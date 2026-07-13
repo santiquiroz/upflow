@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import os
 import time
@@ -13,6 +14,7 @@ from PIL import Image
 from app.config import Settings
 from app.main import app
 from app.models import JobStatus, UpscaleJob, VideoUpscaleJob, utc_now
+from app.services import retention_sweeper as retention_sweeper_module
 from app.services.engines.base import UpscaleEngine
 from app.services.job_manager import JobManager
 from app.services.retention_sweeper import RetentionSweeper
@@ -352,3 +354,59 @@ def test_lifespan_starts_and_stops_retention_sweeper() -> None:
         assert app.state.retention_sweeper is not None
         assert app.state.retention_sweeper.sweep_task is not None
     assert app.state.retention_sweeper.sweep_task is None
+
+
+def make_sweeper(settings: Settings) -> RetentionSweeper:
+    job_manager = JobManager(settings, FakeImageEngine(settings))
+    video_job_manager = VideoJobManager(settings, FailingVideoUpscaler(), FakeMediaTools())
+    return RetentionSweeper(settings, job_manager, video_job_manager)
+
+
+async def test_sweeper_runs_first_sweep_immediately_on_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(retention_sweeper_module, "SWEEP_INTERVAL_SECONDS", 3600)
+    settings = make_settings(tmp_path, output_ttl_hours=1)
+    StorageService(settings)
+    sweeper = make_sweeper(settings)
+
+    stale_output = settings.outputs_path / "stale.png"
+    stale_output.write_bytes(b"stale")
+    fresh_output = settings.outputs_path / "fresh.png"
+    fresh_output.write_bytes(b"fresh")
+    stale_mtime = time.time() - 2 * 3600
+    os.utime(stale_output, (stale_mtime, stale_mtime))
+
+    await sweeper.start()
+    await asyncio.sleep(0)  # one loop cycle: the boot sweep runs before the first (1h) sleep
+    await sweeper.stop()
+
+    assert not stale_output.exists()
+    assert fresh_output.exists()
+
+
+async def test_sweeper_loop_survives_a_failing_sweep(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(retention_sweeper_module, "SWEEP_INTERVAL_SECONDS", 0.01)
+    settings = make_settings(tmp_path, output_ttl_hours=1)
+    StorageService(settings)
+    sweeper = make_sweeper(settings)
+
+    sweep_calls: list[int] = []
+
+    def flaky_sweep_once() -> None:
+        sweep_calls.append(len(sweep_calls))
+        if len(sweep_calls) == 1:
+            raise OSError("simulated locked file on Windows")
+
+    monkeypatch.setattr(sweeper, "sweep_once", flaky_sweep_once)
+
+    await sweeper.start()
+    for _ in range(200):
+        if len(sweep_calls) >= 2:
+            break
+        await asyncio.sleep(0.01)
+    await sweeper.stop()
+
+    assert len(sweep_calls) >= 2, "the sweep loop died after the first sweep_once raised"

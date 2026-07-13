@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from datetime import datetime, timedelta
 
@@ -10,6 +11,8 @@ from app.services.job_manager import JobManager
 from app.services.video_job_manager import VideoJobManager
 
 SWEEP_INTERVAL_SECONDS = 3600
+
+logger = logging.getLogger(__name__)
 
 
 class RetentionSweeper:
@@ -34,8 +37,14 @@ class RetentionSweeper:
 
     async def _run(self) -> None:
         while True:
+            self._sweep_safely()
             await asyncio.sleep(SWEEP_INTERVAL_SECONDS)
+
+    def _sweep_safely(self) -> None:
+        try:
             self.sweep_once()
+        except Exception:  # noqa: BLE001
+            logger.exception("Retention sweep failed; retrying on next interval")
 
     def sweep_once(self) -> None:
         self._delete_expired_outputs()
