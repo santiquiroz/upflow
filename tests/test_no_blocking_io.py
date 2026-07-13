@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import io
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from PIL import Image
 from starlette.datastructures import UploadFile
 
 from app.config import Settings
+from app.services import media_tools as media_tools_module
 from app.services.engines.base import UpscaleEngine
 from app.services.job_manager import JobManager
 from app.services.media_tools import MediaTools
@@ -63,22 +65,71 @@ async def count_heartbeats_during(coro: "asyncio.Future") -> int:
     return ticks
 
 
-async def test_ffprobe_json_does_not_block_event_loop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    settings = make_settings(tmp_path)
-    media_tools = MediaTools(settings)
+def make_fake_ffprobe_command(sleep_seconds: float, exit_code: int = 0) -> list[str]:
+    script = (
+        "import sys, time; "
+        f"time.sleep({sleep_seconds}); "
+        "print('{\"streams\": []}'); "
+        f"sys.exit({exit_code})"
+    )
+    return [sys.executable, "-c", script]
+
+
+def make_media_tools_with_fake_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, command: list[str]
+) -> MediaTools:
+    media_tools = MediaTools(make_settings(tmp_path))
     monkeypatch.setattr(media_tools, "available", lambda: True)
+    monkeypatch.setattr(media_tools, "_build_ffprobe_command", lambda source_path: command)
+    return media_tools
 
-    def slow_ffprobe(source_path: Path) -> subprocess.CompletedProcess[str]:
-        time.sleep(BLOCKING_DELAY_SECONDS)
-        return subprocess.CompletedProcess(args=[], returncode=0, stdout='{"streams": []}', stderr="")
 
-    monkeypatch.setattr(media_tools, "_run_ffprobe", slow_ffprobe)
+async def test_ffprobe_json_does_not_block_event_loop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    media_tools = make_media_tools_with_fake_command(
+        tmp_path, monkeypatch, make_fake_ffprobe_command(BLOCKING_DELAY_SECONDS)
+    )
 
     ticks = await count_heartbeats_during(media_tools.ffprobe_json(Path("fake-source.mp4")))
 
     assert ticks >= HEARTBEAT_TICKS // 2, (
         "the event loop was blocked while ffprobe ran: heartbeat coroutine barely progressed"
     )
+
+
+async def test_ffprobe_json_times_out_and_kills_the_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    media_tools = make_media_tools_with_fake_command(
+        tmp_path, monkeypatch, make_fake_ffprobe_command(sleep_seconds=30)
+    )
+    monkeypatch.setattr(media_tools_module, "FFPROBE_TIMEOUT_SECONDS", 0.2)
+
+    spawned: list[asyncio.subprocess.Process] = []
+    real_spawn = asyncio.create_subprocess_exec
+
+    async def recording_spawn(*args: object, **kwargs: object) -> asyncio.subprocess.Process:
+        process = await real_spawn(*args, **kwargs)  # type: ignore[arg-type]
+        spawned.append(process)
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", recording_spawn)
+
+    with pytest.raises(RuntimeError, match="ffprobe timed out after 0.2s"):
+        await media_tools.ffprobe_json(Path("fake-source.mp4"))
+
+    assert len(spawned) == 1
+    assert spawned[0].returncode is not None, "the ffprobe child process was left running after the timeout"
+
+
+async def test_ffprobe_json_keeps_calledprocesserror_on_nonzero_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    media_tools = make_media_tools_with_fake_command(
+        tmp_path, monkeypatch, make_fake_ffprobe_command(sleep_seconds=0, exit_code=3)
+    )
+
+    with pytest.raises(subprocess.CalledProcessError):
+        await media_tools.ffprobe_json(Path("fake-source.mp4"))
 
 
 async def test_validate_input_image_does_not_block_event_loop(

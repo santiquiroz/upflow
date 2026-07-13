@@ -24,28 +24,49 @@ class MediaTools:
         if not self.available():
             raise RuntimeError("FFmpeg/FFprobe not available. Run scripts/download-ffmpeg.ps1 first.")
 
-        try:
-            result = await asyncio.wait_for(
-                asyncio.to_thread(self._run_ffprobe, source_path),
-                timeout=FFPROBE_TIMEOUT_SECONDS,
-            )
-        except asyncio.TimeoutError as exc:
-            raise RuntimeError(f"ffprobe timed out after {FFPROBE_TIMEOUT_SECONDS}s") from exc
-        return json.loads(result.stdout)
+        stdout = await self._run_ffprobe(source_path)
+        return json.loads(stdout)
 
-    def _run_ffprobe(self, source_path: Path) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            [
-                str(self.ffprobe_path),
-                "-v",
-                "error",
-                "-print_format",
-                "json",
-                "-show_format",
-                "-show_streams",
-                str(source_path),
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
+    def _build_ffprobe_command(self, source_path: Path) -> list[str]:
+        return [
+            str(self.ffprobe_path),
+            "-v",
+            "error",
+            "-print_format",
+            "json",
+            "-show_format",
+            "-show_streams",
+            str(source_path),
+        ]
+
+    async def _run_ffprobe(self, source_path: Path) -> str:
+        command = self._build_ffprobe_command(source_path)
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=FFPROBE_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError as exc:
+            await self._kill_process(process)
+            raise RuntimeError(f"ffprobe timed out after {FFPROBE_TIMEOUT_SECONDS}s") from exc
+        except asyncio.CancelledError:
+            await self._kill_process(process)
+            raise
+
+        stdout_text = stdout.decode("utf-8", errors="replace")
+        if process.returncode != 0:
+            raise subprocess.CalledProcessError(
+                process.returncode or -1,
+                command,
+                output=stdout_text,
+                stderr=stderr.decode("utf-8", errors="replace"),
+            )
+        return stdout_text
+
+    @staticmethod
+    async def _kill_process(process: asyncio.subprocess.Process) -> None:
+        if process.returncode is None:
+            process.kill()
+        await process.wait()
