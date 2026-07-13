@@ -99,6 +99,8 @@ class JobManager:
                     )
         except UnidentifiedImageError as exc:
             raise ValueError("Uploaded file is not a valid image") from exc
+        except Image.DecompressionBombError as exc:
+            raise ValueError("Uploaded image exceeds the maximum allowed dimensions") from exc
 
     async def _worker(self) -> None:
         while True:

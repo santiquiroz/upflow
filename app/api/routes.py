@@ -136,6 +136,8 @@ async def create_job(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Failed to process the uploaded image") from exc
     finally:
         if job is None and destination.exists():
             destination.unlink(missing_ok=True)
@@ -198,6 +200,8 @@ async def create_video_job(
         job.metadata["profileKey"] = profile_key
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Failed to process the uploaded video") from exc
     finally:
         if job is None and destination.exists():
             destination.unlink(missing_ok=True)
