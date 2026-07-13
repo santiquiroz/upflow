@@ -240,13 +240,14 @@ class Settings(BaseSettings):
         return [int(item.strip()) for item in self.allowed_fps_multipliers.split(",") if item.strip()]
 
     def interpolation_available(self) -> bool:
-        # ENABLE_INTERPOLATION is the only feature gate exposed to callers; folding
-        # it in here keeps interpolation_available() the single source of truth
-        # (mirrors RealEsrganNcnnEngine.available(), plus the enable flag).
+        # Capability-only (is RIFE installed?); callers check ENABLE_INTERPOLATION
+        # separately so diagnostics can distinguish "not installed" from
+        # "installed but disabled". Checks the configured model folder too,
+        # guarding against partial installs.
         return (
-            self.enable_interpolation
-            and self.rife_binary_path.exists()
+            self.rife_binary_path.exists()
             and self.rife_models_path.exists()
+            and (self.rife_models_path / self.rife_model).exists()
         )
 
     @property

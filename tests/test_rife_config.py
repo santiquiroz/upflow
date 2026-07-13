@@ -70,27 +70,18 @@ def test_allowed_fps_multiplier_values_parses_custom_csv() -> None:
     assert settings.allowed_fps_multiplier_values == [2, 4]
 
 
-def test_interpolation_available_false_when_disabled(tmp_path: Path) -> None:
+def _make_fake_rife_install(tmp_path: Path, model_name: str = "rife-v4.6") -> tuple[Path, Path]:
     binary = tmp_path / "rife-ncnn-vulkan.exe"
     binary.write_bytes(b"fake")
     models_dir = tmp_path / "models"
-    models_dir.mkdir()
-
-    settings = Settings(
-        ENABLE_INTERPOLATION=False,
-        RIFE_BINARY=str(binary),
-        RIFE_MODELS_DIR=str(models_dir),
-    )
-
-    assert settings.interpolation_available() is False
+    (models_dir / model_name).mkdir(parents=True)
+    return binary, models_dir
 
 
 def test_interpolation_available_false_when_binary_missing(tmp_path: Path) -> None:
-    models_dir = tmp_path / "models"
-    models_dir.mkdir()
+    _, models_dir = _make_fake_rife_install(tmp_path)
 
     settings = Settings(
-        ENABLE_INTERPOLATION=True,
         RIFE_BINARY=str(tmp_path / "missing-rife.exe"),
         RIFE_MODELS_DIR=str(models_dir),
     )
@@ -103,7 +94,6 @@ def test_interpolation_available_false_when_models_dir_missing(tmp_path: Path) -
     binary.write_bytes(b"fake")
 
     settings = Settings(
-        ENABLE_INTERPOLATION=True,
         RIFE_BINARY=str(binary),
         RIFE_MODELS_DIR=str(tmp_path / "missing-models"),
     )
@@ -111,16 +101,41 @@ def test_interpolation_available_false_when_models_dir_missing(tmp_path: Path) -
     assert settings.interpolation_available() is False
 
 
-def test_interpolation_available_true_when_enabled_and_paths_exist(tmp_path: Path) -> None:
-    binary = tmp_path / "rife-ncnn-vulkan.exe"
-    binary.write_bytes(b"fake")
-    models_dir = tmp_path / "models"
-    models_dir.mkdir()
+def test_interpolation_available_false_when_configured_model_folder_missing(
+    tmp_path: Path,
+) -> None:
+    binary, models_dir = _make_fake_rife_install(tmp_path, model_name="rife-v4.25")
 
     settings = Settings(
-        ENABLE_INTERPOLATION=True,
+        RIFE_BINARY=str(binary),
+        RIFE_MODELS_DIR=str(models_dir),
+        RIFE_MODEL="rife-v4.6",
+    )
+
+    assert settings.interpolation_available() is False
+
+
+def test_interpolation_available_true_when_binary_and_model_folder_exist(tmp_path: Path) -> None:
+    binary, models_dir = _make_fake_rife_install(tmp_path)
+
+    settings = Settings(
         RIFE_BINARY=str(binary),
         RIFE_MODELS_DIR=str(models_dir),
     )
 
     assert settings.interpolation_available() is True
+
+
+def test_interpolation_available_is_capability_only_and_ignores_enable_flag(
+    tmp_path: Path,
+) -> None:
+    binary, models_dir = _make_fake_rife_install(tmp_path)
+
+    settings = Settings(
+        ENABLE_INTERPOLATION=False,
+        RIFE_BINARY=str(binary),
+        RIFE_MODELS_DIR=str(models_dir),
+    )
+
+    assert settings.interpolation_available() is True
+    assert (settings.enable_interpolation and settings.interpolation_available()) is False
