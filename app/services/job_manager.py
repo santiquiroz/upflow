@@ -109,6 +109,10 @@ class JobManager:
                 try:
                     job.output_path = await self.engine.run(job)
                     job.status = JobStatus.completed
+                except asyncio.CancelledError:
+                    job.status = JobStatus.failed
+                    job.error = "Job cancelled"
+                    raise
                 except Exception as exc:  # noqa: BLE001
                     job.status = JobStatus.failed
                     job.error = str(exc)
