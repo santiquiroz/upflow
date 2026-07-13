@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import subprocess
 from pathlib import Path
 from typing import Any
 
 from app.config import Settings
+
+FFPROBE_TIMEOUT_SECONDS = 30
 
 
 class MediaTools:
@@ -17,11 +20,21 @@ class MediaTools:
     def available(self) -> bool:
         return self.ffmpeg_path.exists() and self.ffprobe_path.exists()
 
-    def ffprobe_json(self, source_path: Path) -> dict[str, Any]:
+    async def ffprobe_json(self, source_path: Path) -> dict[str, Any]:
         if not self.available():
             raise RuntimeError("FFmpeg/FFprobe not available. Run scripts/download-ffmpeg.ps1 first.")
 
-        result = subprocess.run(
+        try:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(self._run_ffprobe, source_path),
+                timeout=FFPROBE_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError as exc:
+            raise RuntimeError(f"ffprobe timed out after {FFPROBE_TIMEOUT_SECONDS}s") from exc
+        return json.loads(result.stdout)
+
+    def _run_ffprobe(self, source_path: Path) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
             [
                 str(self.ffprobe_path),
                 "-v",
@@ -36,4 +49,3 @@ class MediaTools:
             capture_output=True,
             text=True,
         )
-        return json.loads(result.stdout)

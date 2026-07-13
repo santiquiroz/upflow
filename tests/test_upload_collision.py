@@ -30,7 +30,7 @@ class FakeUpscaler:
 
 
 class FakeMediaTools:
-    def ffprobe_json(self, source_path: Path) -> dict:
+    async def ffprobe_json(self, source_path: Path) -> dict:
         return {"streams": [{"codec_type": "video"}]}
 
 

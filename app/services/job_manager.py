@@ -45,7 +45,7 @@ class JobManager:
         output_format: str,
         job_id: str | None = None,
     ) -> UpscaleJob:
-        self._validate_input_image(source_path)
+        await asyncio.to_thread(self._validate_input_image, source_path)
         resolved_model_name = self._validate_and_resolve_model(
             model_name=model_name,
             scale=scale,

@@ -30,7 +30,7 @@ class VideoUpscaler:
         frames_in.mkdir(parents=True, exist_ok=True)
         frames_out.mkdir(parents=True, exist_ok=True)
 
-        probe = self.media_tools.ffprobe_json(job.source_path)
+        probe = await self.media_tools.ffprobe_json(job.source_path)
         video_stream = next((s for s in probe.get("streams", []) if s.get("codec_type") == "video"), None)
         has_audio = any(s.get("codec_type") == "audio" for s in probe.get("streams", []))
         if not video_stream:

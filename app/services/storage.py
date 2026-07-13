@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import aiofiles
 from fastapi import UploadFile
 
 from app.config import Settings
@@ -25,10 +26,10 @@ class StorageService:
     async def save_upload(self, upload: UploadFile, destination: Path, *, max_mb: int | None = None) -> None:
         size = 0
         limit_mb = max_mb or self.settings.max_upload_mb
-        with destination.open("wb") as handle:
+        async with aiofiles.open(destination, "wb") as handle:
             while chunk := await upload.read(1024 * 1024):
                 size += len(chunk)
                 if size > limit_mb * 1024 * 1024:
                     raise ValueError(f"Upload exceeds limit of {limit_mb} MB")
-                handle.write(chunk)
+                await handle.write(chunk)
         await upload.close()

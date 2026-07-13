@@ -49,7 +49,7 @@ class VideoJobManager:
         keep_audio: bool,
         job_id: str | None = None,
     ) -> VideoUpscaleJob:
-        self._validate_video(source_path)
+        await self._validate_video(source_path)
         self._validate_request(model_name, scale, output_container, video_codec, video_preset, crf)
 
         job = VideoUpscaleJob(
@@ -72,8 +72,8 @@ class VideoJobManager:
     def get_job(self, job_id: str) -> VideoUpscaleJob | None:
         return self.jobs.get(job_id)
 
-    def _validate_video(self, source_path: Path) -> None:
-        probe = self.media_tools.ffprobe_json(source_path)
+    async def _validate_video(self, source_path: Path) -> None:
+        probe = await self.media_tools.ffprobe_json(source_path)
         streams = probe.get("streams", [])
         if not any(stream.get("codec_type") == "video" for stream in streams):
             raise ValueError("Uploaded file is not a valid video")
