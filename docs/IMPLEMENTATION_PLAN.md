@@ -60,14 +60,20 @@ Engineering plan to (1) fix the audited defects and (2) ship the headline featur
 
 **Test:** `tests/test_cleanup.py` — run a video job with a fake pipeline that creates dummy frame files; assert `work_dir` is gone and source upload removed afterward, output kept.
 
-### 2.2 `GPU_CONCURRENCY` is a no-op
-**Where:** `app/services/job_manager.py:19,24,95-109` — `Semaphore(gpu_concurrency)` but a single worker task, so the semaphore never gates >1.
-**Fix (pick one):**
-- **A (honor it):** in `start()`, spawn `settings.gpu_concurrency` worker tasks; keep them in a list; cancel all in `stop()`. The semaphore then becomes meaningful (or drop it and let N workers be the limit).
-- **B (remove it):** delete the setting + semaphore, document single-GPU-job behavior, and drop it from `/health` + `.env.example`.
-- Recommendation: **A**, since throughput is the point.
+### 2.2 `GPU_CONCURRENCY` is a no-op **+ image/video share no GPU limit**
+**Where:** `app/services/job_manager.py:19,24,95-109` — `Semaphore(gpu_concurrency)` but a single worker task, so the semaphore never gates >1. **Plus (Codex, new):** `job_manager.py:19` and `video_job_manager.py:19` create **separate** semaphores, and `main.py:25-27` wires them independently — an image job and a video job can both run Real-ESRGAN on `-g 0` simultaneously, saturating VRAM even though `/health` reports concurrency 1.
+**Fix:**
+- **A (honor it):** in `start()`, spawn `settings.gpu_concurrency` worker tasks; keep them in a list; cancel all in `stop()`.
+- **B (remove it):** delete the setting + semaphore, document single-GPU-job behavior, drop from `/health` + `.env.example`.
+- **Cross-manager (do regardless of A/B):** inject **one shared GPU semaphore/runner** into both `JobManager` and `VideoJobManager` (create it in `main.py` lifespan, pass to both) so total concurrent GPU jobs across image+video is bounded by a single limit.
+- Recommendation: **A + shared semaphore**, since throughput is the point but VRAM is the real constraint.
 
-**Test:** `tests/test_concurrency.py` — with `gpu_concurrency=2` and a fake engine that records max simultaneous in-flight jobs, assert 2 run at once.
+**Test:** `tests/test_concurrency.py` — with the shared semaphore at 1, a fake engine recording max simultaneous in-flight jobs, assert an image job and a video job never overlap; with limit 2, assert 2 run at once.
+
+### 2.5 `CancelledError` leaves a zombie job + orphan subprocess (Codex, new)
+**Where:** `app/services/job_manager.py:95-109` and `video_job_manager.py:101-115` — the worker's `except Exception` does **not** catch `CancelledError` (it's `BaseException`), but the `finally` still sets `finished_at` and calls `task_done()`. On shutdown mid-job the job is left `status=running` with a `finished_at` set (impossible state), no error, and the child ffmpeg/realesrgan process is never killed.
+**Fix:** add an explicit `except asyncio.CancelledError:` branch that kills the running subprocess (via the guarded runner from 2.3), marks the job `failed`/`cancelled`, then re-raises so the worker task actually stops. Track the live subprocess handle on the job/manager so cancel can reach it.
+**Test:** `tests/test_worker_cancel.py` — start a job with a fake long-running runner, cancel the worker task, assert the job ends `failed`/`cancelled` (not `running`) and the fake subprocess received `kill()`.
 
 ### 2.3 Subprocess: no timeout, no kill on cancel → dead queue / orphans
 **Where:** `app/services/video_upscaler.py:155-163` (`_run_process`), `app/services/engines/realesrgan_ncnn.py:47-55`.
@@ -100,6 +106,7 @@ Engineering plan to (1) fix the audited defects and (2) ship the headline featur
 | 3.7 | `jpeg_quality` setting is dead | `config.py:174` | Wire into engine command if the ncnn binary supports it, else remove. |
 | 3.8 | Unbounded queue | `job_manager.py:18`, `video_job_manager.py:18` | `asyncio.Queue(maxsize=N)` (config), return `429` when full. |
 | 3.9 | Hardcoded relative paths (`app/static`, `app/templates`, `runtime`) | `main.py:45`, `web/routes.py:10`, `config.py` | Resolve against `Path(__file__).parent` / an explicit base dir. |
+| 3.10 | Mislabeled profile: `general-balanced-2x` actually uses `scale=4` (Codex, new) | `config.py:86-91` | Rename profile to `general-balanced-4x` **or** set `scale: 2` with a 2x-capable model, so the label matches the real scale (VRAM/time surprise otherwise). |
 
 Each row gets a focused unit test where it has logic (3.1, 3.2, 3.3, 3.4, 3.8).
 
@@ -172,8 +179,9 @@ Add an "FPS boost" dropdown in the video form: Off / 2× / 3× / 4×. Render res
 | CRITICAL | Upload filename collision | 1.1 |
 | CRITICAL | Blocking I/O on event loop | 1.2 |
 | HIGH | Disk leak (no cleanup) | 2.1 |
-| HIGH | `GPU_CONCURRENCY` no-op | 2.2 |
+| HIGH | `GPU_CONCURRENCY` no-op + image/video share no GPU limit | 2.2 |
 | HIGH | Subprocess no timeout/kill | 2.3 |
+| HIGH | `CancelledError` → zombie job + orphan subprocess | 2.5 |
 | HIGH | Non-`ValueError` leaks files/500 | 2.4 |
 | HIGH | Job dict retained forever | 2.1 (retention sweep) |
 | MEDIUM | `crf`/`scale` `or`-default | 3.1 |
@@ -183,6 +191,7 @@ Add an "FPS boost" dropdown in the video form: Off / 2× / 3× / 4×. Render res
 | MEDIUM | ADS/reserved filenames | 3.5 |
 | MEDIUM | No CSRF/origin check | 3.6 |
 | MEDIUM | Unbounded queue | 3.8 |
+| MEDIUM | Mislabeled profile `general-balanced-2x` = scale 4 | 3.10 |
 | LOW | Dead `jpeg_quality`; hardcoded paths; tests | 3.7 / 3.9 / 5 |
 | — | **NEW: FPS interpolation** | **4** |
 
