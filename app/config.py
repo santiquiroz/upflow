@@ -193,6 +193,12 @@ class Settings(BaseSettings):
     )
     max_queue_size: int = Field(default=20, alias="MAX_QUEUE_SIZE")
 
+    rife_binary: str = Field(default="vendor/rife/rife-ncnn-vulkan.exe", alias="RIFE_BINARY")
+    rife_models_dir: str = Field(default="vendor/rife/models", alias="RIFE_MODELS_DIR")
+    rife_model: str = Field(default="rife-v4.6", alias="RIFE_MODEL")
+    enable_interpolation: bool = Field(default=False, alias="ENABLE_INTERPOLATION")
+    allowed_fps_multipliers: str = Field(default="2,3,4", alias="ALLOWED_FPS_MULTIPLIERS")
+
     @property
     def runtime_path(self) -> Path:
         return resolve_against_project_root(self.runtime_dir)
@@ -220,6 +226,28 @@ class Settings(BaseSettings):
     @property
     def allowed_origin_values(self) -> frozenset[str]:
         return frozenset(item.strip() for item in self.allowed_origins.split(",") if item.strip())
+
+    @property
+    def rife_binary_path(self) -> Path:
+        return resolve_against_project_root(self.rife_binary)
+
+    @property
+    def rife_models_path(self) -> Path:
+        return resolve_against_project_root(self.rife_models_dir)
+
+    @property
+    def allowed_fps_multiplier_values(self) -> list[int]:
+        return [int(item.strip()) for item in self.allowed_fps_multipliers.split(",") if item.strip()]
+
+    def interpolation_available(self) -> bool:
+        # ENABLE_INTERPOLATION is the only feature gate exposed to callers; folding
+        # it in here keeps interpolation_available() the single source of truth
+        # (mirrors RealEsrganNcnnEngine.available(), plus the enable flag).
+        return (
+            self.enable_interpolation
+            and self.rife_binary_path.exists()
+            and self.rife_models_path.exists()
+        )
 
     @property
     def model_catalog(self) -> list[ModelOption]:
