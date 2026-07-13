@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import NamedTuple
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 
-from app.config import Settings, get_settings
+from app.config import Settings, VideoProfile, get_settings
 from app.models import JobStatus, UpscaleJob, VideoUpscaleJob
 from app.schemas import (
     CreateJobResponse,
@@ -22,6 +23,42 @@ from app.services.storage import StorageService
 from app.services.video_job_manager import VideoJobManager
 
 router = APIRouter(prefix="/api/v1", tags=["api"])
+
+
+class ResolvedVideoJobFields(NamedTuple):
+    model_name: str
+    scale: int
+    output_container: str
+    video_codec: str
+    video_preset: str
+    crf: int
+    keep_audio: bool
+
+
+def resolve_video_job_fields(
+    profile: VideoProfile,
+    model_name: str | None,
+    scale: int | None,
+    output_container: str | None,
+    video_codec: str | None,
+    video_preset: str | None,
+    crf: int | None,
+    keep_audio: bool | None,
+) -> ResolvedVideoJobFields:
+    """Resolves per-request overrides against the profile default.
+
+    Uses `is not None` (not `or`) for numeric fields so an explicit 0 from the
+    caller is preserved instead of being silently replaced by the profile default.
+    """
+    return ResolvedVideoJobFields(
+        model_name=model_name or profile["model_key"],
+        scale=scale if scale is not None else profile["scale"],
+        output_container=output_container or "mp4",
+        video_codec=video_codec or profile["video_codec"],
+        video_preset=video_preset or profile["video_preset"],
+        crf=crf if crf is not None else profile["crf"],
+        keep_audio=keep_audio if keep_audio is not None else profile["keep_audio"],
+    )
 
 
 def get_job_manager(request: Request) -> JobManager:
@@ -174,13 +211,9 @@ async def create_video_job(
     token = uuid4().hex
     destination = settings.uploads_path / f"{token}-{original_name}"
 
-    selected_model = model_name or profile["model_key"]
-    selected_scale = scale or profile["scale"]
-    selected_container = output_container or "mp4"
-    selected_codec = video_codec or profile["video_codec"]
-    selected_preset = video_preset or profile["video_preset"]
-    selected_crf = crf or profile["crf"]
-    selected_keep_audio = keep_audio if keep_audio is not None else profile["keep_audio"]
+    resolved = resolve_video_job_fields(
+        profile, model_name, scale, output_container, video_codec, video_preset, crf, keep_audio
+    )
 
     job: VideoUpscaleJob | None = None
     try:
@@ -188,13 +221,13 @@ async def create_video_job(
         job = await video_jobs.create_job(
             source_path=destination,
             original_filename=original_name,
-            model_name=selected_model,
-            scale=selected_scale,
-            output_container=selected_container,
-            video_codec=selected_codec,
-            video_preset=selected_preset,
-            crf=selected_crf,
-            keep_audio=selected_keep_audio,
+            model_name=resolved.model_name,
+            scale=resolved.scale,
+            output_container=resolved.output_container,
+            video_codec=resolved.video_codec,
+            video_preset=resolved.video_preset,
+            crf=resolved.crf,
+            keep_audio=resolved.keep_audio,
             job_id=token,
         )
         job.metadata["profileKey"] = profile_key

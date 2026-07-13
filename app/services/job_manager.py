@@ -9,6 +9,8 @@ from app.config import Settings
 from app.models import JobStatus, UpscaleJob, utc_now
 from app.services.engines.base import UpscaleEngine
 
+ALLOWED_IMAGE_FORMATS = {"PNG", "JPEG", "WEBP", "BMP"}
+
 
 class JobManager:
     def __init__(self, settings: Settings, engine: UpscaleEngine, gpu_semaphore: asyncio.Semaphore) -> None:
@@ -92,6 +94,7 @@ class JobManager:
     def _validate_input_image(self, source_path: Path) -> None:
         try:
             with Image.open(source_path) as img:
+                self._validate_image_format(img)
                 width, height = img.size
                 if width * height > self.settings.max_image_pixels:
                     raise ValueError(
@@ -101,6 +104,13 @@ class JobManager:
             raise ValueError("Uploaded file is not a valid image") from exc
         except Image.DecompressionBombError as exc:
             raise ValueError("Uploaded image exceeds the maximum allowed dimensions") from exc
+
+    @staticmethod
+    def _validate_image_format(img: Image.Image) -> None:
+        if img.format not in ALLOWED_IMAGE_FORMATS:
+            raise ValueError(
+                f"Unsupported image format: {img.format}. Allowed formats: {sorted(ALLOWED_IMAGE_FORMATS)}"
+            )
 
     async def _worker(self) -> None:
         while True:

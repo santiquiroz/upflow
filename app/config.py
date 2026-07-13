@@ -83,8 +83,8 @@ MODEL_CATALOG: list[ModelOption] = [
 
 VIDEO_PROFILE_CATALOG: list[VideoProfile] = [
     {
-        "key": "general-balanced-2x",
-        "label": "General Balanced 2x",
+        "key": "general-balanced-4x",
+        "label": "General Balanced 4x",
         "category": "general",
         "description": "Good default for long videos when you want reasonable size and speed.",
         "model_key": "realesrgan-x4plus",

@@ -3,12 +3,41 @@ from __future__ import annotations
 import asyncio
 import json
 import subprocess
+from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
 from app.config import Settings
 
 FFPROBE_TIMEOUT_SECONDS = 30
+DEFAULT_FPS = Fraction(30, 1)
+
+
+def parse_fps_fraction(value: str | None) -> Fraction | None:
+    """Parses an ffprobe frame-rate string (e.g. "24000/1001") into a Fraction.
+
+    Returns None for anything that cannot represent a real frame rate: empty/missing
+    values, malformed strings, "0/0" (ZeroDivisionError), and non-positive rates
+    such as "0/1".
+    """
+    if not value:
+        return None
+    try:
+        fraction = Fraction(value)
+    except (ValueError, ZeroDivisionError):
+        return None
+    if fraction <= 0:
+        return None
+    return fraction
+
+
+def resolve_video_fps(avg_frame_rate: str | None, r_frame_rate: str | None) -> Fraction:
+    """Resolves a valid fps from ffprobe fields, falling through avg -> r_frame_rate -> 30/1."""
+    return (
+        parse_fps_fraction(avg_frame_rate)
+        or parse_fps_fraction(r_frame_rate)
+        or DEFAULT_FPS
+    )
 
 
 class MediaTools:

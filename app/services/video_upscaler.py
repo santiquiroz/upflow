@@ -6,7 +6,7 @@ from pathlib import Path
 from app.config import Settings
 from app.models import VideoUpscaleJob
 from app.services.engines.realesrgan_ncnn import RealEsrganNcnnEngine
-from app.services.media_tools import MediaTools
+from app.services.media_tools import MediaTools, resolve_video_fps
 from app.services.process_runner import run_guarded_process
 
 
@@ -49,7 +49,7 @@ class VideoUpscaler:
         if not video_stream:
             raise RuntimeError("No video stream found in the uploaded file")
 
-        fps = video_stream.get("avg_frame_rate") or video_stream.get("r_frame_rate") or "30/1"
+        fps = str(resolve_video_fps(video_stream.get("avg_frame_rate"), video_stream.get("r_frame_rate")))
         job.metadata["stage"] = "probing"
         job.metadata["fps"] = fps
         job.metadata["sourceWidth"] = int(video_stream.get("width") or 0)
@@ -133,13 +133,17 @@ class VideoUpscaler:
         job.metadata["stage"] = "encoding_video"
         await self._run_process(encode_cmd)
 
-        if not output_path.exists():
+        if not self._is_non_empty_file(output_path):
             raise RuntimeError("Video processing finished but no output file was produced")
 
         job.metadata["stage"] = "completed"
         job.metadata["outputWidth"] = job.metadata["sourceWidth"] * job.scale
         job.metadata["outputHeight"] = job.metadata["sourceHeight"] * job.scale
         return output_path
+
+    @staticmethod
+    def _is_non_empty_file(path: Path) -> bool:
+        return path.exists() and path.stat().st_size > 0
 
     def _build_video_encode_options(self, job: VideoUpscaleJob) -> list[str]:
         options = [

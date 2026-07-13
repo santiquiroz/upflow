@@ -49,7 +49,11 @@ class RealEsrganNcnnEngine(UpscaleEngine):
         if returncode != 0:
             raise RuntimeError(stderr.decode("utf-8", errors="ignore") or "Upscaling process failed")
 
-        if not output_path.exists():
+        if not self._is_non_empty_file(output_path):
             raise RuntimeError("Upscaling process completed but no output file was produced")
 
         return output_path
+
+    @staticmethod
+    def _is_non_empty_file(path: Path) -> bool:
+        return path.exists() and path.stat().st_size > 0
