@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 from app.config import Settings
 from app.models import UpscaleJob
 from app.services.engines.base import UpscaleEngine
+from app.services.process_runner import run_guarded_process
 
 
 class RealEsrganNcnnEngine(UpscaleEngine):
@@ -44,14 +44,9 @@ class RealEsrganNcnnEngine(UpscaleEngine):
             "0",
         ]
 
-        process = await asyncio.create_subprocess_exec(
-            *command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        _, stderr = await process.communicate()
+        _, stderr, returncode = await run_guarded_process(command, self.settings.subprocess_timeout)
 
-        if process.returncode != 0:
+        if returncode != 0:
             raise RuntimeError(stderr.decode("utf-8", errors="ignore") or "Upscaling process failed")
 
         if not output_path.exists():

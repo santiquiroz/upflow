@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import shutil
 from pathlib import Path
 
@@ -8,6 +7,7 @@ from app.config import Settings
 from app.models import VideoUpscaleJob
 from app.services.engines.realesrgan_ncnn import RealEsrganNcnnEngine
 from app.services.media_tools import MediaTools
+from app.services.process_runner import run_guarded_process
 
 
 class VideoUpscaler:
@@ -166,13 +166,8 @@ class VideoUpscaler:
         return options
 
     async def _run_process(self, command: list[str]) -> None:
-        process = await asyncio.create_subprocess_exec(
-            *command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await process.communicate()
-        if process.returncode != 0:
+        stdout, stderr, returncode = await run_guarded_process(command, self.settings.subprocess_timeout)
+        if returncode != 0:
             raise RuntimeError(self._summarize_process_error(stderr, stdout))
 
     def _summarize_process_error(self, stderr: bytes, stdout: bytes) -> str:

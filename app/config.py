@@ -158,6 +158,7 @@ class Settings(BaseSettings):
     max_image_pixels: int = Field(default=120_000_000, alias="MAX_IMAGE_PIXELS")
     gpu_concurrency: int = Field(default=1, alias="GPU_CONCURRENCY")
     cpu_fallback_workers: int = Field(default=2, alias="CPU_FALLBACK_WORKERS")
+    subprocess_timeout: float = Field(default=3600, alias="SUBPROCESS_TIMEOUT")
     ffmpeg_binary: str = Field(default="vendor/ffmpeg/bin/ffmpeg.exe", alias="FFMPEG_BINARY")
     ffprobe_binary: str = Field(default="vendor/ffmpeg/bin/ffprobe.exe", alias="FFPROBE_BINARY")
     ffmpeg_decode_threads: int = Field(default=12, alias="FFMPEG_DECODE_THREADS")
