@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 
 from app.config import Settings
+from app.exceptions import QueueFullError
 from app.models import JobStatus, VideoUpscaleJob, utc_now
 from app.services.media_tools import MediaTools
 from app.services.video_upscaler import VideoUpscaler
@@ -22,7 +23,7 @@ class VideoJobManager:
         self.upscaler = upscaler
         self.media_tools = media_tools
         self.jobs: dict[str, VideoUpscaleJob] = {}
-        self.queue: asyncio.Queue[VideoUpscaleJob] = asyncio.Queue()
+        self.queue: asyncio.Queue[VideoUpscaleJob] = asyncio.Queue(maxsize=settings.max_queue_size)
         self.gpu_semaphore = gpu_semaphore
         self.worker_tasks: list[asyncio.Task] = []
 
@@ -77,12 +78,18 @@ class VideoJobManager:
         )
         if job_id is not None:
             job.id = job_id
+        self._enqueue(job)
         self.jobs[job.id] = job
-        await self.queue.put(job)
         return job
 
     def get_job(self, job_id: str) -> VideoUpscaleJob | None:
         return self.jobs.get(job_id)
+
+    def _enqueue(self, job: VideoUpscaleJob) -> None:
+        try:
+            self.queue.put_nowait(job)
+        except asyncio.QueueFull as exc:
+            raise QueueFullError("Video job queue is full; try again later") from exc
 
     async def _validate_video(self, source_path: Path) -> None:
         try:

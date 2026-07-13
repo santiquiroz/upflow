@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from app.config import get_settings
 
+APP_DIR = Path(__file__).resolve().parent.parent
+
 router = APIRouter(tags=["web"])
-templates = Jinja2Templates(directory="app/templates")
+templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
 
 
 @router.get("/", response_class=HTMLResponse)

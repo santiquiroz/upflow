@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from fastapi.responses import FileResponse
 
 from app.config import Settings, VideoProfile, get_settings
+from app.exceptions import QueueFullError
 from app.models import JobStatus, UpscaleJob, VideoUpscaleJob
 from app.schemas import (
     CreateJobResponse,
@@ -23,6 +24,38 @@ from app.services.storage import StorageService
 from app.services.video_job_manager import VideoJobManager
 
 router = APIRouter(prefix="/api/v1", tags=["api"])
+
+FORBIDDEN_FILENAME_CHARS = frozenset(':<>"|?*')
+WINDOWS_RESERVED_STEMS = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{i}" for i in range(10)}
+    | {f"LPT{i}" for i in range(10)}
+)
+
+
+def _strip_forbidden_chars(name: str) -> str:
+    return "".join(char for char in name if char not in FORBIDDEN_FILENAME_CHARS)
+
+
+def _escape_reserved_stem(name: str) -> str:
+    stem = Path(name).stem.upper()
+    if stem in WINDOWS_RESERVED_STEMS:
+        return f"_{name}"
+    return name
+
+
+def sanitize_filename(filename: str | None, default: str) -> str:
+    """Produces a filesystem-safe name for the on-disk upload path.
+
+    Strips characters invalid on Windows (`: < > " | ? *`) and escapes
+    reserved device stems (CON, NUL, COM1...) that would otherwise collide
+    with OS device names regardless of extension.
+    """
+    candidate = Path(filename or default).name
+    stripped = _strip_forbidden_chars(candidate).strip()
+    if not stripped:
+        stripped = default
+    return _escape_reserved_stem(stripped)
 
 
 class ResolvedVideoJobFields(NamedTuple):
@@ -157,8 +190,9 @@ async def create_job(
     settings: Settings = Depends(get_settings),
 ) -> CreateJobResponse:
     original_name = Path(file.filename or "upload.png").name
+    safe_name = sanitize_filename(original_name, default="upload.png")
     token = uuid4().hex
-    destination = settings.uploads_path / f"{token}-{original_name}"
+    destination = settings.uploads_path / f"{token}-{safe_name}"
 
     job: UpscaleJob | None = None
     try:
@@ -171,6 +205,8 @@ async def create_job(
             output_format=output_format,
             job_id=token,
         )
+    except QueueFullError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
@@ -208,8 +244,9 @@ async def create_video_job(
         raise HTTPException(status_code=400, detail=f"Unknown profile: {profile_key}")
 
     original_name = Path(file.filename or "upload.mp4").name
+    safe_name = sanitize_filename(original_name, default="upload.mp4")
     token = uuid4().hex
-    destination = settings.uploads_path / f"{token}-{original_name}"
+    destination = settings.uploads_path / f"{token}-{safe_name}"
 
     resolved = resolve_video_job_fields(
         profile, model_name, scale, output_container, video_codec, video_preset, crf, keep_audio
@@ -231,6 +268,8 @@ async def create_video_job(
             job_id=token,
         )
         job.metadata["profileKey"] = profile_key
+    except QueueFullError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:

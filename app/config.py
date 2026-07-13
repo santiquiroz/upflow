@@ -7,6 +7,20 @@ from typing import TypedDict
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def resolve_against_project_root(path_str: str) -> Path:
+    """Resolves a relative path against the project root, not the process CWD.
+
+    Keeps absolute overrides (e.g. an absolute RUNTIME_DIR) untouched so the
+    app still works regardless of the directory it was launched from.
+    """
+    path = Path(path_str)
+    if path.is_absolute():
+        return path
+    return PROJECT_ROOT / path
+
 
 class ModelOption(TypedDict):
     key: str
@@ -172,13 +186,16 @@ class Settings(BaseSettings):
     default_model: str = Field(default="realesrgan-x4plus", alias="DEFAULT_MODEL")
     default_scale: int = Field(default=4, alias="DEFAULT_SCALE")
     allowed_scales: str = Field(default="2,3,4", alias="ALLOWED_SCALES")
-    jpeg_quality: int = Field(default=95, alias="JPEG_QUALITY")
     default_video_profile: str = Field(default="anime-balanced-2x", alias="DEFAULT_VIDEO_PROFILE")
     output_ttl_hours: int = Field(default=24, alias="OUTPUT_TTL_HOURS")
+    allowed_origins: str = Field(
+        default="http://127.0.0.1:8090,http://localhost:8090", alias="ALLOWED_ORIGINS"
+    )
+    max_queue_size: int = Field(default=20, alias="MAX_QUEUE_SIZE")
 
     @property
     def runtime_path(self) -> Path:
-        return Path(self.runtime_dir)
+        return resolve_against_project_root(self.runtime_dir)
 
     @property
     def uploads_path(self) -> Path:
@@ -199,6 +216,10 @@ class Settings(BaseSettings):
     @property
     def allowed_scale_values(self) -> list[int]:
         return [int(item.strip()) for item in self.allowed_scales.split(",") if item.strip()]
+
+    @property
+    def allowed_origin_values(self) -> frozenset[str]:
+        return frozenset(item.strip() for item in self.allowed_origins.split(",") if item.strip())
 
     @property
     def model_catalog(self) -> list[ModelOption]:

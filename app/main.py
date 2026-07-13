@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import router as api_router
 from app.config import get_settings
+from app.security import OriginGuardMiddleware
 from app.services.engines.realesrgan_ncnn import RealEsrganNcnnEngine
 from app.services.job_manager import JobManager
 from app.services.media_tools import MediaTools
@@ -16,6 +18,8 @@ from app.services.storage import StorageService
 from app.services.video_job_manager import VideoJobManager
 from app.services.video_upscaler import VideoUpscaler
 from app.web.routes import router as web_router
+
+APP_DIR = Path(__file__).resolve().parent
 
 
 @asynccontextmanager
@@ -49,6 +53,7 @@ async def lifespan(app: FastAPI):
 
 settings = get_settings()
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
-app.mount("/static", StaticFiles(directory="app/static"), name="static")
+app.add_middleware(OriginGuardMiddleware, allowed_origins=settings.allowed_origin_values)
+app.mount("/static", StaticFiles(directory=str(APP_DIR / "static")), name="static")
 app.include_router(api_router)
 app.include_router(web_router)
