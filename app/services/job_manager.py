@@ -11,26 +11,31 @@ from app.services.engines.base import UpscaleEngine
 
 
 class JobManager:
-    def __init__(self, settings: Settings, engine: UpscaleEngine) -> None:
+    def __init__(self, settings: Settings, engine: UpscaleEngine, gpu_semaphore: asyncio.Semaphore) -> None:
         self.settings = settings
         self.engine = engine
         self.jobs: dict[str, UpscaleJob] = {}
         self.queue: asyncio.Queue[UpscaleJob] = asyncio.Queue()
-        self.semaphore = asyncio.Semaphore(settings.gpu_concurrency)
-        self.worker_task: asyncio.Task | None = None
+        self.gpu_semaphore = gpu_semaphore
+        self.worker_tasks: list[asyncio.Task] = []
 
     async def start(self) -> None:
-        if self.worker_task is None:
-            self.worker_task = asyncio.create_task(self._worker(), name="upscale-worker")
+        if self.worker_tasks:
+            return
+        self.worker_tasks = [
+            asyncio.create_task(self._worker(), name=f"upscale-worker-{i}")
+            for i in range(self.settings.gpu_concurrency)
+        ]
 
     async def stop(self) -> None:
-        if self.worker_task:
-            self.worker_task.cancel()
+        for task in self.worker_tasks:
+            task.cancel()
+        for task in self.worker_tasks:
             try:
-                await self.worker_task
+                await task
             except asyncio.CancelledError:
                 pass
-            self.worker_task = None
+        self.worker_tasks = []
 
     def queue_depth(self) -> int:
         return self.queue.qsize()
@@ -98,7 +103,7 @@ class JobManager:
     async def _worker(self) -> None:
         while True:
             job = await self.queue.get()
-            async with self.semaphore:
+            async with self.gpu_semaphore:
                 job.status = JobStatus.running
                 job.started_at = utc_now()
                 try:

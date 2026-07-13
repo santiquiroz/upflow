@@ -136,7 +136,7 @@ async def test_validate_input_image_does_not_block_event_loop(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     settings = make_settings(tmp_path)
-    jobs = JobManager(settings, FakeEngine())
+    jobs = JobManager(settings, FakeEngine(), asyncio.Semaphore(settings.gpu_concurrency))
 
     source_path = tmp_path / "input.png"
     source_path.write_bytes(make_png_bytes())

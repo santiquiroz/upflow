@@ -10,27 +10,38 @@ from app.services.video_upscaler import VideoUpscaler
 
 
 class VideoJobManager:
-    def __init__(self, settings: Settings, upscaler: VideoUpscaler, media_tools: MediaTools) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        upscaler: VideoUpscaler,
+        media_tools: MediaTools,
+        gpu_semaphore: asyncio.Semaphore,
+    ) -> None:
         self.settings = settings
         self.upscaler = upscaler
         self.media_tools = media_tools
         self.jobs: dict[str, VideoUpscaleJob] = {}
         self.queue: asyncio.Queue[VideoUpscaleJob] = asyncio.Queue()
-        self.semaphore = asyncio.Semaphore(1)
-        self.worker_task: asyncio.Task | None = None
+        self.gpu_semaphore = gpu_semaphore
+        self.worker_tasks: list[asyncio.Task] = []
 
     async def start(self) -> None:
-        if self.worker_task is None:
-            self.worker_task = asyncio.create_task(self._worker(), name="video-upscale-worker")
+        if self.worker_tasks:
+            return
+        self.worker_tasks = [
+            asyncio.create_task(self._worker(), name=f"video-upscale-worker-{i}")
+            for i in range(self.settings.gpu_concurrency)
+        ]
 
     async def stop(self) -> None:
-        if self.worker_task:
-            self.worker_task.cancel()
+        for task in self.worker_tasks:
+            task.cancel()
+        for task in self.worker_tasks:
             try:
-                await self.worker_task
+                await task
             except asyncio.CancelledError:
                 pass
-            self.worker_task = None
+        self.worker_tasks = []
 
     def queue_depth(self) -> int:
         return self.queue.qsize()
@@ -104,7 +115,7 @@ class VideoJobManager:
     async def _worker(self) -> None:
         while True:
             job = await self.queue.get()
-            async with self.semaphore:
+            async with self.gpu_semaphore:
                 job.status = JobStatus.running
                 job.started_at = utc_now()
                 try:

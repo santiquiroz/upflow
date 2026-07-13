@@ -51,7 +51,7 @@ def make_upload(filename: str, content: bytes) -> UploadFile:
 async def test_concurrent_image_uploads_with_same_name_get_distinct_paths(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     storage = StorageService(settings)
-    jobs = JobManager(settings, FakeEngine())
+    jobs = JobManager(settings, FakeEngine(), asyncio.Semaphore(settings.gpu_concurrency))
 
     content_a = make_png_bytes("red")
     content_b = make_png_bytes("blue")
@@ -92,7 +92,9 @@ async def test_concurrent_image_uploads_with_same_name_get_distinct_paths(tmp_pa
 async def test_concurrent_video_uploads_with_same_name_get_distinct_paths(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     storage = StorageService(settings)
-    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools())
+    video_jobs = VideoJobManager(
+        settings, FakeUpscaler(), FakeMediaTools(), asyncio.Semaphore(settings.gpu_concurrency)
+    )
 
     content_a = b"fake-video-bytes-a"
     content_b = b"fake-video-bytes-b"

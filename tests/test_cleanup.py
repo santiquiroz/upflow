@@ -176,7 +176,9 @@ async def test_video_job_worker_removes_source_and_keeps_output_on_success(tmp_p
     settings = make_settings(tmp_path)
     StorageService(settings)
     upscaler = FakePipelineVideoUpscaler(settings, FakeVideoEngine(), FakeMediaTools())
-    video_jobs = VideoJobManager(settings, upscaler, FakeMediaTools())
+    video_jobs = VideoJobManager(
+        settings, upscaler, FakeMediaTools(), asyncio.Semaphore(settings.gpu_concurrency)
+    )
 
     source_path = settings.uploads_path / "clip.mp4"
     source_path.write_bytes(b"fake-video-bytes")
@@ -210,7 +212,12 @@ async def test_video_job_worker_removes_source_and_keeps_output_on_success(tmp_p
 async def test_video_job_worker_removes_source_on_failure(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     StorageService(settings)
-    video_jobs = VideoJobManager(settings, FailingVideoUpscaler(), FakeMediaTools())
+    video_jobs = VideoJobManager(
+        settings,
+        FailingVideoUpscaler(),
+        FakeMediaTools(),
+        asyncio.Semaphore(settings.gpu_concurrency),
+    )
 
     source_path = settings.uploads_path / "clip.mp4"
     source_path.write_bytes(b"fake-video-bytes")
@@ -241,7 +248,9 @@ async def test_video_job_worker_removes_source_on_failure(tmp_path: Path) -> Non
 async def test_image_job_worker_removes_source_and_keeps_output_on_success(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     StorageService(settings)
-    jobs = JobManager(settings, FakeImageEngine(settings))
+    jobs = JobManager(
+        settings, FakeImageEngine(settings), asyncio.Semaphore(settings.gpu_concurrency)
+    )
 
     source_path = settings.uploads_path / "photo.png"
     source_path.write_bytes(make_png_bytes())
@@ -270,7 +279,9 @@ async def test_image_job_worker_removes_source_and_keeps_output_on_success(tmp_p
 async def test_image_job_worker_removes_source_on_failure(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     StorageService(settings)
-    jobs = JobManager(settings, FailingImageEngine())
+    jobs = JobManager(
+        settings, FailingImageEngine(), asyncio.Semaphore(settings.gpu_concurrency)
+    )
 
     source_path = settings.uploads_path / "photo.png"
     source_path.write_bytes(make_png_bytes())
@@ -297,8 +308,15 @@ async def test_image_job_worker_removes_source_on_failure(tmp_path: Path) -> Non
 def test_retention_sweeper_deletes_expired_outputs_and_keeps_fresh_ones(tmp_path: Path) -> None:
     settings = make_settings(tmp_path, output_ttl_hours=1)
     StorageService(settings)
-    job_manager = JobManager(settings, FakeImageEngine(settings))
-    video_job_manager = VideoJobManager(settings, FailingVideoUpscaler(), FakeMediaTools())
+    job_manager = JobManager(
+        settings, FakeImageEngine(settings), asyncio.Semaphore(settings.gpu_concurrency)
+    )
+    video_job_manager = VideoJobManager(
+        settings,
+        FailingVideoUpscaler(),
+        FakeMediaTools(),
+        asyncio.Semaphore(settings.gpu_concurrency),
+    )
     sweeper = RetentionSweeper(settings, job_manager, video_job_manager)
 
     stale_output = settings.outputs_path / "stale.png"
@@ -318,8 +336,15 @@ def test_retention_sweeper_deletes_expired_outputs_and_keeps_fresh_ones(tmp_path
 def test_retention_sweeper_prunes_old_finished_jobs_but_keeps_recent_and_running(tmp_path: Path) -> None:
     settings = make_settings(tmp_path, output_ttl_hours=1)
     StorageService(settings)
-    job_manager = JobManager(settings, FakeImageEngine(settings))
-    video_job_manager = VideoJobManager(settings, FailingVideoUpscaler(), FakeMediaTools())
+    job_manager = JobManager(
+        settings, FakeImageEngine(settings), asyncio.Semaphore(settings.gpu_concurrency)
+    )
+    video_job_manager = VideoJobManager(
+        settings,
+        FailingVideoUpscaler(),
+        FakeMediaTools(),
+        asyncio.Semaphore(settings.gpu_concurrency),
+    )
     sweeper = RetentionSweeper(settings, job_manager, video_job_manager)
 
     def make_job(status: JobStatus, finished_at) -> UpscaleJob:
@@ -357,8 +382,15 @@ def test_lifespan_starts_and_stops_retention_sweeper() -> None:
 
 
 def make_sweeper(settings: Settings) -> RetentionSweeper:
-    job_manager = JobManager(settings, FakeImageEngine(settings))
-    video_job_manager = VideoJobManager(settings, FailingVideoUpscaler(), FakeMediaTools())
+    job_manager = JobManager(
+        settings, FakeImageEngine(settings), asyncio.Semaphore(settings.gpu_concurrency)
+    )
+    video_job_manager = VideoJobManager(
+        settings,
+        FailingVideoUpscaler(),
+        FakeMediaTools(),
+        asyncio.Semaphore(settings.gpu_concurrency),
+    )
     return RetentionSweeper(settings, job_manager, video_job_manager)
 
 

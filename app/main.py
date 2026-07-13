@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -23,9 +24,10 @@ async def lifespan(app: FastAPI):
     storage = StorageService(settings)
     engine = RealEsrganNcnnEngine(settings)
     media_tools = MediaTools(settings)
-    job_manager = JobManager(settings, engine)
+    gpu_semaphore = asyncio.Semaphore(settings.gpu_concurrency)
+    job_manager = JobManager(settings, engine, gpu_semaphore)
     video_upscaler = VideoUpscaler(settings, engine, media_tools)
-    video_job_manager = VideoJobManager(settings, video_upscaler, media_tools)
+    video_job_manager = VideoJobManager(settings, video_upscaler, media_tools, gpu_semaphore)
     retention_sweeper = RetentionSweeper(settings, job_manager, video_job_manager)
     await job_manager.start()
     await video_job_manager.start()
