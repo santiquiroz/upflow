@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{{ title }}</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="container">
+      <section class="hero">
+        <h1>{{ title }}</h1>
+        <p>High-quality image and video upscaling for AMD GPUs. Web UI for humans, REST API for other apps.</p>
+      </section>
+
+      <section class="card">
+        <h2>Image upscaling</h2>
+        <form id="upscale-form">
+          <label>
+            Image
+            <input id="file-input" type="file" name="file" accept="image/*" required />
+          </label>
+
+          <div id="preview-block" class="hidden preview-block">
+            <p id="image-meta"></p>
+            <img id="image-preview" class="image-preview" alt="Input preview" />
+            <p id="image-warning" class="warning hidden"></p>
+          </div>
+
+          <label>
+            Model
+            <select id="model-select" name="model_name">
+              {% for model in supported_models %}
+              <option value="{{ model.key }}" {% if model.key == default_model %}selected{% endif %}>{{ model.label }} — {{ model.description }}</option>
+              {% endfor %}
+            </select>
+          </label>
+
+          <div id="model-help" class="help-text"></div>
+
+          <label>
+            Scale
+            <select id="scale-select" name="scale">
+              {% for scale in allowed_scales %}
+              <option value="{{ scale }}">{{ scale }}x</option>
+              {% endfor %}
+            </select>
+          </label>
+
+          <label>
+            Output format
+            <select name="output_format">
+              <option value="png">PNG</option>
+              <option value="jpg">JPG</option>
+              <option value="webp">WEBP</option>
+            </select>
+          </label>
+
+          <button type="submit">Upscale image</button>
+        </form>
+      </section>
+
+      <section class="card">
+        <h2>Video upscaling</h2>
+        <form id="video-form">
+          <label>
+            Video
+            <input id="video-input" type="file" name="file" accept="video/*" required />
+          </label>
+
+          <div id="video-meta" class="help-text">Upload MP4/MKV/MOV or other formats FFmpeg can read.</div>
+
+          <label>
+            Profile
+            <select id="video-profile-select" name="profile_key">
+              {% for profile in video_profiles %}
+              <option value="{{ profile.key }}" {% if profile.key == default_video_profile %}selected{% endif %}>{{ profile.label }} — {{ profile.description }}</option>
+              {% endfor %}
+            </select>
+          </label>
+
+          <div id="video-profile-help" class="help-text"></div>
+
+          <details>
+            <summary>Advanced options</summary>
+            <div class="advanced-grid">
+              <label>
+                Model
+                <select id="video-model-select" name="model_name">
+                  {% for model in supported_models %}
+                  <option value="{{ model.key }}">{{ model.label }}</option>
+                  {% endfor %}
+                </select>
+              </label>
+
+              <label>
+                Scale
+                <select id="video-scale-select" name="scale">
+                  {% for scale in allowed_scales %}
+                  <option value="{{ scale }}">{{ scale }}x</option>
+                  {% endfor %}
+                </select>
+              </label>
+
+              <label>
+                Container
+                <select name="output_container">
+                  <option value="mp4">MP4</option>
+                  <option value="mkv">MKV</option>
+                </select>
+              </label>
+
+              <label>
+                Codec
+                <select name="video_codec">
+                  <option value="libx264">H.264 (libx264)</option>
+                  <option value="libx265">H.265 (libx265)</option>
+                </select>
+              </label>
+
+              <label>
+                Preset
+                <select name="video_preset">
+                  <option value="medium">medium</option>
+                  <option value="slow">slow</option>
+                  <option value="veryslow">veryslow</option>
+                </select>
+              </label>
+
+              <label>
+                CRF
+                <input type="number" name="crf" min="10" max="28" value="17" />
+              </label>
+
+              <label class="checkbox-row">
+                <input type="checkbox" id="keep-audio-checkbox" name="keep_audio" checked />
+                Keep original audio track
+              </label>
+            </div>
+          </details>
+
+          <button type="submit">Upscale video</button>
+        </form>
+      </section>
+
+      <section class="card">
+        <h2>Anime-ready presets</h2>
+        <ul class="model-list">
+          {% for profile in video_profiles if profile.category == 'anime' %}
+          <li>
+            <strong>{{ profile.label }}</strong> — {{ profile.description }}
+            <span class="muted">Model: {{ profile.model_key }} · Scale: {{ profile.scale }}x · Codec: {{ profile.video_codec }} · CRF: {{ profile.crf }}</span>
+          </li>
+          {% endfor %}
+        </ul>
+      </section>
+
+      <section class="card">
+        <h2>Status</h2>
+        <pre id="status-box">Ready. Engine: {{ engine }}</pre>
+        <a id="download-link" class="hidden" href="#">Download result</a>
+      </section>
+
+      <section class="card">
+        <h2>API</h2>
+        <p>Images: <code>POST /api/v1/jobs</code></p>
+        <p>Videos: <code>POST /api/v1/video/jobs</code></p>
+        <p>Engine + models + video profiles: <code>GET /api/v1/engine</code></p>
+      </section>
+    </main>
+
+    <script>
+      const supportedModels = {{ supported_models | tojson }};
+      const videoProfiles = {{ video_profiles | tojson }};
+      const statusBox = document.getElementById('status-box');
+      const downloadLink = document.getElementById('download-link');
+
+      const imageForm = document.getElementById('upscale-form');
+      const fileInput = document.getElementById('file-input');
+      const previewBlock = document.getElementById('preview-block');
+      const imagePreview = document.getElementById('image-preview');
+      const imageMeta = document.getElementById('image-meta');
+      const imageWarning = document.getElementById('image-warning');
+      const modelSelect = document.getElementById('model-select');
+      const scaleSelect = document.getElementById('scale-select');
+      const modelHelp = document.getElementById('model-help');
+
+      const videoForm = document.getElementById('video-form');
+      const videoInput = document.getElementById('video-input');
+      const videoMeta = document.getElementById('video-meta');
+      const videoProfileSelect = document.getElementById('video-profile-select');
+      const videoProfileHelp = document.getElementById('video-profile-help');
+      const videoModelSelect = document.getElementById('video-model-select');
+      const videoScaleSelect = document.getElementById('video-scale-select');
+      const keepAudioCheckbox = document.getElementById('keep-audio-checkbox');
+
+      function refreshModelUi() {
+        const selected = supportedModels.find(model => model.key === modelSelect.value);
+        if (!selected) return;
+        for (const option of scaleSelect.options) {
+          const scaleValue = Number(option.value);
+          option.disabled = !selected.scales.includes(scaleValue);
+          option.hidden = !selected.scales.includes(scaleValue);
+        }
+        if (![...scaleSelect.options].some(option => option.value === scaleSelect.value && !option.disabled)) {
+          scaleSelect.value = String(selected.scales[0]);
+        }
+        modelHelp.textContent = `${selected.category.toUpperCase()} — ${selected.description} Supported scales: ${selected.scales.join(', ')}x.`;
+      }
+
+      function refreshVideoModelUi() {
+        const selected = supportedModels.find(model => model.key === videoModelSelect.value);
+        if (!selected) return;
+        for (const option of videoScaleSelect.options) {
+          const scaleValue = Number(option.value);
+          option.disabled = !selected.scales.includes(scaleValue);
+          option.hidden = !selected.scales.includes(scaleValue);
+        }
+        if (![...videoScaleSelect.options].some(option => option.value === videoScaleSelect.value && !option.disabled)) {
+          videoScaleSelect.value = String(selected.scales[0]);
+        }
+      }
+
+      function applyVideoProfile() {
+        const profile = videoProfiles.find(item => item.key === videoProfileSelect.value);
+        if (!profile) return;
+        videoProfileHelp.textContent = `${profile.category.toUpperCase()} — ${profile.description} Model: ${profile.modelKey}, Scale: ${profile.scale}x, Codec: ${profile.videoCodec}, Preset: ${profile.videoPreset}, CRF: ${profile.crf}.`;
+        videoModelSelect.value = profile.modelKey;
+        refreshVideoModelUi();
+        videoScaleSelect.value = String(profile.scale);
+        videoForm.querySelector('[name="output_container"]').value = 'mp4';
+        videoForm.querySelector('[name="video_codec"]').value = profile.videoCodec;
+        videoForm.querySelector('[name="video_preset"]').value = profile.videoPreset;
+        videoForm.querySelector('[name="crf"]').value = profile.crf;
+        keepAudioCheckbox.checked = true;
+      }
+
+      fileInput.addEventListener('change', () => {
+        const file = fileInput.files?.[0];
+        if (!file) {
+          previewBlock.classList.add('hidden');
+          imageWarning.classList.add('hidden');
+          return;
+        }
+        const url = URL.createObjectURL(file);
+        imagePreview.src = url;
+        const img = new Image();
+        img.onload = () => {
+          previewBlock.classList.remove('hidden');
+          imageMeta.textContent = `Selected: ${file.name} — ${img.width}x${img.height} — ${(file.size / 1024).toFixed(1)} KB`;
+          if (img.width < 512 || img.height < 512 || file.size < 50 * 1024) {
+            imageWarning.textContent = 'Warning: this file looks very small, so it may be a thumbnail/preview instead of the original image.';
+            imageWarning.classList.remove('hidden');
+          } else {
+            imageWarning.classList.add('hidden');
+          }
+        };
+        img.src = url;
+      });
+
+      videoInput.addEventListener('change', () => {
+        const file = videoInput.files?.[0];
+        if (!file) return;
+        videoMeta.textContent = `Selected video: ${file.name} — ${(file.size / (1024 * 1024)).toFixed(2)} MB`;
+      });
+
+      modelSelect.addEventListener('change', refreshModelUi);
+      videoModelSelect.addEventListener('change', refreshVideoModelUi);
+      videoProfileSelect.addEventListener('change', applyVideoProfile);
+      refreshModelUi();
+      applyVideoProfile();
+
+      async function pollJob(statusUrl) {
+        for (;;) {
+          const response = await fetch(statusUrl);
+          const data = await response.json();
+          const stage = data?.metadata?.stage ? `\n\nStage: ${data.metadata.stage}` : '';
+          statusBox.textContent = JSON.stringify(data, null, 2) + stage;
+          if (data.status === 'completed' && data.downloadUrl) {
+            downloadLink.href = data.downloadUrl;
+            downloadLink.classList.remove('hidden');
+            downloadLink.textContent = 'Download result';
+            return;
+          }
+          if (data.status === 'failed') {
+            downloadLink.classList.add('hidden');
+            return;
+          }
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+      }
+
+      imageForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        downloadLink.classList.add('hidden');
+        statusBox.textContent = 'Uploading image...';
+        const formData = new FormData(imageForm);
+        const response = await fetch('/api/v1/jobs', { method: 'POST', body: formData });
+        const data = await response.json();
+        statusBox.textContent = JSON.stringify(data, null, 2);
+        if (!response.ok) return;
+        await pollJob(data.statusUrl);
+      });
+
+      videoForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        downloadLink.classList.add('hidden');
+        statusBox.textContent = 'Uploading video... this can take a while.';
+        const formData = new FormData(videoForm);
+        formData.set('keep_audio', keepAudioCheckbox.checked ? 'true' : 'false');
+        statusBox.textContent += keepAudioCheckbox.checked ? '\n\nAudio: keep original track' : '\n\nAudio: muted export';
+        const response = await fetch('/api/v1/video/jobs', { method: 'POST', body: formData });
+        const data = await response.json();
+        statusBox.textContent = JSON.stringify(data, null, 2);
+        if (!response.ok) return;
+        await pollJob(data.statusUrl);
+      });
+    </script>
+  </body>
+</html>

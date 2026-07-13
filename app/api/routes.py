@@ -1,0 +1,243 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse
+
+from app.config import Settings, get_settings
+from app.models import JobStatus, UpscaleJob, VideoUpscaleJob
+from app.schemas import (
+    CreateJobResponse,
+    EngineInfoResponse,
+    HealthResponse,
+    JobResponse,
+    SupportedModelResponse,
+    VideoJobResponse,
+    VideoProfileResponse,
+)
+from app.services.job_manager import JobManager
+from app.services.storage import StorageService
+from app.services.video_job_manager import VideoJobManager
+
+router = APIRouter(prefix="/api/v1", tags=["api"])
+
+
+def get_job_manager(request: Request) -> JobManager:
+    return request.app.state.job_manager
+
+
+def get_video_job_manager(request: Request) -> VideoJobManager:
+    return request.app.state.video_job_manager
+
+
+def get_storage(request: Request) -> StorageService:
+    return request.app.state.storage
+
+
+def job_to_response(job: UpscaleJob) -> JobResponse:
+    download_url = f"/api/v1/jobs/{job.id}/download" if job.status == JobStatus.completed else None
+    return JobResponse(
+        job_id=job.id,
+        status=job.status,
+        original_filename=job.original_filename,
+        model_name=job.model_name,
+        scale=job.scale,
+        output_format=job.output_format,
+        created_at=job.created_at,
+        started_at=job.started_at,
+        finished_at=job.finished_at,
+        error=job.error,
+        download_url=download_url,
+    )
+
+
+def video_job_to_response(job: VideoUpscaleJob) -> VideoJobResponse:
+    download_url = f"/api/v1/video/jobs/{job.id}/download" if job.status == JobStatus.completed else None
+    return VideoJobResponse(
+        job_id=job.id,
+        status=job.status,
+        original_filename=job.original_filename,
+        model_name=job.model_name,
+        scale=job.scale,
+        output_container=job.output_container,
+        video_codec=job.video_codec,
+        video_preset=job.video_preset,
+        crf=job.crf,
+        keep_audio=job.keep_audio,
+        created_at=job.created_at,
+        started_at=job.started_at,
+        finished_at=job.finished_at,
+        error=job.error,
+        metadata=job.metadata,
+        download_url=download_url,
+    )
+
+
+@router.get("/health", response_model=HealthResponse)
+async def health(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+    jobs: JobManager = Depends(get_job_manager),
+    video_jobs: VideoJobManager = Depends(get_video_job_manager),
+) -> HealthResponse:
+    return HealthResponse(
+        status="ok",
+        engine=settings.engine,
+        gpu_concurrency=settings.gpu_concurrency,
+        queue_depth=jobs.queue_depth(),
+        video_queue_depth=video_jobs.queue_depth(),
+    )
+
+
+@router.get("/engine", response_model=EngineInfoResponse)
+async def engine_info(request: Request, settings: Settings = Depends(get_settings)) -> EngineInfoResponse:
+    engine = request.app.state.engine
+    media_tools = request.app.state.media_tools
+    return EngineInfoResponse(
+        engine=settings.engine,
+        configured_binary=settings.engine_binary,
+        configured_models_dir=settings.engine_models_dir,
+        available=engine.available(),
+        default_model=settings.default_model,
+        allowed_scales=settings.allowed_scale_values,
+        supported_models=[SupportedModelResponse(**item) for item in settings.model_catalog],
+        video_profiles=[VideoProfileResponse(**item) for item in settings.video_profile_catalog],
+        ffmpeg_available=media_tools.available(),
+    )
+
+
+@router.post("/jobs", response_model=CreateJobResponse, status_code=202)
+async def create_job(
+    request: Request,
+    file: UploadFile = File(...),
+    model_name: str = Form(default="realesrgan-x4plus"),
+    scale: int = Form(default=4),
+    output_format: str = Form(default="png"),
+    jobs: JobManager = Depends(get_job_manager),
+    storage: StorageService = Depends(get_storage),
+    settings: Settings = Depends(get_settings),
+) -> CreateJobResponse:
+    original_name = Path(file.filename or "upload.png").name
+    destination = settings.uploads_path / f"pending-{original_name}"
+
+    try:
+        await storage.save_upload(file, destination)
+        job = await jobs.create_job(
+            source_path=destination,
+            original_filename=original_name,
+            model_name=model_name,
+            scale=scale,
+            output_format=output_format,
+        )
+        final_source = settings.uploads_path / f"{job.id}-{original_name}"
+        destination.rename(final_source)
+        job.source_path = final_source
+    except ValueError as exc:
+        if destination.exists():
+            destination.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return CreateJobResponse(
+        job_id=job.id,
+        status=job.status,
+        status_url=f"/api/v1/jobs/{job.id}",
+        download_url=None,
+    )
+
+
+@router.post("/video/jobs", response_model=CreateJobResponse, status_code=202)
+async def create_video_job(
+    request: Request,
+    file: UploadFile = File(...),
+    profile_key: str = Form(default="anime-balanced-2x"),
+    model_name: str | None = Form(default=None),
+    scale: int | None = Form(default=None),
+    output_container: str | None = Form(default=None),
+    video_codec: str | None = Form(default=None),
+    video_preset: str | None = Form(default=None),
+    crf: int | None = Form(default=None),
+    keep_audio: bool | None = Form(default=None),
+    video_jobs: VideoJobManager = Depends(get_video_job_manager),
+    storage: StorageService = Depends(get_storage),
+    settings: Settings = Depends(get_settings),
+) -> CreateJobResponse:
+    profile = settings.get_video_profile(profile_key)
+    if not profile:
+        raise HTTPException(status_code=400, detail=f"Unknown profile: {profile_key}")
+
+    original_name = Path(file.filename or "upload.mp4").name
+    destination = settings.uploads_path / f"pending-video-{original_name}"
+
+    selected_model = model_name or profile["model_key"]
+    selected_scale = scale or profile["scale"]
+    selected_container = output_container or "mp4"
+    selected_codec = video_codec or profile["video_codec"]
+    selected_preset = video_preset or profile["video_preset"]
+    selected_crf = crf or profile["crf"]
+    selected_keep_audio = keep_audio if keep_audio is not None else profile["keep_audio"]
+
+    try:
+        await storage.save_upload(file, destination, max_mb=settings.max_video_upload_mb)
+        job = await video_jobs.create_job(
+            source_path=destination,
+            original_filename=original_name,
+            model_name=selected_model,
+            scale=selected_scale,
+            output_container=selected_container,
+            video_codec=selected_codec,
+            video_preset=selected_preset,
+            crf=selected_crf,
+            keep_audio=selected_keep_audio,
+        )
+        final_source = settings.uploads_path / f"{job.id}-{original_name}"
+        destination.rename(final_source)
+        job.source_path = final_source
+        job.metadata["profileKey"] = profile_key
+    except ValueError as exc:
+        if destination.exists():
+            destination.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return CreateJobResponse(
+        job_id=job.id,
+        status=job.status,
+        status_url=f"/api/v1/video/jobs/{job.id}",
+        download_url=None,
+    )
+
+
+@router.get("/jobs/{job_id}", response_model=JobResponse)
+async def get_job(job_id: str, jobs: JobManager = Depends(get_job_manager)) -> JobResponse:
+    job = jobs.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job_to_response(job)
+
+
+@router.get("/video/jobs/{job_id}", response_model=VideoJobResponse)
+async def get_video_job(job_id: str, video_jobs: VideoJobManager = Depends(get_video_job_manager)) -> VideoJobResponse:
+    job = video_jobs.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Video job not found")
+    return video_job_to_response(job)
+
+
+@router.get("/jobs/{job_id}/download")
+async def download_job(job_id: str, jobs: JobManager = Depends(get_job_manager)) -> FileResponse:
+    job = jobs.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status != JobStatus.completed or not job.output_path:
+        raise HTTPException(status_code=409, detail="Job is not completed yet")
+    return FileResponse(path=job.output_path, filename=job.output_path.name, media_type="application/octet-stream")
+
+
+@router.get("/video/jobs/{job_id}/download")
+async def download_video_job(job_id: str, video_jobs: VideoJobManager = Depends(get_video_job_manager)) -> FileResponse:
+    job = video_jobs.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Video job not found")
+    if job.status != JobStatus.completed or not job.output_path:
+        raise HTTPException(status_code=409, detail="Video job is not completed yet")
+    return FileResponse(path=job.output_path, filename=job.output_path.name, media_type="application/octet-stream")

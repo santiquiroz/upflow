@@ -1,0 +1,57 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from enum import Enum
+from pathlib import Path
+from typing import Any
+from uuid import uuid4
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+class JobStatus(str, Enum):
+    queued = "queued"
+    running = "running"
+    completed = "completed"
+    failed = "failed"
+
+
+@dataclass(slots=True)
+class UpscaleJob:
+    source_path: Path
+    original_filename: str
+    model_name: str
+    scale: int
+    output_format: str
+    id: str = field(default_factory=lambda: uuid4().hex)
+    status: JobStatus = JobStatus.queued
+    created_at: datetime = field(default_factory=utc_now)
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    error: str | None = None
+    output_path: Path | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class VideoUpscaleJob:
+    source_path: Path
+    original_filename: str
+    model_name: str
+    scale: int
+    output_container: str
+    video_codec: str
+    video_preset: str
+    crf: int
+    keep_audio: bool
+    id: str = field(default_factory=lambda: uuid4().hex)
+    status: JobStatus = JobStatus.queued
+    created_at: datetime = field(default_factory=utc_now)
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    error: str | None = None
+    output_path: Path | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)

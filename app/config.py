@@ -1,0 +1,234 @@
+from __future__ import annotations
+
+from functools import lru_cache
+from pathlib import Path
+from typing import TypedDict
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class ModelOption(TypedDict):
+    key: str
+    engine_name: str
+    label: str
+    category: str
+    description: str
+    scales: list[int]
+
+
+class VideoProfile(TypedDict):
+    key: str
+    label: str
+    category: str
+    description: str
+    model_key: str
+    scale: int
+    video_codec: str
+    video_preset: str
+    crf: int
+    keep_audio: bool
+
+
+MODEL_CATALOG: list[ModelOption] = [
+    {
+        "key": "realesrgan-x4plus",
+        "engine_name": "realesrgan-x4plus",
+        "label": "RealESRGAN x4 Plus",
+        "category": "general",
+        "description": "Best general-purpose photo upscaling.",
+        "scales": [4],
+    },
+    {
+        "key": "realesrgan-x4plus-anime",
+        "engine_name": "realesrgan-x4plus-anime",
+        "label": "RealESRGAN x4 Plus Anime",
+        "category": "anime",
+        "description": "Still anime images, illustrations and line art.",
+        "scales": [4],
+    },
+    {
+        "key": "realesr-animevideov3-x2",
+        "engine_name": "realesr-animevideov3-x2",
+        "label": "RealESR AnimeVideo v3 x2",
+        "category": "anime",
+        "description": "Anime/video style model optimized for 2x.",
+        "scales": [2],
+    },
+    {
+        "key": "realesr-animevideov3-x3",
+        "engine_name": "realesr-animevideov3-x3",
+        "label": "RealESR AnimeVideo v3 x3",
+        "category": "anime",
+        "description": "Anime/video style model optimized for 3x.",
+        "scales": [3],
+    },
+    {
+        "key": "realesr-animevideov3-x4",
+        "engine_name": "realesr-animevideov3-x4",
+        "label": "RealESR AnimeVideo v3 x4",
+        "category": "anime",
+        "description": "Anime/video style model optimized for 4x.",
+        "scales": [4],
+    },
+    {
+        "key": "realesr-animevideov3",
+        "engine_name": "realesr-animevideov3",
+        "label": "RealESR AnimeVideo v3 (auto by scale)",
+        "category": "anime",
+        "description": "Convenience preset that maps automatically to x2/x3/x4.",
+        "scales": [2, 3, 4],
+    },
+]
+
+VIDEO_PROFILE_CATALOG: list[VideoProfile] = [
+    {
+        "key": "general-balanced-2x",
+        "label": "General Balanced 2x",
+        "category": "general",
+        "description": "Good default for long videos when you want reasonable size and speed.",
+        "model_key": "realesrgan-x4plus",
+        "scale": 4,
+        "video_codec": "libx264",
+        "video_preset": "medium",
+        "crf": 18,
+        "keep_audio": True,
+    },
+    {
+        "key": "general-hq-4x",
+        "label": "General High Quality 4x",
+        "category": "general",
+        "description": "Higher quality archival-style output for non-anime footage.",
+        "model_key": "realesrgan-x4plus",
+        "scale": 4,
+        "video_codec": "libx265",
+        "video_preset": "slow",
+        "crf": 17,
+        "keep_audio": True,
+    },
+    {
+        "key": "anime-balanced-2x",
+        "label": "Anime Balanced 2x",
+        "category": "anime",
+        "description": "Best starting point for anime episodes and longer clips.",
+        "model_key": "realesr-animevideov3-x2",
+        "scale": 2,
+        "video_codec": "libx264",
+        "video_preset": "medium",
+        "crf": 17,
+        "keep_audio": True,
+    },
+    {
+        "key": "anime-quality-3x",
+        "label": "Anime Quality 3x",
+        "category": "anime",
+        "description": "Sharper upscale for anime scenes where detail matters.",
+        "model_key": "realesr-animevideov3-x3",
+        "scale": 3,
+        "video_codec": "libx265",
+        "video_preset": "slow",
+        "crf": 16,
+        "keep_audio": True,
+    },
+    {
+        "key": "anime-max-detail-4x",
+        "label": "Anime Max Detail 4x",
+        "category": "anime",
+        "description": "Heavy upscale for short anime clips when you want to push the GPU harder.",
+        "model_key": "realesr-animevideov3-x4",
+        "scale": 4,
+        "video_codec": "libx265",
+        "video_preset": "slow",
+        "crf": 15,
+        "keep_audio": True,
+    },
+]
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    app_name: str = Field(default="Image Upscaler AMD", alias="APP_NAME")
+    app_host: str = Field(default="127.0.0.1", alias="APP_HOST")
+    app_port: int = Field(default=8090, alias="APP_PORT")
+    web_title: str = Field(default="AMD Image Upscaler", alias="WEB_TITLE")
+
+    max_upload_mb: int = Field(default=50, alias="MAX_UPLOAD_MB")
+    max_video_upload_mb: int = Field(default=2048, alias="MAX_VIDEO_UPLOAD_MB")
+    max_image_pixels: int = Field(default=120_000_000, alias="MAX_IMAGE_PIXELS")
+    gpu_concurrency: int = Field(default=1, alias="GPU_CONCURRENCY")
+    cpu_fallback_workers: int = Field(default=2, alias="CPU_FALLBACK_WORKERS")
+    ffmpeg_binary: str = Field(default="vendor/ffmpeg/bin/ffmpeg.exe", alias="FFMPEG_BINARY")
+    ffprobe_binary: str = Field(default="vendor/ffmpeg/bin/ffprobe.exe", alias="FFPROBE_BINARY")
+    ffmpeg_decode_threads: int = Field(default=12, alias="FFMPEG_DECODE_THREADS")
+    ffmpeg_encode_threads: int = Field(default=24, alias="FFMPEG_ENCODE_THREADS")
+    ffmpeg_x265_threads: int = Field(default=8, alias="FFMPEG_X265_THREADS")
+
+    runtime_dir: str = Field(default="runtime", alias="RUNTIME_DIR")
+    engine: str = Field(default="realesrgan-ncnn", alias="ENGINE")
+    engine_binary: str = Field(default="vendor/realesrgan/realesrgan-ncnn-vulkan.exe", alias="ENGINE_BINARY")
+    engine_models_dir: str = Field(default="vendor/realesrgan/models", alias="ENGINE_MODELS_DIR")
+    default_model: str = Field(default="realesrgan-x4plus", alias="DEFAULT_MODEL")
+    default_scale: int = Field(default=4, alias="DEFAULT_SCALE")
+    allowed_scales: str = Field(default="2,3,4", alias="ALLOWED_SCALES")
+    jpeg_quality: int = Field(default=95, alias="JPEG_QUALITY")
+    default_video_profile: str = Field(default="anime-balanced-2x", alias="DEFAULT_VIDEO_PROFILE")
+
+    @property
+    def runtime_path(self) -> Path:
+        return Path(self.runtime_dir)
+
+    @property
+    def uploads_path(self) -> Path:
+        return self.runtime_path / "uploads"
+
+    @property
+    def outputs_path(self) -> Path:
+        return self.runtime_path / "outputs"
+
+    @property
+    def temp_path(self) -> Path:
+        return self.runtime_path / "temp"
+
+    @property
+    def video_work_path(self) -> Path:
+        return self.runtime_path / "video-work"
+
+    @property
+    def allowed_scale_values(self) -> list[int]:
+        return [int(item.strip()) for item in self.allowed_scales.split(",") if item.strip()]
+
+    @property
+    def model_catalog(self) -> list[ModelOption]:
+        return MODEL_CATALOG
+
+    @property
+    def model_keys(self) -> set[str]:
+        return {item["key"] for item in self.model_catalog}
+
+    @property
+    def video_profile_catalog(self) -> list[VideoProfile]:
+        return VIDEO_PROFILE_CATALOG
+
+    @property
+    def video_profile_keys(self) -> set[str]:
+        return {item["key"] for item in self.video_profile_catalog}
+
+    def get_model_option(self, model_name: str) -> ModelOption | None:
+        return next((item for item in self.model_catalog if item["key"] == model_name), None)
+
+    def get_video_profile(self, profile_key: str) -> VideoProfile | None:
+        return next((item for item in self.video_profile_catalog if item["key"] == profile_key), None)
+
+    def resolve_engine_model_name(self, model_name: str, scale: int) -> str:
+        if model_name == "realesr-animevideov3":
+            return f"realesr-animevideov3-x{scale}"
+        option = self.get_model_option(model_name)
+        if option:
+            return option["engine_name"]
+        return model_name
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    return Settings()
