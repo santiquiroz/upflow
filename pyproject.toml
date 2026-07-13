@@ -1,7 +1,7 @@
 [project]
-name = "image-upscaler-amd"
+name = "upflow"
 version = "0.1.0"
-description = "High-quality image upscaling service for AMD GPUs with FastAPI, web UI, and third-party API support."
+description = "Modern AI upscaling + frame interpolation for AMD GPUs — Vulkan-native, FastAPI, web UI + REST API."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

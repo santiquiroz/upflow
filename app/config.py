@@ -148,10 +148,10 @@ VIDEO_PROFILE_CATALOG: list[VideoProfile] = [
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    app_name: str = Field(default="Image Upscaler AMD", alias="APP_NAME")
+    app_name: str = Field(default="Upflow", alias="APP_NAME")
     app_host: str = Field(default="127.0.0.1", alias="APP_HOST")
     app_port: int = Field(default=8090, alias="APP_PORT")
-    web_title: str = Field(default="AMD Image Upscaler", alias="WEB_TITLE")
+    web_title: str = Field(default="Upflow", alias="WEB_TITLE")
 
     max_upload_mb: int = Field(default=50, alias="MAX_UPLOAD_MB")
     max_video_upload_mb: int = Field(default=2048, alias="MAX_VIDEO_UPLOAD_MB")

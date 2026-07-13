@@ -1,124 +1,124 @@
-# Image Upscaler AMD
+<div align="center">
 
-Proyecto nuevo y aislado para reescalado de **imágenes y videos** con alta calidad en **Windows + AMD Radeon RX 7800 XT**.
+# ⚡ Upflow
 
-## Qué incluye
+### Modern AI upscaling **+** frame interpolation — open source, Vulkan-native, built for AMD.
 
-- **Web UI** para imágenes y videos.
-- **REST API** para que otras apps envíen trabajos y consulten su estado.
-- **Cola de trabajos** separada para imágenes y videos.
-- **Motor desacoplado** para usar Real-ESRGAN NCNN con Vulkan, ideal para AMD en Windows.
-- **Pipeline de video** con FFmpeg: extracción de frames, upscale por lotes, preservación de audio y re-ensamblado final.
-- Manejo más robusto de encode H.265/libx265 en Windows para evitar fallos por exceso de threads.
-- Estructura pensada para crecer sin mezclar la UI con el motor ni la API.
+*Think Lossless Scaling, but for your files: batch-upscale anime and photos, rebuild video frame-by-frame, and (soon) interpolate to buttery-smooth high FPS — all on your own GPU, no cloud, no CUDA lock-in.*
 
-## Por qué esta arquitectura
+[![License: MIT](https://img.shields.io/badge/License-MIT-22c55e.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-009688.svg?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![Backend: Vulkan](https://img.shields.io/badge/backend-Vulkan-AC162C.svg?logo=vulkan&logoColor=white)](https://github.com/xinntao/Real-ESRGAN-ncnn-vulkan)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-8b5cf6.svg)](CONTRIBUTING.md)
 
-Tu máquina:
+</div>
 
-- **GPU:** AMD Radeon RX 7800 XT
-- **CPU:** Ryzen 9 7900X3D
-- **RAM:** 128 GB
-- **SO:** Windows 11 Pro
+---
 
-Para AMD en Windows, la ruta más sensata para calidad + compatibilidad es **Real-ESRGAN NCNN Vulkan**. DirectML existe, pero hoy suele ser menos predecible para este tipo de flujo. Por eso la app está preparada para arrancar con NCNN/Vulkan y dejar el motor como componente intercambiable.
+## Why Upflow
 
-## Modelos disponibles
+Most good upscalers are either NVIDIA/CUDA-only, closed-source, or a pile of CLI flags. Upflow is a clean **web UI + REST API** wrapped around a **decoupled, swappable engine**, running on **Real-ESRGAN NCNN + Vulkan** — which means it screams on **AMD Radeon** hardware on Windows where DirectML and CUDA fall short.
 
-**Generales**
-- **realesrgan-x4plus** → fotos, imágenes generales, mejor equilibrio calidad/detalle.
+- 🖼️ **Images** — drag, pick a model, upscale up to 4×. Photos and anime/line-art alike.
+- 🎬 **Video** — full FFmpeg pipeline: extract frames → batch upscale → re-encode with audio preserved. Anime & general presets included.
+- 🧩 **Decoupled engine** — the model backend is a component behind an interface. NCNN/Vulkan today, anything tomorrow.
+- 🔌 **REST API** — queue jobs and poll status from any other app.
+- 🏠 **100% local** — your media never leaves your machine.
 
-**Especializados en anime**
-- **realesrgan-x4plus-anime** → anime, ilustración, line art estático.
-- **realesr-animevideov3-x2** → anime/video con escala 2x.
-- **realesr-animevideov3-x3** → anime/video con escala 3x.
-- **realesr-animevideov3-x4** → anime/video con escala 4x.
-- **realesr-animevideov3** → preset automático que selecciona x2/x3/x4 según la escala elegida.
+> **Runs on any Vulkan GPU** (AMD, NVIDIA, Intel). It's simply *tuned* for AMD-on-Windows, where the good options are thin.
 
-La UI ahora expone estos modelos en un **dropdown** y la API también los publica en `GET /api/v1/engine`.
+## ✨ Roadmap — the "modern" part
 
-## Estructura
+Upscaling is spatial super-resolution. The next leap is **temporal**: AI **frame interpolation** to turn 24 fps into smooth 48/60/120 fps — the same trick Lossless Scaling does in real time, but applied losslessly to your output file.
 
-```text
-image-upscaler-amd/
-  app/
-    api/
-    services/
-    templates/
-    static/
-    web/
-    main.py
-  scripts/
-  tests/
-  runtime/
-```
+- [ ] 🌊 **FPS interpolation via RIFE** (`rife-ncnn-vulkan`) — 2×/3×/4× frame rate, anime-optimized models (RIFE 4.8 / GMFSS)
+- [ ] 🧹 Automatic disk cleanup + job retention (TTL)
+- [ ] 🗄️ Persistent job store (SQLite)
+- [ ] 📊 Prometheus / OpenTelemetry metrics
+- [ ] 🔑 Optional API-key auth + rate limiting for remote use
 
-## Flujo de trabajo
+See the full engineering plan in **[`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md)**.
 
-1. La imagen entra por la web o por la API.
-2. Se guarda en `runtime/uploads/`.
-3. Se crea un job.
-4. Un worker procesa la cola respetando `GPU_CONCURRENCY`.
-5. La salida se guarda en `runtime/outputs/`.
-6. El cliente consulta estado y descarga el resultado.
-
-## Instalación
+## 🚀 Quickstart (Windows / PowerShell)
 
 ```powershell
-cd image-upscaler-amd
+git clone https://github.com/santiquiroz/upflow.git
+cd upflow
+
+# 1. Python env + deps
 powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1
+
+# 2. Download the Real-ESRGAN NCNN Vulkan engine + models
 powershell -ExecutionPolicy Bypass -File .\scripts\download-realesrgan.ps1
-```
 
-## Arranque
+# 3. (video only) Download FFmpeg
+powershell -ExecutionPolicy Bypass -File .\scripts\download-ffmpeg.ps1
 
-```powershell
-cd image-upscaler-amd
+# 4. Run
 .\.venv\Scripts\uvicorn app.main:app --host 127.0.0.1 --port 8090 --reload
 ```
 
-## Endpoints
+Open **http://127.0.0.1:8090**.
 
-- `GET /` → web UI
-- `GET /api/v1/health` → healthcheck
-- `GET /api/v1/engine` → estado del motor/configuración/modelos/perfiles de video
-- `POST /api/v1/jobs` → crear trabajo de imagen
-- `GET /api/v1/jobs/{job_id}` → ver estado de imagen
-- `GET /api/v1/jobs/{job_id}/download` → descargar imagen
-- `POST /api/v1/video/jobs` → crear trabajo de video
-- `GET /api/v1/video/jobs/{job_id}` → ver estado de video
-- `GET /api/v1/video/jobs/{job_id}/download` → descargar video
+## 🧠 Models
 
-## Ejemplo de uso por API
+| Model | Best for | Scales |
+|---|---|---|
+| `realesrgan-x4plus` | Photos, general images | 4× |
+| `realesrgan-x4plus-anime` | Still anime, illustration, line art | 4× |
+| `realesr-animevideov3-x2/x3/x4` | Anime video frames | 2× / 3× / 4× |
+| `realesr-animevideov3` | Auto preset (picks x2/x3/x4 by scale) | 2–4× |
+
+## 🔗 API
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `GET` | `/api/v1/health` | Healthcheck + queue depth |
+| `GET` | `/api/v1/engine` | Engine status, models, video profiles |
+| `POST` | `/api/v1/jobs` | Create image job |
+| `GET` | `/api/v1/jobs/{id}` | Image job status |
+| `GET` | `/api/v1/jobs/{id}/download` | Download upscaled image |
+| `POST` | `/api/v1/video/jobs` | Create video job |
+| `GET` | `/api/v1/video/jobs/{id}` | Video job status |
+| `GET` | `/api/v1/video/jobs/{id}/download` | Download upscaled video |
 
 ```bash
 curl -X POST http://127.0.0.1:8090/api/v1/jobs \
   -F "file=@input.png" \
-  -F "model_name=realesrgan-x4plus" \
+  -F "model_name=realesrgan-x4plus-anime" \
   -F "scale=4" \
   -F "output_format=png"
 ```
 
-## Notas de rendimiento
+## 🏗️ Architecture
 
-- Empieza con `GPU_CONCURRENCY=1` para evitar pelear VRAM y degradar latencia.
-- Si luego quieres throughput, podemos probar `GPU_CONCURRENCY=2` y perfilar.
-- La CPU y RAM sobran; el cuello real será el motor GPU.
-- Para producción más pesada, el siguiente paso natural sería mover la cola a Redis y separar workers.
+```text
+Browser / API client
+        │
+   FastAPI (app/)  ──  web UI (Jinja) + REST routers
+        │
+   Job queue (per media type)  ──  async worker + GPU semaphore
+        │
+   ┌────┴─────────────┐
+   │                  │
+Image engine     Video pipeline (FFmpeg)
+(Real-ESRGAN     extract frames → upscale batch → re-encode + audio
+ NCNN Vulkan)    (RIFE interpolation stage — coming)
+```
 
-## Buenas prácticas ya aplicadas
+The engine sits behind an `UpscaleEngine` interface (`app/services/engines/base.py`), so the Vulkan backend is a drop-in component.
 
-- Proyecto aislado en carpeta nueva.
-- Motor desacoplado de UI/API.
-- Validación de entrada.
-- Límite de tamaño de subida.
-- Cola de trabajos en vez de bloquear request largos.
-- Un solo backend para servir web y servicios.
+## 🤝 Contributing
 
-## Qué mejoraría después
+PRs welcome. See [`CONTRIBUTING.md`](CONTRIBUTING.md) and the [implementation plan](docs/IMPLEMENTATION_PLAN.md) for where help is most useful. Good first areas: disk cleanup, tests, and the RIFE interpolation stage.
 
-1. Persistencia real de jobs en SQLite/PostgreSQL.
-2. Redis + workers separados para escala horizontal.
-3. Métricas Prometheus/OpenTelemetry.
-4. Catálogo formal de modelos con presets por tipo de imagen.
-5. Batch processing y autenticación para API externa.
+## 📄 License
+
+[MIT](LICENSE) © 2026 Santiago Quiroz. Do whatever you want with it.
+
+---
+
+<div align="center">
+<sub>Built with FastAPI · Real-ESRGAN · NCNN · Vulkan · FFmpeg</sub>
+</div>
