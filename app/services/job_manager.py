@@ -43,6 +43,7 @@ class JobManager:
         model_name: str,
         scale: int,
         output_format: str,
+        job_id: str | None = None,
     ) -> UpscaleJob:
         self._validate_input_image(source_path)
         resolved_model_name = self._validate_and_resolve_model(
@@ -58,6 +59,8 @@ class JobManager:
             scale=scale,
             output_format=output_format,
         )
+        if job_id is not None:
+            job.id = job_id
         self.jobs[job.id] = job
         await self.queue.put(job)
         return job

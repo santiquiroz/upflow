@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
@@ -119,8 +120,10 @@ async def create_job(
     settings: Settings = Depends(get_settings),
 ) -> CreateJobResponse:
     original_name = Path(file.filename or "upload.png").name
-    destination = settings.uploads_path / f"pending-{original_name}"
+    token = uuid4().hex
+    destination = settings.uploads_path / f"{token}-{original_name}"
 
+    job: UpscaleJob | None = None
     try:
         await storage.save_upload(file, destination)
         job = await jobs.create_job(
@@ -129,14 +132,13 @@ async def create_job(
             model_name=model_name,
             scale=scale,
             output_format=output_format,
+            job_id=token,
         )
-        final_source = settings.uploads_path / f"{job.id}-{original_name}"
-        destination.rename(final_source)
-        job.source_path = final_source
     except ValueError as exc:
-        if destination.exists():
-            destination.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        if job is None and destination.exists():
+            destination.unlink(missing_ok=True)
 
     return CreateJobResponse(
         job_id=job.id,
@@ -167,7 +169,8 @@ async def create_video_job(
         raise HTTPException(status_code=400, detail=f"Unknown profile: {profile_key}")
 
     original_name = Path(file.filename or "upload.mp4").name
-    destination = settings.uploads_path / f"pending-video-{original_name}"
+    token = uuid4().hex
+    destination = settings.uploads_path / f"{token}-{original_name}"
 
     selected_model = model_name or profile["model_key"]
     selected_scale = scale or profile["scale"]
@@ -177,6 +180,7 @@ async def create_video_job(
     selected_crf = crf or profile["crf"]
     selected_keep_audio = keep_audio if keep_audio is not None else profile["keep_audio"]
 
+    job: VideoUpscaleJob | None = None
     try:
         await storage.save_upload(file, destination, max_mb=settings.max_video_upload_mb)
         job = await video_jobs.create_job(
@@ -189,15 +193,14 @@ async def create_video_job(
             video_preset=selected_preset,
             crf=selected_crf,
             keep_audio=selected_keep_audio,
+            job_id=token,
         )
-        final_source = settings.uploads_path / f"{job.id}-{original_name}"
-        destination.rename(final_source)
-        job.source_path = final_source
         job.metadata["profileKey"] = profile_key
     except ValueError as exc:
-        if destination.exists():
-            destination.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        if job is None and destination.exists():
+            destination.unlink(missing_ok=True)
 
     return CreateJobResponse(
         job_id=job.id,

@@ -47,6 +47,7 @@ class VideoJobManager:
         video_preset: str,
         crf: int,
         keep_audio: bool,
+        job_id: str | None = None,
     ) -> VideoUpscaleJob:
         self._validate_video(source_path)
         self._validate_request(model_name, scale, output_container, video_codec, video_preset, crf)
@@ -62,6 +63,8 @@ class VideoJobManager:
             crf=crf,
             keep_audio=keep_audio,
         )
+        if job_id is not None:
+            job.id = job_id
         self.jobs[job.id] = job
         await self.queue.put(job)
         return job
