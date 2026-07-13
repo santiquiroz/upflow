@@ -5,16 +5,10 @@ from pathlib import Path
 
 
 class SubprocessTimeoutError(RuntimeError):
-    """Raised when a guarded subprocess exceeds its allotted timeout."""
+    pass
 
 
 async def run_guarded_process(command: list[str], timeout: float) -> tuple[bytes, bytes, int]:
-    """Run command to completion, killing the child on timeout or task cancellation.
-
-    Returns (stdout, stderr, returncode) for any exit code; the caller decides how to
-    interpret a nonzero returncode. Raises SubprocessTimeoutError on timeout (child
-    already killed). Re-raises CancelledError on cancellation (child already killed).
-    """
     process = await asyncio.create_subprocess_exec(
         *command,
         stdout=asyncio.subprocess.PIPE,
