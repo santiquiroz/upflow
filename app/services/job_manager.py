@@ -109,4 +109,5 @@ class JobManager:
                     job.error = str(exc)
                 finally:
                     job.finished_at = utc_now()
+                    job.source_path.unlink(missing_ok=True)
                     self.queue.task_done()

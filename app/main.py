@@ -10,6 +10,7 @@ from app.config import get_settings
 from app.services.engines.realesrgan_ncnn import RealEsrganNcnnEngine
 from app.services.job_manager import JobManager
 from app.services.media_tools import MediaTools
+from app.services.retention_sweeper import RetentionSweeper
 from app.services.storage import StorageService
 from app.services.video_job_manager import VideoJobManager
 from app.services.video_upscaler import VideoUpscaler
@@ -25,19 +26,23 @@ async def lifespan(app: FastAPI):
     job_manager = JobManager(settings, engine)
     video_upscaler = VideoUpscaler(settings, engine, media_tools)
     video_job_manager = VideoJobManager(settings, video_upscaler, media_tools)
+    retention_sweeper = RetentionSweeper(settings, job_manager, video_job_manager)
     await job_manager.start()
     await video_job_manager.start()
+    await retention_sweeper.start()
 
     app.state.storage = storage
     app.state.engine = engine
     app.state.media_tools = media_tools
     app.state.job_manager = job_manager
     app.state.video_job_manager = video_job_manager
+    app.state.retention_sweeper = retention_sweeper
     try:
         yield
     finally:
         await job_manager.stop()
         await video_job_manager.stop()
+        await retention_sweeper.stop()
 
 
 settings = get_settings()

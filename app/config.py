@@ -173,6 +173,7 @@ class Settings(BaseSettings):
     allowed_scales: str = Field(default="2,3,4", alias="ALLOWED_SCALES")
     jpeg_quality: int = Field(default=95, alias="JPEG_QUALITY")
     default_video_profile: str = Field(default="anime-balanced-2x", alias="DEFAULT_VIDEO_PROFILE")
+    output_ttl_hours: int = Field(default=24, alias="OUTPUT_TTL_HOURS")
 
     @property
     def runtime_path(self) -> Path:

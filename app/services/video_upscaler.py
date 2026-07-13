@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
 from pathlib import Path
 
 from app.config import Settings
@@ -30,6 +31,18 @@ class VideoUpscaler:
         frames_in.mkdir(parents=True, exist_ok=True)
         frames_out.mkdir(parents=True, exist_ok=True)
 
+        try:
+            return await self._run_pipeline(job, frames_in, frames_out, audio_path)
+        finally:
+            shutil.rmtree(work_dir, ignore_errors=True)
+
+    async def _run_pipeline(
+        self,
+        job: VideoUpscaleJob,
+        frames_in: Path,
+        frames_out: Path,
+        audio_path: Path,
+    ) -> Path:
         probe = await self.media_tools.ffprobe_json(job.source_path)
         video_stream = next((s for s in probe.get("streams", []) if s.get("codec_type") == "video"), None)
         has_audio = any(s.get("codec_type") == "audio" for s in probe.get("streams", []))
