@@ -6,7 +6,7 @@ import subprocess
 from fractions import Fraction
 from pathlib import Path
 
-from app.config import Settings
+from app.config import AUDIO_ENHANCE_MODES, Settings
 from app.exceptions import QueueFullError
 from app.models import JobStatus, VideoUpscaleJob, utc_now
 from app.services.media_tools import MediaTools, parse_fps_fraction, resolve_video_fps
@@ -68,6 +68,7 @@ class VideoJobManager:
         keep_audio: bool,
         fps_multiplier: int = 1,
         target_fps: str | None = None,
+        audio_enhance: str | None = None,
         job_id: str | None = None,
     ) -> VideoUpscaleJob:
         source_fps = await self._validate_video(source_path)
@@ -81,6 +82,8 @@ class VideoJobManager:
             fps_multiplier,
             target_fps,
             source_fps,
+            keep_audio,
+            audio_enhance,
         )
 
         job = VideoUpscaleJob(
@@ -95,6 +98,7 @@ class VideoJobManager:
             keep_audio=keep_audio,
             fps_multiplier=fps_multiplier,
             target_fps=target_fps,
+            audio_enhance=audio_enhance,
         )
         if job_id is not None:
             job.id = job_id
@@ -133,6 +137,8 @@ class VideoJobManager:
         fps_multiplier: int,
         target_fps: str | None,
         source_fps: Fraction,
+        keep_audio: bool,
+        audio_enhance: str | None,
     ) -> None:
         if model_name not in self.settings.model_keys:
             raise ValueError(f"Model must be one of {sorted(self.settings.model_keys)}")
@@ -148,6 +154,7 @@ class VideoJobManager:
         if crf < 10 or crf > 28:
             raise ValueError("CRF must be between 10 and 28")
         self._validate_fps_mode(fps_multiplier, target_fps, source_fps)
+        self._validate_audio_enhance_mode(audio_enhance, keep_audio)
 
     def _validate_fps_mode(self, fps_multiplier: int, target_fps: str | None, source_fps: Fraction) -> None:
         if target_fps is not None and fps_multiplier > 1:
@@ -190,6 +197,26 @@ class VideoJobManager:
             raise ValueError(
                 "Frame interpolation requested but RIFE is not installed "
                 "(run scripts/download-rife.ps1)"
+            )
+
+    def _validate_audio_enhance_mode(self, audio_enhance: str | None, keep_audio: bool) -> None:
+        if audio_enhance is None:
+            return
+        if audio_enhance not in AUDIO_ENHANCE_MODES:
+            raise ValueError(f"audio_enhance must be one of {sorted(AUDIO_ENHANCE_MODES)}")
+        if not keep_audio:
+            raise ValueError("audio_enhance requires keep_audio to be enabled")
+        self._validate_audio_enhance_enabled(audio_enhance)
+
+    def _validate_audio_enhance_enabled(self, audio_enhance: str) -> None:
+        if not self.settings.enable_audio_enhance:
+            raise ValueError(
+                "Audio enhancement is disabled by configuration (set ENABLE_AUDIO_ENHANCE=true)"
+            )
+        if not self.settings.audio_enhance_available(audio_enhance):
+            raise ValueError(
+                f"Audio enhance mode {audio_enhance!r} requested but not installed "
+                "(run scripts/download-deepfilternet.ps1)"
             )
 
     async def _worker(self) -> None:

@@ -138,6 +138,15 @@
               </label>
 
               <label>
+                Audio enhance
+                <select id="video-audio-enhance-select" name="audio_enhance">
+                  <option value="off" selected>Off</option>
+                  <option value="rnnoise">RNNoise (rápido)</option>
+                  <option value="deepfilter">DeepFilterNet (mejor voz)</option>
+                </select>
+              </label>
+
+              <label>
                 FPS boost
                 <select id="video-fps-select" name="fps_multiplier">
                   <option value="1" selected>Off</option>
@@ -206,6 +215,7 @@
       const videoScaleSelect = document.getElementById('video-scale-select');
       const keepAudioCheckbox = document.getElementById('keep-audio-checkbox');
       const videoFpsSelect = document.getElementById('video-fps-select');
+      const videoAudioEnhanceSelect = document.getElementById('video-audio-enhance-select');
 
       function refreshModelUi() {
         const selected = supportedModels.find(model => model.key === modelSelect.value);
@@ -247,6 +257,7 @@
         videoForm.querySelector('[name="crf"]').value = profile.crf;
         keepAudioCheckbox.checked = true;
         videoFpsSelect.value = String(profile.fps_multiplier ?? 1);
+        videoAudioEnhanceSelect.value = profile.audio_enhance ?? 'off';
       }
 
       function formatFps(rawValue) {
@@ -265,6 +276,15 @@
         }
         formData.set('target_fps', selection);
         formData.set('fps_multiplier', '1');
+      }
+
+      function applyAudioEnhanceSelection(formData) {
+        const selection = videoAudioEnhanceSelect.value;
+        if (selection === 'off') {
+          formData.delete('audio_enhance');
+          return;
+        }
+        formData.set('audio_enhance', selection);
       }
 
       fileInput.addEventListener('change', () => {
@@ -342,6 +362,7 @@
         const formData = new FormData(videoForm);
         formData.set('keep_audio', keepAudioCheckbox.checked ? 'true' : 'false');
         applyTargetFpsSelection(formData);
+        applyAudioEnhanceSelection(formData);
         statusBox.textContent += keepAudioCheckbox.checked ? '\n\nAudio: keep original track' : '\n\nAudio: muted export';
         const response = await fetch('/api/v1/video/jobs', { method: 'POST', body: formData });
         const data = await response.json();

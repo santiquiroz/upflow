@@ -111,3 +111,38 @@ def test_video_form_submit_routes_fraction_fps_selection_to_target_fps() -> None
     assert "applyTargetFpsSelection(formData)" in html
     assert "formData.set('target_fps', selection)" in html
     assert "formData.delete('target_fps')" in html
+
+
+# ---------------------------------------------------------------------------
+# Task 20 (6.1c) - Audio enhance dropdown (Off/RNNoise/DeepFilterNet), profile
+# sync, and submit-only-if-not-off wiring.
+# ---------------------------------------------------------------------------
+
+
+def test_audio_enhance_select_has_off_rnnoise_deepfilter_options() -> None:
+    html = get_index_html()
+
+    assert 'id="video-audio-enhance-select"' in html
+    assert '<option value="off" selected>Off</option>' in html
+    assert 'value="rnnoise"' in html
+    assert 'value="deepfilter"' in html
+
+
+def test_apply_video_profile_reads_snake_case_audio_enhance_field() -> None:
+    html = get_index_html()
+
+    assert "profile.audio_enhance" in html
+
+
+def test_apply_video_profile_does_not_reference_camel_case_audio_enhance() -> None:
+    html = get_index_html()
+
+    assert "profile.audioEnhance" not in html
+
+
+def test_video_form_submit_routes_off_audio_enhance_out_of_form_data() -> None:
+    html = get_index_html()
+
+    assert "applyAudioEnhanceSelection(formData)" in html
+    assert "formData.delete('audio_enhance')" in html
+    assert "formData.set('audio_enhance', selection)" in html

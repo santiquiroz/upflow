@@ -5,6 +5,7 @@ from pathlib import Path
 
 from app.config import Settings
 from app.models import VideoUpscaleJob
+from app.services.engines.audio_enhance import AudioEnhancer
 from app.services.engines.realesrgan_ncnn import RealEsrganNcnnEngine
 from app.services.engines.rife_ncnn import RifeNcnnEngine
 from app.services.media_tools import (
@@ -24,11 +25,13 @@ class VideoUpscaler:
         engine: RealEsrganNcnnEngine,
         media_tools: MediaTools,
         rife_engine: RifeNcnnEngine | None = None,
+        audio_enhancers: dict[str, AudioEnhancer] | None = None,
     ) -> None:
         self.settings = settings
         self.engine = engine
         self.media_tools = media_tools
         self.rife_engine = rife_engine
+        self.audio_enhancers = audio_enhancers or {}
 
     def available(self) -> bool:
         return self.engine.available() and self.media_tools.available()
@@ -86,22 +89,12 @@ class VideoUpscaler:
             ]
         )
 
+        audio_mux_path: Path | None = None
+        audio_codec_args: list[str] = []
         if job.keep_audio and has_audio:
-            job.metadata["stage"] = "extracting_audio"
-            await self._run_process(
-                [
-                    str(self.settings.ffmpeg_binary_path),
-                    "-y",
-                    "-i",
-                    str(job.source_path),
-                    "-vn",
-                    "-c:a",
-                    "aac",
-                    "-b:a",
-                    "192k",
-                    str(audio_path),
-                ]
-            )
+            audio_mux_path, audio_codec_args = await self._prepare_audio(job, audio_path)
+        elif job.keep_audio and job.audio_enhance:
+            job.metadata["audioEnhanced"] = "skipped_no_audio"
 
         job.metadata["stage"] = "upscaling_frames"
         await self._run_process(
@@ -140,13 +133,13 @@ class VideoUpscaler:
             "-i",
             str(encode_frames_dir / "%08d.png"),
         ]
-        if job.keep_audio and audio_path.exists():
-            encode_cmd += ["-i", str(audio_path), "-map", "0:v:0", "-map", "1:a:0"]
+        if audio_mux_path is not None:
+            encode_cmd += ["-i", str(audio_mux_path), "-map", "0:v:0", "-map", "1:a:0"]
 
         encode_cmd += self._build_video_encode_options(job)
 
-        if job.keep_audio and audio_path.exists():
-            encode_cmd += ["-c:a", "copy"]
+        if audio_mux_path is not None:
+            encode_cmd += audio_codec_args
         output_path.parent.mkdir(parents=True, exist_ok=True)
         encode_cmd.append(str(output_path))
 
@@ -160,6 +153,67 @@ class VideoUpscaler:
         job.metadata["outputWidth"] = job.metadata["sourceWidth"] * job.scale
         job.metadata["outputHeight"] = job.metadata["sourceHeight"] * job.scale
         return output_path
+
+    async def _prepare_audio(self, job: VideoUpscaleJob, audio_path: Path) -> tuple[Path, list[str]]:
+        if job.audio_enhance:
+            return await self._prepare_enhanced_audio(job, audio_path)
+        return await self._prepare_original_audio(job, audio_path)
+
+    async def _prepare_original_audio(self, job: VideoUpscaleJob, audio_path: Path) -> tuple[Path, list[str]]:
+        job.metadata["stage"] = "extracting_audio"
+        await self._run_process(
+            [
+                str(self.settings.ffmpeg_binary_path),
+                "-y",
+                "-i",
+                str(job.source_path),
+                "-vn",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "192k",
+                str(audio_path),
+            ]
+        )
+        return audio_path, ["-c:a", "copy"]
+
+    async def _prepare_enhanced_audio(self, job: VideoUpscaleJob, audio_path: Path) -> tuple[Path, list[str]]:
+        audio_wav_path = audio_path.with_name("audio.wav")
+        await self._extract_audio_wav(job, audio_wav_path)
+
+        audio_enhanced_path = audio_path.with_name("audio-enhanced.wav")
+        await self._enhance_audio(job, audio_wav_path, audio_enhanced_path)
+
+        job.metadata["audioEnhanced"] = True
+        return audio_enhanced_path, ["-c:a", "aac", "-b:a", "192k"]
+
+    async def _extract_audio_wav(self, job: VideoUpscaleJob, audio_wav_path: Path) -> None:
+        # DeepFilterNet requires 48kHz input; a lossless PCM extraction avoids
+        # compounding lossy re-encodes before the enhancer runs.
+        job.metadata["stage"] = "extracting_audio"
+        await self._run_process(
+            [
+                str(self.settings.ffmpeg_binary_path),
+                "-y",
+                "-i",
+                str(job.source_path),
+                "-vn",
+                "-acodec",
+                "pcm_s16le",
+                "-ar",
+                "48000",
+                str(audio_wav_path),
+            ]
+        )
+
+    async def _enhance_audio(self, job: VideoUpscaleJob, input_wav: Path, output_wav: Path) -> None:
+        enhancer = self.audio_enhancers.get(job.audio_enhance)
+        if enhancer is None:
+            raise RuntimeError(
+                f"Audio enhance mode {job.audio_enhance!r} requested but no engine is configured"
+            )
+        job.metadata["stage"] = "enhancing_audio"
+        await enhancer.run(input_wav, output_wav)
 
     async def _maybe_interpolate(
         self,

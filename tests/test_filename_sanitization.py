@@ -171,6 +171,7 @@ async def test_video_upload_with_forbidden_chars_lands_on_disk_sanitized(tmp_pat
         keep_audio=None,
         fps_multiplier=None,
         target_fps=None,
+        audio_enhance=None,
         video_jobs=video_jobs,
         storage=storage,
         settings=settings,
