@@ -16,6 +16,27 @@
 
 ---
 
+## 🚀 Instalación rápida (usuarios)
+
+**No hace falta tocar Python ni la consola.** Cuatro pasos:
+
+1. Descargá el `.zip` del [último release](https://github.com/santiquiroz/upflow/releases) (por ejemplo `upflow-v0.1.0.zip`).
+2. Extraelo en cualquier carpeta.
+3. Doble click en **`Upflow.bat`**.
+4. Esperá la primera descarga de binarios (~1 GB: motor de upscaling + FFmpeg + RIFE) — cuando el servidor está listo, el navegador se abre solo en `http://127.0.0.1:8090`.
+
+**Requisitos:**
+
+- Windows 10 u 11.
+- Cualquier GPU con soporte Vulkan (NVIDIA, AMD o Intel).
+- [Python 3.11+](https://www.python.org/downloads/) instalado y en el `PATH`. Si tenés `winget`, con esto alcanza: `winget install Python.Python.3.12`
+
+> **¿Tenés una NVIDIA RTX?** Anda exactamente igual — Upflow corre sobre Vulkan, no necesita CUDA ni drivers especiales.
+
+¿Preferís correrlo desde el código fuente, o contribuir al proyecto? Seguí con la sección de abajo.
+
+---
+
 ## Qué es Upflow
 
 La mayoría de buenos upscalers son CUDA-only, de código cerrado, o una pila de flags de CLI. Upflow es una **web UI + API REST** limpia, construida alrededor de un **motor desacoplado e intercambiable**, corriendo sobre **Real-ESRGAN NCNN + Vulkan** — lo que significa que vuela en **AMD Radeon** en Windows, donde DirectML y CUDA se quedan cortos.
