@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
 import time
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from app.config import Settings
 from app.models import JobStatus, UpscaleJob, VideoUpscaleJob, utc_now
@@ -47,9 +49,26 @@ class RetentionSweeper:
             logger.exception("Retention sweep failed; retrying on next interval")
 
     def sweep_once(self) -> None:
+        active_source_paths = self._active_source_paths()
+        active_video_work_ids = self._active_video_work_ids()
         self._delete_expired_outputs()
+        self._delete_expired_uploads(active_source_paths)
+        self._delete_expired_work_dirs(active_video_work_ids)
         self._prune_finished_jobs(self.job_manager.jobs)
         self._prune_finished_jobs(self.video_job_manager.jobs)
+
+    def _active_source_paths(self) -> set[Path]:
+        all_jobs = list(self.job_manager.jobs.values()) + list(self.video_job_manager.jobs.values())
+        return {job.source_path for job in all_jobs if not self._is_finished(job)}
+
+    def _active_video_work_ids(self) -> set[str]:
+        return {
+            job.id for job in self.video_job_manager.jobs.values() if not self._is_finished(job)
+        }
+
+    @staticmethod
+    def _is_finished(job: UpscaleJob | VideoUpscaleJob) -> bool:
+        return job.status in (JobStatus.completed, JobStatus.failed)
 
     def _delete_expired_outputs(self) -> None:
         if not self.settings.outputs_path.exists():
@@ -59,14 +78,34 @@ class RetentionSweeper:
             if output_file.is_file() and output_file.stat().st_mtime < cutoff:
                 output_file.unlink(missing_ok=True)
 
+    def _delete_expired_uploads(self, active_source_paths: set[Path]) -> None:
+        if not self.settings.uploads_path.exists():
+            return
+        cutoff = time.time() - self.settings.output_ttl_hours * 3600
+        for upload_file in self.settings.uploads_path.iterdir():
+            if not upload_file.is_file() or upload_file in active_source_paths:
+                continue
+            if upload_file.stat().st_mtime < cutoff:
+                upload_file.unlink(missing_ok=True)
+
+    def _delete_expired_work_dirs(self, active_video_work_ids: set[str]) -> None:
+        if not self.settings.video_work_path.exists():
+            return
+        cutoff = time.time() - self.settings.output_ttl_hours * 3600
+        for work_dir in self.settings.video_work_path.iterdir():
+            if not work_dir.is_dir() or work_dir.name in active_video_work_ids:
+                continue
+            if work_dir.stat().st_mtime < cutoff:
+                shutil.rmtree(work_dir, ignore_errors=True)
+
     def _prune_finished_jobs(self, jobs: dict[str, UpscaleJob] | dict[str, VideoUpscaleJob]) -> None:
         cutoff = utc_now() - timedelta(hours=self.settings.output_ttl_hours)
         expired_ids = [job_id for job_id, job in jobs.items() if self._is_expired(job, cutoff)]
         for job_id in expired_ids:
             del jobs[job_id]
 
-    @staticmethod
-    def _is_expired(job: UpscaleJob | VideoUpscaleJob, cutoff: datetime) -> bool:
-        if job.status not in (JobStatus.completed, JobStatus.failed):
+    @classmethod
+    def _is_expired(cls, job: UpscaleJob | VideoUpscaleJob, cutoff: datetime) -> bool:
+        if not cls._is_finished(job):
             return False
         return job.finished_at is not None and job.finished_at < cutoff

@@ -442,3 +442,119 @@ async def test_sweeper_loop_survives_a_failing_sweep(
     await sweeper.stop()
 
     assert len(sweep_calls) >= 2, "the sweep loop died after the first sweep_once raised"
+
+
+# ---------------------------------------------------------------------------
+# Retention sweeper: also covers uploads/ and video-work/ (not just outputs/)
+# ---------------------------------------------------------------------------
+
+
+def test_retention_sweeper_deletes_expired_uploads_and_keeps_fresh_ones(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path, output_ttl_hours=1)
+    StorageService(settings)
+    sweeper = make_sweeper(settings)
+
+    stale_upload = settings.uploads_path / "stale-upload.png"
+    stale_upload.write_bytes(b"stale")
+    fresh_upload = settings.uploads_path / "fresh-upload.png"
+    fresh_upload.write_bytes(b"fresh")
+
+    stale_mtime = time.time() - 2 * 3600
+    os.utime(stale_upload, (stale_mtime, stale_mtime))
+
+    sweeper.sweep_once()
+
+    assert not stale_upload.exists()
+    assert fresh_upload.exists()
+
+
+def test_retention_sweeper_keeps_stale_upload_referenced_by_queued_image_job(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path, output_ttl_hours=1)
+    StorageService(settings)
+    sweeper = make_sweeper(settings)
+
+    active_upload = settings.uploads_path / "active-image-upload.png"
+    active_upload.write_bytes(b"active")
+    stale_mtime = time.time() - 2 * 3600
+    os.utime(active_upload, (stale_mtime, stale_mtime))
+
+    queued_job = UpscaleJob(
+        source_path=active_upload,
+        original_filename="active-image-upload.png",
+        model_name="realesrgan-x4plus",
+        scale=4,
+        output_format="png",
+    )
+    sweeper.job_manager.jobs[queued_job.id] = queued_job
+
+    sweeper.sweep_once()
+
+    assert active_upload.exists(), "upload referenced by a queued image job must survive the sweep"
+
+
+def test_retention_sweeper_keeps_stale_upload_referenced_by_running_video_job(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path, output_ttl_hours=1)
+    StorageService(settings)
+    sweeper = make_sweeper(settings)
+
+    active_upload = settings.uploads_path / "active-video-upload.mp4"
+    active_upload.write_bytes(b"active")
+    stale_mtime = time.time() - 2 * 3600
+    os.utime(active_upload, (stale_mtime, stale_mtime))
+
+    running_job = VideoUpscaleJob(
+        source_path=active_upload,
+        original_filename="active-video-upload.mp4",
+        model_name="realesr-animevideov3-x2",
+        scale=2,
+        output_container="mp4",
+        video_codec="libx264",
+        video_preset="medium",
+        crf=18,
+        keep_audio=False,
+    )
+    running_job.status = JobStatus.running
+    sweeper.video_job_manager.jobs[running_job.id] = running_job
+
+    sweeper.sweep_once()
+
+    assert active_upload.exists(), "upload referenced by a running video job must survive the sweep"
+
+
+def test_retention_sweeper_removes_expired_video_work_dirs_and_keeps_fresh_ones(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path, output_ttl_hours=1)
+    StorageService(settings)
+    sweeper = make_sweeper(settings)
+
+    stale_work_dir = settings.video_work_path / "stale-job-id"
+    (stale_work_dir / "frames-in").mkdir(parents=True)
+    (stale_work_dir / "frames-in" / "00000001.png").write_bytes(b"frame")
+    stale_mtime = time.time() - 2 * 3600
+    os.utime(stale_work_dir, (stale_mtime, stale_mtime))
+
+    fresh_work_dir = settings.video_work_path / "fresh-job-id"
+    fresh_work_dir.mkdir(parents=True)
+
+    sweeper.sweep_once()
+
+    assert not stale_work_dir.exists()
+    assert fresh_work_dir.exists()
+
+
+def test_retention_sweeper_keeps_stale_work_dir_of_running_video_job(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path, output_ttl_hours=1)
+    StorageService(settings)
+    sweeper = make_sweeper(settings)
+
+    running_job = make_video_job(tmp_path / "source.mp4")
+    running_job.status = JobStatus.running
+    sweeper.video_job_manager.jobs[running_job.id] = running_job
+
+    active_work_dir = settings.video_work_path / running_job.id
+    active_work_dir.mkdir(parents=True)
+    stale_mtime = time.time() - 2 * 3600
+    os.utime(active_work_dir, (stale_mtime, stale_mtime))
+
+    sweeper.sweep_once()
+
+    assert active_work_dir.exists(), "work dir of a running video job must survive the sweep"
