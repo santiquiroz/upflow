@@ -205,6 +205,14 @@ class Settings(BaseSettings):
     enable_interpolation: bool = Field(default=False, alias="ENABLE_INTERPOLATION")
     allowed_fps_multipliers: str = Field(default="2,3,4", alias="ALLOWED_FPS_MULTIPLIERS")
 
+    deepfilter_binary: str = Field(
+        default="vendor/deepfilternet/deep-filter.exe", alias="DEEPFILTER_BINARY"
+    )
+    rnnoise_model: str = Field(
+        default="vendor/deepfilternet/models/sh.rnnn", alias="RNNOISE_MODEL"
+    )
+    enable_audio_enhance: bool = Field(default=False, alias="ENABLE_AUDIO_ENHANCE")
+
     @model_validator(mode="after")
     def _apply_default_allowed_origins(self) -> "Settings":
         """Fills ALLOWED_ORIGINS from app_host/app_port when the caller left it unset.
@@ -289,6 +297,31 @@ class Settings(BaseSettings):
             and self.rife_models_path.exists()
             and (self.rife_models_path / self.rife_model).exists()
         )
+
+    @property
+    def deepfilter_binary_path(self) -> Path:
+        return resolve_against_project_root(self.deepfilter_binary)
+
+    @property
+    def rnnoise_model_path(self) -> Path:
+        return resolve_against_project_root(self.rnnoise_model)
+
+    def _deepfilter_available(self) -> bool:
+        return self.deepfilter_binary_path.exists()
+
+    def _rnnoise_available(self) -> bool:
+        return self.rnnoise_model_path.exists()
+
+    def audio_enhance_available(self, mode: str) -> bool:
+        # Capability-only per mode (is the binary/model installed?); callers
+        # check ENABLE_AUDIO_ENHANCE separately, same split as
+        # interpolation_available(). ffmpeg itself is not re-checked here for
+        # "rnnoise" -- it is a hard startup dependency already.
+        if mode == "deepfilter":
+            return self._deepfilter_available()
+        if mode == "rnnoise":
+            return self._rnnoise_available()
+        raise ValueError(f"Unknown audio enhance mode: {mode!r}")
 
     @property
     def model_catalog(self) -> list[ModelOption]:
