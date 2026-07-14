@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import NamedTuple
@@ -13,6 +14,8 @@ from app.exceptions import QueueFullError
 from app.models import JobStatus, UpscaleJob, VideoUpscaleJob
 from app.schemas import (
     CreateJobResponse,
+    DeviceInfoResponse,
+    DevicesResponse,
     EngineInfoResponse,
     HealthResponse,
     JobResponse,
@@ -20,6 +23,7 @@ from app.schemas import (
     VideoJobResponse,
     VideoProfileResponse,
 )
+from app.services.devices_service import DevicesService
 from app.services.job_manager import JobManager
 from app.services.storage import StorageService
 from app.services.video_job_manager import VideoJobManager
@@ -120,6 +124,10 @@ def get_storage(request: Request) -> StorageService:
     return request.app.state.storage
 
 
+def get_devices_service(request: Request) -> DevicesService:
+    return request.app.state.devices_service
+
+
 def job_to_response(job: UpscaleJob) -> JobResponse:
     download_url = f"/api/v1/jobs/{job.id}/download" if job.status == JobStatus.completed else None
     return JobResponse(
@@ -192,6 +200,16 @@ async def engine_info(request: Request, settings: Settings = Depends(get_setting
         supported_models=[SupportedModelResponse(**item) for item in settings.model_catalog],
         video_profiles=[VideoProfileResponse(**item) for item in settings.video_profile_catalog],
         ffmpeg_available=media_tools.available(),
+    )
+
+
+@router.get("/devices", response_model=DevicesResponse)
+async def list_devices(devices: DevicesService = Depends(get_devices_service)) -> DevicesResponse:
+    device_list = await asyncio.to_thread(devices.list_devices)
+    default_device = devices.resolve_default(device_list)
+    return DevicesResponse(
+        devices=[DeviceInfoResponse(**item) for item in device_list],
+        default_device_id=default_device["id"],
     )
 
 

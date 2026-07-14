@@ -107,6 +107,7 @@ Todos los endpoints viven bajo `/api/v1`. Los campos de formulario (subida) van 
 |---|---|---|
 | `GET` | `/api/v1/health` | Healthcheck: motor activo, `gpuConcurrency` y profundidad de ambas colas |
 | `GET` | `/api/v1/engine` | Estado del motor, si FFmpeg está disponible, catálogo de modelos y de perfiles de video |
+| `GET` | `/api/v1/devices` | Dispositivos de cómputo disponibles (`cpu`, `dml:0`, `dml:1`...) y `defaultDeviceId` efectivo |
 | `POST` | `/api/v1/jobs` | Crea un job de imagen (`202`) |
 | `GET` | `/api/v1/jobs/{job_id}` | Estado de un job de imagen (`404` si no existe) |
 | `GET` | `/api/v1/jobs/{job_id}/download` | Descarga el resultado (`404` si no existe, `409` si aún no terminó) |

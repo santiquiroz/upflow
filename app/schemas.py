@@ -90,3 +90,15 @@ class HealthResponse(BaseModel):
     gpu_concurrency: int = Field(serialization_alias="gpuConcurrency")
     queue_depth: int = Field(serialization_alias="queueDepth")
     video_queue_depth: int = Field(serialization_alias="videoQueueDepth")
+
+
+class DeviceInfoResponse(BaseModel):
+    id: str
+    kind: Literal["cpu", "gpu", "npu"]
+    name: str
+    backend: Literal["cpu", "directml", "winml"]
+
+
+class DevicesResponse(BaseModel):
+    devices: list[DeviceInfoResponse]
+    default_device_id: str = Field(serialization_alias="defaultDeviceId")

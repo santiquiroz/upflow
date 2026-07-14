@@ -217,6 +217,8 @@ class Settings(BaseSettings):
     )
     enable_audio_enhance: bool = Field(default=False, alias="ENABLE_AUDIO_ENHANCE")
 
+    default_device: str = Field(default="dml:0", alias="DEFAULT_DEVICE")
+
     @model_validator(mode="after")
     def _apply_default_allowed_origins(self) -> "Settings":
         """Fills ALLOWED_ORIGINS from app_host/app_port when the caller left it unset.
