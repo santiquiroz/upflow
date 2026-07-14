@@ -9,6 +9,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 NEUTRAL_BIND_HOSTS = frozenset({"127.0.0.1", "0.0.0.0", "localhost"})
 
+DEEPFILTER_MODE = "deepfilter"
+RNNOISE_MODE = "rnnoise"
+AUDIO_ENHANCE_MODES = frozenset({DEEPFILTER_MODE, RNNOISE_MODE})
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -317,11 +321,11 @@ class Settings(BaseSettings):
         # check ENABLE_AUDIO_ENHANCE separately, same split as
         # interpolation_available(). ffmpeg itself is not re-checked here for
         # "rnnoise" -- it is a hard startup dependency already.
-        if mode == "deepfilter":
+        if mode not in AUDIO_ENHANCE_MODES:
+            raise ValueError(f"Unknown audio enhance mode: {mode!r}")
+        if mode == DEEPFILTER_MODE:
             return self._deepfilter_available()
-        if mode == "rnnoise":
-            return self._rnnoise_available()
-        raise ValueError(f"Unknown audio enhance mode: {mode!r}")
+        return self._rnnoise_available()
 
     @property
     def model_catalog(self) -> list[ModelOption]:

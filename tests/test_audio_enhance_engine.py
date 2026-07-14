@@ -4,12 +4,14 @@ from pathlib import Path, PureWindowsPath
 
 import pytest
 
-from app.config import Settings
+from app.config import AUDIO_ENHANCE_MODES, Settings
 from app.services.engines.audio_enhance import AudioEnhancer
+from app.services.process_runner import SubprocessTimeoutError
 
 # ---------------------------------------------------------------------------
 # Task 19 (6.1b) - Audio enhance engine (deepfilter/rnnoise): argv
-# construction, shared guarded runner reuse, output validation, availability.
+# construction, shared guarded runner reuse, output validation, availability,
+# temp-dir isolation for deep-filter's dir-only output contract.
 # ---------------------------------------------------------------------------
 
 
@@ -46,6 +48,20 @@ def write_wav(path: Path, content: bytes = b"fake-wav") -> None:
     path.write_bytes(content)
 
 
+def deepfilter_out_dir(command: list[str]) -> Path:
+    return Path(command[command.index("-o") + 1])
+
+
+def write_deepfilter_output(command: list[str], input_wav: Path, content: bytes = b"enhanced-audio") -> None:
+    # Mimics the real binary: writes the enhanced file under the input's own
+    # basename inside whatever -o directory it was given.
+    write_wav(deepfilter_out_dir(command) / input_wav.name, content)
+
+
+def leftover_temp_dirs(directory: Path) -> list[Path]:
+    return list(directory.glob(".dfn-*"))
+
+
 # ---------------------------------------------------------------------------
 # mode validation
 # ---------------------------------------------------------------------------
@@ -56,6 +72,16 @@ def test_audio_enhancer_raises_value_error_for_unknown_mode(tmp_path: Path) -> N
 
     with pytest.raises(ValueError, match="Unknown audio enhance mode"):
         AudioEnhancer(settings, mode="not-a-real-mode")
+
+
+def test_audio_enhancer_accepts_every_mode_known_to_settings(tmp_path: Path) -> None:
+    # Guards against the engine's accepted modes drifting from the config
+    # helper's: both must consume the same AUDIO_ENHANCE_MODES source.
+    settings = make_settings(tmp_path)
+
+    for mode in AUDIO_ENHANCE_MODES:
+        engine = AudioEnhancer(settings, mode=mode)
+        assert engine.mode == mode
 
 
 # ---------------------------------------------------------------------------
@@ -92,7 +118,7 @@ def test_audio_enhancer_available_false_when_rnnoise_model_missing(tmp_path: Pat
 
 
 # ---------------------------------------------------------------------------
-# deepfilter argv construction + output relocation
+# deepfilter argv construction + temp-dir output promotion
 # ---------------------------------------------------------------------------
 
 
@@ -109,24 +135,25 @@ async def test_deepfilter_engine_run_builds_expected_argv(
 
     async def fake_run_guarded_process(command: list[str], timeout: float) -> tuple[bytes, bytes, int]:
         calls.append(command)
-        write_wav(output_wav.parent / input_wav.name, b"enhanced-audio")
+        write_deepfilter_output(command, input_wav)
         return b"", b"", 0
 
     monkeypatch.setattr("app.services.engines.audio_enhance.run_guarded_process", fake_run_guarded_process)
 
     await engine.run(input_wav, output_wav)
 
-    assert calls == [
-        [
-            str(settings.deepfilter_binary_path),
-            "-o",
-            str(output_wav.parent),
-            str(input_wav),
-        ]
-    ]
+    assert len(calls) == 1
+    command = calls[0]
+    assert len(command) == 4
+    assert command[0] == str(settings.deepfilter_binary_path)
+    assert command[1] == "-o"
+    assert command[3] == str(input_wav)
+    out_dir = Path(command[2])
+    assert out_dir.parent == output_wav.parent
+    assert out_dir.name.startswith(".dfn-")
 
 
-async def test_deepfilter_engine_run_relocates_output_to_requested_path(
+async def test_deepfilter_engine_run_promotes_output_to_requested_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     settings = make_deepfilter_available_settings(tmp_path)
@@ -136,7 +163,7 @@ async def test_deepfilter_engine_run_relocates_output_to_requested_path(
     write_wav(input_wav)
 
     async def fake_run_guarded_process(command: list[str], timeout: float) -> tuple[bytes, bytes, int]:
-        write_wav(output_wav.parent / input_wav.name, b"enhanced-audio")
+        write_deepfilter_output(command, input_wav)
         return b"", b"", 0
 
     monkeypatch.setattr("app.services.engines.audio_enhance.run_guarded_process", fake_run_guarded_process)
@@ -144,10 +171,9 @@ async def test_deepfilter_engine_run_relocates_output_to_requested_path(
     await engine.run(input_wav, output_wav)
 
     assert output_wav.read_bytes() == b"enhanced-audio"
-    assert not (output_wav.parent / input_wav.name).exists()
 
 
-async def test_deepfilter_engine_run_skips_relocation_when_names_match(
+async def test_deepfilter_engine_run_supports_same_name_input_and_output(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     settings = make_deepfilter_available_settings(tmp_path)
@@ -157,7 +183,7 @@ async def test_deepfilter_engine_run_skips_relocation_when_names_match(
     write_wav(input_wav)
 
     async def fake_run_guarded_process(command: list[str], timeout: float) -> tuple[bytes, bytes, int]:
-        write_wav(output_wav.parent / input_wav.name, b"same-name-output")
+        write_deepfilter_output(command, input_wav, b"same-name-output")
         return b"", b"", 0
 
     monkeypatch.setattr("app.services.engines.audio_enhance.run_guarded_process", fake_run_guarded_process)
@@ -165,6 +191,33 @@ async def test_deepfilter_engine_run_skips_relocation_when_names_match(
     await engine.run(input_wav, output_wav)
 
     assert output_wav.read_bytes() == b"same-name-output"
+
+
+async def test_deepfilter_engine_run_same_directory_leaves_input_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Regression guard for the same-directory hazard: input and output share
+    # a parent dir, so pointing -o at output_wav.parent would make the binary
+    # overwrite the SOURCE wav in place. The temp-dir strategy must keep the
+    # source bytes intact and still honor the requested output path.
+    settings = make_deepfilter_available_settings(tmp_path)
+    engine = AudioEnhancer(settings, mode="deepfilter")
+    work_dir = tmp_path / "job-work"
+    input_wav = work_dir / "raw.wav"
+    output_wav = work_dir / "enhanced.wav"
+    write_wav(input_wav, b"original-source-audio")
+
+    async def fake_run_guarded_process(command: list[str], timeout: float) -> tuple[bytes, bytes, int]:
+        assert deepfilter_out_dir(command) != input_wav.parent
+        write_deepfilter_output(command, input_wav)
+        return b"", b"", 0
+
+    monkeypatch.setattr("app.services.engines.audio_enhance.run_guarded_process", fake_run_guarded_process)
+
+    await engine.run(input_wav, output_wav)
+
+    assert input_wav.read_bytes() == b"original-source-audio"
+    assert output_wav.read_bytes() == b"enhanced-audio"
 
 
 async def test_deepfilter_engine_run_creates_output_dir_before_invoking_runner(
@@ -176,19 +229,84 @@ async def test_deepfilter_engine_run_creates_output_dir_before_invoking_runner(
     output_wav = tmp_path / "out" / "enhanced.wav"
     write_wav(input_wav)
 
-    dir_existed_at_call_time = False
+    dirs_existed_at_call_time = False
 
     async def fake_run_guarded_process(command: list[str], timeout: float) -> tuple[bytes, bytes, int]:
-        nonlocal dir_existed_at_call_time
-        dir_existed_at_call_time = output_wav.parent.exists()
-        write_wav(output_wav.parent / input_wav.name, b"enhanced-audio")
+        nonlocal dirs_existed_at_call_time
+        dirs_existed_at_call_time = output_wav.parent.exists() and deepfilter_out_dir(command).exists()
+        write_deepfilter_output(command, input_wav)
         return b"", b"", 0
 
     monkeypatch.setattr("app.services.engines.audio_enhance.run_guarded_process", fake_run_guarded_process)
 
     await engine.run(input_wav, output_wav)
 
-    assert dir_existed_at_call_time is True
+    assert dirs_existed_at_call_time is True
+
+
+# ---------------------------------------------------------------------------
+# deepfilter temp-dir cleanup
+# ---------------------------------------------------------------------------
+
+
+async def test_deepfilter_engine_run_cleans_temp_dir_on_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = make_deepfilter_available_settings(tmp_path)
+    engine = AudioEnhancer(settings, mode="deepfilter")
+    input_wav = tmp_path / "in" / "raw.wav"
+    output_wav = tmp_path / "out" / "enhanced.wav"
+    write_wav(input_wav)
+
+    async def fake_run_guarded_process(command: list[str], timeout: float) -> tuple[bytes, bytes, int]:
+        write_deepfilter_output(command, input_wav)
+        return b"", b"", 0
+
+    monkeypatch.setattr("app.services.engines.audio_enhance.run_guarded_process", fake_run_guarded_process)
+
+    await engine.run(input_wav, output_wav)
+
+    assert leftover_temp_dirs(output_wav.parent) == []
+
+
+async def test_deepfilter_engine_run_cleans_temp_dir_when_runner_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = make_deepfilter_available_settings(tmp_path)
+    engine = AudioEnhancer(settings, mode="deepfilter")
+    input_wav = tmp_path / "in" / "raw.wav"
+    output_wav = tmp_path / "out" / "enhanced.wav"
+    write_wav(input_wav)
+
+    async def fake_run_guarded_process(command: list[str], timeout: float) -> tuple[bytes, bytes, int]:
+        raise SubprocessTimeoutError("Process 'deep-filter.exe' timed out after 1s")
+
+    monkeypatch.setattr("app.services.engines.audio_enhance.run_guarded_process", fake_run_guarded_process)
+
+    with pytest.raises(SubprocessTimeoutError):
+        await engine.run(input_wav, output_wav)
+
+    assert leftover_temp_dirs(output_wav.parent) == []
+
+
+async def test_deepfilter_engine_run_cleans_temp_dir_on_nonzero_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = make_deepfilter_available_settings(tmp_path)
+    engine = AudioEnhancer(settings, mode="deepfilter")
+    input_wav = tmp_path / "in" / "raw.wav"
+    output_wav = tmp_path / "out" / "enhanced.wav"
+    write_wav(input_wav)
+
+    async def fake_run_guarded_process(command: list[str], timeout: float) -> tuple[bytes, bytes, int]:
+        return b"", b"boom\n", 1
+
+    monkeypatch.setattr("app.services.engines.audio_enhance.run_guarded_process", fake_run_guarded_process)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await engine.run(input_wav, output_wav)
+
+    assert leftover_temp_dirs(output_wav.parent) == []
 
 
 # ---------------------------------------------------------------------------
@@ -284,6 +402,8 @@ async def test_deepfilter_engine_run_raises_when_produced_file_missing(
     with pytest.raises(RuntimeError, match="no output file was produced"):
         await engine.run(input_wav, output_wav)
 
+    assert leftover_temp_dirs(output_wav.parent) == []
+
 
 async def test_deepfilter_engine_run_raises_when_output_is_zero_bytes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -295,7 +415,7 @@ async def test_deepfilter_engine_run_raises_when_output_is_zero_bytes(
     write_wav(input_wav)
 
     async def fake_run_guarded_process(command: list[str], timeout: float) -> tuple[bytes, bytes, int]:
-        write_wav(output_wav.parent / input_wav.name, b"")
+        write_deepfilter_output(command, input_wav, b"")
         return b"", b"", 0
 
     monkeypatch.setattr("app.services.engines.audio_enhance.run_guarded_process", fake_run_guarded_process)
@@ -416,7 +536,7 @@ async def test_deepfilter_engine_run_uses_shared_runner_with_configured_timeout(
 
     async def fake_run_guarded_process(command: list[str], timeout: float) -> tuple[bytes, bytes, int]:
         calls.append(timeout)
-        write_wav(output_wav.parent / input_wav.name, b"enhanced-audio")
+        write_deepfilter_output(command, input_wav)
         return b"", b"", 0
 
     monkeypatch.setattr("app.services.engines.audio_enhance.run_guarded_process", fake_run_guarded_process)

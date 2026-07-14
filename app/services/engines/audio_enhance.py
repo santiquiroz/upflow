@@ -1,13 +1,11 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
+from uuid import uuid4
 
-from app.config import Settings
+from app.config import AUDIO_ENHANCE_MODES, DEEPFILTER_MODE, Settings
 from app.services.process_runner import run_guarded_process
-
-DEEPFILTER_MODE = "deepfilter"
-RNNOISE_MODE = "rnnoise"
-KNOWN_MODES = frozenset({DEEPFILTER_MODE, RNNOISE_MODE})
 
 
 class AudioEnhancer:
@@ -18,7 +16,7 @@ class AudioEnhancer:
 
     @staticmethod
     def _validate_mode(mode: str) -> None:
-        if mode not in KNOWN_MODES:
+        if mode not in AUDIO_ENHANCE_MODES:
             raise ValueError(f"Unknown audio enhance mode: {mode!r}")
 
     def available(self) -> bool:
@@ -39,32 +37,37 @@ class AudioEnhancer:
             await self._run_rnnoise(input_wav, output_wav)
 
     async def _run_deepfilter(self, input_wav: Path, output_wav: Path) -> None:
-        command = self._build_deepfilter_command(input_wav, output_wav)
-        await self._execute(command, "DeepFilterNet enhancement process failed")
-        self._relocate_deepfilter_output(input_wav, output_wav)
+        # deep-filter only accepts an output *directory* (-o) and writes the
+        # enhanced file under the input's own basename inside it. Pointing -o
+        # at output_wav.parent would overwrite the SOURCE wav in place
+        # whenever input and output share a directory, so the run is isolated
+        # in a unique temp dir and the result promoted to the exact
+        # output_wav afterwards -- one safe code path for same-dir,
+        # different-dir and same-name layouts.
+        temp_dir = output_wav.parent / f".dfn-{uuid4().hex}"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            command = self._build_deepfilter_command(input_wav, temp_dir)
+            await self._execute(command, "DeepFilterNet enhancement process failed")
+            self._promote_deepfilter_output(temp_dir / input_wav.name, output_wav)
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
         self._validate_output(output_wav)
 
-    def _build_deepfilter_command(self, input_wav: Path, output_wav: Path) -> list[str]:
+    def _build_deepfilter_command(self, input_wav: Path, out_dir: Path) -> list[str]:
         return [
             str(self.settings.deepfilter_binary_path),
             "-o",
-            str(output_wav.parent),
+            str(out_dir),
             str(input_wav),
         ]
 
     @staticmethod
-    def _relocate_deepfilter_output(input_wav: Path, output_wav: Path) -> None:
-        # deep-filter only accepts an output *directory* (-o) and writes the
-        # enhanced file under the input's own basename inside it, so a
-        # rename step is needed to honor the exact output_wav path callers
-        # requested (same run(input_wav, output_wav) contract as rnnoise).
-        produced_path = output_wav.parent / input_wav.name
-        if produced_path == output_wav:
-            return
+    def _promote_deepfilter_output(produced_path: Path, output_wav: Path) -> None:
         if not produced_path.exists():
             raise RuntimeError(
                 "DeepFilterNet process completed but no output file was produced "
-                f"(expected {produced_path})"
+                f"(expected {produced_path.name} in the temp output dir)"
             )
         produced_path.replace(output_wav)
 
