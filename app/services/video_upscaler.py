@@ -74,7 +74,7 @@ class VideoUpscaler:
         job.metadata["stage"] = "extracting_frames"
         await self._run_process(
             [
-                self.settings.ffmpeg_binary,
+                str(self.settings.ffmpeg_binary_path),
                 "-y",
                 "-i",
                 str(job.source_path),
@@ -90,7 +90,7 @@ class VideoUpscaler:
             job.metadata["stage"] = "extracting_audio"
             await self._run_process(
                 [
-                    self.settings.ffmpeg_binary,
+                    str(self.settings.ffmpeg_binary_path),
                     "-y",
                     "-i",
                     str(job.source_path),
@@ -106,7 +106,7 @@ class VideoUpscaler:
         job.metadata["stage"] = "upscaling_frames"
         await self._run_process(
             [
-                self.settings.engine_binary,
+                str(self.settings.engine_binary_path),
                 "-i",
                 str(frames_in),
                 "-o",
@@ -133,7 +133,7 @@ class VideoUpscaler:
 
         output_path = self.settings.outputs_path / f"{job.id}.{job.output_container}"
         encode_cmd = [
-            self.settings.ffmpeg_binary,
+            str(self.settings.ffmpeg_binary_path),
             "-y",
             "-framerate",
             encode_fps,

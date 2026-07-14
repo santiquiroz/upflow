@@ -252,6 +252,18 @@ class Settings(BaseSettings):
         return frozenset(item.strip() for item in self.allowed_origins.split(",") if item.strip())
 
     @property
+    def ffmpeg_binary_path(self) -> Path:
+        return resolve_against_project_root(self.ffmpeg_binary)
+
+    @property
+    def ffprobe_binary_path(self) -> Path:
+        return resolve_against_project_root(self.ffprobe_binary)
+
+    @property
+    def engine_binary_path(self) -> Path:
+        return resolve_against_project_root(self.engine_binary)
+
+    @property
     def rife_binary_path(self) -> Path:
         return resolve_against_project_root(self.rife_binary)
 

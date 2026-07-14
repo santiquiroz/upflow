@@ -57,7 +57,7 @@ class FakePipelineVideoUpscaler(VideoUpscaler):
             self._write_dummy_frame(command)
         elif "-vn" in command:
             self._write_dummy_audio(command)
-        elif command[0] == self.settings.engine_binary:
+        elif command[0] == str(self.settings.engine_binary_path):
             self._write_dummy_upscaled_frame(command)
         elif "-framerate" in command:
             self._write_dummy_output(command)

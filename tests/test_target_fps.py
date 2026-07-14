@@ -243,7 +243,9 @@ async def test_video_job_manager_rejects_target_fps_when_interpolation_disabled_
 
 
 async def test_video_job_manager_rejects_target_fps_when_rife_not_installed(tmp_path: Path) -> None:
-    settings = make_settings(tmp_path, ENABLE_INTERPOLATION=True)
+    settings = make_settings(
+        tmp_path, ENABLE_INTERPOLATION=True, RIFE_BINARY=str(tmp_path / "missing-rife.exe")
+    )
     video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), asyncio.Semaphore(1))
     source_path = make_source(settings)
 
@@ -253,7 +255,9 @@ async def test_video_job_manager_rejects_target_fps_when_rife_not_installed(tmp_
 
 def test_target_fps_disabled_and_not_installed_messages_are_distinct(tmp_path: Path) -> None:
     disabled_settings = make_settings_with_rife_available(tmp_path / "a", enable_interpolation=False)
-    not_installed_settings = make_settings(tmp_path / "b", ENABLE_INTERPOLATION=True)
+    not_installed_settings = make_settings(
+        tmp_path / "b", ENABLE_INTERPOLATION=True, RIFE_BINARY=str(tmp_path / "missing-rife.exe")
+    )
     disabled_jobs = VideoJobManager(disabled_settings, FakeUpscaler(), FakeMediaTools(), asyncio.Semaphore(1))
     not_installed_jobs = VideoJobManager(
         not_installed_settings, FakeUpscaler(), FakeMediaTools(), asyncio.Semaphore(1)

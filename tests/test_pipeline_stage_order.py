@@ -89,7 +89,7 @@ class StageTrackingVideoUpscaler(VideoUpscaler):
         elif "-vn" in command:
             self.events.append("extract_audio")
             self._write_dummy_audio(command)
-        elif command[0] == self.settings.engine_binary:
+        elif command[0] == str(self.settings.engine_binary_path):
             self.events.append("upscale")
             self._write_dummy_upscaled_frame(command)
         elif "-framerate" in command:
@@ -233,6 +233,46 @@ async def test_work_dir_removed_after_interpolated_run(tmp_path: Path) -> None:
     work_dir = upscaler.settings.video_work_path / job.id
     assert not work_dir.exists()
     assert output_path.exists()
+
+
+async def test_extract_and_encode_commands_use_resolved_absolute_ffmpeg_path(tmp_path: Path) -> None:
+    """Task 16 review fix: raw settings.ffmpeg_binary (a CWD-relative forward-slash
+    string) crashes asyncio.create_subprocess_exec on Windows with WinError 2.
+    Every ffmpeg invocation must use the resolved absolute ffmpeg_binary_path.
+    """
+    events: list[str] = []
+    upscaler = make_upscaler(tmp_path, events, FakeRifeEngine(events))
+    job = make_video_job(write_source(upscaler))
+
+    await upscaler.run(job, fps_multiplier=2)
+
+    expected_ffmpeg = str(upscaler.settings.ffmpeg_binary_path)
+    assert expected_ffmpeg != upscaler.settings.ffmpeg_binary
+    encode_command = upscaler.encode_commands[0]
+    assert encode_command[0] == expected_ffmpeg
+
+
+async def test_upscale_command_uses_resolved_absolute_engine_path(tmp_path: Path) -> None:
+    events: list[str] = []
+    rife_engine = FakeRifeEngine(events)
+    upscaler = make_upscaler(tmp_path, events, rife_engine)
+    job = make_video_job(write_source(upscaler))
+
+    captured: list[list[str]] = []
+    original_run_process = upscaler._run_process
+
+    async def capturing_run_process(command: list[str]) -> None:
+        captured.append(command)
+        await original_run_process(command)
+
+    upscaler._run_process = capturing_run_process  # type: ignore[method-assign]
+
+    await upscaler.run(job, fps_multiplier=2)
+
+    expected_engine = str(upscaler.settings.engine_binary_path)
+    assert expected_engine != upscaler.settings.engine_binary
+    upscale_commands = [command for command in captured if command[0] == expected_engine]
+    assert len(upscale_commands) == 1
 
 
 async def test_run_raises_clear_error_when_multiplier_enabled_without_rife_engine(tmp_path: Path) -> None:

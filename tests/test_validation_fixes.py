@@ -194,7 +194,7 @@ class ZeroByteOutputVideoUpscaler(VideoUpscaler):
             frames_in_dir = Path(command[-1]).parent
             frames_in_dir.mkdir(parents=True, exist_ok=True)
             (frames_in_dir / "00000001.png").write_bytes(b"fake-frame-in")
-        elif command[0] == self.settings.engine_binary:
+        elif command[0] == str(self.settings.engine_binary_path):
             frames_out_dir = Path(command[command.index("-o") + 1])
             frames_out_dir.mkdir(parents=True, exist_ok=True)
             (frames_out_dir / "00000001.png").write_bytes(b"fake-frame-out")

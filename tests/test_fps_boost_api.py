@@ -259,7 +259,9 @@ async def test_video_job_manager_rejects_multiplier_when_interpolation_disabled_
 
 
 async def test_video_job_manager_rejects_multiplier_when_rife_not_installed(tmp_path: Path) -> None:
-    settings = make_settings(tmp_path, ENABLE_INTERPOLATION=True)
+    settings = make_settings(
+        tmp_path, ENABLE_INTERPOLATION=True, RIFE_BINARY=str(tmp_path / "missing-rife.exe")
+    )
     video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), asyncio.Semaphore(1))
     source_path = settings.uploads_path / "clip.mp4"
     source_path.parent.mkdir(parents=True, exist_ok=True)
@@ -282,7 +284,9 @@ async def test_video_job_manager_rejects_multiplier_when_rife_not_installed(tmp_
 
 def test_disabled_and_not_installed_messages_are_distinct(tmp_path: Path) -> None:
     disabled_settings = make_settings_with_rife_available(tmp_path / "a", enable_interpolation=False)
-    not_installed_settings = make_settings(tmp_path / "b", ENABLE_INTERPOLATION=True)
+    not_installed_settings = make_settings(
+        tmp_path / "b", ENABLE_INTERPOLATION=True, RIFE_BINARY=str(tmp_path / "missing-rife.exe")
+    )
     disabled_jobs = VideoJobManager(
         disabled_settings, FakeUpscaler(), FakeMediaTools(), asyncio.Semaphore(1)
     )
@@ -363,7 +367,9 @@ async def test_create_video_job_route_rejects_invalid_multiplier(tmp_path: Path,
 
 
 async def test_create_video_job_route_rejects_when_interpolation_unavailable(tmp_path: Path) -> None:
-    settings = make_settings(tmp_path, ENABLE_INTERPOLATION=True)
+    settings = make_settings(
+        tmp_path, ENABLE_INTERPOLATION=True, RIFE_BINARY=str(tmp_path / "missing-rife.exe")
+    )
     storage = StorageService(settings)
     video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), asyncio.Semaphore(1))
 
