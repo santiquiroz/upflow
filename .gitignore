@@ -7,3 +7,5 @@ runtime/
 .pytest_cache/
 *.egg-info/
 vendor/
+.coverage
+htmlcov/
