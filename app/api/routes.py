@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import NamedTuple
 from uuid import uuid4
@@ -24,6 +25,8 @@ from app.services.storage import StorageService
 from app.services.video_job_manager import VideoJobManager
 
 router = APIRouter(prefix="/api/v1", tags=["api"])
+
+logger = logging.getLogger(__name__)
 
 FORBIDDEN_FILENAME_CHARS = frozenset(':<>"|?*')
 WINDOWS_RESERVED_STEMS = frozenset(
@@ -214,6 +217,7 @@ async def create_job(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
+        logger.exception("Unexpected error while creating image job")
         raise HTTPException(status_code=500, detail="Failed to process the uploaded image") from exc
     finally:
         if job is None and destination.exists():
@@ -279,6 +283,7 @@ async def create_video_job(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
+        logger.exception("Unexpected error while creating video job")
         raise HTTPException(status_code=500, detail="Failed to process the uploaded video") from exc
     finally:
         if job is None and destination.exists():

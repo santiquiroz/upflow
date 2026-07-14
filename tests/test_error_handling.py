@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import logging
 import struct
 import subprocess
 import zlib
@@ -134,53 +135,65 @@ async def test_malformed_video_upload_returns_400_and_no_leftover_file(tmp_path:
     assert list(settings.uploads_path.iterdir()) == []
 
 
-async def test_unexpected_image_job_error_returns_clean_500_and_no_leftover_file(tmp_path: Path) -> None:
+async def test_unexpected_image_job_error_returns_clean_500_and_no_leftover_file(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     settings = make_settings(tmp_path)
     storage = StorageService(settings)
 
-    with pytest.raises(HTTPException) as exc_info:
-        await create_job(
-            request=None,
-            file=make_upload("photo.png", b"irrelevant-bytes"),
-            model_name="realesrgan-x4plus",
-            scale=4,
-            output_format="png",
-            jobs=ExplodingJobManager(),
-            storage=storage,
-            settings=settings,
-        )
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(HTTPException) as exc_info:
+            await create_job(
+                request=None,
+                file=make_upload("photo.png", b"irrelevant-bytes"),
+                model_name="realesrgan-x4plus",
+                scale=4,
+                output_format="png",
+                jobs=ExplodingJobManager(),
+                storage=storage,
+                settings=settings,
+            )
 
     assert exc_info.value.status_code == 500
     assert "secret-path" not in str(exc_info.value.detail)
     assert "disk full" not in str(exc_info.value.detail)
     assert list(settings.uploads_path.iterdir()) == []
+    assert any(record.levelno >= logging.ERROR for record in caplog.records), (
+        "the unexpected exception must be logged server-side even though the client sees a generic message"
+    )
 
 
-async def test_unexpected_video_job_error_returns_clean_500_and_no_leftover_file(tmp_path: Path) -> None:
+async def test_unexpected_video_job_error_returns_clean_500_and_no_leftover_file(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     settings = make_settings(tmp_path)
     storage = StorageService(settings)
 
-    with pytest.raises(HTTPException) as exc_info:
-        await create_video_job(
-            request=None,
-            file=make_upload("clip.mp4", b"irrelevant-bytes"),
-            profile_key="anime-balanced-2x",
-            model_name=None,
-            scale=None,
-            output_container=None,
-            video_codec=None,
-            video_preset=None,
-            crf=None,
-            keep_audio=None,
-            video_jobs=ExplodingVideoJobManager(),
-            storage=storage,
-            settings=settings,
-        )
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(HTTPException) as exc_info:
+            await create_video_job(
+                request=None,
+                file=make_upload("clip.mp4", b"irrelevant-bytes"),
+                profile_key="anime-balanced-2x",
+                model_name=None,
+                scale=None,
+                output_container=None,
+                video_codec=None,
+                video_preset=None,
+                crf=None,
+                keep_audio=None,
+                video_jobs=ExplodingVideoJobManager(),
+                storage=storage,
+                settings=settings,
+            )
 
     assert exc_info.value.status_code == 500
     assert "secret-path" not in str(exc_info.value.detail)
     assert "disk full" not in str(exc_info.value.detail)
     assert list(settings.uploads_path.iterdir()) == []
+    assert any(record.levelno >= logging.ERROR for record in caplog.records), (
+        "the unexpected exception must be logged server-side even though the client sees a generic message"
+    )
 
 
 async def test_validate_input_image_translates_decompression_bomb_error_to_value_error(
