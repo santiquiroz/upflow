@@ -167,7 +167,12 @@ function Get-EnvValue {
     if (-not $line) {
         return $Default
     }
-    return ($line -split '=', 2)[1].Trim()
+    # .env.example values carry trailing "  # explicacion" comments; strip
+    # those before trimming or callers get a broken value (e.g. a port
+    # string with a comment glued to it).
+    $rawValue = ($line -split '=', 2)[1]
+    $valueWithoutComment = ($rawValue -split '#', 2)[0]
+    return $valueWithoutComment.Trim()
 }
 
 function Start-Upflow {
