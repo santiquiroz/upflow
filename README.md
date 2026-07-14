@@ -79,7 +79,7 @@ Todos los binarios de `vendor/` y todo lo de `runtime/` (uploads, outputs, temp,
 
 ### API REST
 
-Todos los endpoints viven bajo `/api/v1`. Los campos de formulario (subida) van en snake_case; las respuestas JSON usan camelCase (p. ej. `job_id` se sube como campo, pero la respuesta trae `jobId`).
+Todos los endpoints viven bajo `/api/v1`. Los campos de formulario (subida) van en snake_case; las respuestas JSON usan camelCase (p. ej. subís `video_codec` como campo del form y la respuesta lo devuelve como `videoCodec`).
 
 | Método | Endpoint | Descripción |
 |---|---|---|
@@ -145,10 +145,10 @@ Todas las variables leen de `.env` (ver [`.env.example`](.env.example) con los d
 
 | Variable | Default | Descripción |
 |---|---|---|
-| `APP_NAME` | `Image Upscaler AMD` | Nombre interno del proceso FastAPI |
+| `APP_NAME` | `Upflow` | Nombre interno del proceso FastAPI (`.env.example` lo sobreescribe a `Image Upscaler AMD`) |
 | `APP_HOST` | `127.0.0.1` | Host de bind de uvicorn |
 | `APP_PORT` | `8090` | Puerto de bind de uvicorn |
-| `WEB_TITLE` | `AMD Image Upscaler` | Título mostrado en la web UI |
+| `WEB_TITLE` | `Upflow` | Título mostrado en la web UI (`.env.example` lo sobreescribe a `AMD Image Upscaler`) |
 | `MAX_UPLOAD_MB` | `50` | Tamaño máximo de subida para imágenes (MB) |
 | `MAX_VIDEO_UPLOAD_MB` | `2048` | Tamaño máximo de subida para videos (MB) |
 | `MAX_IMAGE_PIXELS` | `120000000` | Límite de píxeles (ancho × alto) para evitar decompression bombs |
