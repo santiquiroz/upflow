@@ -6,20 +6,28 @@ from pathlib import Path
 from app.config import Settings
 from app.models import VideoUpscaleJob
 from app.services.engines.realesrgan_ncnn import RealEsrganNcnnEngine
-from app.services.media_tools import MediaTools, resolve_video_fps
+from app.services.engines.rife_ncnn import RifeNcnnEngine
+from app.services.media_tools import MediaTools, compute_interpolated_fps, resolve_video_fps
 from app.services.process_runner import run_guarded_process
 
 
 class VideoUpscaler:
-    def __init__(self, settings: Settings, engine: RealEsrganNcnnEngine, media_tools: MediaTools) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        engine: RealEsrganNcnnEngine,
+        media_tools: MediaTools,
+        rife_engine: RifeNcnnEngine | None = None,
+    ) -> None:
         self.settings = settings
         self.engine = engine
         self.media_tools = media_tools
+        self.rife_engine = rife_engine
 
     def available(self) -> bool:
         return self.engine.available() and self.media_tools.available()
 
-    async def run(self, job: VideoUpscaleJob) -> Path:
+    async def run(self, job: VideoUpscaleJob, fps_multiplier: int = 1) -> Path:
         if not self.available():
             raise RuntimeError("Video pipeline is not available. Ensure Real-ESRGAN and FFmpeg are installed.")
 
@@ -32,7 +40,7 @@ class VideoUpscaler:
         frames_out.mkdir(parents=True, exist_ok=True)
 
         try:
-            return await self._run_pipeline(job, frames_in, frames_out, audio_path)
+            return await self._run_pipeline(job, frames_in, frames_out, audio_path, fps_multiplier)
         finally:
             shutil.rmtree(work_dir, ignore_errors=True)
 
@@ -42,6 +50,7 @@ class VideoUpscaler:
         frames_in: Path,
         frames_out: Path,
         audio_path: Path,
+        fps_multiplier: int = 1,
     ) -> Path:
         probe = await self.media_tools.ffprobe_json(job.source_path)
         video_stream = next((s for s in probe.get("streams", []) if s.get("codec_type") == "video"), None)
@@ -111,14 +120,18 @@ class VideoUpscaler:
             ]
         )
 
+        encode_frames_dir, encode_fps = await self._maybe_interpolate(
+            job, frames_out, fps, fps_multiplier
+        )
+
         output_path = self.settings.outputs_path / f"{job.id}.{job.output_container}"
         encode_cmd = [
             self.settings.ffmpeg_binary,
             "-y",
             "-framerate",
-            fps,
+            encode_fps,
             "-i",
-            str(frames_out / "%08d.png"),
+            str(encode_frames_dir / "%08d.png"),
         ]
         if job.keep_audio and audio_path.exists():
             encode_cmd += ["-i", str(audio_path), "-map", "0:v:0", "-map", "1:a:0"]
@@ -140,6 +153,32 @@ class VideoUpscaler:
         job.metadata["outputWidth"] = job.metadata["sourceWidth"] * job.scale
         job.metadata["outputHeight"] = job.metadata["sourceHeight"] * job.scale
         return output_path
+
+    async def _maybe_interpolate(
+        self,
+        job: VideoUpscaleJob,
+        frames_out: Path,
+        fps: str,
+        fps_multiplier: int,
+    ) -> tuple[Path, str]:
+        if fps_multiplier <= 1:
+            return frames_out, fps
+
+        if self.rife_engine is None:
+            raise RuntimeError("Frame interpolation requested but no RIFE engine is configured")
+
+        job.metadata["stage"] = "interpolating_frames"
+        frames_interp = frames_out.parent / "frames-interp"
+        source_frame_count = self._count_frames(frames_out)
+        await self.rife_engine.run(frames_out, frames_interp, source_frame_count, fps_multiplier)
+
+        new_rate = compute_interpolated_fps(fps, fps_multiplier)
+        encode_fps = f"{new_rate.numerator}/{new_rate.denominator}"
+        return frames_interp, encode_fps
+
+    @staticmethod
+    def _count_frames(directory: Path) -> int:
+        return sum(1 for _ in directory.glob("*.png"))
 
     @staticmethod
     def _is_non_empty_file(path: Path) -> bool:

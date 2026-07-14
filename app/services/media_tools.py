@@ -40,6 +40,18 @@ def resolve_video_fps(avg_frame_rate: str | None, r_frame_rate: str | None) -> F
     )
 
 
+def compute_interpolated_fps(source_fps: str | None, multiplier: int) -> Fraction:
+    """Computes the encode framerate after RIFE interpolation: source_fps * multiplier.
+
+    Keeps playback duration (and audio sync) identical once frame count is multiplied.
+    Raises ValueError for anything parse_fps_fraction rejects (missing, malformed, <= 0).
+    """
+    fraction = parse_fps_fraction(source_fps)
+    if fraction is None:
+        raise ValueError(f"Cannot compute interpolated fps from invalid source fps: {source_fps!r}")
+    return fraction * multiplier
+
+
 class MediaTools:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
