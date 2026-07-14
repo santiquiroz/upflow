@@ -172,6 +172,40 @@ Add an "FPS boost" dropdown in the video form: Off / 2× / 3× / 4×. Render res
 
 ---
 
+## Phase 6 — Roadmap: suite completa de anime (investigación 2026-07-13)
+
+Basado en investigación profunda (informe interno: frame generation, audio IA, AFMF/LSFG, subtitulado). Todo lo de esta fase es **selectable/activable** vía config + UI, siguiendo el patrón de motores vendored por subprocess. Orden sugerido = orden de la tabla.
+
+### 6.1 Mejora de audio IA (esfuerzo: bajo)
+- **Motor principal:** DeepFilterNet CLI (`deep-filter.exe`, MIT/Apache-2.0, binario standalone, CPU RTF ~0.04-0.2 — sin CUDA). Script `download-deepfilternet.ps1` + engine `engines/deepfilter.py` con el guarded runner.
+- **Bonus gratis:** filtro `arnndn` (RNNoise) del FFmpeg ya vendored como opción ligera.
+- Etapa opcional del pipeline de video: extraer audio → mejorar → mux. Toggle `ENABLE_AUDIO_ENHANCE` + dropdown (Off / RNNoise / DeepFilterNet).
+- Descartados por ahora: AudioSR/FlashSR/Apollo (difusión GPU-CUDA, sin camino AMD verificado; Apollo es CC BY-SA).
+
+### 6.2 Subtitulado IA (esfuerzo: bajo-medio)
+- **Motor:** whisper.cpp (`whisper-cli.exe`, MIT, emite SRT nativo con `-osrt`; CPU ok, backend Vulkan corre en AMD ~8x tiempo real con modelo large). Modelos ggml vendored (`download-whisper.ps1`).
+- JP→EN integrado (task translate de Whisper). JP→ES: fase 2 con MADLAD-400 3B GGUF vía llama.cpp CPU (Apache 2.0). Evitar NLLB (CC-BY-NC).
+- Upgrade de calidad posterior: modelo anime-whisper (CER 13.0% vs 16.5% stock en anime) convertido a ggml; pre-pass opcional Demucs (vocals) para pistas ruidosas.
+- Pipeline: extraer audio (FFmpeg) → STT en CPU **en paralelo** con el upscale GPU (sin contención) → mux subs blandos al encode (`-c:s srt/ass` MKV, `mov_text` MP4). UI: toggle + selector de idioma.
+
+### 6.3 Slider calidad ↔ velocidad (esfuerzo: bajo)
+Presets Fast/Balanced/Best mapeados a knobs reales por motor (tabla completa en el informe): Real-ESRGAN (modelo, tile size), RIFE (modelo v4.6 vs más nuevos/pesados), DeepFilterNet on/off, whisper (small/medium/large). Un solo control en UI que resuelve a un dict de settings por job.
+
+### 6.4 Frame generation — veredicto (investigado a fondo, incluye follow-up AFMF/LSFG)
+- AFMF y LSFG 3.x **sí** son motion-vector-free (optical flow sobre frames de color), pero **no existe camino offline a archivos**: AFMF vive en el present-path del driver DX11/12; LSFG captura compositor en vivo; lsfg-vk (GPL-3) descarta frames en su modo debug y requiere poseer Lossless Scaling. El requisito de motion vectors es solo del FSR3 FG in-engine.
+- Calidad: los flujos real-time (bloques 8x8, presupuesto sub-frame) son más crudos que el optical flow aprendido per-pixel de RIFE — offline, RIFE gana sin desventaja.
+- **Decisión:** RIFE ncnn Vulkan (fork TNTwise) es EL motor de frame-gen offline. GMFSS/FILM/EMA-VFI/VFIMamba: sin ports Vulkan mantenidos, solo CUDA — reevaluar en 6-12 meses.
+- Modelos RIFE adicionales (v4.26, rife-anime, etc. — ya vienen en el zip vendored) como opciones seleccionables del dropdown de calidad.
+
+### 6.5 Modo tiempo real estilo Lossless Scaling — NO se construye
+Arquitectónicamente incompatible con una app de archivos FastAPI/Python (requiere captura DirectX + present de baja latencia nativos). Recomendación al usuario: Lossless Scaling (Steam, ~$7) o Magpie (open source, GPL-3) para gaming; Upflow queda como pipeline offline de máxima calidad. Documentado en README.
+
+### 6.6 Batch por temporada (para el flujo "temporada completa de anime")
+- Subida múltiple / carpeta de entrada observada; cola ya bounded + workers ya concurrentes (fases 1-3) — falta UX de lote: seleccionar N episodios, progreso agregado, reanudación.
+- `fps_multiplier` fraccional o modo "target fps" (`-n` de RIFE ya es frame-count absoluto → 23.976→60 exacto es viable: target = ceil(count × 60/23.976), encode a 60000/1001). Diseñar como `TARGET_FPS` alternativo al multiplicador entero.
+
+---
+
 ## Quick reference — audit findings → phase
 
 | Severity | Finding | Phase |
