@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 
 from PIL import Image, UnidentifiedImageError
@@ -11,6 +12,8 @@ from app.models import JobStatus, UpscaleJob, utc_now
 from app.services.engines.base import UpscaleEngine
 
 ALLOWED_IMAGE_FORMATS = {"PNG", "JPEG", "WEBP", "BMP"}
+
+logger = logging.getLogger(__name__)
 
 
 class JobManager:
@@ -137,5 +140,12 @@ class JobManager:
                     job.error = str(exc)
                 finally:
                     job.finished_at = utc_now()
-                    job.source_path.unlink(missing_ok=True)
+                    self._unlink_source_safely(job.source_path)
                     self.queue.task_done()
+
+    @staticmethod
+    def _unlink_source_safely(source_path: Path) -> None:
+        try:
+            source_path.unlink(missing_ok=True)
+        except OSError:
+            logger.exception("Failed to delete source upload %s", source_path)

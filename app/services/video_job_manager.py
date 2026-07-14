@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import subprocess
 from pathlib import Path
 
@@ -9,6 +10,8 @@ from app.exceptions import QueueFullError
 from app.models import JobStatus, VideoUpscaleJob, utc_now
 from app.services.media_tools import MediaTools
 from app.services.video_upscaler import VideoUpscaler
+
+logger = logging.getLogger(__name__)
 
 
 class VideoJobManager:
@@ -167,5 +170,12 @@ class VideoJobManager:
                     job.error = str(exc)
                 finally:
                     job.finished_at = utc_now()
-                    job.source_path.unlink(missing_ok=True)
+                    self._unlink_source_safely(job.source_path)
                     self.queue.task_done()
+
+    @staticmethod
+    def _unlink_source_safely(source_path: Path) -> None:
+        try:
+            source_path.unlink(missing_ok=True)
+        except OSError:
+            logger.exception("Failed to delete source upload %s", source_path)
