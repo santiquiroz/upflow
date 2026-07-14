@@ -231,3 +231,71 @@ async def test_run_raises_clear_error_when_multiplier_enabled_without_rife_engin
 
     with pytest.raises(RuntimeError, match="RIFE"):
         await upscaler.run(job, fps_multiplier=2)
+
+
+# ---------------------------------------------------------------------------
+# Task 13 - keep_audio=True combined with fps_multiplier=2: audio mux args
+# must stay unchanged while the encode framerate doubles (closes a Task 12
+# review gap; the earlier stage-order tests never exercised keep_audio=True
+# together with interpolation in the same run).
+# ---------------------------------------------------------------------------
+
+
+class FakeMediaToolsWithAudio:
+    def available(self) -> bool:
+        return True
+
+    async def ffprobe_json(self, source_path: Path) -> dict:
+        return {
+            "streams": [
+                {"codec_type": "video", "width": 4, "height": 4, "avg_frame_rate": "30/1"},
+                {"codec_type": "audio"},
+            ],
+            "format": {"duration": "1.0"},
+        }
+
+
+def make_video_job_with_audio(source_path: Path) -> VideoUpscaleJob:
+    return VideoUpscaleJob(
+        source_path=source_path,
+        original_filename=source_path.name,
+        model_name="realesr-animevideov3-x2",
+        scale=2,
+        output_container="mp4",
+        video_codec="libx264",
+        video_preset="medium",
+        crf=18,
+        keep_audio=True,
+    )
+
+
+def make_upscaler_with_audio(
+    tmp_path: Path, events: list[str], rife_engine: FakeRifeEngine | None
+) -> StageTrackingVideoUpscaler:
+    settings = make_settings(tmp_path)
+    StorageService(settings)
+    return StageTrackingVideoUpscaler(
+        settings, FakeVideoEngine(), FakeMediaToolsWithAudio(), rife_engine, events=events
+    )
+
+
+async def test_keep_audio_and_fps_multiplier_combo_preserves_audio_mux_and_doubles_framerate(
+    tmp_path: Path,
+) -> None:
+    events: list[str] = []
+    upscaler = make_upscaler_with_audio(tmp_path, events, FakeRifeEngine(events))
+    job = make_video_job_with_audio(write_source(upscaler))
+
+    await upscaler.run(job, fps_multiplier=2)
+
+    assert events == ["extract", "extract_audio", "upscale", "interpolate", "encode"]
+
+    encode_command = upscaler.encode_commands[0]
+
+    framerate = encode_command[encode_command.index("-framerate") + 1]
+    assert framerate == "60/1"
+
+    map_indices = [index for index, arg in enumerate(encode_command) if arg == "-map"]
+    mapped_values = [encode_command[index + 1] for index in map_indices]
+    assert mapped_values == ["0:v:0", "1:a:0"], "audio mux mapping must stay unchanged by interpolation"
+    assert encode_command[-3:-1] == ["-c:a", "copy"], "audio codec copy flag must stay unchanged"

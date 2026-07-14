@@ -60,10 +60,11 @@ class VideoJobManager:
         video_preset: str,
         crf: int,
         keep_audio: bool,
+        fps_multiplier: int = 1,
         job_id: str | None = None,
     ) -> VideoUpscaleJob:
         await self._validate_video(source_path)
-        self._validate_request(model_name, scale, output_container, video_codec, video_preset, crf)
+        self._validate_request(model_name, scale, output_container, video_codec, video_preset, crf, fps_multiplier)
 
         job = VideoUpscaleJob(
             source_path=source_path,
@@ -75,6 +76,7 @@ class VideoJobManager:
             video_preset=video_preset,
             crf=crf,
             keep_audio=keep_audio,
+            fps_multiplier=fps_multiplier,
         )
         if job_id is not None:
             job.id = job_id
@@ -108,6 +110,7 @@ class VideoJobManager:
         video_codec: str,
         video_preset: str,
         crf: int,
+        fps_multiplier: int,
     ) -> None:
         if model_name not in self.settings.model_keys:
             raise ValueError(f"Model must be one of {sorted(self.settings.model_keys)}")
@@ -122,6 +125,29 @@ class VideoJobManager:
             raise ValueError("Video preset must be medium, slow, or veryslow")
         if crf < 10 or crf > 28:
             raise ValueError("CRF must be between 10 and 28")
+        self._validate_fps_multiplier(fps_multiplier)
+
+    def _validate_fps_multiplier(self, fps_multiplier: int) -> None:
+        if fps_multiplier <= 0:
+            raise ValueError("fps_multiplier must be a positive integer")
+        allowed_multipliers = {1, *self.settings.allowed_fps_multiplier_values}
+        if fps_multiplier not in allowed_multipliers:
+            raise ValueError(
+                f"fps_multiplier must be 1 (off) or one of {sorted(allowed_multipliers - {1})}"
+            )
+        if fps_multiplier > 1:
+            self._validate_interpolation_enabled()
+
+    def _validate_interpolation_enabled(self) -> None:
+        if not self.settings.enable_interpolation:
+            raise ValueError(
+                "Frame interpolation is disabled by configuration (set ENABLE_INTERPOLATION=true)"
+            )
+        if not self.settings.interpolation_available():
+            raise ValueError(
+                "Frame interpolation requested but RIFE is not installed "
+                "(run scripts/download-rife.ps1)"
+            )
 
     async def _worker(self) -> None:
         while True:
@@ -130,7 +156,7 @@ class VideoJobManager:
                 job.status = JobStatus.running
                 job.started_at = utc_now()
                 try:
-                    job.output_path = await self.upscaler.run(job)
+                    job.output_path = await self.upscaler.run(job, fps_multiplier=job.fps_multiplier)
                     job.status = JobStatus.completed
                 except asyncio.CancelledError:
                     job.status = JobStatus.failed

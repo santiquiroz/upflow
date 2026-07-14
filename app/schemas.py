@@ -40,6 +40,7 @@ class VideoJobResponse(BaseModel):
     video_preset: str = Field(serialization_alias="videoPreset")
     crf: int
     keep_audio: bool = Field(serialization_alias="keepAudio")
+    fps_multiplier: int = Field(serialization_alias="fpsMultiplier")
     created_at: datetime = Field(serialization_alias="createdAt")
     started_at: datetime | None = Field(default=None, serialization_alias="startedAt")
     finished_at: datetime | None = Field(default=None, serialization_alias="finishedAt")

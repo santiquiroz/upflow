@@ -68,7 +68,7 @@ class TrackingVideoUpscaler:
     def __init__(self, tracker: ConcurrencyTracker) -> None:
         self.tracker = tracker
 
-    async def run(self, job: VideoUpscaleJob) -> Path:
+    async def run(self, job: VideoUpscaleJob, fps_multiplier: int = 1) -> Path:
         await self.tracker.enter()
         try:
             await asyncio.sleep(HOLD_SECONDS)

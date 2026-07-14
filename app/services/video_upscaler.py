@@ -123,6 +123,7 @@ class VideoUpscaler:
         encode_frames_dir, encode_fps = await self._maybe_interpolate(
             job, frames_out, fps, fps_multiplier
         )
+        job.metadata["outputFps"] = encode_fps
 
         output_path = self.settings.outputs_path / f"{job.id}.{job.output_container}"
         encode_cmd = [

@@ -47,6 +47,7 @@ class VideoUpscaleJob:
     video_preset: str
     crf: int
     keep_audio: bool
+    fps_multiplier: int = 1
     id: str = field(default_factory=lambda: uuid4().hex)
     status: JobStatus = JobStatus.queued
     created_at: datetime = field(default_factory=utc_now)

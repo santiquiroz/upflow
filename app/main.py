@@ -11,6 +11,7 @@ from app.api.routes import router as api_router
 from app.config import get_settings
 from app.security import OriginGuardMiddleware
 from app.services.engines.realesrgan_ncnn import RealEsrganNcnnEngine
+from app.services.engines.rife_ncnn import RifeNcnnEngine
 from app.services.job_manager import JobManager
 from app.services.media_tools import MediaTools
 from app.services.retention_sweeper import RetentionSweeper
@@ -28,9 +29,10 @@ async def lifespan(app: FastAPI):
     storage = StorageService(settings)
     engine = RealEsrganNcnnEngine(settings)
     media_tools = MediaTools(settings)
+    rife_engine = RifeNcnnEngine(settings)
     gpu_semaphore = asyncio.Semaphore(settings.gpu_concurrency)
     job_manager = JobManager(settings, engine, gpu_semaphore)
-    video_upscaler = VideoUpscaler(settings, engine, media_tools)
+    video_upscaler = VideoUpscaler(settings, engine, media_tools, rife_engine)
     video_job_manager = VideoJobManager(settings, video_upscaler, media_tools, gpu_semaphore)
     retention_sweeper = RetentionSweeper(settings, job_manager, video_job_manager)
     await job_manager.start()
@@ -40,6 +42,7 @@ async def lifespan(app: FastAPI):
     app.state.storage = storage
     app.state.engine = engine
     app.state.media_tools = media_tools
+    app.state.rife_engine = rife_engine
     app.state.job_manager = job_manager
     app.state.video_job_manager = video_job_manager
     app.state.retention_sweeper = retention_sweeper

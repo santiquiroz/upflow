@@ -66,6 +66,7 @@ class ResolvedVideoJobFields(NamedTuple):
     video_preset: str
     crf: int
     keep_audio: bool
+    fps_multiplier: int
 
 
 def resolve_video_job_fields(
@@ -77,6 +78,7 @@ def resolve_video_job_fields(
     video_preset: str | None,
     crf: int | None,
     keep_audio: bool | None,
+    fps_multiplier: int | None = None,
 ) -> ResolvedVideoJobFields:
     """Resolves per-request overrides against the profile default.
 
@@ -91,6 +93,7 @@ def resolve_video_job_fields(
         video_preset=video_preset or profile["video_preset"],
         crf=crf if crf is not None else profile["crf"],
         keep_audio=keep_audio if keep_audio is not None else profile["keep_audio"],
+        fps_multiplier=fps_multiplier if fps_multiplier is not None else profile.get("fps_multiplier", 1),
     )
 
 
@@ -136,6 +139,7 @@ def video_job_to_response(job: VideoUpscaleJob) -> VideoJobResponse:
         video_preset=job.video_preset,
         crf=job.crf,
         keep_audio=job.keep_audio,
+        fps_multiplier=job.fps_multiplier,
         created_at=job.created_at,
         started_at=job.started_at,
         finished_at=job.finished_at,
@@ -235,6 +239,7 @@ async def create_video_job(
     video_preset: str | None = Form(default=None),
     crf: int | None = Form(default=None),
     keep_audio: bool | None = Form(default=None),
+    fps_multiplier: int | None = Form(default=None),
     video_jobs: VideoJobManager = Depends(get_video_job_manager),
     storage: StorageService = Depends(get_storage),
     settings: Settings = Depends(get_settings),
@@ -249,7 +254,7 @@ async def create_video_job(
     destination = settings.uploads_path / f"{token}-{safe_name}"
 
     resolved = resolve_video_job_fields(
-        profile, model_name, scale, output_container, video_codec, video_preset, crf, keep_audio
+        profile, model_name, scale, output_container, video_codec, video_preset, crf, keep_audio, fps_multiplier
     )
 
     job: VideoUpscaleJob | None = None
@@ -265,6 +270,7 @@ async def create_video_job(
             video_preset=resolved.video_preset,
             crf=resolved.crf,
             keep_audio=resolved.keep_audio,
+            fps_multiplier=resolved.fps_multiplier,
             job_id=token,
         )
         job.metadata["profileKey"] = profile_key

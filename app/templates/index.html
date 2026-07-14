@@ -136,6 +136,16 @@
                 <input type="checkbox" id="keep-audio-checkbox" name="keep_audio" checked />
                 Keep original audio track
               </label>
+
+              <label>
+                FPS boost
+                <select id="video-fps-select" name="fps_multiplier">
+                  <option value="1" selected>Off</option>
+                  {% for multiplier in allowed_fps_multipliers %}
+                  <option value="{{ multiplier }}">{{ multiplier }}×</option>
+                  {% endfor %}
+                </select>
+              </label>
             </div>
           </details>
 
@@ -275,7 +285,8 @@
           const response = await fetch(statusUrl);
           const data = await response.json();
           const stage = data?.metadata?.stage ? `\n\nStage: ${data.metadata.stage}` : '';
-          statusBox.textContent = JSON.stringify(data, null, 2) + stage;
+          const outputFps = data?.metadata?.outputFps ? `\nOutput FPS: ${data.metadata.outputFps}` : '';
+          statusBox.textContent = JSON.stringify(data, null, 2) + stage + outputFps;
           if (data.status === 'completed' && data.downloadUrl) {
             downloadLink.href = data.downloadUrl;
             downloadLink.classList.remove('hidden');

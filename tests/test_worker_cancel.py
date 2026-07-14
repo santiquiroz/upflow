@@ -50,7 +50,7 @@ class HangingVideoUpscaler:
     def __init__(self) -> None:
         self.spawned_processes: list[FakeSubprocess] = []
 
-    async def run(self, job: VideoUpscaleJob) -> Path:
+    async def run(self, job: VideoUpscaleJob, fps_multiplier: int = 1) -> Path:
         process = FakeSubprocess()
         self.spawned_processes.append(process)
         try:

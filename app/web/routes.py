@@ -25,6 +25,7 @@ async def home(request: Request) -> HTMLResponse:
             "default_model": settings.default_model,
             "default_video_profile": settings.default_video_profile,
             "allowed_scales": settings.allowed_scale_values,
+            "allowed_fps_multipliers": settings.allowed_fps_multiplier_values,
             "supported_models": settings.model_catalog,
             "video_profiles": settings.video_profile_catalog,
             "engine": settings.engine,

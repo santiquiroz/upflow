@@ -136,7 +136,7 @@ class FailingImageEngine(UpscaleEngine):
 
 
 class FailingVideoUpscaler:
-    async def run(self, job: VideoUpscaleJob) -> Path:
+    async def run(self, job: VideoUpscaleJob, fps_multiplier: int = 1) -> Path:
         raise RuntimeError("simulated engine crash")
 
 

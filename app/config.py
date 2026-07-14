@@ -42,6 +42,7 @@ class VideoProfile(TypedDict):
     video_preset: str
     crf: int
     keep_audio: bool
+    fps_multiplier: int
 
 
 MODEL_CATALOG: list[ModelOption] = [
@@ -107,6 +108,7 @@ VIDEO_PROFILE_CATALOG: list[VideoProfile] = [
         "video_preset": "medium",
         "crf": 18,
         "keep_audio": True,
+        "fps_multiplier": 1,
     },
     {
         "key": "general-hq-4x",
@@ -119,6 +121,7 @@ VIDEO_PROFILE_CATALOG: list[VideoProfile] = [
         "video_preset": "slow",
         "crf": 17,
         "keep_audio": True,
+        "fps_multiplier": 1,
     },
     {
         "key": "anime-balanced-2x",
@@ -131,6 +134,7 @@ VIDEO_PROFILE_CATALOG: list[VideoProfile] = [
         "video_preset": "medium",
         "crf": 17,
         "keep_audio": True,
+        "fps_multiplier": 1,
     },
     {
         "key": "anime-quality-3x",
@@ -143,6 +147,7 @@ VIDEO_PROFILE_CATALOG: list[VideoProfile] = [
         "video_preset": "slow",
         "crf": 16,
         "keep_audio": True,
+        "fps_multiplier": 1,
     },
     {
         "key": "anime-max-detail-4x",
@@ -155,6 +160,7 @@ VIDEO_PROFILE_CATALOG: list[VideoProfile] = [
         "video_preset": "slow",
         "crf": 15,
         "keep_audio": True,
+        "fps_multiplier": 1,
     },
 ]
 
