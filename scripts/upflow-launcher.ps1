@@ -110,6 +110,12 @@ function Test-RifePresent {
     return (Test-Path $binary) -and (Test-Path $defaultModel)
 }
 
+function Test-DeepfilternetPresent {
+    $binary = Join-Path $root 'vendor\deepfilternet\deep-filter.exe'
+    $rnnoiseModel = Join-Path $root 'vendor\deepfilternet\models\sh.rnnn'
+    return (Test-Path $binary) -and (Test-Path $rnnoiseModel)
+}
+
 function Invoke-DownloadScript {
     param(
         [string]$ScriptName,
@@ -141,17 +147,24 @@ function Install-MissingBinaries {
     } else {
         Invoke-DownloadScript -ScriptName 'download-rife.ps1' -Label 'RIFE NCNN Vulkan (FPS boost)'
     }
+
+    if (Test-DeepfilternetPresent) {
+        Write-Host 'DeepFilterNet ya esta descargado.'
+    } else {
+        Invoke-DownloadScript -ScriptName 'download-deepfilternet.ps1' -Label 'DeepFilterNet (mejora de audio con IA)'
+    }
 }
 
-function New-EnvFileWithInterpolationEnabled {
+function New-EnvFileWithFeaturesEnabled {
     if (Test-Path $envPath) {
         Write-Host 'Archivo .env ya existe, no se modifica.'
         return
     }
 
-    Write-Step 'Generando .env con el FPS boost activado...'
+    Write-Step 'Generando .env con el FPS boost y la mejora de audio activados...'
     $lines = Get-Content $envExamplePath
     $lines = $lines -replace '^ENABLE_INTERPOLATION=.*', 'ENABLE_INTERPOLATION=True'
+    $lines = $lines -replace '^ENABLE_AUDIO_ENHANCE=.*', 'ENABLE_AUDIO_ENHANCE=True'
     Set-Content -Path $envPath -Value $lines -Encoding utf8
 }
 
@@ -219,7 +232,7 @@ function Main {
 
     Install-PythonEnvironment
     Install-MissingBinaries
-    New-EnvFileWithInterpolationEnabled
+    New-EnvFileWithFeaturesEnabled
     Start-Upflow
 }
 

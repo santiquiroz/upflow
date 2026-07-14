@@ -48,6 +48,7 @@ La mayoría de buenos upscalers son CUDA-only, de código cerrado, o una pila de
 - 🖼️ **Upscaling de imagen** — arrastrás el archivo, elegís modelo y escala (2×/3×/4× según el modelo), listo. Fotos y anime/line-art por igual.
 - 🎬 **Upscaling de video** — pipeline completo con FFmpeg: extraer frames → upscale por lote → re-encodear preservando el audio. Perfiles listos para anime y contenido general.
 - 🌊 **FPS boost con RIFE NCNN Vulkan** — interpolación de fotogramas 2×/3×/4× sobre el video ya reescalado, mismo backend Vulkan (sin CUDA). Se activa por config y aparece como dropdown en la UI.
+- 🔊 **Mejora de audio con IA** — denoise opcional del audio del video con DeepFilterNet (red neuronal) o RNNoise (filtro `arnndn` de FFmpeg), como paso extra del pipeline antes de re-encodear. Se activa por config y se elige por job (`audio_enhance=deepfilter|rnnoise`).
 - 🧹 **Retención automática** — un sweeper en background borra outputs y jobs terminados más viejos que `OUTPUT_TTL_HOURS`; corre al arrancar y luego cada hora. El disco ya no crece sin límite.
 - 🚦 **Cola con límite + concurrencia de GPU compartida** — cada tipo de job (imagen/video) tiene su propia cola acotada (`MAX_QUEUE_SIZE`, responde `429` si se llena) y ambas comparten un único semáforo de GPU (`GPU_CONCURRENCY`) para no saturar la VRAM.
 - 🛡️ **Hardening de subida** — nombres de archivo sanitizados (caracteres inválidos en Windows y nombres reservados como `CON`/`NUL`/`COM1`), timeout + kill automático de subprocesos colgados, validación de formato/tamaño/dimensiones de imagen y video, y un middleware que rechaza requests de escritura (`POST`/`PUT`/`PATCH`/`DELETE`) desde orígenes no permitidos.
@@ -123,13 +124,20 @@ curl -X POST http://127.0.0.1:8090/api/v1/jobs \
   -F "output_format=png"
 ```
 
-**Crear un job de video** — campos de formulario: `file` (requerido), `profile_key` (default `anime-balanced-2x`), y overrides opcionales del perfil: `model_name`, `scale`, `output_container` (`mp4`/`mkv`), `video_codec` (`libx264`/`libx265`), `video_preset` (`medium`/`slow`/`veryslow`), `crf` (`10`-`28`), `keep_audio`, `fps_multiplier` (`1` = sin boost, o uno de `ALLOWED_FPS_MULTIPLIERS`):
+**Crear un job de video** — campos de formulario: `file` (requerido), `profile_key` (default `anime-balanced-2x`), y overrides opcionales del perfil: `model_name`, `scale`, `output_container` (`mp4`/`mkv`), `video_codec` (`libx264`/`libx265`), `video_preset` (`medium`/`slow`/`veryslow`), `crf` (`10`-`28`), `keep_audio`, `fps_multiplier` (`1` = sin boost, o uno de `ALLOWED_FPS_MULTIPLIERS`), `audio_enhance` (`deepfilter`/`rnnoise`, omitido = sin mejora; requiere `keep_audio=true` y `ENABLE_AUDIO_ENHANCE=true` — ver "Cómo activar la mejora de audio" abajo):
 
 ```bash
 curl -X POST http://127.0.0.1:8090/api/v1/video/jobs \
   -F "file=@input.mp4" \
   -F "profile_key=anime-balanced-2x" \
   -F "fps_multiplier=2"
+
+# con mejora de audio (requiere ENABLE_AUDIO_ENHANCE=true y haber corrido download-deepfilternet.ps1)
+curl -X POST http://127.0.0.1:8090/api/v1/video/jobs \
+  -F "file=@input.mp4" \
+  -F "profile_key=anime-balanced-2x" \
+  -F "keep_audio=true" \
+  -F "audio_enhance=deepfilter"
 ```
 
 **Consultar y descargar:**
@@ -197,6 +205,9 @@ Todas las variables leen de `.env` (ver [`.env.example`](.env.example) con los d
 | `RIFE_MODEL` | `rife-v4.6` | Modelo RIFE usado para interpolar (recomendado, general-purpose) |
 | `ENABLE_INTERPOLATION` | `false` | Habilita el FPS boost; requiere haber corrido `download-rife.ps1` |
 | `ALLOWED_FPS_MULTIPLIERS` | `2,3,4` | Multiplicadores de FPS permitidos por la API (lista separada por comas) |
+| `DEEPFILTER_BINARY` | `vendor/deepfilternet/deep-filter.exe` | Ruta al binario CLI de DeepFilterNet |
+| `RNNOISE_MODEL` | `vendor/deepfilternet/models/sh.rnnn` | Ruta al modelo `.rnnn` usado por el filtro `arnndn` de FFmpeg |
+| `ENABLE_AUDIO_ENHANCE` | `false` | Habilita la mejora de audio (`audio_enhance=deepfilter\|rnnoise`); requiere haber corrido `download-deepfilternet.ps1` |
 
 ## Cómo activar el FPS boost (RIFE)
 
@@ -211,6 +222,20 @@ ENABLE_INTERPOLATION=true
 ```
 
 El dropdown "FPS boost" siempre está visible en la UI de video (con las opciones de `ALLOWED_FPS_MULTIPLIERS`), pero solo funciona una vez activado: pedir un `fps_multiplier > 1` (por UI o directo en `POST /api/v1/video/jobs`) sin `ENABLE_INTERPOLATION=true` o sin el binario de RIFE instalado devuelve `400`.
+
+## Cómo activar la mejora de audio (DeepFilterNet / RNNoise)
+
+La mejora de audio está deshabilitada por defecto. Para activarla:
+
+```powershell
+# 1. Descargar el binario de DeepFilterNet (~26 MB) + el modelo .rnnn para el filtro arnndn de FFmpeg (~300 KB)
+powershell -ExecutionPolicy Bypass -File .\scripts\download-deepfilternet.ps1
+
+# 2. En .env, habilitar la mejora de audio
+ENABLE_AUDIO_ENHANCE=true
+```
+
+Con eso activado, un job de video con `keep_audio=true` puede pedir `audio_enhance=deepfilter` (red neuronal DeepFilterNet3, mejor calidad, más lento) o `audio_enhance=rnnoise` (filtro `arnndn` de FFmpeg, más liviano). Pedir `audio_enhance` sin `keep_audio=true`, sin `ENABLE_AUDIO_ENHANCE=true` o sin los binarios instalados devuelve `400`. Omitir `audio_enhance` deja el audio original intacto (remux con `-c:a copy`).
 
 ## Tests
 
@@ -250,7 +275,7 @@ El motor de upscaling vive detrás de una interfaz `UpscaleEngine` (`app/service
 
 - [x] 🌊 FPS boost con RIFE NCNN Vulkan (2×/3×/4×, activable por config)
 - [x] 🧹 Limpieza automática de disco + retención de jobs (TTL)
-- [ ] 🔊 Mejora de audio con IA (DeepFilterNet) — denoise/realce de diálogo como etapa opcional del pipeline
+- [x] 🔊 Mejora de audio con IA (DeepFilterNet / RNNoise) — denoise como etapa opcional del pipeline, activable por config
 - [ ] 📝 Subtítulos con IA (whisper.cpp) — generación + traducción, muxeados como pista blanda
 - [ ] 🎚️ Slider calidad ↔ velocidad (presets Fast/Balanced/Best mapeados a los knobs reales de cada motor)
 - [ ] 📦 Modo batch por temporada (subida múltiple, progreso agregado)
