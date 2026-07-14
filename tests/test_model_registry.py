@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 
 import pytest
@@ -247,3 +248,196 @@ def test_settings_models_path_defaults_to_models_under_runtime(tmp_path: Path) -
     settings = make_settings(tmp_path)
 
     assert settings.models_path == settings.runtime_path / "models"
+
+
+# ---------------------------------------------------------------------------
+# Review fix 1 - register() must not bypass builtin protection
+# ---------------------------------------------------------------------------
+
+
+def test_register_raises_value_error_for_builtin_reserved_id(tmp_path: Path) -> None:
+    registry = ModelRegistry(make_settings(tmp_path))
+    impostor = make_onnx_entry(id="realesrgan-x4plus", name="Impostor")
+
+    with pytest.raises(ValueError, match="realesrgan-x4plus"):
+        registry.register(impostor)
+
+    builtin = registry.get("realesrgan-x4plus")
+    assert builtin is not None
+    assert builtin.kind == ModelKind.builtin_ncnn
+    assert builtin.name == "RealESRGAN x4 Plus"
+
+
+def test_register_rejected_builtin_id_stays_removable_protected(tmp_path: Path) -> None:
+    # Regression for the reproduced exploit: register(builtin id) used to
+    # overwrite the entry as kind=onnx, which then made remove() succeed.
+    registry = ModelRegistry(make_settings(tmp_path))
+
+    with pytest.raises(ValueError):
+        registry.register(make_onnx_entry(id="realesrgan-x4plus"))
+    with pytest.raises(ValueError):
+        registry.remove("realesrgan-x4plus")
+
+    assert registry.get("realesrgan-x4plus") is not None
+
+
+def test_register_raises_value_error_for_external_builtin_kind(tmp_path: Path) -> None:
+    # Only the internal seed creates builtin entries; letting callers register
+    # kind=builtin-ncnn under a new id would create an unremovable zombie.
+    registry = ModelRegistry(make_settings(tmp_path))
+    zombie = make_onnx_entry(id="my-custom", kind=ModelKind.builtin_ncnn)
+
+    with pytest.raises(ValueError, match="my-custom"):
+        registry.register(zombie)
+
+    assert registry.get("my-custom") is None
+
+
+# ---------------------------------------------------------------------------
+# Review fix 2 - corrupt registry.json must not crash the constructor
+# ---------------------------------------------------------------------------
+
+
+def seed_corrupt_registry(settings: Settings, content: str) -> Path:
+    registry_path = settings.models_path / "registry.json"
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    registry_path.write_text(content, encoding="utf-8")
+    return registry_path
+
+
+def assert_recovers_from_corrupt_file(tmp_path: Path, content: str) -> None:
+    settings = make_settings(tmp_path)
+    seed_corrupt_registry(settings, content)
+
+    registry = ModelRegistry(settings)
+
+    assert {entry.id for entry in registry.list()} == CATALOG_IDS
+    backups = list(settings.models_path.glob("registry.json.corrupt-*"))
+    assert len(backups) == 1
+    assert backups[0].read_text(encoding="utf-8") == content
+
+
+def test_malformed_json_is_backed_up_and_builtins_reseeded(tmp_path: Path) -> None:
+    assert_recovers_from_corrupt_file(tmp_path, "{not valid json!!!")
+
+
+def test_valid_json_with_wrong_schema_is_backed_up_and_reseeded(tmp_path: Path) -> None:
+    assert_recovers_from_corrupt_file(tmp_path, json.dumps([{"foo": "bar"}]))
+
+
+def test_valid_json_with_bad_enum_value_is_backed_up_and_reseeded(tmp_path: Path) -> None:
+    entry = make_onnx_entry()
+    registry_path = tmp_path / "runtime" / "models" / "registry.json"
+    settings = make_settings(tmp_path)
+    ModelRegistry(settings).register(entry)
+    raw = json.loads(registry_path.read_text(encoding="utf-8"))
+    raw[0]["kind"] = "not-a-kind"
+    assert_recovers_from_corrupt_file(tmp_path, json.dumps(raw))
+
+
+def test_corrupt_recovery_persists_fresh_registry(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    seed_corrupt_registry(settings, "{corrupt")
+    ModelRegistry(settings)
+
+    reloaded = ModelRegistry(settings)
+
+    assert {entry.id for entry in reloaded.list()} == CATALOG_IDS
+    assert len(list(settings.models_path.glob("registry.json.corrupt-*"))) == 1
+
+
+# ---------------------------------------------------------------------------
+# Review fix 3 - concurrent writers must not race (Task 5 will call the
+# registry from asyncio.to_thread workers; unlocked os.replace collisions
+# were reproduced as PermissionError on Windows)
+# ---------------------------------------------------------------------------
+
+
+def test_concurrent_registers_do_not_race_and_all_persist(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    registry = ModelRegistry(settings)
+    thread_count = 8
+    entries_per_thread = 5
+    barrier = threading.Barrier(thread_count)
+    errors: list[Exception] = []
+
+    def register_batch(worker: int) -> None:
+        barrier.wait()
+        try:
+            for item in range(entries_per_thread):
+                registry.register(
+                    make_onnx_entry(id=f"custom-{worker}-{item}", name=f"Custom {worker}-{item}")
+                )
+        except Exception as exc:  # noqa: BLE001 - collected for the assertion
+            errors.append(exc)
+
+    threads = [threading.Thread(target=register_batch, args=(worker,)) for worker in range(thread_count)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert errors == []
+    expected_ids = {
+        f"custom-{worker}-{item}"
+        for worker in range(thread_count)
+        for item in range(entries_per_thread)
+    }
+    reloaded = ModelRegistry(settings)
+    assert expected_ids <= {entry.id for entry in reloaded.list()}
+
+
+def test_concurrent_register_and_remove_do_not_race(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    registry = ModelRegistry(settings)
+    for item in range(20):
+        registry.register(make_onnx_entry(id=f"seeded-{item}", name=f"Seeded {item}"))
+    barrier = threading.Barrier(2)
+    errors: list[Exception] = []
+
+    def remover() -> None:
+        barrier.wait()
+        try:
+            for item in range(20):
+                registry.remove(f"seeded-{item}")
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    def registrar() -> None:
+        barrier.wait()
+        try:
+            for item in range(20):
+                registry.register(make_onnx_entry(id=f"fresh-{item}", name=f"Fresh {item}"))
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=remover), threading.Thread(target=registrar)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert errors == []
+    reloaded = ModelRegistry(settings)
+    ids = {entry.id for entry in reloaded.list()}
+    assert {f"fresh-{item}" for item in range(20)} <= ids
+    assert not any(model_id.startswith("seeded-") for model_id in ids)
+
+
+# ---------------------------------------------------------------------------
+# Review minor - register() stores a defensive copy
+# ---------------------------------------------------------------------------
+
+
+def test_register_stores_defensive_copy_of_entry(tmp_path: Path) -> None:
+    registry = ModelRegistry(make_settings(tmp_path))
+    entry = make_onnx_entry()
+    registry.register(entry)
+
+    entry.status = ModelStatus.error
+    entry.error = "mutated after register"
+
+    stored = registry.get("swinir-real-sr-x4")
+    assert stored is not None
+    assert stored.status == ModelStatus.installed
+    assert stored.error is None

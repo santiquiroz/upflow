@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import logging
 import tempfile
-from dataclasses import dataclass, field
+import threading
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -11,7 +13,11 @@ from typing import Any
 from app.config import MODEL_CATALOG, ModelOption, Settings
 from app.models import utc_now
 
+logger = logging.getLogger(__name__)
+
 REGISTRY_FILENAME = "registry.json"
+
+BUILTIN_MODEL_IDS = frozenset(option["key"] for option in MODEL_CATALOG)
 
 
 class ModelKind(str, Enum):
@@ -106,30 +112,49 @@ def _write_json_atomically(path: Path, payload: list[dict[str, Any]]) -> None:
         raise
 
 
+def _reject_builtin_conflicts(entry: ModelEntry) -> None:
+    if entry.id in BUILTIN_MODEL_IDS:
+        raise ValueError(f"Cannot overwrite builtin model: {entry.id!r}")
+    # Only the internal seed creates builtin entries; a caller-registered
+    # builtin-ncnn entry would be an unremovable zombie.
+    if entry.kind == ModelKind.builtin_ncnn:
+        raise ValueError(f"Cannot register builtin-ncnn entry: {entry.id!r}")
+
+
 class ModelRegistry:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self._registry_path = settings.models_path / REGISTRY_FILENAME
+        # Guards the in-memory dict and the persist step: Task 5+ calls the
+        # registry from asyncio.to_thread workers, and two unlocked os.replace
+        # calls racing on the same target raise PermissionError on Windows.
+        self._lock = threading.Lock()
         self._entries: dict[str, ModelEntry] = self._load()
         self._seed_builtins()
 
     def list(self) -> list[ModelEntry]:
-        return list(self._entries.values())
+        with self._lock:
+            return list(self._entries.values())
 
     def get(self, model_id: str) -> ModelEntry | None:
-        return self._entries.get(model_id)
+        with self._lock:
+            return self._entries.get(model_id)
 
     def register(self, entry: ModelEntry) -> ModelEntry:
-        self._entries[entry.id] = entry
-        self._persist()
-        return entry
+        _reject_builtin_conflicts(entry)
+        stored = replace(entry)
+        with self._lock:
+            self._entries[stored.id] = stored
+            self._persist()
+        return stored
 
     def remove(self, model_id: str) -> None:
-        entry = self._require_entry(model_id)
-        if entry.kind == ModelKind.builtin_ncnn:
-            raise ValueError(f"Cannot remove builtin model: {model_id!r}")
-        del self._entries[model_id]
-        self._persist()
+        with self._lock:
+            entry = self._require_entry(model_id)
+            if entry.kind == ModelKind.builtin_ncnn:
+                raise ValueError(f"Cannot remove builtin model: {model_id!r}")
+            del self._entries[model_id]
+            self._persist()
 
     def _require_entry(self, model_id: str) -> ModelEntry:
         entry = self._entries.get(model_id)
@@ -140,21 +165,40 @@ class ModelRegistry:
     def _load(self) -> dict[str, ModelEntry]:
         if not self._registry_path.exists():
             return {}
-        raw = json.loads(self._registry_path.read_text(encoding="utf-8"))
-        return {item["id"]: _entry_from_json_dict(item) for item in raw}
+        try:
+            raw = json.loads(self._registry_path.read_text(encoding="utf-8"))
+            return {item["id"]: _entry_from_json_dict(item) for item in raw}
+        except (json.JSONDecodeError, KeyError, ValueError, TypeError) as exc:
+            self._backup_corrupt_registry(exc)
+            return {}
+
+    def _backup_corrupt_registry(self, exc: Exception) -> None:
+        timestamp = utc_now().strftime("%Y%m%dT%H%M%S%f")
+        backup_path = self._registry_path.with_name(
+            f"{self._registry_path.name}.corrupt-{timestamp}"
+        )
+        self._registry_path.replace(backup_path)
+        logger.warning(
+            "Corrupt model registry at %s (%s); backed up to %s, reseeding builtins",
+            self._registry_path,
+            exc,
+            backup_path,
+        )
 
     def _seed_builtins(self) -> None:
-        missing = [
-            _builtin_entry_from_catalog(option)
-            for option in MODEL_CATALOG
-            if option["key"] not in self._entries
-        ]
-        if not missing:
-            return
-        for entry in missing:
-            self._entries[entry.id] = entry
-        self._persist()
+        with self._lock:
+            missing = [
+                _builtin_entry_from_catalog(option)
+                for option in MODEL_CATALOG
+                if option["key"] not in self._entries
+            ]
+            if not missing:
+                return
+            for entry in missing:
+                self._entries[entry.id] = entry
+            self._persist()
 
     def _persist(self) -> None:
+        # Callers must hold self._lock.
         payload = [_entry_to_json_dict(entry) for entry in self._entries.values()]
         _write_json_atomically(self._registry_path, payload)
