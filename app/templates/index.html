@@ -235,16 +235,24 @@
       function applyVideoProfile() {
         const profile = videoProfiles.find(item => item.key === videoProfileSelect.value);
         if (!profile) return;
-        videoProfileHelp.textContent = `${profile.category.toUpperCase()} — ${profile.description} Model: ${profile.modelKey}, Scale: ${profile.scale}x, Codec: ${profile.videoCodec}, Preset: ${profile.videoPreset}, CRF: ${profile.crf}.`;
-        videoModelSelect.value = profile.modelKey;
+        videoProfileHelp.textContent = `${profile.category.toUpperCase()} — ${profile.description} Model: ${profile.model_key}, Scale: ${profile.scale}x, Codec: ${profile.video_codec}, Preset: ${profile.video_preset}, CRF: ${profile.crf}.`;
+        videoModelSelect.value = profile.model_key;
         refreshVideoModelUi();
         videoScaleSelect.value = String(profile.scale);
         videoForm.querySelector('[name="output_container"]').value = 'mp4';
-        videoForm.querySelector('[name="video_codec"]').value = profile.videoCodec;
-        videoForm.querySelector('[name="video_preset"]').value = profile.videoPreset;
+        videoForm.querySelector('[name="video_codec"]').value = profile.video_codec;
+        videoForm.querySelector('[name="video_preset"]').value = profile.video_preset;
         videoForm.querySelector('[name="crf"]').value = profile.crf;
         keepAudioCheckbox.checked = true;
         videoFpsSelect.value = String(profile.fps_multiplier ?? 1);
+      }
+
+      function formatFps(rawValue) {
+        if (typeof rawValue !== 'string' || !rawValue.includes('/')) return rawValue;
+        const [numerator, denominator] = rawValue.split('/').map(Number);
+        if (!denominator) return rawValue;
+        const decimal = numerator / denominator;
+        return Number.isInteger(decimal) ? String(decimal) : decimal.toFixed(2);
       }
 
       fileInput.addEventListener('change', () => {
@@ -287,7 +295,7 @@
           const response = await fetch(statusUrl);
           const data = await response.json();
           const stage = data?.metadata?.stage ? `\n\nStage: ${data.metadata.stage}` : '';
-          const outputFps = data?.metadata?.outputFps ? `\nOutput FPS: ${data.metadata.outputFps}` : '';
+          const outputFps = data?.metadata?.outputFps ? `\nOutput FPS: ${formatFps(data.metadata.outputFps)}` : '';
           statusBox.textContent = JSON.stringify(data, null, 2) + stage + outputFps;
           if (data.status === 'completed' && data.downloadUrl) {
             downloadLink.href = data.downloadUrl;
