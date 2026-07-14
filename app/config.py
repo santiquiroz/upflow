@@ -264,6 +264,10 @@ class Settings(BaseSettings):
         return resolve_against_project_root(self.engine_binary)
 
     @property
+    def engine_models_path(self) -> Path:
+        return resolve_against_project_root(self.engine_models_dir)
+
+    @property
     def rife_binary_path(self) -> Path:
         return resolve_against_project_root(self.rife_binary)
 

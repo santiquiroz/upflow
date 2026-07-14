@@ -11,8 +11,8 @@ from app.services.process_runner import run_guarded_process
 class RealEsrganNcnnEngine(UpscaleEngine):
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.binary_path = Path(settings.engine_binary)
-        self.models_dir = Path(settings.engine_models_dir)
+        self.binary_path = settings.engine_binary_path
+        self.models_dir = settings.engine_models_path
 
     def available(self) -> bool:
         return self.binary_path.exists() and self.models_dir.exists()

@@ -116,7 +116,7 @@ class VideoUpscaler:
                 "-s",
                 str(job.scale),
                 "-m",
-                self.settings.engine_models_dir,
+                str(self.settings.engine_models_path),
                 "-f",
                 "png",
                 "-g",

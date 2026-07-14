@@ -274,6 +274,11 @@ async def test_upscale_command_uses_resolved_absolute_engine_path(tmp_path: Path
     upscale_commands = [command for command in captured if command[0] == expected_engine]
     assert len(upscale_commands) == 1
 
+    upscale_command = upscale_commands[0]
+    models_arg = upscale_command[upscale_command.index("-m") + 1]
+    assert models_arg == str(upscaler.settings.engine_models_path)
+    assert models_arg != upscaler.settings.engine_models_dir
+
 
 async def test_run_raises_clear_error_when_multiplier_enabled_without_rife_engine(tmp_path: Path) -> None:
     events: list[str] = []

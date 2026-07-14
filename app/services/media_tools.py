@@ -78,8 +78,8 @@ def format_fps_fraction(value: str | None) -> str:
 class MediaTools:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.ffmpeg_path = Path(settings.ffmpeg_binary)
-        self.ffprobe_path = Path(settings.ffprobe_binary)
+        self.ffmpeg_path = settings.ffmpeg_binary_path
+        self.ffprobe_path = settings.ffprobe_binary_path
 
     def available(self) -> bool:
         return self.ffmpeg_path.exists() and self.ffprobe_path.exists()

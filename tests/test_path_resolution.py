@@ -92,6 +92,65 @@ def test_absolute_engine_binary_override_is_kept_as_is(tmp_path: Path) -> None:
     assert settings.engine_binary_path == tmp_path / "custom-engine.exe"
 
 
+def test_engine_models_path_resolves_against_project_root_not_cwd(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    settings = Settings()
+
+    assert settings.engine_models_path.is_absolute()
+    assert settings.engine_models_path == PROJECT_ROOT / "vendor/realesrgan/models"
+    assert settings.engine_models_path != tmp_path / "vendor/realesrgan/models"
+
+
+def test_absolute_engine_models_dir_override_is_kept_as_is(tmp_path: Path) -> None:
+    settings = Settings(ENGINE_MODELS_DIR=str(tmp_path / "custom-models"))
+
+    assert settings.engine_models_path == tmp_path / "custom-models"
+
+
+# ---------------------------------------------------------------------------
+# Task 16 review round 2 — the consumers themselves must hold resolved
+# absolute paths. Path(settings.ffmpeg_binary) normalizes slashes (enough to
+# dodge WinError 2 from the project root) but stays CWD-relative: launched
+# from any other directory (packaged launcher, Windows service), ffprobe and
+# the realesrgan engine would fail to find their binaries.
+# ---------------------------------------------------------------------------
+
+
+def test_media_tools_uses_resolved_absolute_ffmpeg_and_ffprobe_paths(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from app.services.media_tools import MediaTools
+
+    monkeypatch.chdir(tmp_path)
+    settings = Settings()
+
+    media_tools = MediaTools(settings)
+
+    assert media_tools.ffmpeg_path.is_absolute()
+    assert media_tools.ffmpeg_path == settings.ffmpeg_binary_path
+    assert media_tools.ffprobe_path.is_absolute()
+    assert media_tools.ffprobe_path == settings.ffprobe_binary_path
+
+
+def test_realesrgan_engine_uses_resolved_absolute_binary_and_models_paths(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from app.services.engines.realesrgan_ncnn import RealEsrganNcnnEngine
+
+    monkeypatch.chdir(tmp_path)
+    settings = Settings()
+
+    engine = RealEsrganNcnnEngine(settings)
+
+    assert engine.binary_path.is_absolute()
+    assert engine.binary_path == settings.engine_binary_path
+    assert engine.models_dir.is_absolute()
+    assert engine.models_dir == settings.engine_models_path
+
+
 def test_templates_directory_is_absolute_and_exists() -> None:
     from app.web.routes import templates
 
