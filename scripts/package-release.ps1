@@ -53,7 +53,29 @@ Get-ChildItem $stagingDir -Recurse -File -Filter '*.pyc' | ForEach-Object {
     Remove-Item -Force $_.FullName
 }
 
-Compress-Archive -Path (Join-Path $stagingDir '*') -DestinationPath $zipPath -Force
+# Both Compress-Archive and ZipFile.CreateFromDirectory leave literal
+# backslashes in entry names on Windows/.NET Framework (Windows PowerShell
+# 5.1), which violates the ZIP spec (entries must use '/') and breaks
+# extraction on tools that follow it strictly. Building entries manually
+# guarantees forward-slash separators regardless of PowerShell/.NET version.
+Add-Type -AssemblyName System.IO.Compression
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$zipStream = [System.IO.File]::Open($zipPath, [System.IO.FileMode]::Create)
+try {
+    $archive = New-Object System.IO.Compression.ZipArchive($zipStream, [System.IO.Compression.ZipArchiveMode]::Create)
+    try {
+        Get-ChildItem -Path $stagingDir -Recurse -File | ForEach-Object {
+            $relativePath = $_.FullName.Substring($stagingDir.Length + 1) -replace '\\', '/'
+            [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $_.FullName, $relativePath, [System.IO.Compression.CompressionLevel]::Optimal) | Out-Null
+        }
+    }
+    finally {
+        $archive.Dispose()
+    }
+}
+finally {
+    $zipStream.Dispose()
+}
 
 Remove-Item -Recurse -Force $stagingDir
 
