@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -72,6 +74,20 @@ def test_list_devices_returns_only_cpu_when_onnxruntime_not_installed(
     devices = service.list_devices()
 
     assert devices == [CPU_DEVICE]
+
+
+def test_list_devices_survives_real_onnxruntime_import_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Unlike the other tests (which patch the _probe_onnxruntime seam), this
+    # exercises the real try/except inside it: a None entry in sys.modules
+    # makes `import onnxruntime` raise ImportError even when the package is
+    # installed, so the no-lib fallback is covered on any dev machine.
+    monkeypatch.setitem(sys.modules, "onnxruntime", None)
+    service = DevicesService(make_settings(DEFAULT_DEVICE="dml:0"))
+
+    assert service.list_devices() == [CPU_DEVICE]
+    assert service.resolve_default() == CPU_DEVICE
 
 
 def test_list_devices_returns_only_cpu_when_directml_provider_unavailable(
