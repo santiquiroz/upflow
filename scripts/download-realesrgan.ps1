@@ -1,5 +1,8 @@
 $ErrorActionPreference = 'Stop'
 
+# Older Windows PowerShell 5.1 defaults to TLS 1.0, which GitHub rejects.
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+
 $root = Split-Path -Parent $PSScriptRoot
 $vendorDir = Join-Path $root 'vendor\realesrgan'
 $binaryPath = Join-Path $vendorDir 'realesrgan-ncnn-vulkan.exe'
