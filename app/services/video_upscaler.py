@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import shutil
 from pathlib import Path
 
@@ -16,6 +17,8 @@ from app.services.media_tools import (
     resolve_video_fps,
 )
 from app.services.process_runner import run_guarded_process
+
+logger = logging.getLogger(__name__)
 
 
 class VideoUpscaler:
@@ -92,7 +95,8 @@ class VideoUpscaler:
         audio_mux_path: Path | None = None
         audio_codec_args: list[str] = []
         if job.keep_audio and has_audio:
-            audio_mux_path, audio_codec_args = await self._prepare_audio(job, audio_path)
+            prepared_audio_path, audio_codec_args = await self._prepare_audio(job, audio_path)
+            audio_mux_path = self._usable_audio_or_none(prepared_audio_path)
         elif job.keep_audio and job.audio_enhance:
             job.metadata["audioEnhanced"] = "skipped_no_audio"
 
@@ -158,6 +162,18 @@ class VideoUpscaler:
         if job.audio_enhance:
             return await self._prepare_enhanced_audio(job, audio_path)
         return await self._prepare_original_audio(job, audio_path)
+
+    def _usable_audio_or_none(self, prepared_audio_path: Path) -> Path | None:
+        # ffmpeg can exit 0 without producing a usable track for exotic
+        # codecs; the pre-enhance pipeline gated the mux on the file existing
+        # and silently encoded a muted video instead of failing the whole job,
+        # so this guard keeps that contract.
+        if self._is_non_empty_file(prepared_audio_path):
+            return prepared_audio_path
+        logger.warning(
+            "Prepared audio track %s is missing or empty; encoding without audio", prepared_audio_path
+        )
+        return None
 
     async def _prepare_original_audio(self, job: VideoUpscaleJob, audio_path: Path) -> tuple[Path, list[str]]:
         job.metadata["stage"] = "extracting_audio"

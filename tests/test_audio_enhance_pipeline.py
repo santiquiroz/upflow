@@ -287,6 +287,70 @@ async def test_audio_enhance_skips_cleanly_without_audio_stream(tmp_path: Path) 
 
 
 # ---------------------------------------------------------------------------
+# Mux gate: extraction exiting 0 without a usable file must not feed a
+# nonexistent path into the encode command — pre-Task-20 the pipeline
+# silently encoded a muted video (audio_path.exists() gate), so failing the
+# whole job here would be a behavior regression.
+# ---------------------------------------------------------------------------
+
+
+class SilentAudioExtractionUpscaler(StageTrackingVideoUpscaler):
+    """Audio extraction exits 0 but writes no file (exotic-codec edge case)."""
+
+    async def _run_process(self, command: list[str]) -> None:
+        if "-vn" in command:
+            self.events.append("extract_audio")
+            self.extract_audio_commands.append(command)
+            return
+        await super()._run_process(command)
+
+
+class EmptyAudioFileUpscaler(StageTrackingVideoUpscaler):
+    """Audio extraction exits 0 but leaves a 0-byte file behind."""
+
+    @staticmethod
+    def _write_dummy_audio(command: list[str]) -> None:
+        audio_path = Path(command[-1])
+        audio_path.parent.mkdir(parents=True, exist_ok=True)
+        audio_path.write_bytes(b"")
+
+
+async def test_encode_drops_audio_when_extraction_exits_zero_without_file(tmp_path: Path) -> None:
+    events: list[str] = []
+    settings = make_settings(tmp_path)
+    StorageService(settings)
+    upscaler = SilentAudioExtractionUpscaler(
+        settings, FakeVideoEngine(), FakeMediaToolsWithAudio(), None, None, events=events
+    )
+    job = make_video_job_with_audio(write_source(upscaler))
+
+    output_path = await upscaler.run(job)
+
+    assert "extract_audio" in events
+    encode_command = upscaler.encode_commands[0]
+    assert "-map" not in encode_command
+    assert "-c:a" not in encode_command
+    assert output_path.exists()
+
+
+async def test_encode_drops_audio_when_extraction_produces_empty_file(tmp_path: Path) -> None:
+    events: list[str] = []
+    settings = make_settings(tmp_path)
+    StorageService(settings)
+    upscaler = EmptyAudioFileUpscaler(
+        settings, FakeVideoEngine(), FakeMediaToolsWithAudio(), None, None, events=events
+    )
+    job = make_video_job_with_audio(write_source(upscaler))
+
+    output_path = await upscaler.run(job)
+
+    encode_command = upscaler.encode_commands[0]
+    assert "-map" not in encode_command
+    assert "-c:a" not in encode_command
+    assert output_path.exists()
+
+
+# ---------------------------------------------------------------------------
 # Misconfiguration guard
 # ---------------------------------------------------------------------------
 
