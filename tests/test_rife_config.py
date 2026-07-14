@@ -13,7 +13,10 @@ from app.config import PROJECT_ROOT, Settings
 
 
 def test_rife_settings_have_expected_defaults() -> None:
-    settings = Settings()
+    # _env_file=None bypasses the developer's real .env (which upflow-launcher.ps1
+    # legitimately sets ENABLE_INTERPOLATION=True in) so this asserts the Field-level
+    # code defaults, not whatever the local .env happens to contain.
+    settings = Settings(_env_file=None)
 
     assert settings.rife_binary == "vendor/rife/rife-ncnn-vulkan.exe"
     assert settings.rife_models_dir == "vendor/rife/models"
