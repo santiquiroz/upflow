@@ -299,3 +299,29 @@ async def test_keep_audio_and_fps_multiplier_combo_preserves_audio_mux_and_doubl
     mapped_values = [encode_command[index + 1] for index in map_indices]
     assert mapped_values == ["0:v:0", "1:a:0"], "audio mux mapping must stay unchanged by interpolation"
     assert encode_command[-3:-1] == ["-c:a", "copy"], "audio codec copy flag must stay unchanged"
+
+
+# ---------------------------------------------------------------------------
+# Task 13 review fix - job.metadata["outputFps"] coverage: populated with the
+# multiplied fps for interpolated runs and the original fps otherwise.
+# ---------------------------------------------------------------------------
+
+
+async def test_output_fps_metadata_reflects_multiplier_on_interpolated_run(tmp_path: Path) -> None:
+    events: list[str] = []
+    upscaler = make_upscaler(tmp_path, events, FakeRifeEngine(events))
+    job = make_video_job(write_source(upscaler))
+
+    await upscaler.run(job, fps_multiplier=2)
+
+    assert job.metadata["outputFps"] == "60/1"
+
+
+async def test_output_fps_metadata_keeps_original_fps_when_multiplier_is_one(tmp_path: Path) -> None:
+    events: list[str] = []
+    upscaler = make_upscaler(tmp_path, events, FakeRifeEngine(events))
+    job = make_video_job(write_source(upscaler))
+
+    await upscaler.run(job)
+
+    assert job.metadata["outputFps"] == "30"

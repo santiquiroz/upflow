@@ -203,6 +203,7 @@
       const videoModelSelect = document.getElementById('video-model-select');
       const videoScaleSelect = document.getElementById('video-scale-select');
       const keepAudioCheckbox = document.getElementById('keep-audio-checkbox');
+      const videoFpsSelect = document.getElementById('video-fps-select');
 
       function refreshModelUi() {
         const selected = supportedModels.find(model => model.key === modelSelect.value);
@@ -243,6 +244,7 @@
         videoForm.querySelector('[name="video_preset"]').value = profile.videoPreset;
         videoForm.querySelector('[name="crf"]').value = profile.crf;
         keepAudioCheckbox.checked = true;
+        videoFpsSelect.value = String(profile.fps_multiplier ?? 1);
       }
 
       fileInput.addEventListener('change', () => {

@@ -429,6 +429,18 @@ def test_video_job_to_response_exposes_fps_multiplier() -> None:
     assert response.fps_multiplier == 3
 
 
+def test_video_job_response_serializes_output_fps_metadata() -> None:
+    from app.api.routes import video_job_to_response
+
+    job = make_video_job(Path("clip.mp4"), fps_multiplier=2)
+    job.metadata["outputFps"] = "60/1"
+
+    serialized = video_job_to_response(job).model_dump(by_alias=True)
+
+    assert serialized["fpsMultiplier"] == 2
+    assert serialized["metadata"]["outputFps"] == "60/1"
+
+
 # ---------------------------------------------------------------------------
 # Worker passes job.fps_multiplier through to the upscaler
 # ---------------------------------------------------------------------------
