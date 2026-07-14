@@ -4,8 +4,10 @@ from functools import lru_cache
 from pathlib import Path
 from typing import TypedDict
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+NEUTRAL_BIND_HOSTS = frozenset({"127.0.0.1", "0.0.0.0", "localhost"})
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -194,9 +196,7 @@ class Settings(BaseSettings):
     allowed_scales: str = Field(default="2,3,4", alias="ALLOWED_SCALES")
     default_video_profile: str = Field(default="anime-balanced-2x", alias="DEFAULT_VIDEO_PROFILE")
     output_ttl_hours: int = Field(default=24, alias="OUTPUT_TTL_HOURS")
-    allowed_origins: str = Field(
-        default="http://127.0.0.1:8090,http://localhost:8090", alias="ALLOWED_ORIGINS"
-    )
+    allowed_origins: str | None = Field(default=None, alias="ALLOWED_ORIGINS")
     max_queue_size: int = Field(default=20, alias="MAX_QUEUE_SIZE")
 
     rife_binary: str = Field(default="vendor/rife/rife-ncnn-vulkan.exe", alias="RIFE_BINARY")
@@ -204,6 +204,24 @@ class Settings(BaseSettings):
     rife_model: str = Field(default="rife-v4.6", alias="RIFE_MODEL")
     enable_interpolation: bool = Field(default=False, alias="ENABLE_INTERPOLATION")
     allowed_fps_multipliers: str = Field(default="2,3,4", alias="ALLOWED_FPS_MULTIPLIERS")
+
+    @model_validator(mode="after")
+    def _apply_default_allowed_origins(self) -> "Settings":
+        """Fills ALLOWED_ORIGINS from app_host/app_port when the caller left it unset.
+
+        Only kicks in when no value came from init kwargs, env vars, or the
+        dotenv file, so an explicit override (even an empty string) always
+        wins verbatim.
+        """
+        if self.allowed_origins is None:
+            self.allowed_origins = self._default_allowed_origins()
+        return self
+
+    def _default_allowed_origins(self) -> str:
+        origins = [f"http://127.0.0.1:{self.app_port}", f"http://localhost:{self.app_port}"]
+        if self.app_host not in NEUTRAL_BIND_HOSTS:
+            origins.append(f"http://{self.app_host}:{self.app_port}")
+        return ",".join(origins)
 
     @property
     def runtime_path(self) -> Path:

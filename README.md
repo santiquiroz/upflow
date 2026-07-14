@@ -169,7 +169,7 @@ Todas las variables leen de `.env` (ver [`.env.example`](.env.example) con los d
 | `ALLOWED_SCALES` | `2,3,4` | Escalas permitidas por la API (lista separada por comas) |
 | `DEFAULT_VIDEO_PROFILE` | `anime-balanced-2x` | Perfil de video preseleccionado en la UI |
 | `OUTPUT_TTL_HOURS` | `24` | Horas antes de borrar outputs y jobs terminados (el sweep corre cada hora) |
-| `ALLOWED_ORIGINS` | `http://127.0.0.1:8090,http://localhost:8090` | Orígenes permitidos para requests que cambian estado (`POST`/`PUT`/`PATCH`/`DELETE`) |
+| `ALLOWED_ORIGINS` | *(derivado de `APP_HOST`/`APP_PORT`; ej. `http://127.0.0.1:8090,http://localhost:8090`)* | Orígenes permitidos para requests que cambian estado (`POST`/`PUT`/`PATCH`/`DELETE`). Si no se define, se deriva automáticamente del `APP_HOST`/`APP_PORT` configurados; fijarlo explícitamente para sobreescribir |
 | `MAX_QUEUE_SIZE` | `20` | Tamaño máximo de cada cola de jobs (imagen y video por separado); responde `429` si se llena |
 | `RIFE_BINARY` | `vendor/rife/rife-ncnn-vulkan.exe` | Ruta al binario de RIFE NCNN Vulkan |
 | `RIFE_MODELS_DIR` | `vendor/rife/models` | Carpeta de modelos de RIFE |
