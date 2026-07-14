@@ -334,7 +334,7 @@ async def test_rnnoise_engine_run_builds_expected_argv_with_escaped_model_path(
 
     await engine.run(input_wav, output_wav)
 
-    expected_model_arg = str(settings.rnnoise_model_path).replace("\\", "/").replace(":", "\\:")
+    expected_model_arg = str(settings.rnnoise_model_path).replace("\\", "/").replace(":", "\\\\:")
     assert calls == [
         [
             str(settings.ffmpeg_binary_path),
@@ -377,7 +377,15 @@ def test_escape_filter_path_escapes_windows_drive_colon_and_backslashes() -> Non
 
     escaped = AudioEnhancer._escape_filter_path(path)
 
-    assert escaped == r"C\:/vendor/deepfilternet/models/sh.rnnn"
+    # A single backslash before the colon parses as "no option name" in the
+    # real ffmpeg arnndn filter graph when invoked via argv (no shell)
+    # because asyncio.create_subprocess_exec passes the value through with
+    # no shell-level backslash consumption first, unlike the double-escaped
+    # invocations documented in ffmpeg's own Windows-path examples. Verified
+    # against the vendored ffmpeg binary in Task 21's real-binary smoke test:
+    # only a double backslash reaches the filtergraph parser as an escaped
+    # colon.
+    assert escaped == r"C\\:/vendor/deepfilternet/models/sh.rnnn"
 
 
 # ---------------------------------------------------------------------------

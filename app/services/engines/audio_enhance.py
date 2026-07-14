@@ -94,10 +94,15 @@ class AudioEnhancer:
         # a Windows drive-letter colon (and any literal backslash, itself an
         # escape character in filter syntax) breaks parsing if passed as-is.
         # Forward slashes are accepted as path separators on Windows, so
-        # converting to them first sidesteps backslash-escaping entirely;
-        # only the colon then needs a leading backslash.
+        # converting to them first sidesteps backslash-escaping entirely.
+        # A single leading backslash before the colon is NOT enough: this
+        # command runs via asyncio.create_subprocess_exec (argv, no shell),
+        # so no shell layer consumes one backslash on the way in, and
+        # ffmpeg's filtergraph parser needs to see a doubled backslash to
+        # read the colon as a literal character instead of an option
+        # separator. Confirmed against the real vendored ffmpeg binary.
         posix_style = str(path).replace("\\", "/")
-        return posix_style.replace(":", r"\:")
+        return posix_style.replace(":", r"\\:")
 
     async def _execute(self, command: list[str], failure_message: str) -> None:
         _, stderr, returncode = await run_guarded_process(command, self.settings.subprocess_timeout)
