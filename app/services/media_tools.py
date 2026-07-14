@@ -52,6 +52,29 @@ def compute_interpolated_fps(source_fps: str | None, multiplier: int) -> Fractio
     return fraction * multiplier
 
 
+def compute_target_frame_count(source_frame_count: int, source_fps: str | None, target_fps: str | None) -> int:
+    """Computes the absolute RIFE `-n` target for TARGET_FPS mode.
+
+    target_frames = round(source_count * target_fps / source_fps). Rounding means the
+    resulting duration can drift from the source by less than one frame at target_fps.
+    """
+    source_fraction = parse_fps_fraction(source_fps)
+    if source_fraction is None:
+        raise ValueError(f"Cannot compute target frame count from invalid source fps: {source_fps!r}")
+    target_fraction = parse_fps_fraction(target_fps)
+    if target_fraction is None:
+        raise ValueError(f"Cannot compute target frame count from invalid target fps: {target_fps!r}")
+    return round(source_frame_count * target_fraction / source_fraction)
+
+
+def format_fps_fraction(value: str | None) -> str:
+    """Normalizes an fps value ("60", "60000/1001") into ffmpeg's "num/den" form."""
+    fraction = parse_fps_fraction(value)
+    if fraction is None:
+        raise ValueError(f"Cannot format invalid fps value: {value!r}")
+    return f"{fraction.numerator}/{fraction.denominator}"
+
+
 class MediaTools:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings

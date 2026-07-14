@@ -7,7 +7,13 @@ from app.config import Settings
 from app.models import VideoUpscaleJob
 from app.services.engines.realesrgan_ncnn import RealEsrganNcnnEngine
 from app.services.engines.rife_ncnn import RifeNcnnEngine
-from app.services.media_tools import MediaTools, compute_interpolated_fps, resolve_video_fps
+from app.services.media_tools import (
+    MediaTools,
+    compute_interpolated_fps,
+    compute_target_frame_count,
+    format_fps_fraction,
+    resolve_video_fps,
+)
 from app.services.process_runner import run_guarded_process
 
 
@@ -121,7 +127,7 @@ class VideoUpscaler:
         )
 
         encode_frames_dir, encode_fps = await self._maybe_interpolate(
-            job, frames_out, fps, fps_multiplier
+            job, frames_out, fps, fps_multiplier, job.target_fps
         )
         job.metadata["outputFps"] = encode_fps
 
@@ -161,8 +167,9 @@ class VideoUpscaler:
         frames_out: Path,
         fps: str,
         fps_multiplier: int,
+        target_fps: str | None = None,
     ) -> tuple[Path, str]:
-        if fps_multiplier <= 1:
+        if not self._interpolation_requested(fps_multiplier, target_fps):
             return frames_out, fps
 
         if self.rife_engine is None:
@@ -171,6 +178,42 @@ class VideoUpscaler:
         job.metadata["stage"] = "interpolating_frames"
         frames_interp = frames_out.parent / "frames-interp"
         source_frame_count = self._count_frames(frames_out)
+
+        if target_fps is not None:
+            return await self._interpolate_to_target_fps(
+                frames_out, frames_interp, source_frame_count, fps, target_fps
+            )
+
+        return await self._interpolate_by_multiplier(
+            frames_out, frames_interp, source_frame_count, fps, fps_multiplier
+        )
+
+    @staticmethod
+    def _interpolation_requested(fps_multiplier: int, target_fps: str | None) -> bool:
+        return target_fps is not None or fps_multiplier > 1
+
+    async def _interpolate_to_target_fps(
+        self,
+        frames_out: Path,
+        frames_interp: Path,
+        source_frame_count: int,
+        fps: str,
+        target_fps: str,
+    ) -> tuple[Path, str]:
+        target_frame_count = compute_target_frame_count(source_frame_count, fps, target_fps)
+        await self.rife_engine.run(
+            frames_out, frames_interp, source_frame_count, target_frame_count=target_frame_count
+        )
+        return frames_interp, format_fps_fraction(target_fps)
+
+    async def _interpolate_by_multiplier(
+        self,
+        frames_out: Path,
+        frames_interp: Path,
+        source_frame_count: int,
+        fps: str,
+        fps_multiplier: int,
+    ) -> tuple[Path, str]:
         await self.rife_engine.run(frames_out, frames_interp, source_frame_count, fps_multiplier)
 
         new_rate = compute_interpolated_fps(fps, fps_multiplier)

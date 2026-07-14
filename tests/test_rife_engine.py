@@ -267,3 +267,75 @@ async def test_rife_engine_run_raises_when_output_frame_count_does_not_match_tar
 
     with pytest.raises(RuntimeError, match="15"):
         await engine.run(frames_in, frames_out, source_frame_count=10, multiplier=2)
+
+
+# ---------------------------------------------------------------------------
+# Task 15 (6.6) - explicit target_frame_count (TARGET_FPS mode), keeping
+# multiplier-based callers working unchanged.
+# ---------------------------------------------------------------------------
+
+
+async def test_rife_engine_run_accepts_explicit_target_frame_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = make_available_settings(tmp_path)
+    engine = RifeNcnnEngine(settings)
+    frames_in = tmp_path / "frames-in"
+    frames_out = tmp_path / "frames-out"
+    frames_in.mkdir()
+
+    calls: list[list[str]] = []
+    target_frame_count = 250
+
+    async def fake_run_guarded_process(command: list[str], timeout: float) -> tuple[bytes, bytes, int]:
+        calls.append(command)
+        write_fake_frames(frames_out, target_frame_count)
+        return b"", b"", 0
+
+    monkeypatch.setattr("app.services.engines.rife_ncnn.run_guarded_process", fake_run_guarded_process)
+
+    await engine.run(frames_in, frames_out, source_frame_count=100, target_frame_count=target_frame_count)
+
+    assert calls[0][calls[0].index("-n") + 1] == str(target_frame_count)
+
+
+async def test_rife_engine_run_target_frame_count_overrides_multiplier(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = make_available_settings(tmp_path)
+    engine = RifeNcnnEngine(settings)
+    frames_in = tmp_path / "frames-in"
+    frames_out = tmp_path / "frames-out"
+    frames_in.mkdir()
+
+    calls: list[list[str]] = []
+
+    async def fake_run_guarded_process(command: list[str], timeout: float) -> tuple[bytes, bytes, int]:
+        calls.append(command)
+        write_fake_frames(frames_out, 250)
+        return b"", b"", 0
+
+    monkeypatch.setattr("app.services.engines.rife_ncnn.run_guarded_process", fake_run_guarded_process)
+
+    await engine.run(frames_in, frames_out, source_frame_count=100, multiplier=2, target_frame_count=250)
+
+    assert calls[0][calls[0].index("-n") + 1] == "250"
+
+
+async def test_rife_engine_run_validates_output_against_target_frame_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = make_available_settings(tmp_path)
+    engine = RifeNcnnEngine(settings)
+    frames_in = tmp_path / "frames-in"
+    frames_out = tmp_path / "frames-out"
+    frames_in.mkdir()
+
+    async def fake_run_guarded_process(command: list[str], timeout: float) -> tuple[bytes, bytes, int]:
+        write_fake_frames(frames_out, 100)
+        return b"", b"", 0
+
+    monkeypatch.setattr("app.services.engines.rife_ncnn.run_guarded_process", fake_run_guarded_process)
+
+    with pytest.raises(RuntimeError, match="100"):
+        await engine.run(frames_in, frames_out, source_frame_count=100, target_frame_count=250)

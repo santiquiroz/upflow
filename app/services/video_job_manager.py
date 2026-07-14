@@ -3,15 +3,18 @@ from __future__ import annotations
 import asyncio
 import logging
 import subprocess
+from fractions import Fraction
 from pathlib import Path
 
 from app.config import Settings
 from app.exceptions import QueueFullError
 from app.models import JobStatus, VideoUpscaleJob, utc_now
-from app.services.media_tools import MediaTools
+from app.services.media_tools import MediaTools, parse_fps_fraction, resolve_video_fps
 from app.services.video_upscaler import VideoUpscaler
 
 logger = logging.getLogger(__name__)
+
+MAX_TARGET_FPS = 240
 
 
 class VideoJobManager:
@@ -64,10 +67,21 @@ class VideoJobManager:
         crf: int,
         keep_audio: bool,
         fps_multiplier: int = 1,
+        target_fps: str | None = None,
         job_id: str | None = None,
     ) -> VideoUpscaleJob:
-        await self._validate_video(source_path)
-        self._validate_request(model_name, scale, output_container, video_codec, video_preset, crf, fps_multiplier)
+        source_fps = await self._validate_video(source_path)
+        self._validate_request(
+            model_name,
+            scale,
+            output_container,
+            video_codec,
+            video_preset,
+            crf,
+            fps_multiplier,
+            target_fps,
+            source_fps,
+        )
 
         job = VideoUpscaleJob(
             source_path=source_path,
@@ -80,6 +94,7 @@ class VideoJobManager:
             crf=crf,
             keep_audio=keep_audio,
             fps_multiplier=fps_multiplier,
+            target_fps=target_fps,
         )
         if job_id is not None:
             job.id = job_id
@@ -96,14 +111,16 @@ class VideoJobManager:
         except asyncio.QueueFull as exc:
             raise QueueFullError("Video job queue is full; try again later") from exc
 
-    async def _validate_video(self, source_path: Path) -> None:
+    async def _validate_video(self, source_path: Path) -> Fraction:
         try:
             probe = await self.media_tools.ffprobe_json(source_path)
         except subprocess.CalledProcessError as exc:
             raise ValueError("Uploaded file is not a valid video") from exc
         streams = probe.get("streams", [])
-        if not any(stream.get("codec_type") == "video" for stream in streams):
+        video_stream = next((stream for stream in streams if stream.get("codec_type") == "video"), None)
+        if video_stream is None:
             raise ValueError("Uploaded file is not a valid video")
+        return resolve_video_fps(video_stream.get("avg_frame_rate"), video_stream.get("r_frame_rate"))
 
     def _validate_request(
         self,
@@ -114,6 +131,8 @@ class VideoJobManager:
         video_preset: str,
         crf: int,
         fps_multiplier: int,
+        target_fps: str | None,
+        source_fps: Fraction,
     ) -> None:
         if model_name not in self.settings.model_keys:
             raise ValueError(f"Model must be one of {sorted(self.settings.model_keys)}")
@@ -128,7 +147,28 @@ class VideoJobManager:
             raise ValueError("Video preset must be medium, slow, or veryslow")
         if crf < 10 or crf > 28:
             raise ValueError("CRF must be between 10 and 28")
+        self._validate_fps_mode(fps_multiplier, target_fps, source_fps)
+
+    def _validate_fps_mode(self, fps_multiplier: int, target_fps: str | None, source_fps: Fraction) -> None:
+        if target_fps is not None and fps_multiplier > 1:
+            raise ValueError("target_fps and fps_multiplier are mutually exclusive; provide only one")
         self._validate_fps_multiplier(fps_multiplier)
+        if target_fps is not None:
+            self._validate_target_fps(target_fps, source_fps)
+
+    def _validate_target_fps(self, target_fps: str, source_fps: Fraction) -> None:
+        target_fraction = parse_fps_fraction(target_fps)
+        if target_fraction is None:
+            raise ValueError(
+                f"target_fps must be a positive fraction (e.g. '60' or '60000/1001'), got {target_fps!r}"
+            )
+        if target_fraction > MAX_TARGET_FPS:
+            raise ValueError(f"target_fps must not exceed {MAX_TARGET_FPS}")
+        if target_fraction <= source_fps:
+            raise ValueError(
+                f"target_fps ({target_fraction}) must be greater than the source video fps ({source_fps})"
+            )
+        self._validate_interpolation_enabled()
 
     def _validate_fps_multiplier(self, fps_multiplier: int) -> None:
         if fps_multiplier <= 0:

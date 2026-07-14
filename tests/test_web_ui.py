@@ -90,3 +90,24 @@ def test_format_fps_source_in_rendered_page_matches_pinned_algorithm() -> None:
 )
 def test_format_fps_reference_mirror_normalizes_fractions(raw_value: str, expected: str) -> None:
     assert reference_format_fps(raw_value) == expected
+
+
+# ---------------------------------------------------------------------------
+# Task 15 (6.6) - TARGET_FPS exact options in the "FPS boost" dropdown, routed
+# to the target_fps API field (not fps_multiplier) at submit time.
+# ---------------------------------------------------------------------------
+
+
+def test_fps_select_includes_exact_ntsc_and_60_options() -> None:
+    html = get_index_html()
+
+    assert '<option value="60000/1001">59.94 fps (NTSC, exact)</option>' in html
+    assert '<option value="60/1">60 fps (exact)</option>' in html
+
+
+def test_video_form_submit_routes_fraction_fps_selection_to_target_fps() -> None:
+    html = get_index_html()
+
+    assert "applyTargetFpsSelection(formData)" in html
+    assert "formData.set('target_fps', selection)" in html
+    assert "formData.delete('target_fps')" in html

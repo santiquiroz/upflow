@@ -169,6 +169,7 @@ async def test_create_video_job_returns_400_when_profile_is_unknown(tmp_path: Pa
             crf=None,
             keep_audio=None,
             fps_multiplier=None,
+            target_fps=None,
             video_jobs=video_jobs,
             storage=storage,
             settings=settings,

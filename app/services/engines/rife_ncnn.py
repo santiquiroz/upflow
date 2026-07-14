@@ -23,25 +23,37 @@ class RifeNcnnEngine:
         frames_in: Path,
         frames_out: Path,
         source_frame_count: int,
-        multiplier: int,
+        multiplier: int = 1,
+        *,
+        target_frame_count: int | None = None,
     ) -> Path:
         if not self.available():
             raise RuntimeError(
                 "RIFE NCNN interpolation engine is not available. Run scripts/download-rife.ps1 first."
             )
 
-        target_frame_count = source_frame_count * multiplier
+        resolved_target_frame_count = self._resolve_target_frame_count(
+            source_frame_count, multiplier, target_frame_count
+        )
         frames_out.mkdir(parents=True, exist_ok=True)
 
-        command = self._build_command(frames_in, frames_out, target_frame_count)
+        command = self._build_command(frames_in, frames_out, resolved_target_frame_count)
         _, stderr, returncode = await run_guarded_process(command, self.settings.subprocess_timeout)
 
         if returncode != 0:
             raise RuntimeError(stderr.decode("utf-8", errors="ignore") or "Frame interpolation process failed")
 
-        self._validate_output_frame_count(frames_out, target_frame_count)
+        self._validate_output_frame_count(frames_out, resolved_target_frame_count)
 
         return frames_out
+
+    @staticmethod
+    def _resolve_target_frame_count(
+        source_frame_count: int, multiplier: int, target_frame_count: int | None
+    ) -> int:
+        if target_frame_count is not None:
+            return target_frame_count
+        return source_frame_count * multiplier
 
     def _build_command(self, frames_in: Path, frames_out: Path, target_frame_count: int) -> list[str]:
         return [

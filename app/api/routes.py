@@ -70,6 +70,7 @@ class ResolvedVideoJobFields(NamedTuple):
     crf: int
     keep_audio: bool
     fps_multiplier: int
+    target_fps: str | None
 
 
 def resolve_video_job_fields(
@@ -82,11 +83,13 @@ def resolve_video_job_fields(
     crf: int | None,
     keep_audio: bool | None,
     fps_multiplier: int | None = None,
+    target_fps: str | None = None,
 ) -> ResolvedVideoJobFields:
     """Resolves per-request overrides against the profile default.
 
     Uses `is not None` (not `or`) for numeric fields so an explicit 0 from the
     caller is preserved instead of being silently replaced by the profile default.
+    target_fps has no profile default (explicit per-job only) — passed through as-is.
     """
     return ResolvedVideoJobFields(
         model_name=model_name or profile["model_key"],
@@ -97,6 +100,7 @@ def resolve_video_job_fields(
         crf=crf if crf is not None else profile["crf"],
         keep_audio=keep_audio if keep_audio is not None else profile["keep_audio"],
         fps_multiplier=fps_multiplier if fps_multiplier is not None else profile.get("fps_multiplier", 1),
+        target_fps=target_fps,
     )
 
 
@@ -143,6 +147,7 @@ def video_job_to_response(job: VideoUpscaleJob) -> VideoJobResponse:
         crf=job.crf,
         keep_audio=job.keep_audio,
         fps_multiplier=job.fps_multiplier,
+        target_fps=job.target_fps,
         created_at=job.created_at,
         started_at=job.started_at,
         finished_at=job.finished_at,
@@ -244,6 +249,7 @@ async def create_video_job(
     crf: int | None = Form(default=None),
     keep_audio: bool | None = Form(default=None),
     fps_multiplier: int | None = Form(default=None),
+    target_fps: str | None = Form(default=None),
     video_jobs: VideoJobManager = Depends(get_video_job_manager),
     storage: StorageService = Depends(get_storage),
     settings: Settings = Depends(get_settings),
@@ -258,7 +264,16 @@ async def create_video_job(
     destination = settings.uploads_path / f"{token}-{safe_name}"
 
     resolved = resolve_video_job_fields(
-        profile, model_name, scale, output_container, video_codec, video_preset, crf, keep_audio, fps_multiplier
+        profile,
+        model_name,
+        scale,
+        output_container,
+        video_codec,
+        video_preset,
+        crf,
+        keep_audio,
+        fps_multiplier,
+        target_fps,
     )
 
     job: VideoUpscaleJob | None = None
@@ -275,6 +290,7 @@ async def create_video_job(
             crf=resolved.crf,
             keep_audio=resolved.keep_audio,
             fps_multiplier=resolved.fps_multiplier,
+            target_fps=resolved.target_fps,
             job_id=token,
         )
         job.metadata["profileKey"] = profile_key

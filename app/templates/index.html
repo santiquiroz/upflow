@@ -144,6 +144,8 @@
                   {% for multiplier in allowed_fps_multipliers %}
                   <option value="{{ multiplier }}">{{ multiplier }}×</option>
                   {% endfor %}
+                  <option value="60000/1001">59.94 fps (NTSC, exact)</option>
+                  <option value="60/1">60 fps (exact)</option>
                 </select>
               </label>
             </div>
@@ -255,6 +257,16 @@
         return Number.isInteger(decimal) ? String(decimal) : decimal.toFixed(2);
       }
 
+      function applyTargetFpsSelection(formData) {
+        const selection = videoFpsSelect.value;
+        if (!selection.includes('/')) {
+          formData.delete('target_fps');
+          return;
+        }
+        formData.set('target_fps', selection);
+        formData.set('fps_multiplier', '1');
+      }
+
       fileInput.addEventListener('change', () => {
         const file = fileInput.files?.[0];
         if (!file) {
@@ -329,6 +341,7 @@
         statusBox.textContent = 'Uploading video... this can take a while.';
         const formData = new FormData(videoForm);
         formData.set('keep_audio', keepAudioCheckbox.checked ? 'true' : 'false');
+        applyTargetFpsSelection(formData);
         statusBox.textContent += keepAudioCheckbox.checked ? '\n\nAudio: keep original track' : '\n\nAudio: muted export';
         const response = await fetch('/api/v1/video/jobs', { method: 'POST', body: formData });
         const data = await response.json();

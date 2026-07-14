@@ -6,6 +6,7 @@ import pytest
 
 from app.config import Settings
 from app.models import VideoUpscaleJob
+from app.services.media_tools import compute_target_frame_count
 from app.services.storage import StorageService
 from app.services.video_upscaler import VideoUpscaler
 
@@ -53,13 +54,22 @@ class FakeMediaTools:
 class FakeRifeEngine:
     def __init__(self, events: list[str]) -> None:
         self.events = events
-        self.calls: list[tuple[Path, Path, int, int]] = []
+        self.calls: list[tuple[Path, Path, int, int, int | None]] = []
 
-    async def run(self, frames_in: Path, frames_out: Path, source_frame_count: int, multiplier: int) -> Path:
+    async def run(
+        self,
+        frames_in: Path,
+        frames_out: Path,
+        source_frame_count: int,
+        multiplier: int = 1,
+        *,
+        target_frame_count: int | None = None,
+    ) -> Path:
         self.events.append("interpolate")
-        self.calls.append((frames_in, frames_out, source_frame_count, multiplier))
+        self.calls.append((frames_in, frames_out, source_frame_count, multiplier, target_frame_count))
+        resolved_count = target_frame_count if target_frame_count is not None else source_frame_count * multiplier
         frames_out.mkdir(parents=True, exist_ok=True)
-        for index in range(source_frame_count * multiplier):
+        for index in range(resolved_count):
             (frames_out / f"{index:08d}.png").write_bytes(b"fake-interp-frame")
         return frames_out
 
@@ -205,11 +215,12 @@ async def test_rife_engine_receives_upscaled_frame_count_and_multiplier(tmp_path
     await upscaler.run(job, fps_multiplier=3)
 
     assert len(rife_engine.calls) == 1
-    frames_in_arg, frames_out_arg, source_frame_count, multiplier = rife_engine.calls[0]
+    frames_in_arg, frames_out_arg, source_frame_count, multiplier, target_frame_count = rife_engine.calls[0]
     assert frames_in_arg.name == "frames-out"
     assert frames_out_arg.name == "frames-interp"
     assert source_frame_count == 1
     assert multiplier == 3
+    assert target_frame_count is None
 
 
 async def test_work_dir_removed_after_interpolated_run(tmp_path: Path) -> None:
@@ -325,3 +336,91 @@ async def test_output_fps_metadata_keeps_original_fps_when_multiplier_is_one(tmp
     await upscaler.run(job)
 
     assert job.metadata["outputFps"] == "30"
+
+
+# ---------------------------------------------------------------------------
+# Task 15 (6.6) - TARGET_FPS mode: job.target_fps drives interpolation to an
+# absolute frame count instead of a multiplier. FakeMediaTools in this file
+# reports avg_frame_rate "30/1" as the source.
+# ---------------------------------------------------------------------------
+
+
+def make_video_job_with_target_fps(source_path: Path, target_fps: str) -> VideoUpscaleJob:
+    return VideoUpscaleJob(
+        source_path=source_path,
+        original_filename=source_path.name,
+        model_name="realesr-animevideov3-x2",
+        scale=2,
+        output_container="mp4",
+        video_codec="libx264",
+        video_preset="medium",
+        crf=18,
+        keep_audio=False,
+        target_fps=target_fps,
+    )
+
+
+async def test_target_fps_interpolation_runs_after_upscale_and_before_encode(tmp_path: Path) -> None:
+    events: list[str] = []
+    upscaler = make_upscaler(tmp_path, events, FakeRifeEngine(events))
+    job = make_video_job_with_target_fps(write_source(upscaler), "60")
+
+    await upscaler.run(job)
+
+    assert events == ["extract", "upscale", "interpolate", "encode"]
+
+
+async def test_target_fps_encode_reads_from_frames_interp(tmp_path: Path) -> None:
+    events: list[str] = []
+    upscaler = make_upscaler(tmp_path, events, FakeRifeEngine(events))
+    job = make_video_job_with_target_fps(write_source(upscaler), "60")
+
+    await upscaler.run(job)
+
+    encode_command = upscaler.encode_commands[0]
+    frames_arg = encode_command[encode_command.index("-i") + 1]
+    assert "frames-interp" in frames_arg
+
+
+async def test_target_fps_encode_framerate_is_normalized_target(tmp_path: Path) -> None:
+    events: list[str] = []
+    upscaler = make_upscaler(tmp_path, events, FakeRifeEngine(events))
+    job = make_video_job_with_target_fps(write_source(upscaler), "60")
+
+    await upscaler.run(job)
+
+    encode_command = upscaler.encode_commands[0]
+    framerate = encode_command[encode_command.index("-framerate") + 1]
+    assert framerate == "60/1"
+
+
+async def test_target_fps_output_fps_metadata_is_normalized_target(tmp_path: Path) -> None:
+    events: list[str] = []
+    upscaler = make_upscaler(tmp_path, events, FakeRifeEngine(events))
+    job = make_video_job_with_target_fps(write_source(upscaler), "60")
+
+    await upscaler.run(job)
+
+    assert job.metadata["outputFps"] == "60/1"
+
+
+async def test_rife_engine_receives_absolute_target_frame_count(tmp_path: Path) -> None:
+    events: list[str] = []
+    rife_engine = FakeRifeEngine(events)
+    upscaler = make_upscaler(tmp_path, events, rife_engine)
+    job = make_video_job_with_target_fps(write_source(upscaler), "60")
+
+    await upscaler.run(job)
+
+    assert len(rife_engine.calls) == 1
+    _, _, source_frame_count, _, target_frame_count = rife_engine.calls[0]
+    assert target_frame_count == compute_target_frame_count(source_frame_count, "30/1", "60")
+
+
+async def test_run_raises_clear_error_when_target_fps_set_without_rife_engine(tmp_path: Path) -> None:
+    events: list[str] = []
+    upscaler = make_upscaler(tmp_path, events, None)
+    job = make_video_job_with_target_fps(write_source(upscaler), "60")
+
+    with pytest.raises(RuntimeError, match="RIFE"):
+        await upscaler.run(job)
