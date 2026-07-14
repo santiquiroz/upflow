@@ -2,9 +2,9 @@
 
 # ⚡ Upflow
 
-### Modern AI upscaling **+** frame interpolation — open source, Vulkan-native, built for AMD.
+### Upscaling con IA **+** interpolación de fotogramas — open source, nativo en Vulkan, pensado para AMD.
 
-*Think Lossless Scaling, but for your files: batch-upscale anime and photos, rebuild video frame-by-frame, and (soon) interpolate to buttery-smooth high FPS — all on your own GPU, no cloud, no CUDA lock-in.*
+*Como Lossless Scaling, pero para tus archivos: reescala en lote anime y fotos, reconstruye video fotograma a fotograma y súbele los FPS con IA — todo en tu propia GPU, sin nube, sin depender de CUDA.*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-22c55e.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
@@ -16,72 +16,83 @@
 
 ---
 
-## Why Upflow
+## Qué es Upflow
 
-Most good upscalers are either NVIDIA/CUDA-only, closed-source, or a pile of CLI flags. Upflow is a clean **web UI + REST API** wrapped around a **decoupled, swappable engine**, running on **Real-ESRGAN NCNN + Vulkan** — which means it screams on **AMD Radeon** hardware on Windows where DirectML and CUDA fall short.
+La mayoría de buenos upscalers son CUDA-only, de código cerrado, o una pila de flags de CLI. Upflow es una **web UI + API REST** limpia, construida alrededor de un **motor desacoplado e intercambiable**, corriendo sobre **Real-ESRGAN NCNN + Vulkan** — lo que significa que vuela en **AMD Radeon** en Windows, donde DirectML y CUDA se quedan cortos.
 
-- 🖼️ **Images** — drag, pick a model, upscale up to 4×. Photos and anime/line-art alike.
-- 🎬 **Video** — full FFmpeg pipeline: extract frames → batch upscale → re-encode with audio preserved. Anime & general presets included.
-- 🧩 **Decoupled engine** — the model backend is a component behind an interface. NCNN/Vulkan today, anything tomorrow.
-- 🔌 **REST API** — queue jobs and poll status from any other app.
-- 🏠 **100% local** — your media never leaves your machine.
+> **Corre en cualquier GPU con Vulkan** (AMD, NVIDIA, Intel). Simplemente está *afinado* para AMD-en-Windows, donde las buenas opciones escasean.
 
-> **Runs on any Vulkan GPU** (AMD, NVIDIA, Intel). It's simply *tuned* for AMD-on-Windows, where the good options are thin.
+## Características
 
-## ✨ Roadmap — the "modern" part
+- 🖼️ **Upscaling de imagen** — arrastrás el archivo, elegís modelo y escala (2×/3×/4× según el modelo), listo. Fotos y anime/line-art por igual.
+- 🎬 **Upscaling de video** — pipeline completo con FFmpeg: extraer frames → upscale por lote → re-encodear preservando el audio. Perfiles listos para anime y contenido general.
+- 🌊 **FPS boost con RIFE NCNN Vulkan** — interpolación de fotogramas 2×/3×/4× sobre el video ya reescalado, mismo backend Vulkan (sin CUDA). Se activa por config y aparece como dropdown en la UI.
+- 🧹 **Retención automática** — un sweeper en background borra outputs y jobs terminados más viejos que `OUTPUT_TTL_HOURS`; corre al arrancar y luego cada hora. El disco ya no crece sin límite.
+- 🚦 **Cola con límite + concurrencia de GPU compartida** — cada tipo de job (imagen/video) tiene su propia cola acotada (`MAX_QUEUE_SIZE`, responde `429` si se llena) y ambas comparten un único semáforo de GPU (`GPU_CONCURRENCY`) para no saturar la VRAM.
+- 🛡️ **Hardening de subida** — nombres de archivo sanitizados (caracteres inválidos en Windows y nombres reservados como `CON`/`NUL`/`COM1`), timeout + kill automático de subprocesos colgados, validación de formato/tamaño/dimensiones de imagen y video, y un middleware que rechaza requests de escritura (`POST`/`PUT`/`PATCH`/`DELETE`) desde orígenes no permitidos.
+- 🧩 **Motor desacoplado** — el backend de upscaling vive detrás de una interfaz (`UpscaleEngine`). NCNN/Vulkan hoy, lo que sea mañana.
+- 🔌 **API REST** — encolá jobs y consultá su estado desde cualquier otra app.
+- 🏠 **100% local** — tus archivos nunca salen de tu máquina.
 
-Upscaling is spatial super-resolution. The next leap is **temporal**: AI **frame interpolation** to turn 24 fps into smooth 48/60/120 fps — the same trick Lossless Scaling does in real time, but applied losslessly to your output file.
+## Requisitos
 
-- [ ] 🌊 **FPS interpolation via RIFE** (`rife-ncnn-vulkan`) — 2×/3×/4× frame rate, anime-optimized models (RIFE 4.8 / GMFSS)
-- [ ] 🧹 Automatic disk cleanup + job retention (TTL)
-- [ ] 🗄️ Persistent job store (SQLite)
-- [ ] 📊 Prometheus / OpenTelemetry metrics
-- [ ] 🔑 Optional API-key auth + rate limiting for remote use
+- Windows con una GPU compatible con Vulkan (AMD, NVIDIA o Intel).
+- [Python 3.11+](https://www.python.org/) en el `PATH`.
+- PowerShell (para correr los scripts de `scripts/`).
 
-See the full engineering plan in **[`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md)**.
-
-## 🚀 Quickstart (Windows / PowerShell)
+## Instalación paso a paso
 
 ```powershell
 git clone https://github.com/santiquiroz/upflow.git
 cd upflow
 
-# 1. Python env + deps
+# 1. Entorno Python (crea .venv e instala el paquete en modo editable)
 powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1
 
-# 2. Download the Real-ESRGAN NCNN Vulkan engine + models
+# 2. Motor de upscaling: Real-ESRGAN NCNN Vulkan (obligatorio)
 powershell -ExecutionPolicy Bypass -File .\scripts\download-realesrgan.ps1
 
-# 3. (video only) Download FFmpeg
+# 3. FFmpeg (obligatorio solo si vas a usar upscaling de video)
 powershell -ExecutionPolicy Bypass -File .\scripts\download-ffmpeg.ps1
 
-# 4. Run
+# 4. RIFE NCNN Vulkan (opcional, solo si querés el FPS boost — ver más abajo)
+powershell -ExecutionPolicy Bypass -File .\scripts\download-rife.ps1
+
+# 5. (opcional) copiar .env.example a .env y ajustar valores
+copy .env.example .env
+
+# 6. Arrancar el servidor
 .\.venv\Scripts\uvicorn app.main:app --host 127.0.0.1 --port 8090 --reload
 ```
 
-Open **http://127.0.0.1:8090**.
+Abrí **http://127.0.0.1:8090**.
 
-## 🧠 Models
+Todos los binarios de `vendor/` y todo lo de `runtime/` (uploads, outputs, temp, video-work) están en `.gitignore` — se generan localmente con los scripts de arriba y en tiempo de ejecución, nunca se commitean.
 
-| Model | Best for | Scales |
+## Cómo usar
+
+### Web UI
+
+- **Imagen**: subís el archivo, elegís modelo (la lista de escalas se filtra automáticamente según lo que soporta cada modelo) y formato de salida.
+- **Video**: subís el archivo y elegís un perfil (ver tabla de perfiles abajo). En "Advanced options" podés sobreescribir modelo, escala, contenedor, códec, preset, CRF, audio y el dropdown **FPS boost** (Off, o 2×/3×/4×; solo produce resultado si tenés `ENABLE_INTERPOLATION=true` y RIFE instalado — ver más abajo).
+- La sección **Status** hace polling del job cada 2 segundos y muestra el JSON completo más el `stage` actual y, para video, el FPS de salida.
+
+### API REST
+
+Todos los endpoints viven bajo `/api/v1`. Los campos de formulario (subida) van en snake_case; las respuestas JSON usan camelCase (p. ej. `job_id` se sube como campo, pero la respuesta trae `jobId`).
+
+| Método | Endpoint | Descripción |
 |---|---|---|
-| `realesrgan-x4plus` | Photos, general images | 4× |
-| `realesrgan-x4plus-anime` | Still anime, illustration, line art | 4× |
-| `realesr-animevideov3-x2/x3/x4` | Anime video frames | 2× / 3× / 4× |
-| `realesr-animevideov3` | Auto preset (picks x2/x3/x4 by scale) | 2–4× |
+| `GET` | `/api/v1/health` | Healthcheck: motor activo, `gpuConcurrency` y profundidad de ambas colas |
+| `GET` | `/api/v1/engine` | Estado del motor, si FFmpeg está disponible, catálogo de modelos y de perfiles de video |
+| `POST` | `/api/v1/jobs` | Crea un job de imagen (`202`) |
+| `GET` | `/api/v1/jobs/{job_id}` | Estado de un job de imagen (`404` si no existe) |
+| `GET` | `/api/v1/jobs/{job_id}/download` | Descarga el resultado (`404` si no existe, `409` si aún no terminó) |
+| `POST` | `/api/v1/video/jobs` | Crea un job de video (`202`) |
+| `GET` | `/api/v1/video/jobs/{job_id}` | Estado de un job de video, incluye `metadata` (stage, fps, dimensiones, `outputFps`) |
+| `GET` | `/api/v1/video/jobs/{job_id}/download` | Descarga el video resultante (`404`/`409` igual que arriba) |
 
-## 🔗 API
-
-| Method | Endpoint | Purpose |
-|---|---|---|
-| `GET` | `/api/v1/health` | Healthcheck + queue depth |
-| `GET` | `/api/v1/engine` | Engine status, models, video profiles |
-| `POST` | `/api/v1/jobs` | Create image job |
-| `GET` | `/api/v1/jobs/{id}` | Image job status |
-| `GET` | `/api/v1/jobs/{id}/download` | Download upscaled image |
-| `POST` | `/api/v1/video/jobs` | Create video job |
-| `GET` | `/api/v1/video/jobs/{id}` | Video job status |
-| `GET` | `/api/v1/video/jobs/{id}/download` | Download upscaled video |
+**Crear un job de imagen** — campos de formulario: `file` (requerido), `model_name` (default `realesrgan-x4plus`), `scale` (default `4`), `output_format` (`png`/`jpg`/`jpeg`/`webp`, default `png`):
 
 ```bash
 curl -X POST http://127.0.0.1:8090/api/v1/jobs \
@@ -91,34 +102,152 @@ curl -X POST http://127.0.0.1:8090/api/v1/jobs \
   -F "output_format=png"
 ```
 
-## 🏗️ Architecture
+**Crear un job de video** — campos de formulario: `file` (requerido), `profile_key` (default `anime-balanced-2x`), y overrides opcionales del perfil: `model_name`, `scale`, `output_container` (`mp4`/`mkv`), `video_codec` (`libx264`/`libx265`), `video_preset` (`medium`/`slow`/`veryslow`), `crf` (`10`-`28`), `keep_audio`, `fps_multiplier` (`1` = sin boost, o uno de `ALLOWED_FPS_MULTIPLIERS`):
 
-```text
-Browser / API client
-        │
-   FastAPI (app/)  ──  web UI (Jinja) + REST routers
-        │
-   Job queue (per media type)  ──  async worker + GPU semaphore
-        │
-   ┌────┴─────────────┐
-   │                  │
-Image engine     Video pipeline (FFmpeg)
-(Real-ESRGAN     extract frames → upscale batch → re-encode + audio
- NCNN Vulkan)    (RIFE interpolation stage — coming)
+```bash
+curl -X POST http://127.0.0.1:8090/api/v1/video/jobs \
+  -F "file=@input.mp4" \
+  -F "profile_key=anime-balanced-2x" \
+  -F "fps_multiplier=2"
 ```
 
-The engine sits behind an `UpscaleEngine` interface (`app/services/engines/base.py`), so the Vulkan backend is a drop-in component.
+**Consultar y descargar:**
 
-## 🤝 Contributing
+```bash
+curl http://127.0.0.1:8090/api/v1/video/jobs/<job_id>
+curl -OJ http://127.0.0.1:8090/api/v1/video/jobs/<job_id>/download
+```
 
-PRs welcome. See [`CONTRIBUTING.md`](CONTRIBUTING.md) and the [implementation plan](docs/IMPLEMENTATION_PLAN.md) for where help is most useful. Good first areas: disk cleanup, tests, and the RIFE interpolation stage.
+## Modelos
 
-## 📄 License
+| Modelo | Ideal para | Escalas |
+|---|---|---|
+| `realesrgan-x4plus` | Fotos, imágenes generales | 4× |
+| `realesrgan-x4plus-anime` | Anime fijo, ilustración, line art | 4× |
+| `realesr-animevideov3-x2` / `-x3` / `-x4` | Fotogramas de video anime | 2× / 3× / 4× |
+| `realesr-animevideov3` | Preset automático (resuelve a x2/x3/x4 según la escala pedida) | 2×–4× |
 
-[MIT](LICENSE) © 2026 Santiago Quiroz. Do whatever you want with it.
+## Perfiles de video
+
+| Perfil | Categoría | Modelo | Escala | Códec | Preset | CRF |
+|---|---|---|---|---|---|---|
+| `general-balanced-4x` | General | `realesrgan-x4plus` | 4× | `libx264` | `medium` | 18 |
+| `general-hq-4x` | General | `realesrgan-x4plus` | 4× | `libx265` | `slow` | 17 |
+| `anime-balanced-2x` (default) | Anime | `realesr-animevideov3-x2` | 2× | `libx264` | `medium` | 17 |
+| `anime-quality-3x` | Anime | `realesr-animevideov3-x3` | 3× | `libx265` | `slow` | 16 |
+| `anime-max-detail-4x` | Anime | `realesr-animevideov3-x4` | 4× | `libx265` | `slow` | 15 |
+
+Cualquier campo del perfil puede sobreescribirse por request (ver "Crear un job de video" arriba). El catálogo completo vive en `app/config.py` (`MODEL_CATALOG` / `VIDEO_PROFILE_CATALOG`) — agregar un modelo o perfil ahí lo expone automáticamente en la web UI y en `GET /api/v1/engine`.
+
+## Configuración
+
+Todas las variables leen de `.env` (ver [`.env.example`](.env.example) con los defaults y comentarios). `get_settings()` cachea el resultado — reiniciá el servidor después de cambiar `.env`.
+
+| Variable | Default | Descripción |
+|---|---|---|
+| `APP_NAME` | `Image Upscaler AMD` | Nombre interno del proceso FastAPI |
+| `APP_HOST` | `127.0.0.1` | Host de bind de uvicorn |
+| `APP_PORT` | `8090` | Puerto de bind de uvicorn |
+| `WEB_TITLE` | `AMD Image Upscaler` | Título mostrado en la web UI |
+| `MAX_UPLOAD_MB` | `50` | Tamaño máximo de subida para imágenes (MB) |
+| `MAX_VIDEO_UPLOAD_MB` | `2048` | Tamaño máximo de subida para videos (MB) |
+| `MAX_IMAGE_PIXELS` | `120000000` | Límite de píxeles (ancho × alto) para evitar decompression bombs |
+| `GPU_CONCURRENCY` | `1` | Jobs simultáneos en GPU; semáforo compartido entre imagen y video — no subirlo sin perfilar VRAM |
+| `CPU_FALLBACK_WORKERS` | `2` | Hilos de carga/guardado de frames para Real-ESRGAN NCNN en el pipeline de video |
+| `SUBPROCESS_TIMEOUT` | `3600` | Segundos antes de matar cualquier subproceso (engine, FFmpeg, RIFE) |
+| `FFMPEG_BINARY` | `vendor/ffmpeg/bin/ffmpeg.exe` | Ruta al binario de FFmpeg |
+| `FFPROBE_BINARY` | `vendor/ffmpeg/bin/ffprobe.exe` | Ruta al binario de ffprobe |
+| `FFMPEG_DECODE_THREADS` | `12` | Hilos para extraer frames del video de entrada |
+| `FFMPEG_ENCODE_THREADS` | `24` | Hilos para re-encodear con `libx264` |
+| `FFMPEG_X265_THREADS` | `8` | Hilos para re-encodear con `libx265` (limitado: falla en Windows con exceso de threads) |
+| `RUNTIME_DIR` | `runtime` | Carpeta para uploads/outputs/temp/video-work (relativa a la raíz del proyecto, funciona sin importar el CWD) |
+| `ENGINE` | `realesrgan-ncnn` | Identificador del motor de upscaling activo |
+| `ENGINE_BINARY` | `vendor/realesrgan/realesrgan-ncnn-vulkan.exe` | Ruta al binario del motor |
+| `ENGINE_MODELS_DIR` | `vendor/realesrgan/models` | Carpeta de modelos del motor |
+| `DEFAULT_MODEL` | `realesrgan-x4plus` | Modelo preseleccionado en la UI y en `POST /api/v1/jobs` |
+| `DEFAULT_SCALE` | `4` | Escala preseleccionada |
+| `ALLOWED_SCALES` | `2,3,4` | Escalas permitidas por la API (lista separada por comas) |
+| `DEFAULT_VIDEO_PROFILE` | `anime-balanced-2x` | Perfil de video preseleccionado en la UI |
+| `OUTPUT_TTL_HOURS` | `24` | Horas antes de borrar outputs y jobs terminados (el sweep corre cada hora) |
+| `ALLOWED_ORIGINS` | `http://127.0.0.1:8090,http://localhost:8090` | Orígenes permitidos para requests que cambian estado (`POST`/`PUT`/`PATCH`/`DELETE`) |
+| `MAX_QUEUE_SIZE` | `20` | Tamaño máximo de cada cola de jobs (imagen y video por separado); responde `429` si se llena |
+| `RIFE_BINARY` | `vendor/rife/rife-ncnn-vulkan.exe` | Ruta al binario de RIFE NCNN Vulkan |
+| `RIFE_MODELS_DIR` | `vendor/rife/models` | Carpeta de modelos de RIFE |
+| `RIFE_MODEL` | `rife-v4.6` | Modelo RIFE usado para interpolar (recomendado, general-purpose) |
+| `ENABLE_INTERPOLATION` | `false` | Habilita el FPS boost; requiere haber corrido `download-rife.ps1` |
+| `ALLOWED_FPS_MULTIPLIERS` | `2,3,4` | Multiplicadores de FPS permitidos por la API (lista separada por comas) |
+
+## Cómo activar el FPS boost (RIFE)
+
+El FPS boost está deshabilitado por defecto. Para activarlo:
+
+```powershell
+# 1. Descargar el motor RIFE NCNN Vulkan (fork TNTwise, incluye varios modelos v4.x)
+powershell -ExecutionPolicy Bypass -File .\scripts\download-rife.ps1
+
+# 2. En .env, habilitar la interpolación
+ENABLE_INTERPOLATION=true
+```
+
+El dropdown "FPS boost" siempre está visible en la UI de video (con las opciones de `ALLOWED_FPS_MULTIPLIERS`), pero solo funciona una vez activado: pedir un `fps_multiplier > 1` (por UI o directo en `POST /api/v1/video/jobs`) sin `ENABLE_INTERPOLATION=true` o sin el binario de RIFE instalado devuelve `400`.
+
+## Tests
+
+```powershell
+# instalar dependencias de desarrollo (pytest, pytest-asyncio) una sola vez
+.\.venv\Scripts\python -m pip install -e ".[dev]"
+
+# correr toda la suite
+.\.venv\Scripts\python -m pytest
+
+# un archivo o test puntual
+.\.venv\Scripts\python -m pytest tests/test_health.py::test_health_endpoint
+
+# con cobertura (requiere pytest-cov: pip install pytest-cov)
+.\.venv\Scripts\python -m pytest --cov=app --cov-report=term-missing
+```
+
+## Arquitectura
+
+```text
+Browser / cliente API
+        │
+   FastAPI (app/)  ──  web UI (Jinja) + routers REST
+        │
+   Cola de jobs por tipo (imagen/video)  ──  workers async + semáforo de GPU compartido
+        │
+   ┌────┴──────────────────┐
+   │                        │
+Motor de imagen        Pipeline de video (FFmpeg)
+(Real-ESRGAN            extraer frames → upscale por lote →
+ NCNN Vulkan)            interpolar con RIFE (opcional) → re-encode + audio
+```
+
+El motor de upscaling vive detrás de una interfaz `UpscaleEngine` (`app/services/engines/base.py`), así que el backend Vulkan es un componente reemplazable. Un `RetentionSweeper` en background borra outputs y jobs vencidos según `OUTPUT_TTL_HOURS`.
+
+## Roadmap
+
+- [x] 🌊 FPS boost con RIFE NCNN Vulkan (2×/3×/4×, activable por config)
+- [x] 🧹 Limpieza automática de disco + retención de jobs (TTL)
+- [ ] 🔊 Mejora de audio con IA (DeepFilterNet) — denoise/realce de diálogo como etapa opcional del pipeline
+- [ ] 📝 Subtítulos con IA (whisper.cpp) — generación + traducción, muxeados como pista blanda
+- [ ] 🎚️ Slider calidad ↔ velocidad (presets Fast/Balanced/Best mapeados a los knobs reales de cada motor)
+- [ ] 📦 Modo batch por temporada (subida múltiple, progreso agregado)
+
+**Fuera de alcance:** interpolación en tiempo real estilo Lossless Scaling. Requiere captura del swapchain DirectX en vivo, arquitectónicamente incompatible con una app de archivos FastAPI/Python. Para eso, usá [Lossless Scaling](https://store.steampowered.com/app/993090/Lossless_Scaling/) o [Magpie](https://github.com/Blinue/Magpie) (open source) — Upflow se mantiene como pipeline offline de máxima calidad.
+
+Ver el plan de ingeniería completo en **[`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md)** y la investigación detrás de estos ítems en **[`docs/RESEARCH_ANIME_SUITE.md`](docs/RESEARCH_ANIME_SUITE.md)**.
+
+## Contribuir
+
+Los PRs son bienvenidos. Ver [`CONTRIBUTING.md`](CONTRIBUTING.md) y el [plan de implementación](docs/IMPLEMENTATION_PLAN.md) para saber dónde ayuda más.
+
+## Licencia
+
+[MIT](LICENSE) © 2026 Santiago Quiroz. Hacé lo que quieras con esto.
 
 ---
 
 <div align="center">
-<sub>Built with FastAPI · Real-ESRGAN · NCNN · Vulkan · FFmpeg</sub>
+<sub>Construido con FastAPI · Real-ESRGAN · RIFE · NCNN · Vulkan · FFmpeg</sub>
 </div>

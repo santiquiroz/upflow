@@ -8,6 +8,8 @@ Thanks for helping out. Upflow is open source (MIT) and PRs are welcome.
 powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\download-realesrgan.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\download-ffmpeg.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\download-rife.ps1  # optional, only for FPS boost work
+.\.venv\Scripts\python -m pip install -e ".[dev]"
 .\.venv\Scripts\uvicorn app.main:app --reload --port 8090
 ```
 
@@ -21,11 +23,12 @@ powershell -ExecutionPolicy Bypass -File .\scripts\download-ffmpeg.ps1
 
 ## Where help is most useful
 
-See [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md). High-value areas right now:
+Disk cleanup, job retention and the RIFE FPS-boost stage are done. See [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) (Phase 6) and [`docs/RESEARCH_ANIME_SUITE.md`](docs/RESEARCH_ANIME_SUITE.md) for what's next:
 
-1. Disk cleanup + job retention (the `runtime/` folder currently grows without bound).
-2. RIFE frame-interpolation stage (the headline roadmap feature).
-3. Test coverage — only a health-check test exists today.
+1. AI audio enhancement (DeepFilterNet CLI, denoise/dialogue as an optional pipeline stage).
+2. AI subtitles (whisper.cpp, generation + translation, muxed as a soft track).
+3. Quality/speed slider (Fast/Balanced/Best presets mapped to real per-engine knobs).
+4. Batch mode for full anime seasons (multi-upload, aggregate progress).
 
 ## PR checklist
 
