@@ -111,6 +111,30 @@ def test_absolute_engine_models_dir_override_is_kept_as_is(tmp_path: Path) -> No
 
 
 # ---------------------------------------------------------------------------
+# SP1 Task 2 — models_path derives from runtime_path (not project root) so
+# it always follows an overridden RUNTIME_DIR, mirroring uploads/outputs/temp.
+# ---------------------------------------------------------------------------
+
+
+def test_models_path_defaults_to_models_dir_under_runtime(tmp_path: Path) -> None:
+    settings = Settings(RUNTIME_DIR=str(tmp_path / "runtime"))
+
+    assert settings.models_path == tmp_path / "runtime" / "models"
+
+
+def test_models_path_follows_overridden_runtime_dir(tmp_path: Path) -> None:
+    settings = Settings(RUNTIME_DIR=str(tmp_path / "custom-runtime"))
+
+    assert settings.models_path == tmp_path / "custom-runtime" / "models"
+
+
+def test_absolute_models_dir_override_is_kept_as_is(tmp_path: Path) -> None:
+    settings = Settings(RUNTIME_DIR=str(tmp_path / "runtime"), MODELS_DIR=str(tmp_path / "custom-models"))
+
+    assert settings.models_path == tmp_path / "custom-models"
+
+
+# ---------------------------------------------------------------------------
 # Task 16 review round 2 — the consumers themselves must hold resolved
 # absolute paths. Path(settings.ffmpeg_binary) normalizes slashes (enough to
 # dodge WinError 2 from the project root) but stays CWD-relative: launched

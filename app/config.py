@@ -219,6 +219,8 @@ class Settings(BaseSettings):
 
     default_device: str = Field(default="dml:0", alias="DEFAULT_DEVICE")
 
+    models_dir: str = Field(default="models", alias="MODELS_DIR")
+
     @model_validator(mode="after")
     def _apply_default_allowed_origins(self) -> "Settings":
         """Fills ALLOWED_ORIGINS from app_host/app_port when the caller left it unset.
@@ -256,6 +258,15 @@ class Settings(BaseSettings):
     @property
     def video_work_path(self) -> Path:
         return self.runtime_path / "video-work"
+
+    @property
+    def models_path(self) -> Path:
+        # Derived from runtime_path (already resolved), not
+        # resolve_against_project_root: MODELS_DIR must follow an overridden
+        # RUNTIME_DIR the same way uploads/outputs/temp do. An absolute
+        # MODELS_DIR override still wins outright (Path.__truediv__ discards
+        # the left side when the right side is absolute).
+        return self.runtime_path / self.models_dir
 
     @property
     def allowed_scale_values(self) -> list[int]:
