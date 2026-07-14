@@ -15,6 +15,9 @@ def test_runtime_path_resolves_against_project_root_not_cwd(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    # The isolated_runtime_dir autouse fixture (tests/conftest.py) sets RUNTIME_DIR
+    # for every test; undo it here to exercise the real, un-overridden default.
+    monkeypatch.delenv("RUNTIME_DIR", raising=False)
 
     settings = Settings()
 
