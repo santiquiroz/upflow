@@ -1,0 +1,272 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as api from "../../lib/api";
+import type {
+  CreateJobResponse,
+  DevicesResponse,
+  EngineInfoResponse,
+  ModelsResponse,
+  VideoJobResponse,
+  VideoProfileResponse,
+} from "../../lib/apiTypes";
+import { VideoPanel } from "./VideoPanel";
+
+vi.mock("../../lib/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../lib/api")>();
+  return {
+    ...actual,
+    getModels: vi.fn(),
+    getDevices: vi.fn(),
+    getEngineInfo: vi.fn(),
+    createVideoJob: vi.fn(),
+    getVideoJob: vi.fn(),
+  };
+});
+
+const GENERAL_PROFILE: VideoProfileResponse = {
+  key: "general-balanced-4x",
+  label: "General Balanced 4x",
+  category: "general",
+  description: "Good default for long videos.",
+  modelKey: "realesrgan-x4plus",
+  scale: 4,
+  videoCodec: "libx264",
+  videoPreset: "medium",
+  crf: 18,
+  keepAudio: true,
+};
+
+const ANIME_PROFILE: VideoProfileResponse = {
+  key: "anime-balanced-2x",
+  label: "Anime Balanced 2x",
+  category: "anime",
+  description: "Best starting point for anime episodes.",
+  modelKey: "realesr-animevideov3-x2",
+  scale: 2,
+  videoCodec: "libx265",
+  videoPreset: "slow",
+  crf: 16,
+  keepAudio: true,
+};
+
+const MODELS: ModelsResponse = {
+  models: [
+    {
+      id: "realesrgan-x4plus",
+      name: "RealESRGAN x4plus",
+      kind: "builtin-ncnn",
+      source: "builtin",
+      scale: 4,
+      arch: "esrgan",
+      sizeBytes: 0,
+      status: "installed",
+      error: null,
+    },
+    {
+      id: "realesr-animevideov3-x2",
+      name: "RealESR AnimeVideoV3 x2",
+      kind: "builtin-ncnn",
+      source: "builtin",
+      scale: 2,
+      arch: "esrgan",
+      sizeBytes: 0,
+      status: "installed",
+      error: null,
+    },
+  ],
+};
+
+const DEVICES: DevicesResponse = {
+  devices: [
+    { id: "cpu", kind: "cpu", name: "CPU", backend: "cpu" },
+    { id: "dml:0", kind: "gpu", name: "AMD Radeon RX 7900", backend: "directml" },
+  ],
+  defaultDeviceId: "dml:0",
+};
+
+const CPU_ONLY_DEVICES: DevicesResponse = {
+  devices: [{ id: "cpu", kind: "cpu", name: "CPU", backend: "cpu" }],
+  defaultDeviceId: "cpu",
+};
+
+const ENGINE_INFO: EngineInfoResponse = {
+  engine: "realesrgan-ncnn",
+  configuredBinary: "vendor/realesrgan/realesrgan-ncnn-vulkan.exe",
+  configuredModelsDir: "vendor/realesrgan/models",
+  available: true,
+  defaultModel: "realesrgan-x4plus",
+  allowedScales: [2, 3, 4],
+  supportedModels: [],
+  videoProfiles: [GENERAL_PROFILE, ANIME_PROFILE],
+  ffmpegAvailable: true,
+};
+
+function renderPanel(devices: DevicesResponse = DEVICES) {
+  vi.mocked(api.getModels).mockResolvedValue(MODELS);
+  vi.mocked(api.getDevices).mockResolvedValue(devices);
+  vi.mocked(api.getEngineInfo).mockResolvedValue(ENGINE_INFO);
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  function Wrapper({ children }: { children: ReactNode }) {
+    return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+  }
+  return render(<VideoPanel />, { wrapper: Wrapper });
+}
+
+function makeFile(): File {
+  return new File(["binary"], "clip.mp4", { type: "video/mp4" });
+}
+
+async function selectFile() {
+  const fileInput = document.getElementById("video-file-input") as HTMLInputElement;
+  fireEvent.change(fileInput, { target: { files: [makeFile()] } });
+  await screen.findByRole("radio", { name: /General Balanced 4x/ });
+}
+
+afterEach(() => {
+  vi.mocked(api.getModels).mockReset();
+  vi.mocked(api.getDevices).mockReset();
+  vi.mocked(api.getEngineInfo).mockReset();
+  vi.mocked(api.createVideoJob).mockReset();
+  vi.mocked(api.getVideoJob).mockReset();
+});
+
+describe("VideoPanel", () => {
+  it("disables the Upscale CTA until a file and a profile are selected", async () => {
+    renderPanel();
+
+    const submitButton = screen.getByRole("button", { name: /upscale video/i });
+    expect(submitButton).toBeDisabled();
+
+    await selectFile();
+    const profileRadio = await screen.findByRole("radio", { name: /General Balanced 4x/ });
+    fireEvent.click(profileRadio);
+
+    await waitFor(() => expect(submitButton).not.toBeDisabled());
+  });
+
+  it("auto-selects the profile's model and applies its advanced defaults", async () => {
+    renderPanel();
+    await selectFile();
+
+    const profileRadio = await screen.findByRole("radio", { name: /Anime Balanced 2x/ });
+    fireEvent.click(profileRadio);
+
+    const modelRadio = await screen.findByRole("radio", { name: /RealESR AnimeVideoV3 x2/ });
+    await waitFor(() => expect(modelRadio).toBeChecked());
+    expect(await screen.findByRole("spinbutton", { name: /crf/i })).toHaveValue(16);
+  });
+
+  it("keeps a manual ModelPicker override after the profile's default model was auto-applied", async () => {
+    renderPanel();
+    await selectFile();
+
+    fireEvent.click(await screen.findByRole("radio", { name: /Anime Balanced 2x/ }));
+    const animeModelRadio = await screen.findByRole("radio", { name: /RealESR AnimeVideoV3 x2/ });
+    await waitFor(() => expect(animeModelRadio).toBeChecked());
+
+    const generalModelRadio = await screen.findByRole("radio", { name: /RealESRGAN x4plus/ });
+    fireEvent.click(generalModelRadio);
+
+    await waitFor(() => expect(generalModelRadio).toBeChecked());
+    expect(animeModelRadio).not.toBeChecked();
+  });
+
+  it("keeps the CTA disabled with a clear hint when the profile's model needs a GPU but only cpu exists", async () => {
+    renderPanel(CPU_ONLY_DEVICES);
+    await selectFile();
+
+    const profileRadio = await screen.findByRole("radio", { name: /General Balanced 4x/ });
+    fireEvent.click(profileRadio);
+
+    const submitButton = screen.getByRole("button", { name: /upscale video/i });
+    expect(await screen.findByRole("status")).toHaveTextContent(/requires a Vulkan GPU/i);
+    expect(submitButton).toBeDisabled();
+    expect(vi.mocked(api.createVideoJob)).not.toHaveBeenCalled();
+  });
+
+  it("disables audio enhance until keep_audio is on, and re-enables it once toggled on", async () => {
+    renderPanel();
+    await selectFile();
+    fireEvent.click(await screen.findByRole("radio", { name: /General Balanced 4x/ }));
+
+    const keepAudioToggle = await screen.findByRole("checkbox", { name: /keep original audio/i });
+    expect(keepAudioToggle).toBeChecked();
+    expect(screen.getByRole("button", { name: "RNNoise" })).not.toBeDisabled();
+
+    fireEvent.click(keepAudioToggle);
+    expect(screen.getByRole("button", { name: "RNNoise" })).toBeDisabled();
+
+    fireEvent.click(keepAudioToggle);
+    expect(screen.getByRole("button", { name: "RNNoise" })).not.toBeDisabled();
+  });
+
+  it("submits the job with the mutually-exclusive FPS boost mode and shows the normalized outputFps on completion", async () => {
+    const createResponse: CreateJobResponse = {
+      jobId: "vid-1",
+      status: "queued",
+      statusUrl: "/api/v1/video/jobs/vid-1",
+      downloadUrl: null,
+    };
+    const completedJob: VideoJobResponse = {
+      jobId: "vid-1",
+      status: "completed",
+      originalFilename: "clip.mp4",
+      modelName: "realesrgan-x4plus",
+      scale: 4,
+      outputContainer: "mp4",
+      videoCodec: "libx264",
+      videoPreset: "medium",
+      crf: 18,
+      keepAudio: true,
+      fpsMultiplier: 1,
+      targetFps: "60000/1001",
+      audioEnhance: null,
+      modelId: "realesrgan-x4plus",
+      device: "dml:0",
+      createdAt: "2026-01-01T00:00:00Z",
+      startedAt: "2026-01-01T00:00:01Z",
+      finishedAt: "2026-01-01T00:00:05Z",
+      error: null,
+      metadata: { outputFps: "24000/1001" },
+      downloadUrl: "/api/v1/video/jobs/vid-1/download",
+    };
+    vi.mocked(api.createVideoJob).mockResolvedValue(createResponse);
+    vi.mocked(api.getVideoJob).mockResolvedValue(completedJob);
+
+    renderPanel();
+    await selectFile();
+    fireEvent.click(await screen.findByRole("radio", { name: /General Balanced 4x/ }));
+
+    fireEvent.click(screen.getByRole("button", { name: "59.94 fps" }));
+    expect(screen.getByRole("button", { name: "2×" })).toBeDisabled();
+
+    const submitButton = await screen.findByRole("button", { name: /upscale video/i });
+    await waitFor(() => expect(submitButton).not.toBeDisabled());
+    fireEvent.click(submitButton);
+
+    expect(await screen.findByRole("link", { name: /download/i })).toHaveAttribute(
+      "href",
+      "/api/v1/video/jobs/vid-1/download",
+    );
+    expect(screen.getByText("23.98")).toBeInTheDocument();
+    expect(vi.mocked(api.createVideoJob).mock.calls[0][0]).toEqual(
+      expect.objectContaining({ fpsMultiplier: 1, targetFps: "60000/1001" }),
+    );
+  });
+
+  it("shows an inline error message when the server rejects the upload", async () => {
+    vi.mocked(api.createVideoJob).mockRejectedValue(new Error("Video queue is full; try again later"));
+
+    renderPanel();
+    await selectFile();
+    fireEvent.click(await screen.findByRole("radio", { name: /General Balanced 4x/ }));
+
+    const submitButton = await screen.findByRole("button", { name: /upscale video/i });
+    await waitFor(() => expect(submitButton).not.toBeDisabled());
+    fireEvent.click(submitButton);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Video queue is full; try again later");
+  });
+});
