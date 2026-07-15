@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import type { JobResponse } from "../lib/apiTypes";
+import type { JobResponse, VideoJobResponse } from "../lib/apiTypes";
 import { JobCard } from "./JobCard";
 
 const BASE_JOB: JobResponse = {
@@ -16,6 +16,30 @@ const BASE_JOB: JobResponse = {
   startedAt: null,
   finishedAt: null,
   error: null,
+  downloadUrl: null,
+};
+
+const BASE_VIDEO_JOB: VideoJobResponse = {
+  jobId: "vid-1",
+  status: "queued",
+  originalFilename: "clip.mp4",
+  modelName: "realesr-animevideov3-x2",
+  scale: 2,
+  outputContainer: "mp4",
+  videoCodec: "libx264",
+  videoPreset: "medium",
+  crf: 17,
+  keepAudio: true,
+  fpsMultiplier: 1,
+  targetFps: null,
+  audioEnhance: null,
+  modelId: "realesr-animevideov3-x2",
+  device: "dml:0",
+  createdAt: "2026-01-01T00:00:00Z",
+  startedAt: null,
+  finishedAt: null,
+  error: null,
+  metadata: {},
   downloadUrl: null,
 };
 
@@ -46,6 +70,24 @@ describe("JobCard", () => {
     render(<JobCard phase="running" job={{ ...BASE_JOB, status: "running" }} />);
 
     expect(screen.getByRole("progressbar")).toBeInTheDocument();
+    expect(screen.getByText(/processing/i)).toBeInTheDocument();
+  });
+
+  it("shows the current pipeline stage for a running video job", () => {
+    const job: VideoJobResponse = {
+      ...BASE_VIDEO_JOB,
+      status: "running",
+      metadata: { stage: "upscaling_frames" },
+    };
+    render(<JobCard phase="running" job={job} />);
+
+    expect(screen.getByText(/upscaling frames/i)).toBeInTheDocument();
+  });
+
+  it("shows only the generic Processing label when a running video job has no stage yet", () => {
+    const job: VideoJobResponse = { ...BASE_VIDEO_JOB, status: "running", metadata: {} };
+    render(<JobCard phase="running" job={job} />);
+
     expect(screen.getByText(/processing/i)).toBeInTheDocument();
   });
 
@@ -90,5 +132,39 @@ describe("JobCard", () => {
 
     const scaleValue = screen.getByText("4x");
     expect(scaleValue).toHaveClass("font-mono-tabular");
+  });
+
+  it("shows a download link without an image preview for a completed video job", () => {
+    const job: VideoJobResponse = {
+      ...BASE_VIDEO_JOB,
+      status: "completed",
+      downloadUrl: "/api/v1/video/jobs/vid-1/download",
+    };
+    render(<JobCard phase="completed" job={job} />);
+
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    const link = screen.getByRole("link", { name: /download/i });
+    expect(link).toHaveAttribute("href", "/api/v1/video/jobs/vid-1/download");
+    expect(screen.getByText("2x")).toHaveClass("font-mono-tabular");
+  });
+
+  it("shows the normalized outputFps as a tabular number when present in metadata", () => {
+    const job: VideoJobResponse = {
+      ...BASE_VIDEO_JOB,
+      status: "completed",
+      downloadUrl: "/download",
+      metadata: { outputFps: "24000/1001" },
+    };
+    render(<JobCard phase="completed" job={job} />);
+
+    const fpsValue = screen.getByText("23.98");
+    expect(fpsValue).toHaveClass("font-mono-tabular");
+  });
+
+  it("omits the FPS row when outputFps is absent from metadata", () => {
+    const job: VideoJobResponse = { ...BASE_VIDEO_JOB, status: "completed", downloadUrl: "/download", metadata: {} };
+    render(<JobCard phase="completed" job={job} />);
+
+    expect(screen.queryByText(/fps/i)).not.toBeInTheDocument();
   });
 });

@@ -1,13 +1,34 @@
 import { AlertTriangle, CheckCircle2, Clock, Download, ImageIcon, Loader2, UploadCloud } from "lucide-react";
-import type { JobResponse } from "../lib/apiTypes";
+import type { JobResponse, VideoJobResponse } from "../lib/apiTypes";
+import { formatFps } from "../lib/formatFps";
 
 export type JobCardPhase = "idle" | "uploading" | "queued" | "running" | "completed" | "failed";
 
+type AnyJobResponse = JobResponse | VideoJobResponse;
+
 interface JobCardProps {
   phase: JobCardPhase;
-  job?: JobResponse | null;
+  job?: AnyJobResponse | null;
   fileName?: string | null;
   errorMessage?: string | null;
+}
+
+function isVideoJob(job: AnyJobResponse): job is VideoJobResponse {
+  return "videoCodec" in job;
+}
+
+function readOutputFps(job: VideoJobResponse): string | null {
+  const raw = job.metadata.outputFps;
+  return typeof raw === "string" ? raw : null;
+}
+
+function readStage(job: VideoJobResponse): string | null {
+  const raw = job.metadata.stage;
+  return typeof raw === "string" ? raw : null;
+}
+
+function humanizeStage(stage: string): string {
+  return stage.replace(/_/g, " ");
 }
 
 function IndeterminateProgressBar({ label }: { label: string }) {
@@ -52,25 +73,23 @@ function QueuedState() {
   );
 }
 
-function RunningState() {
+function RunningState({ job }: { job?: AnyJobResponse | null }) {
+  const stage = job && isVideoJob(job) ? readStage(job) : null;
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center gap-2 text-sm text-text">
         <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin text-accent" strokeWidth={1.75} />
         <span>Processing</span>
+        {stage && <span className="text-text-dim">— {humanizeStage(stage)}</span>}
       </div>
       <IndeterminateProgressBar label="Processing" />
     </div>
   );
 }
 
-function CompletedState({ job }: { job: JobResponse }) {
+function ImageCompletedDetails({ job }: { job: JobResponse }) {
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex items-center gap-2 text-sm text-ok">
-        <CheckCircle2 aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />
-        <span>Completed</span>
-      </div>
+    <>
       {job.downloadUrl && (
         <img
           src={job.downloadUrl}
@@ -88,6 +107,40 @@ function CompletedState({ job }: { job: JobResponse }) {
           <dd className="uppercase text-text">{job.outputFormat}</dd>
         </div>
       </dl>
+    </>
+  );
+}
+
+function VideoCompletedDetails({ job }: { job: VideoJobResponse }) {
+  const outputFps = readOutputFps(job);
+  return (
+    <dl className="flex gap-4 text-xs text-text-dim">
+      <div className="flex items-center gap-1">
+        <dt className="sr-only">Scale</dt>
+        <dd className="font-mono-tabular text-text">{job.scale}x</dd>
+      </div>
+      <div className="flex items-center gap-1">
+        <dt className="sr-only">Container</dt>
+        <dd className="uppercase text-text">{job.outputContainer}</dd>
+      </div>
+      {outputFps && (
+        <div className="flex items-center gap-1">
+          <dt className="text-text-faint">FPS</dt>
+          <dd className="font-mono-tabular text-text">{formatFps(outputFps)}</dd>
+        </div>
+      )}
+    </dl>
+  );
+}
+
+function CompletedState({ job }: { job: AnyJobResponse }) {
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center gap-2 text-sm text-ok">
+        <CheckCircle2 aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />
+        <span>Completed</span>
+      </div>
+      {isVideoJob(job) ? <VideoCompletedDetails job={job} /> : <ImageCompletedDetails job={job} />}
       {job.downloadUrl && (
         <a
           href={job.downloadUrl}
@@ -111,7 +164,7 @@ function FailedState({ message }: { message: string }) {
   );
 }
 
-function resolveErrorMessage(job: JobResponse | null | undefined, errorMessage?: string | null): string {
+function resolveErrorMessage(job: AnyJobResponse | null | undefined, errorMessage?: string | null): string {
   if (errorMessage) {
     return errorMessage;
   }
@@ -139,7 +192,7 @@ export function JobCard({ phase, job, fileName, errorMessage }: JobCardProps) {
       {displayPhase === "idle" && <IdleState />}
       {displayPhase === "uploading" && <UploadingState fileName={fileName} />}
       {displayPhase === "queued" && <QueuedState />}
-      {displayPhase === "running" && <RunningState />}
+      {displayPhase === "running" && <RunningState job={job} />}
       {displayPhase === "completed" && job && <CompletedState job={job} />}
       {displayPhase === "failed" && <FailedState message={resolveErrorMessage(job, errorMessage)} />}
     </div>
