@@ -7,7 +7,8 @@ from pathlib import Path
 from app.config import Settings
 from app.models import VideoUpscaleJob
 from app.services.engines.audio_enhance import AudioEnhancer
-from app.services.engines.realesrgan_ncnn import RealEsrganNcnnEngine
+from app.services.engines.onnx_upscaler import OnnxUpscaler
+from app.services.engines.realesrgan_ncnn import RealEsrganNcnnEngine, gpu_index_for_device
 from app.services.engines.rife_ncnn import RifeNcnnEngine
 from app.services.media_tools import (
     MediaTools,
@@ -16,6 +17,7 @@ from app.services.media_tools import (
     format_fps_fraction,
     resolve_video_fps,
 )
+from app.services.model_registry import ModelKind, ModelRegistry
 from app.services.process_runner import run_guarded_process
 
 logger = logging.getLogger(__name__)
@@ -29,12 +31,16 @@ class VideoUpscaler:
         media_tools: MediaTools,
         rife_engine: RifeNcnnEngine | None = None,
         audio_enhancers: dict[str, AudioEnhancer] | None = None,
+        onnx_engine: OnnxUpscaler | None = None,
+        model_registry: ModelRegistry | None = None,
     ) -> None:
         self.settings = settings
         self.engine = engine
         self.media_tools = media_tools
         self.rife_engine = rife_engine
         self.audio_enhancers = audio_enhancers or {}
+        self.onnx_engine = onnx_engine
+        self.model_registry = model_registry
 
     def available(self) -> bool:
         return self.engine.available() and self.media_tools.available()
@@ -101,27 +107,7 @@ class VideoUpscaler:
             job.metadata["audioEnhanced"] = "skipped_no_audio"
 
         job.metadata["stage"] = "upscaling_frames"
-        await self._run_process(
-            [
-                str(self.settings.engine_binary_path),
-                "-i",
-                str(frames_in),
-                "-o",
-                str(frames_out),
-                "-n",
-                job.model_name,
-                "-s",
-                str(job.scale),
-                "-m",
-                str(self.settings.engine_models_path),
-                "-f",
-                "png",
-                "-g",
-                "0",
-                "-j",
-                f"2:{self.settings.cpu_fallback_workers}:{self.settings.cpu_fallback_workers}",
-            ]
-        )
+        await self._upscale_frames(job, frames_in, frames_out)
 
         encode_frames_dir, encode_fps = await self._maybe_interpolate(
             job, frames_out, fps, fps_multiplier, job.target_fps
@@ -157,6 +143,47 @@ class VideoUpscaler:
         job.metadata["outputWidth"] = job.metadata["sourceWidth"] * job.scale
         job.metadata["outputHeight"] = job.metadata["sourceHeight"] * job.scale
         return output_path
+
+    async def _upscale_frames(self, job: VideoUpscaleJob, frames_in: Path, frames_out: Path) -> None:
+        if self._is_onnx_model(job.model_id):
+            await self._upscale_frames_onnx(job, frames_in, frames_out)
+        else:
+            await self._upscale_frames_ncnn(job, frames_in, frames_out)
+
+    def _is_onnx_model(self, model_id: str | None) -> bool:
+        if model_id is None or self.model_registry is None:
+            return False
+        entry = self.model_registry.get(model_id)
+        return entry is not None and entry.kind == ModelKind.onnx
+
+    async def _upscale_frames_ncnn(self, job: VideoUpscaleJob, frames_in: Path, frames_out: Path) -> None:
+        await self._run_process(
+            [
+                str(self.settings.engine_binary_path),
+                "-i",
+                str(frames_in),
+                "-o",
+                str(frames_out),
+                "-n",
+                job.model_name,
+                "-s",
+                str(job.scale),
+                "-m",
+                str(self.settings.engine_models_path),
+                "-f",
+                "png",
+                "-g",
+                gpu_index_for_device(job.device),
+                "-j",
+                f"2:{self.settings.cpu_fallback_workers}:{self.settings.cpu_fallback_workers}",
+            ]
+        )
+
+    async def _upscale_frames_onnx(self, job: VideoUpscaleJob, frames_in: Path, frames_out: Path) -> None:
+        if self.onnx_engine is None:
+            raise RuntimeError(f"Model {job.model_id!r} requires the ONNX engine, which is not configured")
+        device = job.device or self.settings.default_device
+        await self.onnx_engine.run_frames(frames_in, frames_out, job.model_id, device)
 
     async def _prepare_audio(self, job: VideoUpscaleJob, audio_path: Path) -> tuple[Path, list[str]]:
         if job.audio_enhance:

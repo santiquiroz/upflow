@@ -51,6 +51,14 @@ class FakeMediaTools:
         return {"streams": [{"codec_type": "video"}]}
 
 
+class FakeDevicesService:
+    def list_devices(self) -> list[dict]:
+        return [{"id": "dml:0", "kind": "gpu", "name": "Fake GPU", "backend": "directml"}]
+
+    def resolve_default(self, devices: list[dict]) -> dict:
+        return devices[0]
+
+
 # ---------------------------------------------------------------------------
 # 3.5 — ADS / reserved-name filenames (Windows)
 # ---------------------------------------------------------------------------
@@ -117,11 +125,14 @@ async def test_image_upload_with_forbidden_chars_lands_on_disk_sanitized(tmp_pat
         request=None,
         file=make_upload('weird:name<>"file.png', make_png_bytes()),
         model_name="realesrgan-x4plus",
+        model_id=None,
+        device=None,
         scale=4,
         output_format="png",
         jobs=jobs,
         storage=storage,
         settings=settings,
+        devices=FakeDevicesService(),
     )
 
     job = jobs.get_job(response.job_id)
@@ -139,11 +150,14 @@ async def test_image_upload_keeps_original_filename_as_display_metadata(tmp_path
         request=None,
         file=make_upload("holiday-photo.png", make_png_bytes()),
         model_name="realesrgan-x4plus",
+        model_id=None,
+        device=None,
         scale=4,
         output_format="png",
         jobs=jobs,
         storage=storage,
         settings=settings,
+        devices=FakeDevicesService(),
     )
 
     job = jobs.get_job(response.job_id)
@@ -172,9 +186,12 @@ async def test_video_upload_with_forbidden_chars_lands_on_disk_sanitized(tmp_pat
         fps_multiplier=None,
         target_fps=None,
         audio_enhance=None,
+        model_id=None,
+        device=None,
         video_jobs=video_jobs,
         storage=storage,
         settings=settings,
+        devices=FakeDevicesService(),
     )
 
     job = video_jobs.get_job(response.job_id)

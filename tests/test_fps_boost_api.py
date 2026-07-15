@@ -92,6 +92,14 @@ class FakeMediaTools:
         return {"streams": [{"codec_type": "video"}]}
 
 
+class FakeDevicesService:
+    def list_devices(self) -> list[dict]:
+        return [{"id": "dml:0", "kind": "gpu", "name": "Fake GPU", "backend": "directml"}]
+
+    def resolve_default(self, devices: list[dict]) -> dict:
+        return devices[0]
+
+
 # ---------------------------------------------------------------------------
 # Model default
 # ---------------------------------------------------------------------------
@@ -328,9 +336,12 @@ async def test_create_video_job_route_accepts_allowed_multipliers(tmp_path: Path
         fps_multiplier=multiplier,
         target_fps=None,
         audio_enhance=None,
+        model_id=None,
+        device=None,
         video_jobs=video_jobs,
         storage=storage,
         settings=settings,
+        devices=FakeDevicesService(),
     )
 
     job = video_jobs.get_job(response.job_id)
@@ -359,9 +370,12 @@ async def test_create_video_job_route_rejects_invalid_multiplier(tmp_path: Path,
             fps_multiplier=multiplier,
             target_fps=None,
             audio_enhance=None,
+            model_id=None,
+            device=None,
             video_jobs=video_jobs,
             storage=storage,
             settings=settings,
+            devices=FakeDevicesService(),
         )
 
     assert exc_info.value.status_code == 400
@@ -390,9 +404,12 @@ async def test_create_video_job_route_rejects_when_interpolation_unavailable(tmp
             fps_multiplier=2,
             target_fps=None,
             audio_enhance=None,
+            model_id=None,
+            device=None,
             video_jobs=video_jobs,
             storage=storage,
             settings=settings,
+            devices=FakeDevicesService(),
         )
 
     assert exc_info.value.status_code == 400
@@ -418,9 +435,12 @@ async def test_create_video_job_route_omitted_fps_multiplier_defaults_to_off(tmp
         fps_multiplier=None,
         target_fps=None,
         audio_enhance=None,
+        model_id=None,
+        device=None,
         video_jobs=video_jobs,
         storage=storage,
         settings=settings,
+        devices=FakeDevicesService(),
     )
 
     job = video_jobs.get_job(response.job_id)

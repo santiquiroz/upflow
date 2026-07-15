@@ -26,6 +26,8 @@ class UpscaleJob:
     model_name: str
     scale: int
     output_format: str
+    model_id: str | None = None
+    device: str | None = None
     id: str = field(default_factory=lambda: uuid4().hex)
     status: JobStatus = JobStatus.queued
     created_at: datetime = field(default_factory=utc_now)
@@ -50,6 +52,8 @@ class VideoUpscaleJob:
     fps_multiplier: int = 1
     target_fps: str | None = None
     audio_enhance: str | None = None
+    model_id: str | None = None
+    device: str | None = None
     id: str = field(default_factory=lambda: uuid4().hex)
     status: JobStatus = JobStatus.queued
     created_at: datetime = field(default_factory=utc_now)

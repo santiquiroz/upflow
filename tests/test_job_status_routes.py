@@ -44,6 +44,14 @@ class FakeMediaTools:
         return {"streams": [{"codec_type": "video"}]}
 
 
+class FakeDevicesService:
+    def list_devices(self) -> list[dict]:
+        return [{"id": "dml:0", "kind": "gpu", "name": "Fake GPU", "backend": "directml"}]
+
+    def resolve_default(self, devices: list[dict]) -> dict:
+        return devices[0]
+
+
 def make_settings(tmp_path: Path) -> Settings:
     return Settings(RUNTIME_DIR=str(tmp_path))
 
@@ -170,9 +178,13 @@ async def test_create_video_job_returns_400_when_profile_is_unknown(tmp_path: Pa
             keep_audio=None,
             fps_multiplier=None,
             target_fps=None,
+            audio_enhance=None,
+            model_id=None,
+            device=None,
             video_jobs=video_jobs,
             storage=storage,
             settings=settings,
+            devices=FakeDevicesService(),
         )
 
     assert exc_info.value.status_code == 400

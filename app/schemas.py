@@ -22,6 +22,8 @@ class JobResponse(BaseModel):
     model_name: str = Field(serialization_alias="modelName")
     scale: int
     output_format: str = Field(serialization_alias="outputFormat")
+    model_id: str | None = Field(default=None, serialization_alias="modelId")
+    device: str | None = None
     created_at: datetime = Field(serialization_alias="createdAt")
     started_at: datetime | None = Field(default=None, serialization_alias="startedAt")
     finished_at: datetime | None = Field(default=None, serialization_alias="finishedAt")
@@ -43,6 +45,8 @@ class VideoJobResponse(BaseModel):
     fps_multiplier: int = Field(serialization_alias="fpsMultiplier")
     target_fps: str | None = Field(default=None, serialization_alias="targetFps")
     audio_enhance: str | None = Field(default=None, serialization_alias="audioEnhance")
+    model_id: str | None = Field(default=None, serialization_alias="modelId")
+    device: str | None = None
     created_at: datetime = Field(serialization_alias="createdAt")
     started_at: datetime | None = Field(default=None, serialization_alias="startedAt")
     finished_at: datetime | None = Field(default=None, serialization_alias="finishedAt")

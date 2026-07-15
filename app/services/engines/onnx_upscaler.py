@@ -173,6 +173,44 @@ class OnnxUpscaler(UpscaleEngine):
             raise RuntimeError("ONNX upscaling completed but no output file was produced")
         return output_path
 
+    async def run_frames(self, frames_in: Path, frames_out: Path, model_id: str, device: str) -> Path:
+        # Video pipeline contract (mirrors RifeNcnnEngine.run): frames_in/out
+        # are directories of "%08d.png" frames. Every frame is upscaled
+        # independently through the same cached session -- no cross-frame
+        # state -- and the output frame count is validated against the input
+        # count the same way RIFE validates its target frame count.
+        entry = self._resolve_installed_entry(model_id)
+        frames_out.mkdir(parents=True, exist_ok=True)
+        source_frame_count = self._count_frame_files(frames_in)
+
+        await asyncio.to_thread(self._run_frames_and_save, frames_in, frames_out, entry, device)
+
+        self._validate_frame_output_count(frames_out, source_frame_count)
+        return frames_out
+
+    def _run_frames_and_save(self, frames_in: Path, frames_out: Path, entry: ModelEntry, device: str) -> None:
+        if not self.available():
+            raise RuntimeError("ONNX engine is not available: onnxruntime is not installed")
+        self.devices.validate(device)
+        session = self._get_session(entry.id, device, entry)
+        for frame_path in sorted(frames_in.glob("*.png")):
+            image = _load_rgb_array(frame_path)
+            upscaled = self._upscale_array(session, image, self.settings.onnx_tile_size)
+            _save_rgb_array(upscaled, frames_out / frame_path.name)
+
+    @staticmethod
+    def _count_frame_files(directory: Path) -> int:
+        return sum(1 for _ in directory.glob("*.png"))
+
+    def _validate_frame_output_count(self, frames_out: Path, expected_count: int) -> None:
+        actual_count = self._count_frame_files(frames_out)
+        if actual_count == 0:
+            raise RuntimeError("ONNX frame upscaling completed but no output frames were produced")
+        if actual_count != expected_count:
+            raise RuntimeError(
+                f"ONNX frame upscaling completed with {actual_count} frames, expected {expected_count}"
+            )
+
     def _output_path(self, job: UpscaleJob) -> Path:
         return self.settings.outputs_path / f"{job.id}.{job.output_format.lower()}"
 

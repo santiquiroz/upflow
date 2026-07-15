@@ -150,6 +150,20 @@ def get_model_installer(request: Request) -> ModelInstaller:
     return request.app.state.model_installer
 
 
+async def resolve_request_device(device: str | None, devices: DevicesService) -> str:
+    """Resolves the `device` Form param to a concrete device id.
+
+    An explicit device is passed through untouched (validated downstream by
+    the job manager). `None` defaults to settings.DEFAULT_DEVICE via
+    DevicesService.resolve_default -- real hardware enumeration, so it is
+    dispatched through asyncio.to_thread rather than blocking the event loop.
+    """
+    if device is not None:
+        return device
+    device_list = await asyncio.to_thread(devices.list_devices)
+    return devices.resolve_default(device_list)["id"]
+
+
 def job_to_response(job: UpscaleJob) -> JobResponse:
     download_url = f"/api/v1/jobs/{job.id}/download" if job.status == JobStatus.completed else None
     return JobResponse(
@@ -159,6 +173,8 @@ def job_to_response(job: UpscaleJob) -> JobResponse:
         model_name=job.model_name,
         scale=job.scale,
         output_format=job.output_format,
+        model_id=job.model_id,
+        device=job.device,
         created_at=job.created_at,
         started_at=job.started_at,
         finished_at=job.finished_at,
@@ -183,6 +199,8 @@ def video_job_to_response(job: VideoUpscaleJob) -> VideoJobResponse:
         fps_multiplier=job.fps_multiplier,
         target_fps=job.target_fps,
         audio_enhance=job.audio_enhance,
+        model_id=job.model_id,
+        device=job.device,
         created_at=job.created_at,
         started_at=job.started_at,
         finished_at=job.finished_at,
@@ -254,16 +272,20 @@ async def create_job(
     request: Request,
     file: UploadFile = File(...),
     model_name: str = Form(default="realesrgan-x4plus"),
+    model_id: str | None = Form(default=None),
+    device: str | None = Form(default=None),
     scale: int = Form(default=4),
     output_format: str = Form(default="png"),
     jobs: JobManager = Depends(get_job_manager),
     storage: StorageService = Depends(get_storage),
     settings: Settings = Depends(get_settings),
+    devices: DevicesService = Depends(get_devices_service),
 ) -> CreateJobResponse:
     original_name = Path(file.filename or "upload.png").name
     safe_name = sanitize_filename(original_name, default="upload.png")
     token = uuid4().hex
     destination = settings.uploads_path / f"{token}-{safe_name}"
+    resolved_device = await resolve_request_device(device, devices)
 
     job: UpscaleJob | None = None
     try:
@@ -272,6 +294,8 @@ async def create_job(
             source_path=destination,
             original_filename=original_name,
             model_name=model_name,
+            model_id=model_id,
+            device=resolved_device,
             scale=scale,
             output_format=output_format,
             job_id=token,
@@ -310,9 +334,12 @@ async def create_video_job(
     fps_multiplier: int | None = Form(default=None),
     target_fps: str | None = Form(default=None),
     audio_enhance: str | None = Form(default=None),
+    model_id: str | None = Form(default=None),
+    device: str | None = Form(default=None),
     video_jobs: VideoJobManager = Depends(get_video_job_manager),
     storage: StorageService = Depends(get_storage),
     settings: Settings = Depends(get_settings),
+    devices: DevicesService = Depends(get_devices_service),
 ) -> CreateJobResponse:
     profile = settings.get_video_profile(profile_key)
     if not profile:
@@ -322,6 +349,7 @@ async def create_video_job(
     safe_name = sanitize_filename(original_name, default="upload.mp4")
     token = uuid4().hex
     destination = settings.uploads_path / f"{token}-{safe_name}"
+    resolved_device = await resolve_request_device(device, devices)
 
     resolved = resolve_video_job_fields(
         profile,
@@ -353,6 +381,8 @@ async def create_video_job(
             fps_multiplier=resolved.fps_multiplier,
             target_fps=resolved.target_fps,
             audio_enhance=resolved.audio_enhance,
+            model_id=model_id,
+            device=resolved_device,
             job_id=token,
         )
         job.metadata["profileKey"] = profile_key

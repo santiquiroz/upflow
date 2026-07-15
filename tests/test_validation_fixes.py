@@ -46,6 +46,14 @@ class FakeMediaTools:
         return {"streams": [{"codec_type": "video"}]}
 
 
+class FakeDevicesService:
+    def list_devices(self) -> list[dict]:
+        return [{"id": "dml:0", "kind": "gpu", "name": "Fake GPU", "backend": "directml"}]
+
+    def resolve_default(self, devices: list[dict]) -> dict:
+        return devices[0]
+
+
 # ---------------------------------------------------------------------------
 # 3.1 — crf / scale `or`-default drops explicit 0
 # ---------------------------------------------------------------------------
@@ -135,9 +143,12 @@ async def test_explicit_scale_zero_is_rejected_by_downstream_validation_not_sile
             video_preset=None,
             crf=None,
             keep_audio=None,
+            model_id=None,
+            device=None,
             video_jobs=video_jobs,
             storage=storage,
             settings=settings,
+            devices=FakeDevicesService(),
         )
 
     assert exc_info.value.status_code == 400

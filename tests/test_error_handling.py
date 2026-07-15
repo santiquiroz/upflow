@@ -73,6 +73,14 @@ class FakeMediaToolsRaisingCalledProcessError:
         )
 
 
+class FakeDevicesService:
+    def list_devices(self) -> list[dict]:
+        return [{"id": "dml:0", "kind": "gpu", "name": "Fake GPU", "backend": "directml"}]
+
+    def resolve_default(self, devices: list[dict]) -> dict:
+        return devices[0]
+
+
 class ExplodingJobManager:
     async def create_job(self, **kwargs: object) -> UpscaleJob:
         raise RuntimeError("disk full at C:\\internal\\secret-path\\uploads")
@@ -93,11 +101,14 @@ async def test_bomb_sized_image_upload_returns_400_and_no_leftover_file(tmp_path
             request=None,
             file=make_upload("bomb.png", make_bomb_png_bytes()),
             model_name="realesrgan-x4plus",
+            model_id=None,
+            device=None,
             scale=4,
             output_format="png",
             jobs=jobs,
             storage=storage,
             settings=settings,
+            devices=FakeDevicesService(),
         )
 
     assert exc_info.value.status_code == 400
@@ -126,9 +137,12 @@ async def test_malformed_video_upload_returns_400_and_no_leftover_file(tmp_path:
             video_preset=None,
             crf=None,
             keep_audio=None,
+            model_id=None,
+            device=None,
             video_jobs=video_jobs,
             storage=storage,
             settings=settings,
+            devices=FakeDevicesService(),
         )
 
     assert exc_info.value.status_code == 400
@@ -147,11 +161,14 @@ async def test_unexpected_image_job_error_returns_clean_500_and_no_leftover_file
                 request=None,
                 file=make_upload("photo.png", b"irrelevant-bytes"),
                 model_name="realesrgan-x4plus",
+                model_id=None,
+                device=None,
                 scale=4,
                 output_format="png",
                 jobs=ExplodingJobManager(),
                 storage=storage,
                 settings=settings,
+                devices=FakeDevicesService(),
             )
 
     assert exc_info.value.status_code == 500
@@ -182,9 +199,12 @@ async def test_unexpected_video_job_error_returns_clean_500_and_no_leftover_file
                 video_preset=None,
                 crf=None,
                 keep_audio=None,
+                model_id=None,
+                device=None,
                 video_jobs=ExplodingVideoJobManager(),
                 storage=storage,
                 settings=settings,
+                devices=FakeDevicesService(),
             )
 
     assert exc_info.value.status_code == 500

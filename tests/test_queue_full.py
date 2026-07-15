@@ -51,6 +51,14 @@ class FakeMediaTools:
         return {"streams": [{"codec_type": "video"}]}
 
 
+class FakeDevicesService:
+    def list_devices(self) -> list[dict]:
+        return [{"id": "dml:0", "kind": "gpu", "name": "Fake GPU", "backend": "directml"}]
+
+    def resolve_default(self, devices: list[dict]) -> dict:
+        return devices[0]
+
+
 # ---------------------------------------------------------------------------
 # 3.8 — unbounded queue → maxsize + QueueFullError
 # ---------------------------------------------------------------------------
@@ -140,11 +148,14 @@ async def test_create_job_route_returns_429_when_queue_full(tmp_path: Path) -> N
         request=None,
         file=make_upload("a.png", make_png_bytes()),
         model_name="realesrgan-x4plus",
+        model_id=None,
+        device=None,
         scale=4,
         output_format="png",
         jobs=jobs,
         storage=storage,
         settings=settings,
+        devices=FakeDevicesService(),
     )
 
     with pytest.raises(HTTPException) as exc_info:
@@ -152,11 +163,14 @@ async def test_create_job_route_returns_429_when_queue_full(tmp_path: Path) -> N
             request=None,
             file=make_upload("b.png", make_png_bytes()),
             model_name="realesrgan-x4plus",
+            model_id=None,
+            device=None,
             scale=4,
             output_format="png",
             jobs=jobs,
             storage=storage,
             settings=settings,
+            devices=FakeDevicesService(),
         )
 
     assert exc_info.value.status_code == 429
@@ -184,9 +198,12 @@ async def test_create_video_job_route_returns_429_when_queue_full(tmp_path: Path
         fps_multiplier=None,
         target_fps=None,
         audio_enhance=None,
+        model_id=None,
+        device=None,
         video_jobs=video_jobs,
         storage=storage,
         settings=settings,
+        devices=FakeDevicesService(),
     )
 
     with pytest.raises(HTTPException) as exc_info:
@@ -204,9 +221,12 @@ async def test_create_video_job_route_returns_429_when_queue_full(tmp_path: Path
             fps_multiplier=None,
             target_fps=None,
             audio_enhance=None,
+            model_id=None,
+            device=None,
             video_jobs=video_jobs,
             storage=storage,
             settings=settings,
+            devices=FakeDevicesService(),
         )
 
     assert exc_info.value.status_code == 429

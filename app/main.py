@@ -12,6 +12,7 @@ from app.config import AUDIO_ENHANCE_MODES, get_settings
 from app.security import OriginGuardMiddleware
 from app.services.devices_service import DevicesService
 from app.services.engines.audio_enhance import AudioEnhancer
+from app.services.engines.onnx_upscaler import OnnxUpscaler
 from app.services.engines.realesrgan_ncnn import RealEsrganNcnnEngine
 from app.services.engines.rife_ncnn import RifeNcnnEngine
 from app.services.hf_client import HfClient
@@ -37,12 +38,25 @@ async def lifespan(app: FastAPI):
     rife_engine = RifeNcnnEngine(settings)
     audio_enhancers = {mode: AudioEnhancer(settings, mode) for mode in AUDIO_ENHANCE_MODES}
     devices_service = DevicesService(settings)
-    gpu_semaphore = asyncio.Semaphore(settings.gpu_concurrency)
-    job_manager = JobManager(settings, engine, gpu_semaphore)
-    video_upscaler = VideoUpscaler(settings, engine, media_tools, rife_engine, audio_enhancers)
-    video_job_manager = VideoJobManager(settings, video_upscaler, media_tools, gpu_semaphore)
-    retention_sweeper = RetentionSweeper(settings, job_manager, video_job_manager)
     model_registry = ModelRegistry(settings)
+    onnx_engine = OnnxUpscaler(settings, model_registry, devices_service)
+    gpu_semaphore = asyncio.Semaphore(settings.gpu_concurrency)
+    job_manager = JobManager(
+        settings, engine, gpu_semaphore, onnx_engine=onnx_engine, registry=model_registry, devices=devices_service
+    )
+    video_upscaler = VideoUpscaler(
+        settings,
+        engine,
+        media_tools,
+        rife_engine,
+        audio_enhancers,
+        onnx_engine=onnx_engine,
+        model_registry=model_registry,
+    )
+    video_job_manager = VideoJobManager(
+        settings, video_upscaler, media_tools, gpu_semaphore, registry=model_registry, devices=devices_service
+    )
+    retention_sweeper = RetentionSweeper(settings, job_manager, video_job_manager)
     hf_client = HfClient(settings)
     model_installer = ModelInstaller(settings, model_registry, hf_client)
     await job_manager.start()
@@ -55,6 +69,7 @@ async def lifespan(app: FastAPI):
     app.state.media_tools = media_tools
     app.state.rife_engine = rife_engine
     app.state.audio_enhancers = audio_enhancers
+    app.state.onnx_engine = onnx_engine
     app.state.devices_service = devices_service
     app.state.job_manager = job_manager
     app.state.video_job_manager = video_job_manager

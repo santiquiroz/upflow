@@ -8,6 +8,7 @@ from PIL import Image
 
 from app.main import app
 from app.security import is_origin_allowed
+from app.services import devices_service
 
 ALLOWED_ORIGINS = frozenset({"http://127.0.0.1:8090", "http://localhost:8090"})
 FOREIGN_ORIGIN = "http://evil.example.com"
@@ -17,6 +18,22 @@ def make_png_bytes(color: str = "red") -> bytes:
     buffer = io.BytesIO()
     Image.new("RGB", (4, 4), color=color).save(buffer, format="PNG")
     return buffer.getvalue()
+
+
+def patch_fake_gpu_present(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Makes DevicesService resolve a fake DirectML GPU as the default device.
+
+    Origin-middleware tests exercise the real /api/v1/jobs route end to end,
+    which now resolves a default device via real hardware enumeration. On a
+    machine with no DirectML GPU that default would fall back to "cpu",
+    which is correctly rejected for the builtin ncnn model used here -- these
+    tests care about origin handling, not device selection, so hardware
+    detection is faked the same way tests/test_devices.py does.
+    """
+    monkeypatch.setattr(devices_service, "_probe_onnxruntime", lambda: devices_service.OnnxRuntimeProbe(
+        available_providers=["DmlExecutionProvider", "CPUExecutionProvider"]
+    ))
+    monkeypatch.setattr(devices_service, "_enumerate_gpu_adapter_names", lambda: ["Fake GPU"])
 
 
 # ---------------------------------------------------------------------------
@@ -69,7 +86,8 @@ def test_get_health_with_foreign_origin_passes() -> None:
     assert response.status_code == 200
 
 
-def test_post_job_with_no_origin_and_no_referer_passes_middleware() -> None:
+def test_post_job_with_no_origin_and_no_referer_passes_middleware(monkeypatch: pytest.MonkeyPatch) -> None:
+    patch_fake_gpu_present(monkeypatch)
     with TestClient(app) as client:
         response = client.post(
             "/api/v1/jobs",
@@ -92,7 +110,8 @@ def test_post_job_with_foreign_origin_is_rejected_with_403() -> None:
     assert response.status_code == 403
 
 
-def test_post_job_with_allowed_origin_passes_middleware() -> None:
+def test_post_job_with_allowed_origin_passes_middleware(monkeypatch: pytest.MonkeyPatch) -> None:
+    patch_fake_gpu_present(monkeypatch)
     with TestClient(app) as client:
         response = client.post(
             "/api/v1/jobs",

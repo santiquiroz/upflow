@@ -3,18 +3,28 @@ from __future__ import annotations
 import asyncio
 import logging
 import subprocess
+from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
 
 from app.config import AUDIO_ENHANCE_MODES, Settings
 from app.exceptions import QueueFullError
 from app.models import JobStatus, VideoUpscaleJob, utc_now
+from app.services.devices_service import DevicesService
 from app.services.media_tools import MediaTools, parse_fps_fraction, resolve_video_fps
+from app.services.model_registry import ModelKind, ModelRegistry, ModelStatus
 from app.services.video_upscaler import VideoUpscaler
 
 logger = logging.getLogger(__name__)
 
 MAX_TARGET_FPS = 240
+
+
+@dataclass(frozen=True, slots=True)
+class VideoModelResolution:
+    model_id: str
+    engine_model_name: str
+    kind: ModelKind
 
 
 class VideoJobManager:
@@ -24,10 +34,15 @@ class VideoJobManager:
         upscaler: VideoUpscaler,
         media_tools: MediaTools,
         gpu_semaphore: asyncio.Semaphore,
+        *,
+        registry: ModelRegistry | None = None,
+        devices: DevicesService | None = None,
     ) -> None:
         self.settings = settings
         self.upscaler = upscaler
         self.media_tools = media_tools
+        self.registry = registry
+        self.devices = devices
         self.jobs: dict[str, VideoUpscaleJob] = {}
         self.queue: asyncio.Queue[VideoUpscaleJob] = asyncio.Queue(maxsize=settings.max_queue_size)
         self.gpu_semaphore = gpu_semaphore
@@ -69,12 +84,16 @@ class VideoJobManager:
         fps_multiplier: int = 1,
         target_fps: str | None = None,
         audio_enhance: str | None = None,
+        model_id: str | None = None,
+        device: str | None = None,
         job_id: str | None = None,
     ) -> VideoUpscaleJob:
         source_fps = await self._validate_video(source_path)
+        resolved_model_id = model_id if model_id is not None else model_name
+        if device is not None and self.devices is not None:
+            await asyncio.to_thread(self.devices.validate, device)
+        resolution = self._resolve_model(resolved_model_id, scale, device)
         self._validate_request(
-            model_name,
-            scale,
             output_container,
             video_codec,
             video_preset,
@@ -89,7 +108,7 @@ class VideoJobManager:
         job = VideoUpscaleJob(
             source_path=source_path,
             original_filename=original_filename,
-            model_name=self.settings.resolve_engine_model_name(model_name, scale),
+            model_name=resolution.engine_model_name,
             scale=scale,
             output_container=output_container,
             video_codec=video_codec,
@@ -99,6 +118,8 @@ class VideoJobManager:
             fps_multiplier=fps_multiplier,
             target_fps=target_fps,
             audio_enhance=audio_enhance,
+            model_id=resolution.model_id,
+            device=device,
         )
         if job_id is not None:
             job.id = job_id
@@ -126,10 +147,36 @@ class VideoJobManager:
             raise ValueError("Uploaded file is not a valid video")
         return resolve_video_fps(video_stream.get("avg_frame_rate"), video_stream.get("r_frame_rate"))
 
+    def _resolve_model(self, model_id: str, scale: int, device: str | None) -> VideoModelResolution:
+        if model_id in self.settings.model_keys:
+            return self._resolve_builtin_model(model_id, scale, device)
+        return self._resolve_onnx_model(model_id)
+
+    def _resolve_builtin_model(self, model_id: str, scale: int, device: str | None) -> VideoModelResolution:
+        option = self.settings.get_model_option(model_id)
+        if option and scale not in option["scales"]:
+            raise ValueError(f"Model {model_id} supports only scales {option['scales']}")
+        if device == "cpu":
+            raise ValueError(
+                f"Device 'cpu' is not supported for builtin model {model_id!r} (requires a Vulkan GPU device)"
+            )
+        engine_model_name = self.settings.resolve_engine_model_name(model_id, scale)
+        return VideoModelResolution(
+            model_id=model_id, engine_model_name=engine_model_name, kind=ModelKind.builtin_ncnn
+        )
+
+    def _resolve_onnx_model(self, model_id: str) -> VideoModelResolution:
+        if self.registry is None:
+            raise ValueError(f"Model must be one of {sorted(self.settings.model_keys)}")
+        entry = self.registry.get(model_id)
+        if entry is None or entry.kind != ModelKind.onnx:
+            raise ValueError(f"Unknown model id: {model_id!r}")
+        if entry.status != ModelStatus.installed:
+            raise ValueError(f"Model {model_id!r} is not ready for inference (status={entry.status.value})")
+        return VideoModelResolution(model_id=model_id, engine_model_name=model_id, kind=ModelKind.onnx)
+
     def _validate_request(
         self,
-        model_name: str,
-        scale: int,
         output_container: str,
         video_codec: str,
         video_preset: str,
@@ -140,11 +187,6 @@ class VideoJobManager:
         keep_audio: bool,
         audio_enhance: str | None,
     ) -> None:
-        if model_name not in self.settings.model_keys:
-            raise ValueError(f"Model must be one of {sorted(self.settings.model_keys)}")
-        option = self.settings.get_model_option(model_name)
-        if option and scale not in option["scales"]:
-            raise ValueError(f"Model {model_name} supports only scales {option['scales']}")
         if output_container not in {"mp4", "mkv"}:
             raise ValueError("Output container must be mp4 or mkv")
         if video_codec not in {"libx264", "libx265"}:
