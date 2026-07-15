@@ -15,7 +15,16 @@ dependencies = [
   "aiofiles>=24.1.0,<25.0.0",
   "httpx>=0.27.0,<1.0.0",
   "numpy>=1.26.0,<3.0.0",
-  "onnxruntime-directml>=1.19.0,<2.0.0; sys_platform == 'win32'"
+  "onnxruntime-directml>=1.19.0,<2.0.0; sys_platform == 'win32'",
+  # SP1 Task 6 - .pth/.safetensors -> ONNX conversion (app/services/model_converter.py).
+  # torch is unpinned to a CUDA index on purpose: plain PyPI already resolves
+  # to a CPU-capable wheel and this only ever runs the export/inference
+  # graph on CPU. `onnx` (the protobuf graph library, distinct from
+  # `onnxruntime`) is a transitive hard requirement of torch.onnx.export
+  # itself, not something this module calls directly.
+  "torch>=2.2.0,<3.0.0",
+  "spandrel>=0.4.0,<1.0.0",
+  "onnx>=1.16.0,<2.0.0"
 ]
 
 [project.optional-dependencies]

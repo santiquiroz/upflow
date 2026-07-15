@@ -7,7 +7,9 @@ import pytest
 
 from app.config import Settings
 from app.exceptions import HfDownloadTooLargeError, ModelNotFoundError, ModelProtectedError
+from app.services import model_installer
 from app.services.hf_client import HfFile
+from app.services.model_converter import ConversionResult
 from app.services.model_installer import (
     InstallStatus,
     ModelInstaller,
@@ -258,23 +260,147 @@ async def test_install_from_hf_happy_path_registers_onnx_model(
 
 
 # ---------------------------------------------------------------------------
-# non-.onnx weight file: rejected without downloading (Task 6 will replace
-# this branch with real .pth/.safetensors conversion)
+# non-.onnx weight file: routed through model_converter.convert_to_onnx
+# (SP1 Task 6). convert_to_onnx itself is unit-tested for real in
+# test_model_converter.py (real torch.onnx.export + real onnxruntime
+# validation against a fake-but-real Spandrel descriptor); these tests only
+# assert the INSTALLER's wiring/routing contract, so `convert_to_onnx` is
+# monkeypatched at the module level the same way `_create_validation_session`
+# already is for the .onnx path above.
 # ---------------------------------------------------------------------------
 
 
-async def test_install_rejects_non_onnx_weight_file_without_downloading(tmp_path: Path) -> None:
-    installer, registry, hf, _ = make_installer(tmp_path, NON_ONNX_FILES)
+def _install_fake_convert_to_onnx(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    arch: str = "FakeArch",
+    scale: int = 4,
+    onnx_bytes: bytes = b"converted-onnx-bytes",
+    error: Exception | None = None,
+) -> list[tuple[Path, Path]]:
+    calls: list[tuple[Path, Path]] = []
+
+    def fake_convert(weight_path: Path, out_onnx: Path, progress_cb=None) -> ConversionResult:
+        calls.append((weight_path, out_onnx))
+        if error is not None:
+            raise error
+        out_onnx.parent.mkdir(parents=True, exist_ok=True)
+        out_onnx.write_bytes(onnx_bytes)
+        return ConversionResult(arch=arch, scale=scale)
+
+    monkeypatch.setattr(model_installer, "convert_to_onnx", fake_convert)
+    return calls
+
+
+async def test_install_routes_non_onnx_weight_through_conversion_and_registers_onnx(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installer, registry, hf, settings = make_installer(tmp_path, NON_ONNX_FILES)
+    monkeypatch.setattr(installer, "_create_validation_session", lambda path: FakeValidSession(scale=2))
+    convert_calls = _install_fake_convert_to_onnx(monkeypatch, arch="ESRGAN", scale=4)
+
+    install_id = await installer.install_from_hf("org/pth-repo")
+    processed = await installer._process_next()
+
+    assert processed is True
+    job = installer.status(install_id)
+    assert job is not None
+    assert job.status == InstallStatus.installed
+    assert job.error is None
+
+    entry = registry.get(job.model_id)
+    assert entry is not None
+    assert entry.kind == ModelKind.onnx
+    assert entry.status == ModelStatus.installed
+    # arch/scale come from ConversionResult (Spandrel metadata), NOT from
+    # the filename stem or from FakeValidSession's runtime-detected scale=2.
+    assert entry.arch == "ESRGAN"
+    assert entry.scale == 4
+    assert entry.file_path == "onnx/org--pth-repo.onnx"
+
+    onnx_path = settings.models_path / entry.file_path
+    assert onnx_path.read_bytes() == b"converted-onnx-bytes"
+
+    # pick_weight_file prefers .safetensors over .pth (NON_ONNX_FILES has both).
+    assert len(convert_calls) == 1
+    source_weight_path, out_onnx_arg = convert_calls[0]
+    assert source_weight_path.suffix == ".safetensors"
+    assert out_onnx_arg.name == "org--pth-repo.onnx.validating"
+
+
+async def test_install_reports_converting_status_during_conversion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installer, _, _, _ = make_installer(tmp_path, NON_ONNX_FILES)
+    monkeypatch.setattr(installer, "_create_validation_session", lambda path: FakeValidSession(scale=2))
+
+    install_id = await installer.install_from_hf("org/pth-repo")
+    job = installer.status(install_id)
+    assert job is not None
+    observed_statuses: list[InstallStatus] = []
+
+    def fake_convert(weight_path: Path, out_onnx: Path, progress_cb=None) -> ConversionResult:
+        observed_statuses.append(job.status)
+        out_onnx.parent.mkdir(parents=True, exist_ok=True)
+        out_onnx.write_bytes(b"onnx-bytes")
+        return ConversionResult(arch="Arch", scale=2)
+
+    monkeypatch.setattr(model_installer, "convert_to_onnx", fake_convert)
+
+    await installer._process_next()
+
+    assert observed_statuses == [InstallStatus.converting]
+
+
+async def test_install_deletes_original_weight_file_after_successful_conversion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installer, _, _, settings = make_installer(tmp_path, NON_ONNX_FILES)
+    monkeypatch.setattr(installer, "_create_validation_session", lambda path: FakeValidSession(scale=2))
+    _install_fake_convert_to_onnx(monkeypatch)
+
+    await installer.install_from_hf("org/pth-repo")
+    await installer._process_next()
+
+    source_weight_path = settings.temp_path / "org--pth-repo.safetensors"
+    assert not source_weight_path.exists()
+
+
+async def test_install_uses_converted_onnx_file_size_not_original_weight_size(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installer, registry, _, _ = make_installer(tmp_path, NON_ONNX_FILES)
+    monkeypatch.setattr(installer, "_create_validation_session", lambda path: FakeValidSession(scale=2))
+    onnx_bytes = b"x" * 123
+    _install_fake_convert_to_onnx(monkeypatch, onnx_bytes=onnx_bytes)
 
     install_id = await installer.install_from_hf("org/pth-repo")
     await installer._process_next()
 
     job = installer.status(install_id)
+    entry = registry.get(job.model_id)
+    assert entry.size_bytes == 123
+    # NON_ONNX_FILES' .safetensors entry declares 4_000_000 bytes on HF --
+    # the registered size must reflect the converted .onnx, not that.
+    assert entry.size_bytes != 4_000_000
+
+
+async def test_install_marks_error_when_conversion_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installer, registry, hf, settings = make_installer(tmp_path, NON_ONNX_FILES)
+    _install_fake_convert_to_onnx(monkeypatch, error=RuntimeError("conversion boom"))
+
+    install_id = await installer.install_from_hf("org/broken-weights")
+    await installer._process_next()
+
+    job = installer.status(install_id)
     assert job is not None
     assert job.status == InstallStatus.error
-    assert ".onnx" in job.error
-    assert hf.download_calls == []
-    assert registry.get("org--pth-repo") is None
+    assert "conversion boom" in job.error
+    assert registry.get("org--broken-weights") is None
+    assert list((settings.models_path / "onnx").glob("*")) == []
+    assert not (settings.temp_path / "org--broken-weights.safetensors").exists()
 
 
 async def test_install_error_when_no_weight_file_present(tmp_path: Path) -> None:

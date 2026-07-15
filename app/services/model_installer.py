@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -20,7 +21,8 @@ from app.services.engines.onnx_upscaler import (
     _from_nchw_float,
     _to_nchw_float,
 )
-from app.services.hf_client import HfClient, pick_weight_file
+from app.services.hf_client import HfClient, HfFile, ProgressCallback, pick_weight_file
+from app.services.model_converter import ConversionResult, convert_to_onnx
 from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry, ModelStatus
 
 logger = logging.getLogger(__name__)
@@ -31,11 +33,21 @@ logger = logging.getLogger(__name__)
 # asyncio queue (deliberately NOT the GPU job queue -- downloads/validation
 # are CPU/network-bound and must never compete with GPU-gated upscale jobs).
 #
-# .pth/.safetensors weights are NOT converted here -- that lands in Task 6.
-# Picking a repo without an .onnx file completes the install job with
-# status=error and a clear "not available yet" message instead of silently
-# hanging or attempting a conversion that doesn't exist; T6 replaces this
-# branch with a real conversion step.
+# SP1 Task 6 - .pth/.safetensors weights are converted to ONNX via
+# model_converter.convert_to_onnx (Spandrel + torch.onnx.export) before
+# entering the SAME staging/validate/promote pipeline used for a natively
+# published .onnx file, through an extra `converting` job status between
+# `downloading` and `validating`. The raw downloaded checkpoint is staged
+# under settings.temp_path (NOT the final models/onnx dir -- it is never a
+# registered artifact) and is always deleted once conversion finishes,
+# success or failure: only the resulting .onnx is kept, mirroring "kind=onnx
+# has exactly one file on disk" everywhere else in this module. `arch` and
+# `scale` on the registered entry come from Spandrel's ConversionResult (the
+# architecture's own declared metadata), not from the filename or from
+# re-inferring scale via a black-box ONNX forward pass -- the latter still
+# runs (via `_validate_onnx_file`, unchanged) as a structural sanity check
+# on the exported graph, but its returned scale is discarded in favor of the
+# authoritative one for converted models.
 #
 # ONNX validation reuses onnx_upscaler's `_build_providers` (cpu-only here),
 # `_detect_scale`, `_to_nchw_float` and `_from_nchw_float` instead of
@@ -58,10 +70,6 @@ REPO_ID_PATTERN = re.compile(
 
 VALIDATION_TILE_SIZE = 32
 ONNX_SUFFIX = ".onnx"
-NON_ONNX_ERROR_MESSAGE = (
-    "The selected weight file is not .onnx; conversion of .pth/.safetensors "
-    "weights is not available yet (coming in a later step)."
-)
 
 
 class InstallStatus(str, Enum):
@@ -246,11 +254,6 @@ class ModelInstaller:
         files = await self.hf_client.repo_files(job.repo_id)
         weight_file = pick_weight_file(files)
 
-        if Path(weight_file.path).suffix.lower() != ONNX_SUFFIX:
-            job.status = InstallStatus.error
-            job.error = NON_ONNX_ERROR_MESSAGE
-            return
-
         model_id = _model_id_from_repo_id(job.repo_id)
         final_dest = self._onnx_dest_path(model_id)
         # Downloaded/validated under a staging name, not final_dest directly:
@@ -264,14 +267,30 @@ class ModelInstaller:
         def progress_cb(downloaded: int, total: int | None) -> None:
             job.progress_pct = _progress_percent(downloaded, total)
 
-        await self.hf_client.download(job.repo_id, weight_file.path, staging_dest, progress_cb=progress_cb)
+        weight_suffix = Path(weight_file.path).suffix.lower()
+        if weight_suffix == ONNX_SUFFIX:
+            await self.hf_client.download(job.repo_id, weight_file.path, staging_dest, progress_cb=progress_cb)
+            arch = Path(weight_file.path).stem
+            conversion_result = None
+        else:
+            arch, conversion_result = await self._download_and_convert(
+                job, weight_file, weight_suffix, model_id, staging_dest, progress_cb
+            )
 
         job.status = InstallStatus.validating
         try:
-            scale = await asyncio.to_thread(self._validate_onnx_file, staging_dest)
+            detected_scale = await asyncio.to_thread(self._validate_onnx_file, staging_dest)
         except Exception:
             staging_dest.unlink(missing_ok=True)
             raise
+
+        # A converted model's arch/scale come from Spandrel's own metadata
+        # (authoritative), not from the runtime-detected scale of a
+        # zero-tile forward pass -- that detection still runs above as a
+        # structural sanity check on the exported graph (1 input, 4D,
+        # float), its returned scale is just not the one that gets stored.
+        scale = conversion_result.scale if conversion_result is not None else detected_scale
+        size_bytes = staging_dest.stat().st_size if conversion_result is not None else weight_file.size
 
         staging_dest.replace(final_dest)
 
@@ -280,15 +299,56 @@ class ModelInstaller:
             name=job.repo_id,
             kind=ModelKind.onnx,
             source=f"https://huggingface.co/{job.repo_id}",
-            size_bytes=weight_file.size,
+            size_bytes=size_bytes,
             scale=scale,
-            arch=Path(weight_file.path).stem,
+            arch=arch,
             file_path=self._relative_onnx_path(model_id),
             status=ModelStatus.installed,
         )
         await asyncio.to_thread(self.registry.register, entry)
         job.model_id = model_id
         job.status = InstallStatus.installed
+
+    async def _download_and_convert(
+        self,
+        job: InstallJob,
+        weight_file: HfFile,
+        weight_suffix: str,
+        model_id: str,
+        staging_dest: Path,
+        progress_cb: ProgressCallback,
+    ) -> tuple[str, ConversionResult]:
+        # The raw .pth/.safetensors checkpoint is staged OUTSIDE the models
+        # dir (settings.temp_path): it is never a registered artifact, only
+        # ever an input to conversion, and is always removed below -- success
+        # or failure -- so a `converting` job never leaves it behind.
+        source_weight_path = self._weight_source_path(model_id, weight_suffix)
+        await self.hf_client.download(job.repo_id, weight_file.path, source_weight_path, progress_cb=progress_cb)
+
+        job.status = InstallStatus.converting
+        try:
+            conversion_result = await asyncio.to_thread(
+                convert_to_onnx,
+                source_weight_path,
+                staging_dest,
+                self._conversion_progress_logger(job),
+            )
+        except Exception:
+            staging_dest.unlink(missing_ok=True)
+            raise
+        finally:
+            source_weight_path.unlink(missing_ok=True)
+
+        return conversion_result.arch, conversion_result
+
+    def _weight_source_path(self, model_id: str, suffix: str) -> Path:
+        return self.settings.temp_path / f"{model_id}{suffix}"
+
+    def _conversion_progress_logger(self, job: InstallJob) -> Callable[[str], None]:
+        def _log_stage(stage: str) -> None:
+            logger.debug("Converting %s: %s", job.repo_id, stage)
+
+        return _log_stage
 
     def _onnx_dest_path(self, model_id: str) -> Path:
         return self.settings.models_path / "onnx" / f"{model_id}{ONNX_SUFFIX}"
