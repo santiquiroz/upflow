@@ -90,6 +90,37 @@ class FailingSession:
         raise RuntimeError(self._message)
 
 
+class PerTileConstantSession:
+    """Position-SENSITIVE fake: fills each successive tile (in the engine's
+    row-major processing order) with a distinct constant, ignoring pixel
+    content. Unlike Double2xSession, the same source pixel yields a DIFFERENT
+    output value depending on which tile inferred it -- so the value written
+    into the overlap region is fully determined by the blend weights, which
+    makes the feather taper observable (and a broken/flat feather detectable).
+    """
+
+    def __init__(self, fill_values: list[float], scale: int = 2) -> None:
+        self._fill_values = fill_values
+        self._scale = scale
+        self._call = 0
+        self._input = _IoInfo("input")
+        self._output = _IoInfo("output")
+
+    def get_inputs(self) -> list[_IoInfo]:
+        return [self._input]
+
+    def get_outputs(self) -> list[_IoInfo]:
+        return [self._output]
+
+    def run(self, output_names: list[str], input_feed: dict[str, np.ndarray]) -> list[np.ndarray]:
+        array = input_feed[self._input.name]
+        _, channels, height, width = array.shape
+        value = self._fill_values[self._call]
+        self._call += 1
+        shape = (1, channels, height * self._scale, width * self._scale)
+        return [np.full(shape, value, dtype=np.float32)]
+
+
 def make_onnx_entry(**overrides: object) -> ModelEntry:
     defaults: dict[str, object] = {
         "id": "fake-2x",
@@ -275,6 +306,38 @@ def test_tiled_upscale_handles_non_square_non_divisible_image(tmp_path: Path) ->
 
 def test_tile_overlap_constant_is_16px() -> None:
     assert TILE_OVERLAP_PX == 16
+
+
+def test_tiling_feather_produces_gradient_taper_in_overlap(tmp_path: Path) -> None:
+    # Two side-by-side tiles filled with distinct constants (left=0.2->51,
+    # right=0.8->204). A position-invariant fake would reconstruct exactly
+    # regardless of weights; here the overlap value depends ENTIRELY on the
+    # feather ramp, so we can pin the taper shape.
+    #
+    # width=48, tile=32, overlap=16 -> tile starts [0, 16] (2 tiles);
+    # height=16 <= 32 -> a single tile row. Overlap is output cols [32, 64).
+    #   - hard seam  -> [51,...,51, 204,...,204]  (only 2 distinct values)
+    #   - flat average (feather OFF, weights all 1) -> constant 128
+    #   - feather ON -> monotonic gradient from ~51 toward ~204
+    engine, _, _ = make_engine(tmp_path)
+    session = PerTileConstantSession(fill_values=[0.2, 0.8], scale=2)
+    array = make_gradient_array(height=16, width=48)
+
+    result = engine._upscale_array(session, array, tile_size=32)
+
+    assert result.shape == (32, 96, 3)
+    overlap_profile = result[8, 32:64, 0].astype(int)
+
+    # Not a flat average: a genuine gradient has many distinct levels.
+    assert np.unique(overlap_profile).size >= 8
+    # Monotonic left->right taper (a broken/reversed ramp breaks this).
+    assert np.all(np.diff(overlap_profile) >= 0)
+    assert overlap_profile[0] < overlap_profile[-1]
+    # Not a hard seam: intermediate blended values exist between the two fills.
+    assert np.any((overlap_profile > 70) & (overlap_profile < 185))
+    # Endpoints are blended, not the raw per-tile constants.
+    assert overlap_profile[0] > 51
+    assert overlap_profile[-1] < 204
 
 
 # ---------------------------------------------------------------------------
