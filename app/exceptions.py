@@ -15,3 +15,11 @@ class HfDownloadTooLargeError(HfDownloadError):
 
 class HfInvalidSourceError(HfDownloadError):
     """Raised when a download URL is not HTTPS huggingface.co."""
+
+
+class ModelNotFoundError(Exception):
+    """Raised when a model id does not exist in the registry."""
+
+
+class ModelProtectedError(Exception):
+    """Raised when attempting to delete a builtin (non-removable) model."""
