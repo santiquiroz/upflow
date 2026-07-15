@@ -1,5 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, createImageJob, getDevices, getEngineInfo, getHealth, getJob, getModels } from "./api";
+import {
+  ApiError,
+  createImageJob,
+  createVideoJob,
+  getDevices,
+  getEngineInfo,
+  getHealth,
+  getJob,
+  getModels,
+  getVideoJob,
+} from "./api";
 import type {
   CreateJobResponse,
   DevicesResponse,
@@ -7,6 +17,7 @@ import type {
   HealthResponse,
   JobResponse,
   ModelsResponse,
+  VideoJobResponse,
 } from "./apiTypes";
 
 function mockFetchOnce(body: unknown, init: ResponseInit = { status: 200 }) {
@@ -156,6 +167,120 @@ describe("getJob", () => {
     const result = await getJob("job-1");
 
     expect(fetch).toHaveBeenCalledWith("/api/v1/jobs/job-1", expect.objectContaining({ method: "GET" }));
+    expect(result).toEqual(payload);
+  });
+});
+
+describe("createVideoJob", () => {
+  function videoParams(overrides: Partial<Parameters<typeof createVideoJob>[0]> = {}) {
+    return {
+      file: new File(["binary"], "clip.mp4", { type: "video/mp4" }),
+      profileKey: "anime-balanced-2x",
+      modelId: "realesrgan-x4plus",
+      device: "dml:0",
+      scale: 2,
+      outputContainer: "mp4",
+      videoCodec: "libx264",
+      videoPreset: "medium",
+      crf: 17,
+      keepAudio: true,
+      fpsMultiplier: 1,
+      targetFps: null,
+      audioEnhance: null,
+      ...overrides,
+    };
+  }
+
+  it("issues a multipart POST to /api/v1/video/jobs with every resolved field", async () => {
+    const payload: CreateJobResponse = {
+      jobId: "vid-1",
+      status: "queued",
+      statusUrl: "/api/v1/video/jobs/vid-1",
+      downloadUrl: null,
+    };
+    mockFetchOnce(payload, { status: 202 });
+
+    const result = await createVideoJob(videoParams());
+
+    expect(fetch).toHaveBeenCalledWith("/api/v1/video/jobs", expect.objectContaining({ method: "POST" }));
+    const call = vi.mocked(fetch).mock.calls[0];
+    const body = call[1]?.body as FormData;
+    expect(body.get("profile_key")).toBe("anime-balanced-2x");
+    expect(body.get("model_name")).toBe("realesrgan-x4plus");
+    expect(body.get("model_id")).toBe("realesrgan-x4plus");
+    expect(body.get("device")).toBe("dml:0");
+    expect(body.get("scale")).toBe("2");
+    expect(body.get("output_container")).toBe("mp4");
+    expect(body.get("video_codec")).toBe("libx264");
+    expect(body.get("video_preset")).toBe("medium");
+    expect(body.get("crf")).toBe("17");
+    expect(body.get("keep_audio")).toBe("true");
+    expect(body.get("fps_multiplier")).toBe("1");
+    expect(body.has("target_fps")).toBe(false);
+    expect(body.has("audio_enhance")).toBe(false);
+    expect(result).toEqual(payload);
+  });
+
+  it("sends target_fps when set and omits model/device when absent", async () => {
+    mockFetchOnce(
+      { jobId: "vid-2", status: "queued", statusUrl: "/api/v1/video/jobs/vid-2", downloadUrl: null },
+      { status: 202 },
+    );
+
+    await createVideoJob(videoParams({ modelId: null, device: null, targetFps: "60000/1001" }));
+
+    const call = vi.mocked(fetch).mock.calls[0];
+    const body = call[1]?.body as FormData;
+    expect(body.has("model_name")).toBe(false);
+    expect(body.has("model_id")).toBe(false);
+    expect(body.has("device")).toBe(false);
+    expect(body.get("target_fps")).toBe("60000/1001");
+  });
+
+  it("sends audio_enhance when set", async () => {
+    mockFetchOnce(
+      { jobId: "vid-3", status: "queued", statusUrl: "/api/v1/video/jobs/vid-3", downloadUrl: null },
+      { status: 202 },
+    );
+
+    await createVideoJob(videoParams({ audioEnhance: "deepfilter" }));
+
+    const call = vi.mocked(fetch).mock.calls[0];
+    const body = call[1]?.body as FormData;
+    expect(body.get("audio_enhance")).toBe("deepfilter");
+  });
+});
+
+describe("getVideoJob", () => {
+  it("issues a GET to /api/v1/video/jobs/{id} and returns the typed payload", async () => {
+    const payload: VideoJobResponse = {
+      jobId: "vid-1",
+      status: "running",
+      originalFilename: "clip.mp4",
+      modelName: "realesrgan-x4plus",
+      scale: 2,
+      outputContainer: "mp4",
+      videoCodec: "libx264",
+      videoPreset: "medium",
+      crf: 17,
+      keepAudio: true,
+      fpsMultiplier: 1,
+      targetFps: null,
+      audioEnhance: null,
+      modelId: "realesrgan-x4plus",
+      device: "dml:0",
+      createdAt: "2026-01-01T00:00:00Z",
+      startedAt: "2026-01-01T00:00:01Z",
+      finishedAt: null,
+      error: null,
+      metadata: { stage: "upscaling_frames" },
+      downloadUrl: null,
+    };
+    mockFetchOnce(payload);
+
+    const result = await getVideoJob("vid-1");
+
+    expect(fetch).toHaveBeenCalledWith("/api/v1/video/jobs/vid-1", expect.objectContaining({ method: "GET" }));
     expect(result).toEqual(payload);
   });
 });
