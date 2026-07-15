@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, getDevices, getEngineInfo, getHealth, getModels } from "./api";
-import type { DevicesResponse, EngineInfoResponse, HealthResponse, ModelsResponse } from "./apiTypes";
+import { ApiError, createImageJob, getDevices, getEngineInfo, getHealth, getJob, getModels } from "./api";
+import type {
+  CreateJobResponse,
+  DevicesResponse,
+  EngineInfoResponse,
+  HealthResponse,
+  JobResponse,
+  ModelsResponse,
+} from "./apiTypes";
 
 function mockFetchOnce(body: unknown, init: ResponseInit = { status: 200 }) {
   const response = new Response(JSON.stringify(body), {
@@ -77,6 +84,78 @@ describe("getModels", () => {
     const result = await getModels();
 
     expect(fetch).toHaveBeenCalledWith("/api/v1/models", expect.objectContaining({ method: "GET" }));
+    expect(result).toEqual(payload);
+  });
+});
+
+describe("createImageJob", () => {
+  it("issues a multipart POST to /api/v1/jobs with the resolved model id in both fields", async () => {
+    const payload: CreateJobResponse = {
+      jobId: "job-1",
+      status: "queued",
+      statusUrl: "/api/v1/jobs/job-1",
+      downloadUrl: null,
+    };
+    mockFetchOnce(payload, { status: 202 });
+    const file = new File(["binary"], "photo.png", { type: "image/png" });
+
+    const result = await createImageJob({
+      file,
+      modelId: "realesrgan-x4plus",
+      device: "dml:0",
+      scale: 4,
+      outputFormat: "png",
+    });
+
+    expect(fetch).toHaveBeenCalledWith("/api/v1/jobs", expect.objectContaining({ method: "POST" }));
+    const call = vi.mocked(fetch).mock.calls[0];
+    const body = call[1]?.body as FormData;
+    expect(body.get("file")).toBe(file);
+    expect(body.get("model_name")).toBe("realesrgan-x4plus");
+    expect(body.get("model_id")).toBe("realesrgan-x4plus");
+    expect(body.get("device")).toBe("dml:0");
+    expect(body.get("scale")).toBe("4");
+    expect(body.get("output_format")).toBe("png");
+    expect(result).toEqual(payload);
+  });
+
+  it("omits the device field when no device is selected", async () => {
+    mockFetchOnce(
+      { jobId: "job-2", status: "queued", statusUrl: "/api/v1/jobs/job-2", downloadUrl: null },
+      { status: 202 },
+    );
+    const file = new File(["binary"], "photo.png", { type: "image/png" });
+
+    await createImageJob({ file, modelId: "realesrgan-x4plus", device: null, scale: 2, outputFormat: "webp" });
+
+    const call = vi.mocked(fetch).mock.calls[0];
+    const body = call[1]?.body as FormData;
+    expect(body.has("device")).toBe(false);
+  });
+});
+
+describe("getJob", () => {
+  it("issues a GET to /api/v1/jobs/{id} and returns the typed payload", async () => {
+    const payload: JobResponse = {
+      jobId: "job-1",
+      status: "running",
+      originalFilename: "photo.png",
+      modelName: "realesrgan-x4plus",
+      scale: 4,
+      outputFormat: "png",
+      modelId: "realesrgan-x4plus",
+      device: "dml:0",
+      createdAt: "2026-01-01T00:00:00Z",
+      startedAt: "2026-01-01T00:00:01Z",
+      finishedAt: null,
+      error: null,
+      downloadUrl: null,
+    };
+    mockFetchOnce(payload);
+
+    const result = await getJob("job-1");
+
+    expect(fetch).toHaveBeenCalledWith("/api/v1/jobs/job-1", expect.objectContaining({ method: "GET" }));
     expect(result).toEqual(payload);
   });
 });
