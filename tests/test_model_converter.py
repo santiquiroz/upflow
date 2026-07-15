@@ -205,6 +205,8 @@ def test_convert_to_onnx_raises_clear_error_when_onnxruntime_validation_fails(
     with pytest.raises(RuntimeError, match="simulated onnxruntime rejection"):
         convert_to_onnx(weight_path, out_onnx)
 
+    assert not out_onnx.exists()
+
 
 def test_convert_to_onnx_creates_parent_directory_for_output(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

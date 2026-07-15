@@ -270,10 +270,9 @@ class ModelInstaller:
         weight_suffix = Path(weight_file.path).suffix.lower()
         if weight_suffix == ONNX_SUFFIX:
             await self.hf_client.download(job.repo_id, weight_file.path, staging_dest, progress_cb=progress_cb)
-            arch = Path(weight_file.path).stem
             conversion_result = None
         else:
-            arch, conversion_result = await self._download_and_convert(
+            conversion_result = await self._download_and_convert(
                 job, weight_file, weight_suffix, model_id, staging_dest, progress_cb
             )
 
@@ -284,13 +283,21 @@ class ModelInstaller:
             staging_dest.unlink(missing_ok=True)
             raise
 
-        # A converted model's arch/scale come from Spandrel's own metadata
-        # (authoritative), not from the runtime-detected scale of a
-        # zero-tile forward pass -- that detection still runs above as a
-        # structural sanity check on the exported graph (1 input, 4D,
-        # float), its returned scale is just not the one that gets stored.
-        scale = conversion_result.scale if conversion_result is not None else detected_scale
-        size_bytes = staging_dest.stat().st_size if conversion_result is not None else weight_file.size
+        # A converted model's arch/scale/size come from Spandrel's own
+        # metadata + the resulting .onnx (authoritative), not from the
+        # filename stem, the HF-declared checkpoint size, or the
+        # runtime-detected scale of a zero-tile forward pass -- that
+        # detection still runs above as a structural sanity check on the
+        # exported graph (1 input, 4D, float), its returned scale is just not
+        # the one that gets stored for converted models.
+        if conversion_result is not None:
+            arch = conversion_result.arch
+            scale = conversion_result.scale
+            size_bytes = staging_dest.stat().st_size
+        else:
+            arch = Path(weight_file.path).stem
+            scale = detected_scale
+            size_bytes = weight_file.size
 
         staging_dest.replace(final_dest)
 
@@ -317,7 +324,7 @@ class ModelInstaller:
         model_id: str,
         staging_dest: Path,
         progress_cb: ProgressCallback,
-    ) -> tuple[str, ConversionResult]:
+    ) -> ConversionResult:
         # The raw .pth/.safetensors checkpoint is staged OUTSIDE the models
         # dir (settings.temp_path): it is never a registered artifact, only
         # ever an input to conversion, and is always removed below -- success
@@ -327,7 +334,7 @@ class ModelInstaller:
 
         job.status = InstallStatus.converting
         try:
-            conversion_result = await asyncio.to_thread(
+            return await asyncio.to_thread(
                 convert_to_onnx,
                 source_weight_path,
                 staging_dest,
@@ -338,8 +345,6 @@ class ModelInstaller:
             raise
         finally:
             source_weight_path.unlink(missing_ok=True)
-
-        return conversion_result.arch, conversion_result
 
     def _weight_source_path(self, model_id: str, suffix: str) -> Path:
         return self.settings.temp_path / f"{model_id}{suffix}"

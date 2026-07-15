@@ -5,9 +5,10 @@ import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import torch
+if TYPE_CHECKING:
+    import torch
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +76,13 @@ def _report(progress_cb: ConversionProgressCallback | None, stage: str) -> None:
 
 
 def _make_dummy_input() -> torch.Tensor:
+    # Lazy import: torch takes ~4-5s to import and this module is pulled in
+    # transitively at app startup (main.py -> ModelInstaller -> here), but
+    # the vast majority of sessions never convert a .pth. Keeping torch out
+    # of the module top level keeps startup sub-second -- same lazy-import
+    # discipline already applied to spandrel and onnxruntime below.
+    import torch
+
     return torch.zeros(1, 3, DUMMY_INPUT_SIZE, DUMMY_INPUT_SIZE, dtype=torch.float32)
 
 
@@ -86,6 +94,8 @@ def _load_descriptor_or_raise(weight_path: Path) -> Any:
 
 
 def _export_onnx(model: torch.nn.Module, out_onnx: Path) -> None:
+    import torch
+
     out_onnx.parent.mkdir(parents=True, exist_ok=True)
     dummy_input = _make_dummy_input()
     try:
@@ -127,13 +137,7 @@ def convert_to_onnx(
     out_onnx: Path,
     progress_cb: ConversionProgressCallback | None = None,
 ) -> ConversionResult:
-    """Converts a .pth/.safetensors SR checkpoint to a dynamic-shape ONNX graph.
-
-    Runs entirely on CPU in fp32; heavy work (Spandrel load + torch.onnx.export)
-    is synchronous by design -- callers on the asyncio event loop must wrap
-    this in `asyncio.to_thread`, mirroring how ModelInstaller already runs
-    `_validate_onnx_file`.
-    """
+    """Converts a .pth/.safetensors SR checkpoint to a dynamic-shape fp32 ONNX graph (sync; wrap in asyncio.to_thread)."""
     _report(progress_cb, STAGE_LOADING)
     descriptor = _load_descriptor_or_raise(weight_path)
     model = descriptor.model
