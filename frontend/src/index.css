@@ -68,7 +68,10 @@
   /* Texto */
   --text: #e6e8ee;
   --text-dim: #9aa1b2;
-  --text-faint: #6b7280;
+  /* #6b7280 daba ~3.67:1 sobre --surface (falla AA 4.5:1). #8a92a6 sube a
+     ~5.69:1 sobre --surface / ~5.16:1 sobre --surface-2 / ~6.15:1 sobre --bg,
+     manteniendo la jerarquia faint < dim < text. */
+  --text-faint: #8a92a6;
 
   /* Acento primario ambar */
   --accent: #f5a524;
