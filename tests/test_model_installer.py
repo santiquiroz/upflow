@@ -15,7 +15,7 @@ from app.services.model_installer import (
     _progress_percent,
     _validate_repo_id,
 )
-from app.services.model_registry import ModelKind, ModelRegistry, ModelStatus
+from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry, ModelStatus
 
 # ---------------------------------------------------------------------------
 # SP1 Task 5 - model_installer: installs .onnx models straight from a
@@ -455,6 +455,67 @@ async def test_delete_removes_installed_onnx_model(tmp_path: Path, monkeypatch: 
     await installer.delete(job.model_id)
 
     assert registry.get(job.model_id) is None
+
+
+async def test_delete_removes_onnx_file_from_disk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    installer, registry, _, settings = make_installer(tmp_path, ONNX_FILES)
+    monkeypatch.setattr(installer, "_create_validation_session", lambda path: FakeValidSession())
+    install_id = await installer.install_from_hf("org/removable")
+    await installer._process_next()
+    job = installer.status(install_id)
+    assert job is not None and job.model_id is not None
+    entry = registry.get(job.model_id)
+    assert entry is not None
+    onnx_path = settings.models_path / entry.file_path
+    assert onnx_path.exists()
+
+    await installer.delete(job.model_id)
+
+    assert not onnx_path.exists()
+    assert registry.get(job.model_id) is None
+
+
+async def test_delete_builtin_does_not_touch_any_onnx_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installer, registry, _, settings = make_installer(tmp_path, ONNX_FILES)
+    monkeypatch.setattr(installer, "_create_validation_session", lambda path: FakeValidSession())
+    install_id = await installer.install_from_hf("org/keepme")
+    await installer._process_next()
+    job = installer.status(install_id)
+    assert job is not None
+    onnx_path = settings.models_path / registry.get(job.model_id).file_path
+    assert onnx_path.exists()
+
+    with pytest.raises(ModelProtectedError):
+        await installer.delete("realesrgan-x4plus")
+
+    assert onnx_path.exists(), "deleting a builtin must not touch other models' files"
+
+
+async def test_delete_does_not_remove_file_outside_models_dir(tmp_path: Path) -> None:
+    # A manipulated/corrupt entry whose file_path escapes the models dir must
+    # never let delete() unlink an arbitrary file on disk. The registry entry
+    # is still removed; only the out-of-dir file deletion is refused.
+    installer, registry, _, settings = make_installer(tmp_path, ONNX_FILES)
+    outside_file = tmp_path / "outside.onnx"
+    outside_file.write_bytes(b"do-not-delete-me")
+    registry.register(
+        ModelEntry(
+            id="evil-entry",
+            name="evil",
+            kind=ModelKind.onnx,
+            source="https://huggingface.co/evil/evil",
+            size_bytes=10,
+            scale=4,
+            file_path=str(outside_file),
+        )
+    )
+
+    await installer.delete("evil-entry")
+
+    assert outside_file.exists(), "delete() must not unlink files outside the models dir"
+    assert registry.get("evil-entry") is None
 
 
 # ---------------------------------------------------------------------------

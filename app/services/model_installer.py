@@ -178,12 +178,35 @@ class ModelInstaller:
         return self._jobs.get(install_id)
 
     async def delete(self, model_id: str) -> None:
+        # Capture the entry (and its file_path) BEFORE removing it: the
+        # builtin/unknown guards raise before touching disk, and the on-disk
+        # file is only unlinked after registry.remove() succeeds, so a failed
+        # remove never leaves the registry and disk inconsistent.
         entry = self.registry.get(model_id)
         if entry is None:
             raise ModelNotFoundError(f"Unknown model id: {model_id!r}")
         if entry.kind == ModelKind.builtin_ncnn:
             raise ModelProtectedError(f"Cannot remove builtin model: {model_id!r}")
         await asyncio.to_thread(self.registry.remove, model_id)
+        await asyncio.to_thread(self._delete_model_file, entry)
+
+    def _delete_model_file(self, entry: ModelEntry) -> None:
+        # Only ever deletes an onnx entry's own file, and only when it
+        # resolves INSIDE settings.models_path -- guards a manipulated/corrupt
+        # file_path (traversal, absolute path) from unlinking arbitrary files.
+        if entry.kind != ModelKind.onnx or entry.file_path is None:
+            return
+        models_root = self.settings.models_path.resolve()
+        target = (self.settings.models_path / entry.file_path).resolve()
+        if not target.is_relative_to(models_root):
+            logger.warning("Refusing to delete model file outside models dir: %s", target)
+            return
+        try:
+            target.unlink(missing_ok=True)
+        except OSError:
+            # Windows can hold a lock on a file still mapped by a warm ORT
+            # session; log and move on rather than failing the delete.
+            logger.exception("Failed to delete model file %s", target)
 
     async def _worker(self) -> None:
         while True:
