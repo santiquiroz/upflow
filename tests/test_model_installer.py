@@ -539,6 +539,81 @@ async def test_install_marks_error_when_repo_files_fails(tmp_path: Path) -> None
 
 
 # ---------------------------------------------------------------------------
+# M1 fast-follow: promote (staging_dest.replace(final_dest)) retries a
+# transient Windows PermissionError instead of failing the whole install --
+# this was the source of the flake noted in the SP1 Task 8 smoke report (an
+# ORT validation session or a warm cached session on reinstall can hold the
+# file handle a moment longer than the replace() call).
+# ---------------------------------------------------------------------------
+
+
+def _patch_staging_replace(monkeypatch: pytest.MonkeyPatch, *, fail_times: int | None) -> list[int]:
+    """Patches Path.replace so only staging (`*.onnx.validating`) targets are
+    affected -- ModelRegistry._persist's own tmp-then-replace write must keep
+    working normally, or these tests would spuriously fail on registry
+    persistence instead of exercising the promote retry path.
+    """
+    original_replace = Path.replace
+    call_count = [0]
+
+    def fake_replace(self: Path, target: Path) -> Path:
+        if self.name.endswith(".onnx.validating"):
+            call_count[0] += 1
+            if fail_times is None or call_count[0] <= fail_times:
+                raise PermissionError("[WinError 5] Access is denied")
+        return original_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", fake_replace)
+    return call_count
+
+
+async def test_install_promote_retries_permission_error_then_succeeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installer, registry, _, settings = make_installer(tmp_path, ONNX_FILES)
+    monkeypatch.setattr(installer, "_create_validation_session", lambda path: FakeValidSession(scale=2))
+    call_count = _patch_staging_replace(monkeypatch, fail_times=2)
+
+    install_id = await installer.install_from_hf("org/flaky-replace")
+    await installer._process_next()
+
+    job = installer.status(install_id)
+    assert job is not None
+    assert job.status == InstallStatus.installed
+    assert job.error is None
+    assert call_count[0] == 3, "expected 2 failures then a successful 3rd attempt"
+
+    entry = registry.get(job.model_id)
+    assert entry is not None
+    onnx_path = settings.models_path / entry.file_path
+    assert onnx_path.exists()
+    staging_path = onnx_path.with_name(f"{onnx_path.name}.validating")
+    assert not staging_path.exists()
+
+
+async def test_install_promote_surfaces_clean_error_when_always_locked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installer, registry, _, settings = make_installer(tmp_path, ONNX_FILES)
+    monkeypatch.setattr(installer, "_create_validation_session", lambda path: FakeValidSession(scale=2))
+    _patch_staging_replace(monkeypatch, fail_times=None)
+
+    install_id = await installer.install_from_hf("org/permanently-locked")
+    await installer._process_next()
+
+    job = installer.status(install_id)
+    assert job is not None
+    assert job.status == InstallStatus.error
+    assert job.error is not None
+    assert "locked" in job.error.lower() or "permission" in job.error.lower()
+    assert registry.get("org--permanently-locked") is None
+
+    staging_path = settings.models_path / "onnx" / "org--permanently-locked.onnx.validating"
+    assert not staging_path.exists(), "staging file must be cleaned up after retries are exhausted"
+    assert not (settings.models_path / "onnx" / "org--permanently-locked.onnx").exists()
+
+
+# ---------------------------------------------------------------------------
 # status()
 # ---------------------------------------------------------------------------
 

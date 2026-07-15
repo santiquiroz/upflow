@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import logging
 import re
 from collections.abc import Callable
@@ -70,6 +71,13 @@ REPO_ID_PATTERN = re.compile(
 
 VALIDATION_TILE_SIZE = 32
 ONNX_SUFFIX = ".onnx"
+
+# Windows can keep a brief handle on the just-validated .onnx file (ORT's
+# validation session, or a warm cached session from a previous install of
+# the same model_id) after the InferenceSession object is logically dead --
+# _validate_onnx_file forces `del` + `gc.collect()` to drop it eagerly, and
+# this backoff absorbs whatever race remains before failing the install.
+PROMOTE_RETRY_DELAYS_SECONDS = (0.1, 0.2, 0.4)
 
 
 class InstallStatus(str, Enum):
@@ -299,7 +307,7 @@ class ModelInstaller:
             scale = detected_scale
             size_bytes = weight_file.size
 
-        staging_dest.replace(final_dest)
+        await self._promote_staging_file(staging_dest, final_dest)
 
         entry = ModelEntry(
             id=model_id,
@@ -362,15 +370,57 @@ class ModelInstaller:
     def _relative_onnx_path(model_id: str) -> str:
         return f"onnx/{model_id}{ONNX_SUFFIX}"
 
+    async def _promote_staging_file(self, staging_dest: Path, final_dest: Path) -> None:
+        """Renames the validated staging file onto final_dest, retrying a
+        transient Windows PermissionError with backoff before giving up.
+
+        A validation InferenceSession (or, on reinstall, a warm cached
+        session still holding the previous final_dest open) can keep a file
+        handle alive for a moment after it is logically unreferenced --
+        `_validate_onnx_file` already forces `del` + `gc.collect()` to drop
+        it eagerly, this retry absorbs whatever race remains.
+        """
+        attempts = len(PROMOTE_RETRY_DELAYS_SECONDS) + 1
+        for attempt in range(attempts):
+            try:
+                staging_dest.replace(final_dest)
+                return
+            except PermissionError as exc:
+                is_last_attempt = attempt == attempts - 1
+                if is_last_attempt:
+                    staging_dest.unlink(missing_ok=True)
+                    raise RuntimeError(
+                        f"Could not install model: {final_dest.name} is locked by another "
+                        "process (Windows file handle not yet released). Try again."
+                    ) from exc
+                logger.warning(
+                    "PermissionError promoting %s -> %s (attempt %d/%d), retrying: %s",
+                    staging_dest,
+                    final_dest,
+                    attempt + 1,
+                    attempts,
+                    exc,
+                )
+                await asyncio.sleep(PROMOTE_RETRY_DELAYS_SECONDS[attempt])
+
     def _validate_onnx_file(self, path: Path) -> int:
         session = self._create_validation_session(path)
-        input_info = _require_single_input(session.get_inputs())
-        _require_4d_float_input(input_info)
-        output_info = session.get_outputs()[0]
-        batch = _to_nchw_float(_make_validation_tile())
-        result = session.run([output_info.name], {input_info.name: batch})[0]
-        output_hwc = _from_nchw_float(result)
-        return _detect_scale(VALIDATION_TILE_SIZE, VALIDATION_TILE_SIZE, output_hwc)
+        try:
+            input_info = _require_single_input(session.get_inputs())
+            _require_4d_float_input(input_info)
+            output_info = session.get_outputs()[0]
+            batch = _to_nchw_float(_make_validation_tile())
+            result = session.run([output_info.name], {input_info.name: batch})[0]
+            output_hwc = _from_nchw_float(result)
+            return _detect_scale(VALIDATION_TILE_SIZE, VALIDATION_TILE_SIZE, output_hwc)
+        finally:
+            # Drop the session eagerly instead of relying on refcounting at
+            # function exit: an ORT session can be entangled in an internal
+            # reference cycle that defers its __del__ (and the file handle it
+            # holds) to the next gc pass, which on Windows can still be
+            # holding final_dest.replace()'s target open.
+            del session
+            gc.collect()
 
     def _create_validation_session(self, path: Path) -> Any:
         # Monkeypatchable seam (mirrors OnnxUpscaler._create_session): unit
