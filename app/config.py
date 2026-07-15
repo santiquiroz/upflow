@@ -224,6 +224,8 @@ class Settings(BaseSettings):
     hf_token: str | None = Field(default=None, alias="HF_TOKEN")
     max_model_download_mb: int = Field(default=2048, alias="MAX_MODEL_DOWNLOAD_MB")
 
+    onnx_tile_size: int = Field(default=256, alias="ONNX_TILE_SIZE")
+
     @model_validator(mode="after")
     def _apply_default_allowed_origins(self) -> "Settings":
         """Fills ALLOWED_ORIGINS from app_host/app_port when the caller left it unset.
