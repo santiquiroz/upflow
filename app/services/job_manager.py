@@ -24,6 +24,7 @@ class ModelResolution:
     model_id: str
     engine_model_name: str
     kind: ModelKind
+    scale: int
 
 
 class JobManager:
@@ -95,7 +96,7 @@ class JobManager:
             source_path=source_path,
             original_filename=original_filename,
             model_name=resolution.engine_model_name,
-            scale=scale,
+            scale=resolution.scale,
             output_format=output_format,
             model_id=resolution.model_id,
             device=device,
@@ -138,7 +139,9 @@ class JobManager:
                 f"Device 'cpu' is not supported for builtin model {model_id!r} (requires a Vulkan GPU device)"
             )
         engine_model_name = self.settings.resolve_engine_model_name(model_id, scale)
-        return ModelResolution(model_id=model_id, engine_model_name=engine_model_name, kind=ModelKind.builtin_ncnn)
+        return ModelResolution(
+            model_id=model_id, engine_model_name=engine_model_name, kind=ModelKind.builtin_ncnn, scale=scale
+        )
 
     def _resolve_onnx_model(self, model_id: str) -> ModelResolution:
         if self.registry is None:
@@ -148,7 +151,12 @@ class JobManager:
             raise ValueError(f"Unknown model id: {model_id!r}")
         if entry.status != ModelStatus.installed:
             raise ValueError(f"Model {model_id!r} is not ready for inference (status={entry.status.value})")
-        return ModelResolution(model_id=model_id, engine_model_name=model_id, kind=ModelKind.onnx)
+        # The requested scale is only used to pick a builtin engine variant;
+        # an onnx model's real up-ratio is whatever its weights produce
+        # (entry.scale, detected at install time), so it must win here --
+        # otherwise a scale/model mismatch silently corrupts derived metadata
+        # like video outputWidth/outputHeight (computed from job.scale).
+        return ModelResolution(model_id=model_id, engine_model_name=model_id, kind=ModelKind.onnx, scale=entry.scale)
 
     def _select_engine(self, job: UpscaleJob) -> UpscaleEngine:
         if job.model_id is not None and self.registry is not None:

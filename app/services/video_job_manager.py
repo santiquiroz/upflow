@@ -25,6 +25,7 @@ class VideoModelResolution:
     model_id: str
     engine_model_name: str
     kind: ModelKind
+    scale: int
 
 
 class VideoJobManager:
@@ -109,7 +110,7 @@ class VideoJobManager:
             source_path=source_path,
             original_filename=original_filename,
             model_name=resolution.engine_model_name,
-            scale=scale,
+            scale=resolution.scale,
             output_container=output_container,
             video_codec=video_codec,
             video_preset=video_preset,
@@ -162,7 +163,7 @@ class VideoJobManager:
             )
         engine_model_name = self.settings.resolve_engine_model_name(model_id, scale)
         return VideoModelResolution(
-            model_id=model_id, engine_model_name=engine_model_name, kind=ModelKind.builtin_ncnn
+            model_id=model_id, engine_model_name=engine_model_name, kind=ModelKind.builtin_ncnn, scale=scale
         )
 
     def _resolve_onnx_model(self, model_id: str) -> VideoModelResolution:
@@ -173,7 +174,13 @@ class VideoJobManager:
             raise ValueError(f"Unknown model id: {model_id!r}")
         if entry.status != ModelStatus.installed:
             raise ValueError(f"Model {model_id!r} is not ready for inference (status={entry.status.value})")
-        return VideoModelResolution(model_id=model_id, engine_model_name=model_id, kind=ModelKind.onnx)
+        # See JobManager._resolve_onnx_model: the model's own registered
+        # scale must win over the requested one, or derived metadata
+        # (outputWidth/outputHeight below, computed from job.scale) goes
+        # wrong for a mismatched request/model scale.
+        return VideoModelResolution(
+            model_id=model_id, engine_model_name=model_id, kind=ModelKind.onnx, scale=entry.scale
+        )
 
     def _validate_request(
         self,

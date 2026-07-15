@@ -628,6 +628,140 @@ async def test_create_video_job_route_routes_explicit_model_id_to_onnx_run_frame
 
 
 # ---------------------------------------------------------------------------
+# M3 fast-follow: an onnx model's registered scale (the real up-ratio the
+# weights produce) must win over the requested scale on the resolved job --
+# a mismatched request/model scale silently produced wrong output metadata
+# (video outputWidth/outputHeight is derived from job.scale).
+# ---------------------------------------------------------------------------
+
+
+async def test_job_manager_onnx_resolution_overrides_requested_scale_with_entry_scale(
+    tmp_path: Path,
+) -> None:
+    settings = make_settings(tmp_path)
+    registry = ModelRegistry(settings)
+    registry.register(make_onnx_entry(id="fake-onnx-2x", scale=2))
+    manager = JobManager(
+        settings,
+        FakeNcnnEngine(),
+        asyncio.Semaphore(1),
+        onnx_engine=FakeOnnxEngine(),
+        registry=registry,
+        devices=FakeDevicesService(),
+    )
+    source_path = settings.uploads_path / "photo.png"
+    write_source_image(source_path)
+
+    job = await manager.create_job(
+        source_path=source_path,
+        original_filename="photo.png",
+        model_name="realesrgan-x4plus",
+        model_id="fake-onnx-2x",
+        scale=4,
+        output_format="png",
+        device="cpu",
+    )
+
+    assert job.scale == 2, "job.scale must reflect the onnx model's registered scale, not the request"
+
+
+async def test_job_manager_builtin_resolution_keeps_requested_scale(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    manager = JobManager(settings, FakeNcnnEngine(), asyncio.Semaphore(1), devices=FakeDevicesService())
+    source_path = settings.uploads_path / "photo.png"
+    write_source_image(source_path)
+
+    job = await manager.create_job(
+        source_path=source_path,
+        original_filename="photo.png",
+        model_name="realesrgan-x4plus",
+        scale=4,
+        output_format="png",
+        device="dml:0",
+    )
+
+    assert job.scale == 4
+
+
+async def test_video_job_manager_onnx_resolution_overrides_requested_scale_with_entry_scale(
+    tmp_path: Path,
+) -> None:
+    settings = make_settings(tmp_path)
+    registry = ModelRegistry(settings)
+    registry.register(make_onnx_entry(id="fake-onnx-2x", scale=2))
+    manager = VideoJobManager(
+        settings,
+        FakeSimpleVideoUpscaler(),
+        FakeVideoMediaTools(),
+        asyncio.Semaphore(1),
+        registry=registry,
+        devices=FakeDevicesService(),
+    )
+    source_path = settings.uploads_path / "clip.mp4"
+    write_source_video(source_path)
+
+    job = await manager.create_job(
+        source_path=source_path,
+        original_filename="clip.mp4",
+        model_name="realesr-animevideov3-x2",
+        model_id="fake-onnx-2x",
+        scale=4,
+        output_container="mp4",
+        video_codec="libx264",
+        video_preset="medium",
+        crf=18,
+        keep_audio=False,
+        device="cpu",
+    )
+
+    assert job.scale == 2, "job.scale must reflect the onnx model's registered scale, not the request"
+
+
+async def test_video_upscaler_onnx_output_metadata_uses_entry_scale_not_requested_scale(
+    tmp_path: Path,
+) -> None:
+    # End-to-end: job requests scale=4 for an onnx model whose registered
+    # scale is 2 -- outputWidth/outputHeight (derived from job.scale inside
+    # VideoUpscaler.run) must reflect 2x, matching what run_frames actually
+    # produced, not the mismatched request.
+    settings = make_settings(tmp_path)
+    registry = ModelRegistry(settings)
+    registry.register(make_onnx_entry(id="fake-onnx-2x", scale=2))
+    events: list[str] = []
+    onnx_engine = FakeOnnxRunFramesEngine()
+    upscaler = make_video_upscaler(settings, events, registry, onnx_engine)
+    manager = VideoJobManager(
+        settings,
+        upscaler,
+        FakeVideoMediaTools(),
+        asyncio.Semaphore(1),
+        registry=registry,
+        devices=FakeDevicesService(),
+    )
+    source_path = settings.uploads_path / "clip.mp4"
+    write_source_video(source_path)
+
+    job = await manager.create_job(
+        source_path=source_path,
+        original_filename="clip.mp4",
+        model_name="realesr-animevideov3-x2",
+        model_id="fake-onnx-2x",
+        scale=4,
+        output_container="mp4",
+        video_codec="libx264",
+        video_preset="medium",
+        crf=18,
+        keep_audio=False,
+        device="cpu",
+    )
+    await upscaler.run(job)
+
+    assert job.scale == 2
+    assert job.metadata["outputWidth"] == job.metadata["sourceWidth"] * 2
+    assert job.metadata["outputHeight"] == job.metadata["sourceHeight"] * 2
+
+
+# ---------------------------------------------------------------------------
 # Video: VideoJobManager model resolution / validation
 # ---------------------------------------------------------------------------
 
