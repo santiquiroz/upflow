@@ -91,6 +91,8 @@ Abrí **http://127.0.0.1:8090**.
 
 Todos los binarios de `vendor/` y todo lo de `runtime/` (uploads, outputs, temp, video-work) están en `.gitignore` — se generan localmente con los scripts de arriba y en tiempo de ejecución, nunca se commitean.
 
+> **Instalación más pesada de lo habitual:** el paso 1 (`pip install -e .`) instala también `onnxruntime-directml`, `torch` (CPU-only), `spandrel` y `onnx` — dependencias del módulo de modelos HF (ver sección "Modelos" abajo). Sumalas y son ~2-3 GB extra, la mayoría por `torch`. No hace falta ningún paso manual adicional, solo tener espacio en disco y paciencia la primera vez.
+
 ## Cómo usar
 
 ### Web UI
@@ -108,6 +110,11 @@ Todos los endpoints viven bajo `/api/v1`. Los campos de formulario (subida) van 
 | `GET` | `/api/v1/health` | Healthcheck: motor activo, `gpuConcurrency` y profundidad de ambas colas |
 | `GET` | `/api/v1/engine` | Estado del motor, si FFmpeg está disponible, catálogo de modelos y de perfiles de video |
 | `GET` | `/api/v1/devices` | Dispositivos de cómputo disponibles (`cpu`, `dml:0`, `dml:1`...) y `defaultDeviceId` efectivo |
+| `GET` | `/api/v1/models` | Catálogo completo de modelos instalados (builtin + los instalados desde Hugging Face) |
+| `GET` | `/api/v1/models/search?q=` | Busca modelos de super-resolución en Hugging Face Hub |
+| `POST` | `/api/v1/models/install` | Instala un modelo desde HF por `repo_id` (`202`, devuelve `install_id`) |
+| `GET` | `/api/v1/models/install/{install_id}` | Estado de una instalación en curso (`pending`/`downloading`/`converting`/`done`/`error`) |
+| `DELETE` | `/api/v1/models/{model_id}` | Borra un modelo instalado (`204`; `403` si es builtin, `404` si no existe) |
 | `POST` | `/api/v1/jobs` | Crea un job de imagen (`202`) |
 | `GET` | `/api/v1/jobs/{job_id}` | Estado de un job de imagen (`404` si no existe) |
 | `GET` | `/api/v1/jobs/{job_id}/download` | Descarga el resultado (`404` si no existe, `409` si aún no terminó) |
@@ -115,7 +122,7 @@ Todos los endpoints viven bajo `/api/v1`. Los campos de formulario (subida) van 
 | `GET` | `/api/v1/video/jobs/{job_id}` | Estado de un job de video, incluye `metadata` (stage, fps, dimensiones, `outputFps`) |
 | `GET` | `/api/v1/video/jobs/{job_id}/download` | Descarga el video resultante (`404`/`409` igual que arriba) |
 
-**Crear un job de imagen** — campos de formulario: `file` (requerido), `model_name` (default `realesrgan-x4plus`), `scale` (default `4`), `output_format` (`png`/`jpg`/`jpeg`/`webp`, default `png`):
+**Crear un job de imagen** — campos de formulario: `file` (requerido), `model_name` (default `realesrgan-x4plus`, ignorado si se manda `model_id`), `model_id` (opcional: id de un modelo ONNX instalado desde HF, ver sección Modelos), `device` (opcional: `cpu`/`dml:N`, ver sección Dispositivos; omitido = `DEFAULT_DEVICE`), `scale` (default `4`), `output_format` (`png`/`jpg`/`jpeg`/`webp`, default `png`):
 
 ```bash
 curl -X POST http://127.0.0.1:8090/api/v1/jobs \
@@ -123,9 +130,16 @@ curl -X POST http://127.0.0.1:8090/api/v1/jobs \
   -F "model_name=realesrgan-x4plus-anime" \
   -F "scale=4" \
   -F "output_format=png"
+
+# con un modelo ONNX instalado desde Hugging Face, en la GPU dml:0
+curl -X POST http://127.0.0.1:8090/api/v1/jobs \
+  -F "file=@input.png" \
+  -F "model_id=sceneworks--real-esrgan-onnx" \
+  -F "device=dml:0" \
+  -F "output_format=png"
 ```
 
-**Crear un job de video** — campos de formulario: `file` (requerido), `profile_key` (default `anime-balanced-2x`), y overrides opcionales del perfil: `model_name`, `scale`, `output_container` (`mp4`/`mkv`), `video_codec` (`libx264`/`libx265`), `video_preset` (`medium`/`slow`/`veryslow`), `crf` (`10`-`28`), `keep_audio`, `fps_multiplier` (`1` = sin boost, o uno de `ALLOWED_FPS_MULTIPLIERS`), `audio_enhance` (`deepfilter`/`rnnoise`, omitido = sin mejora; requiere `keep_audio=true` y `ENABLE_AUDIO_ENHANCE=true` — ver "Cómo activar la mejora de audio" abajo):
+**Crear un job de video** — campos de formulario: `file` (requerido), `profile_key` (default `anime-balanced-2x`), y overrides opcionales del perfil: `model_name`, `model_id` (modelo ONNX instalado desde HF, ver sección Modelos), `device` (`cpu`/`dml:N`, ver sección Dispositivos), `scale`, `output_container` (`mp4`/`mkv`), `video_codec` (`libx264`/`libx265`), `video_preset` (`medium`/`slow`/`veryslow`), `crf` (`10`-`28`), `keep_audio`, `fps_multiplier` (`1` = sin boost, o uno de `ALLOWED_FPS_MULTIPLIERS`), `audio_enhance` (`deepfilter`/`rnnoise`, omitido = sin mejora; requiere `keep_audio=true` y `ENABLE_AUDIO_ENHANCE=true` — ver "Cómo activar la mejora de audio" abajo):
 
 ```bash
 curl -X POST http://127.0.0.1:8090/api/v1/video/jobs \
@@ -150,12 +164,44 @@ curl -OJ http://127.0.0.1:8090/api/v1/video/jobs/<job_id>/download
 
 ## Modelos
 
+### Modelos builtin (NCNN Vulkan)
+
 | Modelo | Ideal para | Escalas |
 |---|---|---|
 | `realesrgan-x4plus` | Fotos, imágenes generales | 4× |
 | `realesrgan-x4plus-anime` | Anime fijo, ilustración, line art | 4× |
 | `realesr-animevideov3-x2` / `-x3` / `-x4` | Fotogramas de video anime | 2× / 3× / 4× |
 | `realesr-animevideov3` | Preset automático (resuelve a x2/x3/x4 según la escala pedida) | 2×–4× |
+
+Estos modelos vienen empaquetados con el motor (`scripts/download-realesrgan.ps1`), corren siempre sobre Vulkan y **no aceptan `device=cpu`** (ver sección Dispositivos).
+
+### Instalar modelos desde Hugging Face
+
+Además del catálogo builtin, Upflow puede instalar cualquier modelo de super-resolución publicado en Hugging Face y correrlo con el motor ONNX Runtime + DirectML:
+
+1. Buscar en el buscador de la web UI (sección Modelos) o con `GET /api/v1/models/search?q=<texto>` — pega directo a la Hub API de Hugging Face.
+2. Instalar con `POST /api/v1/models/install` (`{"repo_id": "org/nombre-repo"}`) — devuelve un `install_id` para hacer polling en `GET /api/v1/models/install/{install_id}` hasta `status=done`.
+3. Una vez instalado, el modelo aparece en `GET /api/v1/models` con `kind=onnx` y puede pasarse como `model_id` al crear un job de imagen o video.
+
+**Formatos soportados:**
+
+- **`.onnx` directo** — se copia tal cual a `MODELS_DIR`, sin conversión. Camino rápido (ej. `SceneWorks/real-esrgan-onnx`).
+- **`.pth` / `.safetensors` (arquitecturas comunitarias tipo ESRGAN/Compact/SRVGG)** — se detecta la arquitectura vía [Spandrel](https://github.com/chaiNNer-org/spandrel) y se convierte a ONNX automáticamente con `torch.onnx.export` antes de dejarlo instalado. Requiere las dependencias `torch`/`spandrel`/`onnx` (ver "Instalación paso a paso" — se instalan solas con `pip install -e .`).
+
+Si el repo de HF no expone un archivo compatible, el estado del install job pasa a `error` con el detalle.
+
+Un modelo instalado puede borrarse con `DELETE /api/v1/models/{model_id}` (los 6 builtins están protegidos: devuelve `403`). El límite de tamaño de descarga es `MAX_MODEL_DOWNLOAD_MB` (default 2048 MB).
+
+## Dispositivos
+
+`GET /api/v1/devices` enumera los dispositivos de cómputo disponibles para el motor ONNX/DirectML:
+
+- **`cpu`** — siempre presente. Válido **solo** para modelos ONNX instalados desde Hugging Face (`kind=onnx`). **Inválido para los 6 modelos builtin** (`kind=builtin-ncnn`): corren siempre sobre Vulkan y pedir `device=cpu` con un `model_id` builtin devuelve `400` ("Device 'cpu' is not supported for builtin model ... (requires a Vulkan GPU device)").
+- **`dml:N`** — una GPU DirectML-capable, `N` = índice de adaptador DXGI (0, 1, 2...). El nombre real de cada GPU viene de `IDXGIFactory1::EnumAdapters1` (Windows, vía `ctypes`, sin dependencia extra) y `N` es exactamente el `device_id` que se le pasa a `DmlExecutionProvider` de onnxruntime — mapeo verificado empíricamente (ver `.superpowers/sdd/sp1-task-8-smoke-report.md`).
+
+Es normal que una misma GPU física aparezca más de una vez (ej. `dml:0` y `dml:2` apuntando ambos a la misma dGPU) en máquinas con configuraciones de gráficos híbridos: Windows/DXGI expone LUIDs de adaptador distintos para el mismo silicio. Cada índice sigue siendo un `device_id` válido y funcional para DirectML — no es un bug, es comportamiento real de DXGI.
+
+El dispositivo por defecto se controla con `DEFAULT_DEVICE` en `.env` (default `dml:0`); si el dispositivo configurado no está disponible, cae automáticamente a `cpu`.
 
 ## Perfiles de video
 
@@ -209,6 +255,11 @@ Todas las variables leen de `.env` (ver [`.env.example`](.env.example) con los d
 | `DEEPFILTER_BINARY` | `vendor/deepfilternet/deep-filter.exe` | Ruta al binario CLI de DeepFilterNet |
 | `RNNOISE_MODEL` | `vendor/deepfilternet/models/sh.rnnn` | Ruta al modelo `.rnnn` usado por el filtro `arnndn` de FFmpeg |
 | `ENABLE_AUDIO_ENHANCE` | `false` | Habilita la mejora de audio (`audio_enhance=deepfilter\|rnnoise`); requiere haber corrido `download-deepfilternet.ps1` |
+| `DEFAULT_DEVICE` | `dml:0` | Dispositivo preferido (`cpu`/`dml:N`) para el motor ONNX/DirectML; cae a `cpu` si no está disponible (ver sección Dispositivos) |
+| `MODELS_DIR` | `models` | Carpeta donde se guardan los modelos ONNX instalados desde Hugging Face (relativa a la raíz del proyecto) |
+| `HF_TOKEN` | *(vacío)* | Token de Hugging Face opcional, para buscar/descargar modelos privados o evitar rate limiting anónimo |
+| `MAX_MODEL_DOWNLOAD_MB` | `2048` | Tamaño máximo permitido para un archivo de modelo descargado desde HF (MB) |
+| `ONNX_TILE_SIZE` | `256` | Tamaño de tile (px) para inferencia ONNX por partes, con blend de 16px de solape; `0` desactiva el tiling (imagen completa de una pasada) |
 
 ## Cómo activar el FPS boost (RIFE)
 
@@ -277,11 +328,12 @@ El motor de upscaling vive detrás de una interfaz `UpscaleEngine` (`app/service
 - [x] 🌊 FPS boost con RIFE NCNN Vulkan (2×/3×/4×, activable por config)
 - [x] 🧹 Limpieza automática de disco + retención de jobs (TTL)
 - [x] 🔊 Mejora de audio con IA (DeepFilterNet / RNNoise) — denoise como etapa opcional del pipeline, activable por config
+- [x] 🧠 Modelos HF + selección de dispositivo — instalar cualquier modelo de super-resolución de Hugging Face (`.onnx` directo o `.pth`/`.safetensors` vía conversión Spandrel) y elegir `cpu`/`dml:N` por job
 - [ ] 📝 Subtítulos con IA (whisper.cpp) — generación + traducción, muxeados como pista blanda
 - [ ] 🎚️ Slider calidad ↔ velocidad (presets Fast/Balanced/Best mapeados a los knobs reales de cada motor)
 - [ ] 📦 Modo batch por temporada (subida múltiple, progreso agregado)
 
-**Fuera de alcance:** interpolación en tiempo real estilo Lossless Scaling. Requiere captura del swapchain DirectX en vivo, arquitectónicamente incompatible con una app de archivos FastAPI/Python. Para eso, usá [Lossless Scaling](https://store.steampowered.com/app/993090/Lossless_Scaling/) o [Magpie](https://github.com/Blinue/Magpie) (open source) — Upflow se mantiene como pipeline offline de máxima calidad.
+**Fuera de alcance (por ahora):** interpolación en tiempo real estilo Lossless Scaling. Requiere captura del swapchain DirectX en vivo, arquitectónicamente incompatible con una app de archivos FastAPI/Python en el proceso principal. Diseño de Fase 7 (fork/vendor de Magpie como proceso helper separado, sin implementar todavía) documentado en **[`docs/REALTIME_MODULE.md`](docs/REALTIME_MODULE.md)**. Hasta que eso exista, usá [Lossless Scaling](https://store.steampowered.com/app/993090/Lossless_Scaling/) o [Magpie](https://github.com/Blinue/Magpie) (open source) — Upflow se mantiene como pipeline offline de máxima calidad.
 
 Ver el plan de ingeniería completo en **[`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md)** y la investigación detrás de estos ítems en **[`docs/RESEARCH_ANIME_SUITE.md`](docs/RESEARCH_ANIME_SUITE.md)**.
 
