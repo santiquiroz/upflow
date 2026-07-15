@@ -8,7 +8,7 @@ import pytest
 from PIL import Image
 from starlette.datastructures import UploadFile
 
-from app.api.routes import create_job, job_to_response, video_job_to_response
+from app.api.routes import create_job, create_video_job, job_to_response, video_job_to_response
 from app.config import Settings
 from app.models import JobStatus, UpscaleJob, VideoUpscaleJob
 from app.services.engines.base import UpscaleEngine
@@ -550,6 +550,81 @@ async def test_video_upscaler_routes_onnx_model_to_run_frames(tmp_path: Path) ->
     assert model_id_arg == "fake-onnx-2x"
     assert device_arg == "cpu"
     assert output_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# Video: route-level wiring end to end (create_video_job -> VideoJobManager ->
+# VideoUpscaler -> run_frames). Analogous to the image
+# test_create_job_route_routes_explicit_model_id_to_onnx_engine, but this one
+# runs the worker so it exercises the subtlety unique to video: the route's
+# resolve_video_job_fields computes model_name from the profile default
+# (realesr-animevideov3-x2, a builtin) INDEPENDENTLY of model_id, and only
+# VideoJobManager.create_job's own resolution overrides it with the onnx
+# model_id. A regression there would silently route to the ncnn subprocess
+# (or 400 on cpu), which the assertions below catch RED.
+# ---------------------------------------------------------------------------
+
+
+async def test_create_video_job_route_routes_explicit_model_id_to_onnx_run_frames(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    storage = StorageService(settings)
+    registry = ModelRegistry(settings)
+    registry.register(make_onnx_entry())
+    events: list[str] = []
+    onnx_engine = FakeOnnxRunFramesEngine()
+    upscaler = make_video_upscaler(settings, events, registry, onnx_engine)
+    video_jobs = VideoJobManager(
+        settings,
+        upscaler,
+        FakeVideoMediaTools(),
+        asyncio.Semaphore(1),
+        registry=registry,
+        devices=FakeDevicesService(),
+    )
+
+    await video_jobs.start()
+    try:
+        response = await create_video_job(
+            request=None,
+            file=make_upload("clip.mp4", b"fake-video-bytes"),
+            profile_key="anime-balanced-2x",
+            model_name=None,
+            scale=None,
+            output_container=None,
+            video_codec=None,
+            video_preset=None,
+            crf=None,
+            keep_audio=None,
+            fps_multiplier=None,
+            target_fps=None,
+            audio_enhance=None,
+            model_id="fake-onnx-2x",
+            device="cpu",
+            video_jobs=video_jobs,
+            storage=storage,
+            settings=settings,
+            devices=FakeDevicesService(),
+        )
+        await video_jobs.queue.join()
+    finally:
+        await video_jobs.stop()
+
+    job = video_jobs.get_job(response.job_id)
+    assert job is not None
+    assert job.status == JobStatus.completed
+    assert job.model_id == "fake-onnx-2x"
+    assert job.device == "cpu"
+    # Routed to onnx run_frames, NOT the ncnn subprocess (the profile default
+    # realesr-animevideov3-x2 must not win over the explicit onnx model_id).
+    assert len(onnx_engine.calls) == 1
+    assert "upscale_ncnn" not in events
+    _frames_in, _frames_out, model_id_arg, device_arg = onnx_engine.calls[0]
+    assert model_id_arg == "fake-onnx-2x"
+    assert device_arg == "cpu"
+    # Response (GET shape) exposes modelId/device.
+    serialized = video_job_to_response(job).model_dump(by_alias=True)
+    assert serialized["modelId"] == "fake-onnx-2x"
+    assert serialized["device"] == "cpu"
 
 
 # ---------------------------------------------------------------------------
