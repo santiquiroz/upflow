@@ -1,9 +1,12 @@
 import type {
+  CreateInstallResponse,
   CreateJobResponse,
   DevicesResponse,
   EngineInfoResponse,
   HealthResponse,
+  InstallStatusResponse,
   JobResponse,
+  ModelSearchResponse,
   ModelsResponse,
   VideoJobResponse,
 } from "./apiTypes";
@@ -46,6 +49,25 @@ async function apiPostForm<T>(path: string, formData: FormData): Promise<T> {
     throw new ApiError(response.status, await extractErrorMessage(response));
   }
   return (await response.json()) as T;
+}
+
+async function apiPostJson<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, await extractErrorMessage(response));
+  }
+  return (await response.json()) as T;
+}
+
+async function apiDelete(path: string): Promise<void> {
+  const response = await fetch(`${API_BASE}${path}`, { method: "DELETE" });
+  if (!response.ok) {
+    throw new ApiError(response.status, await extractErrorMessage(response));
+  }
 }
 
 export function getHealth(): Promise<HealthResponse> {
@@ -147,4 +169,20 @@ export function createVideoJob(params: CreateVideoJobParams): Promise<CreateJobR
 
 export function getVideoJob(jobId: string): Promise<VideoJobResponse> {
   return apiGet<VideoJobResponse>(`/video/jobs/${jobId}`);
+}
+
+export function searchHfModels(query: string): Promise<ModelSearchResponse> {
+  return apiGet<ModelSearchResponse>(`/models/search?q=${encodeURIComponent(query)}`);
+}
+
+export function installModel(repoId: string): Promise<CreateInstallResponse> {
+  return apiPostJson<CreateInstallResponse>("/models/install", { repoId });
+}
+
+export function getInstallStatus(installId: string): Promise<InstallStatusResponse> {
+  return apiGet<InstallStatusResponse>(`/models/install/${installId}`);
+}
+
+export function deleteModel(modelId: string): Promise<void> {
+  return apiDelete(`/models/${modelId}`);
 }

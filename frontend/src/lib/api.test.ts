@@ -3,19 +3,26 @@ import {
   ApiError,
   createImageJob,
   createVideoJob,
+  deleteModel,
   getDevices,
   getEngineInfo,
   getHealth,
+  getInstallStatus,
   getJob,
   getModels,
   getVideoJob,
+  installModel,
+  searchHfModels,
 } from "./api";
 import type {
+  CreateInstallResponse,
   CreateJobResponse,
   DevicesResponse,
   EngineInfoResponse,
   HealthResponse,
+  InstallStatusResponse,
   JobResponse,
+  ModelSearchResponse,
   ModelsResponse,
   VideoJobResponse,
 } from "./apiTypes";
@@ -282,6 +289,94 @@ describe("getVideoJob", () => {
 
     expect(fetch).toHaveBeenCalledWith("/api/v1/video/jobs/vid-1", expect.objectContaining({ method: "GET" }));
     expect(result).toEqual(payload);
+  });
+});
+
+describe("searchHfModels", () => {
+  it("issues a GET to /api/v1/models/search with the query string encoded", async () => {
+    const payload: ModelSearchResponse = {
+      results: [
+        {
+          id: "example/anime-2x",
+          author: "example",
+          pipelineTag: "image-to-image",
+          downloads: 120,
+          likes: 5,
+          tags: ["onnx"],
+        },
+      ],
+    };
+    mockFetchOnce(payload);
+
+    const result = await searchHfModels("anime 2x");
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/v1/models/search?q=anime%202x",
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(result).toEqual(payload);
+  });
+});
+
+describe("installModel", () => {
+  it("issues a JSON POST to /api/v1/models/install with the repoId", async () => {
+    const payload: CreateInstallResponse = {
+      installId: "install-1",
+      statusUrl: "/api/v1/models/install/install-1",
+    };
+    mockFetchOnce(payload, { status: 202 });
+
+    const result = await installModel("example/anime-2x");
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/v1/models/install",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ repoId: "example/anime-2x" }),
+      }),
+    );
+    expect(result).toEqual(payload);
+  });
+});
+
+describe("getInstallStatus", () => {
+  it("issues a GET to /api/v1/models/install/{id} and returns the typed payload", async () => {
+    const payload: InstallStatusResponse = {
+      installId: "install-1",
+      repoId: "example/anime-2x",
+      status: "downloading",
+      progressPct: 42.5,
+      modelId: null,
+      error: null,
+    };
+    mockFetchOnce(payload);
+
+    const result = await getInstallStatus("install-1");
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/v1/models/install/install-1",
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(result).toEqual(payload);
+  });
+});
+
+describe("deleteModel", () => {
+  it("issues a DELETE to /api/v1/models/{id} and resolves with no content", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 204 })));
+
+    await expect(deleteModel("custom-anime-2x")).resolves.toBeUndefined();
+
+    expect(fetch).toHaveBeenCalledWith("/api/v1/models/custom-anime-2x", expect.objectContaining({ method: "DELETE" }));
+  });
+
+  it("throws an ApiError with the detail message when the delete is rejected", async () => {
+    mockFetchOnce({ detail: "Cannot delete a builtin model" }, { status: 409 });
+
+    await expect(deleteModel("realesrgan-x4plus")).rejects.toMatchObject(
+      new ApiError(409, "Cannot delete a builtin model"),
+    );
   });
 });
 
