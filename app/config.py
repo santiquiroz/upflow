@@ -226,6 +226,8 @@ class Settings(BaseSettings):
 
     onnx_tile_size: int = Field(default=256, alias="ONNX_TILE_SIZE")
 
+    serve_spa: bool = Field(default=False, alias="SERVE_SPA")
+
     @model_validator(mode="after")
     def _apply_default_allowed_origins(self) -> "Settings":
         """Fills ALLOWED_ORIGINS from app_host/app_port when the caller left it unset.

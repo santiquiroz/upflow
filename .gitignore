@@ -10,3 +10,5 @@ vendor/
 .coverage
 htmlcov/
 dist/
+node_modules/
+*.tsbuildinfo
