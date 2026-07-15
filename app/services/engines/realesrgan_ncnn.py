@@ -15,6 +15,21 @@ def gpu_index_for_device(device: str | None) -> str:
     preserves the historical hardcoded "-g 0" behavior. "cpu" has no ncnn
     Vulkan equivalent -- validation must reject it before an engine ever
     runs, so reaching this function with "cpu" is a bug, not user error.
+
+    IMPORTANT ordering caveat (SP1 fast-follow I2): `dml:N` ids come from
+    DXGI adapter enumeration (devices_service.py), but `-g N` here is a
+    Vulkan physical-device index consumed by the ncnn binary. This function
+    assumes DXGI order == Vulkan order for the same N, which is NOT
+    guaranteed by either API on a multi-adapter machine. The only mapping
+    empirically verified end-to-end is the single-dGPU default (`dml:0` ->
+    `-g 0`, see `.superpowers/sdd/sp1-task-8-smoke-report.md`, PART A). The
+    onnx/DirectML path (`_create_session` in onnx_upscaler.py) does NOT have
+    this problem: `device_id` is passed straight through to
+    `DmlExecutionProvider`, which resolves it against the same DXGI-ordered
+    list -- no second enumeration to drift out of sync with. There is no way
+    to query ncnn's own Vulkan device list from Python to verify this
+    mapping without the binary itself, so treat `-g N` for N > 0 as
+    best-effort on multi-GPU systems until verified on real hardware.
     """
     if device is None:
         return "0"

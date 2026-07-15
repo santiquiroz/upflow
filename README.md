@@ -203,6 +203,8 @@ Es normal que una misma GPU física aparezca más de una vez (ej. `dml:0` y `dml
 
 El dispositivo por defecto se controla con `DEFAULT_DEVICE` en `.env` (default `dml:0`); si el dispositivo configurado no está disponible, cae automáticamente a `cpu`.
 
+**Selección de GPU en máquinas multi-adaptador — alcance de la garantía:** para modelos ONNX/HF (`kind=onnx`), `dml:N` se pasa directo como `device_id` a `DmlExecutionProvider`, que lo resuelve contra la misma lista ordenada por DXGI — el mapeo es exacto (verificado empíricamente, ver `.superpowers/sdd/sp1-task-8-smoke-report.md`). Para los modelos builtin (`kind=builtin-ncnn`), en cambio, `dml:N` se traduce a `-g N` (índice de dispositivo físico Vulkan del binario `realesrgan-ncnn-vulkan.exe`) — DXGI y Vulkan **no garantizan el mismo orden de enumeración** en una máquina con más de un adaptador. Solo el default de un único dGPU (`dml:0` → `-g 0`) está verificado end-to-end; en hardware multi-GPU, la selección de un `dml:N` con `N > 0` para un modelo builtin es best-effort, no exacta.
+
 ## Perfiles de video
 
 | Perfil | Categoría | Modelo | Escala | Códec | Preset | CRF |
