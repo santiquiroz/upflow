@@ -60,9 +60,14 @@ const ENGINE_INFO: EngineInfoResponse = {
   ffmpegAvailable: true,
 };
 
-function renderPanel() {
+const CPU_ONLY_DEVICES: DevicesResponse = {
+  devices: [{ id: "cpu", kind: "cpu", name: "CPU", backend: "cpu" }],
+  defaultDeviceId: "cpu",
+};
+
+function renderPanel(devices: DevicesResponse = DEVICES) {
   vi.mocked(api.getModels).mockResolvedValue(MODELS);
-  vi.mocked(api.getDevices).mockResolvedValue(DEVICES);
+  vi.mocked(api.getDevices).mockResolvedValue(devices);
   vi.mocked(api.getEngineInfo).mockResolvedValue(ENGINE_INFO);
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   function Wrapper({ children }: { children: ReactNode }) {
@@ -101,6 +106,16 @@ describe("ImagePanel", () => {
     await selectFileAndModel();
 
     await waitFor(() => expect(submitButton).not.toBeDisabled());
+  });
+
+  it("keeps the CTA disabled with a clear hint when a builtin model needs a GPU but only cpu exists", async () => {
+    renderPanel(CPU_ONLY_DEVICES);
+    await selectFileAndModel();
+
+    const submitButton = screen.getByRole("button", { name: /upscale/i });
+    expect(await screen.findByRole("status")).toHaveTextContent(/requires a Vulkan GPU/i);
+    expect(submitButton).toBeDisabled();
+    expect(vi.mocked(api.createImageJob)).not.toHaveBeenCalled();
   });
 
   it("submits the job and shows the completed preview with a download link", async () => {

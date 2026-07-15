@@ -80,7 +80,12 @@
 
   /* Semanticos */
   --ok: #2dd4bf;
-  --danger: #f04438;
+  /* #f04438 daba solo ~4.27:1 sobre --surface-2 (falla AA 4.5:1) justo en el
+     bloque FailedState del JobCard, donde el usuario lee sus errores. #f65a4d
+     sube a ~4.96:1 sobre --surface-2 / ~5.48:1 sobre --surface / ~5.92:1 sobre
+     --bg (todos AA), sin aclararlo tanto que se confunda con el ambar --warn:
+     sigue siendo rojo (hue ~5) claramente distinto del ambar (hue ~38). */
+  --danger: #f65a4d;
   --warn: #f5a524;
 }
 

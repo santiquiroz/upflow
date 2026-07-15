@@ -24,6 +24,16 @@ function isJobBusy(phase: ImageJobPhase): boolean {
   return phase === "uploading" || phase === "queued" || phase === "running";
 }
 
+// A builtin-ncnn model needs a Vulkan GPU, so a cpu device can never run it.
+// On a GPU-less machine resolvePreferredDevice falls back to a (disabled) cpu
+// device, so guard here too -- otherwise an unrunnable job would be submittable.
+function isDeviceUsable(device: DeviceInfoResponse | null, requiresGpu: boolean): boolean {
+  if (device === null) {
+    return false;
+  }
+  return !(requiresGpu && device.kind === "cpu");
+}
+
 function resolvePreferredDevice(
   devicesResponse: DevicesResponse,
   requiresGpu: boolean,
@@ -121,7 +131,10 @@ export function ImagePanel() {
     submit({ file, modelId: model.id, device: device?.id ?? null, scale, outputFormat: format });
   }
 
-  const canSubmit = file !== null && model !== null && scale !== null && !isJobBusy(phase);
+  const deviceUsable = isDeviceUsable(device, requiresGpu);
+  const showNoGpuHint = model !== null && requiresGpu && !deviceUsable;
+  const canSubmit =
+    file !== null && model !== null && scale !== null && deviceUsable && !isJobBusy(phase);
 
   return (
     <div className="flex flex-col gap-6">
@@ -141,15 +154,22 @@ export function ImagePanel() {
             format={format}
             onFormatChange={setFormat}
           />
-          <button
-            type="button"
-            onClick={handleSubmit}
-            disabled={!canSubmit}
-            className="inline-flex w-fit items-center gap-2 rounded bg-accent px-4 py-2 text-sm font-medium text-bg transition-[background-color,opacity] duration-fast hover:bg-accent-hover active:bg-accent-press disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
-          >
-            <Wand2 aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />
-            Upscale
-          </button>
+          <div className="flex flex-col gap-2">
+            {showNoGpuHint && (
+              <p role="status" className="text-xs text-warn">
+                This builtin model requires a Vulkan GPU; no GPU device is available.
+              </p>
+            )}
+            <button
+              type="button"
+              onClick={handleSubmit}
+              disabled={!canSubmit}
+              className="inline-flex w-fit items-center gap-2 rounded bg-accent px-4 py-2 text-sm font-medium text-bg transition-[background-color,opacity] duration-fast hover:bg-accent-hover active:bg-accent-press disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+            >
+              <Wand2 aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />
+              Upscale
+            </button>
+          </div>
         </div>
         <JobCard phase={phase} job={job} fileName={file?.name} errorMessage={errorMessage} />
       </div>
