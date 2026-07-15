@@ -14,8 +14,11 @@ from app.services.devices_service import DevicesService
 from app.services.engines.audio_enhance import AudioEnhancer
 from app.services.engines.realesrgan_ncnn import RealEsrganNcnnEngine
 from app.services.engines.rife_ncnn import RifeNcnnEngine
+from app.services.hf_client import HfClient
 from app.services.job_manager import JobManager
 from app.services.media_tools import MediaTools
+from app.services.model_installer import ModelInstaller
+from app.services.model_registry import ModelRegistry
 from app.services.retention_sweeper import RetentionSweeper
 from app.services.storage import StorageService
 from app.services.video_job_manager import VideoJobManager
@@ -39,9 +42,13 @@ async def lifespan(app: FastAPI):
     video_upscaler = VideoUpscaler(settings, engine, media_tools, rife_engine, audio_enhancers)
     video_job_manager = VideoJobManager(settings, video_upscaler, media_tools, gpu_semaphore)
     retention_sweeper = RetentionSweeper(settings, job_manager, video_job_manager)
+    model_registry = ModelRegistry(settings)
+    hf_client = HfClient(settings)
+    model_installer = ModelInstaller(settings, model_registry, hf_client)
     await job_manager.start()
     await video_job_manager.start()
     await retention_sweeper.start()
+    await model_installer.start()
 
     app.state.storage = storage
     app.state.engine = engine
@@ -52,12 +59,16 @@ async def lifespan(app: FastAPI):
     app.state.job_manager = job_manager
     app.state.video_job_manager = video_job_manager
     app.state.retention_sweeper = retention_sweeper
+    app.state.model_registry = model_registry
+    app.state.hf_client = hf_client
+    app.state.model_installer = model_installer
     try:
         yield
     finally:
         await job_manager.stop()
         await video_job_manager.stop()
         await retention_sweeper.stop()
+        await model_installer.stop()
 
 
 settings = get_settings()

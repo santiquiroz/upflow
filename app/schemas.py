@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.models import JobStatus
 
@@ -102,3 +102,52 @@ class DeviceInfoResponse(BaseModel):
 class DevicesResponse(BaseModel):
     devices: list[DeviceInfoResponse]
     default_device_id: str = Field(serialization_alias="defaultDeviceId")
+
+
+class ModelResponse(BaseModel):
+    id: str
+    name: str
+    kind: str
+    source: str
+    scale: int | None = None
+    arch: str | None = None
+    size_bytes: int = Field(serialization_alias="sizeBytes")
+    status: str
+    error: str | None = None
+
+
+class ModelsResponse(BaseModel):
+    models: list[ModelResponse]
+
+
+class HfModelSearchResultResponse(BaseModel):
+    id: str
+    author: str | None = None
+    pipeline_tag: str | None = Field(default=None, serialization_alias="pipelineTag")
+    downloads: int
+    likes: int
+    tags: list[str]
+
+
+class ModelSearchResponse(BaseModel):
+    results: list[HfModelSearchResultResponse]
+
+
+class InstallModelRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    repo_id: str = Field(alias="repoId")
+
+
+class CreateInstallResponse(BaseModel):
+    install_id: str = Field(serialization_alias="installId")
+    status_url: str = Field(serialization_alias="statusUrl")
+
+
+class InstallStatusResponse(BaseModel):
+    install_id: str = Field(serialization_alias="installId")
+    repo_id: str = Field(serialization_alias="repoId")
+    status: str
+    progress_pct: float | None = Field(default=None, serialization_alias="progressPct")
+    model_id: str | None = Field(default=None, serialization_alias="modelId")
+    error: str | None = None

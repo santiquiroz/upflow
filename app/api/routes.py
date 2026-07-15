@@ -6,25 +6,35 @@ from pathlib import Path
 from typing import NamedTuple
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 
 from app.config import Settings, VideoProfile, get_settings
-from app.exceptions import QueueFullError
+from app.exceptions import ModelNotFoundError, ModelProtectedError, QueueFullError
 from app.models import JobStatus, UpscaleJob, VideoUpscaleJob
 from app.schemas import (
+    CreateInstallResponse,
     CreateJobResponse,
     DeviceInfoResponse,
     DevicesResponse,
     EngineInfoResponse,
     HealthResponse,
+    HfModelSearchResultResponse,
+    InstallModelRequest,
+    InstallStatusResponse,
     JobResponse,
+    ModelResponse,
+    ModelSearchResponse,
+    ModelsResponse,
     SupportedModelResponse,
     VideoJobResponse,
     VideoProfileResponse,
 )
 from app.services.devices_service import DevicesService
+from app.services.hf_client import HfClient
 from app.services.job_manager import JobManager
+from app.services.model_installer import ModelInstaller
+from app.services.model_registry import ModelEntry, ModelRegistry
 from app.services.storage import StorageService
 from app.services.video_job_manager import VideoJobManager
 
@@ -128,6 +138,18 @@ def get_devices_service(request: Request) -> DevicesService:
     return request.app.state.devices_service
 
 
+def get_model_registry(request: Request) -> ModelRegistry:
+    return request.app.state.model_registry
+
+
+def get_hf_client(request: Request) -> HfClient:
+    return request.app.state.hf_client
+
+
+def get_model_installer(request: Request) -> ModelInstaller:
+    return request.app.state.model_installer
+
+
 def job_to_response(job: UpscaleJob) -> JobResponse:
     download_url = f"/api/v1/jobs/{job.id}/download" if job.status == JobStatus.completed else None
     return JobResponse(
@@ -167,6 +189,20 @@ def video_job_to_response(job: VideoUpscaleJob) -> VideoJobResponse:
         error=job.error,
         metadata=job.metadata,
         download_url=download_url,
+    )
+
+
+def model_entry_to_response(entry: ModelEntry) -> ModelResponse:
+    return ModelResponse(
+        id=entry.id,
+        name=entry.name,
+        kind=entry.kind.value,
+        source=entry.source,
+        scale=entry.scale,
+        arch=entry.arch,
+        size_bytes=entry.size_bytes,
+        status=entry.status.value,
+        error=entry.error,
     )
 
 
@@ -373,3 +409,77 @@ async def download_video_job(job_id: str, video_jobs: VideoJobManager = Depends(
     if job.status != JobStatus.completed or not job.output_path:
         raise HTTPException(status_code=409, detail="Video job is not completed yet")
     return FileResponse(path=job.output_path, filename=job.output_path.name, media_type="application/octet-stream")
+
+
+@router.get("/models", response_model=ModelsResponse)
+async def list_models(registry: ModelRegistry = Depends(get_model_registry)) -> ModelsResponse:
+    return ModelsResponse(models=[model_entry_to_response(entry) for entry in registry.list()])
+
+
+@router.get("/models/search", response_model=ModelSearchResponse)
+async def search_models(
+    q: str = Query(..., min_length=1),
+    hf_client: HfClient = Depends(get_hf_client),
+) -> ModelSearchResponse:
+    try:
+        results = await hf_client.search(q)
+    except Exception as exc:
+        logger.exception("Hugging Face search failed for query %r", q)
+        raise HTTPException(status_code=502, detail="Hugging Face search failed") from exc
+    return ModelSearchResponse(
+        results=[
+            HfModelSearchResultResponse(
+                id=item.id,
+                author=item.author,
+                pipeline_tag=item.pipeline_tag,
+                downloads=item.downloads,
+                likes=item.likes,
+                tags=list(item.tags),
+            )
+            for item in results
+        ]
+    )
+
+
+@router.post("/models/install", response_model=CreateInstallResponse, status_code=202)
+async def install_model(
+    payload: InstallModelRequest,
+    installer: ModelInstaller = Depends(get_model_installer),
+) -> CreateInstallResponse:
+    try:
+        install_id = await installer.install_from_hf(payload.repo_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return CreateInstallResponse(
+        install_id=install_id, status_url=f"/api/v1/models/install/{install_id}"
+    )
+
+
+@router.get("/models/install/{install_id}", response_model=InstallStatusResponse)
+async def get_install_status(
+    install_id: str, installer: ModelInstaller = Depends(get_model_installer)
+) -> InstallStatusResponse:
+    job = installer.status(install_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Install job not found")
+    return InstallStatusResponse(
+        install_id=job.id,
+        repo_id=job.repo_id,
+        status=job.status.value,
+        progress_pct=job.progress_pct,
+        model_id=job.model_id,
+        error=job.error,
+    )
+
+
+@router.delete("/models/{model_id}", status_code=204)
+async def delete_model(
+    model_id: str, installer: ModelInstaller = Depends(get_model_installer)
+) -> Response:
+    try:
+        await installer.delete(model_id)
+    except ModelNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ModelProtectedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return Response(status_code=204)
