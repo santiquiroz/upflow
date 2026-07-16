@@ -13,6 +13,9 @@ DEEPFILTER_MODE = "deepfilter"
 RNNOISE_MODE = "rnnoise"
 AUDIO_ENHANCE_MODES = frozenset({DEEPFILTER_MODE, RNNOISE_MODE})
 
+APOLLO_MODE = "apollo"
+AUDIO_RESTORE_MODES = frozenset({APOLLO_MODE})
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -225,6 +228,16 @@ class Settings(BaseSettings):
     )
     enable_audio_enhance: bool = Field(default=False, alias="ENABLE_AUDIO_ENHANCE")
 
+    # Apollo audio restoration (experimental, ONNX/DirectML). Off by default:
+    # it reconstructs codec-lost high band and is gated behind its own flag,
+    # unlike denoise (production-ready, install-gated only).
+    enable_audio_restore: bool = Field(default=False, alias="ENABLE_AUDIO_RESTORE")
+    apollo_restore_model: str = Field(default="vendor/apollo/apollo.onnx", alias="APOLLO_RESTORE_MODEL")
+    # DirectML breaks on long tensors: Apollo runs in chunks <=3s with a
+    # 0.5s Hann overlap-add, so this bounds the per-inference tensor length.
+    audio_restore_chunk_seconds: float = Field(default=3.0, alias="AUDIO_RESTORE_CHUNK_SECONDS")
+    max_audio_upload_mb: int = Field(default=200, alias="MAX_AUDIO_UPLOAD_MB")
+
     default_device: str = Field(default="dml:0", alias="DEFAULT_DEVICE")
     # When on and a job request doesn't pin a device, routes.py hands the job
     # the "auto" sentinel instead of DEFAULT_DEVICE -- see
@@ -273,6 +286,15 @@ class Settings(BaseSettings):
     def _validate_update_timeout_positive(cls, value: float) -> float:
         if value <= 0:
             raise ValueError("UPDATE_API_TIMEOUT_SECONDS must be greater than 0")
+        return value
+
+    @field_validator("audio_restore_chunk_seconds")
+    @classmethod
+    def _validate_chunk_seconds_positive(cls, value: float) -> float:
+        # A non-positive chunk length makes the Apollo overlap-add hop <= 0,
+        # which would infinite-loop the chunker.
+        if value <= 0:
+            raise ValueError("AUDIO_RESTORE_CHUNK_SECONDS must be greater than 0")
         return value
 
     @model_validator(mode="after")
@@ -393,6 +415,17 @@ class Settings(BaseSettings):
         if mode == DEEPFILTER_MODE:
             return self._deepfilter_available()
         return self._rnnoise_available()
+
+    @property
+    def apollo_restore_model_path(self) -> Path:
+        return resolve_against_project_root(self.apollo_restore_model)
+
+    def audio_restore_available(self) -> bool:
+        # Unlike audio_enhance_available (capability-only), restore folds the
+        # enable flag in: it is experimental, so "available" means both
+        # explicitly enabled AND the model file present. Never raises -- a
+        # missing model just yields False, so the app never breaks.
+        return self.enable_audio_restore and self.apollo_restore_model_path.exists()
 
     @property
     def model_catalog(self) -> list[ModelOption]:

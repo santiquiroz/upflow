@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, replace
 from typing import Any, Literal
 
-from app.models import UpscaleJob, VideoUpscaleJob, utc_now
+from app.models import AudioJob, UpscaleJob, VideoUpscaleJob, utc_now
 from app.services.media_tools import parse_fps_fraction
 
 StageStatus = Literal["pending", "active", "done"]
@@ -13,6 +13,7 @@ VIDEO_STAGE_WEIGHTS: dict[str, tuple[str, float]] = {
     "extracting_frames": ("Extracting frames", 8),
     "extracting_audio": ("Extracting audio", 4),
     "enhancing_audio": ("Enhancing audio", 4),
+    "restoring_audio": ("Restoring audio", 4),
     "upscaling_frames": ("Upscaling frames", 55),
     "interpolating_frames": ("Interpolating frames", 15),
     "encoding_video": ("Encoding video", 13),
@@ -23,6 +24,7 @@ VIDEO_STAGE_ORDER: tuple[str, ...] = (
     "extracting_frames",
     "extracting_audio",
     "enhancing_audio",
+    "restoring_audio",
     "upscaling_frames",
     "interpolating_frames",
     "encoding_video",
@@ -34,6 +36,15 @@ IMAGE_STAGE_WEIGHTS: dict[str, tuple[str, float]] = {
 }
 
 IMAGE_STAGE_ORDER: tuple[str, ...] = ("validating", "upscaling")
+
+AUDIO_STAGE_WEIGHTS: dict[str, tuple[str, float]] = {
+    "decoding": ("Decoding audio", 10),
+    "denoising": ("Denoising", 40),
+    "restoring": ("Restoring", 45),
+    "finalizing": ("Writing output", 5),
+}
+
+AUDIO_STAGE_ORDER: tuple[str, ...] = ("decoding", "denoising", "restoring", "finalizing")
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +64,8 @@ def _video_stage_active(job: VideoUpscaleJob, key: str, has_audio: bool) -> bool
         return job.keep_audio and has_audio
     if key == "enhancing_audio":
         return job.keep_audio and has_audio and bool(job.audio_enhance)
+    if key == "restoring_audio":
+        return job.keep_audio and has_audio and bool(job.audio_restore)
     if key == "interpolating_frames":
         return video_interpolation_active(job)
     return True
@@ -80,6 +93,23 @@ def build_video_stages(job: VideoUpscaleJob) -> list[Stage]:
 
 def build_image_stages() -> list[Stage]:
     raw_stages = [(key, *IMAGE_STAGE_WEIGHTS[key]) for key in IMAGE_STAGE_ORDER]
+    return _normalize_weights(raw_stages)
+
+
+def _audio_stage_active(job: AudioJob, key: str) -> bool:
+    if key == "denoising":
+        return bool(job.denoise)
+    if key == "restoring":
+        return bool(job.restore)
+    return True
+
+
+def build_audio_stages(job: AudioJob) -> list[Stage]:
+    raw_stages = [
+        (key, *AUDIO_STAGE_WEIGHTS[key])
+        for key in AUDIO_STAGE_ORDER
+        if _audio_stage_active(job, key)
+    ]
     return _normalize_weights(raw_stages)
 
 
@@ -154,7 +184,7 @@ def frame_stage_fraction(frames_done: int, frames_total: int | None) -> float:
 
 
 def _write_stage_metadata(
-    job: UpscaleJob | VideoUpscaleJob,
+    job: UpscaleJob | VideoUpscaleJob | AudioJob,
     stages: list[Stage],
     stage_key: str,
     progress_override: float | None = None,
@@ -186,6 +216,16 @@ def advance_image_stage(job: UpscaleJob, stage_key: str) -> None:
 
 def complete_image_stages(job: UpscaleJob) -> None:
     stages = mark_all_done(build_image_stages())
+    _write_stage_metadata(job, stages, "completed", progress_override=1.0)
+
+
+def advance_audio_stage(job: AudioJob, stage_key: str) -> None:
+    stages = apply_stage_transition(build_audio_stages(job), stage_key)
+    _write_stage_metadata(job, stages, stage_key)
+
+
+def complete_audio_stages(job: AudioJob) -> None:
+    stages = mark_all_done(build_audio_stages(job))
     _write_stage_metadata(job, stages, "completed", progress_override=1.0)
 
 

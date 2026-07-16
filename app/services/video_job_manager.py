@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
 
-from app.config import AUDIO_ENHANCE_MODES, Settings
+from app.config import AUDIO_ENHANCE_MODES, AUDIO_RESTORE_MODES, Settings
 from app.exceptions import QueueFullError
 from app.models import JobStatus, VideoUpscaleJob, utc_now
 from app.services.device_router import DeviceRouter, has_compatible_device
@@ -89,6 +89,7 @@ class VideoJobManager:
         fps_multiplier: int = 1,
         target_fps: str | None = None,
         audio_enhance: str | None = None,
+        audio_restore: str | None = None,
         model_id: str | None = None,
         device: str | None = None,
         job_id: str | None = None,
@@ -111,6 +112,7 @@ class VideoJobManager:
             keep_audio,
             audio_enhance,
         )
+        self._validate_audio_restore_mode(audio_restore, keep_audio)
 
         job = VideoUpscaleJob(
             source_path=source_path,
@@ -125,6 +127,7 @@ class VideoJobManager:
             fps_multiplier=fps_multiplier,
             target_fps=target_fps,
             audio_enhance=audio_enhance,
+            audio_restore=audio_restore,
             model_id=resolution.model_id,
             device=device,
         )
@@ -290,6 +293,23 @@ class VideoJobManager:
             raise ValueError(
                 f"Audio enhance mode {audio_enhance!r} requested but not installed "
                 "(run scripts/download-deepfilternet.ps1)"
+            )
+
+    def _validate_audio_restore_mode(self, audio_restore: str | None, keep_audio: bool) -> None:
+        if audio_restore is None:
+            return
+        if audio_restore not in AUDIO_RESTORE_MODES:
+            raise ValueError(f"audio_restore must be one of {sorted(AUDIO_RESTORE_MODES)}")
+        if not keep_audio:
+            raise ValueError("audio_restore requires keep_audio to be enabled")
+        if not self.settings.enable_audio_restore:
+            raise ValueError(
+                "Audio restoration is disabled by configuration (set ENABLE_AUDIO_RESTORE=true)"
+            )
+        if not self.settings.apollo_restore_model_path.exists():
+            raise ValueError(
+                f"Audio restore mode {audio_restore!r} requested but the Apollo model is not installed "
+                "(run scripts/download-apollo.ps1)"
             )
 
     async def _worker(self) -> None:

@@ -28,7 +28,11 @@ dependencies = [
   # itself, not something this module calls directly.
   "torch>=2.2.0,<3.0.0",
   "spandrel>=0.4.0,<1.0.0",
-  "onnx>=1.16.0,<2.0.0"
+  "onnx>=1.16.0,<2.0.0",
+  # SP9 - Apollo audio restore (app/services/engines/apollo_restore.py) reads
+  # audio via soundfile and resamples to 44.1k via scipy.signal.resample_poly.
+  "soundfile>=0.12.0,<1.0.0",
+  "scipy>=1.11.0,<2.0.0"
 ]
 
 [project.optional-dependencies]

@@ -63,7 +63,25 @@ class VideoUpscaleJob:
     fps_multiplier: int = 1
     target_fps: str | None = None
     audio_enhance: str | None = None
+    audio_restore: str | None = None
     model_id: str | None = None
+    device: str | None = None
+    id: str = field(default_factory=lambda: uuid4().hex)
+    status: JobStatus = JobStatus.queued
+    created_at: datetime = field(default_factory=utc_now)
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    error: str | None = None
+    output_path: Path | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class AudioJob:
+    source_path: Path
+    original_filename: str
+    denoise: str | None = None
+    restore: str | None = None
     device: str | None = None
     id: str = field(default_factory=lambda: uuid4().hex)
     status: JobStatus = JobStatus.queued

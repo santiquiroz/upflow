@@ -9,6 +9,7 @@ from pathlib import Path
 
 from app.config import Settings
 from app.models import VideoUpscaleJob
+from app.services.engines.apollo_restore import ApolloRestorer
 from app.services.engines.audio_enhance import AudioEnhancer
 from app.services.engines.onnx_upscaler import OnnxUpscaler
 from app.services.engines.realesrgan_ncnn import RealEsrganNcnnEngine, gpu_index_for_device
@@ -64,12 +65,14 @@ class VideoUpscaler:
         model_registry: ModelRegistry | None = None,
         frame_poll_interval_seconds: float = FRAME_POLL_INTERVAL_SECONDS,
         frame_stall_timeout_seconds: float | None = None,
+        restorer: ApolloRestorer | None = None,
     ) -> None:
         self.settings = settings
         self.engine = engine
         self.media_tools = media_tools
         self.rife_engine = rife_engine
         self.audio_enhancers = audio_enhancers or {}
+        self.restorer = restorer
         self.onnx_engine = onnx_engine
         self.model_registry = model_registry
         self.frame_poll_interval_seconds = frame_poll_interval_seconds
@@ -147,6 +150,8 @@ class VideoUpscaler:
             audio_mux_path = self._usable_audio_or_none(prepared_audio_path)
         elif job.keep_audio and job.audio_enhance:
             job.metadata["audioEnhanced"] = "skipped_no_audio"
+        elif job.keep_audio and job.audio_restore:
+            job.metadata["audioRestored"] = "skipped_no_audio"
 
         advance_video_stage(job, "upscaling_frames")
         async with self._track_frame_progress(job, frames_out, "upscaling_frames"):
@@ -230,8 +235,8 @@ class VideoUpscaler:
         await self.onnx_engine.run_frames(frames_in, frames_out, job.model_id, device)
 
     async def _prepare_audio(self, job: VideoUpscaleJob, audio_path: Path) -> tuple[Path, list[str]]:
-        if job.audio_enhance:
-            return await self._prepare_enhanced_audio(job, audio_path)
+        if job.audio_enhance or job.audio_restore:
+            return await self._prepare_processed_audio(job, audio_path)
         return await self._prepare_original_audio(job, audio_path)
 
     def _usable_audio_or_none(self, prepared_audio_path: Path) -> Path | None:
@@ -264,15 +269,26 @@ class VideoUpscaler:
         )
         return audio_path, ["-c:a", "copy"]
 
-    async def _prepare_enhanced_audio(self, job: VideoUpscaleJob, audio_path: Path) -> tuple[Path, list[str]]:
-        audio_wav_path = audio_path.with_name("audio.wav")
-        await self._extract_audio_wav(job, audio_wav_path)
+    async def _prepare_processed_audio(self, job: VideoUpscaleJob, audio_path: Path) -> tuple[Path, list[str]]:
+        # Extract once, then chain denoise -> restore on the WAV track (same
+        # order as the standalone pipeline). Any processed track is re-encoded
+        # to AAC at mux time, never copied.
+        current = audio_path.with_name("audio.wav")
+        await self._extract_audio_wav(job, current)
 
-        audio_enhanced_path = audio_path.with_name("audio-enhanced.wav")
-        await self._enhance_audio(job, audio_wav_path, audio_enhanced_path)
+        if job.audio_enhance:
+            audio_enhanced_path = audio_path.with_name("audio-enhanced.wav")
+            await self._enhance_audio(job, current, audio_enhanced_path)
+            current = audio_enhanced_path
+            job.metadata["audioEnhanced"] = True
 
-        job.metadata["audioEnhanced"] = True
-        return audio_enhanced_path, ["-c:a", "aac", "-b:a", "192k"]
+        if job.audio_restore:
+            audio_restored_path = audio_path.with_name("audio-restored.wav")
+            await self._restore_audio(job, current, audio_restored_path)
+            current = audio_restored_path
+            job.metadata["audioRestored"] = True
+
+        return current, ["-c:a", "aac", "-b:a", "192k"]
 
     async def _extract_audio_wav(self, job: VideoUpscaleJob, audio_wav_path: Path) -> None:
         # DeepFilterNet requires 48kHz input; a lossless PCM extraction avoids
@@ -301,6 +317,13 @@ class VideoUpscaler:
             )
         advance_video_stage(job, "enhancing_audio")
         await enhancer.run(input_wav, output_wav)
+
+    async def _restore_audio(self, job: VideoUpscaleJob, input_wav: Path, output_wav: Path) -> None:
+        if self.restorer is None:
+            raise RuntimeError("audio_restore requested but no Apollo restorer is configured")
+        advance_video_stage(job, "restoring_audio")
+        device = job.device or self.settings.default_device
+        await self.restorer.run(input_wav, output_wav, device)
 
     async def _maybe_interpolate(
         self,

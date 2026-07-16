@@ -10,9 +10,12 @@ from fastapi.staticfiles import StaticFiles
 from app.api.routes import router as api_router
 from app.config import AUDIO_ENHANCE_MODES, get_settings
 from app.security import OriginGuardMiddleware
+from app.services.audio_job_manager import AudioJobManager
+from app.services.audio_pipeline import AudioPipeline
 from app.services.device_router import DeviceRouter
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.devices_service import DevicesService
+from app.services.engines.apollo_restore import ApolloRestorer
 from app.services.engines.audio_enhance import AudioEnhancer
 from app.services.engines.onnx_upscaler import OnnxUpscaler
 from app.services.engines.realesrgan_ncnn import RealEsrganNcnnEngine
@@ -40,6 +43,7 @@ async def lifespan(app: FastAPI):
     media_tools = MediaTools(settings)
     rife_engine = RifeNcnnEngine(settings)
     audio_enhancers = {mode: AudioEnhancer(settings, mode) for mode in AUDIO_ENHANCE_MODES}
+    apollo_restorer = ApolloRestorer(settings)
     devices_service = DevicesService(settings)
     model_registry = ModelRegistry(settings)
     onnx_engine = OnnxUpscaler(settings, model_registry, devices_service)
@@ -65,6 +69,7 @@ async def lifespan(app: FastAPI):
         audio_enhancers,
         onnx_engine=onnx_engine,
         model_registry=model_registry,
+        restorer=apollo_restorer,
     )
     video_job_manager = VideoJobManager(
         settings,
@@ -75,12 +80,20 @@ async def lifespan(app: FastAPI):
         devices=devices_service,
         device_router=device_router,
     )
-    retention_sweeper = RetentionSweeper(settings, job_manager, video_job_manager)
+    audio_pipeline = AudioPipeline(settings, audio_enhancers, apollo_restorer)
+    audio_job_manager = AudioJobManager(
+        settings,
+        audio_pipeline,
+        device_semaphores,
+        devices=devices_service,
+    )
+    retention_sweeper = RetentionSweeper(settings, job_manager, video_job_manager, audio_job_manager)
     update_service = UpdateService(settings)
     hf_client = HfClient(settings)
     model_installer = ModelInstaller(settings, model_registry, hf_client)
     await job_manager.start()
     await video_job_manager.start()
+    await audio_job_manager.start()
     await retention_sweeper.start()
     await model_installer.start()
 
@@ -89,10 +102,12 @@ async def lifespan(app: FastAPI):
     app.state.media_tools = media_tools
     app.state.rife_engine = rife_engine
     app.state.audio_enhancers = audio_enhancers
+    app.state.apollo_restorer = apollo_restorer
     app.state.onnx_engine = onnx_engine
     app.state.devices_service = devices_service
     app.state.job_manager = job_manager
     app.state.video_job_manager = video_job_manager
+    app.state.audio_job_manager = audio_job_manager
     app.state.retention_sweeper = retention_sweeper
     app.state.model_registry = model_registry
     app.state.update_service = update_service
@@ -103,6 +118,7 @@ async def lifespan(app: FastAPI):
     finally:
         await job_manager.stop()
         await video_job_manager.stop()
+        await audio_job_manager.stop()
         await retention_sweeper.stop()
         await model_installer.stop()
 

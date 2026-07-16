@@ -599,6 +599,7 @@ async def test_create_video_job_route_routes_explicit_model_id_to_onnx_run_frame
             fps_multiplier=None,
             target_fps=None,
             audio_enhance=None,
+            audio_restore=None,
             model_id="fake-onnx-2x",
             device="cpu",
             video_jobs=video_jobs,

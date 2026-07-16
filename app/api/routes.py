@@ -9,10 +9,12 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 
-from app.config import Settings, VideoProfile, get_settings
+from app.config import AUDIO_ENHANCE_MODES, Settings, VideoProfile, get_settings
 from app.exceptions import ModelNotFoundError, ModelProtectedError, QueueFullError
-from app.models import JobStatus, UpdateStatus, UpscaleJob, VideoUpscaleJob
+from app.models import AudioJob, JobStatus, UpdateStatus, UpscaleJob, VideoUpscaleJob
 from app.schemas import (
+    AudioCapabilitiesResponse,
+    AudioJobResponse,
     CreateInstallResponse,
     CreateJobResponse,
     DeviceInfoResponse,
@@ -31,6 +33,7 @@ from app.schemas import (
     VideoJobResponse,
     VideoProfileResponse,
 )
+from app.services.audio_job_manager import AudioJobManager
 from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
 from app.services.hf_client import HfClient
 from app.services.job_manager import JobManager
@@ -132,6 +135,10 @@ def get_video_job_manager(request: Request) -> VideoJobManager:
     return request.app.state.video_job_manager
 
 
+def get_audio_job_manager(request: Request) -> AudioJobManager:
+    return request.app.state.audio_job_manager
+
+
 def get_storage(request: Request) -> StorageService:
     return request.app.state.storage
 
@@ -217,6 +224,7 @@ def video_job_to_response(job: VideoUpscaleJob) -> VideoJobResponse:
         fps_multiplier=job.fps_multiplier,
         target_fps=job.target_fps,
         audio_enhance=job.audio_enhance,
+        audio_restore=job.audio_restore,
         model_id=job.model_id,
         device=job.device,
         created_at=job.created_at,
@@ -225,6 +233,22 @@ def video_job_to_response(job: VideoUpscaleJob) -> VideoJobResponse:
         error=job.error,
         metadata=job.metadata,
         progress_pct=_progress_pct_from_metadata(job.metadata),
+        download_url=download_url,
+    )
+
+
+def audio_job_to_response(job: AudioJob) -> AudioJobResponse:
+    download_url = f"/api/v1/audio/jobs/{job.id}/download" if job.status == JobStatus.completed else None
+    return AudioJobResponse(
+        id=job.id,
+        status=job.status,
+        original_filename=job.original_filename,
+        denoise=job.denoise,
+        restore=job.restore,
+        device=job.device,
+        progress_pct=_progress_pct_from_metadata(job.metadata),
+        stages=job.metadata.get("stages"),
+        error=job.error,
         download_url=download_url,
     )
 
@@ -378,6 +402,7 @@ async def create_video_job(
     fps_multiplier: int | None = Form(default=None),
     target_fps: str | None = Form(default=None),
     audio_enhance: str | None = Form(default=None),
+    audio_restore: str | None = Form(default=None),
     model_id: str | None = Form(default=None),
     device: str | None = Form(default=None),
     video_jobs: VideoJobManager = Depends(get_video_job_manager),
@@ -425,6 +450,7 @@ async def create_video_job(
             fps_multiplier=resolved.fps_multiplier,
             target_fps=resolved.target_fps,
             audio_enhance=resolved.audio_enhance,
+            audio_restore=audio_restore,
             model_id=model_id,
             device=resolved_device,
             job_id=token,
@@ -482,6 +508,81 @@ async def download_video_job(job_id: str, video_jobs: VideoJobManager = Depends(
         raise HTTPException(status_code=404, detail="Video job not found")
     if job.status != JobStatus.completed or not job.output_path:
         raise HTTPException(status_code=409, detail="Video job is not completed yet")
+    return FileResponse(path=job.output_path, filename=job.output_path.name, media_type="application/octet-stream")
+
+
+@router.post("/audio/jobs", response_model=CreateJobResponse, status_code=202)
+async def create_audio_job(
+    request: Request,
+    file: UploadFile = File(...),
+    denoise: str | None = Form(default=None),
+    restore: str | None = Form(default=None),
+    device: str | None = Form(default=None),
+    audio_jobs: AudioJobManager = Depends(get_audio_job_manager),
+    storage: StorageService = Depends(get_storage),
+    settings: Settings = Depends(get_settings),
+) -> CreateJobResponse:
+    original_name = Path(file.filename or "upload.wav").name
+    safe_name = sanitize_filename(original_name, default="upload.wav")
+    token = uuid4().hex
+    destination = settings.uploads_path / f"{token}-{safe_name}"
+
+    job: AudioJob | None = None
+    try:
+        await storage.save_upload(file, destination, max_mb=settings.max_audio_upload_mb)
+        job = await audio_jobs.create_job(
+            source_path=destination,
+            original_filename=original_name,
+            denoise=denoise,
+            restore=restore,
+            device=device,
+            job_id=token,
+        )
+    except QueueFullError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Unexpected error while creating audio job")
+        raise HTTPException(status_code=500, detail="Failed to process the uploaded audio") from exc
+    finally:
+        if job is None and destination.exists():
+            destination.unlink(missing_ok=True)
+
+    return CreateJobResponse(
+        job_id=job.id,
+        status=job.status,
+        status_url=f"/api/v1/audio/jobs/{job.id}",
+        download_url=None,
+    )
+
+
+@router.get("/audio/capabilities", response_model=AudioCapabilitiesResponse)
+async def audio_capabilities(settings: Settings = Depends(get_settings)) -> AudioCapabilitiesResponse:
+    denoise_modes = [mode for mode in sorted(AUDIO_ENHANCE_MODES) if settings.audio_enhance_available(mode)]
+    return AudioCapabilitiesResponse(
+        denoise_modes=denoise_modes,
+        restore_available=settings.audio_restore_available(),
+    )
+
+
+@router.get("/audio/jobs/{job_id}", response_model=AudioJobResponse)
+async def get_audio_job(job_id: str, audio_jobs: AudioJobManager = Depends(get_audio_job_manager)) -> AudioJobResponse:
+    job = audio_jobs.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Audio job not found")
+    return audio_job_to_response(job)
+
+
+@router.get("/audio/jobs/{job_id}/download")
+async def download_audio_job(
+    job_id: str, audio_jobs: AudioJobManager = Depends(get_audio_job_manager)
+) -> FileResponse:
+    job = audio_jobs.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Audio job not found")
+    if job.status != JobStatus.completed or not job.output_path:
+        raise HTTPException(status_code=409, detail="Audio job is not completed yet")
     return FileResponse(path=job.output_path, filename=job.output_path.name, media_type="application/octet-stream")
 
 

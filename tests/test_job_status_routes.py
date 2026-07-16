@@ -180,6 +180,7 @@ async def test_create_video_job_returns_400_when_profile_is_unknown(tmp_path: Pa
             fps_multiplier=None,
             target_fps=None,
             audio_enhance=None,
+            audio_restore=None,
             model_id=None,
             device=None,
             video_jobs=video_jobs,

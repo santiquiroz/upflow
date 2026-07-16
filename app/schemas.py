@@ -47,6 +47,7 @@ class VideoJobResponse(BaseModel):
     fps_multiplier: int = Field(serialization_alias="fpsMultiplier")
     target_fps: str | None = Field(default=None, serialization_alias="targetFps")
     audio_enhance: str | None = Field(default=None, serialization_alias="audioEnhance")
+    audio_restore: str | None = Field(default=None, serialization_alias="audioRestore")
     model_id: str | None = Field(default=None, serialization_alias="modelId")
     device: str | None = None
     created_at: datetime = Field(serialization_alias="createdAt")
@@ -56,6 +57,24 @@ class VideoJobResponse(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     progress_pct: float | None = Field(default=None, serialization_alias="progressPct")
     download_url: str | None = Field(default=None, serialization_alias="downloadUrl")
+
+
+class AudioJobResponse(BaseModel):
+    id: str
+    status: JobStatus
+    original_filename: str = Field(serialization_alias="originalFilename")
+    denoise: str | None = None
+    restore: str | None = None
+    device: str | None = None
+    progress_pct: float | None = Field(default=None, serialization_alias="progressPct")
+    stages: list[dict[str, Any]] | None = None
+    error: str | None = None
+    download_url: str | None = Field(default=None, serialization_alias="downloadUrl")
+
+
+class AudioCapabilitiesResponse(BaseModel):
+    denoise_modes: list[str] = Field(serialization_alias="denoiseModes")
+    restore_available: bool = Field(serialization_alias="restoreAvailable")
 
 
 class SupportedModelResponse(BaseModel):
