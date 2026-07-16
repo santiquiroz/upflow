@@ -1,9 +1,10 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { CreateImageJobParams } from "../lib/api";
 import { createImageJob, getJob } from "../lib/api";
 import type { JobResponse, JobStatus } from "../lib/apiTypes";
 import { isTerminalJobStatus } from "../lib/jobStatus";
+import { jobQueueStore, type JobQueueStore } from "../lib/jobQueueStore";
 
 export const DEFAULT_POLL_INTERVAL_MS = 1500;
 
@@ -51,12 +52,24 @@ function resolveErrorMessage(
   return null;
 }
 
-export function useImageJob(pollIntervalMs: number = DEFAULT_POLL_INTERVAL_MS): UseImageJobResult {
+export function useImageJob(
+  pollIntervalMs: number = DEFAULT_POLL_INTERVAL_MS,
+  queue: JobQueueStore = jobQueueStore,
+): UseImageJobResult {
   const [jobId, setJobId] = useState<string | null>(null);
+  const pendingFileNameRef = useRef<string>("image");
 
   const uploadMutation = useMutation({
     mutationFn: createImageJob,
-    onSuccess: (data) => setJobId(data.jobId),
+    onSuccess: (data) => {
+      setJobId(data.jobId);
+      queue.addTrackedJob({
+        id: data.jobId,
+        kind: "image",
+        fileName: pendingFileNameRef.current,
+        createdAt: Date.now(),
+      });
+    },
   });
 
   const jobQuery = useQuery({
@@ -68,6 +81,7 @@ export function useImageJob(pollIntervalMs: number = DEFAULT_POLL_INTERVAL_MS): 
 
   function submit(params: CreateImageJobParams): void {
     setJobId(null);
+    pendingFileNameRef.current = params.file.name;
     uploadMutation.mutate(params);
   }
 

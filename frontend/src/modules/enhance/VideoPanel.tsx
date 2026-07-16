@@ -287,57 +287,51 @@ export function VideoPanel() {
   const canSubmit = file !== null && profile !== null && scale !== null && deviceUsable && !isJobBusy(phase);
 
   return (
-    <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="font-heading text-2xl font-semibold text-text">Enhance video</h1>
-        <p className="mt-1 text-sm text-text-dim">Upscale, interpolate and clean up a video.</p>
-      </div>
-      <div className="grid grid-cols-[1fr_320px] gap-6 max-[900px]:grid-cols-1">
-        <div className="flex flex-col gap-6">
-          <Dropzone file={file} onFileSelected={handleFileSelected} />
-          <VideoProfileControls value={profile?.key ?? null} onChange={handleProfileChange} />
-          <ModelPicker value={model?.id ?? null} onChange={setModel} />
-          <DevicePicker value={device?.id ?? null} onChange={setDevice} requiresGpu={requiresGpu} />
-          <FpsBoostControls value={fpsBoost} onChange={setFpsBoost} />
-          <label className="flex items-center gap-2 text-sm text-text">
-            <input
-              type="checkbox"
-              checked={keepAudio}
-              onChange={(event) => handleKeepAudioChange(event.target.checked)}
-              className="h-3.5 w-3.5 accent-accent"
-            />
-            Keep original audio
-          </label>
-          <AudioEnhanceControls value={audioEnhance} onChange={setAudioEnhance} keepAudio={keepAudio} />
-          <AdvancedVideoControls
-            outputContainer={outputContainer}
-            onOutputContainerChange={setOutputContainer}
-            videoCodec={videoCodec}
-            onVideoCodecChange={setVideoCodec}
-            videoPreset={videoPreset}
-            onVideoPresetChange={setVideoPreset}
-            crf={crf}
-            onCrfChange={setCrf}
+    <div className="grid grid-cols-[1fr_320px] gap-6 max-[900px]:grid-cols-1">
+      <div className="flex flex-col gap-6">
+        <Dropzone file={file} onFileSelected={handleFileSelected} />
+        <VideoProfileControls value={profile?.key ?? null} onChange={handleProfileChange} />
+        <ModelPicker value={model?.id ?? null} onChange={setModel} />
+        <DevicePicker value={device?.id ?? null} onChange={setDevice} requiresGpu={requiresGpu} />
+        <FpsBoostControls value={fpsBoost} onChange={setFpsBoost} />
+        <label className="flex items-center gap-2 text-sm text-text">
+          <input
+            type="checkbox"
+            checked={keepAudio}
+            onChange={(event) => handleKeepAudioChange(event.target.checked)}
+            className="h-3.5 w-3.5 accent-accent"
           />
-          <div className="flex flex-col gap-2">
-            {showNoGpuHint && (
-              <p role="status" className="text-xs text-warn">
-                This profile's model requires a Vulkan GPU; no GPU device is available.
-              </p>
-            )}
-            <button
-              type="button"
-              onClick={handleSubmit}
-              disabled={!canSubmit}
-              className="inline-flex w-fit items-center gap-2 rounded bg-accent px-4 py-2 text-sm font-medium text-bg transition-[background-color,opacity] duration-fast hover:bg-accent-hover active:bg-accent-press disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
-            >
-              <Film aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />
-              Upscale video
-            </button>
-          </div>
+          Keep original audio
+        </label>
+        <AudioEnhanceControls value={audioEnhance} onChange={setAudioEnhance} keepAudio={keepAudio} />
+        <AdvancedVideoControls
+          outputContainer={outputContainer}
+          onOutputContainerChange={setOutputContainer}
+          videoCodec={videoCodec}
+          onVideoCodecChange={setVideoCodec}
+          videoPreset={videoPreset}
+          onVideoPresetChange={setVideoPreset}
+          crf={crf}
+          onCrfChange={setCrf}
+        />
+        <div className="flex flex-col gap-2">
+          {showNoGpuHint && (
+            <p role="status" className="text-xs text-warn">
+              This profile's model requires a Vulkan GPU; no GPU device is available.
+            </p>
+          )}
+          <button
+            type="button"
+            onClick={handleSubmit}
+            disabled={!canSubmit}
+            className="inline-flex w-fit items-center gap-2 rounded bg-accent px-4 py-2 text-sm font-medium text-bg transition-[background-color,opacity] duration-fast hover:bg-accent-hover active:bg-accent-press disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+          >
+            <Film aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />
+            Upscale video
+          </button>
         </div>
-        <JobCard phase={phase} job={job} fileName={file?.name} errorMessage={errorMessage} />
       </div>
+      <JobCard phase={phase} job={job} fileName={file?.name} errorMessage={errorMessage} />
     </div>
   );
 }

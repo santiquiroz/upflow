@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as api from "../lib/api";
 import type { CreateJobResponse, VideoJobResponse } from "../lib/apiTypes";
+import { createJobQueueStore } from "../lib/jobQueueStore";
 import { useVideoJob } from "./useVideoJob";
 
 vi.mock("../lib/api", async (importOriginal) => {
@@ -195,5 +196,26 @@ describe("useVideoJob", () => {
 
     expect(result.current.phase).toBe("idle");
     expect(result.current.job).toBeUndefined();
+  });
+
+  it("tracks a submitted job in the shared job queue store with its file name", async () => {
+    const queue = createJobQueueStore();
+    const createResponse: CreateJobResponse = {
+      jobId: "vid-1",
+      status: "queued",
+      statusUrl: "/api/v1/video/jobs/vid-1",
+      downloadUrl: null,
+    };
+    vi.mocked(api.createVideoJob).mockResolvedValue(createResponse);
+    vi.mocked(api.getVideoJob).mockResolvedValue({ ...BASE_JOB, status: "queued" });
+
+    const { result } = renderHook(() => useVideoJob(POLL_INTERVAL_MS, queue), { wrapper: createWrapper() });
+
+    act(() => {
+      result.current.submit(submitParams());
+    });
+
+    await waitFor(() => expect(queue.getSnapshot()).toHaveLength(1));
+    expect(queue.getSnapshot()[0]).toMatchObject({ id: "vid-1", kind: "video", fileName: "clip.mp4" });
   });
 });

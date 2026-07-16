@@ -1,6 +1,7 @@
 import { AlertTriangle, CheckCircle2, Clock, Download, ImageIcon, Loader2, UploadCloud } from "lucide-react";
 import type { JobResponse, VideoJobResponse } from "../lib/apiTypes";
 import { formatFps } from "../lib/formatFps";
+import { IndeterminateProgressBar } from "./IndeterminateProgressBar";
 
 export type JobCardPhase = "idle" | "uploading" | "queued" | "running" | "completed" | "failed";
 
@@ -29,14 +30,6 @@ function readStage(job: VideoJobResponse): string | null {
 
 function humanizeStage(stage: string): string {
   return stage.replace(/_/g, " ");
-}
-
-function IndeterminateProgressBar({ label }: { label: string }) {
-  return (
-    <div role="progressbar" aria-label={label} aria-busy="true" className="h-1.5 w-full overflow-hidden rounded-sm bg-surface-2">
-      <div className="job-progress-bar h-full w-1/3 rounded-sm bg-accent" />
-    </div>
-  );
 }
 
 function IdleState() {

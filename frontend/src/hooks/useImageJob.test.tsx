@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as api from "../lib/api";
 import type { CreateJobResponse, JobResponse } from "../lib/apiTypes";
+import { createJobQueueStore } from "../lib/jobQueueStore";
 import { useImageJob } from "./useImageJob";
 
 vi.mock("../lib/api", async (importOriginal) => {
@@ -173,5 +174,26 @@ describe("useImageJob", () => {
 
     expect(result.current.phase).toBe("idle");
     expect(result.current.job).toBeUndefined();
+  });
+
+  it("tracks a submitted job in the shared job queue store with its file name", async () => {
+    const queue = createJobQueueStore();
+    const createResponse: CreateJobResponse = {
+      jobId: "job-1",
+      status: "queued",
+      statusUrl: "/api/v1/jobs/job-1",
+      downloadUrl: null,
+    };
+    vi.mocked(api.createImageJob).mockResolvedValue(createResponse);
+    vi.mocked(api.getJob).mockResolvedValue({ ...BASE_JOB, status: "queued" });
+
+    const { result } = renderHook(() => useImageJob(POLL_INTERVAL_MS, queue), { wrapper: createWrapper() });
+
+    act(() => {
+      result.current.submit(submitParams());
+    });
+
+    await waitFor(() => expect(queue.getSnapshot()).toHaveLength(1));
+    expect(queue.getSnapshot()[0]).toMatchObject({ id: "job-1", kind: "image", fileName: "photo.png" });
   });
 });

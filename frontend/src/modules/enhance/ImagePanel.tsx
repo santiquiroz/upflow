@@ -137,42 +137,36 @@ export function ImagePanel() {
     file !== null && model !== null && scale !== null && deviceUsable && !isJobBusy(phase);
 
   return (
-    <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="font-heading text-2xl font-semibold text-text">Enhance</h1>
-        <p className="mt-1 text-sm text-text-dim">Upscale a single image.</p>
-      </div>
-      <div className="grid grid-cols-[1fr_320px] gap-6 max-[900px]:grid-cols-1">
-        <div className="flex flex-col gap-6">
-          <Dropzone file={file} onFileSelected={handleFileSelected} />
-          <ModelPicker value={model?.id ?? null} onChange={setModel} />
-          <DevicePicker value={device?.id ?? null} onChange={setDevice} requiresGpu={requiresGpu} />
-          <ScaleFormatControls
-            allowedScales={allowedScales}
-            scale={scale ?? allowedScales[0] ?? 4}
-            onScaleChange={setScale}
-            format={format}
-            onFormatChange={setFormat}
-          />
-          <div className="flex flex-col gap-2">
-            {showNoGpuHint && (
-              <p role="status" className="text-xs text-warn">
-                This builtin model requires a Vulkan GPU; no GPU device is available.
-              </p>
-            )}
-            <button
-              type="button"
-              onClick={handleSubmit}
-              disabled={!canSubmit}
-              className="inline-flex w-fit items-center gap-2 rounded bg-accent px-4 py-2 text-sm font-medium text-bg transition-[background-color,opacity] duration-fast hover:bg-accent-hover active:bg-accent-press disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
-            >
-              <Wand2 aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />
-              Upscale
-            </button>
-          </div>
+    <div className="grid grid-cols-[1fr_320px] gap-6 max-[900px]:grid-cols-1">
+      <div className="flex flex-col gap-6">
+        <Dropzone file={file} onFileSelected={handleFileSelected} />
+        <ModelPicker value={model?.id ?? null} onChange={setModel} />
+        <DevicePicker value={device?.id ?? null} onChange={setDevice} requiresGpu={requiresGpu} />
+        <ScaleFormatControls
+          allowedScales={allowedScales}
+          scale={scale ?? allowedScales[0] ?? 4}
+          onScaleChange={setScale}
+          format={format}
+          onFormatChange={setFormat}
+        />
+        <div className="flex flex-col gap-2">
+          {showNoGpuHint && (
+            <p role="status" className="text-xs text-warn">
+              This builtin model requires a Vulkan GPU; no GPU device is available.
+            </p>
+          )}
+          <button
+            type="button"
+            onClick={handleSubmit}
+            disabled={!canSubmit}
+            className="inline-flex w-fit items-center gap-2 rounded bg-accent px-4 py-2 text-sm font-medium text-bg transition-[background-color,opacity] duration-fast hover:bg-accent-hover active:bg-accent-press disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+          >
+            <Wand2 aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />
+            Upscale
+          </button>
         </div>
-        <JobCard phase={phase} job={job} fileName={file?.name} errorMessage={errorMessage} />
       </div>
+      <JobCard phase={phase} job={job} fileName={file?.name} errorMessage={errorMessage} />
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { NavLink } from "react-router-dom";
 import { NAV_ENTRIES } from "../lib/navigation";
+import { JobQueue } from "./JobQueue";
 
 interface AppShellProps {
   children: ReactNode;
@@ -40,8 +41,7 @@ export function AppShell({ children }: AppShellProps) {
         <div className="mx-auto w-full max-w-[1200px]">{children}</div>
       </main>
       <aside aria-label="Job queue" className="border-l border-border bg-surface p-4">
-        <h2 className="font-heading text-xs font-semibold uppercase tracking-wide text-text-dim">Job Queue</h2>
-        <p className="mt-4 text-sm text-text-faint">No active jobs.</p>
+        <JobQueue />
       </aside>
     </div>
   );

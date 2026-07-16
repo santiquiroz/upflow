@@ -1,9 +1,10 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { CreateVideoJobParams } from "../lib/api";
 import { createVideoJob, getVideoJob } from "../lib/api";
 import type { JobStatus, VideoJobResponse } from "../lib/apiTypes";
 import { isTerminalJobStatus } from "../lib/jobStatus";
+import { jobQueueStore, type JobQueueStore } from "../lib/jobQueueStore";
 
 export const DEFAULT_POLL_INTERVAL_MS = 1500;
 
@@ -51,12 +52,24 @@ function resolveErrorMessage(
   return null;
 }
 
-export function useVideoJob(pollIntervalMs: number = DEFAULT_POLL_INTERVAL_MS): UseVideoJobResult {
+export function useVideoJob(
+  pollIntervalMs: number = DEFAULT_POLL_INTERVAL_MS,
+  queue: JobQueueStore = jobQueueStore,
+): UseVideoJobResult {
   const [jobId, setJobId] = useState<string | null>(null);
+  const pendingFileNameRef = useRef<string>("video");
 
   const uploadMutation = useMutation({
     mutationFn: createVideoJob,
-    onSuccess: (data) => setJobId(data.jobId),
+    onSuccess: (data) => {
+      setJobId(data.jobId);
+      queue.addTrackedJob({
+        id: data.jobId,
+        kind: "video",
+        fileName: pendingFileNameRef.current,
+        createdAt: Date.now(),
+      });
+    },
   });
 
   const jobQuery = useQuery({
@@ -68,6 +81,7 @@ export function useVideoJob(pollIntervalMs: number = DEFAULT_POLL_INTERVAL_MS): 
 
   function submit(params: CreateVideoJobParams): void {
     setJobId(null);
+    pendingFileNameRef.current = params.file.name;
     uploadMutation.mutate(params);
   }
 
