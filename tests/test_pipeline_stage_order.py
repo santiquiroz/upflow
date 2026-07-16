@@ -83,7 +83,7 @@ class StageTrackingVideoUpscaler(VideoUpscaler):
         self.encode_commands: list[list[str]] = []
 
     async def _run_process(self, command: list[str]) -> None:
-        if "-vsync" in command:
+        if "-fps_mode" in command:
             self.events.append("extract")
             self._write_dummy_frame(command)
         elif "-vn" in command:

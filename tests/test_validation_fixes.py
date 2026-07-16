@@ -201,7 +201,7 @@ class ZeroByteOutputVideoUpscaler(VideoUpscaler):
     """Fakes the pipeline but writes a 0-byte encoded output file."""
 
     async def _run_process(self, command: list[str]) -> None:
-        if "-vsync" in command:
+        if "-fps_mode" in command:
             frames_in_dir = Path(command[-1]).parent
             frames_in_dir.mkdir(parents=True, exist_ok=True)
             (frames_in_dir / "00000001.png").write_bytes(b"fake-frame-in")

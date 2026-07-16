@@ -53,7 +53,7 @@ class FakePipelineVideoUpscaler(VideoUpscaler):
     """Fakes _run_process so no real ffmpeg/engine binary is invoked; drops dummy frame/output files instead."""
 
     async def _run_process(self, command: list[str]) -> None:
-        if "-vsync" in command:
+        if "-fps_mode" in command:
             self._write_dummy_frame(command)
         elif "-vn" in command:
             self._write_dummy_audio(command)
@@ -91,7 +91,7 @@ class FailingPipelineVideoUpscaler(VideoUpscaler):
     """Simulates an engine crash mid-pipeline, after work_dir already has content on disk."""
 
     async def _run_process(self, command: list[str]) -> None:
-        if "-vsync" in command:
+        if "-fps_mode" in command:
             frames_in_dir = Path(command[-1]).parent
             frames_in_dir.mkdir(parents=True, exist_ok=True)
             (frames_in_dir / "00000001.png").write_bytes(b"fake-frame-in")
