@@ -240,8 +240,16 @@ class Settings(BaseSettings):
     onnx_tile_size: int = Field(default=256, alias="ONNX_TILE_SIZE")
 
     update_repo: str = Field(default="santiquiroz/upflow", alias="UPDATE_REPO")
+    # Package whose installed metadata gives the running version to compare
+    # against the latest release. Reuse in another project = change UPDATE_REPO
+    # + UPDATE_PACKAGE_NAME (no code edit).
+    update_package_name: str = Field(default="upflow", alias="UPDATE_PACKAGE_NAME")
     update_check_enabled: bool = Field(default=True, alias="UPDATE_CHECK_ENABLED")
     update_check_ttl_seconds: int = Field(default=3600, alias="UPDATE_CHECK_TTL_SECONDS")
+    # A failed check with no prior good result is cached only this long, so a
+    # startup-time network blip retries in minutes instead of after the full
+    # TTL. A successful result (even "up to date") uses the full TTL above.
+    update_error_retry_seconds: int = Field(default=300, alias="UPDATE_ERROR_RETRY_SECONDS")
     update_api_timeout_seconds: float = Field(default=5.0, alias="UPDATE_API_TIMEOUT_SECONDS")
 
     @field_validator("per_device_gpu_concurrency", "cpu_concurrency", "max_concurrent_jobs")
@@ -249,6 +257,22 @@ class Settings(BaseSettings):
     def _validate_concurrency_at_least_one(cls, value: int) -> int:
         if value < 1:
             raise ValueError("Concurrency settings must be at least 1")
+        return value
+
+    @field_validator("update_check_ttl_seconds", "update_error_retry_seconds")
+    @classmethod
+    def _validate_update_ttl_at_least_one(cls, value: int) -> int:
+        # A non-positive TTL would disable caching and hammer GitHub's 60 req/h
+        # anonymous limit -- exactly what the cache exists to prevent.
+        if value < 1:
+            raise ValueError("Update cache TTL settings must be at least 1 second")
+        return value
+
+    @field_validator("update_api_timeout_seconds")
+    @classmethod
+    def _validate_update_timeout_positive(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("UPDATE_API_TIMEOUT_SECONDS must be greater than 0")
         return value
 
     @model_validator(mode="after")

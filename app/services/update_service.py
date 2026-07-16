@@ -23,8 +23,6 @@ from app.models import UpdateStatus, utc_now
 
 RELEASES_LATEST_URL = "https://api.github.com/repos/{repo}/releases/latest"
 GITHUB_ACCEPT_HEADER = "application/vnd.github+json"
-UPDATE_USER_AGENT = "upflow-update-check"
-RELEASE_REQUEST_HEADERS = {"Accept": GITHUB_ACCEPT_HEADER, "User-Agent": UPDATE_USER_AGENT}
 
 
 def _normalize_tag(tag: str) -> str:
@@ -63,7 +61,15 @@ class UpdateService:
         if self._cache is None or self._cached_at_monotonic is None:
             return False
         age = time.monotonic() - self._cached_at_monotonic
-        return age < self.settings.update_check_ttl_seconds
+        return age < self._effective_ttl(self._cache)
+
+    def _effective_ttl(self, status: UpdateStatus) -> float:
+        # An errored result (only ever cached when there's no prior good data)
+        # gets a short retry window so a startup network blip recovers in
+        # minutes; a successful result keeps the full TTL.
+        if status.error is not None:
+            return self.settings.update_error_retry_seconds
+        return self.settings.update_check_ttl_seconds
 
     def _store(self, status: UpdateStatus) -> None:
         self._cache = status
@@ -72,21 +78,36 @@ class UpdateService:
             self._last_good = status
 
     async def _perform_check(self) -> UpdateStatus:
-        current = get_app_version()
+        current = get_app_version(self.settings.update_package_name)
         if not self.settings.update_check_enabled:
             return self._disabled_status(current)
         try:
             release = await self._fetch_latest_release()
             return self._status_from_release(current, release)
         except Exception as exc:  # noqa: BLE001 - any failure must degrade, never raise
-            return self._error_status(current, f"{type(exc).__name__}: {exc}")
+            return self._degraded_status(current, f"{type(exc).__name__}: {exc}")
+
+    def _degraded_status(self, current: str, message: str) -> UpdateStatus:
+        # A transient failure must not hide a genuinely-available update: when a
+        # prior good result exists this process, keep serving it (the frontend
+        # hides the banner whenever `error` is set). Only surface an error
+        # status when there's nothing good to show yet.
+        if self._last_good is not None:
+            return self._last_good
+        return self._error_status(current, message)
 
     async def _fetch_latest_release(self) -> dict:
         url = RELEASES_LATEST_URL.format(repo=self.settings.update_repo)
         async with self._build_client() as client:
-            response = await client.get(url, headers=RELEASE_REQUEST_HEADERS)
+            response = await client.get(url, headers=self._request_headers())
             response.raise_for_status()
             return response.json()
+
+    def _request_headers(self) -> dict[str, str]:
+        return {
+            "Accept": GITHUB_ACCEPT_HEADER,
+            "User-Agent": f"{self.settings.update_package_name}-update-check",
+        }
 
     def _build_client(self) -> httpx.AsyncClient:
         # Built fresh per call (like HfClient): the check is low-frequency and
@@ -125,13 +146,14 @@ class UpdateService:
         )
 
     def _error_status(self, current: str, message: str) -> UpdateStatus:
-        prior = self._last_good
+        # Only reached when there's no prior good result to fall back on, so
+        # every version field is honestly null and the triple stays consistent.
         return UpdateStatus(
             current_version=current,
-            latest_version=prior.latest_version if prior else None,
+            latest_version=None,
             update_available=False,
-            release_url=prior.release_url if prior else None,
-            published_at=prior.published_at if prior else None,
+            release_url=None,
+            published_at=None,
             checked_at=utc_now(),
             error=message,
         )

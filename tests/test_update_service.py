@@ -25,7 +25,7 @@ PINNED_CURRENT = "0.1.0"
 def _pin_current_version(monkeypatch: pytest.MonkeyPatch) -> None:
     # Only rebinds the reference the SERVICE uses; the real
     # version_module.get_app_version stays intact for the version tests below.
-    monkeypatch.setattr(update_service_module, "get_app_version", lambda: PINNED_CURRENT)
+    monkeypatch.setattr(update_service_module, "get_app_version", lambda *_a, **_k: PINNED_CURRENT)
 
 
 def make_settings(**overrides: object) -> Settings:
@@ -108,7 +108,7 @@ async def test_prerelease_newer_than_current_is_an_update() -> None:
 
 async def test_prerelease_of_current_version_is_not_an_update(monkeypatch: pytest.MonkeyPatch) -> None:
     # current 0.2.0 stable is newer than its own release candidate.
-    monkeypatch.setattr(update_service_module, "get_app_version", lambda: "0.2.0")
+    monkeypatch.setattr(update_service_module, "get_app_version", lambda *_a, **_k: "0.2.0")
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=release_payload(tag="v0.2.0-rc2"))
@@ -255,13 +255,18 @@ async def test_force_bypasses_cache_and_refetches() -> None:
     assert handler.calls == 2
 
 
-async def test_expired_ttl_triggers_refetch() -> None:
+async def test_expired_ttl_triggers_refetch(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Drive a controllable monotonic clock so the cache genuinely ages past the
+    # TTL (a TTL of 0 is rejected by config validation, so time must advance).
+    clock = {"t": 0.0}
+    monkeypatch.setattr(update_service_module.time, "monotonic", lambda: clock["t"])
     handler = CountingHandler(lambda request: httpx.Response(200, json=release_payload()))
     service = UpdateService(
-        make_settings(UPDATE_CHECK_TTL_SECONDS=0), transport=httpx.MockTransport(handler)
+        make_settings(UPDATE_CHECK_TTL_SECONDS=1), transport=httpx.MockTransport(handler)
     )
 
     await service.check()
+    clock["t"] = 100.0
     await service.check()
 
     assert handler.calls == 2
@@ -282,7 +287,10 @@ async def test_disabled_check_never_fetches() -> None:
     assert status.error is None
 
 
-async def test_failed_fetch_preserves_prior_good_latest_version() -> None:
+async def test_failed_refresh_keeps_serving_last_good() -> None:
+    # A transient failure must NOT hide a genuinely-available update: once a
+    # good result exists, a later failed refresh keeps serving it (error None,
+    # update_available True) so the banner stays visible instead of vanishing.
     responses = iter(
         [
             httpx.Response(200, json=release_payload(tag="v0.2.0")),
@@ -299,9 +307,40 @@ async def test_failed_fetch_preserves_prior_good_latest_version() -> None:
     after_failure = await service.check(force=True)
 
     assert good.latest_version == "0.2.0"
-    assert after_failure.error is not None
+    assert good.update_available is True
+    assert after_failure.error is None
     assert after_failure.latest_version == "0.2.0"
-    assert after_failure.update_available is False
+    assert after_failure.update_available is True
+
+
+async def test_first_ever_failure_returns_honest_error_status() -> None:
+    # With no prior good result, a failure surfaces an honest error status
+    # (all version fields null) instead of a misleading update flag.
+    service = make_service(lambda request: httpx.Response(503, text="down"))
+
+    status = await service.check()
+
+    assert status.error is not None
+    assert status.update_available is False
+    assert status.latest_version is None
+
+
+async def test_user_agent_carries_configured_package_name() -> None:
+    # Reusability: the UA (and version lookup) derive from UPDATE_PACKAGE_NAME,
+    # so pointing the checker at another project needs no code edit.
+    seen: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["ua"] = request.headers.get("user-agent", "")
+        return httpx.Response(200, json=release_payload())
+
+    service = UpdateService(
+        make_settings(UPDATE_PACKAGE_NAME="other-project"),
+        transport=httpx.MockTransport(handler),
+    )
+    await service.check()
+
+    assert seen["ua"] == "other-project-update-check"
 
 
 # ---------------------------------------------------------------------------
@@ -337,3 +376,23 @@ def test_get_app_version_final_fallback_when_nothing_resolves(
     monkeypatch.setattr(version_module, "PYPROJECT_PATH", tmp_path / "does-not-exist.toml")
 
     assert version_module.get_app_version() == "0.0.0"
+
+
+# ---------------------------------------------------------------------------
+# config validation for the update settings
+# ---------------------------------------------------------------------------
+
+
+def test_ttl_below_one_is_rejected() -> None:
+    with pytest.raises(Exception):
+        make_settings(UPDATE_CHECK_TTL_SECONDS=0)
+
+
+def test_error_retry_below_one_is_rejected() -> None:
+    with pytest.raises(Exception):
+        make_settings(UPDATE_ERROR_RETRY_SECONDS=0)
+
+
+def test_api_timeout_not_positive_is_rejected() -> None:
+    with pytest.raises(Exception):
+        make_settings(UPDATE_API_TIMEOUT_SECONDS=0)
