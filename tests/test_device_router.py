@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,7 @@ import pytest
 from app.config import Settings
 from app.services.device_router import (
     DeviceRouter,
+    _numeric_device_sort_key,
     compatible_devices,
     has_compatible_device,
     is_device_compatible,
@@ -110,6 +112,21 @@ def test_pick_least_loaded_device_single_candidate_is_trivially_picked(tmp_path:
     assert pick_least_loaded_device([GPU0], semaphores) == "dml:0"
 
 
+def test_pick_least_loaded_device_tie_break_is_numeric_not_lexical(tmp_path: Path) -> None:
+    # dml:2 must win over dml:10 on a tie -- a lexical string sort would put
+    # "dml:10" before "dml:2" and route to the wrong device.
+    settings = make_settings(tmp_path)
+    semaphores = DeviceSemaphores(settings)
+    gpu2: DeviceInfo = {"id": "dml:2", "kind": "gpu", "name": "GPU 2", "backend": "directml"}
+    gpu10: DeviceInfo = {"id": "dml:10", "kind": "gpu", "name": "GPU 10", "backend": "directml"}
+
+    assert pick_least_loaded_device([gpu10, gpu2], semaphores) == "dml:2"
+
+
+def test_numeric_device_sort_key_orders_dml_devices_numerically() -> None:
+    assert _numeric_device_sort_key("dml:2") < _numeric_device_sort_key("dml:10")
+
+
 # ---------------------------------------------------------------------------
 # DeviceRouter.acquire_auto
 # ---------------------------------------------------------------------------
@@ -191,3 +208,41 @@ async def test_auto_pick_blocks_until_a_busy_compatible_device_frees_instead_of_
     assert events == ["first-acquired", "first-released", "auto-acquired-dml:0"], (
         "auto pick must wait for the busy device to free, not deadlock or skip ahead"
     )
+
+
+async def test_auto_pick_takes_the_device_that_frees_first_not_a_stale_pick(tmp_path: Path) -> None:
+    """The Critical this fix targets: both GPUs saturated, and the device the
+    router would NOT tie-break to (dml:1) frees FIRST. A waiting auto pick
+    must take dml:1 the moment it frees -- NOT stay parked on dml:0 (its
+    tie-break favourite) and leave dml:1 idle for the rest of dml:0's job.
+    """
+    settings = make_settings(tmp_path, PER_DEVICE_GPU_CONCURRENCY=1)
+    semaphores = DeviceSemaphores(settings)
+    router = DeviceRouter(semaphores)
+    dml0_released_at = 0.0
+    auto_acquired_at = 0.0
+    auto_device = ""
+
+    async def hold_dml0_long() -> None:
+        nonlocal dml0_released_at
+        async with semaphores.acquire("dml:0"):
+            await asyncio.sleep(0.30)
+        dml0_released_at = time.monotonic()
+
+    async def hold_dml1_short() -> None:
+        async with semaphores.acquire("dml:1"):
+            await asyncio.sleep(0.06)
+
+    async def auto_pick() -> None:
+        nonlocal auto_acquired_at, auto_device
+        await asyncio.sleep(0.02)  # ensure both holds are active first
+        async with router.acquire_auto([GPU0, GPU1], ModelKind.builtin_ncnn) as device_id:
+            auto_acquired_at = time.monotonic()
+            auto_device = device_id
+
+    await asyncio.wait_for(
+        asyncio.gather(hold_dml0_long(), hold_dml1_short(), auto_pick()), timeout=2.0
+    )
+
+    assert auto_device == "dml:1", "auto must take the device that freed first (dml:1), not a stale dml:0 pick"
+    assert auto_acquired_at < dml0_released_at, "auto must not wait for the busy dml:0 to free"

@@ -145,6 +145,25 @@ class RecordingOnnxEngine(UpscaleEngine):
         return output_path
 
 
+class DeviceHoldEngine(UpscaleEngine):
+    """Holds for a per-device duration, so a test can make one GPU busy for a
+    long time and another for a short time and observe which one an auto job
+    lands on (by inspecting the resolved job.device + timestamps)."""
+
+    def __init__(self, holds: dict[str, float], default: float = 0.06) -> None:
+        self.holds = holds
+        self.default = default
+
+    def available(self) -> bool:
+        return True
+
+    async def run(self, job: UpscaleJob) -> Path:
+        await asyncio.sleep(self.holds.get(job.device or "", self.default))
+        output_path = job.source_path.parent / f"{job.id}-out.png"
+        output_path.write_bytes(b"fake-output")
+        return output_path
+
+
 class FakeSimpleVideoUpscaler:
     def __init__(self, recorder: DeviceTimestampRecorder, hold_seconds: float = HOLD_SECONDS) -> None:
         self.recorder = recorder
@@ -363,6 +382,63 @@ async def test_two_concurrent_auto_jobs_distribute_across_two_free_gpus(tmp_path
         f"two auto jobs with two free GPUs must not both land on the same device, got {recorder.devices_used()}"
     )
     assert recorder.overlaps("dml:0", "dml:1"), "the two auto jobs should also run in parallel"
+
+
+async def test_auto_job_runs_on_the_gpu_that_frees_first_not_a_stale_pick(tmp_path: Path) -> None:
+    """The reproduced Critical, at the manager level: both GPUs saturated by
+    pinned jobs, and dml:1 (NOT the router's tie-break favourite dml:0) frees
+    first. The auto job must run on dml:1 the moment it frees -- not sit idle
+    on a stale dml:0 pick until dml:0's long job finishes. Proven via the
+    resolved job.device plus started/finished timestamps.
+    """
+    settings = make_settings(tmp_path, PER_DEVICE_GPU_CONCURRENCY=1, MAX_CONCURRENT_JOBS=4)
+    engine = DeviceHoldEngine({"dml:0": 0.30, "dml:1": 0.06})
+    manager = JobManager(
+        settings,
+        engine,
+        DeviceSemaphores(settings),
+        devices=FakeDevicesService([GPU0, GPU1]),
+    )
+    src_pinned_long = make_image_source(settings, "pin0.png")
+    src_pinned_short = make_image_source(settings, "pin1.png")
+    src_auto = make_image_source(settings, "auto.png")
+
+    await manager.start()
+    try:
+        pinned_long = await manager.create_job(
+            source_path=src_pinned_long,
+            original_filename="pin0.png",
+            model_name="realesrgan-x4plus",
+            scale=4,
+            output_format="png",
+            device="dml:0",
+        )
+        await manager.create_job(
+            source_path=src_pinned_short,
+            original_filename="pin1.png",
+            model_name="realesrgan-x4plus",
+            scale=4,
+            output_format="png",
+            device="dml:1",
+        )
+        await asyncio.sleep(0.03)  # let both pinned jobs claim their GPUs first
+        auto_job = await manager.create_job(
+            source_path=src_auto,
+            original_filename="auto.png",
+            model_name="realesrgan-x4plus",
+            scale=4,
+            output_format="png",
+            device=AUTO_DEVICE_ID,
+        )
+        await manager.queue.join()
+    finally:
+        await manager.stop()
+
+    assert auto_job.device == "dml:1", "auto must take the GPU that freed first (dml:1), not a stale dml:0 pick"
+    assert auto_job.started_at is not None and pinned_long.finished_at is not None
+    assert auto_job.started_at < pinned_long.finished_at, (
+        "auto ran only after the long dml:0 job finished -- dml:1 sat idle (head-of-line blocking)"
+    )
 
 
 async def test_router_off_respects_the_pinned_device_on_the_job(tmp_path: Path) -> None:

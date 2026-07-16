@@ -9,54 +9,81 @@ from app.services.devices_service import CPU_DEVICE_ID
 
 
 class DeviceSemaphores:
-    """Per-device concurrency gate.
+    """Per-device concurrency gate backed by a single shared condition.
 
-    Each device_id (e.g. "cpu", "dml:0", "dml:1") gets its own
-    asyncio.Semaphore, created lazily on first use. A job that acquires the
-    semaphore for its own device never blocks on jobs running on a different
-    device -- only jobs sharing the same device_id serialize against each
-    other, up to that device's configured capacity.
+    Each device_id (e.g. "cpu", "dml:0", "dml:1") has a configured capacity
+    (`capacity_for`) and a live `in_flight` count. A job for a device only
+    runs while `in_flight < capacity` for that device; jobs on different
+    devices never gate each other. All accounting lives under ONE shared
+    `asyncio.Condition`, and every release does `notify_all()`, so a waiter
+    blocked on capacity for device X wakes the instant ANY device frees a
+    permit -- crucially including a job releasing a device the waiter is not
+    even interested in. That single release signal is what lets the
+    auto-router (app/services/device_router.py) re-select the first device
+    that frees instead of staying parked on a stale pick (no idle-device
+    head-of-line blocking, no busy-wait).
+
+    Implemented with manual counting + a condition rather than one
+    asyncio.Semaphore per device precisely so that non-blocking "reserve iff
+    free" (needed by the router's atomic pick) and the shared release signal
+    share the exact same in_flight ledger and capacity limit as the blocking
+    `acquire()` used by pinned-device jobs.
     """
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
-        self._semaphores: dict[str | None, asyncio.Semaphore] = {}
         self._in_flight: dict[str | None, int] = {}
-        self._create_lock = asyncio.Lock()
-
-    async def _get_or_create(self, device_id: str | None) -> asyncio.Semaphore:
-        semaphore = self._semaphores.get(device_id)
-        if semaphore is not None:
-            return semaphore
-        # Double-checked locking: the lock only guards the create-and-store
-        # step, so concurrent first-time acquires for the same device_id
-        # never race into creating two independent semaphores (which would
-        # silently double the effective capacity for that device).
-        async with self._create_lock:
-            semaphore = self._semaphores.get(device_id)
-            if semaphore is None:
-                semaphore = asyncio.Semaphore(self.capacity_for(device_id))
-                self._semaphores[device_id] = semaphore
-                self._in_flight[device_id] = 0
-            return semaphore
+        self._condition = asyncio.Condition()
 
     def capacity_for(self, device_id: str | None) -> int:
         if device_id == CPU_DEVICE_ID:
             return self._settings.cpu_concurrency
         return self._settings.per_device_gpu_concurrency
 
-    @asynccontextmanager
-    async def acquire(self, device_id: str | None) -> AsyncIterator[None]:
-        semaphore = await self._get_or_create(device_id)
-        async with semaphore:
-            # No `await` between the increment/decrement and their matching
-            # read in in_flight(), so this stays race-free under asyncio's
-            # single-threaded cooperative scheduling without a lock.
-            self._in_flight[device_id] += 1
-            try:
-                yield
-            finally:
-                self._in_flight[device_id] -= 1
-
     def in_flight(self, device_id: str | None) -> int:
         return self._in_flight.get(device_id, 0)
+
+    def free_capacity(self, device_id: str | None) -> int:
+        return self.capacity_for(device_id) - self.in_flight(device_id)
+
+    @property
+    def release_condition(self) -> asyncio.Condition:
+        """The shared condition the auto-router waits on for a freed permit.
+
+        A caller reserving through it MUST hold it while checking
+        `free_capacity` and calling `reserve`, so the check-and-take is
+        atomic against every other acquirer under asyncio's cooperative
+        scheduling.
+        """
+        return self._condition
+
+    def reserve(self, device_id: str | None) -> None:
+        """Take one permit unconditionally. Caller MUST hold release_condition
+        AND have already confirmed `free_capacity(device_id) > 0` under it."""
+        self._in_flight[device_id] = self.in_flight(device_id) + 1
+
+    def _reserve_if_free(self, device_id: str | None) -> bool:
+        if self.free_capacity(device_id) <= 0:
+            return False
+        self.reserve(device_id)
+        return True
+
+    async def release(self, device_id: str | None) -> None:
+        async with self._condition:
+            self._in_flight[device_id] = self.in_flight(device_id) - 1
+            # Wake every waiter (pinned acquirers AND auto-router pickers): the
+            # freed device may be exactly what an otherwise-idle picker was
+            # waiting for, even if it's not the device it originally eyed.
+            self._condition.notify_all()
+
+    @asynccontextmanager
+    async def acquire(self, device_id: str | None) -> AsyncIterator[None]:
+        # Blocking reserve for a pinned device: wait until this specific
+        # device has a free permit, take it, then run the job WITHOUT holding
+        # the condition (it's a leaf lock, held only during reserve/release).
+        async with self._condition:
+            await self._condition.wait_for(lambda: self._reserve_if_free(device_id))
+        try:
+            yield
+        finally:
+            await self.release(device_id)

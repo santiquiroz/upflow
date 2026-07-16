@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import asyncio
 from collections.abc import AsyncIterator
-from contextlib import AsyncExitStack, asynccontextmanager
+from contextlib import asynccontextmanager
 
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.devices_service import DeviceInfo
@@ -16,13 +15,14 @@ from app.services.model_registry import ModelKind
 # model kind, so it's fully testable without asyncio or real GPUs.
 #
 # pick_least_loaded_device is also pure given a DeviceSemaphores snapshot
-# (capacity_for/in_flight are plain reads), so its selection logic is unit
+# (capacity_for/in_flight are plain reads), so its selection ranking is unit
 # testable in isolation from the locking below.
 #
-# DeviceRouter.acquire_auto is the only piece with real concurrency
-# concerns: two auto-routed jobs racing to pick a device must never both
-# land on the same free device when a different one is idle. See its
-# docstring for the no-deadlock argument.
+# DeviceRouter.acquire_auto holds the concurrency concerns: two auto-routed
+# jobs racing to pick a device must never both land on the same free device
+# when a different one is idle, AND a picker must never sit on a busy device
+# while a DIFFERENT compatible device is free (or frees first). See its
+# docstring for the no-deadlock / no-head-of-line-blocking argument.
 # ---------------------------------------------------------------------------
 
 
@@ -41,53 +41,67 @@ def has_compatible_device(devices: list[DeviceInfo], model_kind: ModelKind) -> b
     return bool(compatible_devices(devices, model_kind))
 
 
+def _numeric_device_sort_key(device_id: str) -> tuple[str, int, str]:
+    """Sort key that orders "dml:2" before "dml:10" (numeric, not lexical).
+
+    Splits "<prefix>:<n>" into (prefix, n, "") when the suffix is a plain
+    integer; anything else (e.g. "cpu") falls back to (id, -1, id) so it
+    still sorts deterministically, just outside the numeric device family.
+    """
+    prefix, _, suffix = device_id.partition(":")
+    if suffix.isdigit():
+        return (prefix, int(suffix), "")
+    return (device_id, -1, device_id)
+
+
 def pick_least_loaded_device(compatible: list[DeviceInfo], device_semaphores: DeviceSemaphores) -> str:
     """Deterministically picks the compatible device with the most free capacity.
 
     Ties -- including "every candidate is equally busy" -- break on the
-    lowest device id, so callers get a stable pick instead of flapping
-    between equally-loaded devices. `compatible` must be non-empty.
+    lowest numeric device id, so callers get a stable pick instead of
+    flapping between equally-loaded devices. `compatible` must be non-empty.
     """
 
     def free_capacity(device_id: str) -> int:
-        return device_semaphores.capacity_for(device_id) - device_semaphores.in_flight(device_id)
+        return device_semaphores.free_capacity(device_id)
 
     return min(
         (device["id"] for device in compatible),
-        key=lambda device_id: (-free_capacity(device_id), device_id),
+        key=lambda device_id: (-free_capacity(device_id), _numeric_device_sort_key(device_id)),
     )
 
 
 class DeviceRouter:
     """Resolves device="auto" jobs to a concrete device_id and reserves it.
 
-    Selection ("which compatible device has the most free capacity") and
-    reservation (actually entering that device's DeviceSemaphores permit)
-    happen atomically under `_selection_lock`: the lock is held across the
-    semaphore's `__aenter__`, so when the picked device has free capacity
-    that entry resolves without suspending and the in_flight increment it
-    performs is visible to the next picker before the lock is released.
-    That's what stops two auto-routed jobs from ever landing on the same
-    free device while another compatible one sits idle.
+    `acquire_auto` never blocks while holding selection state. Under the
+    shared `DeviceSemaphores.release_condition` it looks for a compatible
+    device that has FREE capacity right now and reserves it with a
+    non-blocking take (`reserve`, an in_flight increment done under the same
+    lock -- instantaneous, so two concurrent auto-picks can't both grab the
+    same free device: the first's increment is visible to the second before
+    the lock is released). If NO compatible device is currently free it holds
+    nothing and `await`s the condition, then re-selects from scratch on the
+    next turn.
 
-    No deadlock: `_selection_lock` is a plain asyncio.Lock, never a device
-    semaphore, and nothing holds a device semaphore while trying to acquire
-    it -- there is no cyclic wait. When every compatible device is already
-    saturated, the picked device's semaphore entry blocks while still
-    holding the selection lock, so other auto-picks queue up behind it
-    until a permit frees. That is ordinary backpressure (every semaphore
-    permit is always released in a `finally` by the job holding it), not a
-    deadlock -- but it does mean concurrent auto-routing decisions serialize
-    while the pool is fully saturated. Given ENABLE_AUTO_ROUTE is optional
-    and off by default, and the alternative (a per-job reservation ledger)
-    meaningfully increases complexity for a case where the system has no
-    free capacity anyway, this tradeoff is accepted -- see
-    .superpowers/sdd/sp7-task-2-report.md for the self-review.
+    Why that matters (the head-of-line bug this avoids): an earlier design
+    picked a device eagerly and then blocked on it while holding the
+    selection lock. With two saturated GPUs, a picker married to dml:0 would
+    keep dml:1 idle for dml:0's entire job runtime when dml:1 freed first,
+    and queue every other picker behind it. Here the picker holds no device
+    until one is actually free, and whichever compatible device frees first
+    is the one taken -- no idle device, no picker blocking another picker.
+
+    No deadlock: the only lock is the leaf `release_condition`, held just to
+    check-and-reserve or to `wait()` (which releases it while suspended). No
+    device is ever held while waiting for another. No busy-wait: waiting is a
+    real `condition.wait()`, woken by a permit release, not a spin. The
+    reserved permit is always released in `acquire_auto`'s `finally` (and if
+    cancelled while waiting, nothing was reserved, so nothing leaks).
     """
 
     def __init__(self, device_semaphores: DeviceSemaphores) -> None:
         self._device_semaphores = device_semaphores
-        self._selection_lock = asyncio.Lock()
 
     @asynccontextmanager
     async def acquire_auto(self, devices: list[DeviceInfo], model_kind: ModelKind) -> AsyncIterator[str]:
@@ -96,8 +110,23 @@ class DeviceRouter:
             raise ValueError(
                 f"No compatible device available for model kind {model_kind.value!r} (requested device='auto')"
             )
-        async with AsyncExitStack() as stack:
-            async with self._selection_lock:
-                device_id = pick_least_loaded_device(compatible, self._device_semaphores)
-                await stack.enter_async_context(self._device_semaphores.acquire(device_id))
+        device_id = await self._reserve_least_loaded(compatible)
+        try:
             yield device_id
+        finally:
+            await self._device_semaphores.release(device_id)
+
+    async def _reserve_least_loaded(self, compatible: list[DeviceInfo]) -> str:
+        semaphores = self._device_semaphores
+        condition = semaphores.release_condition
+        async with condition:
+            while True:
+                free = [device for device in compatible if semaphores.free_capacity(device["id"]) > 0]
+                if free:
+                    device_id = pick_least_loaded_device(free, semaphores)
+                    semaphores.reserve(device_id)
+                    return device_id
+                # Every compatible device is saturated: release the lock and
+                # sleep until SOME permit frees, then re-select (the freed
+                # device might be any compatible one, not one we pre-chose).
+                await condition.wait()
