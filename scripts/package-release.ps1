@@ -284,11 +284,29 @@ function Invoke-InnoSetupCompile {
     Write-Host 'Instalador generado:' $setupExePath
 }
 
+function Add-ApolloModelToInstaller {
+    # El modelo Apollo (~74MB) se BUNDLEA en el instalador (a diferencia del resto
+    # de binarios vendored, que se bajan de repos publicos upstream). Motivo: se
+    # hostea en el release PRIVADO, asi que descargarlo falla para quien no tiene
+    # acceso al repo; incluirlo en el setup.exe da el restore con un solo .exe.
+    # El [Files] del .iss copia build\app\* recursivo, asi que basta con stagearlo aca.
+    $apolloSrc = Join-Path $root 'vendor\apollo\apollo.onnx'
+    if (-not (Test-Path $apolloSrc)) {
+        Write-Host 'AVISO: vendor\apollo\apollo.onnx no encontrado; el instalador NO incluira el restore de audio.'
+        return
+    }
+    $apolloDst = Join-Path $installerAppDir 'vendor\apollo'
+    New-Item -ItemType Directory -Force -Path $apolloDst | Out-Null
+    Copy-Item -Force $apolloSrc (Join-Path $apolloDst 'apollo.onnx')
+    Write-Host 'Modelo Apollo (restauracion de audio) incluido en el instalador.'
+}
+
 function New-Installer {
     param([string]$IsccPath)
 
     Initialize-EmbeddedPython
     Copy-AppAllowlist -Destination $installerAppDir
+    Add-ApolloModelToInstaller
     New-Item -ItemType Directory -Force -Path $distDir | Out-Null
     Invoke-InnoSetupCompile -IsccPath $IsccPath
 }
