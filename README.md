@@ -371,6 +371,19 @@ ENABLE_AUDIO_ENHANCE=true
 
 Con eso activado, un job de video con `keep_audio=true` puede pedir `audio_enhance=deepfilter` (red neuronal DeepFilterNet3, mejor calidad, más lento) o `audio_enhance=rnnoise` (filtro `arnndn` de FFmpeg, más liviano). Pedir `audio_enhance` sin `keep_audio=true`, sin `ENABLE_AUDIO_ENHANCE=true` o sin los binarios instalados devuelve `400`. Omitir `audio_enhance` deja el audio original intacto (remux con `-c:a copy`).
 
+## Actualizaciones
+
+Upflow chequea **en silencio** si hay una release más nueva en GitHub y, si la hay, muestra un banner discreto arriba de la UI ("New version X available") con link a la release. El chequeo es opcional y a prueba de fallos: si no hay red, hay timeout o GitHub responde con rate-limit (`403`), el endpoint igual devuelve `200` con `updateAvailable=false` y un campo `error` — el banner simplemente no aparece y **la app nunca se rompe por el chequeo**. El resultado se cachea en memoria (`UPDATE_CHECK_TTL_SECONDS`, default 3600s) para no pegarle a la API de GitHub en cada request. El banner se puede descartar por versión: una vez descartado, esa versión no vuelve a aparecer, pero una versión más nueva sí.
+
+- `GET /api/v1/update-check` → `{ currentVersion, latestVersion, updateAvailable, releaseUrl, publishedAt, checkedAt, error }` (camelCase). Acepta `?force=true` para saltar el cache.
+
+**Reusar el patrón en otro proyecto:** el chequeo no tiene nada hardcodeado a Upflow, así que se reusa cambiando dos cosas:
+
+1. Apuntá `UPDATE_REPO` (en `.env`) al repo destino, con formato `owner/nombre` (default `santiquiroz/upflow`).
+2. Asegurate de que el paquete esté instalado con una versión (`importlib.metadata.version(...)`, con fallback al `[project] version` del `pyproject.toml`), que es contra lo que se compara el `tag_name` de la release.
+
+Toggles: `UPDATE_CHECK_ENABLED` (default `true`) apaga el chequeo por completo, y `UPDATE_API_TIMEOUT_SECONDS` (default `5.0`) acota cuánto espera a GitHub.
+
 ## Tests
 
 Backend (pytest):

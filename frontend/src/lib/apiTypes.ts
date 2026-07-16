@@ -172,6 +172,19 @@ export interface CreateInstallResponse {
   statusUrl: string;
 }
 
+// Mirrors app/schemas.py::UpdateCheckResponse. Backend always answers 200:
+// on any failure (offline, rate-limit, bad JSON) it returns updateAvailable
+// false with a non-null error instead of throwing.
+export interface UpdateCheck {
+  currentVersion: string;
+  latestVersion: string | null;
+  updateAvailable: boolean;
+  releaseUrl: string | null;
+  publishedAt: string | null;
+  checkedAt: string;
+  error: string | null;
+}
+
 export interface InstallStatusResponse {
   installId: string;
   repoId: string;
