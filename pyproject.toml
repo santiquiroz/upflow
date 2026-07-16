@@ -12,6 +12,10 @@ dependencies = [
   "pillow>=10.4.0,<11.0.0",
   "pydantic>=2.8.0,<3.0.0",
   "pydantic-settings>=2.4.0,<3.0.0",
+  # SP8 - update_service.py compares release tags with packaging.version.Version.
+  # Declared explicitly: it was only reaching the env transitively, which a
+  # fresh embedded-Python install can't be relied on to reproduce.
+  "packaging>=23.0",
   "aiofiles>=24.1.0,<25.0.0",
   "httpx>=0.27.0,<1.0.0",
   "numpy>=1.26.0,<3.0.0",
