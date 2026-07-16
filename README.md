@@ -377,10 +377,14 @@ Upflow chequea **en silencio** si hay una release más nueva en GitHub y, si la 
 
 - `GET /api/v1/update-check` → `{ currentVersion, latestVersion, updateAvailable, releaseUrl, publishedAt, checkedAt, error }` (camelCase). Acepta `?force=true` para saltar el cache.
 
-**Reusar el patrón en otro proyecto:** el chequeo no tiene nada hardcodeado a Upflow, así que se reusa cambiando dos cosas:
+Si un chequeo falla justo cuando el cache expira, el banner **no desaparece**: mientras hubo un resultado bueno en la sesión, el servicio sigue sirviéndolo (un parpadeo de red no oculta una actualización real). Un error sin ningún resultado bueno previo se cachea solo `UPDATE_ERROR_RETRY_SECONDS` (default 300s) para reintentar pronto, no por el TTL completo.
 
-1. Apuntá `UPDATE_REPO` (en `.env`) al repo destino, con formato `owner/nombre` (default `santiquiroz/upflow`).
-2. Asegurate de que el paquete esté instalado con una versión (`importlib.metadata.version(...)`, con fallback al `[project] version` del `pyproject.toml`), que es contra lo que se compara el `tag_name` de la release.
+- `GET /api/v1/update-check` → `{ currentVersion, latestVersion, updateAvailable, releaseUrl, publishedAt, checkedAt, error }` (camelCase). Acepta `?force=true` para saltar el cache.
+
+**Reusar el patrón en otro proyecto:** el chequeo no tiene nada hardcodeado a Upflow, así que se reusa cambiando dos variables de `.env`:
+
+1. `UPDATE_REPO` → el repo destino, con formato `owner/nombre` (default `santiquiroz/upflow`).
+2. `UPDATE_PACKAGE_NAME` → el nombre del paquete instalado cuya versión se compara contra el `tag_name` de la release (`importlib.metadata.version(...)`, con fallback al `[project] version` del `pyproject.toml`). También define el User-Agent del request.
 
 Toggles: `UPDATE_CHECK_ENABLED` (default `true`) apaga el chequeo por completo, y `UPDATE_API_TIMEOUT_SECONDS` (default `5.0`) acota cuánto espera a GitHub.
 

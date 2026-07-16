@@ -1,6 +1,6 @@
 [project]
 name = "upflow"
-version = "0.1.0"
+version = "0.2.0"
 description = "Modern AI upscaling + frame interpolation for AMD GPUs — Vulkan-native, FastAPI, web UI + REST API."
 readme = "README.md"
 requires-python = ">=3.11"
