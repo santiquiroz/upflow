@@ -188,7 +188,24 @@ class DevicesService:
     def _enumerate_gpu_devices(self) -> list[DeviceInfo]:
         if not self._directml_supported():
             return []
-        return [_build_gpu_device(index, name) for index, name in enumerate(_enumerate_gpu_adapter_names())]
+        devices: list[DeviceInfo] = []
+        seen_names: set[str] = set()
+        for index, name in enumerate(_enumerate_gpu_adapter_names()):
+            # En sistemas hibridos (iGPU integrada + dGPU discreta) DXGI enumera
+            # el MISMO GPU fisico dos veces: el dGPU aparece como dos adaptadores
+            # de nombre identico y LUID distinto. El smoke del gate de SP1
+            # confirmo que ambos indices resuelven al mismo GPU (perf/output
+            # identicos), asi que colapsamos duplicados por nombre y conservamos
+            # el device_id mas bajo -> el usuario ve cada GPU una sola vez y el
+            # id que sobrevive sigue siendo un device_id valido de DirectML/ncnn
+            # (no se renumera: dml:0 sigue siendo el adaptador 0). Los nombres
+            # vacios NO se deduplican (no se pueden comparar de forma fiable).
+            if name and name in seen_names:
+                continue
+            if name:
+                seen_names.add(name)
+            devices.append(_build_gpu_device(index, name))
+        return devices
 
     @staticmethod
     def _directml_supported() -> bool:

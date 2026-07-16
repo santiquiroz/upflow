@@ -131,6 +131,42 @@ def test_list_devices_falls_back_to_generic_name_when_adapter_name_missing(
     assert devices[2]["name"] == "AMD Radeon RX 7800 XT"
 
 
+def test_list_devices_collapses_duplicate_adapter_names_keeping_lowest_device_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Hardware real del gate de SP1 (Ryzen 9 7900X3D iGPU + RX 7800 XT): DXGI
+    # enumera el dGPU dos veces con nombre identico. Se colapsa a una sola
+    # entrada conservando el device_id mas bajo (dml:0); dml:2 desaparece.
+    patch_onnxruntime_with_directml(
+        monkeypatch,
+        ["AMD Radeon RX 7800 XT", "AMD Radeon(TM) Graphics", "AMD Radeon RX 7800 XT"],
+    )
+    service = DevicesService(make_settings())
+
+    devices = service.list_devices()
+
+    assert devices == [
+        CPU_DEVICE,
+        {"id": "dml:0", "kind": "gpu", "name": "AMD Radeon RX 7800 XT", "backend": "directml"},
+        {"id": "dml:1", "kind": "gpu", "name": "AMD Radeon(TM) Graphics", "backend": "directml"},
+    ]
+
+
+def test_list_devices_does_not_collapse_empty_adapter_names(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Dos adaptadores sin nombre son entradas distintas (GPU 0 / GPU 2); los
+    # nombres vacios no se pueden comparar, asi que no se deduplican.
+    patch_onnxruntime_with_directml(monkeypatch, ["", "AMD Radeon RX 7800 XT", ""])
+    service = DevicesService(make_settings())
+
+    devices = service.list_devices()
+
+    assert [d["id"] for d in devices] == ["cpu", "dml:0", "dml:1", "dml:2"]
+    assert devices[1]["name"] == "GPU 0"
+    assert devices[3]["name"] == "GPU 2"
+
+
 def test_list_devices_returns_only_cpu_when_directml_supported_but_no_adapters_enumerate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
