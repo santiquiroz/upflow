@@ -11,6 +11,7 @@ from starlette.datastructures import UploadFile
 from app.api.routes import create_video_job, resolve_video_job_fields, video_job_to_response
 from app.config import Settings
 from app.models import VideoUpscaleJob
+from app.services.device_semaphores import DeviceSemaphores
 from app.services.storage import StorageService
 from app.services.video_job_manager import VideoJobManager
 
@@ -168,7 +169,7 @@ def test_resolve_video_job_fields_keeps_explicit_audio_enhance() -> None:
 
 async def test_video_job_manager_accepts_valid_audio_enhance_mode(tmp_path: Path) -> None:
     settings = make_settings_with_audio_enhance_available(tmp_path)
-    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), asyncio.Semaphore(1))
+    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), DeviceSemaphores(settings))
     source_path = settings.uploads_path / "clip.mp4"
     source_path.parent.mkdir(parents=True, exist_ok=True)
     source_path.write_bytes(b"fake-video-bytes")
@@ -191,7 +192,7 @@ async def test_video_job_manager_accepts_valid_audio_enhance_mode(tmp_path: Path
 
 async def test_video_job_manager_accepts_audio_enhance_off(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
-    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), asyncio.Semaphore(1))
+    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), DeviceSemaphores(settings))
     source_path = settings.uploads_path / "clip.mp4"
     source_path.parent.mkdir(parents=True, exist_ok=True)
     source_path.write_bytes(b"fake-video-bytes")
@@ -214,7 +215,7 @@ async def test_video_job_manager_accepts_audio_enhance_off(tmp_path: Path) -> No
 
 async def test_video_job_manager_rejects_unknown_audio_enhance_value(tmp_path: Path) -> None:
     settings = make_settings_with_audio_enhance_available(tmp_path)
-    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), asyncio.Semaphore(1))
+    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), DeviceSemaphores(settings))
     source_path = settings.uploads_path / "clip.mp4"
     source_path.parent.mkdir(parents=True, exist_ok=True)
     source_path.write_bytes(b"fake-video-bytes")
@@ -236,7 +237,7 @@ async def test_video_job_manager_rejects_unknown_audio_enhance_value(tmp_path: P
 
 async def test_video_job_manager_rejects_audio_enhance_without_keep_audio(tmp_path: Path) -> None:
     settings = make_settings_with_audio_enhance_available(tmp_path)
-    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), asyncio.Semaphore(1))
+    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), DeviceSemaphores(settings))
     source_path = settings.uploads_path / "clip.mp4"
     source_path.parent.mkdir(parents=True, exist_ok=True)
     source_path.write_bytes(b"fake-video-bytes")
@@ -258,7 +259,7 @@ async def test_video_job_manager_rejects_audio_enhance_without_keep_audio(tmp_pa
 
 async def test_video_job_manager_rejects_audio_enhance_when_disabled_by_config(tmp_path: Path) -> None:
     settings = make_settings_with_audio_enhance_available(tmp_path, enable_audio_enhance=False)
-    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), asyncio.Semaphore(1))
+    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), DeviceSemaphores(settings))
     source_path = settings.uploads_path / "clip.mp4"
     source_path.parent.mkdir(parents=True, exist_ok=True)
     source_path.write_bytes(b"fake-video-bytes")
@@ -285,7 +286,7 @@ async def test_video_job_manager_rejects_audio_enhance_when_not_installed(tmp_pa
         DEEPFILTER_BINARY=str(tmp_path / "missing-deep-filter.exe"),
         RNNOISE_MODEL=str(tmp_path / "missing.rnnn"),
     )
-    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), asyncio.Semaphore(1))
+    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), DeviceSemaphores(settings))
     source_path = settings.uploads_path / "clip.mp4"
     source_path.parent.mkdir(parents=True, exist_ok=True)
     source_path.write_bytes(b"fake-video-bytes")
@@ -315,9 +316,11 @@ def test_disabled_and_not_installed_audio_enhance_messages_are_distinct(tmp_path
         DEEPFILTER_BINARY=str(tmp_path / "missing-deep-filter.exe"),
         RNNOISE_MODEL=str(tmp_path / "missing.rnnn"),
     )
-    disabled_jobs = VideoJobManager(disabled_settings, FakeUpscaler(), FakeMediaTools(), asyncio.Semaphore(1))
+    disabled_jobs = VideoJobManager(
+        disabled_settings, FakeUpscaler(), FakeMediaTools(), DeviceSemaphores(disabled_settings)
+    )
     not_installed_jobs = VideoJobManager(
-        not_installed_settings, FakeUpscaler(), FakeMediaTools(), asyncio.Semaphore(1)
+        not_installed_settings, FakeUpscaler(), FakeMediaTools(), DeviceSemaphores(not_installed_settings)
     )
 
     with pytest.raises(ValueError) as disabled_exc:
@@ -336,7 +339,7 @@ def test_disabled_and_not_installed_audio_enhance_messages_are_distinct(tmp_path
 async def test_create_video_job_route_accepts_valid_audio_enhance(tmp_path: Path) -> None:
     settings = make_settings_with_audio_enhance_available(tmp_path)
     storage = StorageService(settings)
-    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), asyncio.Semaphore(1))
+    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), DeviceSemaphores(settings))
 
     response = await create_video_job(
         request=None,
@@ -368,7 +371,7 @@ async def test_create_video_job_route_accepts_valid_audio_enhance(tmp_path: Path
 async def test_create_video_job_route_rejects_invalid_audio_enhance(tmp_path: Path) -> None:
     settings = make_settings_with_audio_enhance_available(tmp_path)
     storage = StorageService(settings)
-    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), asyncio.Semaphore(1))
+    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), DeviceSemaphores(settings))
 
     with pytest.raises(HTTPException) as exc_info:
         await create_video_job(
@@ -400,7 +403,7 @@ async def test_create_video_job_route_rejects_invalid_audio_enhance(tmp_path: Pa
 async def test_create_video_job_route_rejects_audio_enhance_without_keep_audio(tmp_path: Path) -> None:
     settings = make_settings_with_audio_enhance_available(tmp_path)
     storage = StorageService(settings)
-    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), asyncio.Semaphore(1))
+    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), DeviceSemaphores(settings))
 
     with pytest.raises(HTTPException) as exc_info:
         await create_video_job(
@@ -436,7 +439,7 @@ async def test_create_video_job_route_rejects_audio_enhance_when_unavailable(tmp
         RNNOISE_MODEL=str(tmp_path / "missing.rnnn"),
     )
     storage = StorageService(settings)
-    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), asyncio.Semaphore(1))
+    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), DeviceSemaphores(settings))
 
     with pytest.raises(HTTPException) as exc_info:
         await create_video_job(
@@ -468,7 +471,7 @@ async def test_create_video_job_route_rejects_audio_enhance_when_unavailable(tmp
 async def test_create_video_job_route_omitted_audio_enhance_defaults_to_none(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     storage = StorageService(settings)
-    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), asyncio.Semaphore(1))
+    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), DeviceSemaphores(settings))
 
     response = await create_video_job(
         request=None,

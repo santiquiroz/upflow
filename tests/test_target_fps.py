@@ -12,6 +12,7 @@ from starlette.datastructures import UploadFile
 from app.api.routes import create_video_job, resolve_video_job_fields, video_job_to_response
 from app.config import Settings
 from app.models import VideoUpscaleJob
+from app.services.device_semaphores import DeviceSemaphores
 from app.services.storage import StorageService
 from app.services.video_job_manager import VideoJobManager
 
@@ -189,7 +190,7 @@ def test_resolve_video_job_fields_defaults_target_fps_to_none_when_omitted() -> 
 
 async def test_video_job_manager_accepts_target_fps_above_source(tmp_path: Path) -> None:
     settings = make_settings_with_rife_available(tmp_path)
-    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), asyncio.Semaphore(1))
+    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), DeviceSemaphores(settings))
     source_path = make_source(settings)
 
     job = await create_job_with_target_fps(video_jobs, source_path, target_fps="60")
@@ -200,7 +201,7 @@ async def test_video_job_manager_accepts_target_fps_above_source(tmp_path: Path)
 
 async def test_video_job_manager_accepts_target_fps_at_cap_boundary(tmp_path: Path) -> None:
     settings = make_settings_with_rife_available(tmp_path)
-    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), asyncio.Semaphore(1))
+    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), DeviceSemaphores(settings))
     source_path = make_source(settings)
 
     job = await create_job_with_target_fps(video_jobs, source_path, target_fps="240")
@@ -213,7 +214,7 @@ async def test_video_job_manager_rejects_target_fps_at_or_below_source(
     tmp_path: Path, target_fps: str
 ) -> None:
     settings = make_settings_with_rife_available(tmp_path)
-    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), asyncio.Semaphore(1))
+    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), DeviceSemaphores(settings))
     source_path = make_source(settings)
 
     with pytest.raises(ValueError, match="(?i)greater than"):
@@ -223,7 +224,7 @@ async def test_video_job_manager_rejects_target_fps_at_or_below_source(
 @pytest.mark.parametrize("target_fps", ["abc", "0", "-30", "300"])
 async def test_video_job_manager_rejects_invalid_target_fps(tmp_path: Path, target_fps: str) -> None:
     settings = make_settings_with_rife_available(tmp_path)
-    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), asyncio.Semaphore(1))
+    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), DeviceSemaphores(settings))
     source_path = make_source(settings)
 
     with pytest.raises(ValueError):
@@ -232,7 +233,7 @@ async def test_video_job_manager_rejects_invalid_target_fps(tmp_path: Path, targ
 
 async def test_video_job_manager_rejects_target_fps_with_multiplier_simultaneously(tmp_path: Path) -> None:
     settings = make_settings_with_rife_available(tmp_path)
-    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), asyncio.Semaphore(1))
+    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), DeviceSemaphores(settings))
     source_path = make_source(settings)
 
     with pytest.raises(ValueError, match="(?i)mutually exclusive"):
@@ -243,7 +244,7 @@ async def test_video_job_manager_rejects_target_fps_when_interpolation_disabled_
     tmp_path: Path,
 ) -> None:
     settings = make_settings_with_rife_available(tmp_path, enable_interpolation=False)
-    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), asyncio.Semaphore(1))
+    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), DeviceSemaphores(settings))
     source_path = make_source(settings)
 
     with pytest.raises(ValueError, match="(?i)disabled"):
@@ -254,7 +255,7 @@ async def test_video_job_manager_rejects_target_fps_when_rife_not_installed(tmp_
     settings = make_settings(
         tmp_path, ENABLE_INTERPOLATION=True, RIFE_BINARY=str(tmp_path / "missing-rife.exe")
     )
-    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), asyncio.Semaphore(1))
+    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), DeviceSemaphores(settings))
     source_path = make_source(settings)
 
     with pytest.raises(ValueError, match="(?i)not installed"):
@@ -266,9 +267,11 @@ def test_target_fps_disabled_and_not_installed_messages_are_distinct(tmp_path: P
     not_installed_settings = make_settings(
         tmp_path / "b", ENABLE_INTERPOLATION=True, RIFE_BINARY=str(tmp_path / "missing-rife.exe")
     )
-    disabled_jobs = VideoJobManager(disabled_settings, FakeUpscaler(), FakeMediaTools(), asyncio.Semaphore(1))
+    disabled_jobs = VideoJobManager(
+        disabled_settings, FakeUpscaler(), FakeMediaTools(), DeviceSemaphores(disabled_settings)
+    )
     not_installed_jobs = VideoJobManager(
-        not_installed_settings, FakeUpscaler(), FakeMediaTools(), asyncio.Semaphore(1)
+        not_installed_settings, FakeUpscaler(), FakeMediaTools(), DeviceSemaphores(not_installed_settings)
     )
 
     with pytest.raises(ValueError) as disabled_exc:
@@ -288,7 +291,7 @@ async def test_create_video_job_route_accepts_target_fps(tmp_path: Path) -> None
     settings = make_settings_with_rife_available(tmp_path)
     storage = StorageService(settings)
     upscaler = FakeUpscaler()
-    video_jobs = VideoJobManager(settings, upscaler, FakeMediaTools(), asyncio.Semaphore(1))
+    video_jobs = VideoJobManager(settings, upscaler, FakeMediaTools(), DeviceSemaphores(settings))
 
     response = await create_video_job(
         request=None,
@@ -320,7 +323,7 @@ async def test_create_video_job_route_accepts_target_fps(tmp_path: Path) -> None
 async def test_create_video_job_route_rejects_target_fps_and_multiplier_together(tmp_path: Path) -> None:
     settings = make_settings_with_rife_available(tmp_path)
     storage = StorageService(settings)
-    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), asyncio.Semaphore(1))
+    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), DeviceSemaphores(settings))
 
     with pytest.raises(HTTPException) as exc_info:
         await create_video_job(
@@ -352,7 +355,7 @@ async def test_create_video_job_route_rejects_target_fps_and_multiplier_together
 async def test_create_video_job_route_rejects_target_fps_below_source(tmp_path: Path) -> None:
     settings = make_settings_with_rife_available(tmp_path)
     storage = StorageService(settings)
-    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), asyncio.Semaphore(1))
+    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), DeviceSemaphores(settings))
 
     with pytest.raises(HTTPException) as exc_info:
         await create_video_job(
@@ -384,7 +387,7 @@ async def test_create_video_job_route_rejects_target_fps_below_source(tmp_path: 
 async def test_create_video_job_route_omitted_target_fps_defaults_to_none(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     storage = StorageService(settings)
-    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), asyncio.Semaphore(1))
+    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), DeviceSemaphores(settings))
 
     response = await create_video_job(
         request=None,

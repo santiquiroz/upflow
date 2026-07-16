@@ -10,6 +10,7 @@ from pathlib import Path
 from app.config import AUDIO_ENHANCE_MODES, Settings
 from app.exceptions import QueueFullError
 from app.models import JobStatus, VideoUpscaleJob, utc_now
+from app.services.device_semaphores import DeviceSemaphores
 from app.services.devices_service import DevicesService
 from app.services.media_tools import MediaTools, parse_fps_fraction, resolve_video_fps
 from app.services.model_registry import ModelKind, ModelRegistry, ModelStatus
@@ -34,7 +35,7 @@ class VideoJobManager:
         settings: Settings,
         upscaler: VideoUpscaler,
         media_tools: MediaTools,
-        gpu_semaphore: asyncio.Semaphore,
+        device_semaphores: DeviceSemaphores,
         *,
         registry: ModelRegistry | None = None,
         devices: DevicesService | None = None,
@@ -46,7 +47,7 @@ class VideoJobManager:
         self.devices = devices
         self.jobs: dict[str, VideoUpscaleJob] = {}
         self.queue: asyncio.Queue[VideoUpscaleJob] = asyncio.Queue(maxsize=settings.max_queue_size)
-        self.gpu_semaphore = gpu_semaphore
+        self.device_semaphores = device_semaphores
         self.worker_tasks: list[asyncio.Task] = []
 
     async def start(self) -> None:
@@ -54,7 +55,7 @@ class VideoJobManager:
             return
         self.worker_tasks = [
             asyncio.create_task(self._worker(), name=f"video-upscale-worker-{i}")
-            for i in range(self.settings.gpu_concurrency)
+            for i in range(self.settings.max_concurrent_jobs)
         ]
 
     async def stop(self) -> None:
@@ -271,7 +272,7 @@ class VideoJobManager:
     async def _worker(self) -> None:
         while True:
             job = await self.queue.get()
-            async with self.gpu_semaphore:
+            async with self.device_semaphores.acquire(job.device):
                 job.status = JobStatus.running
                 job.started_at = utc_now()
                 try:

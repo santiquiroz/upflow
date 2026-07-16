@@ -11,6 +11,7 @@ from starlette.datastructures import UploadFile
 from app.api.routes import create_job, create_video_job, sanitize_filename
 from app.config import Settings
 from app.models import UpscaleJob, VideoUpscaleJob
+from app.services.device_semaphores import DeviceSemaphores
 from app.services.engines.base import UpscaleEngine
 from app.services.job_manager import JobManager
 from app.services.storage import StorageService
@@ -119,7 +120,7 @@ def test_sanitize_filename_strips_directory_components() -> None:
 async def test_image_upload_with_forbidden_chars_lands_on_disk_sanitized(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     storage = StorageService(settings)
-    jobs = JobManager(settings, FakeEngine(), asyncio.Semaphore(settings.gpu_concurrency))
+    jobs = JobManager(settings, FakeEngine(), DeviceSemaphores(settings))
 
     response = await create_job(
         request=None,
@@ -144,7 +145,7 @@ async def test_image_upload_with_forbidden_chars_lands_on_disk_sanitized(tmp_pat
 async def test_image_upload_keeps_original_filename_as_display_metadata(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     storage = StorageService(settings)
-    jobs = JobManager(settings, FakeEngine(), asyncio.Semaphore(settings.gpu_concurrency))
+    jobs = JobManager(settings, FakeEngine(), DeviceSemaphores(settings))
 
     response = await create_job(
         request=None,
@@ -169,7 +170,7 @@ async def test_video_upload_with_forbidden_chars_lands_on_disk_sanitized(tmp_pat
     settings = make_settings(tmp_path)
     storage = StorageService(settings)
     video_jobs = VideoJobManager(
-        settings, FakeUpscaler(), FakeMediaTools(), asyncio.Semaphore(settings.gpu_concurrency)
+        settings, FakeUpscaler(), FakeMediaTools(), DeviceSemaphores(settings)
     )
 
     response = await create_video_job(

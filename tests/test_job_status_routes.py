@@ -17,6 +17,7 @@ from app.api.routes import (
 )
 from app.config import Settings
 from app.models import JobStatus, UpscaleJob, VideoUpscaleJob
+from app.services.device_semaphores import DeviceSemaphores
 from app.services.engines.base import UpscaleEngine
 from app.services.job_manager import JobManager
 from app.services.storage import StorageService
@@ -57,11 +58,11 @@ def make_settings(tmp_path: Path) -> Settings:
 
 
 def make_job_manager(settings: Settings) -> JobManager:
-    return JobManager(settings, FakeEngine(), asyncio.Semaphore(1))
+    return JobManager(settings, FakeEngine(), DeviceSemaphores(settings))
 
 
 def make_video_job_manager(settings: Settings) -> VideoJobManager:
-    return VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), asyncio.Semaphore(1))
+    return VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), DeviceSemaphores(settings))
 
 
 def make_job(tmp_path: Path, **overrides: object) -> UpscaleJob:

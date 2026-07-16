@@ -13,6 +13,7 @@ from app.api.routes import create_job, create_video_job
 from app.config import Settings
 from app.exceptions import QueueFullError
 from app.models import UpscaleJob, VideoUpscaleJob
+from app.services.device_semaphores import DeviceSemaphores
 from app.services.engines.base import UpscaleEngine
 from app.services.job_manager import JobManager
 from app.services.storage import StorageService
@@ -66,14 +67,14 @@ class FakeDevicesService:
 
 async def test_job_manager_queue_respects_configured_maxsize(tmp_path: Path) -> None:
     settings = make_settings(tmp_path, max_queue_size=3)
-    jobs = JobManager(settings, FakeEngine(), asyncio.Semaphore(settings.gpu_concurrency))
+    jobs = JobManager(settings, FakeEngine(), DeviceSemaphores(settings))
 
     assert jobs.queue.maxsize == 3
 
 
 async def test_job_manager_raises_queue_full_error_when_queue_is_full(tmp_path: Path) -> None:
     settings = make_settings(tmp_path, max_queue_size=1)
-    jobs = JobManager(settings, FakeEngine(), asyncio.Semaphore(settings.gpu_concurrency))
+    jobs = JobManager(settings, FakeEngine(), DeviceSemaphores(settings))
 
     source_a = tmp_path / "a.png"
     source_a.write_bytes(make_png_bytes())
@@ -103,7 +104,7 @@ async def test_job_manager_raises_queue_full_error_when_queue_is_full(tmp_path: 
 async def test_video_job_manager_raises_queue_full_error_when_queue_is_full(tmp_path: Path) -> None:
     settings = make_settings(tmp_path, max_queue_size=1)
     video_jobs = VideoJobManager(
-        settings, FakeUpscaler(), FakeMediaTools(), asyncio.Semaphore(settings.gpu_concurrency)
+        settings, FakeUpscaler(), FakeMediaTools(), DeviceSemaphores(settings)
     )
 
     source_a = tmp_path / "a.mp4"
@@ -142,7 +143,7 @@ async def test_video_job_manager_raises_queue_full_error_when_queue_is_full(tmp_
 async def test_create_job_route_returns_429_when_queue_full(tmp_path: Path) -> None:
     settings = make_settings(tmp_path, max_queue_size=1)
     storage = StorageService(settings)
-    jobs = JobManager(settings, FakeEngine(), asyncio.Semaphore(settings.gpu_concurrency))
+    jobs = JobManager(settings, FakeEngine(), DeviceSemaphores(settings))
 
     await create_job(
         request=None,
@@ -181,7 +182,7 @@ async def test_create_video_job_route_returns_429_when_queue_full(tmp_path: Path
     settings = make_settings(tmp_path, max_queue_size=1)
     storage = StorageService(settings)
     video_jobs = VideoJobManager(
-        settings, FakeUpscaler(), FakeMediaTools(), asyncio.Semaphore(settings.gpu_concurrency)
+        settings, FakeUpscaler(), FakeMediaTools(), DeviceSemaphores(settings)
     )
 
     await create_video_job(

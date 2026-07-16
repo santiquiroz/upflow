@@ -13,6 +13,7 @@ from starlette.datastructures import UploadFile
 from app.api.routes import create_video_job, resolve_video_job_fields
 from app.config import Settings
 from app.models import UpscaleJob, VideoUpscaleJob
+from app.services.device_semaphores import DeviceSemaphores
 from app.services.job_manager import JobManager
 from app.services.engines import realesrgan_ncnn as realesrgan_module
 from app.services.engines.realesrgan_ncnn import RealEsrganNcnnEngine
@@ -128,7 +129,7 @@ async def test_explicit_scale_zero_is_rejected_by_downstream_validation_not_sile
     settings = make_settings(tmp_path)
     storage = StorageService(settings)
     video_jobs = VideoJobManager(
-        settings, FakeUpscaler(), FakeMediaTools(), asyncio.Semaphore(settings.gpu_concurrency)
+        settings, FakeUpscaler(), FakeMediaTools(), DeviceSemaphores(settings)
     )
 
     with pytest.raises(HTTPException) as exc_info:
@@ -302,7 +303,7 @@ def make_gif_bytes() -> bytes:
 
 def test_validate_input_image_rejects_non_whitelisted_format(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
-    jobs = JobManager(settings, object(), asyncio.Semaphore(settings.gpu_concurrency))
+    jobs = JobManager(settings, object(), DeviceSemaphores(settings))
     source_path = tmp_path / "sneaky.gif"
     source_path.write_bytes(make_gif_bytes())
 
@@ -312,7 +313,7 @@ def test_validate_input_image_rejects_non_whitelisted_format(tmp_path: Path) -> 
 
 def test_validate_input_image_accepts_png(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
-    jobs = JobManager(settings, object(), asyncio.Semaphore(settings.gpu_concurrency))
+    jobs = JobManager(settings, object(), DeviceSemaphores(settings))
     source_path = tmp_path / "ok.png"
     source_path.write_bytes(make_png_bytes())
 

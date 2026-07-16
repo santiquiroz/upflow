@@ -7,13 +7,14 @@ import pytest
 
 from app.config import Settings
 from app.models import JobStatus, UpscaleJob, VideoUpscaleJob
+from app.services.device_semaphores import DeviceSemaphores
 from app.services.engines.base import UpscaleEngine
 from app.services.job_manager import JobManager
 from app.services.video_job_manager import VideoJobManager
 
 
 def make_settings(tmp_path: Path) -> Settings:
-    return Settings(RUNTIME_DIR=str(tmp_path), GPU_CONCURRENCY=1)
+    return Settings(RUNTIME_DIR=str(tmp_path), PER_DEVICE_GPU_CONCURRENCY=1)
 
 
 class FakeSubprocess:
@@ -101,7 +102,7 @@ def make_video_job(source_path: Path) -> VideoUpscaleJob:
 async def test_job_manager_worker_cancel_kills_subprocess_and_marks_job_failed(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     engine = HangingImageEngine()
-    semaphore = asyncio.Semaphore(1)
+    semaphore = DeviceSemaphores(settings)
     manager = JobManager(settings, engine, semaphore)
 
     source_path = tmp_path / "input.png"
@@ -130,7 +131,7 @@ async def test_job_manager_worker_cancel_kills_subprocess_and_marks_job_failed(t
 async def test_video_job_manager_worker_cancel_kills_subprocess_and_marks_job_failed(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     upscaler = HangingVideoUpscaler()
-    semaphore = asyncio.Semaphore(1)
+    semaphore = DeviceSemaphores(settings)
     manager = VideoJobManager(settings, upscaler, FakeMediaTools(), semaphore)
 
     source_path = tmp_path / "input.mp4"

@@ -15,6 +15,7 @@ from app.config import Settings
 from app.main import app
 from app.models import JobStatus, UpscaleJob, VideoUpscaleJob, utc_now
 from app.services import retention_sweeper as retention_sweeper_module
+from app.services.device_semaphores import DeviceSemaphores
 from app.services.engines.base import UpscaleEngine
 from app.services.job_manager import JobManager
 from app.services.retention_sweeper import RetentionSweeper
@@ -177,7 +178,7 @@ async def test_video_job_worker_removes_source_and_keeps_output_on_success(tmp_p
     StorageService(settings)
     upscaler = FakePipelineVideoUpscaler(settings, FakeVideoEngine(), FakeMediaTools())
     video_jobs = VideoJobManager(
-        settings, upscaler, FakeMediaTools(), asyncio.Semaphore(settings.gpu_concurrency)
+        settings, upscaler, FakeMediaTools(), DeviceSemaphores(settings)
     )
 
     source_path = settings.uploads_path / "clip.mp4"
@@ -216,7 +217,7 @@ async def test_video_job_worker_removes_source_on_failure(tmp_path: Path) -> Non
         settings,
         FailingVideoUpscaler(),
         FakeMediaTools(),
-        asyncio.Semaphore(settings.gpu_concurrency),
+        DeviceSemaphores(settings),
     )
 
     source_path = settings.uploads_path / "clip.mp4"
@@ -249,7 +250,7 @@ async def test_image_job_worker_removes_source_and_keeps_output_on_success(tmp_p
     settings = make_settings(tmp_path)
     StorageService(settings)
     jobs = JobManager(
-        settings, FakeImageEngine(settings), asyncio.Semaphore(settings.gpu_concurrency)
+        settings, FakeImageEngine(settings), DeviceSemaphores(settings)
     )
 
     source_path = settings.uploads_path / "photo.png"
@@ -280,7 +281,7 @@ async def test_image_job_worker_removes_source_on_failure(tmp_path: Path) -> Non
     settings = make_settings(tmp_path)
     StorageService(settings)
     jobs = JobManager(
-        settings, FailingImageEngine(), asyncio.Semaphore(settings.gpu_concurrency)
+        settings, FailingImageEngine(), DeviceSemaphores(settings)
     )
 
     source_path = settings.uploads_path / "photo.png"
@@ -309,13 +310,13 @@ def test_retention_sweeper_deletes_expired_outputs_and_keeps_fresh_ones(tmp_path
     settings = make_settings(tmp_path, output_ttl_hours=1)
     StorageService(settings)
     job_manager = JobManager(
-        settings, FakeImageEngine(settings), asyncio.Semaphore(settings.gpu_concurrency)
+        settings, FakeImageEngine(settings), DeviceSemaphores(settings)
     )
     video_job_manager = VideoJobManager(
         settings,
         FailingVideoUpscaler(),
         FakeMediaTools(),
-        asyncio.Semaphore(settings.gpu_concurrency),
+        DeviceSemaphores(settings),
     )
     sweeper = RetentionSweeper(settings, job_manager, video_job_manager)
 
@@ -337,13 +338,13 @@ def test_retention_sweeper_prunes_old_finished_jobs_but_keeps_recent_and_running
     settings = make_settings(tmp_path, output_ttl_hours=1)
     StorageService(settings)
     job_manager = JobManager(
-        settings, FakeImageEngine(settings), asyncio.Semaphore(settings.gpu_concurrency)
+        settings, FakeImageEngine(settings), DeviceSemaphores(settings)
     )
     video_job_manager = VideoJobManager(
         settings,
         FailingVideoUpscaler(),
         FakeMediaTools(),
-        asyncio.Semaphore(settings.gpu_concurrency),
+        DeviceSemaphores(settings),
     )
     sweeper = RetentionSweeper(settings, job_manager, video_job_manager)
 
@@ -383,13 +384,13 @@ def test_lifespan_starts_and_stops_retention_sweeper() -> None:
 
 def make_sweeper(settings: Settings) -> RetentionSweeper:
     job_manager = JobManager(
-        settings, FakeImageEngine(settings), asyncio.Semaphore(settings.gpu_concurrency)
+        settings, FakeImageEngine(settings), DeviceSemaphores(settings)
     )
     video_job_manager = VideoJobManager(
         settings,
         FailingVideoUpscaler(),
         FakeMediaTools(),
-        asyncio.Semaphore(settings.gpu_concurrency),
+        DeviceSemaphores(settings),
     )
     return RetentionSweeper(settings, job_manager, video_job_manager)
 

@@ -15,6 +15,7 @@ from starlette.datastructures import UploadFile
 from app.api.routes import create_job, create_video_job
 from app.config import Settings
 from app.models import UpscaleJob, VideoUpscaleJob
+from app.services.device_semaphores import DeviceSemaphores
 from app.services.engines.base import UpscaleEngine
 from app.services.job_manager import JobManager
 from app.services.storage import StorageService
@@ -94,7 +95,7 @@ class ExplodingVideoJobManager:
 async def test_bomb_sized_image_upload_returns_400_and_no_leftover_file(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     storage = StorageService(settings)
-    jobs = JobManager(settings, FakeEngine(), asyncio.Semaphore(settings.gpu_concurrency))
+    jobs = JobManager(settings, FakeEngine(), DeviceSemaphores(settings))
 
     with pytest.raises(HTTPException) as exc_info:
         await create_job(
@@ -122,7 +123,7 @@ async def test_malformed_video_upload_returns_400_and_no_leftover_file(tmp_path:
         settings,
         FakeUpscaler(),
         FakeMediaToolsRaisingCalledProcessError(),
-        asyncio.Semaphore(settings.gpu_concurrency),
+        DeviceSemaphores(settings),
     )
 
     with pytest.raises(HTTPException) as exc_info:
@@ -220,7 +221,7 @@ async def test_validate_input_image_translates_decompression_bomb_error_to_value
     tmp_path: Path,
 ) -> None:
     settings = make_settings(tmp_path)
-    jobs = JobManager(settings, FakeEngine(), asyncio.Semaphore(settings.gpu_concurrency))
+    jobs = JobManager(settings, FakeEngine(), DeviceSemaphores(settings))
     source_path = tmp_path / "bomb.png"
     source_path.write_bytes(make_bomb_png_bytes())
 
@@ -234,7 +235,7 @@ async def test_validate_video_translates_calledprocesserror_to_value_error(tmp_p
         settings,
         FakeUpscaler(),
         FakeMediaToolsRaisingCalledProcessError(),
-        asyncio.Semaphore(settings.gpu_concurrency),
+        DeviceSemaphores(settings),
     )
     source_path = tmp_path / "clip.mp4"
     source_path.write_bytes(b"not-really-a-video")

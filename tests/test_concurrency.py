@@ -8,6 +8,7 @@ from PIL import Image
 
 from app.config import Settings
 from app.models import UpscaleJob, VideoUpscaleJob
+from app.services.device_semaphores import DeviceSemaphores
 from app.services.engines.base import UpscaleEngine
 from app.services.job_manager import JobManager
 from app.services.storage import StorageService
@@ -16,8 +17,10 @@ from app.services.video_job_manager import VideoJobManager
 HOLD_SECONDS = 0.15
 
 
-def make_settings(tmp_path: Path, gpu_concurrency: int) -> Settings:
-    return Settings(RUNTIME_DIR=str(tmp_path), GPU_CONCURRENCY=gpu_concurrency)
+def make_settings(tmp_path: Path, **overrides: object) -> Settings:
+    kwargs: dict[str, object] = {"RUNTIME_DIR": str(tmp_path)}
+    kwargs.update(overrides)
+    return Settings(_env_file=None, **kwargs)
 
 
 def make_png_bytes(color: str = "red") -> bytes:
@@ -94,17 +97,18 @@ def make_video_source(settings: Settings, name: str) -> Path:
     return source_path
 
 
-async def submit_image_job(jobs: JobManager, source_path: Path) -> None:
+async def submit_image_job(jobs: JobManager, source_path: Path, device: str) -> None:
     await jobs.create_job(
         source_path=source_path,
         original_filename=source_path.name,
         model_name="realesrgan-x4plus",
         scale=4,
         output_format="png",
+        device=device,
     )
 
 
-async def submit_video_job(video_jobs: VideoJobManager, source_path: Path) -> None:
+async def submit_video_job(video_jobs: VideoJobManager, source_path: Path, device: str) -> None:
     await video_jobs.create_job(
         source_path=source_path,
         original_filename=source_path.name,
@@ -115,20 +119,31 @@ async def submit_video_job(video_jobs: VideoJobManager, source_path: Path) -> No
         video_preset="medium",
         crf=18,
         keep_audio=False,
+        device=device,
     )
 
 
 def make_shared_managers(
     settings: Settings, tracker: ConcurrencyTracker
 ) -> tuple[JobManager, VideoJobManager]:
-    gpu_semaphore = asyncio.Semaphore(settings.gpu_concurrency)
-    jobs = JobManager(settings, TrackingImageEngine(settings, tracker), gpu_semaphore)
-    video_jobs = VideoJobManager(settings, TrackingVideoUpscaler(tracker), FakeMediaTools(), gpu_semaphore)
+    device_semaphores = DeviceSemaphores(settings)
+    jobs = JobManager(settings, TrackingImageEngine(settings, tracker), device_semaphores)
+    video_jobs = VideoJobManager(settings, TrackingVideoUpscaler(tracker), FakeMediaTools(), device_semaphores)
     return jobs, video_jobs
 
 
-async def test_shared_semaphore_at_limit_one_prevents_image_and_video_overlap(tmp_path: Path) -> None:
-    settings = make_settings(tmp_path, gpu_concurrency=1)
+# ---------------------------------------------------------------------------
+# SP7 Task 1: these two tests used to prove a single shared asyncio.Semaphore
+# gated image+video jobs together across both managers. That semaphore is now
+# per-device_id (DeviceSemaphores) -- to keep proving the SAME-device gating
+# intent, every job below explicitly targets device="dml:0" so they all
+# compete for that one device's semaphore. Cross-device parallelism (the
+# actual SP7 fix) is proven separately in tests/test_multigpu_concurrency.py.
+# ---------------------------------------------------------------------------
+
+
+async def test_same_device_concurrency_one_prevents_image_and_video_overlap(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path, PER_DEVICE_GPU_CONCURRENCY=1, MAX_CONCURRENT_JOBS=4)
     StorageService(settings)
     tracker = ConcurrencyTracker()
     jobs, video_jobs = make_shared_managers(settings, tracker)
@@ -140,8 +155,8 @@ async def test_shared_semaphore_at_limit_one_prevents_image_and_video_overlap(tm
     await video_jobs.start()
     try:
         await asyncio.gather(
-            submit_image_job(jobs, image_source),
-            submit_video_job(video_jobs, video_source),
+            submit_image_job(jobs, image_source, "dml:0"),
+            submit_video_job(video_jobs, video_source, "dml:0"),
         )
         await jobs.queue.join()
         await video_jobs.queue.join()
@@ -149,11 +164,11 @@ async def test_shared_semaphore_at_limit_one_prevents_image_and_video_overlap(tm
         await jobs.stop()
         await video_jobs.stop()
 
-    assert tracker.max_in_flight == 1, "image and video jobs overlapped despite a shared limit of 1"
+    assert tracker.max_in_flight == 1, "image and video jobs on the same device overlapped despite capacity 1"
 
 
-async def test_shared_semaphore_at_limit_two_allows_two_jobs_at_once(tmp_path: Path) -> None:
-    settings = make_settings(tmp_path, gpu_concurrency=2)
+async def test_same_device_concurrency_two_allows_two_jobs_at_once(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path, PER_DEVICE_GPU_CONCURRENCY=2, MAX_CONCURRENT_JOBS=4)
     StorageService(settings)
     tracker = ConcurrencyTracker()
     jobs, video_jobs = make_shared_managers(settings, tracker)
@@ -165,8 +180,8 @@ async def test_shared_semaphore_at_limit_two_allows_two_jobs_at_once(tmp_path: P
     await video_jobs.start()
     try:
         await asyncio.gather(
-            *(submit_image_job(jobs, source) for source in image_sources),
-            *(submit_video_job(video_jobs, source) for source in video_sources),
+            *(submit_image_job(jobs, source, "dml:0") for source in image_sources),
+            *(submit_video_job(video_jobs, source, "dml:0") for source in video_sources),
         )
         await jobs.queue.join()
         await video_jobs.queue.join()
@@ -174,11 +189,11 @@ async def test_shared_semaphore_at_limit_two_allows_two_jobs_at_once(tmp_path: P
         await jobs.stop()
         await video_jobs.stop()
 
-    assert tracker.max_in_flight == 2, "shared limit of 2 was not reached or was exceeded across managers"
+    assert tracker.max_in_flight == 2, "device capacity of 2 was not reached or was exceeded across managers"
 
 
 async def test_job_manager_start_spawns_configured_worker_count_and_stop_cancels_all(tmp_path: Path) -> None:
-    settings = make_settings(tmp_path, gpu_concurrency=3)
+    settings = make_settings(tmp_path, MAX_CONCURRENT_JOBS=3)
     StorageService(settings)
     tracker = ConcurrencyTracker()
     jobs, _ = make_shared_managers(settings, tracker)
@@ -196,7 +211,7 @@ async def test_job_manager_start_spawns_configured_worker_count_and_stop_cancels
 async def test_video_job_manager_start_spawns_configured_worker_count_and_stop_cancels_all(
     tmp_path: Path,
 ) -> None:
-    settings = make_settings(tmp_path, gpu_concurrency=3)
+    settings = make_settings(tmp_path, MAX_CONCURRENT_JOBS=3)
     StorageService(settings)
     tracker = ConcurrencyTracker()
     _, video_jobs = make_shared_managers(settings, tracker)

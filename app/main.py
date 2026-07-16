@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -11,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from app.api.routes import router as api_router
 from app.config import AUDIO_ENHANCE_MODES, get_settings
 from app.security import OriginGuardMiddleware
+from app.services.device_semaphores import DeviceSemaphores
 from app.services.devices_service import DevicesService
 from app.services.engines.audio_enhance import AudioEnhancer
 from app.services.engines.onnx_upscaler import OnnxUpscaler
@@ -41,9 +41,14 @@ async def lifespan(app: FastAPI):
     devices_service = DevicesService(settings)
     model_registry = ModelRegistry(settings)
     onnx_engine = OnnxUpscaler(settings, model_registry, devices_service)
-    gpu_semaphore = asyncio.Semaphore(settings.gpu_concurrency)
+    device_semaphores = DeviceSemaphores(settings)
     job_manager = JobManager(
-        settings, engine, gpu_semaphore, onnx_engine=onnx_engine, registry=model_registry, devices=devices_service
+        settings,
+        engine,
+        device_semaphores,
+        onnx_engine=onnx_engine,
+        registry=model_registry,
+        devices=devices_service,
     )
     video_upscaler = VideoUpscaler(
         settings,
@@ -55,7 +60,12 @@ async def lifespan(app: FastAPI):
         model_registry=model_registry,
     )
     video_job_manager = VideoJobManager(
-        settings, video_upscaler, media_tools, gpu_semaphore, registry=model_registry, devices=devices_service
+        settings,
+        video_upscaler,
+        media_tools,
+        device_semaphores,
+        registry=model_registry,
+        devices=devices_service,
     )
     retention_sweeper = RetentionSweeper(settings, job_manager, video_job_manager)
     hf_client = HfClient(settings)

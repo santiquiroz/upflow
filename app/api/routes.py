@@ -242,7 +242,11 @@ async def health(
     return HealthResponse(
         status="ok",
         engine=settings.engine,
-        gpu_concurrency=settings.gpu_concurrency,
+        # gpu_concurrency now reports the per-device GPU concurrency (the
+        # role GPU_CONCURRENCY used to play before per-device semaphores) --
+        # the JSON field name is unchanged so existing API consumers keep
+        # working.
+        gpu_concurrency=settings.per_device_gpu_concurrency,
         queue_depth=jobs.queue_depth(),
         video_queue_depth=video_jobs.queue_depth(),
     )

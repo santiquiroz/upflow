@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import TypedDict
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 NEUTRAL_BIND_HOSTS = frozenset({"127.0.0.1", "0.0.0.0", "localhost"})
@@ -181,7 +181,15 @@ class Settings(BaseSettings):
     max_upload_mb: int = Field(default=50, alias="MAX_UPLOAD_MB")
     max_video_upload_mb: int = Field(default=2048, alias="MAX_VIDEO_UPLOAD_MB")
     max_image_pixels: int = Field(default=120_000_000, alias="MAX_IMAGE_PIXELS")
-    gpu_concurrency: int = Field(default=1, alias="GPU_CONCURRENCY")
+    # Per-device concurrency (DeviceSemaphores): each physical device_id
+    # (dml:0, dml:1, cpu...) gets its own semaphore, so jobs on distinct
+    # devices run in parallel instead of serializing behind one shared gate.
+    per_device_gpu_concurrency: int = Field(default=1, alias="PER_DEVICE_GPU_CONCURRENCY")
+    cpu_concurrency: int = Field(default=2, alias="CPU_CONCURRENCY")
+    # Workers per manager (JobManager/VideoJobManager): must exceed the
+    # number of devices expected to run in parallel, or idle device
+    # semaphores never get a worker to pull a job into them.
+    max_concurrent_jobs: int = Field(default=4, alias="MAX_CONCURRENT_JOBS")
     cpu_fallback_workers: int = Field(default=2, alias="CPU_FALLBACK_WORKERS")
     subprocess_timeout: float = Field(default=86400, alias="SUBPROCESS_TIMEOUT")
     frame_stall_timeout_seconds: float = Field(default=900, alias="FRAME_STALL_TIMEOUT_SECONDS")
@@ -225,6 +233,13 @@ class Settings(BaseSettings):
     max_model_download_mb: int = Field(default=2048, alias="MAX_MODEL_DOWNLOAD_MB")
 
     onnx_tile_size: int = Field(default=256, alias="ONNX_TILE_SIZE")
+
+    @field_validator("per_device_gpu_concurrency", "cpu_concurrency", "max_concurrent_jobs")
+    @classmethod
+    def _validate_concurrency_at_least_one(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("Concurrency settings must be at least 1")
+        return value
 
     @model_validator(mode="after")
     def _apply_default_allowed_origins(self) -> "Settings":

@@ -27,11 +27,12 @@ from app.services.progress import apply_image_tile_progress
 #
 # GPU semaphore: this engine intentionally does NOT accept or manage its own
 # asyncio.Semaphore. JobManager/VideoJobManager already wrap every
-# `await self.engine.run(job)` call in `async with self.gpu_semaphore:` --
-# that gating is applied uniformly to whichever engine is plugged in, so once
-# Task 7 wires OnnxUpscaler as `self.engine`, concurrency is gated for free.
-# Adding a second semaphore here would be redundant and risks a deadlock if
-# the two semaphores ever had different capacities.
+# `await self.engine.run(job)` call in
+# `async with self.device_semaphores.acquire(job.device):` -- that gating is
+# applied uniformly to whichever engine is plugged in, keyed by the job's own
+# device, so once Task 7 wires OnnxUpscaler as `self.engine`, concurrency is
+# gated for free. Adding a second semaphore here would be redundant and risks
+# a deadlock if the two semaphores ever had different capacities.
 #
 # Tiling: ONNX_TILE_SIZE (default 256, 0 disables tiling) with a fixed 16px
 # overlap. Each tile is inferred independently and stitched back with a

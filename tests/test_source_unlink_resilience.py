@@ -10,6 +10,7 @@ from PIL import Image
 
 from app.config import Settings
 from app.models import JobStatus, UpscaleJob, VideoUpscaleJob
+from app.services.device_semaphores import DeviceSemaphores
 from app.services.engines.base import UpscaleEngine
 from app.services.job_manager import JobManager
 from app.services.video_job_manager import VideoJobManager
@@ -28,7 +29,7 @@ def make_png_bytes(color: str = "red") -> bytes:
 
 
 def make_settings(tmp_path: Path) -> Settings:
-    return Settings(RUNTIME_DIR=str(tmp_path), GPU_CONCURRENCY=1)
+    return Settings(RUNTIME_DIR=str(tmp_path), PER_DEVICE_GPU_CONCURRENCY=1)
 
 
 class FakeImageEngine(UpscaleEngine):
@@ -89,7 +90,7 @@ async def test_image_worker_survives_locked_source_unlink_and_processes_next_job
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     settings = make_settings(tmp_path)
-    manager = JobManager(settings, FakeImageEngine(), asyncio.Semaphore(1))
+    manager = JobManager(settings, FakeImageEngine(), DeviceSemaphores(settings))
 
     locked_source = tmp_path / "locked.png"
     locked_source.write_bytes(make_png_bytes())
@@ -132,7 +133,7 @@ async def test_video_worker_survives_locked_source_unlink_and_processes_next_job
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     settings = make_settings(tmp_path)
-    manager = VideoJobManager(settings, FakeVideoUpscaler(), FakeMediaTools(), asyncio.Semaphore(1))
+    manager = VideoJobManager(settings, FakeVideoUpscaler(), FakeMediaTools(), DeviceSemaphores(settings))
 
     locked_source = tmp_path / "locked.mp4"
     locked_source.write_bytes(b"fake-video-bytes")
@@ -185,7 +186,7 @@ async def test_worker_cancellation_is_not_masked_by_a_failing_source_unlink(
     """A PermissionError raised inside the finally-block unlink must never
     replace a propagating CancelledError."""
     settings = make_settings(tmp_path)
-    manager = JobManager(settings, FakeImageEngine(), asyncio.Semaphore(1))
+    manager = JobManager(settings, FakeImageEngine(), DeviceSemaphores(settings))
 
     source_path = tmp_path / "locked-during-cancel.png"
     source_path.write_bytes(b"fake-image-bytes")

@@ -8,6 +8,7 @@ import pytest
 from app.api.routes import job_to_response, video_job_to_response
 from app.config import Settings
 from app.models import JobStatus, UpscaleJob, VideoUpscaleJob
+from app.services.device_semaphores import DeviceSemaphores
 from app.services.engines.base import UpscaleEngine
 from app.services.job_manager import JobManager
 from app.services.progress import (
@@ -448,7 +449,7 @@ class FakeImageEngine(UpscaleEngine):
 
 async def test_job_manager_worker_advances_and_completes_image_stages(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
-    manager = JobManager(settings, FakeImageEngine(), asyncio.Semaphore(1))
+    manager = JobManager(settings, FakeImageEngine(), DeviceSemaphores(settings))
     job = make_image_job(tmp_path / "in.png")
     manager.jobs[job.id] = job
     manager.queue.put_nowait(job)

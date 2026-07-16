@@ -10,6 +10,7 @@ from starlette.datastructures import UploadFile
 from app.api.routes import create_job, create_video_job
 from app.config import Settings
 from app.models import UpscaleJob, VideoUpscaleJob
+from app.services.device_semaphores import DeviceSemaphores
 from app.services.engines.base import UpscaleEngine
 from app.services.job_manager import JobManager
 from app.services.storage import StorageService
@@ -59,7 +60,7 @@ def make_upload(filename: str, content: bytes) -> UploadFile:
 async def test_concurrent_image_uploads_with_same_name_get_distinct_paths(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     storage = StorageService(settings)
-    jobs = JobManager(settings, FakeEngine(), asyncio.Semaphore(settings.gpu_concurrency))
+    jobs = JobManager(settings, FakeEngine(), DeviceSemaphores(settings))
 
     content_a = make_png_bytes("red")
     content_b = make_png_bytes("blue")
@@ -107,7 +108,7 @@ async def test_concurrent_video_uploads_with_same_name_get_distinct_paths(tmp_pa
     settings = make_settings(tmp_path)
     storage = StorageService(settings)
     video_jobs = VideoJobManager(
-        settings, FakeUpscaler(), FakeMediaTools(), asyncio.Semaphore(settings.gpu_concurrency)
+        settings, FakeUpscaler(), FakeMediaTools(), DeviceSemaphores(settings)
     )
 
     content_a = b"fake-video-bytes-a"

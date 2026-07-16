@@ -11,6 +11,7 @@ from starlette.datastructures import UploadFile
 from app.api.routes import create_job, create_video_job, job_to_response, video_job_to_response
 from app.config import Settings
 from app.models import JobStatus, UpscaleJob, VideoUpscaleJob
+from app.services.device_semaphores import DeviceSemaphores
 from app.services.engines.base import UpscaleEngine
 from app.services.job_manager import JobManager
 from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry, ModelStatus
@@ -256,7 +257,7 @@ async def test_job_manager_routes_builtin_model_to_ncnn_engine(tmp_path: Path) -
     manager = JobManager(
         settings,
         ncnn_engine,
-        asyncio.Semaphore(1),
+        DeviceSemaphores(settings),
         onnx_engine=onnx_engine,
         registry=ModelRegistry(settings),
         devices=FakeDevicesService(),
@@ -287,7 +288,7 @@ async def test_job_manager_routes_builtin_model_to_ncnn_engine(tmp_path: Path) -
 
 async def test_job_manager_model_name_back_compat_maps_to_model_id(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
-    manager = JobManager(settings, FakeNcnnEngine(), asyncio.Semaphore(1), devices=FakeDevicesService())
+    manager = JobManager(settings, FakeNcnnEngine(), DeviceSemaphores(settings), devices=FakeDevicesService())
     source_path = settings.uploads_path / "photo.png"
     write_source_image(source_path)
 
@@ -318,7 +319,7 @@ async def test_job_manager_routes_onnx_model_id_to_onnx_engine(tmp_path: Path) -
     manager = JobManager(
         settings,
         ncnn_engine,
-        asyncio.Semaphore(1),
+        DeviceSemaphores(settings),
         onnx_engine=onnx_engine,
         registry=registry,
         devices=FakeDevicesService(),
@@ -355,7 +356,7 @@ async def test_job_manager_onnx_model_accepts_cpu_device(tmp_path: Path) -> None
     manager = JobManager(
         settings,
         FakeNcnnEngine(),
-        asyncio.Semaphore(1),
+        DeviceSemaphores(settings),
         onnx_engine=FakeOnnxEngine(),
         registry=registry,
         devices=FakeDevicesService(),
@@ -387,7 +388,7 @@ async def test_job_manager_create_job_rejects_unknown_model_id(tmp_path: Path) -
     manager = JobManager(
         settings,
         FakeNcnnEngine(),
-        asyncio.Semaphore(1),
+        DeviceSemaphores(settings),
         registry=ModelRegistry(settings),
         devices=FakeDevicesService(),
     )
@@ -408,7 +409,7 @@ async def test_job_manager_create_job_rejects_unknown_model_id(tmp_path: Path) -
 
 async def test_job_manager_rejects_cpu_device_for_builtin_ncnn_model(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
-    manager = JobManager(settings, FakeNcnnEngine(), asyncio.Semaphore(1), devices=FakeDevicesService())
+    manager = JobManager(settings, FakeNcnnEngine(), DeviceSemaphores(settings), devices=FakeDevicesService())
     source_path = settings.uploads_path / "photo.png"
     write_source_image(source_path)
 
@@ -425,7 +426,7 @@ async def test_job_manager_rejects_cpu_device_for_builtin_ncnn_model(tmp_path: P
 
 async def test_job_manager_create_job_rejects_unknown_device(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
-    manager = JobManager(settings, FakeNcnnEngine(), asyncio.Semaphore(1), devices=FakeDevicesService())
+    manager = JobManager(settings, FakeNcnnEngine(), DeviceSemaphores(settings), devices=FakeDevicesService())
     source_path = settings.uploads_path / "photo.png"
     write_source_image(source_path)
 
@@ -454,7 +455,7 @@ async def test_create_job_route_routes_explicit_model_id_to_onnx_engine(tmp_path
     manager = JobManager(
         settings,
         FakeNcnnEngine(),
-        asyncio.Semaphore(1),
+        DeviceSemaphores(settings),
         onnx_engine=onnx_engine,
         registry=registry,
         devices=FakeDevicesService(),
@@ -577,7 +578,7 @@ async def test_create_video_job_route_routes_explicit_model_id_to_onnx_run_frame
         settings,
         upscaler,
         FakeVideoMediaTools(),
-        asyncio.Semaphore(1),
+        DeviceSemaphores(settings),
         registry=registry,
         devices=FakeDevicesService(),
     )
@@ -644,7 +645,7 @@ async def test_job_manager_onnx_resolution_overrides_requested_scale_with_entry_
     manager = JobManager(
         settings,
         FakeNcnnEngine(),
-        asyncio.Semaphore(1),
+        DeviceSemaphores(settings),
         onnx_engine=FakeOnnxEngine(),
         registry=registry,
         devices=FakeDevicesService(),
@@ -667,7 +668,7 @@ async def test_job_manager_onnx_resolution_overrides_requested_scale_with_entry_
 
 async def test_job_manager_builtin_resolution_keeps_requested_scale(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
-    manager = JobManager(settings, FakeNcnnEngine(), asyncio.Semaphore(1), devices=FakeDevicesService())
+    manager = JobManager(settings, FakeNcnnEngine(), DeviceSemaphores(settings), devices=FakeDevicesService())
     source_path = settings.uploads_path / "photo.png"
     write_source_image(source_path)
 
@@ -693,7 +694,7 @@ async def test_video_job_manager_onnx_resolution_overrides_requested_scale_with_
         settings,
         FakeSimpleVideoUpscaler(),
         FakeVideoMediaTools(),
-        asyncio.Semaphore(1),
+        DeviceSemaphores(settings),
         registry=registry,
         devices=FakeDevicesService(),
     )
@@ -734,7 +735,7 @@ async def test_video_upscaler_onnx_output_metadata_uses_entry_scale_not_requeste
         settings,
         upscaler,
         FakeVideoMediaTools(),
-        asyncio.Semaphore(1),
+        DeviceSemaphores(settings),
         registry=registry,
         devices=FakeDevicesService(),
     )
@@ -772,7 +773,7 @@ async def test_video_job_manager_model_name_back_compat_maps_to_model_id(tmp_pat
         settings,
         FakeSimpleVideoUpscaler(),
         FakeVideoMediaTools(),
-        asyncio.Semaphore(1),
+        DeviceSemaphores(settings),
         registry=ModelRegistry(settings),
         devices=FakeDevicesService(),
     )
@@ -801,7 +802,7 @@ async def test_video_job_manager_rejects_unknown_model_id(tmp_path: Path) -> Non
         settings,
         FakeSimpleVideoUpscaler(),
         FakeVideoMediaTools(),
-        asyncio.Semaphore(1),
+        DeviceSemaphores(settings),
         registry=ModelRegistry(settings),
         devices=FakeDevicesService(),
     )
@@ -830,7 +831,7 @@ async def test_video_job_manager_rejects_cpu_device_for_builtin_ncnn_model(tmp_p
         settings,
         FakeSimpleVideoUpscaler(),
         FakeVideoMediaTools(),
-        asyncio.Semaphore(1),
+        DeviceSemaphores(settings),
         devices=FakeDevicesService(),
     )
     source_path = settings.uploads_path / "clip.mp4"
@@ -857,7 +858,7 @@ async def test_video_job_manager_rejects_unknown_device(tmp_path: Path) -> None:
         settings,
         FakeSimpleVideoUpscaler(),
         FakeVideoMediaTools(),
-        asyncio.Semaphore(1),
+        DeviceSemaphores(settings),
         devices=FakeDevicesService(),
     )
     source_path = settings.uploads_path / "clip.mp4"
@@ -896,13 +897,15 @@ def test_video_job_to_response_exposes_model_id_and_device() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Shared GPU semaphore must cover the onnx routing path too, for both
-# managers at once (mirrors tests/test_concurrency.py's cross-manager test).
+# The shared per-device semaphore must cover the onnx routing path too, for
+# both managers at once (mirrors tests/test_concurrency.py's cross-manager
+# test). Both jobs below target device="cpu", so CPU_CONCURRENCY (not GPU) is
+# the relevant gate.
 # ---------------------------------------------------------------------------
 
 
 async def test_shared_semaphore_gates_onnx_routed_image_and_video_jobs_together(tmp_path: Path) -> None:
-    settings = make_settings(tmp_path, GPU_CONCURRENCY=1)
+    settings = make_settings(tmp_path, CPU_CONCURRENCY=1)
     registry = ModelRegistry(settings)
     registry.register(make_onnx_entry())
     tracker = ConcurrencyTracker()
@@ -935,19 +938,24 @@ async def test_shared_semaphore_gates_onnx_routed_image_and_video_jobs_together(
                 await tracker.exit()
 
     events: list[str] = []
-    gpu_semaphore = asyncio.Semaphore(1)
+    device_semaphores = DeviceSemaphores(settings)
 
     image_manager = JobManager(
         settings,
         FakeNcnnEngine(),
-        gpu_semaphore,
+        device_semaphores,
         onnx_engine=TrackingOnnxEngine(),
         registry=registry,
         devices=FakeDevicesService(),
     )
     video_upscaler = make_video_upscaler(settings, events, registry, TrackingOnnxRunFramesEngine())
     video_manager = VideoJobManager(
-        settings, video_upscaler, FakeVideoMediaTools(), gpu_semaphore, registry=registry, devices=FakeDevicesService()
+        settings,
+        video_upscaler,
+        FakeVideoMediaTools(),
+        device_semaphores,
+        registry=registry,
+        devices=FakeDevicesService(),
     )
 
     image_source = settings.uploads_path / "photo.png"

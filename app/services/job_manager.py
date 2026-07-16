@@ -10,6 +10,7 @@ from PIL import Image, UnidentifiedImageError
 from app.config import Settings
 from app.exceptions import QueueFullError
 from app.models import JobStatus, UpscaleJob, utc_now
+from app.services.device_semaphores import DeviceSemaphores
 from app.services.devices_service import DevicesService
 from app.services.engines.base import UpscaleEngine
 from app.services.model_registry import ModelKind, ModelRegistry, ModelStatus
@@ -33,7 +34,7 @@ class JobManager:
         self,
         settings: Settings,
         engine: UpscaleEngine,
-        gpu_semaphore: asyncio.Semaphore,
+        device_semaphores: DeviceSemaphores,
         *,
         onnx_engine: UpscaleEngine | None = None,
         registry: ModelRegistry | None = None,
@@ -46,7 +47,7 @@ class JobManager:
         self.devices = devices
         self.jobs: dict[str, UpscaleJob] = {}
         self.queue: asyncio.Queue[UpscaleJob] = asyncio.Queue(maxsize=settings.max_queue_size)
-        self.gpu_semaphore = gpu_semaphore
+        self.device_semaphores = device_semaphores
         self.worker_tasks: list[asyncio.Task] = []
 
     async def start(self) -> None:
@@ -54,7 +55,7 @@ class JobManager:
             return
         self.worker_tasks = [
             asyncio.create_task(self._worker(), name=f"upscale-worker-{i}")
-            for i in range(self.settings.gpu_concurrency)
+            for i in range(self.settings.max_concurrent_jobs)
         ]
 
     async def stop(self) -> None:
@@ -194,7 +195,7 @@ class JobManager:
     async def _worker(self) -> None:
         while True:
             job = await self.queue.get()
-            async with self.gpu_semaphore:
+            async with self.device_semaphores.acquire(job.device):
                 job.status = JobStatus.running
                 job.started_at = utc_now()
                 advance_image_stage(job, "upscaling")
