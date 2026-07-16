@@ -1,4 +1,5 @@
 import { AlertTriangle, CheckCircle2, Download, Heart, Loader2 } from "lucide-react";
+import { DeterminateProgressBar } from "../../components/DeterminateProgressBar";
 import { IndeterminateProgressBar } from "../../components/IndeterminateProgressBar";
 import { DEFAULT_INSTALL_POLL_INTERVAL_MS, useModelInstall, type ModelInstallPhase } from "../../hooks/useModels";
 import type { HfModelSearchResultResponse } from "../../lib/apiTypes";
@@ -31,24 +32,6 @@ function installPhaseLabel(phase: ModelInstallPhase): string {
 
 function formatCount(count: number): string {
   return count.toLocaleString("en-US");
-}
-
-function DeterminateProgressBar({ label, percent }: { label: string; percent: number }) {
-  return (
-    <div
-      role="progressbar"
-      aria-label={label}
-      aria-valuenow={Math.round(percent)}
-      aria-valuemin={0}
-      aria-valuemax={100}
-      className="h-1.5 w-full overflow-hidden rounded-sm bg-surface-2"
-    >
-      <div
-        className="h-full rounded-sm bg-accent transition-[width] duration-normal"
-        style={{ width: `${percent}%` }}
-      />
-    </div>
-  );
 }
 
 function InstallProgress({ phase, progressPct }: { phase: ModelInstallPhase; progressPct: number | null }) {

@@ -138,6 +138,8 @@ describe("ImagePanel", () => {
       startedAt: "2026-01-01T00:00:01Z",
       finishedAt: "2026-01-01T00:00:02Z",
       error: null,
+      metadata: {},
+      progressPct: null,
       downloadUrl: "/api/v1/jobs/job-1/download",
     };
     vi.mocked(api.createImageJob).mockResolvedValue(createResponse);

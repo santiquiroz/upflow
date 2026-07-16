@@ -27,6 +27,8 @@ const BASE_IMAGE_JOB: JobResponse = {
   startedAt: null,
   finishedAt: null,
   error: null,
+  metadata: {},
+  progressPct: null,
   downloadUrl: null,
 };
 
@@ -51,6 +53,7 @@ const BASE_VIDEO_JOB: VideoJobResponse = {
   finishedAt: null,
   error: null,
   metadata: {},
+  progressPct: null,
   downloadUrl: null,
 };
 

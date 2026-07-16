@@ -4,6 +4,31 @@
 
 export type JobStatus = "queued" | "running" | "completed" | "failed";
 
+export type StageStatus = "pending" | "active" | "done";
+
+// Mirrors app/services/progress.py::Stage (asdict()'d into job.metadata.stages).
+export interface JobStage {
+  key: string;
+  label: string;
+  weight: number;
+  status: StageStatus;
+}
+
+// Known job.metadata keys written by app/services/progress.py and
+// video_upscaler.py. The index signature keeps this permissive for the
+// remaining ad-hoc metadata (duration, hasAudio, outputWidth, ...) callers
+// read defensively rather than relying on a fully-typed dictionary.
+export interface JobMetadata {
+  stage?: string;
+  stages?: JobStage[];
+  stageStartedAt?: string;
+  framesDone?: number;
+  framesTotal?: number | null;
+  interpFramesTotal?: number | null;
+  outputFps?: string;
+  [key: string]: unknown;
+}
+
 export interface CreateJobResponse {
   jobId: string;
   status: JobStatus;
@@ -24,6 +49,8 @@ export interface JobResponse {
   startedAt: string | null;
   finishedAt: string | null;
   error: string | null;
+  metadata: JobMetadata;
+  progressPct: number | null;
   downloadUrl: string | null;
 }
 
@@ -47,7 +74,8 @@ export interface VideoJobResponse {
   startedAt: string | null;
   finishedAt: string | null;
   error: string | null;
-  metadata: Record<string, unknown>;
+  metadata: JobMetadata;
+  progressPct: number | null;
   downloadUrl: string | null;
 }
 

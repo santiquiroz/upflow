@@ -16,6 +16,8 @@ const BASE_JOB: JobResponse = {
   startedAt: null,
   finishedAt: null,
   error: null,
+  metadata: {},
+  progressPct: null,
   downloadUrl: null,
 };
 
@@ -40,6 +42,7 @@ const BASE_VIDEO_JOB: VideoJobResponse = {
   finishedAt: null,
   error: null,
   metadata: {},
+  progressPct: null,
   downloadUrl: null,
 };
 
@@ -146,6 +149,32 @@ describe("JobCard", () => {
     const link = screen.getByRole("link", { name: /download/i });
     expect(link).toHaveAttribute("href", "/api/v1/video/jobs/vid-1/download");
     expect(screen.getByText("2x")).toHaveClass("font-mono-tabular");
+  });
+
+  it("shows a determinate progress bar with a tabular percentage when progressPct is available while running", () => {
+    const job: VideoJobResponse = { ...BASE_VIDEO_JOB, status: "running", progressPct: 42 };
+    render(<JobCard phase="running" job={job} />);
+
+    const bar = screen.getByRole("progressbar");
+    expect(bar).toHaveAttribute("aria-valuenow", "42");
+    const percentLabel = screen.getByText("42%");
+    expect(percentLabel).toHaveClass("font-mono-tabular");
+  });
+
+  it("keeps the indeterminate bar while running when progressPct is not yet available", () => {
+    const job: VideoJobResponse = { ...BASE_VIDEO_JOB, status: "running", progressPct: null };
+    render(<JobCard phase="running" job={job} />);
+
+    const bar = screen.getByRole("progressbar");
+    expect(bar).toHaveAttribute("aria-busy", "true");
+    expect(bar).not.toHaveAttribute("aria-valuenow");
+  });
+
+  it("shows a determinate progress bar while queued once progressPct is available", () => {
+    const job: JobResponse = { ...BASE_JOB, status: "queued", progressPct: 5 };
+    render(<JobCard phase="queued" job={job} />);
+
+    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "5");
   });
 
   it("shows the normalized outputFps as a tabular number when present in metadata", () => {

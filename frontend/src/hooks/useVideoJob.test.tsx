@@ -39,6 +39,7 @@ const BASE_JOB: VideoJobResponse = {
   finishedAt: null,
   error: null,
   metadata: {},
+  progressPct: null,
   downloadUrl: null,
 };
 

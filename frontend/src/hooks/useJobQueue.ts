@@ -15,6 +15,7 @@ export interface JobQueueEntry {
   status: JobStatus;
   downloadUrl: string | null;
   errorMessage: string | null;
+  job: JobResponse | VideoJobResponse | undefined;
 }
 
 export interface UseJobQueueResult {
@@ -50,6 +51,7 @@ function toQueueEntry(
     status: data?.status ?? "queued",
     downloadUrl: data?.downloadUrl ?? null,
     errorMessage: resolveEntryError(data, queryError),
+    job: data,
   };
 }
 

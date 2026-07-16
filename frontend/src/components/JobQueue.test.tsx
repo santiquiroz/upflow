@@ -25,6 +25,8 @@ const BASE_IMAGE_JOB: JobResponse = {
   startedAt: null,
   finishedAt: null,
   error: null,
+  metadata: {},
+  progressPct: null,
   downloadUrl: null,
 };
 
@@ -49,6 +51,7 @@ const BASE_VIDEO_JOB: VideoJobResponse = {
   finishedAt: null,
   error: null,
   metadata: {},
+  progressPct: null,
   downloadUrl: null,
 };
 
@@ -169,5 +172,32 @@ describe("JobQueue", () => {
     isolatedStore.addTrackedJob({ id: "isolated-1", kind: "image", fileName: "isolated.png", createdAt: 1 });
 
     expect(jobQueueStore.getSnapshot()).toHaveLength(0);
+  });
+
+  it("opens the job detail modal when a queue item is clicked", async () => {
+    vi.mocked(api.getVideoJob).mockResolvedValue(BASE_VIDEO_JOB);
+    jobQueueStore.addTrackedJob({ id: "vid-1", kind: "video", fileName: "clip.mp4", createdAt: 1 });
+
+    renderQueue();
+    await screen.findByText("clip.mp4");
+
+    fireEvent.click(screen.getByRole("button", { name: /view details for clip\.mp4/i }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("realesr-animevideov3-x2");
+  });
+
+  it("closes the job detail modal when Escape is pressed", async () => {
+    vi.mocked(api.getVideoJob).mockResolvedValue(BASE_VIDEO_JOB);
+    jobQueueStore.addTrackedJob({ id: "vid-1", kind: "video", fileName: "clip.mp4", createdAt: 1 });
+
+    renderQueue();
+    await screen.findByText("clip.mp4");
+    fireEvent.click(screen.getByRole("button", { name: /view details for clip\.mp4/i }));
+    const dialog = await screen.findByRole("dialog");
+
+    fireEvent.keyDown(dialog, { key: "Escape" });
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 });

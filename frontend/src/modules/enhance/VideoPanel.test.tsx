@@ -230,6 +230,7 @@ describe("VideoPanel", () => {
       finishedAt: "2026-01-01T00:00:05Z",
       error: null,
       metadata: { outputFps: "24000/1001" },
+      progressPct: null,
       downloadUrl: "/api/v1/video/jobs/vid-1/download",
     };
     vi.mocked(api.createVideoJob).mockResolvedValue(createResponse);

@@ -1,6 +1,8 @@
 import { AlertTriangle, CheckCircle2, Clock, Download, ImageIcon, Loader2, UploadCloud } from "lucide-react";
 import type { JobResponse, VideoJobResponse } from "../lib/apiTypes";
 import { formatFps } from "../lib/formatFps";
+import { isProgressDeterminate } from "../lib/jobProgress";
+import { DeterminateProgressBar } from "./DeterminateProgressBar";
 import { IndeterminateProgressBar } from "./IndeterminateProgressBar";
 
 export type JobCardPhase = "idle" | "uploading" | "queued" | "running" | "completed" | "failed";
@@ -54,14 +56,31 @@ function UploadingState({ fileName }: { fileName?: string | null }) {
   );
 }
 
-function QueuedState() {
+function readProgressPct(job?: AnyJobResponse | null): number | null {
+  return job?.progressPct ?? null;
+}
+
+function JobProgressBar({ label, job }: { label: string; job?: AnyJobResponse | null }) {
+  const progressPct = readProgressPct(job);
+  if (isProgressDeterminate(progressPct)) {
+    return (
+      <div className="flex flex-col gap-1">
+        <DeterminateProgressBar label={label} percent={progressPct} />
+        <span className="font-mono-tabular self-end text-xs text-text-dim">{Math.round(progressPct)}%</span>
+      </div>
+    );
+  }
+  return <IndeterminateProgressBar label={label} />;
+}
+
+function QueuedState({ job }: { job?: AnyJobResponse | null }) {
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center gap-2 text-sm text-text">
         <Clock aria-hidden="true" className="h-4 w-4 text-accent" strokeWidth={1.75} />
         <span>Queued</span>
       </div>
-      <IndeterminateProgressBar label="Queued" />
+      <JobProgressBar label="Queued" job={job} />
     </div>
   );
 }
@@ -75,7 +94,7 @@ function RunningState({ job }: { job?: AnyJobResponse | null }) {
         <span>Processing</span>
         {stage && <span className="text-text-dim">— {humanizeStage(stage)}</span>}
       </div>
-      <IndeterminateProgressBar label="Processing" />
+      <JobProgressBar label="Processing" job={job} />
     </div>
   );
 }
@@ -184,7 +203,7 @@ export function JobCard({ phase, job, fileName, errorMessage }: JobCardProps) {
     <div aria-live="polite" className="rounded border border-border bg-surface p-4">
       {displayPhase === "idle" && <IdleState />}
       {displayPhase === "uploading" && <UploadingState fileName={fileName} />}
-      {displayPhase === "queued" && <QueuedState />}
+      {displayPhase === "queued" && <QueuedState job={job} />}
       {displayPhase === "running" && <RunningState job={job} />}
       {displayPhase === "completed" && job && <CompletedState job={job} />}
       {displayPhase === "failed" && <FailedState message={resolveErrorMessage(job, errorMessage)} />}

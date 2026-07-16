@@ -1,11 +1,9 @@
 import { AlertTriangle, CheckCircle2, Clock, Download, Loader2, X } from "lucide-react";
+import { useState } from "react";
 import { type JobQueueEntry, useJobQueue } from "../hooks/useJobQueue";
-import { isTerminalJobStatus } from "../lib/jobStatus";
+import { isTerminalJobStatus, jobKindLabel } from "../lib/jobStatus";
 import { IndeterminateProgressBar } from "./IndeterminateProgressBar";
-
-function kindLabel(kind: JobQueueEntry["kind"]): string {
-  return kind === "image" ? "Image" : "Video";
-}
+import { JobDetailModal } from "./JobDetailModal";
 
 function QueuedStatus() {
   return (
@@ -88,17 +86,30 @@ function DismissButton({ entry, onDismiss }: { entry: JobQueueEntry; onDismiss: 
   );
 }
 
-function QueueEntryRow({ entry, onDismiss }: { entry: JobQueueEntry; onDismiss: (id: string) => void }) {
+function QueueEntryRow({
+  entry,
+  onDismiss,
+  onOpenDetail,
+}: {
+  entry: JobQueueEntry;
+  onDismiss: (id: string) => void;
+  onOpenDetail: (id: string) => void;
+}) {
   const isTerminal = isTerminalJobStatus(entry.status);
   return (
     <li className="flex flex-col gap-2 rounded border border-border bg-surface-2 p-3">
       <div className="flex items-start justify-between gap-2">
-        <div className="flex min-w-0 flex-col">
+        <button
+          type="button"
+          onClick={() => onOpenDetail(entry.id)}
+          aria-label={`View details for ${entry.fileName}`}
+          className="flex min-w-0 flex-col text-left transition-colors duration-fast hover:text-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+        >
           <span className="truncate text-xs text-text" title={entry.fileName}>
             {entry.fileName}
           </span>
-          <span className="text-[10px] uppercase tracking-wide text-text-faint">{kindLabel(entry.kind)}</span>
-        </div>
+          <span className="text-[10px] uppercase tracking-wide text-text-faint">{jobKindLabel(entry.kind)}</span>
+        </button>
         {isTerminal && <DismissButton entry={entry} onDismiss={onDismiss} />}
       </div>
       <QueueEntryStatus entry={entry} />
@@ -122,6 +133,8 @@ function EmptyQueueState() {
 export function JobQueue() {
   const { entries, dismiss, clearCompleted } = useJobQueue();
   const hasCompletedOrFailed = entries.some((entry) => isTerminalJobStatus(entry.status));
+  const [detailJobId, setDetailJobId] = useState<string | null>(null);
+  const detailEntry = entries.find((entry) => entry.id === detailJobId);
 
   return (
     <div className="flex h-full flex-col gap-3">
@@ -134,7 +147,7 @@ export function JobQueue() {
       ) : (
         <ul className="flex flex-col gap-2 overflow-y-auto">
           {entries.map((entry) => (
-            <QueueEntryRow key={entry.id} entry={entry} onDismiss={dismiss} />
+            <QueueEntryRow key={entry.id} entry={entry} onDismiss={dismiss} onOpenDetail={setDetailJobId} />
           ))}
         </ul>
       )}
@@ -147,6 +160,7 @@ export function JobQueue() {
           Clear completed
         </button>
       )}
+      {detailEntry && <JobDetailModal entry={detailEntry} onClose={() => setDetailJobId(null)} />}
     </div>
   );
 }

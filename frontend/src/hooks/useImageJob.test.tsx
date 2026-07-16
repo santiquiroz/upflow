@@ -31,6 +31,8 @@ const BASE_JOB: JobResponse = {
   startedAt: null,
   finishedAt: null,
   error: null,
+  metadata: {},
+  progressPct: null,
   downloadUrl: null,
 };
 
