@@ -371,6 +371,23 @@ ENABLE_AUDIO_ENHANCE=true
 
 Con eso activado, un job de video con `keep_audio=true` puede pedir `audio_enhance=deepfilter` (red neuronal DeepFilterNet3, mejor calidad, más lento) o `audio_enhance=rnnoise` (filtro `arnndn` de FFmpeg, más liviano). Pedir `audio_enhance` sin `keep_audio=true`, sin `ENABLE_AUDIO_ENHANCE=true` o sin los binarios instalados devuelve `400`. Omitir `audio_enhance` deja el audio original intacto (remux con `-c:a copy`).
 
+## Apartado de Audio (mejora standalone + restauración de compresión)
+
+Además de imagen y video, Upflow tiene un **apartado de Audio** propio (ruta `/audio`): subís un archivo de audio (wav/mp3/flac/m4a/ogg/opus), elegís la mejora y descargás el resultado. La cadena es `entrada → [denoise] → [restore] → salida`, cada paso opcional.
+
+- **Denoise** — quita ruido: `deepfilter` (DeepFilterNet3) o `rnnoise`. Es el mismo motor que ya se usa en video (ver sección anterior); requiere `ENABLE_AUDIO_ENHANCE=true` + `download-deepfilternet.ps1`.
+- **Restore (EXPERIMENTAL)** — `apollo`: reconstruye la banda de agudos perdida por compresión de códec (audio de WhatsApp/Telegram/redes). Motor ONNX **multi-provider** (corre en cualquier GPU DirectX12 —AMD/NVIDIA/Intel— o CPU, igual que los modelos de imagen HF). Requiere `ENABLE_AUDIO_RESTORE=true` + el modelo `apollo.onnx` (`scripts/download-apollo.ps1`). Si el modelo no está, el modo simplemente no aparece — la app nunca se rompe por esto.
+
+```powershell
+# Restore experimental: descargar el modelo Apollo (~74 MB) y habilitarlo
+powershell -ExecutionPolicy Bypass -File .\scripts\download-apollo.ps1
+# en .env:  ENABLE_AUDIO_RESTORE=true
+```
+
+API: `POST /api/v1/audio/jobs` (multipart: `file`, `denoise?`, `restore?`, `device?`) → 202; `GET /api/v1/audio/jobs/{id}` (estado + progreso), `.../download` (resultado), `GET /api/v1/audio/capabilities` (qué motores están instalados). El mismo `restore=apollo` se puede pedir en un job de video vía el campo `audio_restore` (con `keep_audio=true`), aplicado después del denoise.
+
+> **Nota experimental:** el restore es un port ONNX del modelo Apollo (ver `docs/` y la guía del port). Funciona y es multi-provider, pero la calidad de reconstrucción y el rendimiento GPU aún se están evaluando — por eso va detrás de un flag y con badge "Experimental" en la UI.
+
 ## Actualizaciones
 
 Upflow chequea **en silencio** si hay una release más nueva en GitHub y, si la hay, muestra un banner discreto arriba de la UI ("New version X available") con link a la release. El chequeo es opcional y a prueba de fallos: si no hay red, hay timeout o GitHub responde con rate-limit (`403`), el endpoint igual devuelve `200` con `updateAvailable=false` y un campo `error` — el banner simplemente no aparece y **la app nunca se rompe por el chequeo**. El resultado se cachea en memoria (`UPDATE_CHECK_TTL_SECONDS`, default 3600s) para no pegarle a la API de GitHub en cada request. El banner se puede descartar por versión: una vez descartado, esa versión no vuelve a aparecer, pero una versión más nueva sí.
