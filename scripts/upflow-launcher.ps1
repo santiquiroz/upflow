@@ -213,6 +213,9 @@ function Install-MissingBinaries {
     } else {
         Invoke-DownloadScript -ScriptName 'download-deepfilternet.ps1' -Label 'DeepFilterNet (mejora de audio con IA)'
     }
+
+    # download-apollo.ps1 se auto-saltea si el modelo ya esta presente.
+    Invoke-DownloadScript -ScriptName 'download-apollo.ps1' -Label 'Apollo (restauracion de audio por compresion, experimental)'
 }
 
 function New-EnvFileWithFeaturesEnabled {
@@ -225,6 +228,7 @@ function New-EnvFileWithFeaturesEnabled {
     $lines = Get-Content $envExamplePath
     $lines = $lines -replace '^ENABLE_INTERPOLATION=.*', 'ENABLE_INTERPOLATION=True'
     $lines = $lines -replace '^ENABLE_AUDIO_ENHANCE=.*', 'ENABLE_AUDIO_ENHANCE=True'
+    $lines = $lines -replace '^ENABLE_AUDIO_RESTORE=.*', 'ENABLE_AUDIO_RESTORE=True'
     Set-Content -Path $envPath -Value $lines -Encoding utf8
 }
 

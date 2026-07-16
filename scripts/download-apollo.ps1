@@ -11,7 +11,7 @@ $modelPath = Join-Path $vendorDir 'apollo.onnx'
 # audio-restoration mode. Runs on any ONNX Runtime EP (DirectML / CPU / CUDA).
 # The .onnx is a derived artifact of the CC BY-SA weights; attribution:
 # https://github.com/JusperLee/Apollo (arXiv:2409.08514). Hosted as a release asset.
-$releaseTag = 'v0.2.0'
+$releaseTag = 'v0.3.0'
 $downloadUrl = "https://github.com/santiquiroz/upflow/releases/download/$releaseTag/apollo.onnx"
 
 if (Test-Path $modelPath) {
