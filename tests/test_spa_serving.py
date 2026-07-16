@@ -80,3 +80,24 @@ def test_spa_catch_all_does_not_shadow_api_router(tmp_path: Path) -> None:
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
     assert "spa-root" not in response.text
+
+
+def test_unmatched_api_path_returns_404_not_the_spa(tmp_path: Path) -> None:
+    """A nonexistent /api/* path (renamed/removed endpoint, stale frontend)
+    must 404 instead of falling through to the SPA catch-all and returning
+    index.html — otherwise the client gets HTML where it expects JSON.
+    """
+    dist_dir = tmp_path / "dist"
+    write_fake_spa_build(dist_dir)
+    app = FastAPI()
+    app.state.job_manager = SimpleNamespace(queue_depth=lambda: 0)
+    app.state.video_job_manager = SimpleNamespace(queue_depth=lambda: 0)
+    app.include_router(api_router)
+
+    configure_web_routes(app, frontend_dist=dist_dir)
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/does-not-exist")
+
+    assert response.status_code == 404
+    assert "spa-root" not in response.text

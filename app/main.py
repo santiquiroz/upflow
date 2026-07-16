@@ -4,7 +4,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -107,6 +107,12 @@ def configure_web_routes(app: FastAPI, frontend_dist: Path = FRONTEND_DIST_DIR) 
 
     @app.get("/{full_path:path}", include_in_schema=False)
     async def spa_fallback(full_path: str) -> FileResponse:
+        # An unmatched /api/* path is a real 404 (renamed/removed endpoint),
+        # not a client-side route — serving index.html would hand a stale
+        # frontend HTML where it expects JSON, masking the error. Wrong
+        # methods on existing endpoints still 405 via the api_router.
+        if full_path == "api" or full_path.startswith("api/"):
+            raise HTTPException(status_code=404)
         return FileResponse(index_path)
 
 
