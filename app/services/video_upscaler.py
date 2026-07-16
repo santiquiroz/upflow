@@ -31,10 +31,25 @@ from app.services.progress import (
     frame_stage_fraction,
     resolve_frames_total,
 )
+from app.services.stall_watchdog import StallWatchdog
 
 logger = logging.getLogger(__name__)
 
 FRAME_POLL_INTERVAL_SECONDS = 1.0
+
+
+# Not a SubprocessTimeoutError: a stall is "hung, no new output", not
+# "hit the absolute 24h backstop" -- callers need to tell those apart.
+class VideoStallError(RuntimeError):
+    pass
+
+
+def _stall_message(missing_signal: str, stall_timeout_seconds: float) -> str:
+    stall_minutes = stall_timeout_seconds / 60
+    return (
+        f"El proceso parece estancado: sin {missing_signal} por {stall_minutes:.0f} min. "
+        "Puede ser un problema del modelo/GPU."
+    )
 
 
 class VideoUpscaler:
@@ -48,6 +63,7 @@ class VideoUpscaler:
         onnx_engine: OnnxUpscaler | None = None,
         model_registry: ModelRegistry | None = None,
         frame_poll_interval_seconds: float = FRAME_POLL_INTERVAL_SECONDS,
+        frame_stall_timeout_seconds: float | None = None,
     ) -> None:
         self.settings = settings
         self.engine = engine
@@ -57,6 +73,11 @@ class VideoUpscaler:
         self.onnx_engine = onnx_engine
         self.model_registry = model_registry
         self.frame_poll_interval_seconds = frame_poll_interval_seconds
+        self.frame_stall_timeout_seconds = (
+            settings.frame_stall_timeout_seconds
+            if frame_stall_timeout_seconds is None
+            else frame_stall_timeout_seconds
+        )
 
     def available(self) -> bool:
         return self.engine.available() and self.media_tools.available()
@@ -156,7 +177,8 @@ class VideoUpscaler:
         encode_cmd.append(str(output_path))
 
         advance_video_stage(job, "encoding_video")
-        await self._run_process(encode_cmd)
+        async with self._track_encode_progress(output_path):
+            await self._run_process(encode_cmd)
 
         if not self._is_non_empty_file(output_path):
             raise RuntimeError("Video processing finished but no output file was produced")
@@ -369,41 +391,60 @@ class VideoUpscaler:
     async def _track_frame_progress(
         self, job: VideoUpscaleJob, output_dir: Path, stage_key: str, frames_total: int | None = None
     ) -> AsyncIterator[None]:
+        stage_task = asyncio.current_task()
+        stall_watchdog = StallWatchdog(self.frame_stall_timeout_seconds)
         poller = asyncio.create_task(
-            self._poll_frame_progress(job, output_dir, stage_key, frames_total)
+            self._poll_frame_progress(job, output_dir, stage_key, frames_total, stall_watchdog, stage_task)
         )
         try:
             yield
+        except asyncio.CancelledError:
+            if not stall_watchdog.triggered:
+                raise
+            raise VideoStallError(_stall_message("frames nuevos", self.frame_stall_timeout_seconds)) from None
         finally:
-            await self._stop_frame_poller(poller)
+            await self._stop_poller(poller)
             # Final authoritative count so framesDone reaches the true total
             # even if the stage finished between two poll ticks.
             await self._refresh_frame_progress(job, output_dir, stage_key, frames_total)
 
     @staticmethod
-    async def _stop_frame_poller(poller: asyncio.Task[None]) -> None:
+    async def _stop_poller(poller: asyncio.Task[None]) -> None:
         poller.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await poller
 
     async def _poll_frame_progress(
-        self, job: VideoUpscaleJob, output_dir: Path, stage_key: str, frames_total: int | None
+        self,
+        job: VideoUpscaleJob,
+        output_dir: Path,
+        stage_key: str,
+        frames_total: int | None,
+        stall_watchdog: StallWatchdog,
+        stage_task: asyncio.Task[None],
     ) -> None:
         while True:
             await asyncio.sleep(self.frame_poll_interval_seconds)
-            await self._refresh_frame_progress(job, output_dir, stage_key, frames_total)
+            frames_done = await self._refresh_frame_progress(job, output_dir, stage_key, frames_total)
+            if frames_done is not None and stall_watchdog.observe(frames_done):
+                stage_task.cancel()
+                return
 
     async def _refresh_frame_progress(
         self, job: VideoUpscaleJob, output_dir: Path, stage_key: str, frames_total: int | None
-    ) -> None:
+    ) -> int | None:
         # The whole tick is guarded (count + metadata mutation): a failure here
         # must never propagate out of the poller task, or `await poller` in the
-        # finally would re-raise it and mask the stage's own exception.
+        # finally would re-raise it and mask the stage's own exception. Returns
+        # None on failure so the stall watchdog skips that tick instead of
+        # misreading a transient stat error as zero progress.
         try:
             frames_done = await asyncio.to_thread(self._count_frames, output_dir)
             self._apply_frame_progress(job, stage_key, frames_done, frames_total)
+            return frames_done
         except Exception:  # noqa: BLE001
             logger.exception("Frame progress poll failed for stage %s in %s", stage_key, output_dir)
+            return None
 
     def _apply_frame_progress(
         self, job: VideoUpscaleJob, stage_key: str, frames_done: int, frames_total: int | None = None
@@ -416,6 +457,45 @@ class VideoUpscaler:
         fraction = frame_stage_fraction(job.metadata["framesDone"], denominator)
         progress = compute_progress(stages, current_fraction=fraction)
         job.metadata["progress"] = max(float(job.metadata.get("progress") or 0.0), progress)
+
+    @contextlib.asynccontextmanager
+    async def _track_encode_progress(self, output_path: Path) -> AsyncIterator[None]:
+        stage_task = asyncio.current_task()
+        stall_watchdog = StallWatchdog(self.frame_stall_timeout_seconds)
+        poller = asyncio.create_task(self._poll_encode_progress(output_path, stall_watchdog, stage_task))
+        try:
+            yield
+        except asyncio.CancelledError:
+            if not stall_watchdog.triggered:
+                raise
+            raise VideoStallError(
+                _stall_message("crecimiento del archivo de salida", self.frame_stall_timeout_seconds)
+            ) from None
+        finally:
+            await self._stop_poller(poller)
+
+    async def _poll_encode_progress(
+        self, output_path: Path, stall_watchdog: StallWatchdog, stage_task: asyncio.Task[None]
+    ) -> None:
+        while True:
+            await asyncio.sleep(self.frame_poll_interval_seconds)
+            output_size = await self._safe_output_file_size(output_path)
+            if output_size is not None and stall_watchdog.observe(output_size):
+                stage_task.cancel()
+                return
+
+    async def _safe_output_file_size(self, output_path: Path) -> int | None:
+        # Guarded the same way as _refresh_frame_progress: a transient stat
+        # failure must never propagate out of the poller task.
+        try:
+            return await asyncio.to_thread(self._output_file_size, output_path)
+        except Exception:  # noqa: BLE001
+            logger.exception("Encode progress poll failed for %s", output_path)
+            return None
+
+    @staticmethod
+    def _output_file_size(output_path: Path) -> int:
+        return output_path.stat().st_size if output_path.exists() else 0
 
     @staticmethod
     def _is_non_empty_file(path: Path) -> bool:
