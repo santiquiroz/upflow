@@ -263,6 +263,25 @@ El dispositivo por defecto se controla con `DEFAULT_DEVICE` en `.env` (default `
 
 **Selección de GPU en máquinas multi-adaptador — alcance de la garantía:** para modelos ONNX/HF (`kind=onnx`), `dml:N` se pasa directo como `device_id` a `DmlExecutionProvider`, que lo resuelve contra la misma lista ordenada por DXGI — el mapeo es exacto (verificado empíricamente, ver `.superpowers/sdd/sp1-task-8-smoke-report.md`). Para los modelos builtin (`kind=builtin-ncnn`), en cambio, `dml:N` se traduce a `-g N` (índice de dispositivo físico Vulkan del binario `realesrgan-ncnn-vulkan.exe`) — DXGI y Vulkan **no garantizan el mismo orden de enumeración** en una máquina con más de un adaptador. Solo el default de un único dGPU (`dml:0` → `-g 0`) está verificado end-to-end; en hardware multi-GPU, la selección de un `dml:N` con `N > 0` para un modelo builtin es best-effort, no exacta.
 
+## Multi-GPU (colas por dispositivo + auto-router opcional)
+
+Cada dispositivo tiene su **propia cola de concurrencia**: un job toma un permiso del semáforo de *su* dispositivo (`app/services/device_semaphores.py`), así que jobs en dispositivos distintos corren **en paralelo** en vez de serializarse detrás de un semáforo global. Un video reescalando en `dml:0` y una imagen en la iGPU `dml:1` (o en `cpu`) avanzan a la vez.
+
+- **`PER_DEVICE_GPU_CONCURRENCY`** (default `1`) — jobs simultáneos **por GPU**. Imagen y video comparten el semáforo de esa GPU. No lo subas sin perfilar VRAM: dos jobs pesados en la misma GPU compiten por memoria.
+- **`CPU_CONCURRENCY`** (default `2`) — jobs simultáneos en `cpu` (modelos ONNX). El `cpu` no compite con las GPUs.
+- **`MAX_CONCURRENT_JOBS`** (default `4`) — workers por manager (imagen y video por separado). Debe **superar** la cantidad de dispositivos que quieras correr en paralelo, o no habrá worker libre para desencolar el segundo job.
+
+**Auto-router opcional** (`ENABLE_AUTO_ROUTE`, default `False`): con el toggle activado, los jobs sin dispositivo fijo (o con `device="auto"`) se reparten al **primer dispositivo compatible libre** en vez de encolarse todos en `dml:0`. La compatibilidad depende del modelo:
+
+| Tipo de modelo | Dispositivos compatibles |
+|---|---|
+| `builtin-ncnn` (los 6 builtin) | solo GPUs Vulkan (`dml:N`) — **nunca `cpu`** |
+| `onnx` (instalados desde HF) | `cpu` o cualquier `dml:N` |
+
+Si al desencolar todos los dispositivos compatibles están ocupados, el job espera al que **se libere primero** (sin bloqueo head-of-line: no se casa con un dispositivo saturado dejando otro libre ocioso). Si no existe ningún dispositivo compatible (ej. modelo builtin en una máquina sin GPU Vulkan), la creación del job responde `400`. El toggle vive en **Settings** de la web UI y se puede elegir **"Auto"** en el selector de dispositivo por job.
+
+Caso de uso central: reescalar una **temporada completa** de anime encolando todos los episodios con auto-router on → se reparten entre las GPUs disponibles y terminan antes que en serie.
+
 ## Perfiles de video
 
 | Perfil | Categoría | Modelo | Escala | Códec | Preset | CRF |
@@ -287,9 +306,13 @@ Todas las variables leen de `.env` (ver [`.env.example`](.env.example) con los d
 | `MAX_UPLOAD_MB` | `50` | Tamaño máximo de subida para imágenes (MB) |
 | `MAX_VIDEO_UPLOAD_MB` | `2048` | Tamaño máximo de subida para videos (MB) |
 | `MAX_IMAGE_PIXELS` | `120000000` | Límite de píxeles (ancho × alto) para evitar decompression bombs |
-| `GPU_CONCURRENCY` | `1` | Jobs simultáneos en GPU; semáforo compartido entre imagen y video — no subirlo sin perfilar VRAM |
+| `PER_DEVICE_GPU_CONCURRENCY` | `1` | Jobs simultáneos **por GPU** (semáforo por dispositivo; imagen y video comparten el de esa GPU) — no subirlo sin perfilar VRAM. Ver [Multi-GPU](#multi-gpu-colas-por-dispositivo--auto-router-opcional) |
+| `CPU_CONCURRENCY` | `2` | Jobs simultáneos en `cpu` (modelos ONNX); no compite con las GPUs |
+| `MAX_CONCURRENT_JOBS` | `4` | Workers por manager (imagen y video por separado); debe superar la cantidad de dispositivos a correr en paralelo |
+| `ENABLE_AUTO_ROUTE` | `False` | Auto-router: reparte jobs sin dispositivo fijo (o `device="auto"`) al primer dispositivo compatible libre. Ver [Multi-GPU](#multi-gpu-colas-por-dispositivo--auto-router-opcional) |
 | `CPU_FALLBACK_WORKERS` | `2` | Hilos de carga/guardado de frames para Real-ESRGAN NCNN en el pipeline de video |
-| `SUBPROCESS_TIMEOUT` | `3600` | Segundos antes de matar cualquier subproceso (engine, FFmpeg, RIFE) |
+| `SUBPROCESS_TIMEOUT` | `86400` | Backstop absoluto (24h) para matar cualquier subproceso; NO es el mecanismo real (ver `FRAME_STALL_TIMEOUT_SECONDS`) |
+| `FRAME_STALL_TIMEOUT_SECONDS` | `900` | Watchdog real: mata la etapa solo si no produce frames/bytes nuevos por este tiempo (15 min); se reinicia con cada frame nuevo |
 | `FFMPEG_BINARY` | `vendor/ffmpeg/bin/ffmpeg.exe` | Ruta al binario de FFmpeg |
 | `FFPROBE_BINARY` | `vendor/ffmpeg/bin/ffprobe.exe` | Ruta al binario de ffprobe |
 | `FFMPEG_DECODE_THREADS` | `12` | Hilos para extraer frames del video de entrada |
