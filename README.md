@@ -18,18 +18,30 @@
 
 ## 🚀 Instalación rápida (usuarios)
 
-**No hace falta tocar Python ni la consola.** Cuatro pasos:
+**No hace falta tocar Python ni la consola.** Dos opciones, misma app:
+
+### Opción A: instalador (recomendada — sin Python)
+
+1. Descargá `upflow-setup-v<version>.exe` del [último release](https://github.com/santiquiroz/upflow/releases).
+2. Ejecutalo — no pide admin, se instala en tu carpeta de usuario (`%LOCALAPPDATA%\Upflow`) e incluye su propio Python embebido, así que **no necesitás tener Python instalado**.
+3. Al terminar, tildá "iniciar Upflow" (o abrilo después desde el acceso directo del escritorio/menú inicio).
+4. Esperá la primera descarga (~3-4 GB: motor de upscaling + FFmpeg + RIFE + dependencias de Python) — cuando el servidor está listo, el navegador se abre solo en `http://127.0.0.1:8090`. Las siguientes veces arranca al instante.
+
+Desinstalar preserva por defecto tus archivos y modelos (`runtime\`); hay un checkbox opcional durante la instalación para que el desinstalador también los borre. Ver [`installer/README.md`](installer/README.md) para el detalle del instalador.
+
+### Opción B: zip portátil (requiere Python)
 
 1. Descargá el `.zip` del [último release](https://github.com/santiquiroz/upflow/releases) (por ejemplo `upflow-v0.1.0.zip`).
 2. Extraelo en cualquier carpeta.
 3. Doble click en **`Upflow.bat`**.
 4. Esperá la primera descarga de binarios (~1 GB: motor de upscaling + FFmpeg + RIFE) — cuando el servidor está listo, el navegador se abre solo en `http://127.0.0.1:8090`.
 
-**Requisitos:**
+Requiere [Python 3.11+](https://www.python.org/downloads/) instalado y en el `PATH`. Si tenés `winget`, con esto alcanza: `winget install Python.Python.3.12`
 
-- Windows 10 u 11.
+**Requisitos (ambas opciones):**
+
+- Windows 10 u 11 de 64 bits.
 - Cualquier GPU con soporte Vulkan (NVIDIA, AMD o Intel).
-- [Python 3.11+](https://www.python.org/downloads/) instalado y en el `PATH`. Si tenés `winget`, con esto alcanza: `winget install Python.Python.3.12`
 
 > **¿Tenés una NVIDIA RTX?** Anda exactamente igual — Upflow corre sobre Vulkan, no necesita CUDA ni drivers especiales.
 

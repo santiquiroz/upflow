@@ -5,7 +5,20 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $venvPath = Join-Path $root '.venv'
 $venvPython = Join-Path $venvPath 'Scripts\python.exe'
-$installedSentinel = Join-Path $venvPath '.upflow-installed'
+
+# The installer bundles a Python 3.12 embeddable + pip at {app}\python (see
+# installer/upflow.iss and package-release.ps1 -Installer). When present it
+# takes priority and no system Python / venv is needed at all; the portable
+# zip has no python\ folder, so it falls back to the venv-based flow below.
+$bundledPythonPath = Join-Path $root 'python\python.exe'
+$usingBundledPython = Test-Path $bundledPythonPath
+$pythonExe = if ($usingBundledPython) { $bundledPythonPath } else { $venvPython }
+$installedSentinel = if ($usingBundledPython) {
+    Join-Path $root 'python\.upflow-installed'
+} else {
+    Join-Path $venvPath '.upflow-installed'
+}
+
 $envPath = Join-Path $root '.env'
 $envExamplePath = Join-Path $root '.env.example'
 $minPythonMajor = 3
@@ -63,11 +76,44 @@ function Test-UpflowAlreadyInstalled {
     if (Test-Path $installedSentinel) {
         return $true
     }
-    & $venvPython -c "import app" 2>$null
+    & $pythonExe -c "import app" 2>$null
     return ($LASTEXITCODE -eq 0)
 }
 
 function Install-PythonEnvironment {
+    if ($usingBundledPython) {
+        Install-BundledPythonDependencies
+    } else {
+        Install-VenvPythonDependencies
+    }
+}
+
+function Install-BundledPythonDependencies {
+    if (Test-UpflowAlreadyInstalled) {
+        Write-Host 'Upflow ya esta instalado en el Python embebido, se omite este paso.'
+        New-Item -ItemType File -Force -Path $installedSentinel | Out-Null
+        return
+    }
+
+    Write-Step 'Instalando Upflow con el Python embebido (primera vez, puede tardar un minuto)...'
+    & $pythonExe -m pip install --upgrade pip --quiet
+    if ($LASTEXITCODE -ne 0) {
+        throw 'No se pudo actualizar pip en el Python embebido.'
+    }
+    # --no-build-isolation: el instalador ya deja setuptools/wheel instalados
+    # en el Python embebido (ver package-release.ps1 Initialize-EmbeddedPython).
+    # pip build-isolation normal falla aca porque inyecta las build
+    # dependencies via PYTHONPATH en un subproceso, y el ._pth del embebido
+    # ignora PYTHONPATH por diseno (falla con "BackendUnavailable: Cannot
+    # import 'setuptools.build_meta'" si se omite este flag).
+    & $pythonExe -m pip install --no-build-isolation --quiet -e $root
+    if ($LASTEXITCODE -ne 0) {
+        throw 'No se pudo instalar Upflow (pip install -e .). Revisa tu conexion a internet.'
+    }
+    New-Item -ItemType File -Force -Path $installedSentinel | Out-Null
+}
+
+function Install-VenvPythonDependencies {
     if (-not (Test-Path $venvPython)) {
         Write-Step 'Creando entorno virtual (.venv)...'
         python -m venv $venvPath
@@ -215,7 +261,7 @@ function Start-Upflow {
     Write-Host 'La ventana va a mostrar los logs del servidor. Cerra esta ventana o presiona Ctrl+C para detenerlo.'
 
     try {
-        & $venvPython -m uvicorn app.main:app --host $appHost --port $appPort
+        & $pythonExe -m uvicorn app.main:app --host $appHost --port $appPort
     } finally {
         Stop-Job $browserJob -ErrorAction SilentlyContinue | Out-Null
         Remove-Job $browserJob -Force -ErrorAction SilentlyContinue | Out-Null
@@ -228,7 +274,11 @@ function Main {
     Write-Host '=== Upflow ===' -ForegroundColor Green
 
     Write-Step 'Verificando Python...'
-    Assert-SystemPythonOk
+    if ($usingBundledPython) {
+        Write-Host "Python embebido detectado en $bundledPythonPath, no hace falta Python del sistema."
+    } else {
+        Assert-SystemPythonOk
+    }
 
     Install-PythonEnvironment
     Install-MissingBinaries

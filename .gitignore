@@ -12,3 +12,4 @@ htmlcov/
 dist/
 node_modules/
 *.tsbuildinfo
+installer/build/
