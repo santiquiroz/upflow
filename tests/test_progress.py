@@ -698,8 +698,10 @@ async def test_track_frame_progress_reports_increasing_frames_done_and_monotonic
     snapshots: list[tuple[int, float]] = []
     original_apply = upscaler._apply_frame_progress
 
-    def spying_apply(job_arg: VideoUpscaleJob, stage_key: str, frames_done: int) -> None:
-        original_apply(job_arg, stage_key, frames_done)
+    def spying_apply(
+        job_arg: VideoUpscaleJob, stage_key: str, frames_done: int, frames_total: int | None = None
+    ) -> None:
+        original_apply(job_arg, stage_key, frames_done, frames_total)
         snapshots.append((job_arg.metadata["framesDone"], job_arg.metadata["progress"]))
 
     upscaler._apply_frame_progress = spying_apply  # type: ignore[method-assign]
@@ -834,8 +836,10 @@ async def test_pipeline_wraps_all_three_frame_stages_with_live_poller(tmp_path: 
     stage_snapshots: list[tuple[str, int]] = []
     original_apply = upscaler._apply_frame_progress
 
-    def spying_apply(job_arg: VideoUpscaleJob, stage_key: str, frames_done: int) -> None:
-        original_apply(job_arg, stage_key, frames_done)
+    def spying_apply(
+        job_arg: VideoUpscaleJob, stage_key: str, frames_done: int, frames_total: int | None = None
+    ) -> None:
+        original_apply(job_arg, stage_key, frames_done, frames_total)
         stage_snapshots.append((stage_key, job_arg.metadata["framesDone"]))
 
     upscaler._apply_frame_progress = spying_apply  # type: ignore[method-assign]
@@ -846,3 +850,94 @@ async def test_pipeline_wraps_all_three_frame_stages_with_live_poller(tmp_path: 
     assert observed_stages == {"extracting_frames", "upscaling_frames", "interpolating_frames"}
     assert job.metadata["progress"] == pytest.approx(1.0)
     assert job.metadata["stage"] == "completed"
+
+
+# ---------------------------------------------------------------------------
+# SP5 Task 2 review fix 1: a failure INSIDE _apply_frame_progress (metadata
+# mutation) must be swallowed by the poller's guard, never re-raised through
+# `await poller`, so it cannot mask the stage's own exception.
+# ---------------------------------------------------------------------------
+
+
+async def test_track_frame_progress_apply_error_does_not_mask_stage_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    upscaler = make_tracking_upscaler(tmp_path)
+    job = make_video_job(tmp_path / "clip.mp4")
+    job.metadata["framesTotal"] = 4
+    advance_video_stage(job, "extracting_frames")
+    output_dir = tmp_path / "frames-in"
+
+    def boom(*_args: object, **_kwargs: object) -> None:
+        raise ValueError("apply mutation blew up")
+
+    monkeypatch.setattr(upscaler, "_apply_frame_progress", boom)
+
+    tasks_before = asyncio.all_tasks()
+
+    with pytest.raises(RuntimeError, match="stage exploded"):
+        async with upscaler._track_frame_progress(job, output_dir, "extracting_frames"):
+            await asyncio.sleep(0.05)  # let the poller tick and hit boom
+            raise RuntimeError("stage exploded")
+
+    assert asyncio.all_tasks() == tasks_before
+
+
+# ---------------------------------------------------------------------------
+# SP5 Task 2 review fix 2: interpolating_frames uses the RIFE target count as
+# denominator (source * multiplier / target_fps count), NOT the source
+# framesTotal, so the stage does not clamp to 100% halfway through.
+# ---------------------------------------------------------------------------
+
+
+async def test_apply_frame_progress_interpolation_uses_explicit_target_denominator(tmp_path: Path) -> None:
+    upscaler = make_tracking_upscaler(tmp_path)
+    job = make_video_job(tmp_path / "clip.mp4", fps_multiplier=2)
+    job.metadata["framesTotal"] = 4  # source count
+    advance_video_stage(job, "interpolating_frames")
+    floor = job.metadata["progress"]
+    stages = build_video_stages(job)
+    interp_weight = next(stage.weight for stage in stages if stage.key == "interpolating_frames")
+
+    # 4 produced frames against a target of 8 is HALF the stage, not full: with
+    # the source framesTotal (4) as denominator this would already read 100%.
+    upscaler._apply_frame_progress(job, "interpolating_frames", frames_done=4, frames_total=8)
+    assert job.metadata["progress"] == pytest.approx(floor + 0.5 * interp_weight)
+
+    upscaler._apply_frame_progress(job, "interpolating_frames", frames_done=8, frames_total=8)
+    assert job.metadata["progress"] == pytest.approx(floor + interp_weight)
+
+
+async def test_pipeline_passes_target_count_as_interpolation_denominator(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    StorageService(settings)
+    upscaler = LiveFrameVideoUpscaler(
+        settings,
+        FakeVideoEngine(),
+        FakeMediaTools(),
+        LiveFrameRifeEngine(),
+        frame_poll_interval_seconds=0.01,
+    )
+    source = upscaler.settings.uploads_path / "clip.mp4"
+    source.write_bytes(b"fake-video-bytes")
+    job = make_video_job(source, fps_multiplier=2)
+
+    captured: dict[str, int | None] = {}
+    original_track = upscaler._track_frame_progress
+
+    def spying_track(
+        job_arg: VideoUpscaleJob, output_dir: Path, stage_key: str, frames_total: int | None = None
+    ):
+        captured[stage_key] = frames_total
+        return original_track(job_arg, output_dir, stage_key, frames_total=frames_total)
+
+    upscaler._track_frame_progress = spying_track  # type: ignore[method-assign]
+
+    await upscaler.run(job, fps_multiplier=2)
+
+    # extract/upscale are 1:1 with the source -> no explicit denominator (falls
+    # back to framesTotal); interpolation gets the doubled target (4 upscaled * 2).
+    assert captured["extracting_frames"] is None
+    assert captured["upscaling_frames"] is None
+    assert captured["interpolating_frames"] == 8
+    assert job.metadata["interpFramesTotal"] == 8

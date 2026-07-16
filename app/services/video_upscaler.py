@@ -297,8 +297,17 @@ class VideoUpscaler:
         advance_video_stage(job, "interpolating_frames")
         frames_interp = frames_out.parent / "frames-interp"
         source_frame_count = self._count_frames(frames_out)
+        # Interpolation emits MORE frames than the source (mult>1 / higher fps),
+        # so the source framesTotal would clamp this stage to 100% halfway through.
+        # The RIFE target count is the honest denominator for this stage only.
+        interp_frames_total = self._interp_frames_total(
+            source_frame_count, fps, fps_multiplier, target_fps
+        )
+        job.metadata["interpFramesTotal"] = interp_frames_total
 
-        async with self._track_frame_progress(job, frames_interp, "interpolating_frames"):
+        async with self._track_frame_progress(
+            job, frames_interp, "interpolating_frames", frames_total=interp_frames_total
+        ):
             if target_fps is not None:
                 return await self._interpolate_to_target_fps(
                     frames_out, frames_interp, source_frame_count, fps, target_fps
@@ -307,6 +316,14 @@ class VideoUpscaler:
             return await self._interpolate_by_multiplier(
                 frames_out, frames_interp, source_frame_count, fps, fps_multiplier
             )
+
+    @staticmethod
+    def _interp_frames_total(
+        source_frame_count: int, fps: str, fps_multiplier: int, target_fps: str | None
+    ) -> int | None:
+        if target_fps is not None:
+            return compute_target_frame_count(source_frame_count, fps, target_fps)
+        return source_frame_count * fps_multiplier
 
     @staticmethod
     def _interpolation_requested(fps_multiplier: int, target_fps: str | None) -> bool:
@@ -350,16 +367,18 @@ class VideoUpscaler:
 
     @contextlib.asynccontextmanager
     async def _track_frame_progress(
-        self, job: VideoUpscaleJob, output_dir: Path, stage_key: str
+        self, job: VideoUpscaleJob, output_dir: Path, stage_key: str, frames_total: int | None = None
     ) -> AsyncIterator[None]:
-        poller = asyncio.create_task(self._poll_frame_progress(job, output_dir, stage_key))
+        poller = asyncio.create_task(
+            self._poll_frame_progress(job, output_dir, stage_key, frames_total)
+        )
         try:
             yield
         finally:
             await self._stop_frame_poller(poller)
             # Final authoritative count so framesDone reaches the true total
             # even if the stage finished between two poll ticks.
-            await self._refresh_frame_progress(job, output_dir, stage_key)
+            await self._refresh_frame_progress(job, output_dir, stage_key, frames_total)
 
     @staticmethod
     async def _stop_frame_poller(poller: asyncio.Task[None]) -> None:
@@ -367,23 +386,34 @@ class VideoUpscaler:
         with contextlib.suppress(asyncio.CancelledError):
             await poller
 
-    async def _poll_frame_progress(self, job: VideoUpscaleJob, output_dir: Path, stage_key: str) -> None:
+    async def _poll_frame_progress(
+        self, job: VideoUpscaleJob, output_dir: Path, stage_key: str, frames_total: int | None
+    ) -> None:
         while True:
             await asyncio.sleep(self.frame_poll_interval_seconds)
-            await self._refresh_frame_progress(job, output_dir, stage_key)
+            await self._refresh_frame_progress(job, output_dir, stage_key, frames_total)
 
-    async def _refresh_frame_progress(self, job: VideoUpscaleJob, output_dir: Path, stage_key: str) -> None:
+    async def _refresh_frame_progress(
+        self, job: VideoUpscaleJob, output_dir: Path, stage_key: str, frames_total: int | None
+    ) -> None:
+        # The whole tick is guarded (count + metadata mutation): a failure here
+        # must never propagate out of the poller task, or `await poller` in the
+        # finally would re-raise it and mask the stage's own exception.
         try:
             frames_done = await asyncio.to_thread(self._count_frames, output_dir)
+            self._apply_frame_progress(job, stage_key, frames_done, frames_total)
         except Exception:  # noqa: BLE001
             logger.exception("Frame progress poll failed for stage %s in %s", stage_key, output_dir)
-            return
-        self._apply_frame_progress(job, stage_key, frames_done)
 
-    def _apply_frame_progress(self, job: VideoUpscaleJob, stage_key: str, frames_done: int) -> None:
+    def _apply_frame_progress(
+        self, job: VideoUpscaleJob, stage_key: str, frames_done: int, frames_total: int | None = None
+    ) -> None:
         job.metadata["framesDone"] = max(int(job.metadata.get("framesDone") or 0), frames_done)
         stages = apply_stage_transition(build_video_stages(job), stage_key)
-        fraction = frame_stage_fraction(job.metadata["framesDone"], job.metadata.get("framesTotal"))
+        # Interpolation passes its own (larger) target count; extract/upscale are
+        # 1:1 with the source so they fall back to framesTotal.
+        denominator = frames_total if frames_total is not None else job.metadata.get("framesTotal")
+        fraction = frame_stage_fraction(job.metadata["framesDone"], denominator)
         progress = compute_progress(stages, current_fraction=fraction)
         job.metadata["progress"] = max(float(job.metadata.get("progress") or 0.0), progress)
 
