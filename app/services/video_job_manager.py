@@ -10,8 +10,9 @@ from pathlib import Path
 from app.config import AUDIO_ENHANCE_MODES, Settings
 from app.exceptions import QueueFullError
 from app.models import JobStatus, VideoUpscaleJob, utc_now
+from app.services.device_router import DeviceRouter, has_compatible_device
 from app.services.device_semaphores import DeviceSemaphores
-from app.services.devices_service import DevicesService
+from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
 from app.services.media_tools import MediaTools, parse_fps_fraction, resolve_video_fps
 from app.services.model_registry import ModelKind, ModelRegistry, ModelStatus
 from app.services.video_upscaler import VideoUpscaler
@@ -39,6 +40,7 @@ class VideoJobManager:
         *,
         registry: ModelRegistry | None = None,
         devices: DevicesService | None = None,
+        device_router: DeviceRouter | None = None,
     ) -> None:
         self.settings = settings
         self.upscaler = upscaler
@@ -48,6 +50,7 @@ class VideoJobManager:
         self.jobs: dict[str, VideoUpscaleJob] = {}
         self.queue: asyncio.Queue[VideoUpscaleJob] = asyncio.Queue(maxsize=settings.max_queue_size)
         self.device_semaphores = device_semaphores
+        self.device_router = device_router or DeviceRouter(device_semaphores)
         self.worker_tasks: list[asyncio.Task] = []
 
     async def start(self) -> None:
@@ -92,9 +95,11 @@ class VideoJobManager:
     ) -> VideoUpscaleJob:
         source_fps = await self._validate_video(source_path)
         resolved_model_id = model_id if model_id is not None else model_name
-        if device is not None and self.devices is not None:
+        if device is not None and device != AUTO_DEVICE_ID and self.devices is not None:
             await asyncio.to_thread(self.devices.validate, device)
         resolution = self._resolve_model(resolved_model_id, scale, device)
+        if device == AUTO_DEVICE_ID:
+            await self._validate_auto_device(resolution.kind)
         self._validate_request(
             output_container,
             video_codec,
@@ -182,6 +187,24 @@ class VideoJobManager:
         return VideoModelResolution(
             model_id=model_id, engine_model_name=model_id, kind=ModelKind.onnx, scale=entry.scale
         )
+
+    async def _validate_auto_device(self, kind: ModelKind) -> None:
+        if self.devices is None:
+            raise ValueError("Device 'auto' requires a devices service to be configured")
+        devices = await asyncio.to_thread(self.devices.list_devices)
+        if not has_compatible_device(devices, kind):
+            raise ValueError(
+                f"No compatible device available for model kind {kind.value!r} (requested device='auto')"
+            )
+
+    def _model_kind_for_job(self, job: VideoUpscaleJob) -> ModelKind:
+        if job.model_id in self.settings.model_keys:
+            return ModelKind.builtin_ncnn
+        if self.registry is not None:
+            entry = self.registry.get(job.model_id) if job.model_id is not None else None
+            if entry is not None:
+                return entry.kind
+        raise ValueError(f"Cannot resolve model kind for job (model_id={job.model_id!r})")
 
     def _validate_request(
         self,
@@ -272,23 +295,57 @@ class VideoJobManager:
     async def _worker(self) -> None:
         while True:
             job = await self.queue.get()
-            async with self.device_semaphores.acquire(job.device):
-                job.status = JobStatus.running
-                job.started_at = utc_now()
-                try:
-                    job.output_path = await self.upscaler.run(job, fps_multiplier=job.fps_multiplier)
-                    job.status = JobStatus.completed
-                except asyncio.CancelledError:
-                    job.status = JobStatus.failed
-                    job.error = "Job cancelled"
-                    raise
-                except Exception as exc:  # noqa: BLE001
-                    job.status = JobStatus.failed
-                    job.error = str(exc)
-                finally:
-                    job.finished_at = utc_now()
-                    self._unlink_source_safely(job.source_path)
-                    self.queue.task_done()
+            if job.device == AUTO_DEVICE_ID:
+                await self._run_auto_job(job)
+            else:
+                await self._run_pinned_job(job)
+
+    async def _run_pinned_job(self, job: VideoUpscaleJob) -> None:
+        async with self.device_semaphores.acquire(job.device):
+            await self._execute_job(job)
+
+    async def _run_auto_job(self, job: VideoUpscaleJob) -> None:
+        # See JobManager._run_auto_job: device resolution is guarded on its
+        # own, before any semaphore/router acquire, so a failure here fails
+        # the job cleanly instead of leaving it stuck at status=queued with
+        # task_done() never called.
+        try:
+            kind = self._model_kind_for_job(job)
+            devices = await asyncio.to_thread(self.devices.list_devices)
+        except Exception as exc:  # noqa: BLE001
+            self._fail_dequeued_job(job, str(exc))
+            return
+        try:
+            async with self.device_router.acquire_auto(devices, kind) as device_id:
+                job.device = device_id
+                await self._execute_job(job)
+        except ValueError as exc:
+            self._fail_dequeued_job(job, str(exc))
+
+    async def _execute_job(self, job: VideoUpscaleJob) -> None:
+        job.status = JobStatus.running
+        job.started_at = utc_now()
+        try:
+            job.output_path = await self.upscaler.run(job, fps_multiplier=job.fps_multiplier)
+            job.status = JobStatus.completed
+        except asyncio.CancelledError:
+            job.status = JobStatus.failed
+            job.error = "Job cancelled"
+            raise
+        except Exception as exc:  # noqa: BLE001
+            job.status = JobStatus.failed
+            job.error = str(exc)
+        finally:
+            job.finished_at = utc_now()
+            self._unlink_source_safely(job.source_path)
+            self.queue.task_done()
+
+    def _fail_dequeued_job(self, job: VideoUpscaleJob, error: str) -> None:
+        job.status = JobStatus.failed
+        job.error = error
+        job.finished_at = utc_now()
+        self._unlink_source_safely(job.source_path)
+        self.queue.task_done()
 
     @staticmethod
     def _unlink_source_safely(source_path: Path) -> None:

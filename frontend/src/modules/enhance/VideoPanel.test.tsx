@@ -316,6 +316,57 @@ describe("VideoPanel", () => {
     );
   });
 
+  it("submits device='auto' when the Auto device option is selected", async () => {
+    const createResponse: CreateJobResponse = {
+      jobId: "vid-2",
+      status: "queued",
+      statusUrl: "/api/v1/video/jobs/vid-2",
+      downloadUrl: null,
+    };
+    vi.mocked(api.createVideoJob).mockResolvedValue(createResponse);
+    vi.mocked(api.getVideoJob).mockResolvedValue({
+      jobId: "vid-2",
+      status: "queued",
+      originalFilename: "clip.mp4",
+      modelName: "realesrgan-x4plus",
+      scale: 4,
+      outputContainer: "mp4",
+      videoCodec: "libx264",
+      videoPreset: "medium",
+      crf: 18,
+      keepAudio: true,
+      fpsMultiplier: 1,
+      targetFps: null,
+      audioEnhance: null,
+      modelId: "realesrgan-x4plus",
+      device: "auto",
+      createdAt: "2026-01-01T00:00:00Z",
+      startedAt: null,
+      finishedAt: null,
+      error: null,
+      metadata: {},
+      progressPct: null,
+      downloadUrl: null,
+    });
+
+    renderPanel();
+    await selectFile();
+    fireEvent.click(await screen.findByRole("radio", { name: /General Balanced 4x/ }));
+
+    openSection("Device");
+    const autoRadio = await screen.findByRole("radio", { name: /Auto/ });
+    fireEvent.click(autoRadio);
+
+    const submitButton = await screen.findByRole("button", { name: /upscale video/i });
+    await waitFor(() => expect(submitButton).not.toBeDisabled());
+    fireEvent.click(submitButton);
+
+    await waitFor(() => expect(vi.mocked(api.createVideoJob)).toHaveBeenCalled());
+    expect(vi.mocked(api.createVideoJob).mock.calls[0][0]).toEqual(
+      expect.objectContaining({ device: "auto" }),
+    );
+  });
+
   it("shows an inline error message when the server rejects the upload", async () => {
     vi.mocked(api.createVideoJob).mockRejectedValue(new Error("Video queue is full; try again later"));
 

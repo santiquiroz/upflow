@@ -15,6 +15,10 @@ from app.config import Settings
 # ---------------------------------------------------------------------------
 
 CPU_DEVICE_ID = "cpu"
+# Sentinel accepted as the `device` job field -- never returned by
+# list_devices() (it isn't real hardware). See app/services/device_router.py
+# for how it gets resolved to a concrete device_id at dequeue time.
+AUTO_DEVICE_ID = "auto"
 DML_EXECUTION_PROVIDER = "DmlExecutionProvider"
 DXGI_ADAPTER_FLAG_SOFTWARE = 2
 

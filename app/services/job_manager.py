@@ -10,8 +10,9 @@ from PIL import Image, UnidentifiedImageError
 from app.config import Settings
 from app.exceptions import QueueFullError
 from app.models import JobStatus, UpscaleJob, utc_now
+from app.services.device_router import DeviceRouter, has_compatible_device
 from app.services.device_semaphores import DeviceSemaphores
-from app.services.devices_service import DevicesService
+from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
 from app.services.engines.base import UpscaleEngine
 from app.services.model_registry import ModelKind, ModelRegistry, ModelStatus
 from app.services.progress import advance_image_stage, complete_image_stages
@@ -39,6 +40,7 @@ class JobManager:
         onnx_engine: UpscaleEngine | None = None,
         registry: ModelRegistry | None = None,
         devices: DevicesService | None = None,
+        device_router: DeviceRouter | None = None,
     ) -> None:
         self.settings = settings
         self.engine = engine
@@ -48,6 +50,7 @@ class JobManager:
         self.jobs: dict[str, UpscaleJob] = {}
         self.queue: asyncio.Queue[UpscaleJob] = asyncio.Queue(maxsize=settings.max_queue_size)
         self.device_semaphores = device_semaphores
+        self.device_router = device_router or DeviceRouter(device_semaphores)
         self.worker_tasks: list[asyncio.Task] = []
 
     async def start(self) -> None:
@@ -85,7 +88,7 @@ class JobManager:
     ) -> UpscaleJob:
         await asyncio.to_thread(self._validate_input_image, source_path)
         resolved_model_id = model_id if model_id is not None else model_name
-        if device is not None and self.devices is not None:
+        if device is not None and device != AUTO_DEVICE_ID and self.devices is not None:
             await asyncio.to_thread(self.devices.validate, device)
         resolution = self._resolve_model(
             model_id=resolved_model_id,
@@ -93,6 +96,8 @@ class JobManager:
             output_format=output_format,
             device=device,
         )
+        if device == AUTO_DEVICE_ID:
+            await self._validate_auto_device(resolution.kind)
 
         job = UpscaleJob(
             source_path=source_path,
@@ -171,6 +176,24 @@ class JobManager:
                 return self.onnx_engine
         return self.engine
 
+    async def _validate_auto_device(self, kind: ModelKind) -> None:
+        if self.devices is None:
+            raise ValueError("Device 'auto' requires a devices service to be configured")
+        devices = await asyncio.to_thread(self.devices.list_devices)
+        if not has_compatible_device(devices, kind):
+            raise ValueError(
+                f"No compatible device available for model kind {kind.value!r} (requested device='auto')"
+            )
+
+    def _model_kind_for_job(self, job: UpscaleJob) -> ModelKind:
+        if job.model_id in self.settings.model_keys:
+            return ModelKind.builtin_ncnn
+        if self.registry is not None:
+            entry = self.registry.get(job.model_id) if job.model_id is not None else None
+            if entry is not None:
+                return entry.kind
+        raise ValueError(f"Cannot resolve model kind for job (model_id={job.model_id!r})")
+
     def _validate_input_image(self, source_path: Path) -> None:
         try:
             with Image.open(source_path) as img:
@@ -195,26 +218,61 @@ class JobManager:
     async def _worker(self) -> None:
         while True:
             job = await self.queue.get()
-            async with self.device_semaphores.acquire(job.device):
-                job.status = JobStatus.running
-                job.started_at = utc_now()
-                advance_image_stage(job, "upscaling")
-                try:
-                    engine = self._select_engine(job)
-                    job.output_path = await engine.run(job)
-                    job.status = JobStatus.completed
-                    complete_image_stages(job)
-                except asyncio.CancelledError:
-                    job.status = JobStatus.failed
-                    job.error = "Job cancelled"
-                    raise
-                except Exception as exc:  # noqa: BLE001
-                    job.status = JobStatus.failed
-                    job.error = str(exc)
-                finally:
-                    job.finished_at = utc_now()
-                    self._unlink_source_safely(job.source_path)
-                    self.queue.task_done()
+            if job.device == AUTO_DEVICE_ID:
+                await self._run_auto_job(job)
+            else:
+                await self._run_pinned_job(job)
+
+    async def _run_pinned_job(self, job: UpscaleJob) -> None:
+        async with self.device_semaphores.acquire(job.device):
+            await self._execute_job(job)
+
+    async def _run_auto_job(self, job: UpscaleJob) -> None:
+        # Device resolution (kind lookup + hardware enumeration) happens
+        # BEFORE any semaphore/router acquire and is guarded on its own, so a
+        # failure here (e.g. hardware changed since create_job's own
+        # compatibility check) fails the job cleanly instead of leaving it
+        # stuck at status=queued forever with task_done() never called.
+        try:
+            kind = self._model_kind_for_job(job)
+            devices = await asyncio.to_thread(self.devices.list_devices)
+        except Exception as exc:  # noqa: BLE001
+            self._fail_dequeued_job(job, str(exc))
+            return
+        try:
+            async with self.device_router.acquire_auto(devices, kind) as device_id:
+                job.device = device_id
+                await self._execute_job(job)
+        except ValueError as exc:
+            self._fail_dequeued_job(job, str(exc))
+
+    async def _execute_job(self, job: UpscaleJob) -> None:
+        job.status = JobStatus.running
+        job.started_at = utc_now()
+        advance_image_stage(job, "upscaling")
+        try:
+            engine = self._select_engine(job)
+            job.output_path = await engine.run(job)
+            job.status = JobStatus.completed
+            complete_image_stages(job)
+        except asyncio.CancelledError:
+            job.status = JobStatus.failed
+            job.error = "Job cancelled"
+            raise
+        except Exception as exc:  # noqa: BLE001
+            job.status = JobStatus.failed
+            job.error = str(exc)
+        finally:
+            job.finished_at = utc_now()
+            self._unlink_source_safely(job.source_path)
+            self.queue.task_done()
+
+    def _fail_dequeued_job(self, job: UpscaleJob, error: str) -> None:
+        job.status = JobStatus.failed
+        job.error = error
+        job.finished_at = utc_now()
+        self._unlink_source_safely(job.source_path)
+        self.queue.task_done()
 
     @staticmethod
     def _unlink_source_safely(source_path: Path) -> None:

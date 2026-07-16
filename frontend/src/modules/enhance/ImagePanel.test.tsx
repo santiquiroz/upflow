@@ -206,6 +206,49 @@ describe("ImagePanel", () => {
     );
   });
 
+  it("submits device='auto' when the Auto device option is selected", async () => {
+    const createResponse: CreateJobResponse = {
+      jobId: "job-1",
+      status: "queued",
+      statusUrl: "/api/v1/jobs/job-1",
+      downloadUrl: null,
+    };
+    vi.mocked(api.createImageJob).mockResolvedValue(createResponse);
+    vi.mocked(api.getJob).mockResolvedValue({
+      jobId: "job-1",
+      status: "queued",
+      originalFilename: "photo.png",
+      modelName: "realesrgan-x4plus",
+      scale: 4,
+      outputFormat: "png",
+      modelId: "realesrgan-x4plus",
+      device: "auto",
+      createdAt: "2026-01-01T00:00:00Z",
+      startedAt: null,
+      finishedAt: null,
+      error: null,
+      metadata: {},
+      progressPct: null,
+      downloadUrl: null,
+    });
+
+    renderPanel();
+    await selectFileAndModel();
+
+    fireEvent.click(await screen.findByRole("button", { name: /^Device/ }));
+    const autoRadio = await screen.findByRole("radio", { name: /Auto/ });
+    fireEvent.click(autoRadio);
+
+    const submitButton = await screen.findByRole("button", { name: /upscale/i });
+    await waitFor(() => expect(submitButton).not.toBeDisabled());
+    fireEvent.click(submitButton);
+
+    await waitFor(() => expect(vi.mocked(api.createImageJob)).toHaveBeenCalled());
+    expect(vi.mocked(api.createImageJob).mock.calls[0][0]).toEqual(
+      expect.objectContaining({ device: "auto" }),
+    );
+  });
+
   it("shows an inline error message when the server rejects the upload", async () => {
     vi.mocked(api.createImageJob).mockRejectedValue(new Error("Job queue is full; try again later"));
 

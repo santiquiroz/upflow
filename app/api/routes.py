@@ -30,7 +30,7 @@ from app.schemas import (
     VideoJobResponse,
     VideoProfileResponse,
 )
-from app.services.devices_service import DevicesService
+from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
 from app.services.hf_client import HfClient
 from app.services.job_manager import JobManager
 from app.services.model_installer import ModelInstaller
@@ -150,16 +150,21 @@ def get_model_installer(request: Request) -> ModelInstaller:
     return request.app.state.model_installer
 
 
-async def resolve_request_device(device: str | None, devices: DevicesService) -> str:
+async def resolve_request_device(device: str | None, devices: DevicesService, settings: Settings) -> str:
     """Resolves the `device` Form param to a concrete device id.
 
-    An explicit device is passed through untouched (validated downstream by
-    the job manager). `None` defaults to settings.DEFAULT_DEVICE via
-    DevicesService.resolve_default -- real hardware enumeration, so it is
-    dispatched through asyncio.to_thread rather than blocking the event loop.
+    An explicit device (including the "auto" sentinel) is passed through
+    untouched -- "auto" is validated/resolved downstream by the job manager
+    and its device_router. `None` means the caller didn't pin a device: if
+    ENABLE_AUTO_ROUTE is on, that implicitly means "auto" too; otherwise it
+    defaults to settings.DEFAULT_DEVICE via DevicesService.resolve_default --
+    real hardware enumeration, so it is dispatched through asyncio.to_thread
+    rather than blocking the event loop.
     """
     if device is not None:
         return device
+    if settings.enable_auto_route:
+        return AUTO_DEVICE_ID
     device_list = await asyncio.to_thread(devices.list_devices)
     return devices.resolve_default(device_list)["id"]
 
@@ -297,7 +302,7 @@ async def create_job(
     safe_name = sanitize_filename(original_name, default="upload.png")
     token = uuid4().hex
     destination = settings.uploads_path / f"{token}-{safe_name}"
-    resolved_device = await resolve_request_device(device, devices)
+    resolved_device = await resolve_request_device(device, devices, settings)
 
     job: UpscaleJob | None = None
     try:
@@ -361,7 +366,7 @@ async def create_video_job(
     safe_name = sanitize_filename(original_name, default="upload.mp4")
     token = uuid4().hex
     destination = settings.uploads_path / f"{token}-{safe_name}"
-    resolved_device = await resolve_request_device(device, devices)
+    resolved_device = await resolve_request_device(device, devices, settings)
 
     resolved = resolve_video_job_fields(
         profile,

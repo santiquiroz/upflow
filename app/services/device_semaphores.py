@@ -35,12 +35,12 @@ class DeviceSemaphores:
         async with self._create_lock:
             semaphore = self._semaphores.get(device_id)
             if semaphore is None:
-                semaphore = asyncio.Semaphore(self._capacity_for(device_id))
+                semaphore = asyncio.Semaphore(self.capacity_for(device_id))
                 self._semaphores[device_id] = semaphore
                 self._in_flight[device_id] = 0
             return semaphore
 
-    def _capacity_for(self, device_id: str | None) -> int:
+    def capacity_for(self, device_id: str | None) -> int:
         if device_id == CPU_DEVICE_ID:
             return self._settings.cpu_concurrency
         return self._settings.per_device_gpu_concurrency

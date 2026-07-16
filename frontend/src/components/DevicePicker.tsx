@@ -2,6 +2,19 @@ import { useQuery } from "@tanstack/react-query";
 import { getDevices } from "../lib/api";
 import type { DeviceInfoResponse } from "../lib/apiTypes";
 
+export const AUTO_DEVICE_ID = "auto";
+
+// Synthetic entry, never fetched from GET /devices -- selecting it sends
+// device="auto" to the backend, which routes to a free compatible device at
+// dequeue time (see app/services/device_router.py). Never disabled: real
+// compatibility is enforced server-side, surfaced as a submit-time error.
+export const AUTO_DEVICE: DeviceInfoResponse = {
+  id: AUTO_DEVICE_ID,
+  kind: "auto",
+  name: "Auto",
+  backend: "auto",
+};
+
 interface DevicePickerProps {
   value: string | null;
   onChange: (device: DeviceInfoResponse) => void;
@@ -59,6 +72,9 @@ function DeviceOption({
       {isDisabled && (
         <span className="pl-[22px] text-xs text-warn">Requires a Vulkan GPU for this model (ncnn)</span>
       )}
+      {device.id === AUTO_DEVICE_ID && (
+        <span className="pl-[22px] text-xs text-text-faint">Routes to the least busy compatible device</span>
+      )}
     </label>
   );
 }
@@ -76,17 +92,21 @@ export function DevicePicker({ value, onChange, requiresGpu }: DevicePickerProps
 
   const devices = devicesQuery.data?.devices ?? [];
   const defaultDeviceId = devicesQuery.data?.defaultDeviceId;
+  // Auto is never disabled here -- real compatibility (e.g. a builtin ncnn
+  // model with no GPU present at all) is enforced server-side and surfaces
+  // as a submit-time error instead.
+  const options = [AUTO_DEVICE, ...devices];
 
   return (
     <fieldset className="flex flex-col gap-2">
       <legend className="font-heading text-xs font-semibold uppercase tracking-wide text-text-dim">Device</legend>
-      {devices.map((device) => (
+      {options.map((device) => (
         <DeviceOption
           key={device.id}
           device={device}
           isSelected={device.id === value}
           isDefault={device.id === defaultDeviceId}
-          isDisabled={requiresGpu && isCpuDevice(device)}
+          isDisabled={device.id !== AUTO_DEVICE_ID && requiresGpu && isCpuDevice(device)}
           onChange={onChange}
         />
       ))}

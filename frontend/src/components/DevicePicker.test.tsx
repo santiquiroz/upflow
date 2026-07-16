@@ -71,6 +71,32 @@ describe("DevicePicker", () => {
     expect(onChange).toHaveBeenCalledWith(GPU_DEVICE);
   });
 
+  it("shows an Auto option ahead of the real devices", async () => {
+    renderPicker([CPU_DEVICE, GPU_DEVICE], "dml:0", false);
+
+    const autoOption = await screen.findByRole("radio", { name: /Auto/ });
+    expect(autoOption).not.toBeDisabled();
+    expect(autoOption.closest("label")).toHaveTextContent(/least busy compatible device/i);
+  });
+
+  it("never disables the Auto option even when the selected model requires a Vulkan GPU", async () => {
+    renderPicker([CPU_DEVICE, GPU_DEVICE], "dml:0", true);
+
+    const autoOption = await screen.findByRole("radio", { name: /Auto/ });
+    expect(autoOption).not.toBeDisabled();
+  });
+
+  it("calls onChange with the auto sentinel when Auto is selected", async () => {
+    const { onChange } = renderPicker([CPU_DEVICE, GPU_DEVICE], "dml:0", false);
+
+    const autoOption = await screen.findByRole("radio", { name: /Auto/ });
+    fireEvent.click(autoOption);
+
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "auto", kind: "auto", name: "Auto" }),
+    );
+  });
+
   it("shows an error message when the devices request fails", async () => {
     vi.mocked(api.getDevices).mockRejectedValue(new Error("network down"));
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });

@@ -120,8 +120,11 @@ export interface HealthResponse {
   videoQueueDepth: number;
 }
 
-export type DeviceKind = "cpu" | "gpu" | "npu";
-export type DeviceBackend = "cpu" | "directml" | "winml";
+// "auto" is never returned by GET /devices (real hardware only) -- it's a
+// frontend-only sentinel for the synthetic "Auto" DevicePicker entry, mirrored
+// server-side by app.services.devices_service.AUTO_DEVICE_ID.
+export type DeviceKind = "cpu" | "gpu" | "npu" | "auto";
+export type DeviceBackend = "cpu" | "directml" | "winml" | "auto";
 
 export interface DeviceInfoResponse {
   id: string;

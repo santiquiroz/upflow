@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from app.api.routes import router as api_router
 from app.config import AUDIO_ENHANCE_MODES, get_settings
 from app.security import OriginGuardMiddleware
+from app.services.device_router import DeviceRouter
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.devices_service import DevicesService
 from app.services.engines.audio_enhance import AudioEnhancer
@@ -42,6 +43,10 @@ async def lifespan(app: FastAPI):
     model_registry = ModelRegistry(settings)
     onnx_engine = OnnxUpscaler(settings, model_registry, devices_service)
     device_semaphores = DeviceSemaphores(settings)
+    # Shared across both managers (like device_semaphores) so an auto-routed
+    # image job and an auto-routed video job never pick the same free
+    # device in the same race window -- see DeviceRouter's docstring.
+    device_router = DeviceRouter(device_semaphores)
     job_manager = JobManager(
         settings,
         engine,
@@ -49,6 +54,7 @@ async def lifespan(app: FastAPI):
         onnx_engine=onnx_engine,
         registry=model_registry,
         devices=devices_service,
+        device_router=device_router,
     )
     video_upscaler = VideoUpscaler(
         settings,
@@ -66,6 +72,7 @@ async def lifespan(app: FastAPI):
         device_semaphores,
         registry=model_registry,
         devices=devices_service,
+        device_router=device_router,
     )
     retention_sweeper = RetentionSweeper(settings, job_manager, video_job_manager)
     hf_client = HfClient(settings)

@@ -70,7 +70,9 @@ function EnvExplanationNote() {
       <span>
         These values come from the app&apos;s .env configuration, set at install time. There is no settings-write API
         yet, so nothing on this page is editable from the UI — including audio enhance, frame interpolation, output
-        retention (TTL) and upload size limits, which are configured but not exposed by the API.
+        retention (TTL), upload size limits, and auto-routing queued jobs to a free GPU (ENABLE_AUTO_ROUTE), which
+        are configured but not exposed by the API. Pick &quot;Auto&quot; in a job&apos;s Device section to opt into
+        auto-routing per job regardless of this setting.
       </span>
     </div>
   );

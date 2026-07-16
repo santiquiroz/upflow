@@ -226,6 +226,11 @@ class Settings(BaseSettings):
     enable_audio_enhance: bool = Field(default=False, alias="ENABLE_AUDIO_ENHANCE")
 
     default_device: str = Field(default="dml:0", alias="DEFAULT_DEVICE")
+    # When on and a job request doesn't pin a device, routes.py hands the job
+    # the "auto" sentinel instead of DEFAULT_DEVICE -- see
+    # app/services/device_router.py for the actual routing decision. Off by
+    # default: existing per-job device selection behavior is unchanged.
+    enable_auto_route: bool = Field(default=False, alias="ENABLE_AUTO_ROUTE")
 
     models_dir: str = Field(default="models", alias="MODELS_DIR")
 
