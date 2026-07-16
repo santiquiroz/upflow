@@ -1,4 +1,5 @@
 import { AlertTriangle, CheckCircle2, Download, Heart, Loader2 } from "lucide-react";
+import { IndeterminateProgressBar } from "../../components/IndeterminateProgressBar";
 import { DEFAULT_INSTALL_POLL_INTERVAL_MS, useModelInstall, type ModelInstallPhase } from "../../hooks/useModels";
 import type { HfModelSearchResultResponse } from "../../lib/apiTypes";
 
@@ -46,19 +47,6 @@ function DeterminateProgressBar({ label, percent }: { label: string; percent: nu
         className="h-full rounded-sm bg-accent transition-[width] duration-normal"
         style={{ width: `${percent}%` }}
       />
-    </div>
-  );
-}
-
-function IndeterminateProgressBar({ label }: { label: string }) {
-  return (
-    <div
-      role="progressbar"
-      aria-label={label}
-      aria-busy="true"
-      className="h-1.5 w-full overflow-hidden rounded-sm bg-surface-2"
-    >
-      <div className="job-progress-bar h-full w-1/3 rounded-sm bg-accent" />
     </div>
   );
 }
