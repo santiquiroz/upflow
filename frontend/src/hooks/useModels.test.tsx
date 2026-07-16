@@ -131,6 +131,29 @@ describe("useModelInstall", () => {
     expect(api.getInstallStatus).not.toHaveBeenCalled();
   });
 
+  it("stays in 'starting' between the install request resolving and the first status poll", async () => {
+    vi.mocked(api.installModel).mockResolvedValue({
+      installId: "install-gap",
+      statusUrl: "/api/v1/models/install/install-gap",
+    });
+    // Never resolves: holds the status query in its very first, pending fetch so
+    // we can observe the window that used to leak "idle" and re-show Install.
+    vi.mocked(api.getInstallStatus).mockReturnValue(new Promise<never>(() => {}));
+
+    const { result } = renderHook(() => useModelInstall(POLL_INTERVAL_MS), {
+      wrapper: createWrapper(createQueryClient()),
+    });
+
+    act(() => {
+      result.current.install("example/anime-2x");
+    });
+
+    // Once getInstallStatus has been called the mutation has already resolved
+    // (installId is set) yet no status has arrived, so phase must stay "starting".
+    await waitFor(() => expect(api.getInstallStatus).toHaveBeenCalled());
+    expect(result.current.phase).toBe("starting");
+  });
+
   it("resets back to idle", async () => {
     vi.mocked(api.installModel).mockResolvedValue({
       installId: "install-3",

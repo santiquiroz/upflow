@@ -97,6 +97,16 @@ describe("InstalledModels", () => {
     expect(api.deleteModel).not.toHaveBeenCalled();
   });
 
+  it("closes the confirmation on Escape without deleting", async () => {
+    renderList([BUILTIN_MODEL, ONNX_MODEL]);
+
+    fireEvent.click(await screen.findByRole("button", { name: /delete custom anime 2x/i }));
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(api.deleteModel).not.toHaveBeenCalled();
+  });
+
   it("deletes the model once the destructive action is confirmed", async () => {
     vi.mocked(api.deleteModel).mockResolvedValue(undefined);
     renderList([BUILTIN_MODEL, ONNX_MODEL]);

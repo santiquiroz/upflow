@@ -20,8 +20,24 @@ export interface UseModelInstallResult {
   reset: () => void;
 }
 
-function resolveInstallPhase(isStarting: boolean, status: InstallState | undefined): ModelInstallPhase {
-  if (isStarting) {
+// True in the window between installModel resolving (installId set) and the
+// first status poll returning: without this the phase would briefly read "idle"
+// and the card would re-show "Install", letting a second click fire a duplicate
+// install. A status-fetch error clears it so the spinner never sticks forever.
+function isAwaitingFirstStatus(
+  installId: string | null,
+  statusData: InstallStatusResponse | undefined,
+  statusIsError: boolean,
+): boolean {
+  return installId !== null && statusData === undefined && !statusIsError;
+}
+
+function resolveInstallPhase(
+  isStarting: boolean,
+  isAwaitingStatus: boolean,
+  status: InstallState | undefined,
+): ModelInstallPhase {
+  if (isStarting || isAwaitingStatus) {
     return "starting";
   }
   return status ?? "idle";
@@ -78,7 +94,11 @@ export function useModelInstall(pollIntervalMs: number = DEFAULT_INSTALL_POLL_IN
   }
 
   return {
-    phase: resolveInstallPhase(startMutation.isPending, statusQuery.data?.status as InstallState | undefined),
+    phase: resolveInstallPhase(
+      startMutation.isPending,
+      isAwaitingFirstStatus(installId, statusQuery.data, statusQuery.isError),
+      statusQuery.data?.status as InstallState | undefined,
+    ),
     progressPct: statusQuery.data?.progressPct ?? null,
     errorMessage: resolveInstallErrorMessage(startMutation.error, statusQuery.error, statusQuery.data),
     modelId: statusQuery.data?.modelId ?? null,
