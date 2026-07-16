@@ -76,7 +76,14 @@ function Test-UpflowAlreadyInstalled {
     if (Test-Path $installedSentinel) {
         return $true
     }
-    & $pythonExe -c "import app" 2>$null
+    # Probe una dep de terceros (uvicorn), NO el paquete local `app`: con cwd en
+    # la raiz de instalacion (que contiene app/), un interprete estandar mete
+    # cwd en sys.path, asi que `import app` tiene exito hasta en un .venv fresco
+    # SIN deps -> el check daria "ya instalado", se saltaria pip install, y
+    # Start-Upflow crashearia al correr uvicorn (no instalado). uvicorn solo
+    # existe despues de `pip install -e .`, asi que es el proxy correcto de
+    # "deps instaladas" en ambas ramas (embebida y venv).
+    & $pythonExe -c "import uvicorn" 2>$null
     return ($LASTEXITCODE -eq 0)
 }
 

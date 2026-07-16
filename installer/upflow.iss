@@ -79,11 +79,21 @@ const
   marker es untracked (lo escribe este codigo, no la seccion [Files]), asi que
   Inno no lo borra solo y sigue disponible durante la desinstalacion. }
 procedure CurStepChanged(CurStep: TSetupStep);
+var
+  MarkerPath: String;
 begin
+  { Idempotente: escribe el marker si el task esta tildado, lo BORRA si no.
+    Sin el else, un marker de un install previo CON checkbox sobrevive a un
+    reinstall/upgrade (misma carpeta de instalacion) SIN checkbox, y un
+    uninstall posterior borraria los ~4 GB del usuario aunque en su ultimo
+    install NO lo pidio - perdida de datos irreversible. }
   if CurStep = ssPostInstall then
   begin
+    MarkerPath := ExpandConstant('{app}\' + DeleteUserDataMarker);
     if WizardIsTaskSelected('deleteuserdata') then
-      SaveStringToFile(ExpandConstant('{app}\' + DeleteUserDataMarker), '1', False);
+      SaveStringToFile(MarkerPath, '1', False)
+    else
+      DeleteFile(MarkerPath);
   end;
 end;
 
@@ -103,6 +113,9 @@ begin
   DelTree(ExpandConstant('{app}\vendor'), True, True, True);
   DelTree(ExpandConstant('{app}\python\Lib\site-packages'), True, True, True);
   DeleteFile(ExpandConstant('{app}\.env'));
+  { El sentinel del launcher (python\.upflow-installed) es untracked: sin este
+    DeleteFile quedaria huerfano y python\ no se podria eliminar por completo. }
+  DeleteFile(ExpandConstant('{app}\python\.upflow-installed'));
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
