@@ -208,6 +208,18 @@ curl http://127.0.0.1:8090/api/v1/video/jobs/<job_id>
 curl -OJ http://127.0.0.1:8090/api/v1/video/jobs/<job_id>/download
 ```
 
+## Progreso y ETA
+
+La cola de jobs global muestra una barra de progreso en vivo para cada job; hacer click en un job abre un **modal de detalle** con:
+
+- **Stepper de etapas** — cada tipo de job tiene sus propias etapas ponderadas (video: `probing` → `extracting_frames` → `extracting_audio`/`enhancing_audio` (si aplica) → `upscaling_frames` → `interpolating_frames` (si el FPS boost está activo) → `encoding_video`; imagen: `validating` → `upscaling`), cada una con estado `pending`/`active`/`done`.
+- **Frames X / Y** — en video, cuenta de frames procesados sobre el total real (extraídos del contenedor con `ffprobe`, o derivados de duración × fps cuando el origen es VFR y no trae `nb_frames`). En imagen, solo aparece para modelos **ONNX con tiling** (`ONNX_TILE_SIZE` activo en un lado más grande que el tile): cuenta tiles procesados sobre el total, actualizado entre cada tile de la grilla de inferencia. Los modelos **builtin NCNN** (subprocess único, sin conteo intermedio) y las imágenes **ONNX que caben en un solo tile** se quedan en etapas coarse (`validating`/`upscaling` sin frames) — a propósito: no hay conteo honesto que reportar ahí, así que no se inventa uno.
+- **ETA** — solo se muestra cuando hay suficiente señal para ser confiable (frames/tiles con denominador real y throughput medido); si no, se omite en vez de mostrar un número inventado.
+
+El progreso combinado (`progressPct` en la respuesta del job) es un promedio ponderado: cada etapa completada suma su peso completo, la etapa activa suma su peso proporcional a la fracción interna (frames o tiles procesados), y nunca retrocede.
+
+Los jobs largos (videos de muchos frames, modelos ONNX pesados) ya **no se matan por un timeout fijo de duración**: un *stall watchdog* cancela el job solo si deja de haber progreso real (sin frames nuevos) durante `FRAME_STALL_TIMEOUT_SECONDS` (default 900s), no por exceder un techo de reloj arbitrario.
+
 ## Modelos
 
 ### Modelos builtin (NCNN Vulkan)
