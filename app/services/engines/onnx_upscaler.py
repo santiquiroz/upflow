@@ -14,6 +14,7 @@ from app.models import UpscaleJob
 from app.services.devices_service import DevicesService
 from app.services.engines.base import UpscaleEngine
 from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry, ModelStatus
+from app.services.progress import apply_image_tile_progress
 
 # ---------------------------------------------------------------------------
 # ONNX Runtime DirectML upscaling engine (in-process, no subprocess).
@@ -39,6 +40,14 @@ from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry, Mo
 # ratio is *not* read from static ONNX metadata (input/output shapes are
 # frequently dynamic/symbolic there) -- it is derived from the concrete
 # output array of the first inferred tile instead.
+#
+# Progress (SP5 Task 4): the tiled path reports tilesDone/tilesTotal into
+# job.metadata (framesDone/framesTotal, reusing the video job progress
+# fields the frontend already renders) between tile inferences -- this runs
+# inside the worker thread from asyncio.to_thread, never on the event loop.
+# The single-pass path (image fits in one tile) intentionally does NOT
+# report tile progress: a tilesTotal=1 would be a fake sub-progress, so it
+# stays on the coarse validating/upscaling stages instead.
 # ---------------------------------------------------------------------------
 
 SESSION_CACHE_SIZE = 2
@@ -167,7 +176,7 @@ class OnnxUpscaler(UpscaleEngine):
         entry = self._resolve_installed_entry(job.model_id)
         output_path = self._output_path(job)
 
-        await asyncio.to_thread(self._run_and_save, job.source_path, entry, job.device, output_path)
+        await asyncio.to_thread(self._run_and_save, job, entry, output_path)
 
         if not self._is_non_empty_file(output_path):
             raise RuntimeError("ONNX upscaling completed but no output file was produced")
@@ -224,13 +233,13 @@ class OnnxUpscaler(UpscaleEngine):
             raise RuntimeError(f"Model {model_id!r} is not ready for inference (status={entry.status.value})")
         return entry
 
-    def _run_and_save(self, source_path: Path, entry: ModelEntry, device: str, output_path: Path) -> None:
+    def _run_and_save(self, job: UpscaleJob, entry: ModelEntry, output_path: Path) -> None:
         if not self.available():
             raise RuntimeError("ONNX engine is not available: onnxruntime is not installed")
-        self.devices.validate(device)
-        image = _load_rgb_array(source_path)
-        session = self._get_session(entry.id, device, entry)
-        upscaled = self._upscale_array(session, image, self.settings.onnx_tile_size)
+        self.devices.validate(job.device)
+        image = _load_rgb_array(job.source_path)
+        session = self._get_session(entry.id, job.device, entry)
+        upscaled = self._upscale_array(session, image, self.settings.onnx_tile_size, job=job)
         _save_rgb_array(upscaled, output_path)
 
     def _get_session(self, model_id: str, device: str, entry: ModelEntry) -> Any:
@@ -272,16 +281,23 @@ class OnnxUpscaler(UpscaleEngine):
         model_path = self.settings.models_path / entry.file_path  # type: ignore[operator]
         return ort.InferenceSession(str(model_path), providers=providers)
 
-    def _upscale_array(self, session: Any, image: np.ndarray, tile_size: int) -> np.ndarray:
+    def _upscale_array(
+        self, session: Any, image: np.ndarray, tile_size: int, job: UpscaleJob | None = None
+    ) -> np.ndarray:
         height, width, _ = image.shape
         if tile_size <= 0 or (height <= tile_size and width <= tile_size):
+            # Single pass: no honest sub-progress to report (tilesTotal=1 would
+            # be a fake ETA), so job is intentionally not threaded through here.
             return _finalize_uint8(self._infer_tile(session, image))
-        return self._upscale_tiled(session, image, tile_size)
+        return self._upscale_tiled(session, image, tile_size, job)
 
-    def _upscale_tiled(self, session: Any, image: np.ndarray, tile_size: int) -> np.ndarray:
+    def _upscale_tiled(
+        self, session: Any, image: np.ndarray, tile_size: int, job: UpscaleJob | None = None
+    ) -> np.ndarray:
         height, width, channels = image.shape
         starts_y = _tile_starts(height, tile_size, TILE_OVERLAP_PX)
         starts_x = _tile_starts(width, tile_size, TILE_OVERLAP_PX)
+        tiles_total = len(starts_y) * len(starts_x)
 
         tiles: list[tuple[int, int, int, int, np.ndarray]] = []
         for y0 in starts_y:
@@ -291,6 +307,7 @@ class OnnxUpscaler(UpscaleEngine):
                 source_tile = image[y0 : y0 + tile_h, x0 : x0 + tile_w]
                 output_tile = self._infer_tile(session, source_tile)
                 tiles.append((y0, x0, tile_h, tile_w, output_tile))
+                self._report_tile_progress(job, len(tiles), tiles_total)
 
         _, _, first_h, first_w, first_out = tiles[0]
         scale = _detect_scale(first_h, first_w, first_out)
@@ -316,6 +333,15 @@ class OnnxUpscaler(UpscaleEngine):
 
         blended = accumulator / np.clip(weight_sum, 1e-6, None)
         return _finalize_uint8(blended)
+
+    @staticmethod
+    def _report_tile_progress(job: UpscaleJob | None, tiles_done: int, tiles_total: int) -> None:
+        # job is None for algorithm-level callers (tests, and the video
+        # per-frame ONNX path in run_frames) that don't want tile-level
+        # progress mixed into a job's metadata.
+        if job is None:
+            return
+        apply_image_tile_progress(job, tiles_done, tiles_total)
 
     def _infer_tile(self, session: Any, tile_rgb: np.ndarray) -> np.ndarray:
         input_info = session.get_inputs()[0]

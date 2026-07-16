@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -48,6 +48,7 @@ class StubJob:
     model_id: str
     device: str
     id: str = "job-1"
+    metadata: dict = field(default_factory=dict)
 
 
 class _IoInfo:
@@ -308,6 +309,88 @@ def test_tile_overlap_constant_is_16px() -> None:
     assert TILE_OVERLAP_PX == 16
 
 
+# ---------------------------------------------------------------------------
+# Tile progress reporting (SP5 Task 4)
+# ---------------------------------------------------------------------------
+
+
+class RecordingProgressSession:
+    """Fake session that snapshots the job's metadata BEFORE each tile is
+    inferred, so the test can assert progress was updated incrementally
+    between tiles rather than only once at the very end."""
+
+    def __init__(self, job: StubJob, scale: int = 2) -> None:
+        self._job = job
+        self._scale = scale
+        self.snapshots: list[dict] = []
+        self._input = _IoInfo("input")
+        self._output = _IoInfo("output")
+
+    def get_inputs(self) -> list[_IoInfo]:
+        return [self._input]
+
+    def get_outputs(self) -> list[_IoInfo]:
+        return [self._output]
+
+    def run(self, output_names: list[str], input_feed: dict[str, np.ndarray]) -> list[np.ndarray]:
+        self.snapshots.append(dict(self._job.metadata))
+        array = input_feed[self._input.name]
+        doubled = np.repeat(np.repeat(array, self._scale, axis=2), self._scale, axis=3)
+        return [doubled]
+
+
+def test_upscale_tiled_reports_incremental_tile_progress(tmp_path: Path) -> None:
+    engine, _, _ = make_engine(tmp_path)
+    job = make_job(tmp_path, model_id="fake-2x", device="cpu")
+    session = RecordingProgressSession(job)
+    array = make_gradient_array(height=48, width=48)  # tile=32, overlap=16 -> 2x2 = 4 tiles
+
+    engine._upscale_tiled(session, array, tile_size=32, job=job)
+
+    frames_done_before_each_tile = [snapshot.get("framesDone", 0) for snapshot in session.snapshots]
+    assert frames_done_before_each_tile == [0, 1, 2, 3]
+    assert job.metadata["framesDone"] == 4
+    assert job.metadata["framesTotal"] == 4
+    assert job.metadata["progress"] == pytest.approx(1.0)
+    assert job.metadata["stage"] == "upscaling"
+
+
+def test_upscale_array_tiled_updates_progress_via_job(tmp_path: Path) -> None:
+    engine, _, _ = make_engine(tmp_path)
+    job = make_job(tmp_path, model_id="fake-2x", device="cpu")
+    session = Double2xSession()
+    array = make_gradient_array(height=48, width=48)
+
+    engine._upscale_array(session, array, tile_size=32, job=job)
+
+    assert job.metadata["framesTotal"] == 4
+    assert job.metadata["framesDone"] == 4
+
+
+def test_upscale_array_non_tiled_leaves_job_metadata_untouched(tmp_path: Path) -> None:
+    engine, _, _ = make_engine(tmp_path)
+    job = make_job(tmp_path, model_id="fake-2x", device="cpu")
+    session = Double2xSession()
+    array = make_gradient_array(height=6, width=10)
+
+    engine._upscale_array(session, array, tile_size=256, job=job)
+
+    # Single-pass (non-tiled): no honest tile count exists, so no fake
+    # tilesTotal=1 sub-progress is reported -- stays coarse.
+    assert "framesDone" not in job.metadata
+    assert "framesTotal" not in job.metadata
+
+
+def test_upscale_array_job_none_is_backward_compatible(tmp_path: Path) -> None:
+    engine, _, _ = make_engine(tmp_path)
+    session = Double2xSession()
+    array = make_gradient_array(height=48, width=48)
+
+    result = engine._upscale_array(session, array, tile_size=32)
+
+    assert result.shape == (96, 96, 3)
+
+
 def test_tiling_feather_produces_gradient_taper_in_overlap(tmp_path: Path) -> None:
     # Two side-by-side tiles filled with distinct constants (left=0.2->51,
     # right=0.8->204). A position-invariant fake would reconstruct exactly
@@ -425,6 +508,36 @@ async def test_run_uses_configured_onnx_tile_size(tmp_path: Path, monkeypatch: p
 
     with Image.open(output_path) as out_img:
         assert out_img.size == (96, 96)
+
+
+async def test_run_reports_tile_progress_end_to_end_for_tiled_image(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine, registry, settings = make_engine(tmp_path, ONNX_TILE_SIZE=32)
+    registry.register(make_onnx_entry())
+    monkeypatch.setattr(engine, "_create_session", lambda model_id, device, entry: Double2xSession())
+
+    job = make_job(tmp_path, model_id="fake-2x", device="cpu", width=48, height=48)
+    await engine.run(job)
+
+    assert job.metadata["framesTotal"] == 4
+    assert job.metadata["framesDone"] == 4
+    assert job.metadata["progress"] == pytest.approx(1.0)
+    assert job.metadata["stage"] == "upscaling"
+
+
+async def test_run_does_not_report_tile_progress_for_single_pass_image(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine, registry, settings = make_engine(tmp_path)  # default ONNX_TILE_SIZE=256
+    registry.register(make_onnx_entry())
+    monkeypatch.setattr(engine, "_create_session", lambda model_id, device, entry: Double2xSession())
+
+    job = make_job(tmp_path, model_id="fake-2x", device="cpu", width=10, height=6)
+    await engine.run(job)
+
+    assert "framesDone" not in job.metadata
+    assert "framesTotal" not in job.metadata
 
 
 # ---------------------------------------------------------------------------

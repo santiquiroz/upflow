@@ -14,6 +14,7 @@ from app.services.progress import (
     Stage,
     advance_image_stage,
     advance_video_stage,
+    apply_image_tile_progress,
     apply_stage_transition,
     build_image_stages,
     build_video_stages,
@@ -382,6 +383,54 @@ def test_complete_image_stages_sets_progress_to_one(tmp_path: Path) -> None:
 
     assert job.metadata["progress"] == pytest.approx(1.0)
     assert job.metadata["stage"] == "completed"
+
+
+# ---------------------------------------------------------------------------
+# apply_image_tile_progress (SP5 Task 4 - ONNX tile-based image progress)
+# ---------------------------------------------------------------------------
+
+
+def test_apply_image_tile_progress_sets_frame_counts(tmp_path: Path) -> None:
+    job = make_image_job(tmp_path / "in.png")
+    advance_image_stage(job, "upscaling")
+
+    apply_image_tile_progress(job, tiles_done=1, tiles_total=4)
+
+    assert job.metadata["framesDone"] == 1
+    assert job.metadata["framesTotal"] == 4
+    assert job.metadata["stage"] == "upscaling"
+
+
+def test_apply_image_tile_progress_scales_within_upscaling_weight(tmp_path: Path) -> None:
+    job = make_image_job(tmp_path / "in.png")
+    advance_image_stage(job, "upscaling")
+
+    apply_image_tile_progress(job, tiles_done=2, tiles_total=4)
+
+    # validating(10%) done + upscaling(90%) at 50% fraction = 0.10 + 0.45
+    assert job.metadata["progress"] == pytest.approx(0.55)
+
+
+def test_apply_image_tile_progress_reaches_full_upscaling_weight_on_last_tile(tmp_path: Path) -> None:
+    job = make_image_job(tmp_path / "in.png")
+    advance_image_stage(job, "upscaling")
+
+    apply_image_tile_progress(job, tiles_done=4, tiles_total=4)
+
+    assert job.metadata["progress"] == pytest.approx(1.0)
+
+
+def test_apply_image_tile_progress_is_monotonically_increasing_across_calls(tmp_path: Path) -> None:
+    job = make_image_job(tmp_path / "in.png")
+    advance_image_stage(job, "upscaling")
+
+    progress_values = []
+    for tiles_done in (1, 2, 3, 4):
+        apply_image_tile_progress(job, tiles_done=tiles_done, tiles_total=4)
+        progress_values.append(job.metadata["progress"])
+
+    assert progress_values == sorted(progress_values)
+    assert progress_values[0] < progress_values[-1]
 
 
 # ---------------------------------------------------------------------------

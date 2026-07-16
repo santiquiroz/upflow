@@ -187,3 +187,16 @@ def advance_image_stage(job: UpscaleJob, stage_key: str) -> None:
 def complete_image_stages(job: UpscaleJob) -> None:
     stages = mark_all_done(build_image_stages())
     _write_stage_metadata(job, stages, "completed", progress_override=1.0)
+
+
+def apply_image_tile_progress(job: UpscaleJob, tiles_done: int, tiles_total: int) -> None:
+    # Called from the ONNX engine's worker thread between tiles (see
+    # onnx_upscaler._upscale_tiled) -- only ever invoked for the tiled path,
+    # so tiles_total is always >= 2 and framesTotal is never a fake "1/1".
+    stages = apply_stage_transition(build_image_stages(), "upscaling")
+    fraction = frame_stage_fraction(tiles_done, tiles_total)
+    job.metadata["stage"] = "upscaling"
+    job.metadata["stages"] = [asdict(stage) for stage in stages]
+    job.metadata["framesDone"] = tiles_done
+    job.metadata["framesTotal"] = tiles_total
+    job.metadata["progress"] = compute_progress(stages, current_fraction=fraction)
