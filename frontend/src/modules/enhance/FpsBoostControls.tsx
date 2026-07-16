@@ -15,7 +15,7 @@ interface TargetFpsOption {
 
 const MULTIPLIER_OPTIONS: readonly number[] = [2, 3, 4];
 
-const TARGET_FPS_OPTIONS: readonly TargetFpsOption[] = [
+export const TARGET_FPS_OPTIONS: readonly TargetFpsOption[] = [
   { value: "60000/1001", label: "59.94 fps" },
   { value: "60/1", label: "60 fps" },
 ];

@@ -97,6 +97,51 @@ afterEach(() => {
 });
 
 describe("ImagePanel", () => {
+  it("keeps the Model section expanded by default while Device and Scale & format start collapsed", async () => {
+    renderPanel();
+
+    expect(await screen.findByRole("button", { name: /^Model/ })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: /^Device/ })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByRole("button", { name: /^Scale & format/ })).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("shows a placeholder summary until a model is picked, then reflects the selection", async () => {
+    renderPanel();
+
+    expect(await screen.findByRole("button", { name: /^Model/ })).toHaveTextContent("Select a model…");
+
+    await selectFileAndModel();
+
+    expect(screen.getByRole("button", { name: /^Model/ })).toHaveTextContent("RealESRGAN x4plus");
+  });
+
+  it("auto-fills the Device summary once a preferred device is resolved, without expanding it", async () => {
+    renderPanel();
+    await selectFileAndModel();
+
+    expect(await screen.findByRole("button", { name: /^Device/ })).toHaveTextContent("AMD Radeon RX 7900");
+  });
+
+  it("shows the default scale and format in the Scale & format summary without expanding it", async () => {
+    renderPanel();
+
+    const scaleFormatToggle = await screen.findByRole("button", { name: /^Scale & format/ });
+    await waitFor(() => expect(scaleFormatToggle).toHaveTextContent("4x"));
+    expect(scaleFormatToggle).toHaveTextContent("PNG");
+  });
+
+  it("hides the Device options from the accessibility tree until the section is expanded", async () => {
+    renderPanel();
+    await selectFileAndModel();
+    await screen.findByRole("button", { name: /^Device/ });
+
+    expect(screen.queryByRole("radio", { name: /AMD Radeon RX 7900/ })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /^Device/ }));
+
+    expect(await screen.findByRole("radio", { name: /AMD Radeon RX 7900/ })).toBeInTheDocument();
+  });
+
   it("disables the Upscale CTA until a file and a model are selected", async () => {
     renderPanel();
 

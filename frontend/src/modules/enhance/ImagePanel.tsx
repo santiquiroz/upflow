@@ -1,13 +1,30 @@
 import { useQuery } from "@tanstack/react-query";
 import { UploadCloud, Wand2 } from "lucide-react";
 import { useEffect, useState, type ChangeEvent, type DragEvent } from "react";
+import { AccordionSection } from "../../components/AccordionSection";
 import { DevicePicker } from "../../components/DevicePicker";
 import { JobCard } from "../../components/JobCard";
 import { ModelPicker } from "../../components/ModelPicker";
 import { useImageJob, type ImageJobPhase } from "../../hooks/useImageJob";
 import { getDevices, getEngineInfo } from "../../lib/api";
 import type { DeviceInfoResponse, DevicesResponse, ModelResponse } from "../../lib/apiTypes";
+import { formatDeviceSummary, formatModelSummary } from "./accordionSummaries";
 import { ScaleFormatControls } from "./ScaleFormatControls";
+
+const MODEL_TOOLTIP =
+  "Pick the AI model that upscales the image. Builtin models run on ncnn/Vulkan; ONNX models can run on CPU or GPU.";
+const DEVICE_TOOLTIP =
+  "Pick the compute device that runs the job. A CPU device can't run a builtin (ncnn) model — that needs a Vulkan GPU.";
+const SCALE_FORMAT_TOOLTIP = "Choose the output resolution multiplier and the image file format.";
+
+function formatScaleFormatSummary(scale: number | null, format: string) {
+  const scaleLabel = scale !== null ? `${scale}x` : "—";
+  return (
+    <>
+      <span className="font-mono-tabular">{scaleLabel}</span> · {format.toUpperCase()}
+    </>
+  );
+}
 
 function resolveRequiresGpu(model: ModelResponse | null): boolean {
   return model?.kind === "builtin-ncnn";
@@ -140,15 +157,25 @@ export function ImagePanel() {
     <div className="grid grid-cols-[1fr_320px] gap-6 max-[900px]:grid-cols-1">
       <div className="flex flex-col gap-6">
         <Dropzone file={file} onFileSelected={handleFileSelected} />
-        <ModelPicker value={model?.id ?? null} onChange={setModel} />
-        <DevicePicker value={device?.id ?? null} onChange={setDevice} requiresGpu={requiresGpu} />
-        <ScaleFormatControls
-          allowedScales={allowedScales}
-          scale={scale ?? allowedScales[0] ?? 4}
-          onScaleChange={setScale}
-          format={format}
-          onFormatChange={setFormat}
-        />
+        <AccordionSection title="Model" summary={formatModelSummary(model)} tooltip={MODEL_TOOLTIP} defaultOpen>
+          <ModelPicker value={model?.id ?? null} onChange={setModel} />
+        </AccordionSection>
+        <AccordionSection title="Device" summary={formatDeviceSummary(device)} tooltip={DEVICE_TOOLTIP}>
+          <DevicePicker value={device?.id ?? null} onChange={setDevice} requiresGpu={requiresGpu} />
+        </AccordionSection>
+        <AccordionSection
+          title="Scale & format"
+          summary={formatScaleFormatSummary(scale, format)}
+          tooltip={SCALE_FORMAT_TOOLTIP}
+        >
+          <ScaleFormatControls
+            allowedScales={allowedScales}
+            scale={scale ?? allowedScales[0] ?? 4}
+            onScaleChange={setScale}
+            format={format}
+            onFormatChange={setFormat}
+          />
+        </AccordionSection>
         <div className="flex flex-col gap-2">
           {showNoGpuHint && (
             <p role="status" className="text-xs text-warn">

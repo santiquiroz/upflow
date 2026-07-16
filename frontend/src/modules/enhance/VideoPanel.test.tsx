@@ -124,6 +124,11 @@ async function selectFile() {
   await screen.findByRole("radio", { name: /General Balanced 4x/ });
 }
 
+function openSection(title: string) {
+  const toggle = screen.getByRole("button", { name: new RegExp(`^${title}`) });
+  fireEvent.click(toggle);
+}
+
 afterEach(() => {
   vi.mocked(api.getModels).mockReset();
   vi.mocked(api.getDevices).mockReset();
@@ -133,6 +138,54 @@ afterEach(() => {
 });
 
 describe("VideoPanel", () => {
+  it("keeps the Profile section expanded by default while the rest start collapsed", async () => {
+    renderPanel();
+
+    expect(await screen.findByRole("button", { name: /^Profile/ })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: /^Model/ })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByRole("button", { name: /^Device/ })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByRole("button", { name: /^FPS boost/ })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByRole("button", { name: /^Audio/ })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByRole("button", { name: /^Advanced/ })).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("shows a placeholder Profile summary until one is picked, then reflects the selection", async () => {
+    renderPanel();
+
+    expect(await screen.findByRole("button", { name: /^Profile/ })).toHaveTextContent("Select a profile…");
+
+    await selectFile();
+    fireEvent.click(await screen.findByRole("radio", { name: /General Balanced 4x/ }));
+
+    expect(screen.getByRole("button", { name: /^Profile/ })).toHaveTextContent("General Balanced 4x");
+  });
+
+  it("reflects the profile-driven model, FPS boost and audio choices in their collapsed summaries", async () => {
+    renderPanel();
+    await selectFile();
+    fireEvent.click(await screen.findByRole("radio", { name: /Anime Balanced 2x/ }));
+
+    expect(await screen.findByRole("button", { name: /^Model/ })).toHaveTextContent("RealESR AnimeVideoV3 x2");
+    expect(screen.getByRole("button", { name: /^FPS boost/ })).toHaveTextContent("Off");
+    expect(screen.getByRole("button", { name: /^Audio/ })).toHaveTextContent("Kept");
+
+    openSection("FPS boost");
+    fireEvent.click(screen.getByRole("button", { name: "3×" }));
+    expect(screen.getByRole("button", { name: /^FPS boost/ })).toHaveTextContent("3×");
+  });
+
+  it("hides the Advanced options from the accessibility tree until the section is expanded", async () => {
+    renderPanel();
+    await selectFile();
+    fireEvent.click(await screen.findByRole("radio", { name: /General Balanced 4x/ }));
+
+    expect(screen.queryByRole("spinbutton", { name: /crf/i })).not.toBeInTheDocument();
+
+    openSection("Advanced");
+
+    expect(await screen.findByRole("spinbutton", { name: /crf/i })).toBeInTheDocument();
+  });
+
   it("disables the Upscale CTA until a file and a profile are selected", async () => {
     renderPanel();
 
@@ -153,8 +206,11 @@ describe("VideoPanel", () => {
     const profileRadio = await screen.findByRole("radio", { name: /Anime Balanced 2x/ });
     fireEvent.click(profileRadio);
 
+    openSection("Model");
     const modelRadio = await screen.findByRole("radio", { name: /RealESR AnimeVideoV3 x2/ });
     await waitFor(() => expect(modelRadio).toBeChecked());
+
+    openSection("Advanced");
     expect(await screen.findByRole("spinbutton", { name: /crf/i })).toHaveValue(16);
   });
 
@@ -163,6 +219,7 @@ describe("VideoPanel", () => {
     await selectFile();
 
     fireEvent.click(await screen.findByRole("radio", { name: /Anime Balanced 2x/ }));
+    openSection("Model");
     const animeModelRadio = await screen.findByRole("radio", { name: /RealESR AnimeVideoV3 x2/ });
     await waitFor(() => expect(animeModelRadio).toBeChecked());
 
@@ -190,6 +247,7 @@ describe("VideoPanel", () => {
     renderPanel();
     await selectFile();
     fireEvent.click(await screen.findByRole("radio", { name: /General Balanced 4x/ }));
+    openSection("Audio");
 
     const keepAudioToggle = await screen.findByRole("checkbox", { name: /keep original audio/i });
     expect(keepAudioToggle).toBeChecked();
@@ -239,6 +297,7 @@ describe("VideoPanel", () => {
     renderPanel();
     await selectFile();
     fireEvent.click(await screen.findByRole("radio", { name: /General Balanced 4x/ }));
+    openSection("FPS boost");
 
     fireEvent.click(screen.getByRole("button", { name: "59.94 fps" }));
     expect(screen.getByRole("button", { name: "2×" })).toBeDisabled();

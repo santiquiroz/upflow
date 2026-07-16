@@ -1,14 +1,16 @@
 import { useQuery } from "@tanstack/react-query";
 import { Film, UploadCloud } from "lucide-react";
 import { useEffect, useRef, useState, type ChangeEvent, type DragEvent } from "react";
+import { AccordionSection } from "../../components/AccordionSection";
 import { DevicePicker } from "../../components/DevicePicker";
 import { JobCard } from "../../components/JobCard";
 import { ModelPicker } from "../../components/ModelPicker";
 import { useVideoJob, type VideoJobPhase } from "../../hooks/useVideoJob";
 import { getDevices, getModels } from "../../lib/api";
 import type { DeviceInfoResponse, DevicesResponse, ModelResponse, VideoProfileResponse } from "../../lib/apiTypes";
-import { AudioEnhanceControls } from "./AudioEnhanceControls";
-import { FpsBoostControls, type FpsBoostValue } from "./FpsBoostControls";
+import { formatDeviceSummary, formatModelSummary } from "./accordionSummaries";
+import { AUDIO_ENHANCE_OPTIONS, AudioEnhanceControls } from "./AudioEnhanceControls";
+import { FpsBoostControls, TARGET_FPS_OPTIONS, type FpsBoostValue } from "./FpsBoostControls";
 import { VideoProfileControls } from "./VideoProfileControls";
 
 const OUTPUT_CONTAINERS = ["mp4", "mkv"] as const;
@@ -17,6 +19,52 @@ const VIDEO_CODECS = [
   { value: "libx265", label: "H.265" },
 ] as const;
 const VIDEO_PRESETS = ["medium", "slow", "veryslow"] as const;
+
+const PROFILE_TOOLTIP =
+  "A profile is a preset combining model, scale, codec and quality tuned for a content type. Picking one fills in the fields below; you can still override them.";
+const MODEL_TOOLTIP =
+  "Pick the AI model that upscales the video. Builtin models run on ncnn/Vulkan; ONNX models can run on CPU or GPU.";
+const DEVICE_TOOLTIP =
+  "Pick the compute device that runs the job. A CPU device can't run a builtin (ncnn) model — that needs a Vulkan GPU.";
+const FPS_BOOST_TOOLTIP =
+  "Interpolate extra frames to raise the video's frame rate, either by a fixed multiplier or by targeting a specific frame rate. Only one mode can be active at a time.";
+const AUDIO_TOOLTIP =
+  "Keep the original audio track, optionally cleaned up with noise reduction. Enhancement requires audio to be kept.";
+const ADVANCED_TOOLTIP =
+  "Fine-tune the output container, video codec, encoder preset and quality (CRF). A lower CRF means higher quality and a larger file.";
+
+function formatProfileSummary(profile: VideoProfileResponse | null) {
+  return profile ? profile.label : "Select a profile…";
+}
+
+function formatFpsBoostSummary(value: FpsBoostValue) {
+  if (value.fpsMultiplier > 1) {
+    return <span className="font-mono-tabular">{value.fpsMultiplier}×</span>;
+  }
+  if (value.targetFps) {
+    const target = TARGET_FPS_OPTIONS.find((option) => option.value === value.targetFps);
+    return <span className="font-mono-tabular">{target?.label ?? value.targetFps}</span>;
+  }
+  return "Off";
+}
+
+function formatAudioSummary(keepAudio: boolean, audioEnhance: string | null) {
+  if (!keepAudio) {
+    return "Disabled";
+  }
+  const mode = AUDIO_ENHANCE_OPTIONS.find((option) => option.value === audioEnhance) ?? AUDIO_ENHANCE_OPTIONS[0];
+  return `Kept · ${mode.label}`;
+}
+
+function formatAdvancedSummary(outputContainer: string, videoCodec: string, videoPreset: string, crf: number) {
+  const codecLabel = VIDEO_CODECS.find((codec) => codec.value === videoCodec)?.label ?? videoCodec;
+  return (
+    <>
+      {outputContainer.toUpperCase()} · {codecLabel} · {videoPreset} · CRF{" "}
+      <span className="font-mono-tabular">{crf}</span>
+    </>
+  );
+}
 
 function resolveRequiresGpu(model: ModelResponse | null): boolean {
   return model?.kind === "builtin-ncnn";
@@ -112,35 +160,32 @@ function AdvancedVideoControls({
   onCrfChange: (value: number) => void;
 }) {
   return (
-    <details className="rounded border border-border bg-surface">
-      <summary className="cursor-pointer select-none px-3 py-2 text-sm text-text-dim">Advanced options</summary>
-      <div className="flex flex-col gap-4 border-t border-border p-3">
-        <SegmentedField
-          legend="Container"
-          options={OUTPUT_CONTAINERS.map((value) => ({ value, label: value.toUpperCase() }))}
-          value={outputContainer}
-          onChange={onOutputContainerChange}
+    <div className="flex flex-col gap-4">
+      <SegmentedField
+        legend="Container"
+        options={OUTPUT_CONTAINERS.map((value) => ({ value, label: value.toUpperCase() }))}
+        value={outputContainer}
+        onChange={onOutputContainerChange}
+      />
+      <SegmentedField legend="Codec" options={VIDEO_CODECS} value={videoCodec} onChange={onVideoCodecChange} />
+      <SegmentedField
+        legend="Preset"
+        options={VIDEO_PRESETS.map((value) => ({ value, label: value }))}
+        value={videoPreset}
+        onChange={onVideoPresetChange}
+      />
+      <label className="flex w-24 flex-col gap-1">
+        <span className="font-heading text-xs font-semibold uppercase tracking-wide text-text-dim">CRF</span>
+        <input
+          type="number"
+          min={10}
+          max={28}
+          value={crf}
+          onChange={(event) => onCrfChange(Number(event.target.value))}
+          className="font-mono-tabular rounded-sm border border-border bg-surface px-2 py-1 text-sm text-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
         />
-        <SegmentedField legend="Codec" options={VIDEO_CODECS} value={videoCodec} onChange={onVideoCodecChange} />
-        <SegmentedField
-          legend="Preset"
-          options={VIDEO_PRESETS.map((value) => ({ value, label: value }))}
-          value={videoPreset}
-          onChange={onVideoPresetChange}
-        />
-        <label className="flex w-24 flex-col gap-1">
-          <span className="font-heading text-xs font-semibold uppercase tracking-wide text-text-dim">CRF</span>
-          <input
-            type="number"
-            min={10}
-            max={28}
-            value={crf}
-            onChange={(event) => onCrfChange(Number(event.target.value))}
-            className="font-mono-tabular rounded-sm border border-border bg-surface px-2 py-1 text-sm text-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
-          />
-        </label>
-      </div>
-    </details>
+      </label>
+    </div>
   );
 }
 
@@ -290,30 +335,61 @@ export function VideoPanel() {
     <div className="grid grid-cols-[1fr_320px] gap-6 max-[900px]:grid-cols-1">
       <div className="flex flex-col gap-6">
         <Dropzone file={file} onFileSelected={handleFileSelected} />
-        <VideoProfileControls value={profile?.key ?? null} onChange={handleProfileChange} />
-        <ModelPicker value={model?.id ?? null} onChange={setModel} />
-        <DevicePicker value={device?.id ?? null} onChange={setDevice} requiresGpu={requiresGpu} />
-        <FpsBoostControls value={fpsBoost} onChange={setFpsBoost} />
-        <label className="flex items-center gap-2 text-sm text-text">
-          <input
-            type="checkbox"
-            checked={keepAudio}
-            onChange={(event) => handleKeepAudioChange(event.target.checked)}
-            className="h-3.5 w-3.5 accent-accent"
+        <AccordionSection
+          title="Profile"
+          summary={formatProfileSummary(profile)}
+          tooltip={PROFILE_TOOLTIP}
+          defaultOpen
+        >
+          <VideoProfileControls value={profile?.key ?? null} onChange={handleProfileChange} />
+        </AccordionSection>
+        <AccordionSection title="Model" summary={formatModelSummary(model)} tooltip={MODEL_TOOLTIP}>
+          <ModelPicker value={model?.id ?? null} onChange={setModel} />
+        </AccordionSection>
+        <AccordionSection title="Device" summary={formatDeviceSummary(device)} tooltip={DEVICE_TOOLTIP}>
+          <DevicePicker value={device?.id ?? null} onChange={setDevice} requiresGpu={requiresGpu} />
+        </AccordionSection>
+        <AccordionSection
+          title="FPS boost"
+          summary={formatFpsBoostSummary(fpsBoost)}
+          tooltip={FPS_BOOST_TOOLTIP}
+        >
+          <FpsBoostControls value={fpsBoost} onChange={setFpsBoost} />
+        </AccordionSection>
+        <AccordionSection
+          title="Audio"
+          summary={formatAudioSummary(keepAudio, audioEnhance)}
+          tooltip={AUDIO_TOOLTIP}
+        >
+          <div className="flex flex-col gap-3">
+            <label className="flex items-center gap-2 text-sm text-text">
+              <input
+                type="checkbox"
+                checked={keepAudio}
+                onChange={(event) => handleKeepAudioChange(event.target.checked)}
+                className="h-3.5 w-3.5 accent-accent"
+              />
+              Keep original audio
+            </label>
+            <AudioEnhanceControls value={audioEnhance} onChange={setAudioEnhance} keepAudio={keepAudio} />
+          </div>
+        </AccordionSection>
+        <AccordionSection
+          title="Advanced"
+          summary={formatAdvancedSummary(outputContainer, videoCodec, videoPreset, crf)}
+          tooltip={ADVANCED_TOOLTIP}
+        >
+          <AdvancedVideoControls
+            outputContainer={outputContainer}
+            onOutputContainerChange={setOutputContainer}
+            videoCodec={videoCodec}
+            onVideoCodecChange={setVideoCodec}
+            videoPreset={videoPreset}
+            onVideoPresetChange={setVideoPreset}
+            crf={crf}
+            onCrfChange={setCrf}
           />
-          Keep original audio
-        </label>
-        <AudioEnhanceControls value={audioEnhance} onChange={setAudioEnhance} keepAudio={keepAudio} />
-        <AdvancedVideoControls
-          outputContainer={outputContainer}
-          onOutputContainerChange={setOutputContainer}
-          videoCodec={videoCodec}
-          onVideoCodecChange={setVideoCodec}
-          videoPreset={videoPreset}
-          onVideoPresetChange={setVideoPreset}
-          crf={crf}
-          onCrfChange={setCrf}
-        />
+        </AccordionSection>
         <div className="flex flex-col gap-2">
           {showNoGpuHint && (
             <p role="status" className="text-xs text-warn">

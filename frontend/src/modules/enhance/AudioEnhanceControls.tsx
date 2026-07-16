@@ -9,7 +9,7 @@ interface AudioEnhanceOption {
   label: string;
 }
 
-const AUDIO_ENHANCE_OPTIONS: readonly AudioEnhanceOption[] = [
+export const AUDIO_ENHANCE_OPTIONS: readonly AudioEnhanceOption[] = [
   { value: null, label: "Off" },
   { value: "rnnoise", label: "RNNoise" },
   { value: "deepfilter", label: "DeepFilterNet" },
