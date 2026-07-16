@@ -90,19 +90,28 @@ PATH manualmente.
 - Al terminar, ofrece iniciar Upflow ya mismo; el mensaje de la pagina
   final (`[Messages] FinishedLabel`) advierte que el primer arranque baja
   ~3-4 GB y puede tardar varios minutos.
-- El desinstalador **preserva `runtime/` (uploads, outputs y los modelos
-  instalados desde Hugging Face, que viven en `runtime/models/`) por
-  defecto**. Hay una tarea opcional sin tildar ("borrar tambien runtime\...")
-  que, si se selecciona durante la instalacion, hace que el desinstalador
-  borre ese directorio (`[Code] CurUninstallStepChanged` +
-  `WizardIsTaskSelected`, que sigue funcionando durante el uninstall pese
-  al nombre — ver el comentario en `upflow.iss`).
-- `vendor/` (binarios NCNN/FFmpeg) y `python/Lib/site-packages`
-  (dependencias pip instaladas en el primer arranque) quedan fuera del
-  alcance de esa tarea: no los borra ni el uninstall por defecto ni la
-  tarea opcional, porque Inno solo rastrea/borra lo que el instalador
-  puso ahi, no lo que el launcher agrego despues. Un reset completo de
-  disco requiere borrar `{localappdata}\Upflow` a mano.
+- El desinstalador **preserva por defecto** todo lo que el usuario genera o
+  descarga en el primer arranque: `runtime/` (uploads, outputs y los modelos
+  de Hugging Face, en `runtime/models/`), `vendor/` (binarios NCNN/FFmpeg/
+  RIFE/DeepFilterNet) y `python/Lib/site-packages` (dependencias pip). Una
+  reinstalacion los reutiliza sin volver a descargar.
+- Hay una tarea opcional sin tildar ("borrar tambien los datos y descargas
+  ~4 GB") que, si se selecciona **durante la instalacion**, hace que el
+  desinstalador borre `runtime/` + `vendor/` + `python/Lib/site-packages` +
+  `.env`, recuperando los ~4 GB. Como Inno **no** rastrea nada de eso (lo
+  agrega el launcher despues de instalar, no el instalador), la unica forma
+  de que el uninstall lo alcance es esta rama de codigo.
+- **Como se pasa la decision del checkbox al uninstall (importante):**
+  `WizardIsTaskSelected` NO se puede llamar durante la desinstalacion —
+  lleva el flag `sfNoUninstall` y lanza un `InternalError` en runtime que
+  ISCC **no** detecta al compilar (solo el interprete en runtime). Por eso
+  el `.iss` persiste la decision en un marker file
+  `{app}\.delete-user-data-on-uninstall` en `CurStepChanged(ssPostInstall)`
+  (ahi `WizardIsTaskSelected` si es valida, es codigo de Setup) y en
+  `CurUninstallStepChanged(usUninstall)` la lee con `FileExists`, sin volver
+  a llamar la funcion prohibida. Verificado con un ciclo real
+  install→uninstall en las dos ramas (con y sin el checkbox): sin crash,
+  borra lo correcto cuando corresponde y preserva cuando no.
 
 ## Por que setuptools/wheel van pre-instalados
 

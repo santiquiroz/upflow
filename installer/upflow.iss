@@ -47,7 +47,7 @@ FinishedLabel=Upflow se instalo correctamente en tu computadora.%n%nIMPORTANTE: 
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
-Name: "deleteuserdata"; Description: "Al desinstalar, borrar tambien runtime\ (archivos subidos, resultados y modelos instalados desde Hugging Face) - accion irreversible"; GroupDescription: "Datos de usuario al desinstalar:"; Flags: unchecked
+Name: "deleteuserdata"; Description: "Al desinstalar, borrar tambien los datos y descargas (~4 GB): archivos subidos, resultados y modelos de Hugging Face (runtime\), binarios de Real-ESRGAN/FFmpeg/RIFE/DeepFilterNet (vendor\) y las dependencias de Python (torch, etc.) descargadas en el primer arranque - accion irreversible"; GroupDescription: "Datos de usuario al desinstalar:"; Flags: unchecked
 
 [Files]
 ; El arbol de la app (allowlist: app/, scripts/, frontend/dist/, pyproject.toml,
@@ -67,24 +67,58 @@ Name: "{autodesktop}\Upflow"; Filename: "{app}\Upflow.bat"; WorkingDir: "{app}";
 Filename: "{app}\Upflow.bat"; Description: "{cm:LaunchProgram,Upflow}"; Flags: postinstall skipifsilent nowait
 
 [Code]
-procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
-var
-  RuntimeDir: String;
+const
+  DeleteUserDataMarker = '.delete-user-data-on-uninstall';
+
+{ WizardIsTaskSelected lleva el flag sfNoUninstall (Setup-only): llamarla en
+  CurUninstallStepChanged lanza un InternalError en runtime ("Cannot call
+  WizardIsTaskSelected function during Uninstall") que ISCC NO detecta al
+  compilar. Por eso persistimos la decision del task en un marker file durante
+  la INSTALACION (aca WizardIsTaskSelected si es valida, es codigo de Setup) y
+  la leemos en el uninstall con FileExists, sin volver a llamar la funcion. El
+  marker es untracked (lo escribe este codigo, no la seccion [Files]), asi que
+  Inno no lo borra solo y sigue disponible durante la desinstalacion. }
+procedure CurStepChanged(CurStep: TSetupStep);
 begin
-  { runtime\ anida uploads/outputs/temp/video-work y los modelos instalados
-    desde Hugging Face (app/config.py: models_path = runtime_path /
-    models_dir = runtime\models por default) - borrar runtime\ alcanza para
-    cubrir "datos y modelos". vendor\ (binarios NCNN/FFmpeg) y
-    python\Lib\site-packages (dependencias pip) NO se tocan aca: son
-    re-descargables/re-instalables en el proximo primer arranque, no datos
-    del usuario, y no forman parte del alcance de este checkbox. }
-  if CurUninstallStep = usPostUninstall then
+  if CurStep = ssPostInstall then
   begin
     if WizardIsTaskSelected('deleteuserdata') then
+      SaveStringToFile(ExpandConstant('{app}\' + DeleteUserDataMarker), '1', False);
+  end;
+end;
+
+procedure DeleteDownloadedUserData;
+begin
+  { Borra todo lo que el primer arranque genera/descarga y que Inno NO rastrea
+    (no vino del instalador). Al tildar el checkbox el usuario pidio recuperar
+    los ~4 GB:
+      - runtime\ : uploads/outputs/temp/video-work + modelos HF (runtime\models
+        por app/config.py). Datos del usuario.
+      - vendor\ : binarios NCNN/FFmpeg/RIFE/DeepFilterNet (~1 GB, download-*.ps1).
+      - python\Lib\site-packages : deps pip incl. torch (~2-3 GB, pip install -e .).
+    Los tres se re-obtienen solos en el proximo primer arranque si se reinstala.
+    Tambien se borra .env (config generada por el launcher, untracked): asi no
+    queda huerfano bloqueando la eliminacion de la carpeta de instalacion. }
+  DelTree(ExpandConstant('{app}\runtime'), True, True, True);
+  DelTree(ExpandConstant('{app}\vendor'), True, True, True);
+  DelTree(ExpandConstant('{app}\python\Lib\site-packages'), True, True, True);
+  DeleteFile(ExpandConstant('{app}\.env'));
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  MarkerPath: String;
+begin
+  { usUninstall corre ANTES de que Inno borre los archivos rastreados, con todo
+    el arbol todavia presente, para que DelTree limpie site-packages completo
+    (bundleado + descargado) de una sola pasada. }
+  if CurUninstallStep = usUninstall then
+  begin
+    MarkerPath := ExpandConstant('{app}\' + DeleteUserDataMarker);
+    if FileExists(MarkerPath) then
     begin
-      RuntimeDir := ExpandConstant('{app}\runtime');
-      if DirExists(RuntimeDir) then
-        DelTree(RuntimeDir, True, True, True);
+      DeleteDownloadedUserData;
+      DeleteFile(MarkerPath);
     end;
   end;
 end;
