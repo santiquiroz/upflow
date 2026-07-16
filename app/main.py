@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import router as api_router
@@ -87,6 +87,15 @@ async def lifespan(app: FastAPI):
         await model_installer.stop()
 
 
+def _serve_index(index_path: Path) -> Response:
+    if not index_path.exists():
+        return PlainTextResponse(
+            "Frontend build no encontrado. Ejecuta: cd frontend && npm run build",
+            status_code=503,
+        )
+    return FileResponse(index_path)
+
+
 def configure_web_routes(app: FastAPI, frontend_dist: Path = FRONTEND_DIST_DIR) -> None:
     """Serves the built React SPA as the only UI: static assets plus an
     index.html fallback for every other non-API path, so client-side routes
@@ -102,18 +111,18 @@ def configure_web_routes(app: FastAPI, frontend_dist: Path = FRONTEND_DIST_DIR) 
     index_path = frontend_dist / "index.html"
 
     @app.get("/", include_in_schema=False)
-    async def spa_index() -> FileResponse:
-        return FileResponse(index_path)
+    async def spa_index() -> Response:
+        return _serve_index(index_path)
 
     @app.get("/{full_path:path}", include_in_schema=False)
-    async def spa_fallback(full_path: str) -> FileResponse:
+    async def spa_fallback(full_path: str) -> Response:
         # An unmatched /api/* path is a real 404 (renamed/removed endpoint),
         # not a client-side route — serving index.html would hand a stale
         # frontend HTML where it expects JSON, masking the error. Wrong
         # methods on existing endpoints still 405 via the api_router.
         if full_path == "api" or full_path.startswith("api/"):
             raise HTTPException(status_code=404)
-        return FileResponse(index_path)
+        return _serve_index(index_path)
 
 
 settings = get_settings()

@@ -46,6 +46,24 @@ def test_spa_falls_back_to_index_html_for_unknown_client_routes(tmp_path: Path) 
     assert "spa-root" in response.text
 
 
+def test_spa_returns_friendly_error_when_index_html_missing(tmp_path: Path) -> None:
+    dist_dir = tmp_path / "dist"
+    dist_dir.mkdir(parents=True)
+    app = FastAPI()
+
+    configure_web_routes(app, frontend_dist=dist_dir)
+
+    with TestClient(app) as client:
+        root_response = client.get("/")
+        fallback_response = client.get("/models")
+
+    assert root_response.status_code == 503
+    assert "npm run build" in root_response.text
+    assert "Traceback" not in root_response.text
+    assert fallback_response.status_code == 503
+    assert fallback_response.text == root_response.text
+
+
 def test_spa_exposes_built_assets_under_assets_path(tmp_path: Path) -> None:
     dist_dir = tmp_path / "dist"
     write_fake_spa_build(dist_dir)
