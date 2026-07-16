@@ -105,6 +105,18 @@ def test_pick_least_loaded_device_breaks_ties_on_lowest_device_id(tmp_path: Path
     assert picked == "dml:0", "both fully free -- deterministic tie-break must pick the lowest id"
 
 
+def test_pick_least_loaded_device_prefers_gpu_over_cpu_despite_more_cpu_slots(tmp_path: Path) -> None:
+    # CPU_CONCURRENCY(2) > PER_DEVICE_GPU_CONCURRENCY(1): the idle CPU exposes
+    # MORE free slots than the idle GPU, but auto-routing must still pick the
+    # GPU (the fast path) -- otherwise onnx auto jobs pile onto the CPU.
+    settings = make_settings(tmp_path, PER_DEVICE_GPU_CONCURRENCY=1, CPU_CONCURRENCY=2)
+    semaphores = DeviceSemaphores(settings)
+
+    picked = pick_least_loaded_device([CPU, GPU0], semaphores)
+
+    assert picked == "dml:0", "both idle, but a free GPU must win over a free CPU"
+
+
 def test_pick_least_loaded_device_single_candidate_is_trivially_picked(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     semaphores = DeviceSemaphores(settings)

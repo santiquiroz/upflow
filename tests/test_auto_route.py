@@ -303,6 +303,43 @@ async def test_auto_onnx_job_can_resolve_to_cpu_when_its_the_only_device(tmp_pat
     assert job.device == "cpu"
 
 
+async def test_auto_onnx_job_prefers_idle_gpu_over_idle_cpu(tmp_path: Path) -> None:
+    # onnx runs on cpu OR gpu; with both idle, auto must pick the GPU (fast
+    # path) even though CPU_CONCURRENCY(2) exposes more free slots than the
+    # GPU(1). Regression guard for the router's CPU-preference misrouting.
+    settings = make_settings(tmp_path, PER_DEVICE_GPU_CONCURRENCY=1, CPU_CONCURRENCY=2)
+    registry = ModelRegistry(settings)
+    registry.register(make_onnx_entry())
+    recorder = DeviceTimestampRecorder()
+    manager = JobManager(
+        settings,
+        RecordingNcnnEngine(recorder),
+        DeviceSemaphores(settings),
+        onnx_engine=RecordingOnnxEngine(recorder),
+        registry=registry,
+        devices=FakeDevicesService([CPU, GPU0]),
+    )
+    source_path = make_image_source(settings, "photo.png")
+
+    await manager.start()
+    try:
+        job = await manager.create_job(
+            source_path=source_path,
+            original_filename="photo.png",
+            model_name="realesrgan-x4plus",
+            model_id="fake-onnx-2x",
+            scale=2,
+            output_format="png",
+            device=AUTO_DEVICE_ID,
+        )
+        await manager.queue.join()
+    finally:
+        await manager.stop()
+
+    assert job.status == JobStatus.completed
+    assert job.device == "dml:0", "an idle GPU must win over an idle CPU for onnx auto jobs"
+
+
 async def test_auto_picks_the_free_gpu_when_the_other_is_busy(tmp_path: Path) -> None:
     settings = make_settings(tmp_path, PER_DEVICE_GPU_CONCURRENCY=1, MAX_CONCURRENT_JOBS=4)
     recorder = DeviceTimestampRecorder()

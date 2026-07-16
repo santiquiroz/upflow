@@ -54,21 +54,34 @@ def _numeric_device_sort_key(device_id: str) -> tuple[str, int, str]:
     return (device_id, -1, device_id)
 
 
-def pick_least_loaded_device(compatible: list[DeviceInfo], device_semaphores: DeviceSemaphores) -> str:
-    """Deterministically picks the compatible device with the most free capacity.
+def _device_kind_rank(kind: str) -> int:
+    """Auto-routing prefers a GPU over the CPU; CPU is a fallback, not a peer.
 
-    Ties -- including "every candidate is equally busy" -- break on the
-    lowest numeric device id, so callers get a stable pick instead of
-    flapping between equally-loaded devices. `compatible` must be non-empty.
+    Without this, ranking purely by free capacity misroutes onnx "auto" jobs:
+    the defaults ship CPU_CONCURRENCY(2) > PER_DEVICE_GPU_CONCURRENCY(1), so an
+    idle CPU exposes MORE free slots than an idle GPU and would win -- the
+    opposite of the router's goal (dispatch onnx work to a free GPU to save
+    time). GPUs rank ahead of everything else; the CPU is only chosen when no
+    compatible GPU has free capacity.
+    """
+    return 0 if kind == "gpu" else 1
+
+
+def pick_least_loaded_device(compatible: list[DeviceInfo], device_semaphores: DeviceSemaphores) -> str:
+    """Deterministically picks the best compatible device for an auto job.
+
+    Ranking, in order: GPU before CPU (see `_device_kind_rank`), then most
+    free capacity, then lowest numeric device id. Ties -- including "every
+    candidate is equally busy" -- break on the lowest numeric id, so callers
+    get a stable pick instead of flapping between equally-loaded devices.
+    `compatible` must be non-empty.
     """
 
-    def free_capacity(device_id: str) -> int:
-        return device_semaphores.free_capacity(device_id)
+    def sort_key(device: DeviceInfo) -> tuple[int, int, tuple[str, int, str]]:
+        free_capacity = device_semaphores.free_capacity(device["id"])
+        return (_device_kind_rank(device["kind"]), -free_capacity, _numeric_device_sort_key(device["id"]))
 
-    return min(
-        (device["id"] for device in compatible),
-        key=lambda device_id: (-free_capacity(device_id), _numeric_device_sort_key(device_id)),
-    )
+    return min(compatible, key=sort_key)["id"]
 
 
 class DeviceRouter:
