@@ -48,11 +48,11 @@ def video_interpolation_active(job: VideoUpscaleJob) -> bool:
     return job.target_fps is not None or job.fps_multiplier > 1
 
 
-def _video_stage_active(job: VideoUpscaleJob, key: str) -> bool:
+def _video_stage_active(job: VideoUpscaleJob, key: str, has_audio: bool) -> bool:
     if key == "extracting_audio":
-        return job.keep_audio
+        return job.keep_audio and has_audio
     if key == "enhancing_audio":
-        return job.keep_audio and bool(job.audio_enhance)
+        return job.keep_audio and has_audio and bool(job.audio_enhance)
     if key == "interpolating_frames":
         return video_interpolation_active(job)
     return True
@@ -67,10 +67,13 @@ def _normalize_weights(raw_stages: list[tuple[str, str, float]]) -> list[Stage]:
 
 
 def build_video_stages(job: VideoUpscaleJob) -> list[Stage]:
+    # hasAudio is stamped at probe; default True keeps audio stages when the
+    # source has not been probed yet (stages get filtered once it is known).
+    has_audio = bool(job.metadata.get("hasAudio", True))
     raw_stages = [
         (key, *VIDEO_STAGE_WEIGHTS[key])
         for key in VIDEO_STAGE_ORDER
-        if _video_stage_active(job, key)
+        if _video_stage_active(job, key, has_audio)
     ]
     return _normalize_weights(raw_stages)
 

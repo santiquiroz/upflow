@@ -78,6 +78,9 @@ class VideoUpscaler:
             raise RuntimeError("No video stream found in the uploaded file")
 
         fps = str(resolve_video_fps(video_stream.get("avg_frame_rate"), video_stream.get("r_frame_rate")))
+        # Set before the first advance_video_stage so build_video_stages excludes
+        # the audio stages when the source carries no audio track.
+        job.metadata["hasAudio"] = has_audio
         advance_video_stage(job, "probing")
         job.metadata["fps"] = fps
         job.metadata["sourceWidth"] = int(video_stream.get("width") or 0)

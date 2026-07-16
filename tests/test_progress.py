@@ -445,6 +445,26 @@ class FakeMediaTools:
         }
 
 
+class FakeMediaToolsWithAudio:
+    def available(self) -> bool:
+        return True
+
+    async def ffprobe_json(self, source_path: Path) -> dict:
+        return {
+            "streams": [
+                {
+                    "codec_type": "video",
+                    "width": 4,
+                    "height": 4,
+                    "avg_frame_rate": "30/1",
+                    "nb_frames": "30",
+                },
+                {"codec_type": "audio"},
+            ],
+            "format": {"duration": "1.0"},
+        }
+
+
 class ProgressTrackingVideoUpscaler(VideoUpscaler):
     """Fakes _run_process so no real ffmpeg/engine binary runs; records progress snapshots."""
 
@@ -462,6 +482,8 @@ class ProgressTrackingVideoUpscaler(VideoUpscaler):
         self.snapshots.append((self._current_job.metadata["stage"], self._current_job.metadata["progress"]))
         if "-fps_mode" in command:
             self._write_dummy_frame(command)
+        elif "-vn" in command:
+            self._write_dummy_audio(command)
         elif command[0] == str(self.settings.engine_binary_path):
             self._write_dummy_upscaled_frame(command)
         elif "-framerate" in command:
@@ -472,6 +494,12 @@ class ProgressTrackingVideoUpscaler(VideoUpscaler):
         frames_in_dir = Path(command[-1]).parent
         frames_in_dir.mkdir(parents=True, exist_ok=True)
         (frames_in_dir / "00000001.png").write_bytes(b"fake-frame-in")
+
+    @staticmethod
+    def _write_dummy_audio(command: list[str]) -> None:
+        audio_path = Path(command[-1])
+        audio_path.parent.mkdir(parents=True, exist_ok=True)
+        audio_path.write_bytes(b"fake-audio")
 
     @staticmethod
     def _write_dummy_upscaled_frame(command: list[str]) -> None:
@@ -486,10 +514,16 @@ class ProgressTrackingVideoUpscaler(VideoUpscaler):
         output_path.write_bytes(b"fake-output-video")
 
 
-def make_progress_upscaler(tmp_path: Path, snapshots: list[tuple[str, float]]) -> ProgressTrackingVideoUpscaler:
+def make_progress_upscaler(
+    tmp_path: Path,
+    snapshots: list[tuple[str, float]],
+    media_tools: object | None = None,
+) -> ProgressTrackingVideoUpscaler:
     settings = make_settings(tmp_path)
     StorageService(settings)
-    return ProgressTrackingVideoUpscaler(settings, FakeVideoEngine(), FakeMediaTools(), snapshots=snapshots)
+    return ProgressTrackingVideoUpscaler(
+        settings, FakeVideoEngine(), media_tools or FakeMediaTools(), snapshots=snapshots
+    )
 
 
 async def test_video_pipeline_progress_increases_monotonically_and_reaches_completion(tmp_path: Path) -> None:
@@ -518,6 +552,69 @@ async def test_video_pipeline_sets_frames_total_from_nb_frames_after_probe(tmp_p
     await upscaler.run(job)
 
     assert job.metadata["framesTotal"] == 30
+
+
+# ---------------------------------------------------------------------------
+# Reviewer fix: audio stages are phantom when keep_audio=True but the source
+# has no audio track. build_video_stages must read the probed hasAudio flag so
+# the stepper never shows Extract/Enhance audio steps that instantly complete.
+# ---------------------------------------------------------------------------
+
+
+def test_build_video_stages_excludes_audio_when_has_audio_false(tmp_path: Path) -> None:
+    job = make_video_job(tmp_path / "clip.mp4", keep_audio=True, audio_enhance="deepfilternet")
+    job.metadata["hasAudio"] = False
+
+    stages = build_video_stages(job)
+
+    keys = [stage.key for stage in stages]
+    assert "extracting_audio" not in keys
+    assert "enhancing_audio" not in keys
+    assert sum(stage.weight for stage in stages) == pytest.approx(1.0)
+
+
+def test_build_video_stages_includes_audio_when_has_audio_true(tmp_path: Path) -> None:
+    job = make_video_job(tmp_path / "clip.mp4", keep_audio=True)
+    job.metadata["hasAudio"] = True
+
+    stages = build_video_stages(job)
+
+    assert "extracting_audio" in [stage.key for stage in stages]
+
+
+async def test_video_pipeline_keep_audio_but_no_audio_track_excludes_audio_stages(tmp_path: Path) -> None:
+    snapshots: list[tuple[str, float]] = []
+    upscaler = make_progress_upscaler(tmp_path, snapshots, media_tools=FakeMediaTools())
+    source = upscaler.settings.uploads_path / "clip.mp4"
+    source.write_bytes(b"fake-video-bytes")
+    job = make_video_job(source, keep_audio=True)
+
+    await upscaler.run(job)
+
+    keys = [stage["key"] for stage in job.metadata["stages"]]
+    assert "extracting_audio" not in keys
+    assert "enhancing_audio" not in keys
+    progress_values = [value for _, value in snapshots]
+    assert progress_values == sorted(progress_values)
+    assert job.metadata["progress"] == pytest.approx(1.0)
+    assert all(stage["status"] == "done" for stage in job.metadata["stages"])
+
+
+async def test_video_pipeline_keep_audio_with_audio_track_activates_audio_stage(tmp_path: Path) -> None:
+    snapshots: list[tuple[str, float]] = []
+    upscaler = make_progress_upscaler(tmp_path, snapshots, media_tools=FakeMediaToolsWithAudio())
+    source = upscaler.settings.uploads_path / "clip.mp4"
+    source.write_bytes(b"fake-video-bytes")
+    job = make_video_job(source, keep_audio=True)
+
+    await upscaler.run(job)
+
+    stage_snapshots = [stage for stage, _ in snapshots]
+    keys = [stage["key"] for stage in job.metadata["stages"]]
+    assert "extracting_audio" in keys
+    assert "extracting_audio" in stage_snapshots  # the audio stage actually became active mid-run
+    assert all(stage["status"] == "done" for stage in job.metadata["stages"])
+    assert job.metadata["progress"] == pytest.approx(1.0)
 
 
 # ---------------------------------------------------------------------------
