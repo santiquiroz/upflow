@@ -175,20 +175,8 @@ def test_realesrgan_engine_uses_resolved_absolute_binary_and_models_paths(
     assert engine.models_dir == settings.engine_models_path
 
 
-def test_templates_directory_is_absolute_and_exists() -> None:
-    from app.web.routes import templates
+def test_frontend_dist_dir_is_absolute_and_resolved_against_project_root() -> None:
+    from app.main import APP_DIR, FRONTEND_DIST_DIR
 
-    directory = Path(templates.env.loader.searchpath[0])
-
-    assert directory.is_absolute()
-    assert directory.exists()
-
-
-def test_static_mount_directory_is_absolute_and_exists() -> None:
-    from app.main import app
-
-    static_route = next(route for route in app.routes if getattr(route, "name", None) == "static")
-    directory = Path(static_route.app.directory)
-
-    assert directory.is_absolute()
-    assert directory.exists()
+    assert FRONTEND_DIST_DIR.is_absolute()
+    assert FRONTEND_DIST_DIR == APP_DIR.parent / "frontend" / "dist"

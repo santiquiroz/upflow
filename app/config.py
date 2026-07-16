@@ -177,7 +177,6 @@ class Settings(BaseSettings):
     app_name: str = Field(default="Upflow", alias="APP_NAME")
     app_host: str = Field(default="127.0.0.1", alias="APP_HOST")
     app_port: int = Field(default=8090, alias="APP_PORT")
-    web_title: str = Field(default="Upflow", alias="WEB_TITLE")
 
     max_upload_mb: int = Field(default=50, alias="MAX_UPLOAD_MB")
     max_video_upload_mb: int = Field(default=2048, alias="MAX_VIDEO_UPLOAD_MB")
@@ -225,8 +224,6 @@ class Settings(BaseSettings):
     max_model_download_mb: int = Field(default=2048, alias="MAX_MODEL_DOWNLOAD_MB")
 
     onnx_tile_size: int = Field(default=256, alias="ONNX_TILE_SIZE")
-
-    serve_spa: bool = Field(default=False, alias="SERVE_SPA")
 
     @model_validator(mode="after")
     def _apply_default_allowed_origins(self) -> "Settings":

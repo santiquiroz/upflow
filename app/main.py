@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import router as api_router
-from app.config import AUDIO_ENHANCE_MODES, Settings, get_settings
+from app.config import AUDIO_ENHANCE_MODES, get_settings
 from app.security import OriginGuardMiddleware
 from app.services.devices_service import DevicesService
 from app.services.engines.audio_enhance import AudioEnhancer
@@ -25,7 +25,6 @@ from app.services.retention_sweeper import RetentionSweeper
 from app.services.storage import StorageService
 from app.services.video_job_manager import VideoJobManager
 from app.services.video_upscaler import VideoUpscaler
-from app.web.routes import router as web_router
 
 APP_DIR = Path(__file__).resolve().parent
 FRONTEND_DIST_DIR = APP_DIR.parent / "frontend" / "dist"
@@ -88,10 +87,14 @@ async def lifespan(app: FastAPI):
         await model_installer.stop()
 
 
-def _mount_spa(app: FastAPI, frontend_dist: Path) -> None:
-    """Serves the built React SPA: static assets plus an index.html fallback
-    for every other path, so client-side routes (e.g. /models) resolve on
-    a hard refresh instead of 404ing.
+def configure_web_routes(app: FastAPI, frontend_dist: Path = FRONTEND_DIST_DIR) -> None:
+    """Serves the built React SPA as the only UI: static assets plus an
+    index.html fallback for every other non-API path, so client-side routes
+    (e.g. /models) resolve on a hard refresh instead of 404ing.
+
+    frontend_dist must already contain a `npm run build` output (index.html
+    + assets/) — the release zip and local dev builds both produce this
+    before the server starts; there is no legacy fallback anymore.
     """
     assets_dir = frontend_dist / "assets"
     if assets_dir.is_dir():
@@ -107,24 +110,8 @@ def _mount_spa(app: FastAPI, frontend_dist: Path) -> None:
         return FileResponse(index_path)
 
 
-def configure_web_routes(app: FastAPI, settings: Settings, frontend_dist: Path = FRONTEND_DIST_DIR) -> None:
-    """Chooses between the React SPA and the legacy Jinja UI at "/".
-
-    Gated behind SERVE_SPA (default off) so pytest and existing deployments
-    keep getting the Jinja UI unchanged until the SPA reaches parity (task 6
-    removes this branch and the Jinja templates). Falls back to Jinja even
-    with the flag on if frontend/dist was never built, so a missing `npm run
-    build` degrades gracefully instead of 500ing every request.
-    """
-    if settings.serve_spa and frontend_dist.is_dir():
-        _mount_spa(app, frontend_dist)
-    else:
-        app.include_router(web_router)
-
-
 settings = get_settings()
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
 app.add_middleware(OriginGuardMiddleware, allowed_origins=settings.allowed_origin_values)
-app.mount("/static", StaticFiles(directory=str(APP_DIR / "static")), name="static")
 app.include_router(api_router)
-configure_web_routes(app, settings)
+configure_web_routes(app)

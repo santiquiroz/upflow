@@ -39,18 +39,21 @@
 
 ## Qué es Upflow
 
-La mayoría de buenos upscalers son CUDA-only, de código cerrado, o una pila de flags de CLI. Upflow es una **web UI + API REST** limpia, construida alrededor de un **motor desacoplado e intercambiable**, corriendo sobre **Real-ESRGAN NCNN + Vulkan** — lo que significa que vuela en **AMD Radeon** en Windows, donde DirectML y CUDA se quedan cortos.
+La mayoría de buenos upscalers son CUDA-only, de código cerrado, o una pila de flags de CLI. Upflow es una **SPA en React + API REST** limpia, construida alrededor de un **motor desacoplado e intercambiable**, corriendo sobre **Real-ESRGAN NCNN + Vulkan** — lo que significa que vuela en **AMD Radeon** en Windows, donde DirectML y CUDA se quedan cortos.
 
 > **Corre en cualquier GPU con Vulkan** (AMD, NVIDIA, Intel). Simplemente está *afinado* para AMD-en-Windows, donde las buenas opciones escasean.
 
 ## Características
 
-- 🖼️ **Upscaling de imagen** — arrastrás el archivo, elegís modelo y escala (2×/3×/4× según el modelo), listo. Fotos y anime/line-art por igual.
-- 🎬 **Upscaling de video** — pipeline completo con FFmpeg: extraer frames → upscale por lote → re-encodear preservando el audio. Perfiles listos para anime y contenido general.
-- 🌊 **FPS boost con RIFE NCNN Vulkan** — interpolación de fotogramas 2×/3×/4× sobre el video ya reescalado, mismo backend Vulkan (sin CUDA). Se activa por config y aparece como dropdown en la UI.
+- 🖼️ **Upscaling de imagen** — arrastrás el archivo, elegís modelo, dispositivo y escala (2×/3×/4× según el modelo), listo. Fotos y anime/line-art por igual, con job en vivo y descarga directa desde la UI.
+- 🎬 **Upscaling de video** — pipeline completo con FFmpeg: extraer frames → upscale por lote → re-encodear preservando el audio. Perfiles listos para anime y contenido general, con opciones avanzadas (modelo, escala, códec, preset, CRF, FPS boost, mejora de audio).
+- 🌊 **FPS boost con RIFE NCNN Vulkan** — interpolación de fotogramas 2×/3×/4× sobre el video ya reescalado, mismo backend Vulkan (sin CUDA). Se activa por config y aparece como dropdown en el módulo Enhance.
 - 🔊 **Mejora de audio con IA** — denoise opcional del audio del video con DeepFilterNet (red neuronal) o RNNoise (filtro `arnndn` de FFmpeg), como paso extra del pipeline antes de re-encodear. Se activa por config y se elige por job (`audio_enhance=deepfilter|rnnoise`).
+- 🧠 **Módulo Models** — buscá modelos de super-resolución en Hugging Face, instalalos con un click (con polling de progreso) y gestioná los ya instalados; elegí el dispositivo de cómputo (`cpu`/`dml:N`) por default o por job.
+- ⚙️ **Módulo Settings** — estado del motor, disponibilidad de ffmpeg, concurrencia de GPU y profundidad de las colas de jobs, todo en vivo.
+- 📡 **Módulo Realtime (roadmap)** — vista de estado que explica el plan de interpolación en tiempo real (Fase 7, no implementado todavía) y por qué no es viable hoy — ver [`docs/REALTIME_MODULE.md`](docs/REALTIME_MODULE.md).
 - 🧹 **Retención automática** — un sweeper en background borra outputs y jobs terminados más viejos que `OUTPUT_TTL_HOURS`; corre al arrancar y luego cada hora. El disco ya no crece sin límite.
-- 🚦 **Cola con límite + concurrencia de GPU compartida** — cada tipo de job (imagen/video) tiene su propia cola acotada (`MAX_QUEUE_SIZE`, responde `429` si se llena) y ambas comparten un único semáforo de GPU (`GPU_CONCURRENCY`) para no saturar la VRAM.
+- 🚦 **Cola con límite + concurrencia de GPU compartida** — cada tipo de job (imagen/video) tiene su propia cola acotada (`MAX_QUEUE_SIZE`, responde `429` si se llena) y ambas comparten un único semáforo de GPU (`GPU_CONCURRENCY`) para no saturar la VRAM. La cola global de jobs se ve en vivo desde cualquier módulo.
 - 🛡️ **Hardening de subida** — nombres de archivo sanitizados (caracteres inválidos en Windows y nombres reservados como `CON`/`NUL`/`COM1`), timeout + kill automático de subprocesos colgados, validación de formato/tamaño/dimensiones de imagen y video, y un middleware que rechaza requests de escritura (`POST`/`PUT`/`PATCH`/`DELETE`) desde orígenes no permitidos.
 - 🧩 **Motor desacoplado** — el backend de upscaling vive detrás de una interfaz (`UpscaleEngine`). NCNN/Vulkan hoy, lo que sea mañana.
 - 🔌 **API REST** — encolá jobs y consultá su estado desde cualquier otra app.
@@ -61,6 +64,7 @@ La mayoría de buenos upscalers son CUDA-only, de código cerrado, o una pila de
 - Windows con una GPU compatible con Vulkan (AMD, NVIDIA o Intel).
 - [Python 3.11+](https://www.python.org/) en el `PATH`.
 - PowerShell (para correr los scripts de `scripts/`).
+- [Node.js 20+](https://nodejs.org/) en el `PATH` — **solo si corrés desde el código fuente** (para compilar la SPA de `frontend/`). El `.zip` de release ya trae `frontend/dist/` compilado, así que los usuarios finales no lo necesitan.
 
 ## Instalación paso a paso
 
@@ -80,26 +84,56 @@ powershell -ExecutionPolicy Bypass -File .\scripts\download-ffmpeg.ps1
 # 4. RIFE NCNN Vulkan (opcional, solo si querés el FPS boost — ver más abajo)
 powershell -ExecutionPolicy Bypass -File .\scripts\download-rife.ps1
 
-# 5. (opcional) copiar .env.example a .env y ajustar valores
+# 5. Frontend: compilar la SPA de React (necesario para correr desde codigo fuente,
+#    requiere Node.js 20+; ver seccion "Desarrollo del frontend" mas abajo)
+cd frontend
+npm install
+npm run build
+cd ..
+
+# 6. (opcional) copiar .env.example a .env y ajustar valores
 copy .env.example .env
 
-# 6. Arrancar el servidor
+# 7. Arrancar el servidor
 .\.venv\Scripts\uvicorn app.main:app --host 127.0.0.1 --port 8090 --reload
 ```
 
 Abrí **http://127.0.0.1:8090**.
 
-Todos los binarios de `vendor/` y todo lo de `runtime/` (uploads, outputs, temp, video-work) están en `.gitignore` — se generan localmente con los scripts de arriba y en tiempo de ejecución, nunca se commitean.
+Todos los binarios de `vendor/` y todo lo de `runtime/` (uploads, outputs, temp, video-work) están en `.gitignore` — se generan localmente con los scripts de arriba y en tiempo de ejecución, nunca se commitean. Lo mismo para `frontend/dist/` y `frontend/node_modules/`: se generan con el paso 5, nunca se commitean.
 
 > **Instalación más pesada de lo habitual:** el paso 1 (`pip install -e .`) instala también `onnxruntime-directml`, `torch` (CPU-only), `spandrel` y `onnx` — dependencias del módulo de modelos HF (ver sección "Modelos" abajo). Sumalas y son ~2-3 GB extra, la mayoría por `torch`. No hace falta ningún paso manual adicional, solo tener espacio en disco y paciencia la primera vez.
+
+## Desarrollo del frontend
+
+FastAPI sirve el build de producción de `frontend/dist/` en `/` (paso 5 arriba). Para desarrollar la UI con hot-reload, corré el backend y el dev server de Vite en paralelo:
+
+```powershell
+# Terminal 1: backend (API en :8090)
+.\.venv\Scripts\uvicorn app.main:app --host 127.0.0.1 --port 8090 --reload
+
+# Terminal 2: frontend con hot-reload (:5173, hace proxy de /api hacia :8090)
+cd frontend
+npm install
+npm run dev
+```
+
+Abrí **http://localhost:5173** durante el desarrollo. `npm run build` genera el bundle de producción en `frontend/dist/` que consume FastAPI; `npm test` corre la suite de vitest.
 
 ## Cómo usar
 
 ### Web UI
 
-- **Imagen**: subís el archivo, elegís modelo (la lista de escalas se filtra automáticamente según lo que soporta cada modelo) y formato de salida.
-- **Video**: subís el archivo y elegís un perfil (ver tabla de perfiles abajo). En "Advanced options" podés sobreescribir modelo, escala, contenedor, códec, preset, CRF, audio y el dropdown **FPS boost** (Off, o 2×/3×/4×; solo produce resultado si tenés `ENABLE_INTERPOLATION=true` y RIFE instalado — ver más abajo).
-- La sección **Status** hace polling del job cada 2 segundos y muestra el JSON completo más el `stage` actual y, para video, el FPS de salida.
+La SPA de React tiene cuatro módulos, accesibles desde la barra lateral:
+
+- **Enhance** (`/`) — imagen y video en la misma pantalla, con tabs:
+  - *Imagen*: subís el archivo, elegís modelo, dispositivo de cómputo (`cpu`/`dml:N`) y escala (la lista se filtra automáticamente según lo que soporta cada modelo), formato de salida. Job en vivo con progreso y descarga directa al terminar.
+  - *Video*: subís el archivo y elegís un perfil (ver tabla de perfiles abajo), con opciones avanzadas para sobreescribir modelo, escala, contenedor, códec, preset, CRF, audio, el dropdown **FPS boost** (Off, o 2×/3×/4×; solo produce resultado si tenés `ENABLE_INTERPOLATION=true` y RIFE instalado — ver más abajo) y **mejora de audio** (Off/RNNoise/DeepFilterNet).
+- **Models** (`/models`) — buscador de modelos de super-resolución en Hugging Face, instalación con un click (con polling de progreso hasta `done`/`error`), lista de modelos instalados con borrado, y selección de dispositivo por default.
+- **Settings** (`/settings`) — estado del motor (disponibilidad, ffmpeg), concurrencia de GPU y profundidad de las colas de jobs, en vivo.
+- **Realtime** (`/realtime`) — página de roadmap: explica el plan de interpolación en tiempo real (Fase 7) y por qué el frame generation en vivo no es viable todavía en Windows sin driver hooks propietarios.
+
+Un panel de **cola de jobs** global (imagen + video) con progreso en vivo está disponible desde cualquier módulo.
 
 ### API REST
 
@@ -226,7 +260,6 @@ Todas las variables leen de `.env` (ver [`.env.example`](.env.example) con los d
 | `APP_NAME` | `Upflow` | Nombre interno del proceso FastAPI (`.env.example` lo sobreescribe a `Image Upscaler AMD`) |
 | `APP_HOST` | `127.0.0.1` | Host de bind de uvicorn |
 | `APP_PORT` | `8090` | Puerto de bind de uvicorn |
-| `WEB_TITLE` | `Upflow` | Título mostrado en la web UI (`.env.example` lo sobreescribe a `AMD Image Upscaler`) |
 | `MAX_UPLOAD_MB` | `50` | Tamaño máximo de subida para imágenes (MB) |
 | `MAX_VIDEO_UPLOAD_MB` | `2048` | Tamaño máximo de subida para videos (MB) |
 | `MAX_IMAGE_PIXELS` | `120000000` | Límite de píxeles (ancho × alto) para evitar decompression bombs |
@@ -293,6 +326,8 @@ Con eso activado, un job de video con `keep_audio=true` puede pedir `audio_enhan
 
 ## Tests
 
+Backend (pytest):
+
 ```powershell
 # instalar dependencias de desarrollo (pytest, pytest-asyncio) una sola vez
 .\.venv\Scripts\python -m pip install -e ".[dev]"
@@ -307,12 +342,23 @@ Con eso activado, un job de video con `keep_audio=true` puede pedir `audio_enhan
 .\.venv\Scripts\python -m pytest --cov=app --cov-report=term-missing
 ```
 
+Frontend (vitest):
+
+```powershell
+cd frontend
+npm install
+npm test              # correr toda la suite una vez
+npm run test:watch    # modo watch
+```
+
 ## Arquitectura
 
 ```text
-Browser / cliente API
+Browser
         │
-   FastAPI (app/)  ──  web UI (Jinja) + routers REST
+   SPA de React (frontend/, build de Vite servido desde frontend/dist/)
+        │
+   FastAPI (app/)  ──  sirve la SPA en "/" (fallback de rutas cliente) + routers REST en /api/v1
         │
    Cola de jobs por tipo (imagen/video)  ──  workers async + semáforo de GPU compartido
         │
@@ -323,7 +369,7 @@ Motor de imagen        Pipeline de video (FFmpeg)
  NCNN Vulkan)            interpolar con RIFE (opcional) → re-encode + audio
 ```
 
-El motor de upscaling vive detrás de una interfaz `UpscaleEngine` (`app/services/engines/base.py`), así que el backend Vulkan es un componente reemplazable. Un `RetentionSweeper` en background borra outputs y jobs vencidos según `OUTPUT_TTL_HOURS`.
+El motor de upscaling vive detrás de una interfaz `UpscaleEngine` (`app/services/engines/base.py`), así que el backend Vulkan es un componente reemplazable. Un `RetentionSweeper` en background borra outputs y jobs vencidos según `OUTPUT_TTL_HOURS`. La SPA (`frontend/`) se compila una sola vez a `frontend/dist/` — en release, `scripts/package-release.ps1` corre `npm ci && npm run build` antes de empaquetar el `.zip`; en desarrollo, se compila a mano o se corre con hot-reload (`npm run dev`, ver "Desarrollo del frontend" arriba).
 
 ## Roadmap
 

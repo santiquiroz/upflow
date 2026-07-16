@@ -13,6 +13,33 @@ $distDir = Join-Path $root 'dist'
 $stagingDir = Join-Path $distDir "upflow-v$version"
 $zipPath = Join-Path $distDir "upflow-v$version.zip"
 
+$frontendDir = Join-Path $root 'frontend'
+$frontendDistDir = Join-Path $frontendDir 'dist'
+$frontendIndexPath = Join-Path $frontendDistDir 'index.html'
+
+# The React SPA is the only UI FastAPI serves (app/main.py mounts
+# frontend/dist unconditionally) — the release zip is broken without a
+# fresh build, so this always rebuilds instead of trusting a stale dist/.
+Write-Host 'Compilando la SPA de React (frontend/)...'
+Push-Location $frontendDir
+try {
+    npm ci
+    if ($LASTEXITCODE -ne 0) {
+        throw 'npm ci fallo en frontend/.'
+    }
+    npm run build
+    if ($LASTEXITCODE -ne 0) {
+        throw 'npm run build fallo en frontend/.'
+    }
+}
+finally {
+    Pop-Location
+}
+
+if (-not (Test-Path $frontendIndexPath)) {
+    throw "El build de frontend no genero frontend/dist/index.html."
+}
+
 New-Item -ItemType Directory -Force -Path $distDir | Out-Null
 
 if (Test-Path $stagingDir) {
@@ -44,6 +71,12 @@ foreach ($file in $includeFiles) {
     }
     Copy-Item -Force $source (Join-Path $stagingDir $file)
 }
+
+# Only the built frontend/dist/ output travels in the zip — src/,
+# node_modules/ and the rest of frontend/ are build-time only and stay out.
+$stagingFrontendDistDir = Join-Path $stagingDir 'frontend\dist'
+New-Item -ItemType Directory -Force -Path $stagingFrontendDistDir | Out-Null
+Copy-Item -Recurse -Force (Join-Path $frontendDistDir '*') $stagingFrontendDistDir
 
 # Bytecode cache never belongs in a distributed zip.
 Get-ChildItem $stagingDir -Recurse -Directory -Filter '__pycache__' | ForEach-Object {
