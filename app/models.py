@@ -38,6 +38,17 @@ class UpscaleJob:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(slots=True, frozen=True)
+class UpdateStatus:
+    current_version: str
+    latest_version: str | None
+    update_available: bool
+    release_url: str | None
+    published_at: str | None
+    checked_at: datetime
+    error: str | None
+
+
 @dataclass(slots=True)
 class VideoUpscaleJob:
     source_path: Path

@@ -239,6 +239,11 @@ class Settings(BaseSettings):
 
     onnx_tile_size: int = Field(default=256, alias="ONNX_TILE_SIZE")
 
+    update_repo: str = Field(default="santiquiroz/upflow", alias="UPDATE_REPO")
+    update_check_enabled: bool = Field(default=True, alias="UPDATE_CHECK_ENABLED")
+    update_check_ttl_seconds: int = Field(default=3600, alias="UPDATE_CHECK_TTL_SECONDS")
+    update_api_timeout_seconds: float = Field(default=5.0, alias="UPDATE_API_TIMEOUT_SECONDS")
+
     @field_validator("per_device_gpu_concurrency", "cpu_concurrency", "max_concurrent_jobs")
     @classmethod
     def _validate_concurrency_at_least_one(cls, value: int) -> int:

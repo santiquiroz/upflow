@@ -151,6 +151,16 @@ class CreateInstallResponse(BaseModel):
     status_url: str = Field(serialization_alias="statusUrl")
 
 
+class UpdateCheckResponse(BaseModel):
+    current_version: str = Field(serialization_alias="currentVersion")
+    latest_version: str | None = Field(default=None, serialization_alias="latestVersion")
+    update_available: bool = Field(serialization_alias="updateAvailable")
+    release_url: str | None = Field(default=None, serialization_alias="releaseUrl")
+    published_at: str | None = Field(default=None, serialization_alias="publishedAt")
+    checked_at: datetime = Field(serialization_alias="checkedAt")
+    error: str | None = None
+
+
 class InstallStatusResponse(BaseModel):
     install_id: str = Field(serialization_alias="installId")
     repo_id: str = Field(serialization_alias="repoId")

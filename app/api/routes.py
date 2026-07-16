@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse
 
 from app.config import Settings, VideoProfile, get_settings
 from app.exceptions import ModelNotFoundError, ModelProtectedError, QueueFullError
-from app.models import JobStatus, UpscaleJob, VideoUpscaleJob
+from app.models import JobStatus, UpdateStatus, UpscaleJob, VideoUpscaleJob
 from app.schemas import (
     CreateInstallResponse,
     CreateJobResponse,
@@ -27,6 +27,7 @@ from app.schemas import (
     ModelSearchResponse,
     ModelsResponse,
     SupportedModelResponse,
+    UpdateCheckResponse,
     VideoJobResponse,
     VideoProfileResponse,
 )
@@ -36,6 +37,7 @@ from app.services.job_manager import JobManager
 from app.services.model_installer import ModelInstaller
 from app.services.model_registry import ModelEntry, ModelRegistry
 from app.services.storage import StorageService
+from app.services.update_service import UpdateService
 from app.services.video_job_manager import VideoJobManager
 
 router = APIRouter(prefix="/api/v1", tags=["api"])
@@ -150,6 +152,10 @@ def get_model_installer(request: Request) -> ModelInstaller:
     return request.app.state.model_installer
 
 
+def get_update_service(request: Request) -> UpdateService:
+    return request.app.state.update_service
+
+
 async def resolve_request_device(device: str | None, devices: DevicesService, settings: Settings) -> str:
     """Resolves the `device` Form param to a concrete device id.
 
@@ -237,6 +243,18 @@ def model_entry_to_response(entry: ModelEntry) -> ModelResponse:
     )
 
 
+def update_status_to_response(status: UpdateStatus) -> UpdateCheckResponse:
+    return UpdateCheckResponse(
+        current_version=status.current_version,
+        latest_version=status.latest_version,
+        update_available=status.update_available,
+        release_url=status.release_url,
+        published_at=status.published_at,
+        checked_at=status.checked_at,
+        error=status.error,
+    )
+
+
 @router.get("/health", response_model=HealthResponse)
 async def health(
     request: Request,
@@ -272,6 +290,15 @@ async def engine_info(request: Request, settings: Settings = Depends(get_setting
         video_profiles=[VideoProfileResponse(**item) for item in settings.video_profile_catalog],
         ffmpeg_available=media_tools.available(),
     )
+
+
+@router.get("/update-check", response_model=UpdateCheckResponse)
+async def update_check(
+    force: bool = Query(default=False),
+    updates: UpdateService = Depends(get_update_service),
+) -> UpdateCheckResponse:
+    status = await updates.check(force=force)
+    return update_status_to_response(status)
 
 
 @router.get("/devices", response_model=DevicesResponse)

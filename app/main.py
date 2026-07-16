@@ -24,6 +24,7 @@ from app.services.model_installer import ModelInstaller
 from app.services.model_registry import ModelRegistry
 from app.services.retention_sweeper import RetentionSweeper
 from app.services.storage import StorageService
+from app.services.update_service import UpdateService
 from app.services.video_job_manager import VideoJobManager
 from app.services.video_upscaler import VideoUpscaler
 
@@ -75,6 +76,7 @@ async def lifespan(app: FastAPI):
         device_router=device_router,
     )
     retention_sweeper = RetentionSweeper(settings, job_manager, video_job_manager)
+    update_service = UpdateService(settings)
     hf_client = HfClient(settings)
     model_installer = ModelInstaller(settings, model_registry, hf_client)
     await job_manager.start()
@@ -93,6 +95,7 @@ async def lifespan(app: FastAPI):
     app.state.video_job_manager = video_job_manager
     app.state.retention_sweeper = retention_sweeper
     app.state.model_registry = model_registry
+    app.state.update_service = update_service
     app.state.hf_client = hf_client
     app.state.model_installer = model_installer
     try:
