@@ -22,6 +22,7 @@ const BASE_VIDEO_JOB: VideoJobResponse = {
   fpsMultiplier: 1,
   targetFps: null,
   audioEnhance: null,
+  audioRestore: null,
   modelId: "realesr-animevideov3-x2",
   device: "dml:0",
   createdAt: "2026-01-01T00:00:00Z",

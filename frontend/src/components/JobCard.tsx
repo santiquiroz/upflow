@@ -1,5 +1,6 @@
 import { AlertTriangle, CheckCircle2, Clock, Download, ImageIcon, Loader2, UploadCloud } from "lucide-react";
-import type { JobResponse, VideoJobResponse } from "../lib/apiTypes";
+import type { AudioJob, JobResponse, VideoJobResponse } from "../lib/apiTypes";
+import { denoiseLabel, restoreLabel } from "../lib/audioLabels";
 import { formatFps } from "../lib/formatFps";
 import { isProgressDeterminate } from "../lib/jobProgress";
 import { DeterminateProgressBar } from "./DeterminateProgressBar";
@@ -7,7 +8,7 @@ import { IndeterminateProgressBar } from "./IndeterminateProgressBar";
 
 export type JobCardPhase = "idle" | "uploading" | "queued" | "running" | "completed" | "failed";
 
-type AnyJobResponse = JobResponse | VideoJobResponse;
+type AnyJobResponse = JobResponse | VideoJobResponse | AudioJob;
 
 interface JobCardProps {
   phase: JobCardPhase;
@@ -18,6 +19,10 @@ interface JobCardProps {
 
 function isVideoJob(job: AnyJobResponse): job is VideoJobResponse {
   return "videoCodec" in job;
+}
+
+function isAudioJob(job: AnyJobResponse): job is AudioJob {
+  return "denoise" in job;
 }
 
 function readOutputFps(job: VideoJobResponse): string | null {
@@ -145,6 +150,31 @@ function VideoCompletedDetails({ job }: { job: VideoJobResponse }) {
   );
 }
 
+function AudioCompletedDetails({ job }: { job: AudioJob }) {
+  return (
+    <dl className="flex gap-4 text-xs text-text-dim">
+      <div className="flex items-center gap-1">
+        <dt className="text-text-faint">Denoise</dt>
+        <dd className="text-text">{denoiseLabel(job.denoise)}</dd>
+      </div>
+      <div className="flex items-center gap-1">
+        <dt className="text-text-faint">Restore</dt>
+        <dd className="text-text">{restoreLabel(job.restore)}</dd>
+      </div>
+    </dl>
+  );
+}
+
+function CompletedDetails({ job }: { job: AnyJobResponse }) {
+  if (isVideoJob(job)) {
+    return <VideoCompletedDetails job={job} />;
+  }
+  if (isAudioJob(job)) {
+    return <AudioCompletedDetails job={job} />;
+  }
+  return <ImageCompletedDetails job={job} />;
+}
+
 function CompletedState({ job }: { job: AnyJobResponse }) {
   return (
     <div className="flex flex-col gap-3">
@@ -152,7 +182,7 @@ function CompletedState({ job }: { job: AnyJobResponse }) {
         <CheckCircle2 aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />
         <span>Completed</span>
       </div>
-      {isVideoJob(job) ? <VideoCompletedDetails job={job} /> : <ImageCompletedDetails job={job} />}
+      <CompletedDetails job={job} />
       {job.downloadUrl && (
         <a
           href={job.downloadUrl}

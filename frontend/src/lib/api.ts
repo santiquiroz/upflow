@@ -35,7 +35,7 @@ async function extractErrorMessage(response: Response): Promise<string> {
   return response.statusText || `Request failed with status ${response.status}`;
 }
 
-async function apiGet<T>(path: string): Promise<T> {
+export async function apiGet<T>(path: string): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, { method: "GET" });
   if (!response.ok) {
     throw new ApiError(response.status, await extractErrorMessage(response));
@@ -43,7 +43,7 @@ async function apiGet<T>(path: string): Promise<T> {
   return (await response.json()) as T;
 }
 
-async function apiPostForm<T>(path: string, formData: FormData): Promise<T> {
+export async function apiPostForm<T>(path: string, formData: FormData): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, { method: "POST", body: formData });
   if (!response.ok) {
     throw new ApiError(response.status, await extractErrorMessage(response));
@@ -129,6 +129,7 @@ export interface CreateVideoJobParams {
   fpsMultiplier: number;
   targetFps: string | null;
   audioEnhance: string | null;
+  audioRestore: string | null;
 }
 
 function appendVideoModelFields(formData: FormData, modelId: string | null): void {
@@ -159,6 +160,9 @@ function buildVideoJobFormData(params: CreateVideoJobParams): FormData {
   }
   if (params.audioEnhance) {
     formData.append("audio_enhance", params.audioEnhance);
+  }
+  if (params.audioRestore) {
+    formData.append("audio_restore", params.audioRestore);
   }
   return formData;
 }

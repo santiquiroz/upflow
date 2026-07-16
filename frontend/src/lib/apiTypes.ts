@@ -68,6 +68,7 @@ export interface VideoJobResponse {
   fpsMultiplier: number;
   targetFps: string | null;
   audioEnhance: string | null;
+  audioRestore: string | null;
   modelId: string | null;
   device: string | null;
   createdAt: string;
@@ -77,6 +78,27 @@ export interface VideoJobResponse {
   metadata: JobMetadata;
   progressPct: number | null;
   downloadUrl: string | null;
+}
+
+// Mirrors app/schemas.py::AudioJobResponse. Unlike the image/video responses
+// this one keys the id as `id` (not `jobId`), carries no `metadata`, and puts
+// `stages` at the top level -- consumers must narrow before reading them.
+export interface AudioJob {
+  id: string;
+  status: JobStatus;
+  originalFilename: string;
+  denoise: string | null;
+  restore: string | null;
+  device: string | null;
+  progressPct: number | null;
+  stages: JobStage[] | null;
+  error: string | null;
+  downloadUrl: string | null;
+}
+
+export interface AudioCapabilities {
+  denoiseModes: string[];
+  restoreAvailable: boolean;
 }
 
 export interface SupportedModelResponse {

@@ -1,4 +1,4 @@
-export type TrackedJobKind = "image" | "video";
+export type TrackedJobKind = "image" | "video" | "audio";
 
 export interface TrackedJob {
   id: string;

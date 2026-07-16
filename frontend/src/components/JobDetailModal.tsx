@@ -1,7 +1,8 @@
 import { AlertTriangle, CheckCircle2, Circle, Loader2 } from "lucide-react";
 import { Fragment, useEffect, useState } from "react";
 import type { JobQueueEntry } from "../hooks/useJobQueue";
-import type { JobResponse, VideoJobResponse } from "../lib/apiTypes";
+import type { AudioJob, JobResponse, JobStage, VideoJobResponse } from "../lib/apiTypes";
+import { denoiseLabel, restoreLabel } from "../lib/audioLabels";
 import { estimateEta, formatEta, type EtaSample } from "../lib/eta";
 import { formatFps } from "../lib/formatFps";
 import {
@@ -21,7 +22,7 @@ interface JobDetailModalProps {
   onClose: () => void;
 }
 
-type AnyJobResponse = JobResponse | VideoJobResponse;
+type AnyJobResponse = JobResponse | VideoJobResponse | AudioJob;
 
 const MAX_ETA_SAMPLES = 5;
 
@@ -32,6 +33,22 @@ const AUDIO_ENHANCE_LABELS: Record<string, string> = {
 
 function isVideoJob(job: AnyJobResponse): job is VideoJobResponse {
   return "videoCodec" in job;
+}
+
+function isAudioJob(job: AnyJobResponse): job is AudioJob {
+  return "denoise" in job;
+}
+
+// Audio jobs carry stages at the top level (no `metadata`), image/video jobs
+// nest them under metadata -- normalize both to the same list.
+function resolveStages(job: AnyJobResponse | undefined): JobStage[] | undefined {
+  if (!job) {
+    return undefined;
+  }
+  if (isAudioJob(job)) {
+    return job.stages ?? undefined;
+  }
+  return job.metadata.stages;
 }
 
 function titleIdFor(jobId: string): string {
@@ -122,6 +139,14 @@ function JobTypeSummary({ entry, job }: { entry: JobQueueEntry; job: AnyJobRespo
   if (!job) {
     return <DetailList items={items} />;
   }
+  if (isAudioJob(job)) {
+    items.push({ label: "Denoise", value: denoiseLabel(job.denoise) });
+    items.push({ label: "Restore", value: restoreLabel(job.restore) });
+    if (job.device) {
+      items.push({ label: "Device", value: job.device });
+    }
+    return <DetailList items={items} />;
+  }
   items.push({ label: "Model", value: job.modelName });
   if (job.device) {
     items.push({ label: "Device", value: job.device });
@@ -175,7 +200,7 @@ function stepTextClassName(state: "done" | "active" | "pending"): string {
 }
 
 function Stepper({ job }: { job: AnyJobResponse | undefined }) {
-  const steps = deriveStepper(job?.metadata.stages);
+  const steps = deriveStepper(resolveStages(job));
   if (steps.length === 0) {
     return null;
   }
@@ -212,8 +237,11 @@ function ProgressSection({ job, monotonicProgressPct }: { job: AnyJobResponse | 
 }
 
 function FramesReadout({ job }: { job: AnyJobResponse | undefined }) {
-  const framesDone = job?.metadata.framesDone;
-  const framesTotal = resolveFramesDenominator(job?.metadata);
+  if (!job || isAudioJob(job)) {
+    return null;
+  }
+  const framesDone = job.metadata.framesDone;
+  const framesTotal = resolveFramesDenominator(job.metadata);
   if (!areFramesReportable(framesDone, framesTotal)) {
     return null;
   }

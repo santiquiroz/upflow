@@ -20,4 +20,8 @@ describe("jobKindLabel", () => {
   it("labels a video job", () => {
     expect(jobKindLabel("video")).toBe("Video");
   });
+
+  it("labels an audio job", () => {
+    expect(jobKindLabel("audio")).toBe("Audio");
+  });
 });

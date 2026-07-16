@@ -5,6 +5,7 @@ import { AccordionSection } from "../../components/AccordionSection";
 import { DevicePicker } from "../../components/DevicePicker";
 import { JobCard } from "../../components/JobCard";
 import { ModelPicker } from "../../components/ModelPicker";
+import { useAudioCapabilities } from "../../hooks/useAudioJob";
 import { useVideoJob, type VideoJobPhase } from "../../hooks/useVideoJob";
 import { getDevices, getModels } from "../../lib/api";
 import type { DeviceInfoResponse, DevicesResponse, ModelResponse, VideoProfileResponse } from "../../lib/apiTypes";
@@ -243,12 +244,15 @@ export function VideoPanel() {
   const [keepAudio, setKeepAudio] = useState(true);
   const [fpsBoost, setFpsBoost] = useState<FpsBoostValue>({ fpsMultiplier: 1, targetFps: null });
   const [audioEnhance, setAudioEnhance] = useState<string | null>(null);
+  const [audioRestore, setAudioRestore] = useState<string | null>(null);
 
   const modelsQuery = useQuery({ queryKey: ["models"], queryFn: getModels });
   const devicesQuery = useQuery({ queryKey: ["devices"], queryFn: getDevices });
+  const capabilitiesQuery = useAudioCapabilities();
   const { phase, job, errorMessage, submit, reset } = useVideoJob();
 
   const requiresGpu = resolveRequiresGpu(model);
+  const restoreAvailable = capabilitiesQuery.data?.restoreAvailable ?? false;
 
   // Only re-applies the profile's default model the first time a given profile
   // becomes selected (including the async case where modelsQuery resolves after
@@ -295,6 +299,7 @@ export function VideoPanel() {
     setKeepAudio(nextProfile.keepAudio);
     if (!nextProfile.keepAudio) {
       setAudioEnhance(null);
+      setAudioRestore(null);
     }
     setFpsBoost({ fpsMultiplier: 1, targetFps: null });
   }
@@ -303,6 +308,7 @@ export function VideoPanel() {
     setKeepAudio(checked);
     if (!checked) {
       setAudioEnhance(null);
+      setAudioRestore(null);
     }
   }
 
@@ -324,6 +330,7 @@ export function VideoPanel() {
       fpsMultiplier: fpsBoost.fpsMultiplier,
       targetFps: fpsBoost.targetFps,
       audioEnhance,
+      audioRestore: keepAudio && restoreAvailable ? audioRestore : null,
     });
   }
 
@@ -372,6 +379,17 @@ export function VideoPanel() {
               Keep original audio
             </label>
             <AudioEnhanceControls value={audioEnhance} onChange={setAudioEnhance} keepAudio={keepAudio} />
+            {keepAudio && restoreAvailable && (
+              <label className="flex items-center gap-2 text-sm text-text">
+                <input
+                  type="checkbox"
+                  checked={audioRestore === "apollo"}
+                  onChange={(event) => setAudioRestore(event.target.checked ? "apollo" : null)}
+                  className="h-3.5 w-3.5 accent-accent"
+                />
+                Restore compression (Apollo — experimental)
+              </label>
+            )}
           </div>
         </AccordionSection>
         <AccordionSection

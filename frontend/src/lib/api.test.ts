@@ -196,6 +196,7 @@ describe("createVideoJob", () => {
       fpsMultiplier: 1,
       targetFps: null,
       audioEnhance: null,
+      audioRestore: null,
       ...overrides,
     };
   }
@@ -276,6 +277,7 @@ describe("getVideoJob", () => {
       fpsMultiplier: 1,
       targetFps: null,
       audioEnhance: null,
+      audioRestore: null,
       modelId: "realesrgan-x4plus",
       device: "dml:0",
       createdAt: "2026-01-01T00:00:00Z",

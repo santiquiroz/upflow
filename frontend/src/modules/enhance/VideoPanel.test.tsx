@@ -11,6 +11,7 @@ import type {
   VideoJobResponse,
   VideoProfileResponse,
 } from "../../lib/apiTypes";
+import * as audioService from "../../services/audio";
 import { VideoPanel } from "./VideoPanel";
 
 vi.mock("../../lib/api", async (importOriginal) => {
@@ -23,6 +24,11 @@ vi.mock("../../lib/api", async (importOriginal) => {
     createVideoJob: vi.fn(),
     getVideoJob: vi.fn(),
   };
+});
+
+vi.mock("../../services/audio", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../services/audio")>();
+  return { ...actual, fetchAudioCapabilities: vi.fn() };
 });
 
 const GENERAL_PROFILE: VideoProfileResponse = {
@@ -103,10 +109,14 @@ const ENGINE_INFO: EngineInfoResponse = {
   ffmpegAvailable: true,
 };
 
-function renderPanel(devices: DevicesResponse = DEVICES) {
+function renderPanel(devices: DevicesResponse = DEVICES, restoreAvailable = false) {
   vi.mocked(api.getModels).mockResolvedValue(MODELS);
   vi.mocked(api.getDevices).mockResolvedValue(devices);
   vi.mocked(api.getEngineInfo).mockResolvedValue(ENGINE_INFO);
+  vi.mocked(audioService.fetchAudioCapabilities).mockResolvedValue({
+    denoiseModes: ["deepfilter", "rnnoise"],
+    restoreAvailable,
+  });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   function Wrapper({ children }: { children: ReactNode }) {
     return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
@@ -135,6 +145,7 @@ afterEach(() => {
   vi.mocked(api.getEngineInfo).mockReset();
   vi.mocked(api.createVideoJob).mockReset();
   vi.mocked(api.getVideoJob).mockReset();
+  vi.mocked(audioService.fetchAudioCapabilities).mockReset();
 });
 
 describe("VideoPanel", () => {
@@ -281,6 +292,7 @@ describe("VideoPanel", () => {
       fpsMultiplier: 1,
       targetFps: "60000/1001",
       audioEnhance: null,
+      audioRestore: null,
       modelId: "realesrgan-x4plus",
       device: "dml:0",
       createdAt: "2026-01-01T00:00:00Z",
@@ -338,6 +350,7 @@ describe("VideoPanel", () => {
       fpsMultiplier: 1,
       targetFps: null,
       audioEnhance: null,
+      audioRestore: null,
       modelId: "realesrgan-x4plus",
       device: "auto",
       createdAt: "2026-01-01T00:00:00Z",
@@ -364,6 +377,68 @@ describe("VideoPanel", () => {
     await waitFor(() => expect(vi.mocked(api.createVideoJob)).toHaveBeenCalled());
     expect(vi.mocked(api.createVideoJob).mock.calls[0][0]).toEqual(
       expect.objectContaining({ device: "auto" }),
+    );
+  });
+
+  it("hides the Apollo restore control when restore is unavailable", async () => {
+    renderPanel(DEVICES, false);
+    await selectFile();
+    fireEvent.click(await screen.findByRole("radio", { name: /General Balanced 4x/ }));
+    openSection("Audio");
+
+    await screen.findByRole("checkbox", { name: /keep original audio/i });
+    expect(screen.queryByRole("checkbox", { name: /restore compression/i })).not.toBeInTheDocument();
+  });
+
+  it("shows the Apollo restore control with keep_audio + restore available and sends audio_restore on submit", async () => {
+    const createResponse: CreateJobResponse = {
+      jobId: "vid-3",
+      status: "queued",
+      statusUrl: "/api/v1/video/jobs/vid-3",
+      downloadUrl: null,
+    };
+    vi.mocked(api.createVideoJob).mockResolvedValue(createResponse);
+    vi.mocked(api.getVideoJob).mockResolvedValue({
+      jobId: "vid-3",
+      status: "queued",
+      originalFilename: "clip.mp4",
+      modelName: "realesrgan-x4plus",
+      scale: 4,
+      outputContainer: "mp4",
+      videoCodec: "libx264",
+      videoPreset: "medium",
+      crf: 18,
+      keepAudio: true,
+      fpsMultiplier: 1,
+      targetFps: null,
+      audioEnhance: null,
+      audioRestore: "apollo",
+      modelId: "realesrgan-x4plus",
+      device: "dml:0",
+      createdAt: "2026-01-01T00:00:00Z",
+      startedAt: null,
+      finishedAt: null,
+      error: null,
+      metadata: {},
+      progressPct: null,
+      downloadUrl: null,
+    });
+
+    renderPanel(DEVICES, true);
+    await selectFile();
+    fireEvent.click(await screen.findByRole("radio", { name: /General Balanced 4x/ }));
+    openSection("Audio");
+
+    const restoreToggle = await screen.findByRole("checkbox", { name: /restore compression/i });
+    fireEvent.click(restoreToggle);
+
+    const submitButton = await screen.findByRole("button", { name: /upscale video/i });
+    await waitFor(() => expect(submitButton).not.toBeDisabled());
+    fireEvent.click(submitButton);
+
+    await waitFor(() => expect(vi.mocked(api.createVideoJob)).toHaveBeenCalled());
+    expect(vi.mocked(api.createVideoJob).mock.calls[0][0]).toEqual(
+      expect.objectContaining({ audioRestore: "apollo" }),
     );
   });
 
