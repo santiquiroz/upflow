@@ -3,15 +3,15 @@ import { ArrowUpRight, CircleDashed, Zap } from "lucide-react";
 const ROADMAP_URL = "https://github.com/santiquiroz/upflow/blob/master/docs/REALTIME_MODULE.md";
 
 const MVP_HIGHLIGHTS: readonly string[] = [
-  "Overlay de super-resolución en vivo sobre juegos o video, vía un proceso helper nativo separado (fork de Magpie).",
-  "Reutiliza los mismos modelos ONNX instalados en Models — sin catálogo aparte.",
-  "Shaders Anime4K y modelos compactos (RTMoSR, Compact-ESRGAN) pensados para un presupuesto de 8–16 ms por frame.",
+  "Live super-resolution overlay for games or video, via a separate native helper process (a fork of Magpie).",
+  "Reuses the same ONNX models installed in Models — no separate catalog.",
+  "Anime4K shaders and compact models (RTMoSR, Compact-ESRGAN) designed for an 8–16 ms per-frame budget.",
 ];
 
 const NOT_VIABLE_YET: readonly string[] = [
-  "Frame generation open-source competitivo con Lossless Scaling en Windows.",
-  "AFMF de AMD orquestado desde una app externa — es un toggle de driver sin API pública.",
-  "FidelityFX Frame Interpolation sin motion vectors provistos por el motor del juego.",
+  "An open-source frame generation option competitive with Lossless Scaling on Windows.",
+  "AMD AFMF orchestrated from an external app — it's a driver-level toggle with no public API.",
+  "FidelityFX Frame Interpolation without motion vectors supplied by the game engine.",
 ];
 
 interface RoadmapPhaseInfo {
@@ -24,17 +24,17 @@ const ROADMAP_PHASES: readonly RoadmapPhaseInfo[] = [
   {
     phase: "7.1",
     label: "MVP overlay",
-    description: "Fork/vendor de Magpie, overlay solo-shader/ONNX, control desde Upflow.",
+    description: "Fork/vendor Magpie, shader/ONNX-only overlay, controlled from Upflow.",
   },
   {
     phase: "7.2",
-    label: "Perfiles y hotkeys",
-    description: "Perfiles por juego/ventana, hotkeys, selección de modelo y dispositivo.",
+    label: "Profiles and hotkeys",
+    description: "Per-game/window profiles, hotkeys, model and device selection.",
   },
   {
     phase: "7.3",
-    label: "Frame generation (condicional)",
-    description: "Solo si cambia el panorama open-source de Windows.",
+    label: "Frame generation (conditional)",
+    description: "Only if the Windows open-source landscape changes.",
   },
 ];
 
@@ -86,29 +86,29 @@ export function RealtimePage() {
         <div>
           <h1 className="font-heading text-2xl font-semibold text-text">Realtime</h1>
           <p className="mt-1 text-sm text-text-dim">
-            Overlay de reescalado en tiempo real para juegos y video — todavía en diseño.
+            Real-time upscaling overlay for games and video — still in design.
           </p>
         </div>
       </div>
 
       <div role="status" className="rounded border border-border bg-surface p-4">
         <p className="text-sm text-warn">
-          Próximamente. Este módulo aún no lanza, configura ni controla ningún proceso — lo que ves aquí es solo la
-          visión de diseño.
+          Coming soon. This module doesn't launch, configure, or control any process yet — what you see here is
+          only the design vision.
         </p>
       </div>
 
       <div className="grid grid-cols-2 gap-4 max-[900px]:grid-cols-1">
         <div className="flex flex-col gap-4 rounded border border-border bg-surface p-4">
-          <HighlightList title="MVP (Fase 7.1)" items={MVP_HIGHLIGHTS} toneClassName="text-ok" />
+          <HighlightList title="MVP (Phase 7.1)" items={MVP_HIGHLIGHTS} toneClassName="text-ok" />
         </div>
         <div className="flex flex-col gap-4 rounded border border-border bg-surface p-4">
-          <HighlightList title="No viable todavía" items={NOT_VIABLE_YET} toneClassName="text-danger" />
+          <HighlightList title="Not viable yet" items={NOT_VIABLE_YET} toneClassName="text-danger" />
         </div>
       </div>
 
       <div className="flex flex-col gap-3 rounded border border-border bg-surface p-4">
-        <h2 className="font-heading text-xs font-semibold uppercase tracking-wide text-text-dim">Fases</h2>
+        <h2 className="font-heading text-xs font-semibold uppercase tracking-wide text-text-dim">Phases</h2>
         <ul className="flex flex-col gap-2">
           {ROADMAP_PHASES.map((phaseInfo) => (
             <RoadmapPhaseRow key={phaseInfo.phase} {...phaseInfo} />
@@ -122,7 +122,7 @@ export function RealtimePage() {
         rel="noreferrer"
         className="inline-flex w-fit items-center gap-1.5 text-sm text-accent transition-colors duration-fast hover:text-accent-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
       >
-        Ver la visión completa del módulo
+        View the module's full design vision
         <ArrowUpRight aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />
       </a>
     </div>
