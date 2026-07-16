@@ -1,4 +1,11 @@
-$ErrorActionPreference = 'Stop'
+# 'Continue', NO 'Stop': el launcher maneja errores con checks manuales de
+# $LASTEXITCODE + throw explicitos en cada llamada nativa. Con 'Stop',
+# Windows PowerShell convierte CUALQUIER escritura a stderr de un comando
+# nativo en un error terminante — incluso con 2>$null — asi que el probe
+# esperado-a-fallar `python -c "import uvicorn"` (falla a proposito en una
+# instalacion fresca, antes de instalar deps) crasheaba el arranque con un
+# "Traceback (most recent call last):" en vez de devolver $LASTEXITCODE=1.
+$ErrorActionPreference = 'Continue'
 
 # Resolved against the script's own location, so the launcher works no
 # matter what directory it was double-clicked or invoked from.
