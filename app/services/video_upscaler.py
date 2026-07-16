@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 import shutil
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 from app.config import Settings
@@ -19,9 +22,19 @@ from app.services.media_tools import (
 )
 from app.services.model_registry import ModelKind, ModelRegistry
 from app.services.process_runner import run_guarded_process
-from app.services.progress import advance_video_stage, complete_video_stages, resolve_frames_total
+from app.services.progress import (
+    advance_video_stage,
+    apply_stage_transition,
+    build_video_stages,
+    complete_video_stages,
+    compute_progress,
+    frame_stage_fraction,
+    resolve_frames_total,
+)
 
 logger = logging.getLogger(__name__)
+
+FRAME_POLL_INTERVAL_SECONDS = 1.0
 
 
 class VideoUpscaler:
@@ -34,6 +47,7 @@ class VideoUpscaler:
         audio_enhancers: dict[str, AudioEnhancer] | None = None,
         onnx_engine: OnnxUpscaler | None = None,
         model_registry: ModelRegistry | None = None,
+        frame_poll_interval_seconds: float = FRAME_POLL_INTERVAL_SECONDS,
     ) -> None:
         self.settings = settings
         self.engine = engine
@@ -42,6 +56,7 @@ class VideoUpscaler:
         self.audio_enhancers = audio_enhancers or {}
         self.onnx_engine = onnx_engine
         self.model_registry = model_registry
+        self.frame_poll_interval_seconds = frame_poll_interval_seconds
 
     def available(self) -> bool:
         return self.engine.available() and self.media_tools.available()
@@ -89,19 +104,20 @@ class VideoUpscaler:
         job.metadata["framesTotal"] = resolve_frames_total(probe, video_stream, fps)
 
         advance_video_stage(job, "extracting_frames")
-        await self._run_process(
-            [
-                str(self.settings.ffmpeg_binary_path),
-                "-y",
-                "-i",
-                str(job.source_path),
-                "-fps_mode",
-                "passthrough",
-                "-threads",
-                str(self.settings.ffmpeg_decode_threads),
-                str(frames_in / "%08d.png"),
-            ]
-        )
+        async with self._track_frame_progress(job, frames_in, "extracting_frames"):
+            await self._run_process(
+                [
+                    str(self.settings.ffmpeg_binary_path),
+                    "-y",
+                    "-i",
+                    str(job.source_path),
+                    "-fps_mode",
+                    "passthrough",
+                    "-threads",
+                    str(self.settings.ffmpeg_decode_threads),
+                    str(frames_in / "%08d.png"),
+                ]
+            )
 
         audio_mux_path: Path | None = None
         audio_codec_args: list[str] = []
@@ -112,7 +128,8 @@ class VideoUpscaler:
             job.metadata["audioEnhanced"] = "skipped_no_audio"
 
         advance_video_stage(job, "upscaling_frames")
-        await self._upscale_frames(job, frames_in, frames_out)
+        async with self._track_frame_progress(job, frames_out, "upscaling_frames"):
+            await self._upscale_frames(job, frames_in, frames_out)
 
         encode_frames_dir, encode_fps = await self._maybe_interpolate(
             job, frames_out, fps, fps_multiplier, job.target_fps
@@ -281,14 +298,15 @@ class VideoUpscaler:
         frames_interp = frames_out.parent / "frames-interp"
         source_frame_count = self._count_frames(frames_out)
 
-        if target_fps is not None:
-            return await self._interpolate_to_target_fps(
-                frames_out, frames_interp, source_frame_count, fps, target_fps
-            )
+        async with self._track_frame_progress(job, frames_interp, "interpolating_frames"):
+            if target_fps is not None:
+                return await self._interpolate_to_target_fps(
+                    frames_out, frames_interp, source_frame_count, fps, target_fps
+                )
 
-        return await self._interpolate_by_multiplier(
-            frames_out, frames_interp, source_frame_count, fps, fps_multiplier
-        )
+            return await self._interpolate_by_multiplier(
+                frames_out, frames_interp, source_frame_count, fps, fps_multiplier
+            )
 
     @staticmethod
     def _interpolation_requested(fps_multiplier: int, target_fps: str | None) -> bool:
@@ -324,7 +342,50 @@ class VideoUpscaler:
 
     @staticmethod
     def _count_frames(directory: Path) -> int:
+        # Poller may start tracking before the stage creates its output dir
+        # (e.g. frames-interp only appears once the RIFE engine runs).
+        if not directory.exists():
+            return 0
         return sum(1 for _ in directory.glob("*.png"))
+
+    @contextlib.asynccontextmanager
+    async def _track_frame_progress(
+        self, job: VideoUpscaleJob, output_dir: Path, stage_key: str
+    ) -> AsyncIterator[None]:
+        poller = asyncio.create_task(self._poll_frame_progress(job, output_dir, stage_key))
+        try:
+            yield
+        finally:
+            await self._stop_frame_poller(poller)
+            # Final authoritative count so framesDone reaches the true total
+            # even if the stage finished between two poll ticks.
+            await self._refresh_frame_progress(job, output_dir, stage_key)
+
+    @staticmethod
+    async def _stop_frame_poller(poller: asyncio.Task[None]) -> None:
+        poller.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await poller
+
+    async def _poll_frame_progress(self, job: VideoUpscaleJob, output_dir: Path, stage_key: str) -> None:
+        while True:
+            await asyncio.sleep(self.frame_poll_interval_seconds)
+            await self._refresh_frame_progress(job, output_dir, stage_key)
+
+    async def _refresh_frame_progress(self, job: VideoUpscaleJob, output_dir: Path, stage_key: str) -> None:
+        try:
+            frames_done = await asyncio.to_thread(self._count_frames, output_dir)
+        except Exception:  # noqa: BLE001
+            logger.exception("Frame progress poll failed for stage %s in %s", stage_key, output_dir)
+            return
+        self._apply_frame_progress(job, stage_key, frames_done)
+
+    def _apply_frame_progress(self, job: VideoUpscaleJob, stage_key: str, frames_done: int) -> None:
+        job.metadata["framesDone"] = max(int(job.metadata.get("framesDone") or 0), frames_done)
+        stages = apply_stage_transition(build_video_stages(job), stage_key)
+        fraction = frame_stage_fraction(job.metadata["framesDone"], job.metadata.get("framesTotal"))
+        progress = compute_progress(stages, current_fraction=fraction)
+        job.metadata["progress"] = max(float(job.metadata.get("progress") or 0.0), progress)
 
     @staticmethod
     def _is_non_empty_file(path: Path) -> bool:

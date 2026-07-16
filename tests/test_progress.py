@@ -663,3 +663,186 @@ def test_video_job_to_response_reaches_full_progress_on_completion(tmp_path: Pat
 
     assert response.progress_pct == pytest.approx(100.0)
     assert response.status != JobStatus.completed  # status is independent of stage bookkeeping
+
+
+# ---------------------------------------------------------------------------
+# SP5 Task 2 - live frame poller: _track_frame_progress advances framesDone
+# and progress while a frame stage (extract/upscale/interpolate) is running.
+# ---------------------------------------------------------------------------
+
+
+def make_tracking_upscaler(tmp_path: Path, poll_interval: float = 0.01) -> VideoUpscaler:
+    settings = make_settings(tmp_path)
+    StorageService(settings)
+    return VideoUpscaler(
+        settings, FakeVideoEngine(), FakeMediaTools(), frame_poll_interval_seconds=poll_interval
+    )
+
+
+async def write_frames_incrementally(directory: Path, count: int, delay: float) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    for index in range(count):
+        (directory / f"{index:08d}.png").write_bytes(b"frame")
+        await asyncio.sleep(delay)
+
+
+async def test_track_frame_progress_reports_increasing_frames_done_and_monotonic_progress(
+    tmp_path: Path,
+) -> None:
+    upscaler = make_tracking_upscaler(tmp_path)
+    job = make_video_job(tmp_path / "clip.mp4")
+    job.metadata["framesTotal"] = 8
+    advance_video_stage(job, "extracting_frames")
+    output_dir = tmp_path / "frames-in"
+
+    snapshots: list[tuple[int, float]] = []
+    original_apply = upscaler._apply_frame_progress
+
+    def spying_apply(job_arg: VideoUpscaleJob, stage_key: str, frames_done: int) -> None:
+        original_apply(job_arg, stage_key, frames_done)
+        snapshots.append((job_arg.metadata["framesDone"], job_arg.metadata["progress"]))
+
+    upscaler._apply_frame_progress = spying_apply  # type: ignore[method-assign]
+
+    async with upscaler._track_frame_progress(job, output_dir, "extracting_frames"):
+        await write_frames_incrementally(output_dir, count=8, delay=0.03)
+
+    frames_done_values = [value for value, _ in snapshots]
+    progress_values = [value for _, value in snapshots]
+
+    assert len(snapshots) >= 2, "poller must tick at least once while the stage is still running"
+    assert frames_done_values == sorted(frames_done_values)
+    assert progress_values == sorted(progress_values)
+    assert job.metadata["framesDone"] == 8
+
+
+async def test_track_frame_progress_stage_progress_stays_within_active_stage_band(tmp_path: Path) -> None:
+    upscaler = make_tracking_upscaler(tmp_path)
+    job = make_video_job(tmp_path / "clip.mp4")
+    job.metadata["framesTotal"] = 4
+    advance_video_stage(job, "extracting_frames")
+    stage_floor = job.metadata["progress"]
+    stages = build_video_stages(job)
+    extracting_weight = next(stage.weight for stage in stages if stage.key == "extracting_frames")
+    output_dir = tmp_path / "frames-in"
+
+    async with upscaler._track_frame_progress(job, output_dir, "extracting_frames"):
+        await write_frames_incrementally(output_dir, count=4, delay=0.03)
+
+    assert job.metadata["progress"] == pytest.approx(stage_floor + extracting_weight)
+
+
+async def test_track_frame_progress_honest_floor_when_frames_total_unknown(tmp_path: Path) -> None:
+    upscaler = make_tracking_upscaler(tmp_path)
+    job = make_video_job(tmp_path / "clip.mp4")
+    job.metadata["framesTotal"] = None
+    advance_video_stage(job, "extracting_frames")
+    stage_floor = job.metadata["progress"]
+    output_dir = tmp_path / "frames-in"
+
+    async with upscaler._track_frame_progress(job, output_dir, "extracting_frames"):
+        await write_frames_incrementally(output_dir, count=3, delay=0.03)
+
+    assert job.metadata["framesDone"] == 3
+    assert job.metadata["progress"] == pytest.approx(stage_floor)
+
+
+async def test_track_frame_progress_cleans_up_poller_and_does_not_mask_stage_error(tmp_path: Path) -> None:
+    upscaler = make_tracking_upscaler(tmp_path)
+    job = make_video_job(tmp_path / "clip.mp4")
+    job.metadata["framesTotal"] = 4
+    advance_video_stage(job, "extracting_frames")
+    output_dir = tmp_path / "frames-in"
+
+    tasks_before = asyncio.all_tasks()
+
+    with pytest.raises(RuntimeError, match="stage exploded"):
+        async with upscaler._track_frame_progress(job, output_dir, "extracting_frames"):
+            await asyncio.sleep(0.03)
+            raise RuntimeError("stage exploded")
+
+    assert asyncio.all_tasks() == tasks_before
+
+
+async def test_track_frame_progress_swallows_count_errors_without_crashing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    upscaler = make_tracking_upscaler(tmp_path)
+    job = make_video_job(tmp_path / "clip.mp4")
+    job.metadata["framesTotal"] = 4
+    advance_video_stage(job, "extracting_frames")
+    output_dir = tmp_path / "frames-in"
+
+    def broken_count(_directory: Path) -> int:
+        raise OSError("disk hiccup")
+
+    monkeypatch.setattr(upscaler, "_count_frames", broken_count)
+
+    async with upscaler._track_frame_progress(job, output_dir, "extracting_frames"):
+        await asyncio.sleep(0.05)
+
+    assert job.metadata["framesDone"] == 0
+
+
+class LiveFrameVideoUpscaler(VideoUpscaler):
+    """Fakes _run_process with real async delays so the live poller has time
+    to tick mid-stage; proves the pipeline actually wraps the three frame
+    stages with the tracker instead of just being covered by direct unit
+    tests against _track_frame_progress."""
+
+    async def _run_process(self, command: list[str]) -> None:
+        if "-fps_mode" in command:
+            await write_frames_incrementally(Path(command[-1]).parent, count=4, delay=0.03)
+        elif command[0] == str(self.settings.engine_binary_path):
+            frames_out_dir = Path(command[command.index("-o") + 1])
+            await write_frames_incrementally(frames_out_dir, count=4, delay=0.03)
+        elif "-framerate" in command:
+            output_path = Path(command[-1])
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(b"fake-output-video")
+
+
+class LiveFrameRifeEngine:
+    async def run(
+        self,
+        frames_in: Path,
+        frames_out: Path,
+        source_frame_count: int,
+        multiplier: int = 1,
+        *,
+        target_frame_count: int | None = None,
+    ) -> Path:
+        count = target_frame_count if target_frame_count is not None else source_frame_count * multiplier
+        await write_frames_incrementally(frames_out, count=count, delay=0.03)
+        return frames_out
+
+
+async def test_pipeline_wraps_all_three_frame_stages_with_live_poller(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    StorageService(settings)
+    upscaler = LiveFrameVideoUpscaler(
+        settings,
+        FakeVideoEngine(),
+        FakeMediaTools(),
+        LiveFrameRifeEngine(),
+        frame_poll_interval_seconds=0.01,
+    )
+    source = upscaler.settings.uploads_path / "clip.mp4"
+    source.write_bytes(b"fake-video-bytes")
+    job = make_video_job(source, fps_multiplier=2)
+
+    stage_snapshots: list[tuple[str, int]] = []
+    original_apply = upscaler._apply_frame_progress
+
+    def spying_apply(job_arg: VideoUpscaleJob, stage_key: str, frames_done: int) -> None:
+        original_apply(job_arg, stage_key, frames_done)
+        stage_snapshots.append((stage_key, job_arg.metadata["framesDone"]))
+
+    upscaler._apply_frame_progress = spying_apply  # type: ignore[method-assign]
+
+    await upscaler.run(job, fps_multiplier=2)
+
+    observed_stages = {stage_key for stage_key, frames_done in stage_snapshots if frames_done > 0}
+    assert observed_stages == {"extracting_frames", "upscaling_frames", "interpolating_frames"}
+    assert job.metadata["progress"] == pytest.approx(1.0)
+    assert job.metadata["stage"] == "completed"

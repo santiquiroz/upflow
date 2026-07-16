@@ -145,6 +145,14 @@ def resolve_frames_total(probe: dict[str, Any], video_stream: dict[str, Any], fp
     return round(duration * float(fps_fraction))
 
 
+def frame_stage_fraction(frames_done: int, frames_total: int | None) -> float:
+    # framesTotal is None on VFR/unknown sources -- no honest fraction to report,
+    # compute_progress then keeps the active stage at its floor (no faked ETA).
+    if not frames_total:
+        return 0.0
+    return frames_done / frames_total
+
+
 def _write_stage_metadata(
     job: UpscaleJob | VideoUpscaleJob,
     stages: list[Stage],
