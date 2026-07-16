@@ -4,7 +4,13 @@ import type { JobQueueEntry } from "../hooks/useJobQueue";
 import type { JobResponse, VideoJobResponse } from "../lib/apiTypes";
 import { estimateEta, formatEta, type EtaSample } from "../lib/eta";
 import { formatFps } from "../lib/formatFps";
-import { areFramesReportable, deriveStepper, isProgressDeterminate, toMonotonicProgressPct } from "../lib/jobProgress";
+import {
+  areFramesReportable,
+  deriveStepper,
+  isProgressDeterminate,
+  resolveFramesDenominator,
+  toMonotonicProgressPct,
+} from "../lib/jobProgress";
 import { jobKindLabel } from "../lib/jobStatus";
 import { DeterminateProgressBar } from "./DeterminateProgressBar";
 import { IndeterminateProgressBar } from "./IndeterminateProgressBar";
@@ -207,13 +213,16 @@ function ProgressSection({ job, monotonicProgressPct }: { job: AnyJobResponse | 
 
 function FramesReadout({ job }: { job: AnyJobResponse | undefined }) {
   const framesDone = job?.metadata.framesDone;
-  const framesTotal = job?.metadata.framesTotal;
+  const framesTotal = resolveFramesDenominator(job?.metadata);
   if (!areFramesReportable(framesDone, framesTotal)) {
     return null;
   }
   return (
-    <p className="font-mono-tabular text-xs text-text-dim">
-      {framesDone} / {framesTotal} frames
+    <p className="text-xs text-text-dim">
+      <span className="font-mono-tabular">{framesDone}</span>
+      {" / "}
+      <span className="font-mono-tabular">{framesTotal}</span>
+      {" frames"}
     </p>
   );
 }

@@ -1,4 +1,6 @@
-import type { JobStage, StageStatus } from "./apiTypes";
+import type { JobMetadata, JobStage, StageStatus } from "./apiTypes";
+
+const INTERPOLATION_STAGE_KEY = "interpolating_frames";
 
 export type StepIconState = "done" | "active" | "pending";
 
@@ -44,9 +46,27 @@ export function toMonotonicProgressPct(previousMax: number, candidate: number | 
   return Math.max(previousMax, candidate);
 }
 
+// During interpolating_frames the backend counts framesDone against
+// interpFramesTotal (source x multiplier, larger than the source framesTotal),
+// so dividing by framesTotal there would render an impossible "800 / 400".
+export function resolveFramesDenominator(metadata: JobMetadata | undefined): number | null | undefined {
+  if (!metadata) {
+    return undefined;
+  }
+  if (metadata.stage === INTERPOLATION_STAGE_KEY) {
+    return metadata.interpFramesTotal ?? metadata.framesTotal;
+  }
+  return metadata.framesTotal;
+}
+
 export function areFramesReportable(
   framesDone: number | null | undefined,
   framesTotal: number | null | undefined,
 ): framesTotal is number {
-  return typeof framesDone === "number" && typeof framesTotal === "number" && framesTotal > 0;
+  return (
+    typeof framesDone === "number" &&
+    typeof framesTotal === "number" &&
+    framesTotal > 0 &&
+    framesDone <= framesTotal
+  );
 }

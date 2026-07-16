@@ -109,7 +109,31 @@ describe("JobDetailModal", () => {
 
     render(<JobDetailModal entry={entry} onClose={vi.fn()} />);
 
-    expect(screen.getByText("120 / 600 frames")).toBeInTheDocument();
+    expect(screen.getByText(/frames/)).toHaveTextContent("120 / 600 frames");
+    expect(screen.getByText("120")).toHaveClass("font-mono-tabular");
+    expect(screen.getByText("600")).toHaveClass("font-mono-tabular");
+  });
+
+  it("uses interpFramesTotal as the denominator during interpolation so the ratio stays valid", () => {
+    const entry = buildEntry({
+      progressPct: 90,
+      metadata: { stage: "interpolating_frames", framesDone: 800, framesTotal: 400, interpFramesTotal: 800 },
+    });
+
+    render(<JobDetailModal entry={entry} onClose={vi.fn()} />);
+
+    expect(screen.getByText(/frames/)).toHaveTextContent("800 / 800 frames");
+  });
+
+  it("keeps using framesTotal during a normal upscaling stage", () => {
+    const entry = buildEntry({
+      progressPct: 40,
+      metadata: { stage: "upscaling_frames", framesDone: 200, framesTotal: 400, interpFramesTotal: 800 },
+    });
+
+    render(<JobDetailModal entry={entry} onClose={vi.fn()} />);
+
+    expect(screen.getByText(/frames/)).toHaveTextContent("200 / 400 frames");
   });
 
   it("omits the frames readout when framesTotal is unknown (VFR source)", () => {
@@ -117,7 +141,7 @@ describe("JobDetailModal", () => {
 
     render(<JobDetailModal entry={entry} onClose={vi.fn()} />);
 
-    expect(screen.queryByText(/frames$/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/frames/)).not.toBeInTheDocument();
   });
 
   it("shows the audio enhancement mode when configured", () => {

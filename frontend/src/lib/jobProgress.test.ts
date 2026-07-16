@@ -4,6 +4,7 @@ import {
   areFramesReportable,
   deriveStepper,
   isProgressDeterminate,
+  resolveFramesDenominator,
   toMonotonicProgressPct,
 } from "./jobProgress";
 
@@ -82,6 +83,10 @@ describe("areFramesReportable", () => {
     expect(areFramesReportable(120, 600)).toBe(true);
   });
 
+  it("is true when framesDone equals framesTotal", () => {
+    expect(areFramesReportable(600, 600)).toBe(true);
+  });
+
   it("is false when framesTotal is null (e.g. VFR source)", () => {
     expect(areFramesReportable(120, null)).toBe(false);
   });
@@ -92,5 +97,27 @@ describe("areFramesReportable", () => {
 
   it("is false when framesDone is undefined", () => {
     expect(areFramesReportable(undefined, 600)).toBe(false);
+  });
+
+  it("is false when framesDone exceeds framesTotal (never shows an impossible ratio)", () => {
+    expect(areFramesReportable(800, 400)).toBe(false);
+  });
+});
+
+describe("resolveFramesDenominator", () => {
+  it("returns undefined when metadata is absent", () => {
+    expect(resolveFramesDenominator(undefined)).toBeUndefined();
+  });
+
+  it("uses framesTotal during a non-interpolation stage", () => {
+    expect(resolveFramesDenominator({ stage: "upscaling_frames", framesTotal: 400, interpFramesTotal: 800 })).toBe(400);
+  });
+
+  it("uses interpFramesTotal during interpolating_frames", () => {
+    expect(resolveFramesDenominator({ stage: "interpolating_frames", framesTotal: 400, interpFramesTotal: 800 })).toBe(800);
+  });
+
+  it("falls back to framesTotal during interpolation when interpFramesTotal is not yet set", () => {
+    expect(resolveFramesDenominator({ stage: "interpolating_frames", framesTotal: 400 })).toBe(400);
   });
 });
