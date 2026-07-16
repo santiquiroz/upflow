@@ -990,3 +990,133 @@ async def test_pipeline_passes_target_count_as_interpolation_denominator(tmp_pat
     assert captured["upscaling_frames"] is None
     assert captured["interpolating_frames"] == 8
     assert job.metadata["interpFramesTotal"] == 8
+
+
+# ---------------------------------------------------------------------------
+# SP5 branch-review fix: framesDone is job-wide and was never reset between
+# frame stages. A stage that finishes with framesDone == framesTotal left the
+# NEXT stage starting with fraction=framesDone/framesTotal=1.0, freezing the
+# bar at that stage's ceiling (upscale, the heaviest stage, sat at ~83% the
+# whole time and frames X/Y showed "10/10"). Each frame stage must reset
+# framesDone to 0 on entry so it counts its own output honestly.
+# ---------------------------------------------------------------------------
+
+
+def _stage_floor_and_weight(job: VideoUpscaleJob, stage_key: str) -> tuple[float, float]:
+    stages = build_video_stages(job)
+    floor = compute_progress(apply_stage_transition(stages, stage_key))
+    weight = next(stage.weight for stage in stages if stage.key == stage_key)
+    return floor, weight
+
+
+async def test_frames_done_resets_on_entry_to_next_frame_stage_so_bar_does_not_freeze(
+    tmp_path: Path,
+) -> None:
+    upscaler = make_tracking_upscaler(tmp_path)
+    job = make_video_job(tmp_path / "clip.mp4")
+    job.metadata["framesTotal"] = 10
+
+    # Stage 1 (extract) runs to completion: framesDone reaches framesTotal.
+    advance_video_stage(job, "extracting_frames")
+    frames_in = tmp_path / "frames-in"
+    frames_in.mkdir()
+    for index in range(10):
+        (frames_in / f"{index:08d}.png").write_bytes(b"frame")
+    async with upscaler._track_frame_progress(job, frames_in, "extracting_frames"):
+        await asyncio.sleep(0.03)
+    assert job.metadata["framesDone"] == 10
+    extract_ceiling = job.metadata["progress"]
+
+    # Stage 2 (upscale) begins. Its floor is continuous with extract's ceiling.
+    advance_video_stage(job, "upscaling_frames")
+    upscale_floor, upscale_weight = _stage_floor_and_weight(job, "upscaling_frames")
+    assert upscale_floor == pytest.approx(extract_ceiling)
+
+    frames_out = tmp_path / "frames-out"
+    snapshots: list[tuple[int, float]] = []
+    original_apply = upscaler._apply_frame_progress
+
+    def spying_apply(
+        job_arg: VideoUpscaleJob, stage_key: str, frames_done: int, frames_total: int | None = None
+    ) -> None:
+        original_apply(job_arg, stage_key, frames_done, frames_total)
+        snapshots.append((job_arg.metadata["framesDone"], job_arg.metadata["progress"]))
+
+    upscaler._apply_frame_progress = spying_apply  # type: ignore[method-assign]
+
+    async with upscaler._track_frame_progress(job, frames_out, "upscaling_frames"):
+        # Reset happens on entry, before any upscale frame exists.
+        assert job.metadata["framesDone"] == 0
+        await write_frames_incrementally(frames_out, count=10, delay=0.02)
+
+    # The first poll tick starts near the floor with a SMALL frame count, not
+    # pinned at 10/10 and the stage ceiling (the freeze this fix removes).
+    first_done, first_progress = snapshots[0]
+    assert first_done < 10
+    assert first_progress < upscale_floor + upscale_weight
+
+    # It then climbs honestly within the upscale band, monotonically, to the ceiling.
+    progress_values = [progress for _, progress in snapshots]
+    assert progress_values == sorted(progress_values)
+    assert job.metadata["framesDone"] == 10
+    assert job.metadata["progress"] == pytest.approx(upscale_floor + upscale_weight)
+
+
+async def test_interpolation_stage_starts_at_its_floor_not_frozen_midway(tmp_path: Path) -> None:
+    upscaler = make_tracking_upscaler(tmp_path)
+    job = make_video_job(tmp_path / "clip.mp4", fps_multiplier=2)
+    job.metadata["framesTotal"] = 10
+
+    # Upscale completes with framesDone == framesTotal before interpolation.
+    advance_video_stage(job, "upscaling_frames")
+    frames_out = tmp_path / "frames-out"
+    frames_out.mkdir()
+    for index in range(10):
+        (frames_out / f"{index:08d}.png").write_bytes(b"frame")
+    async with upscaler._track_frame_progress(job, frames_out, "upscaling_frames"):
+        await asyncio.sleep(0.03)
+    assert job.metadata["framesDone"] == 10
+
+    advance_video_stage(job, "interpolating_frames")
+    interp_floor, interp_weight = _stage_floor_and_weight(job, "interpolating_frames")
+    frames_interp = tmp_path / "frames-interp"
+
+    first_progress: list[float] = []
+    async with upscaler._track_frame_progress(
+        job, frames_interp, "interpolating_frames", frames_total=20
+    ):
+        assert job.metadata["framesDone"] == 0
+        first_progress.append(job.metadata["progress"])
+        await write_frames_incrementally(frames_interp, count=20, delay=0.01)
+
+    # Interpolation begins at its floor, NOT frozen half-way through the run.
+    assert first_progress[0] == pytest.approx(interp_floor)
+    assert first_progress[0] < interp_floor + interp_weight
+    assert job.metadata["progress"] == pytest.approx(interp_floor + interp_weight)
+
+
+async def test_frames_counter_reflects_current_stage_not_previous(tmp_path: Path) -> None:
+    upscaler = make_tracking_upscaler(tmp_path)
+    job = make_video_job(tmp_path / "clip.mp4")
+    job.metadata["framesTotal"] = 10
+
+    advance_video_stage(job, "extracting_frames")
+    frames_in = tmp_path / "frames-in"
+    frames_in.mkdir()
+    for index in range(10):
+        (frames_in / f"{index:08d}.png").write_bytes(b"frame")
+    async with upscaler._track_frame_progress(job, frames_in, "extracting_frames"):
+        await asyncio.sleep(0.03)
+    assert job.metadata["framesDone"] == 10
+
+    advance_video_stage(job, "upscaling_frames")
+    frames_out = tmp_path / "frames-out"
+    async with upscaler._track_frame_progress(job, frames_out, "upscaling_frames"):
+        # On entry the counter is scoped to this stage, never the stale 10.
+        assert job.metadata["framesDone"] == 0
+        await write_frames_incrementally(frames_out, count=3, delay=0.02)
+        # Mid-stage it tracks the upscaled frames produced so far, still not 10.
+        assert job.metadata["framesDone"] < 10
+
+    # The finally-block authoritative count settles on this stage's 3 frames.
+    assert job.metadata["framesDone"] == 3

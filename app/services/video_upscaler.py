@@ -391,6 +391,13 @@ class VideoUpscaler:
     async def _track_frame_progress(
         self, job: VideoUpscaleJob, output_dir: Path, stage_key: str, frames_total: int | None = None
     ) -> AsyncIterator[None]:
+        # framesDone is job-wide but each frame stage counts ITS OWN output
+        # dir from zero. Without this reset the previous stage's final count
+        # (== its framesTotal) survives via setdefault in advance_video_stage,
+        # so the next stage's first poll reads fraction=framesDone/framesTotal=1.0
+        # and the bar freezes at that stage's ceiling. Scoping the max() to this
+        # stage keeps progress honest and live.
+        job.metadata["framesDone"] = 0
         stage_task = asyncio.current_task()
         stall_watchdog = StallWatchdog(self.frame_stall_timeout_seconds)
         poller = asyncio.create_task(
