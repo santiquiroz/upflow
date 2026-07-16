@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, NamedTuple
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile
@@ -164,6 +164,11 @@ async def resolve_request_device(device: str | None, devices: DevicesService) ->
     return devices.resolve_default(device_list)["id"]
 
 
+def _progress_pct_from_metadata(metadata: dict[str, Any]) -> float | None:
+    progress = metadata.get("progress")
+    return progress * 100 if isinstance(progress, (int, float)) else None
+
+
 def job_to_response(job: UpscaleJob) -> JobResponse:
     download_url = f"/api/v1/jobs/{job.id}/download" if job.status == JobStatus.completed else None
     return JobResponse(
@@ -179,6 +184,8 @@ def job_to_response(job: UpscaleJob) -> JobResponse:
         started_at=job.started_at,
         finished_at=job.finished_at,
         error=job.error,
+        metadata=job.metadata,
+        progress_pct=_progress_pct_from_metadata(job.metadata),
         download_url=download_url,
     )
 
@@ -206,6 +213,7 @@ def video_job_to_response(job: VideoUpscaleJob) -> VideoJobResponse:
         finished_at=job.finished_at,
         error=job.error,
         metadata=job.metadata,
+        progress_pct=_progress_pct_from_metadata(job.metadata),
         download_url=download_url,
     )
 

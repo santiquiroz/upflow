@@ -19,6 +19,7 @@ from app.services.media_tools import (
 )
 from app.services.model_registry import ModelKind, ModelRegistry
 from app.services.process_runner import run_guarded_process
+from app.services.progress import advance_video_stage, complete_video_stages, resolve_frames_total
 
 logger = logging.getLogger(__name__)
 
@@ -77,13 +78,14 @@ class VideoUpscaler:
             raise RuntimeError("No video stream found in the uploaded file")
 
         fps = str(resolve_video_fps(video_stream.get("avg_frame_rate"), video_stream.get("r_frame_rate")))
-        job.metadata["stage"] = "probing"
+        advance_video_stage(job, "probing")
         job.metadata["fps"] = fps
         job.metadata["sourceWidth"] = int(video_stream.get("width") or 0)
         job.metadata["sourceHeight"] = int(video_stream.get("height") or 0)
         job.metadata["duration"] = float(probe.get("format", {}).get("duration") or 0)
+        job.metadata["framesTotal"] = resolve_frames_total(probe, video_stream, fps)
 
-        job.metadata["stage"] = "extracting_frames"
+        advance_video_stage(job, "extracting_frames")
         await self._run_process(
             [
                 str(self.settings.ffmpeg_binary_path),
@@ -106,7 +108,7 @@ class VideoUpscaler:
         elif job.keep_audio and job.audio_enhance:
             job.metadata["audioEnhanced"] = "skipped_no_audio"
 
-        job.metadata["stage"] = "upscaling_frames"
+        advance_video_stage(job, "upscaling_frames")
         await self._upscale_frames(job, frames_in, frames_out)
 
         encode_frames_dir, encode_fps = await self._maybe_interpolate(
@@ -133,13 +135,13 @@ class VideoUpscaler:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         encode_cmd.append(str(output_path))
 
-        job.metadata["stage"] = "encoding_video"
+        advance_video_stage(job, "encoding_video")
         await self._run_process(encode_cmd)
 
         if not self._is_non_empty_file(output_path):
             raise RuntimeError("Video processing finished but no output file was produced")
 
-        job.metadata["stage"] = "completed"
+        complete_video_stages(job)
         job.metadata["outputWidth"] = job.metadata["sourceWidth"] * job.scale
         job.metadata["outputHeight"] = job.metadata["sourceHeight"] * job.scale
         return output_path
@@ -203,7 +205,7 @@ class VideoUpscaler:
         return None
 
     async def _prepare_original_audio(self, job: VideoUpscaleJob, audio_path: Path) -> tuple[Path, list[str]]:
-        job.metadata["stage"] = "extracting_audio"
+        advance_video_stage(job, "extracting_audio")
         await self._run_process(
             [
                 str(self.settings.ffmpeg_binary_path),
@@ -233,7 +235,7 @@ class VideoUpscaler:
     async def _extract_audio_wav(self, job: VideoUpscaleJob, audio_wav_path: Path) -> None:
         # DeepFilterNet requires 48kHz input; a lossless PCM extraction avoids
         # compounding lossy re-encodes before the enhancer runs.
-        job.metadata["stage"] = "extracting_audio"
+        advance_video_stage(job, "extracting_audio")
         await self._run_process(
             [
                 str(self.settings.ffmpeg_binary_path),
@@ -255,7 +257,7 @@ class VideoUpscaler:
             raise RuntimeError(
                 f"Audio enhance mode {job.audio_enhance!r} requested but no engine is configured"
             )
-        job.metadata["stage"] = "enhancing_audio"
+        advance_video_stage(job, "enhancing_audio")
         await enhancer.run(input_wav, output_wav)
 
     async def _maybe_interpolate(
@@ -272,7 +274,7 @@ class VideoUpscaler:
         if self.rife_engine is None:
             raise RuntimeError("Frame interpolation requested but no RIFE engine is configured")
 
-        job.metadata["stage"] = "interpolating_frames"
+        advance_video_stage(job, "interpolating_frames")
         frames_interp = frames_out.parent / "frames-interp"
         source_frame_count = self._count_frames(frames_out)
 

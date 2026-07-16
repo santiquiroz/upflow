@@ -13,6 +13,7 @@ from app.models import JobStatus, UpscaleJob, utc_now
 from app.services.devices_service import DevicesService
 from app.services.engines.base import UpscaleEngine
 from app.services.model_registry import ModelKind, ModelRegistry, ModelStatus
+from app.services.progress import advance_image_stage, complete_image_stages
 
 ALLOWED_IMAGE_FORMATS = {"PNG", "JPEG", "WEBP", "BMP"}
 
@@ -196,10 +197,12 @@ class JobManager:
             async with self.gpu_semaphore:
                 job.status = JobStatus.running
                 job.started_at = utc_now()
+                advance_image_stage(job, "upscaling")
                 try:
                     engine = self._select_engine(job)
                     job.output_path = await engine.run(job)
                     job.status = JobStatus.completed
+                    complete_image_stages(job)
                 except asyncio.CancelledError:
                     job.status = JobStatus.failed
                     job.error = "Job cancelled"

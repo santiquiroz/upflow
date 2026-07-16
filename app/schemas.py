@@ -28,6 +28,8 @@ class JobResponse(BaseModel):
     started_at: datetime | None = Field(default=None, serialization_alias="startedAt")
     finished_at: datetime | None = Field(default=None, serialization_alias="finishedAt")
     error: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    progress_pct: float | None = Field(default=None, serialization_alias="progressPct")
     download_url: str | None = Field(default=None, serialization_alias="downloadUrl")
 
 
@@ -52,6 +54,7 @@ class VideoJobResponse(BaseModel):
     finished_at: datetime | None = Field(default=None, serialization_alias="finishedAt")
     error: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    progress_pct: float | None = Field(default=None, serialization_alias="progressPct")
     download_url: str | None = Field(default=None, serialization_alias="downloadUrl")
 
 
