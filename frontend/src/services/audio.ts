@@ -1,4 +1,4 @@
-import { apiGet, apiPostForm } from "../lib/api";
+import { apiGet, apiPost, apiPostForm } from "../lib/api";
 import type { AudioCapabilities, AudioJob, CreateJobResponse } from "../lib/apiTypes";
 
 export interface CreateAudioJobParams {
@@ -29,6 +29,10 @@ export function createAudioJob(params: CreateAudioJobParams): Promise<CreateJobR
 
 export function getAudioJob(jobId: string): Promise<AudioJob> {
   return apiGet<AudioJob>(`/audio/jobs/${jobId}`);
+}
+
+export function cancelAudioJob(jobId: string): Promise<AudioJob> {
+  return apiPost<AudioJob>(`/audio/jobs/${jobId}/cancel`);
 }
 
 export function fetchAudioCapabilities(): Promise<AudioCapabilities> {

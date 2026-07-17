@@ -1,7 +1,7 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import type { CreateImageJobParams } from "../lib/api";
-import { createImageJob, getJob } from "../lib/api";
+import { cancelJob, createImageJob, getJob } from "../lib/api";
 import type { JobResponse, JobStatus } from "../lib/apiTypes";
 import { isTerminalJobStatus } from "../lib/jobStatus";
 import { jobQueueStore, type JobQueueStore } from "../lib/jobQueueStore";
@@ -15,6 +15,7 @@ export interface UseImageJobResult {
   job: JobResponse | undefined;
   errorMessage: string | null;
   submit: (params: CreateImageJobParams) => void;
+  cancel: () => void;
   reset: () => void;
 }
 
@@ -58,6 +59,7 @@ export function useImageJob(
 ): UseImageJobResult {
   const [jobId, setJobId] = useState<string | null>(null);
   const pendingFileNameRef = useRef<string>("image");
+  const queryClient = useQueryClient();
 
   const uploadMutation = useMutation({
     mutationFn: createImageJob,
@@ -85,6 +87,17 @@ export function useImageJob(
     uploadMutation.mutate(params);
   }
 
+  // Best-effort: a 409 (job already finished) needs no surfaced error since the
+  // running poll is the source of truth and reconciles the status on refetch.
+  function cancel(): void {
+    if (jobId === null) {
+      return;
+    }
+    void cancelJob(jobId)
+      .then(() => queryClient.invalidateQueries({ queryKey: ["job", jobId] }))
+      .catch(() => undefined);
+  }
+
   function reset(): void {
     setJobId(null);
     uploadMutation.reset();
@@ -95,6 +108,7 @@ export function useImageJob(
     job: jobQuery.data,
     errorMessage: resolveErrorMessage(uploadMutation.error, jobQuery.error, jobQuery.data),
     submit,
+    cancel,
     reset,
   };
 }

@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle2, Clock, Download, ImageIcon, Loader2, UploadCloud } from "lucide-react";
+import { AlertTriangle, Ban, CheckCircle2, Clock, Download, ImageIcon, Loader2, UploadCloud } from "lucide-react";
 import type { AudioJob, JobResponse, VideoJobResponse } from "../lib/apiTypes";
 import { denoiseLabel, restoreLabel } from "../lib/audioLabels";
 import { formatFps } from "../lib/formatFps";
@@ -6,7 +6,7 @@ import { isProgressDeterminate } from "../lib/jobProgress";
 import { DeterminateProgressBar } from "./DeterminateProgressBar";
 import { IndeterminateProgressBar } from "./IndeterminateProgressBar";
 
-export type JobCardPhase = "idle" | "uploading" | "queued" | "running" | "completed" | "failed";
+export type JobCardPhase = "idle" | "uploading" | "queued" | "running" | "completed" | "failed" | "cancelled";
 
 type AnyJobResponse = JobResponse | VideoJobResponse | AudioJob;
 
@@ -15,6 +15,7 @@ interface JobCardProps {
   job?: AnyJobResponse | null;
   fileName?: string | null;
   errorMessage?: string | null;
+  onCancel?: () => void;
 }
 
 function isVideoJob(job: AnyJobResponse): job is VideoJobResponse {
@@ -78,7 +79,20 @@ function JobProgressBar({ label, job }: { label: string; job?: AnyJobResponse | 
   return <IndeterminateProgressBar label={label} />;
 }
 
-function QueuedState({ job }: { job?: AnyJobResponse | null }) {
+function CancelButton({ onCancel }: { onCancel: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onCancel}
+      className="inline-flex w-fit items-center gap-1.5 rounded-sm border border-danger px-2.5 py-1 text-xs font-medium text-danger transition-[background-color,color] duration-fast hover:bg-danger hover:text-bg focus-visible:outline focus-visible:outline-2 focus-visible:outline-danger"
+    >
+      <Ban aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.75} />
+      Cancel
+    </button>
+  );
+}
+
+function QueuedState({ job, onCancel }: { job?: AnyJobResponse | null; onCancel?: () => void }) {
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center gap-2 text-sm text-text">
@@ -86,11 +100,12 @@ function QueuedState({ job }: { job?: AnyJobResponse | null }) {
         <span>Queued</span>
       </div>
       <JobProgressBar label="Queued" job={job} />
+      {onCancel && <CancelButton onCancel={onCancel} />}
     </div>
   );
 }
 
-function RunningState({ job }: { job?: AnyJobResponse | null }) {
+function RunningState({ job, onCancel }: { job?: AnyJobResponse | null; onCancel?: () => void }) {
   const stage = job && isVideoJob(job) ? readStage(job) : null;
   return (
     <div className="flex flex-col gap-2">
@@ -100,6 +115,16 @@ function RunningState({ job }: { job?: AnyJobResponse | null }) {
         {stage && <span className="text-text-dim">— {humanizeStage(stage)}</span>}
       </div>
       <JobProgressBar label="Processing" job={job} />
+      {onCancel && <CancelButton onCancel={onCancel} />}
+    </div>
+  );
+}
+
+function CancelledState() {
+  return (
+    <div className="flex items-center gap-2 text-sm text-text-dim">
+      <Ban aria-hidden="true" className="h-4 w-4 shrink-0" strokeWidth={1.75} />
+      <span>Cancelled</span>
     </div>
   );
 }
@@ -226,17 +251,18 @@ function resolveDisplayPhase(phase: JobCardPhase, errorMessage?: string | null):
   return phase;
 }
 
-export function JobCard({ phase, job, fileName, errorMessage }: JobCardProps) {
+export function JobCard({ phase, job, fileName, errorMessage, onCancel }: JobCardProps) {
   const displayPhase = resolveDisplayPhase(phase, errorMessage);
 
   return (
     <div aria-live="polite" className="rounded border border-border bg-surface p-4">
       {displayPhase === "idle" && <IdleState />}
       {displayPhase === "uploading" && <UploadingState fileName={fileName} />}
-      {displayPhase === "queued" && <QueuedState job={job} />}
-      {displayPhase === "running" && <RunningState job={job} />}
+      {displayPhase === "queued" && <QueuedState job={job} onCancel={onCancel} />}
+      {displayPhase === "running" && <RunningState job={job} onCancel={onCancel} />}
       {displayPhase === "completed" && job && <CompletedState job={job} />}
       {displayPhase === "failed" && <FailedState message={resolveErrorMessage(job, errorMessage)} />}
+      {displayPhase === "cancelled" && <CancelledState />}
     </div>
   );
 }

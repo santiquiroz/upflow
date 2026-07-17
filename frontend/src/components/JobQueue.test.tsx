@@ -3,14 +3,33 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as api from "../lib/api";
-import type { JobResponse, VideoJobResponse } from "../lib/apiTypes";
+import type { AudioJob, JobResponse, VideoJobResponse } from "../lib/apiTypes";
 import { createJobQueueStore, jobQueueStore } from "../lib/jobQueueStore";
+import * as audioService from "../services/audio";
 import { JobQueue } from "./JobQueue";
 
 vi.mock("../lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/api")>();
-  return { ...actual, getJob: vi.fn(), getVideoJob: vi.fn() };
+  return { ...actual, getJob: vi.fn(), getVideoJob: vi.fn(), cancelJob: vi.fn(), cancelVideoJob: vi.fn() };
 });
+
+vi.mock("../services/audio", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/audio")>();
+  return { ...actual, getAudioJob: vi.fn(), cancelAudioJob: vi.fn() };
+});
+
+const BASE_AUDIO_JOB: AudioJob = {
+  id: "aud-1",
+  status: "running",
+  originalFilename: "voice.wav",
+  denoise: "deepfilter",
+  restore: null,
+  device: null,
+  progressPct: null,
+  stages: null,
+  error: null,
+  downloadUrl: null,
+};
 
 const BASE_IMAGE_JOB: JobResponse = {
   jobId: "img-1",
@@ -67,6 +86,10 @@ function renderQueue() {
 afterEach(() => {
   vi.mocked(api.getJob).mockReset();
   vi.mocked(api.getVideoJob).mockReset();
+  vi.mocked(api.cancelJob).mockReset();
+  vi.mocked(api.cancelVideoJob).mockReset();
+  vi.mocked(audioService.getAudioJob).mockReset();
+  vi.mocked(audioService.cancelAudioJob).mockReset();
   // JobQueue always reads the singleton jobQueueStore, so each test must
   // clear it -- otherwise jobs tracked by an earlier test would still show
   // up here since the store is a module-level singleton shared across tests
@@ -200,5 +223,59 @@ describe("JobQueue", () => {
     fireEvent.keyDown(dialog, { key: "Escape" });
 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("cancels an active image job through the image cancel endpoint", async () => {
+    vi.mocked(api.getJob).mockResolvedValue({ ...BASE_IMAGE_JOB, status: "running" });
+    vi.mocked(api.cancelJob).mockResolvedValue({ ...BASE_IMAGE_JOB, status: "cancelled" });
+    jobQueueStore.addTrackedJob({ id: "img-1", kind: "image", fileName: "photo.png", createdAt: 1 });
+
+    renderQueue();
+    await screen.findByText("photo.png");
+
+    fireEvent.click(await screen.findByRole("button", { name: /cancel photo\.png/i }));
+
+    expect(api.cancelJob).toHaveBeenCalledWith("img-1");
+    expect(api.cancelVideoJob).not.toHaveBeenCalled();
+    expect(audioService.cancelAudioJob).not.toHaveBeenCalled();
+  });
+
+  it("cancels an active video job through the video cancel endpoint", async () => {
+    vi.mocked(api.getVideoJob).mockResolvedValue(BASE_VIDEO_JOB);
+    vi.mocked(api.cancelVideoJob).mockResolvedValue({ ...BASE_VIDEO_JOB, status: "cancelled" });
+    jobQueueStore.addTrackedJob({ id: "vid-1", kind: "video", fileName: "clip.mp4", createdAt: 1 });
+
+    renderQueue();
+    await screen.findByText("clip.mp4");
+
+    fireEvent.click(await screen.findByRole("button", { name: /cancel clip\.mp4/i }));
+
+    expect(api.cancelVideoJob).toHaveBeenCalledWith("vid-1");
+    expect(api.cancelJob).not.toHaveBeenCalled();
+  });
+
+  it("cancels an active audio job through the audio cancel endpoint", async () => {
+    vi.mocked(audioService.getAudioJob).mockResolvedValue(BASE_AUDIO_JOB);
+    vi.mocked(audioService.cancelAudioJob).mockResolvedValue({ ...BASE_AUDIO_JOB, status: "cancelled" });
+    jobQueueStore.addTrackedJob({ id: "aud-1", kind: "audio", fileName: "voice.wav", createdAt: 1 });
+
+    renderQueue();
+    await screen.findByText("voice.wav");
+
+    fireEvent.click(await screen.findByRole("button", { name: /cancel voice\.wav/i }));
+
+    expect(audioService.cancelAudioJob).toHaveBeenCalledWith("aud-1");
+    expect(api.cancelJob).not.toHaveBeenCalled();
+  });
+
+  it("renders a cancelled job with its status label and no cancel control", async () => {
+    vi.mocked(api.getJob).mockResolvedValue({ ...BASE_IMAGE_JOB, status: "cancelled" });
+    jobQueueStore.addTrackedJob({ id: "img-1", kind: "image", fileName: "photo.png", createdAt: 1 });
+
+    renderQueue();
+
+    expect(await screen.findByText("Cancelled")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("button", { name: /cancel photo\.png/i })).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: /dismiss photo\.png/i })).toBeInTheDocument();
   });
 });

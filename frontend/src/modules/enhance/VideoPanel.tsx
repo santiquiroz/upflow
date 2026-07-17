@@ -249,7 +249,7 @@ export function VideoPanel() {
   const modelsQuery = useQuery({ queryKey: ["models"], queryFn: getModels });
   const devicesQuery = useQuery({ queryKey: ["devices"], queryFn: getDevices });
   const capabilitiesQuery = useAudioCapabilities();
-  const { phase, job, errorMessage, submit, reset } = useVideoJob();
+  const { phase, job, errorMessage, submit, cancel, reset } = useVideoJob();
 
   const requiresGpu = resolveRequiresGpu(model);
   const restoreAvailable = capabilitiesQuery.data?.restoreAvailable ?? false;
@@ -425,7 +425,7 @@ export function VideoPanel() {
           </button>
         </div>
       </div>
-      <JobCard phase={phase} job={job} fileName={file?.name} errorMessage={errorMessage} />
+      <JobCard phase={phase} job={job} fileName={file?.name} errorMessage={errorMessage} onCancel={cancel} />
     </div>
   );
 }

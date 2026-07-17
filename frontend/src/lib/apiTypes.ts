@@ -2,7 +2,7 @@
 // serialization_alias each Pydantic model uses on the wire, not the Python
 // snake_case attribute names.
 
-export type JobStatus = "queued" | "running" | "completed" | "failed";
+export type JobStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 
 export type StageStatus = "pending" | "active" | "done";
 

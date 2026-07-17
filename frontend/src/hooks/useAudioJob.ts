@@ -1,9 +1,15 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import type { AudioCapabilities, AudioJob, JobStatus } from "../lib/apiTypes";
 import { isTerminalJobStatus } from "../lib/jobStatus";
 import { jobQueueStore, type JobQueueStore } from "../lib/jobQueueStore";
-import { createAudioJob, fetchAudioCapabilities, getAudioJob, type CreateAudioJobParams } from "../services/audio";
+import {
+  cancelAudioJob,
+  createAudioJob,
+  fetchAudioCapabilities,
+  getAudioJob,
+  type CreateAudioJobParams,
+} from "../services/audio";
 
 export const DEFAULT_POLL_INTERVAL_MS = 1500;
 
@@ -14,6 +20,7 @@ export interface UseAudioJobResult {
   job: AudioJob | undefined;
   errorMessage: string | null;
   submit: (params: CreateAudioJobParams) => void;
+  cancel: () => void;
   reset: () => void;
 }
 
@@ -57,6 +64,7 @@ export function useAudioJob(
 ): UseAudioJobResult {
   const [jobId, setJobId] = useState<string | null>(null);
   const pendingFileNameRef = useRef<string>("audio");
+  const queryClient = useQueryClient();
 
   const uploadMutation = useMutation({
     mutationFn: createAudioJob,
@@ -84,6 +92,17 @@ export function useAudioJob(
     uploadMutation.mutate(params);
   }
 
+  // Best-effort: a 409 (job already finished) needs no surfaced error since the
+  // running poll is the source of truth and reconciles the status on refetch.
+  function cancel(): void {
+    if (jobId === null) {
+      return;
+    }
+    void cancelAudioJob(jobId)
+      .then(() => queryClient.invalidateQueries({ queryKey: ["audioJob", jobId] }))
+      .catch(() => undefined);
+  }
+
   function reset(): void {
     setJobId(null);
     uploadMutation.reset();
@@ -94,6 +113,7 @@ export function useAudioJob(
     job: jobQuery.data,
     errorMessage: resolveErrorMessage(uploadMutation.error, jobQuery.error, jobQuery.data),
     submit,
+    cancel,
     reset,
   };
 }

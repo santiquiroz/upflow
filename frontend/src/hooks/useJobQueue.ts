@@ -1,10 +1,10 @@
-import { useQueries } from "@tanstack/react-query";
+import { useQueries, useQueryClient } from "@tanstack/react-query";
 import { useSyncExternalStore } from "react";
-import { getJob, getVideoJob } from "../lib/api";
+import { cancelJob, cancelVideoJob, getJob, getVideoJob } from "../lib/api";
 import type { AudioJob, JobResponse, JobStatus, VideoJobResponse } from "../lib/apiTypes";
 import { isTerminalJobStatus } from "../lib/jobStatus";
 import { jobQueueStore, type JobQueueStore, type TrackedJob } from "../lib/jobQueueStore";
-import { getAudioJob } from "../services/audio";
+import { cancelAudioJob, getAudioJob } from "../services/audio";
 
 export const DEFAULT_QUEUE_POLL_INTERVAL_MS = 1500;
 
@@ -24,6 +24,7 @@ export interface JobQueueEntry {
 export interface UseJobQueueResult {
   entries: JobQueueEntry[];
   dismiss: (id: string) => void;
+  cancel: (id: string) => void;
   clearCompleted: () => void;
 }
 
@@ -31,6 +32,12 @@ const QUERY_KEY_BY_KIND: Record<TrackedJob["kind"], string> = {
   image: "job",
   video: "videoJob",
   audio: "audioJob",
+};
+
+const CANCEL_BY_KIND: Record<TrackedJob["kind"], (id: string) => Promise<TrackedJobResponse>> = {
+  image: cancelJob,
+  video: cancelVideoJob,
+  audio: cancelAudioJob,
 };
 
 function fetchTrackedJob(tracked: TrackedJob): Promise<TrackedJobResponse> {
@@ -79,6 +86,7 @@ export function useJobQueue(
   pollIntervalMs: number = DEFAULT_QUEUE_POLL_INTERVAL_MS,
 ): UseJobQueueResult {
   const trackedJobs = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
+  const queryClient = useQueryClient();
 
   const results = useQueries({
     queries: trackedJobs.map((tracked) => ({
@@ -97,9 +105,22 @@ export function useJobQueue(
     store.removeTrackedJob(id);
   }
 
+  // Best-effort: the server may answer 409 if the job just finished, but the
+  // running poll is the source of truth for the displayed status, so a rejected
+  // cancel needs no surfaced error -- the next refetch reconciles the state.
+  function cancel(id: string): void {
+    const tracked = trackedJobs.find((job) => job.id === id);
+    if (!tracked) {
+      return;
+    }
+    void CANCEL_BY_KIND[tracked.kind](id)
+      .then(() => queryClient.invalidateQueries({ queryKey: [QUERY_KEY_BY_KIND[tracked.kind], id] }))
+      .catch(() => undefined);
+  }
+
   function clearCompleted(): void {
     entries.filter((entry) => isTerminalJobStatus(entry.status)).forEach((entry) => store.removeTrackedJob(entry.id));
   }
 
-  return { entries, dismiss, clearCompleted };
+  return { entries, dismiss, cancel, clearCompleted };
 }

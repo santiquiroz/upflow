@@ -107,7 +107,7 @@ export function ImagePanel() {
 
   const engineQuery = useQuery({ queryKey: ["engine"], queryFn: getEngineInfo });
   const devicesQuery = useQuery({ queryKey: ["devices"], queryFn: getDevices });
-  const { phase, job, errorMessage, submit, reset } = useImageJob();
+  const { phase, job, errorMessage, submit, cancel, reset } = useImageJob();
 
   const allowedScales = engineQuery.data?.allowedScales ?? [];
   const requiresGpu = resolveRequiresGpu(model);
@@ -193,7 +193,7 @@ export function ImagePanel() {
           </button>
         </div>
       </div>
-      <JobCard phase={phase} job={job} fileName={file?.name} errorMessage={errorMessage} />
+      <JobCard phase={phase} job={job} fileName={file?.name} errorMessage={errorMessage} onCancel={cancel} />
     </div>
   );
 }

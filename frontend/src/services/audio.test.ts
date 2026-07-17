@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AudioCapabilities, AudioJob, CreateJobResponse } from "../lib/apiTypes";
-import { createAudioJob, fetchAudioCapabilities, getAudioJob } from "./audio";
+import { cancelAudioJob, createAudioJob, fetchAudioCapabilities, getAudioJob } from "./audio";
 
 function mockFetchOnce(body: unknown, init: ResponseInit = { status: 200 }) {
   const response = new Response(JSON.stringify(body), {
@@ -71,6 +71,32 @@ describe("getAudioJob", () => {
     const result = await getAudioJob("aud-1");
 
     expect(fetch).toHaveBeenCalledWith("/api/v1/audio/jobs/aud-1", expect.objectContaining({ method: "GET" }));
+    expect(result).toEqual(payload);
+  });
+});
+
+describe("cancelAudioJob", () => {
+  it("issues a POST to /api/v1/audio/jobs/{id}/cancel and returns the updated job", async () => {
+    const payload: AudioJob = {
+      id: "aud-1",
+      status: "cancelled",
+      originalFilename: "voice.wav",
+      denoise: "deepfilter",
+      restore: null,
+      device: "dml:0",
+      progressPct: null,
+      stages: null,
+      error: null,
+      downloadUrl: null,
+    };
+    mockFetchOnce(payload);
+
+    const result = await cancelAudioJob("aud-1");
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/v1/audio/jobs/aud-1/cancel",
+      expect.objectContaining({ method: "POST" }),
+    );
     expect(result).toEqual(payload);
   });
 });

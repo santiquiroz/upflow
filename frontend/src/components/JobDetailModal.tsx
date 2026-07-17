@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle2, Circle, Loader2 } from "lucide-react";
+import { AlertTriangle, Ban, CheckCircle2, Circle, Loader2 } from "lucide-react";
 import { Fragment, useEffect, useState } from "react";
 import type { JobQueueEntry } from "../hooks/useJobQueue";
 import type { AudioJob, JobResponse, JobStage, VideoJobResponse } from "../lib/apiTypes";
@@ -12,7 +12,7 @@ import {
   resolveFramesDenominator,
   toMonotonicProgressPct,
 } from "../lib/jobProgress";
-import { jobKindLabel } from "../lib/jobStatus";
+import { isCancellableJobStatus, jobKindLabel } from "../lib/jobStatus";
 import { DeterminateProgressBar } from "./DeterminateProgressBar";
 import { IndeterminateProgressBar } from "./IndeterminateProgressBar";
 import { Modal } from "./Modal";
@@ -20,6 +20,7 @@ import { Modal } from "./Modal";
 interface JobDetailModalProps {
   entry: JobQueueEntry;
   onClose: () => void;
+  onCancel?: (id: string) => void;
 }
 
 type AnyJobResponse = JobResponse | VideoJobResponse | AudioJob;
@@ -272,7 +273,44 @@ function ErrorNotice({ message }: { message: string }) {
   );
 }
 
-export function JobDetailModal({ entry, onClose }: JobDetailModalProps) {
+function CancelledNotice() {
+  return (
+    <div className="flex items-center gap-2 rounded border border-border bg-surface-2 px-3 py-2 text-sm text-text-dim">
+      <Ban aria-hidden="true" className="h-4 w-4 shrink-0" strokeWidth={1.75} />
+      <span>Cancelled</span>
+    </div>
+  );
+}
+
+function ModalActions({ entry, onClose, onCancel }: JobDetailModalProps) {
+  return (
+    <div className="ml-auto flex w-fit gap-2">
+      {isCancellableJobStatus(entry.status) && onCancel && (
+        <button
+          type="button"
+          onClick={() => onCancel(entry.id)}
+          className="inline-flex items-center gap-1.5 rounded-sm border border-danger px-3 py-1.5 text-sm text-danger transition-[background-color,color] duration-fast hover:bg-danger hover:text-bg focus-visible:outline focus-visible:outline-2 focus-visible:outline-danger"
+        >
+          <Ban aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />
+          Cancel
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={onClose}
+        className="rounded-sm border border-border bg-surface px-3 py-1.5 text-sm text-text-dim transition-[border-color,color] duration-fast hover:border-text-faint hover:text-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+      >
+        Close
+      </button>
+    </div>
+  );
+}
+
+function showsProgress(status: JobQueueEntry["status"]): boolean {
+  return status !== "failed" && status !== "cancelled";
+}
+
+export function JobDetailModal({ entry, onClose, onCancel }: JobDetailModalProps) {
   const titleId = titleIdFor(entry.id);
   const rawProgressPct = entry.job?.progressPct ?? null;
   const monotonicProgressPct = useMonotonicProgressPct(entry.id, rawProgressPct);
@@ -285,16 +323,11 @@ export function JobDetailModal({ entry, onClose }: JobDetailModalProps) {
       </h2>
       <JobTypeSummary entry={entry} job={entry.job} />
       <Stepper job={entry.job} />
-      {entry.status !== "failed" && <ProgressSection job={entry.job} monotonicProgressPct={monotonicProgressPct} />}
+      {showsProgress(entry.status) && <ProgressSection job={entry.job} monotonicProgressPct={monotonicProgressPct} />}
       {entry.status === "running" && <EtaReadout samples={etaSamples} />}
+      {entry.status === "cancelled" && <CancelledNotice />}
       {entry.errorMessage && <ErrorNotice message={entry.errorMessage} />}
-      <button
-        type="button"
-        onClick={onClose}
-        className="ml-auto w-fit rounded-sm border border-border bg-surface px-3 py-1.5 text-sm text-text-dim transition-[border-color,color] duration-fast hover:border-text-faint hover:text-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
-      >
-        Close
-      </button>
+      <ModalActions entry={entry} onClose={onClose} onCancel={onCancel} />
     </Modal>
   );
 }

@@ -122,7 +122,7 @@ export function AudioPanel() {
   const [device, setDevice] = useState<DeviceInfoResponse | null>(CPU_DEVICE);
 
   const capabilitiesQuery = useAudioCapabilities();
-  const { phase, job, errorMessage, submit, reset } = useAudioJob();
+  const { phase, job, errorMessage, submit, cancel, reset } = useAudioJob();
 
   const denoiseModes = capabilitiesQuery.data?.denoiseModes ?? [];
   const restoreAvailable = capabilitiesQuery.data?.restoreAvailable ?? false;
@@ -184,7 +184,7 @@ export function AudioPanel() {
           </button>
         </div>
       </div>
-      <JobCard phase={phase} job={job} fileName={file?.name} errorMessage={errorMessage} />
+      <JobCard phase={phase} job={job} fileName={file?.name} errorMessage={errorMessage} onCancel={cancel} />
     </div>
   );
 }

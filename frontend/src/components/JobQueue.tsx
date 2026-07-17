@@ -1,7 +1,7 @@
-import { AlertTriangle, CheckCircle2, Clock, Download, Loader2, X } from "lucide-react";
+import { AlertTriangle, Ban, CheckCircle2, Clock, Download, Loader2, X } from "lucide-react";
 import { useState } from "react";
 import { type JobQueueEntry, useJobQueue } from "../hooks/useJobQueue";
-import { isTerminalJobStatus, jobKindLabel } from "../lib/jobStatus";
+import { isCancellableJobStatus, isTerminalJobStatus, jobKindLabel } from "../lib/jobStatus";
 import { IndeterminateProgressBar } from "./IndeterminateProgressBar";
 import { JobDetailModal } from "./JobDetailModal";
 
@@ -60,6 +60,15 @@ function FailedStatus({ entry }: { entry: JobQueueEntry }) {
   );
 }
 
+function CancelledStatus() {
+  return (
+    <span className="flex items-center gap-1.5 text-xs text-text-dim">
+      <Ban aria-hidden="true" className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
+      Cancelled
+    </span>
+  );
+}
+
 function QueueEntryStatus({ entry }: { entry: JobQueueEntry }) {
   if (entry.status === "queued") {
     return <QueuedStatus />;
@@ -69,6 +78,9 @@ function QueueEntryStatus({ entry }: { entry: JobQueueEntry }) {
   }
   if (entry.status === "completed") {
     return <CompletedStatus entry={entry} />;
+  }
+  if (entry.status === "cancelled") {
+    return <CancelledStatus />;
   }
   return <FailedStatus entry={entry} />;
 }
@@ -86,16 +98,48 @@ function DismissButton({ entry, onDismiss }: { entry: JobQueueEntry; onDismiss: 
   );
 }
 
+function CancelButton({ entry, onCancel }: { entry: JobQueueEntry; onCancel: (id: string) => void }) {
+  return (
+    <button
+      type="button"
+      aria-label={`Cancel ${entry.fileName}`}
+      onClick={() => onCancel(entry.id)}
+      className="shrink-0 rounded-sm p-1 text-text-faint transition-colors duration-fast hover:text-danger focus-visible:outline focus-visible:outline-2 focus-visible:outline-danger"
+    >
+      <Ban aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.75} />
+    </button>
+  );
+}
+
+function QueueEntryAction({
+  entry,
+  onDismiss,
+  onCancel,
+}: {
+  entry: JobQueueEntry;
+  onDismiss: (id: string) => void;
+  onCancel: (id: string) => void;
+}) {
+  if (isCancellableJobStatus(entry.status)) {
+    return <CancelButton entry={entry} onCancel={onCancel} />;
+  }
+  if (isTerminalJobStatus(entry.status)) {
+    return <DismissButton entry={entry} onDismiss={onDismiss} />;
+  }
+  return null;
+}
+
 function QueueEntryRow({
   entry,
   onDismiss,
+  onCancel,
   onOpenDetail,
 }: {
   entry: JobQueueEntry;
   onDismiss: (id: string) => void;
+  onCancel: (id: string) => void;
   onOpenDetail: (id: string) => void;
 }) {
-  const isTerminal = isTerminalJobStatus(entry.status);
   return (
     <li className="flex flex-col gap-2 rounded border border-border bg-surface-2 p-3">
       <div className="flex items-start justify-between gap-2">
@@ -110,7 +154,7 @@ function QueueEntryRow({
           </span>
           <span className="text-[10px] uppercase tracking-wide text-text-faint">{jobKindLabel(entry.kind)}</span>
         </button>
-        {isTerminal && <DismissButton entry={entry} onDismiss={onDismiss} />}
+        <QueueEntryAction entry={entry} onDismiss={onDismiss} onCancel={onCancel} />
       </div>
       <QueueEntryStatus entry={entry} />
     </li>
@@ -131,7 +175,7 @@ function EmptyQueueState() {
 }
 
 export function JobQueue() {
-  const { entries, dismiss, clearCompleted } = useJobQueue();
+  const { entries, dismiss, cancel, clearCompleted } = useJobQueue();
   const hasCompletedOrFailed = entries.some((entry) => isTerminalJobStatus(entry.status));
   const [detailJobId, setDetailJobId] = useState<string | null>(null);
   const detailEntry = entries.find((entry) => entry.id === detailJobId);
@@ -147,7 +191,13 @@ export function JobQueue() {
       ) : (
         <ul className="flex flex-col gap-2 overflow-y-auto">
           {entries.map((entry) => (
-            <QueueEntryRow key={entry.id} entry={entry} onDismiss={dismiss} onOpenDetail={setDetailJobId} />
+            <QueueEntryRow
+              key={entry.id}
+              entry={entry}
+              onDismiss={dismiss}
+              onCancel={cancel}
+              onOpenDetail={setDetailJobId}
+            />
           ))}
         </ul>
       )}
@@ -160,7 +210,7 @@ export function JobQueue() {
           Clear completed
         </button>
       )}
-      {detailEntry && <JobDetailModal entry={detailEntry} onClose={() => setDetailJobId(null)} />}
+      {detailEntry && <JobDetailModal entry={detailEntry} onClose={() => setDetailJobId(null)} onCancel={cancel} />}
     </div>
   );
 }

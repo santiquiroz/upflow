@@ -1,5 +1,5 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 import type { JobResponse, VideoJobResponse } from "../lib/apiTypes";
 import { JobCard } from "./JobCard";
 
@@ -196,5 +196,49 @@ describe("JobCard", () => {
     render(<JobCard phase="completed" job={job} />);
 
     expect(screen.queryByText(/fps/i)).not.toBeInTheDocument();
+  });
+
+  it("shows a Cancel button while queued when onCancel is provided", () => {
+    const onCancel = vi.fn();
+    render(<JobCard phase="queued" job={BASE_JOB} onCancel={onCancel} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
+
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows a Cancel button while running when onCancel is provided", () => {
+    const onCancel = vi.fn();
+    render(<JobCard phase="running" job={{ ...BASE_JOB, status: "running" }} onCancel={onCancel} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
+
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides the Cancel button in terminal phases", () => {
+    const onCancel = vi.fn();
+    const completed: JobResponse = { ...BASE_JOB, status: "completed", downloadUrl: "/download" };
+    const { rerender } = render(<JobCard phase="completed" job={completed} onCancel={onCancel} />);
+    expect(screen.queryByRole("button", { name: /cancel/i })).not.toBeInTheDocument();
+
+    rerender(<JobCard phase="failed" job={{ ...BASE_JOB, status: "failed", error: "boom" }} onCancel={onCancel} />);
+    expect(screen.queryByRole("button", { name: /cancel/i })).not.toBeInTheDocument();
+
+    rerender(<JobCard phase="cancelled" job={{ ...BASE_JOB, status: "cancelled" }} onCancel={onCancel} />);
+    expect(screen.queryByRole("button", { name: /cancel/i })).not.toBeInTheDocument();
+  });
+
+  it("does not render a Cancel button when no onCancel handler is given", () => {
+    render(<JobCard phase="running" job={{ ...BASE_JOB, status: "running" }} />);
+
+    expect(screen.queryByRole("button", { name: /cancel/i })).not.toBeInTheDocument();
+  });
+
+  it("renders the cancelled state with its own label", () => {
+    render(<JobCard phase="cancelled" job={{ ...BASE_JOB, status: "cancelled" }} />);
+
+    expect(screen.getByText("Cancelled")).toBeInTheDocument();
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
   });
 });

@@ -63,6 +63,14 @@ async function apiPostJson<T>(path: string, body: unknown): Promise<T> {
   return (await response.json()) as T;
 }
 
+export async function apiPost<T>(path: string): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}`, { method: "POST" });
+  if (!response.ok) {
+    throw new ApiError(response.status, await extractErrorMessage(response));
+  }
+  return (await response.json()) as T;
+}
+
 async function apiDelete(path: string): Promise<void> {
   const response = await fetch(`${API_BASE}${path}`, { method: "DELETE" });
   if (!response.ok) {
@@ -113,6 +121,10 @@ export function createImageJob(params: CreateImageJobParams): Promise<CreateJobR
 
 export function getJob(jobId: string): Promise<JobResponse> {
   return apiGet<JobResponse>(`/jobs/${jobId}`);
+}
+
+export function cancelJob(jobId: string): Promise<JobResponse> {
+  return apiPost<JobResponse>(`/jobs/${jobId}/cancel`);
 }
 
 export interface CreateVideoJobParams {
@@ -173,6 +185,10 @@ export function createVideoJob(params: CreateVideoJobParams): Promise<CreateJobR
 
 export function getVideoJob(jobId: string): Promise<VideoJobResponse> {
   return apiGet<VideoJobResponse>(`/video/jobs/${jobId}`);
+}
+
+export function cancelVideoJob(jobId: string): Promise<VideoJobResponse> {
+  return apiPost<VideoJobResponse>(`/video/jobs/${jobId}/cancel`);
 }
 
 export function searchHfModels(query: string): Promise<ModelSearchResponse> {

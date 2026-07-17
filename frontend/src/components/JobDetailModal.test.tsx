@@ -229,4 +229,31 @@ describe("JobDetailModal", () => {
 
     expect(onClose).toHaveBeenCalledTimes(1);
   });
+
+  it("shows a Cancel action for a running job and calls onCancel with the job id", () => {
+    const onCancel = vi.fn();
+    render(<JobDetailModal entry={buildEntry()} onClose={vi.fn()} onCancel={onCancel} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
+
+    expect(onCancel).toHaveBeenCalledWith("vid-1");
+  });
+
+  it("hides the Cancel action once the job is terminal", () => {
+    const entry = buildEntry({ status: "completed", downloadUrl: "/download" }, { status: "completed" });
+
+    render(<JobDetailModal entry={entry} onClose={vi.fn()} onCancel={vi.fn()} />);
+
+    expect(screen.queryByRole("button", { name: /cancel/i })).not.toBeInTheDocument();
+  });
+
+  it("renders the cancelled status and hides the progress section", () => {
+    const entry = buildEntry({ status: "cancelled" }, { status: "cancelled" });
+
+    render(<JobDetailModal entry={entry} onClose={vi.fn()} onCancel={vi.fn()} />);
+
+    expect(screen.getByText("Cancelled")).toBeInTheDocument();
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /cancel/i })).not.toBeInTheDocument();
+  });
 });

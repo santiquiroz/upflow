@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ApiError,
+  cancelJob,
+  cancelVideoJob,
   createImageJob,
   createVideoJob,
   deleteModel,
@@ -176,6 +178,79 @@ describe("getJob", () => {
     const result = await getJob("job-1");
 
     expect(fetch).toHaveBeenCalledWith("/api/v1/jobs/job-1", expect.objectContaining({ method: "GET" }));
+    expect(result).toEqual(payload);
+  });
+});
+
+describe("cancelJob", () => {
+  it("issues a POST to /api/v1/jobs/{id}/cancel and returns the updated job", async () => {
+    const payload: JobResponse = {
+      jobId: "job-1",
+      status: "cancelled",
+      originalFilename: "photo.png",
+      modelName: "realesrgan-x4plus",
+      scale: 4,
+      outputFormat: "png",
+      modelId: "realesrgan-x4plus",
+      device: "dml:0",
+      createdAt: "2026-01-01T00:00:00Z",
+      startedAt: "2026-01-01T00:00:01Z",
+      finishedAt: "2026-01-01T00:00:02Z",
+      error: null,
+      metadata: {},
+      progressPct: null,
+      downloadUrl: null,
+    };
+    mockFetchOnce(payload);
+
+    const result = await cancelJob("job-1");
+
+    expect(fetch).toHaveBeenCalledWith("/api/v1/jobs/job-1/cancel", expect.objectContaining({ method: "POST" }));
+    expect(result).toEqual(payload);
+  });
+
+  it("throws an ApiError with the detail message when the job already finished", async () => {
+    mockFetchOnce({ detail: "Job already finished" }, { status: 409 });
+
+    await expect(cancelJob("job-1")).rejects.toMatchObject(new ApiError(409, "Job already finished"));
+  });
+});
+
+describe("cancelVideoJob", () => {
+  it("issues a POST to /api/v1/video/jobs/{id}/cancel and returns the updated job", async () => {
+    const payload: VideoJobResponse = {
+      jobId: "vid-1",
+      status: "cancelled",
+      originalFilename: "clip.mp4",
+      modelName: "realesr-animevideov3-x2",
+      scale: 2,
+      outputContainer: "mp4",
+      videoCodec: "libx264",
+      videoPreset: "medium",
+      crf: 17,
+      keepAudio: true,
+      fpsMultiplier: 1,
+      targetFps: null,
+      audioEnhance: null,
+      audioRestore: null,
+      modelId: "realesr-animevideov3-x2",
+      device: "dml:0",
+      createdAt: "2026-01-01T00:00:00Z",
+      startedAt: "2026-01-01T00:00:01Z",
+      finishedAt: "2026-01-01T00:00:02Z",
+      error: null,
+      metadata: {},
+      progressPct: null,
+      downloadUrl: null,
+    };
+    mockFetchOnce(payload);
+
+    const result = await cancelVideoJob("vid-1");
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/v1/video/jobs/vid-1/cancel",
+      expect.objectContaining({ method: "POST" }),
+    );
     expect(result).toEqual(payload);
   });
 });
