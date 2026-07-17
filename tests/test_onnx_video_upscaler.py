@@ -243,6 +243,61 @@ def test_upscale_one_tiles_over_threshold(tmp_path: Path, monkeypatch: pytest.Mo
     assert calls == {"whole": 0, "tiled": 1}
 
 
+def test_upscale_one_falls_back_to_tiling_on_oom_and_sticks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    engine = make_engine(tmp_path)
+    frame = np.random.default_rng(1).integers(0, 256, (1, 8, 12, 3), dtype=np.uint8)  # under threshold -> whole-frame
+
+    def whole_frame_oom(s, f, d):
+        raise RuntimeError("Failed to allocate memory: out of memory (D3D12)")
+
+    tiled_calls = {"n": 0}
+    monkeypatch.setattr(engine, "_infer_frame", whole_frame_oom)
+    monkeypatch.setattr(engine, "_infer_tiled", lambda s, f, d: (tiled_calls.__setitem__("n", tiled_calls["n"] + 1), f)[1])
+
+    # First frame: whole-frame OOM -> retries tiled, returns force_tiled=True.
+    out1, force1 = engine._upscale_one(None, frame, "dml:0", force_tiled=False)
+    assert force1 is True
+    assert tiled_calls["n"] == 1
+    # Next frame with force_tiled carried in: goes straight to tiling, no whole-frame attempt.
+    out2, force2 = engine._upscale_one(None, frame, "dml:0", force_tiled=True)
+    assert force2 is True
+    assert tiled_calls["n"] == 2
+
+
+def test_upscale_one_reraises_non_oom_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    engine = make_engine(tmp_path)
+    frame = np.random.default_rng(1).integers(0, 256, (1, 8, 12, 3), dtype=np.uint8)
+    monkeypatch.setattr(engine, "_infer_frame", lambda s, f, d: (_ for _ in ()).throw(ValueError("bad shape")))
+    monkeypatch.setattr(engine, "_infer_tiled", lambda s, f, d: f)
+    with pytest.raises(ValueError, match="bad shape"):
+        engine._upscale_one(None, frame, "dml:0")
+
+
+def test_save_queue_maxsize_capped_by_byte_budget(tmp_path: Path) -> None:
+    # 1024x1024 input x4 = 4096x4096x3 = 48.0 MB/frame. Budget 150MB // 48 = 3,
+    # which sits strictly between the floor (n_save=2) and ceiling (n_save*2=4),
+    # so the byte budget is what decides -> 3.
+    engine = make_engine(tmp_path, ONNX_VIDEO_MAX_PIPELINE_MB=150, ONNX_VIDEO_SAVE_THREADS=2)
+    frames_in = tmp_path / "big"
+    write_frames(frames_in, count=1, height=1024, width=1024)
+    paths = sorted(frames_in.glob("*.png"))
+    assert engine._save_queue_maxsize(paths, scale=4, n_save=2) == 3
+
+
+def test_save_queue_maxsize_floors_at_n_save(tmp_path: Path) -> None:
+    # Tiny budget must never starve savers: floor = n_save.
+    engine = make_engine(tmp_path, ONNX_VIDEO_MAX_PIPELINE_MB=1, ONNX_VIDEO_SAVE_THREADS=8)
+    frames_in = tmp_path / "big"
+    write_frames(frames_in, count=1, height=2048, width=2048)
+    paths = sorted(frames_in.glob("*.png"))
+    assert engine._save_queue_maxsize(paths, scale=4, n_save=8) == 8
+
+
+def test_save_queue_maxsize_defaults_when_no_frames(tmp_path: Path) -> None:
+    engine = make_engine(tmp_path, ONNX_VIDEO_SAVE_THREADS=5)
+    assert engine._save_queue_maxsize([], scale=4, n_save=5) == 10  # n_save*2
+
+
 def test_infer_tiled_matches_whole_frame_for_double_session(tmp_path: Path) -> None:
     engine = make_engine(tmp_path, ONNX_TILE_SIZE=16)
     session = Double2xUint8Session()
@@ -326,7 +381,7 @@ async def test_run_frames_builtin_cancel_sets_event_and_reraises(
     touch_builtin_onnx(engine.settings, "realesr-animevideov3-x4-uint8.onnx")
     captured: dict[str, threading.Event] = {}
 
-    def blocking_until_cancelled(frames_in, frames_out, onnx_path, device, cancel_event) -> None:
+    def blocking_until_cancelled(frames_in, frames_out, onnx_path, device, cancel_event, scale=4) -> None:
         captured["event"] = cancel_event
         cancel_event.wait(timeout=5)
 
@@ -406,7 +461,7 @@ async def test_run_frames_builtin_cancel_does_not_leave_worker_thread_running(
     touch_builtin_onnx(engine.settings, "realesr-animevideov3-x4-uint8.onnx")
     finished = threading.Event()
 
-    def blocking_until_cancelled(frames_in, frames_out, onnx_path, device, cancel_event) -> None:
+    def blocking_until_cancelled(frames_in, frames_out, onnx_path, device, cancel_event, scale=4) -> None:
         cancel_event.wait(timeout=5)
         finished.set()  # simulates the pipeline finishing its teardown
 

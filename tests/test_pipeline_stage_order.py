@@ -64,6 +64,7 @@ class FakeRifeEngine:
         multiplier: int = 1,
         *,
         target_frame_count: int | None = None,
+        device: str | None = None,
     ) -> Path:
         self.events.append("interpolate")
         self.calls.append((frames_in, frames_out, source_frame_count, multiplier, target_frame_count))

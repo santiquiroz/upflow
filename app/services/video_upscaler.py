@@ -161,10 +161,22 @@ class VideoUpscaler:
         async with self._track_frame_progress(job, frames_out, "upscaling_frames"):
             await self._upscale_frames(job, frames_in, frames_out)
 
+        # Extracted input frames are dead once upscaled; free the disk now instead
+        # of at the end (peak footprint on a long episode is tens-hundreds of GB,
+        # and concurrent jobs share the volume). work_dir is still rmtree'd in the
+        # finally as a backstop.
+        await asyncio.to_thread(self._safe_rmtree, frames_in)
+
         encode_frames_dir, encode_fps = await self._maybe_interpolate(
             job, frames_out, fps, fps_multiplier, job.target_fps
         )
         job.metadata["outputFps"] = encode_fps
+
+        # If interpolation produced a separate dir, the pre-interp upscaled frames
+        # are dead; encode reads from encode_frames_dir. (No-op when interp is OFF,
+        # where encode_frames_dir IS frames_out and must survive.)
+        if encode_frames_dir != frames_out:
+            await asyncio.to_thread(self._safe_rmtree, frames_out)
 
         output_path = self.settings.outputs_path / f"{job.id}.{job.output_container}"
         encode_cmd = [
@@ -392,11 +404,11 @@ class VideoUpscaler:
         ):
             if target_fps is not None:
                 return await self._interpolate_to_target_fps(
-                    frames_out, frames_interp, source_frame_count, fps, target_fps
+                    frames_out, frames_interp, source_frame_count, fps, target_fps, job.device
                 )
 
             return await self._interpolate_by_multiplier(
-                frames_out, frames_interp, source_frame_count, fps, fps_multiplier
+                frames_out, frames_interp, source_frame_count, fps, fps_multiplier, job.device
             )
 
     @staticmethod
@@ -418,10 +430,11 @@ class VideoUpscaler:
         source_frame_count: int,
         fps: str,
         target_fps: str,
+        device: str | None = None,
     ) -> tuple[Path, str]:
         target_frame_count = compute_target_frame_count(source_frame_count, fps, target_fps)
         await self.rife_engine.run(
-            frames_out, frames_interp, source_frame_count, target_frame_count=target_frame_count
+            frames_out, frames_interp, source_frame_count, target_frame_count=target_frame_count, device=device
         )
         return frames_interp, format_fps_fraction(target_fps)
 
@@ -432,8 +445,11 @@ class VideoUpscaler:
         source_frame_count: int,
         fps: str,
         fps_multiplier: int,
+        device: str | None = None,
     ) -> tuple[Path, str]:
-        await self.rife_engine.run(frames_out, frames_interp, source_frame_count, fps_multiplier)
+        await self.rife_engine.run(
+            frames_out, frames_interp, source_frame_count, fps_multiplier, device=device
+        )
 
         new_rate = compute_interpolated_fps(fps, fps_multiplier)
         encode_fps = f"{new_rate.numerator}/{new_rate.denominator}"
@@ -567,6 +583,10 @@ class VideoUpscaler:
     @staticmethod
     def _is_non_empty_file(path: Path) -> bool:
         return path.exists() and path.stat().st_size > 0
+
+    @staticmethod
+    def _safe_rmtree(path: Path) -> None:
+        shutil.rmtree(path, ignore_errors=True)
 
     def _build_video_encode_options(self, job: VideoUpscaleJob) -> list[str]:
         options = [

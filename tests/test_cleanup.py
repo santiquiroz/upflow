@@ -1,4 +1,5 @@
 from __future__ import annotations
+import threading
 
 import asyncio
 import io
@@ -411,7 +412,12 @@ async def test_sweeper_runs_first_sweep_immediately_on_start(
     os.utime(stale_output, (stale_mtime, stale_mtime))
 
     await sweeper.start()
-    await asyncio.sleep(0)  # one loop cycle: the boot sweep runs before the first (1h) sleep
+    # The boot sweep now runs via asyncio.to_thread, so it completes a few loop
+    # cycles after start() rather than synchronously; poll for the deletion.
+    for _ in range(200):
+        if not stale_output.exists():
+            break
+        await asyncio.sleep(0.01)
     await sweeper.stop()
 
     assert not stale_output.exists()
@@ -443,6 +449,45 @@ async def test_sweeper_loop_survives_a_failing_sweep(
     await sweeper.stop()
 
     assert len(sweep_calls) >= 2, "the sweep loop died after the first sweep_once raised"
+
+
+async def test_sweeper_stop_waits_for_in_flight_sweep(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # stop() must not return while a sweep thread is still running (a detached
+    # thread would keep deleting files after the app thinks it stopped).
+    monkeypatch.setattr(retention_sweeper_module, "SWEEP_INTERVAL_SECONDS", 3600)
+    settings = make_settings(tmp_path, output_ttl_hours=1)
+    StorageService(settings)
+    sweeper = make_sweeper(settings)
+
+    entered = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+
+    def slow_sweep_once() -> None:
+        entered.set()
+        release.wait(timeout=5)  # hold the worker thread inside the sweep
+        finished.set()
+
+    monkeypatch.setattr(sweeper, "sweep_once", slow_sweep_once)
+
+    await sweeper.start()
+    # wait until the worker thread is actually inside the sweep
+    for _ in range(200):
+        if entered.is_set():
+            break
+        await asyncio.sleep(0.01)
+    assert entered.is_set()
+
+    # kick off stop() concurrently, then let the sweep finish; stop() must only
+    # return AFTER the worker completed.
+    stop_task = asyncio.create_task(sweeper.stop())
+    await asyncio.sleep(0.05)
+    assert not stop_task.done(), "stop() returned while the sweep thread was still running"
+    release.set()
+    await stop_task
+    assert finished.is_set()
 
 
 # ---------------------------------------------------------------------------

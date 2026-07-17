@@ -310,7 +310,6 @@ Todas las variables leen de `.env` (ver [`.env.example`](.env.example) con los d
 | `CPU_CONCURRENCY` | `2` | Jobs simultáneos en `cpu` (modelos ONNX); no compite con las GPUs |
 | `MAX_CONCURRENT_JOBS` | `4` | Workers por manager (imagen y video por separado); debe superar la cantidad de dispositivos a correr en paralelo |
 | `ENABLE_AUTO_ROUTE` | `False` | Auto-router: reparte jobs sin dispositivo fijo (o `device="auto"`) al primer dispositivo compatible libre. Ver [Multi-GPU](#multi-gpu-colas-por-dispositivo--auto-router-opcional) |
-| `CPU_FALLBACK_WORKERS` | `2` | Hilos de carga/guardado de frames para Real-ESRGAN NCNN en el pipeline de video |
 | `SUBPROCESS_TIMEOUT` | `86400` | Backstop absoluto (24h) para matar cualquier subproceso; NO es el mecanismo real (ver `FRAME_STALL_TIMEOUT_SECONDS`) |
 | `FRAME_STALL_TIMEOUT_SECONDS` | `900` | Watchdog real: mata la etapa solo si no produce frames/bytes nuevos por este tiempo (15 min); se reinicia con cada frame nuevo |
 | `FFMPEG_BINARY` | `vendor/ffmpeg/bin/ffmpeg.exe` | Ruta al binario de FFmpeg |

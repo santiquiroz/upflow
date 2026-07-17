@@ -47,6 +47,25 @@ def _drain_queue(q: queue.Queue) -> None:
         except queue.Empty:
             return
 
+
+_OOM_SIGNATURES = (
+    "out of memory",
+    "outofmemory",
+    "failed to allocate",
+    "insufficient",
+    "d3d12",  # DirectML allocation failures surface with D3D12 device-removed/hung text
+    "device removed",
+    "device hung",
+    "cudamalloc",
+)
+
+
+def _is_oom_error(exc: BaseException) -> bool:
+    """True if an inference exception looks like a GPU memory / allocation failure,
+    the case where retrying the same frame tiled (smaller allocations) can succeed."""
+    text = str(exc).lower()
+    return any(sig in text for sig in _OOM_SIGNATURES)
+
 from app.config import Settings
 from app.services.backend_registry import get_builtin_onnx_model
 from app.services.devices_service import DevicesService
@@ -197,7 +216,7 @@ class OnnxVideoUpscaler:
         # die (process_runner), and this gives the onnx path the same guarantee.
         worker = asyncio.ensure_future(
             asyncio.to_thread(
-                self._run_frames_blocking, frames_in, frames_out, onnx_path, device, cancel_event
+                self._run_frames_blocking, frames_in, frames_out, onnx_path, device, cancel_event, model.scale
             )
         )
         try:
@@ -212,7 +231,13 @@ class OnnxVideoUpscaler:
         return frames_out
 
     def _run_frames_blocking(
-        self, frames_in: Path, frames_out: Path, onnx_path: Path, device: str, cancel_event: threading.Event
+        self,
+        frames_in: Path,
+        frames_out: Path,
+        onnx_path: Path,
+        device: str,
+        cancel_event: threading.Event,
+        scale: int,
     ) -> None:
         if not self.available():
             raise RuntimeError("ONNX video engine is not available: onnxruntime and opencv are required")
@@ -221,9 +246,34 @@ class OnnxVideoUpscaler:
         self.devices.validate(device)
         session = self._get_session(str(onnx_path), device)
         frame_paths = sorted(frames_in.glob("*.png"))
-        self._run_pipeline(session, frame_paths, frames_out, device, cancel_event)
+        self._run_pipeline(session, frame_paths, frames_out, device, cancel_event, scale)
 
     # --- threaded load/infer/save pipeline ---------------------------------
+
+    def _save_queue_maxsize(self, frame_paths: list[Path], scale: int, n_save: int) -> int:
+        """Bound the save queue by a RAM budget instead of by thread count.
+
+        Each queued item is a full 4x output frame (~44MB @ 5120x2880). Sizing by
+        n_save*2 alone lets the queue hold ~1GB with no relation to memory, so we
+        derive maxsize from ONNX_VIDEO_MAX_PIPELINE_MB and the real output frame
+        size, with a floor of n_save so savers never starve.
+        """
+        default = n_save * 2
+        if not frame_paths or scale < 1:
+            return default
+        out_bytes = self._output_frame_bytes(frame_paths[0], scale)
+        if out_bytes <= 0:
+            return default
+        budget_bytes = max(1, self.settings.onnx_video_max_pipeline_mb) * 1024 * 1024
+        return max(n_save, min(default, budget_bytes // out_bytes))
+
+    @staticmethod
+    def _output_frame_bytes(frame_path: Path, scale: int) -> int:
+        # One extra decode of a single frame (negligible) to learn input dims;
+        # the output frame is scale x larger per axis, 3 bytes/px (uint8 BGR).
+        image = _load_frame(frame_path)
+        _, height, width, channels = image.shape
+        return height * scale * width * scale * channels
 
     def _run_pipeline(
         self,
@@ -232,12 +282,14 @@ class OnnxVideoUpscaler:
         frames_out: Path,
         device: str,
         cancel_event: threading.Event,
+        scale: int = 1,
     ) -> None:
         n_load = max(1, self.settings.onnx_video_load_threads)
         n_save = max(1, self.settings.onnx_video_save_threads)
         png_level = self.settings.onnx_video_png_compression
+        save_maxsize = self._save_queue_maxsize(frame_paths, scale, n_save)
         load_q: queue.Queue[tuple[str, np.ndarray]] = queue.Queue(maxsize=n_load * 2)
-        save_q: queue.Queue[tuple[str, np.ndarray] | None] = queue.Queue(maxsize=n_save * 2)
+        save_q: queue.Queue[tuple[str, np.ndarray] | None] = queue.Queue(maxsize=save_maxsize)
         todo: queue.Queue[Path] = queue.Queue()
         for path in frame_paths:
             todo.put(path)
@@ -328,6 +380,7 @@ class OnnxVideoUpscaler:
         cancel_event: threading.Event,
     ) -> None:
         processed = 0
+        force_tiled = False  # sticky per-run: once a whole-frame OOM forces tiling, stay tiled
         while processed < total:
             if cancel_event.is_set():
                 return
@@ -344,7 +397,7 @@ class OnnxVideoUpscaler:
                     return
                 continue
             try:
-                upscaled = self._upscale_one(session, frame, device)
+                upscaled, force_tiled = self._upscale_one(session, frame, device, force_tiled)
             except Exception as exc:  # noqa: BLE001
                 errors.append(exc)
                 cancel_event.set()
@@ -355,11 +408,31 @@ class OnnxVideoUpscaler:
 
     # --- inference ---------------------------------------------------------
 
-    def _upscale_one(self, session: Any, frame_nhwc: np.ndarray, device: str) -> np.ndarray:
+    def _upscale_one(
+        self, session: Any, frame_nhwc: np.ndarray, device: str, force_tiled: bool = False
+    ) -> tuple[np.ndarray, bool]:
+        """Upscale one frame; returns (frame, force_tiled_for_rest_of_job).
+
+        A whole-frame OOM aborts the whole job today. Instead, catch an OOM-like
+        error, retry THIS frame tiled, and stick to tiling for the rest of the run
+        (memoized via the returned flag) so a low-VRAM job finishes slow instead
+        of crashing.
+        """
         _, height, width, _ = frame_nhwc.shape
-        if should_tile_frame(height * width, self.settings.onnx_whole_frame_max_pixels):
-            return self._infer_tiled(session, frame_nhwc, device)
-        return self._infer_frame(session, frame_nhwc, device)
+        if force_tiled or should_tile_frame(height * width, self.settings.onnx_whole_frame_max_pixels):
+            return self._infer_tiled(session, frame_nhwc, device), force_tiled
+        try:
+            return self._infer_frame(session, frame_nhwc, device), False
+        except Exception as exc:  # noqa: BLE001
+            if not _is_oom_error(exc):
+                raise
+            logger.warning(
+                "whole-frame ONNX inference hit an OOM-like error on %s; falling back to tiling "
+                "for the rest of this job",
+                device,
+                exc_info=True,
+            )
+            return self._infer_tiled(session, frame_nhwc, device), True
 
     def _infer_frame(self, session: Any, frame_nhwc: np.ndarray, device: str) -> np.ndarray:
         input_name = session.get_inputs()[0].name

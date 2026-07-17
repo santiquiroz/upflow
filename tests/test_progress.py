@@ -863,6 +863,7 @@ class LiveFrameRifeEngine:
         multiplier: int = 1,
         *,
         target_frame_count: int | None = None,
+        device: str | None = None,
     ) -> Path:
         count = target_frame_count if target_frame_count is not None else source_frame_count * multiplier
         await write_frames_incrementally(frames_out, count=count, delay=0.03)
