@@ -1,11 +1,29 @@
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import TypedDict
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _logical_cpus() -> int:
+    return os.cpu_count() or 8
+
+
+def _default_onnx_save_threads() -> int:
+    # The 4x-output PNG encode (~510ms/frame @ 5120x2880) is the onnx video
+    # bottleneck, not GPU infer (~68ms). It is CPU/zlib-bound and embarrassingly
+    # parallel, so saver count scales with cores to keep infer the ceiling
+    # (measured 7900X3D: 4 threads -> 5.5fps, 10 -> 11.5fps, 14 -> 12.6fps).
+    return max(4, min(12, _logical_cpus()))
+
+
+def _default_onnx_load_threads() -> int:
+    # Input PNG decode (720p, ~30ms) is cheap; a few threads saturate it.
+    return max(2, min(4, _logical_cpus() // 4))
 
 NEUTRAL_BIND_HOSTS = frozenset({"127.0.0.1", "0.0.0.0", "localhost"})
 
@@ -296,8 +314,10 @@ class Settings(BaseSettings):
     onnx_video_png_compression: int = Field(default=1, alias="ONNX_VIDEO_PNG_COMPRESSION")
     # Threads that overlap frame load (N+1) and save (N-1) with GPU infer (N)
     # in the onnx video pipeline. GPU inference itself stays single-flight.
-    onnx_video_load_threads: int = Field(default=3, alias="ONNX_VIDEO_LOAD_THREADS")
-    onnx_video_save_threads: int = Field(default=4, alias="ONNX_VIDEO_SAVE_THREADS")
+    # Defaults scale with cores because PNG save (not infer) is the bottleneck;
+    # override to dial down on a weak/oversubscribed CPU.
+    onnx_video_load_threads: int = Field(default_factory=_default_onnx_load_threads, alias="ONNX_VIDEO_LOAD_THREADS")
+    onnx_video_save_threads: int = Field(default_factory=_default_onnx_save_threads, alias="ONNX_VIDEO_SAVE_THREADS")
 
     update_repo: str = Field(default="santiquiroz/upflow", alias="UPDATE_REPO")
     # Package whose installed metadata gives the running version to compare

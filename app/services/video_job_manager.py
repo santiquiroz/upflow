@@ -10,6 +10,7 @@ from pathlib import Path
 from app.config import AUDIO_ENHANCE_MODES, AUDIO_RESTORE_MODES, Settings
 from app.exceptions import QueueFullError
 from app.models import JobStatus, VideoUpscaleJob, utc_now
+from app.services.backend_registry import validate_backend_choice
 from app.services.device_router import DeviceRouter, has_compatible_device
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
@@ -93,9 +94,11 @@ class VideoJobManager:
         audio_restore: str | None = None,
         model_id: str | None = None,
         device: str | None = None,
+        backend: str | None = None,
         job_id: str | None = None,
     ) -> VideoUpscaleJob:
         source_fps = await self._validate_video(source_path)
+        validate_backend_choice(backend)
         resolved_model_id = model_id if model_id is not None else model_name
         if device is not None and device != AUTO_DEVICE_ID and self.devices is not None:
             await asyncio.to_thread(self.devices.validate, device)
@@ -131,6 +134,7 @@ class VideoJobManager:
             audio_restore=audio_restore,
             model_id=resolution.model_id,
             device=device,
+            backend=backend,
         )
         if job_id is not None:
             job.id = job_id

@@ -227,6 +227,7 @@ def video_job_to_response(job: VideoUpscaleJob) -> VideoJobResponse:
         audio_restore=job.audio_restore,
         model_id=job.model_id,
         device=job.device,
+        backend=job.backend,
         created_at=job.created_at,
         started_at=job.started_at,
         finished_at=job.finished_at,
@@ -405,6 +406,7 @@ async def create_video_job(
     audio_restore: str | None = Form(default=None),
     model_id: str | None = Form(default=None),
     device: str | None = Form(default=None),
+    backend: str | None = Form(default=None),
     video_jobs: VideoJobManager = Depends(get_video_job_manager),
     storage: StorageService = Depends(get_storage),
     settings: Settings = Depends(get_settings),
@@ -413,6 +415,10 @@ async def create_video_job(
     profile = settings.get_video_profile(profile_key)
     if not profile:
         raise HTTPException(status_code=400, detail=f"Unknown profile: {profile_key}")
+
+    # FastAPI passes `backend` as str|None; a direct unit-test call that omits
+    # it receives the Form() sentinel instead, so normalize non-strings to None.
+    backend_value = backend if isinstance(backend, str) else None
 
     original_name = Path(file.filename or "upload.mp4").name
     safe_name = sanitize_filename(original_name, default="upload.mp4")
@@ -453,6 +459,7 @@ async def create_video_job(
             audio_restore=audio_restore,
             model_id=model_id,
             device=resolved_device,
+            backend=backend_value,
             job_id=token,
         )
         job.metadata["profileKey"] = profile_key

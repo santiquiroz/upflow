@@ -301,12 +301,37 @@ function Add-ApolloModelToInstaller {
     Write-Host 'Modelo Apollo (restauracion de audio) incluido en el instalador.'
 }
 
+function Add-RealesrganOnnxModelsToInstaller {
+    # Los exports ONNX uint8 (backend rapido SP11) se BUNDLEAN en el instalador,
+    # igual que Apollo. Aunque los .pth de origen son publicos, el export local
+    # exige torch+onnx (~2GB) y varios minutos; incluir los .onnx ya horneados
+    # (animevideov3 x2/x3/x4 ~2.5MB c/u, x4plus ~67MB, anime ~18MB) le da al
+    # usuario el runtime ONNX (2x en video) sin instalar torch ni exportar nada.
+    # Solo se copian los .onnx: la subcarpeta weights\ (.pth) no viaja.
+    $onnxSrcDir = Join-Path $root 'vendor\realesrgan-onnx'
+    $onnxFiles = @()
+    if (Test-Path $onnxSrcDir) {
+        $onnxFiles = Get-ChildItem -Path $onnxSrcDir -Filter '*.onnx' -File
+    }
+    if ($onnxFiles.Count -eq 0) {
+        Write-Host 'AVISO: no hay exports en vendor\realesrgan-onnx; el instalador usara solo NCNN (correr scripts\download-realesrgan-onnx.ps1 para el backend ONNX).'
+        return
+    }
+    $onnxDst = Join-Path $installerAppDir 'vendor\realesrgan-onnx'
+    New-Item -ItemType Directory -Force -Path $onnxDst | Out-Null
+    foreach ($file in $onnxFiles) {
+        Copy-Item -Force $file.FullName (Join-Path $onnxDst $file.Name)
+    }
+    Write-Host "Modelos ONNX ($($onnxFiles.Count)) incluidos en el instalador (backend rapido SP11)."
+}
+
 function New-Installer {
     param([string]$IsccPath)
 
     Initialize-EmbeddedPython
     Copy-AppAllowlist -Destination $installerAppDir
     Add-ApolloModelToInstaller
+    Add-RealesrganOnnxModelsToInstaller
     New-Item -ItemType Directory -Force -Path $distDir | Out-Null
     Invoke-InnoSetupCompile -IsccPath $IsccPath
 }

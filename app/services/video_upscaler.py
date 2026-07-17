@@ -9,9 +9,11 @@ from pathlib import Path
 
 from app.config import Settings
 from app.models import VideoUpscaleJob
+from app.services.backend_registry import UpscaleBackend, resolve_upscale_backend
 from app.services.engines.apollo_restore import ApolloRestorer
 from app.services.engines.audio_enhance import AudioEnhancer
 from app.services.engines.onnx_upscaler import OnnxUpscaler
+from app.services.engines.onnx_video_upscaler import OnnxVideoUpscaler
 from app.services.engines.realesrgan_ncnn import RealEsrganNcnnEngine, gpu_index_for_device
 from app.services.engines.rife_ncnn import RifeNcnnEngine
 from app.services.media_tools import (
@@ -66,6 +68,7 @@ class VideoUpscaler:
         frame_poll_interval_seconds: float = FRAME_POLL_INTERVAL_SECONDS,
         frame_stall_timeout_seconds: float | None = None,
         restorer: ApolloRestorer | None = None,
+        onnx_video_engine: OnnxVideoUpscaler | None = None,
     ) -> None:
         self.settings = settings
         self.engine = engine
@@ -74,6 +77,7 @@ class VideoUpscaler:
         self.audio_enhancers = audio_enhancers or {}
         self.restorer = restorer
         self.onnx_engine = onnx_engine
+        self.onnx_video_engine = onnx_video_engine
         self.model_registry = model_registry
         self.frame_poll_interval_seconds = frame_poll_interval_seconds
         self.frame_stall_timeout_seconds = (
@@ -194,10 +198,35 @@ class VideoUpscaler:
         return output_path
 
     async def _upscale_frames(self, job: VideoUpscaleJob, frames_in: Path, frames_out: Path) -> None:
+        # HF-installed ONNX models are onnx-only (arbitrary fp32 NCHW graphs) --
+        # they always go through OnnxUpscaler, untouched by the runtime selector.
         if self._is_onnx_model(job.model_id):
             await self._upscale_frames_onnx(job, frames_in, frames_out)
-        else:
-            await self._upscale_frames_ncnn(job, frames_in, frames_out)
+            return
+        # Builtin Real-ESRGAN model: the selector decides ncnn vs the optimized
+        # onnx video engine (only the RUNTIME changes; the model is the same).
+        # Off the event loop: the first resolve does a cold `import onnxruntime`
+        # (native DLL load) + get_available_providers, which would otherwise stall
+        # every concurrent job's progress polling on the loop thread.
+        if await asyncio.to_thread(self._resolve_builtin_backend, job) == UpscaleBackend.onnx:
+            await self._upscale_frames_onnx_builtin(job, frames_in, frames_out)
+            return
+        await self._upscale_frames_ncnn(job, frames_in, frames_out)
+
+    def _resolve_builtin_backend(self, job: VideoUpscaleJob) -> UpscaleBackend:
+        engine = self.onnx_video_engine
+        onnx_model_available = (
+            engine is not None and engine.available() and engine.builtin_onnx_available(job.model_name)
+        )
+        gpu_ep_available = engine is not None and engine.has_gpu_execution_provider()
+        device = job.device or self.settings.default_device
+        return resolve_upscale_backend(
+            setting_backend=self.settings.upscale_backend,
+            job_backend=job.backend,
+            onnx_model_available=onnx_model_available,
+            gpu_ep_available=gpu_ep_available,
+            device=device,
+        )
 
     def _is_onnx_model(self, model_id: str | None) -> bool:
         if model_id is None or self.model_registry is None:
@@ -233,6 +262,14 @@ class VideoUpscaler:
             raise RuntimeError(f"Model {job.model_id!r} requires the ONNX engine, which is not configured")
         device = job.device or self.settings.default_device
         await self.onnx_engine.run_frames(frames_in, frames_out, job.model_id, device)
+
+    async def _upscale_frames_onnx_builtin(
+        self, job: VideoUpscaleJob, frames_in: Path, frames_out: Path
+    ) -> None:
+        if self.onnx_video_engine is None:
+            raise RuntimeError("ONNX backend selected but the ONNX video engine is not configured")
+        device = job.device or self.settings.default_device
+        await self.onnx_video_engine.run_frames_builtin(frames_in, frames_out, job.model_name, device)
 
     async def _prepare_audio(self, job: VideoUpscaleJob, audio_path: Path) -> tuple[Path, list[str]]:
         if job.audio_enhance or job.audio_restore:
