@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import shutil
+import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -31,28 +33,42 @@ class RetentionSweeper:
         self.video_job_manager = video_job_manager
         self.audio_job_manager = audio_job_manager
         self.sweep_task: asyncio.Task | None = None
+        self._stop_event = threading.Event()
 
     async def start(self) -> None:
         if self.sweep_task is None:
+            self._stop_event.clear()
             self.sweep_task = asyncio.create_task(self._run(), name="retention-sweeper")
 
     async def stop(self) -> None:
         if self.sweep_task:
+            # Signal the worker thread FIRST so an in-flight sweep bails between
+            # phases, then cancel + await: cancel alone can't stop a to_thread
+            # sweep already running, so we must wait for it (see _run) instead of
+            # leaving a detached thread deleting files after stop() returns.
+            self._stop_event.set()
             self.sweep_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self.sweep_task
-            except asyncio.CancelledError:
-                pass
             self.sweep_task = None
 
     async def _run(self) -> None:
-        while True:
+        while not self._stop_event.is_set():
             # The sweep does blocking disk I/O (iterdir/stat/unlink/rmtree over
             # potentially thousands of files); run it off the event loop so it
             # never freezes concurrent job progress polling. _prune_finished_jobs
             # snapshots jobs.items() and uses pop(), so running in a worker thread
             # cannot hit "dict changed size" if the loop adds a job concurrently.
-            await asyncio.to_thread(self._sweep_safely)
+            # Shield + await-the-worker on cancel so stop() genuinely waits for an
+            # in-flight sweep to finish (the _stop_event makes it bail fast).
+            worker = asyncio.ensure_future(asyncio.to_thread(self._sweep_safely))
+            try:
+                await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                self._stop_event.set()
+                with contextlib.suppress(BaseException):
+                    await worker
+                raise
             await asyncio.sleep(SWEEP_INTERVAL_SECONDS)
 
     def _sweep_safely(self) -> None:
@@ -64,9 +80,17 @@ class RetentionSweeper:
     def sweep_once(self) -> None:
         active_source_paths = self._active_source_paths()
         active_video_work_ids = self._active_video_work_ids()
+        # Bail between phases if stop() was requested, so a big sweep doesn't keep
+        # the worker thread alive (and stop()'s await) longer than one phase.
         self._delete_expired_outputs()
+        if self._stop_event.is_set():
+            return
         self._delete_expired_uploads(active_source_paths)
+        if self._stop_event.is_set():
+            return
         self._delete_expired_work_dirs(active_video_work_ids)
+        if self._stop_event.is_set():
+            return
         self._prune_finished_jobs(self.job_manager.jobs)
         self._prune_finished_jobs(self.video_job_manager.jobs)
         if self.audio_job_manager is not None:
