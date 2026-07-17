@@ -224,7 +224,7 @@ class VideoUpscaler:
                 "-g",
                 gpu_index_for_device(job.device),
                 "-j",
-                f"2:{self.settings.cpu_fallback_workers}:{self.settings.cpu_fallback_workers}",
+                self.settings.ncnn_upscale_threads,
             ]
         )
 

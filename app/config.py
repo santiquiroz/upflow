@@ -194,6 +194,12 @@ class Settings(BaseSettings):
     # semaphores never get a worker to pull a job into them.
     max_concurrent_jobs: int = Field(default=4, alias="MAX_CONCURRENT_JOBS")
     cpu_fallback_workers: int = Field(default=2, alias="CPU_FALLBACK_WORKERS")
+    # Threads load:proc:save de Real-ESRGAN NCNN en el upscale de video. El proc
+    # (GPU) por defecto era 2 -> subutilizaba la GPU. Medido en RX 7800 XT (720p 4x):
+    # 2:2:2 -> 2.2 fps ; 2:24:12 -> 5.3 fps (~2.4x, cerca del techo de NCNN Vulkan).
+    # NCNN mantiene el tile chico (auto) asi que muchos proc-threads no revientan VRAM;
+    # en una GPU debil bajar este valor si va lento/inestable.
+    ncnn_upscale_threads: str = Field(default="2:24:12", alias="NCNN_UPSCALE_THREADS")
     subprocess_timeout: float = Field(default=86400, alias="SUBPROCESS_TIMEOUT")
     frame_stall_timeout_seconds: float = Field(default=900, alias="FRAME_STALL_TIMEOUT_SECONDS")
     ffmpeg_binary: str = Field(default="vendor/ffmpeg/bin/ffmpeg.exe", alias="FFMPEG_BINARY")
