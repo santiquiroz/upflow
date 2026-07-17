@@ -240,6 +240,10 @@ class Settings(BaseSettings):
     # (TDR, reset repetido); 1.0s -> ~0.8s/chunk (seguro). En GPUs mas debiles, si igual
     # aparece "GPU timeout", usar device=cpu para el restore (sin TDR, correcto a cualquier largo).
     audio_restore_chunk_seconds: float = Field(default=1.0, alias="AUDIO_RESTORE_CHUNK_SECONDS")
+    # Pausa (s) entre inferencias GPU del restore: le devuelve la GPU al escritorio
+    # de Windows entre chunks para que el PC no se laguee tanto mientras procesa.
+    # Solo aplica a device=dml:N (en CPU no hay contencion de GPU). 0 = sin respiro.
+    audio_restore_gpu_throttle_seconds: float = Field(default=0.15, alias="AUDIO_RESTORE_GPU_THROTTLE_SECONDS")
     max_audio_upload_mb: int = Field(default=200, alias="MAX_AUDIO_UPLOAD_MB")
 
     default_device: str = Field(default="dml:0", alias="DEFAULT_DEVICE")

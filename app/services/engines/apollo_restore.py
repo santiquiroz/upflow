@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 from collections import OrderedDict
 from math import gcd
 from pathlib import Path
@@ -63,10 +64,14 @@ class ApolloRestorer:
             )
         audio = _load_mono_44k(input_wav)
         session = self._get_session(device)
-        restored = self._restore_chunked(session, audio)
+        # En GPU (dml:N) el cómputo satura la única tarjeta y el escritorio se
+        # laguea; un respiro entre chunks le devuelve la GPU al compositor. En CPU
+        # no hay contencion de GPU, asi que no se aplica (seria solo mas lento).
+        throttle = 0.0 if _is_cpu_device(device) else self.settings.audio_restore_gpu_throttle_seconds
+        restored = self._restore_chunked(session, audio, throttle)
         _save_wav(output_wav, restored)
 
-    def _restore_chunked(self, session: Any, audio: np.ndarray) -> np.ndarray:
+    def _restore_chunked(self, session: Any, audio: np.ndarray, throttle: float = 0.0) -> np.ndarray:
         total = audio.shape[-1]
         window_length = max(1, int(self.settings.audio_restore_chunk_seconds * APOLLO_SAMPLE_RATE))
         overlap = min(int(OVERLAP_SECONDS * APOLLO_SAMPLE_RATE), window_length // 2)
@@ -86,6 +91,8 @@ class ApolloRestorer:
             if end >= total:
                 break
             start += hop
+            if throttle > 0:
+                time.sleep(throttle)  # deja respirar al escritorio entre inferencias GPU
         return (accumulator / np.maximum(weight_sum, 1e-8)).astype(np.float32)
 
     def _infer_chunk(self, session: Any, segment: np.ndarray) -> np.ndarray:
@@ -133,6 +140,10 @@ class ApolloRestorer:
     @staticmethod
     def _is_non_empty_file(path: Path) -> bool:
         return path.exists() and path.stat().st_size > 0
+
+
+def _is_cpu_device(device: str) -> bool:
+    return device.strip().lower() == "cpu"
 
 
 def _load_mono_44k(input_wav: Path) -> np.ndarray:
