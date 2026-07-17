@@ -16,6 +16,14 @@ AUDIO_ENHANCE_MODES = frozenset({DEEPFILTER_MODE, RNNOISE_MODE})
 APOLLO_MODE = "apollo"
 AUDIO_RESTORE_MODES = frozenset({APOLLO_MODE})
 
+# Upscale runtime selector (SP11). `auto` picks onnx vs ncnn per the rule in
+# app/services/backend_registry.py; `ncnn`/`onnx` force a specific runtime.
+# The selector changes the RUNTIME, never the model the user picked.
+UPSCALE_BACKEND_AUTO = "auto"
+UPSCALE_BACKEND_NCNN = "ncnn"
+UPSCALE_BACKEND_ONNX = "onnx"
+UPSCALE_BACKENDS = frozenset({UPSCALE_BACKEND_AUTO, UPSCALE_BACKEND_NCNN, UPSCALE_BACKEND_ONNX})
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -269,6 +277,28 @@ class Settings(BaseSettings):
 
     onnx_tile_size: int = Field(default=256, alias="ONNX_TILE_SIZE")
 
+    # --- Optimized ONNX video backend + runtime selector (SP11) ---
+    # Runtime that upscales video frames for builtin Real-ESRGAN models:
+    # `auto` (default) picks onnx when the model has a vendored ONNX export and
+    # a capable GPU EP is present, else ncnn; `ncnn`/`onnx` force one runtime.
+    upscale_backend: str = Field(default=UPSCALE_BACKEND_AUTO, alias="UPSCALE_BACKEND")
+    # Where the uint8-in/out ONNX exports of the builtin models live
+    # (scripts/download-realesrgan-onnx.ps1 populates it). Vendored + gitignored.
+    builtin_onnx_dir: str = Field(default="vendor/realesrgan-onnx", alias="BUILTIN_ONNX_DIR")
+    # Whole-frame inference (no tiling) is the fast path; tiling is only a
+    # fallback for frames whose INPUT pixel count exceeds this (huge frames /
+    # low-VRAM GPUs). 0 disables tiling entirely (always whole-frame). Default
+    # ~= 3840x2160 input.
+    onnx_whole_frame_max_pixels: int = Field(default=8_294_400, alias="ONNX_WHOLE_FRAME_MAX_PIXELS")
+    # PNG compression level (0-9) for intermediate upscaled frames written by
+    # the onnx video pipeline. Low = fast; frames are re-encoded by ffmpeg
+    # anyway, so speed beats size here (OpenCV default is 1).
+    onnx_video_png_compression: int = Field(default=1, alias="ONNX_VIDEO_PNG_COMPRESSION")
+    # Threads that overlap frame load (N+1) and save (N-1) with GPU infer (N)
+    # in the onnx video pipeline. GPU inference itself stays single-flight.
+    onnx_video_load_threads: int = Field(default=3, alias="ONNX_VIDEO_LOAD_THREADS")
+    onnx_video_save_threads: int = Field(default=4, alias="ONNX_VIDEO_SAVE_THREADS")
+
     update_repo: str = Field(default="santiquiroz/upflow", alias="UPDATE_REPO")
     # Package whose installed metadata gives the running version to compare
     # against the latest release. Reuse in another project = change UPDATE_REPO
@@ -303,6 +333,13 @@ class Settings(BaseSettings):
     def _validate_update_timeout_positive(cls, value: float) -> float:
         if value <= 0:
             raise ValueError("UPDATE_API_TIMEOUT_SECONDS must be greater than 0")
+        return value
+
+    @field_validator("upscale_backend")
+    @classmethod
+    def _validate_upscale_backend(cls, value: str) -> str:
+        if value not in UPSCALE_BACKENDS:
+            raise ValueError(f"UPSCALE_BACKEND must be one of {sorted(UPSCALE_BACKENDS)}")
         return value
 
     @field_validator("audio_restore_chunk_seconds")
@@ -360,6 +397,10 @@ class Settings(BaseSettings):
         # MODELS_DIR override still wins outright (Path.__truediv__ discards
         # the left side when the right side is absolute).
         return self.runtime_path / self.models_dir
+
+    @property
+    def builtin_onnx_path(self) -> Path:
+        return resolve_against_project_root(self.builtin_onnx_dir)
 
     @property
     def allowed_scale_values(self) -> list[int]:
