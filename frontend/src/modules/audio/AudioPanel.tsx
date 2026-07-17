@@ -1,7 +1,7 @@
 import { AudioWaveform, UploadCloud } from "lucide-react";
 import { useState, type ChangeEvent, type DragEvent } from "react";
 import { AccordionSection } from "../../components/AccordionSection";
-import { AUTO_DEVICE, DevicePicker } from "../../components/DevicePicker";
+import { CPU_DEVICE, DevicePicker } from "../../components/DevicePicker";
 import { JobCard } from "../../components/JobCard";
 import { useAudioCapabilities, useAudioJob, type AudioJobPhase } from "../../hooks/useAudioJob";
 import { denoiseLabel, restoreLabel } from "../../lib/audioLabels";
@@ -119,7 +119,7 @@ export function AudioPanel() {
   const [file, setFile] = useState<File | null>(null);
   const [denoise, setDenoise] = useState<string | null>(null);
   const [restore, setRestore] = useState<string | null>(null);
-  const [device, setDevice] = useState<DeviceInfoResponse | null>(AUTO_DEVICE);
+  const [device, setDevice] = useState<DeviceInfoResponse | null>(CPU_DEVICE);
 
   const capabilitiesQuery = useAudioCapabilities();
   const { phase, job, errorMessage, submit, reset } = useAudioJob();
@@ -165,7 +165,7 @@ export function AudioPanel() {
           </AccordionSection>
         )}
         <AccordionSection title="Device" summary={formatDeviceSummary(device)} tooltip={DEVICE_TOOLTIP}>
-          <DevicePicker value={device?.id ?? null} onChange={setDevice} requiresGpu={false} />
+          <DevicePicker value={device?.id ?? null} onChange={setDevice} requiresGpu={false} allowAuto={false} />
         </AccordionSection>
         <div className="flex flex-col gap-2">
           {!hasSelection && (

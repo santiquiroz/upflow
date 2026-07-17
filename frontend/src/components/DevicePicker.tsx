@@ -15,10 +15,21 @@ export const AUTO_DEVICE: DeviceInfoResponse = {
   backend: "auto",
 };
 
+// Concrete CPU device -- safe default for jobs that don't support the "auto"
+// router (audio jobs), where CPU also sidesteps the DirectML GPU-timeout (TDR).
+export const CPU_DEVICE: DeviceInfoResponse = {
+  id: "cpu",
+  kind: "cpu",
+  name: "CPU",
+  backend: "cpu",
+};
+
 interface DevicePickerProps {
   value: string | null;
   onChange: (device: DeviceInfoResponse) => void;
   requiresGpu: boolean;
+  // Audio jobs don't support the "auto" router -- hide the Auto option there.
+  allowAuto?: boolean;
 }
 
 function isCpuDevice(device: DeviceInfoResponse): boolean {
@@ -79,7 +90,7 @@ function DeviceOption({
   );
 }
 
-export function DevicePicker({ value, onChange, requiresGpu }: DevicePickerProps) {
+export function DevicePicker({ value, onChange, requiresGpu, allowAuto = true }: DevicePickerProps) {
   const devicesQuery = useQuery({ queryKey: ["devices"], queryFn: getDevices });
 
   if (devicesQuery.isLoading) {
@@ -95,7 +106,7 @@ export function DevicePicker({ value, onChange, requiresGpu }: DevicePickerProps
   // Auto is never disabled here -- real compatibility (e.g. a builtin ncnn
   // model with no GPU present at all) is enforced server-side and surfaces
   // as a submit-time error instead.
-  const options = [AUTO_DEVICE, ...devices];
+  const options = allowAuto ? [AUTO_DEVICE, ...devices] : devices;
 
   return (
     <fieldset className="flex flex-col gap-2">

@@ -133,7 +133,7 @@ describe("AudioPanel", () => {
       "/api/v1/audio/jobs/aud-1/download",
     );
     expect(vi.mocked(audioService.createAudioJob).mock.calls[0][0]).toEqual(
-      expect.objectContaining({ denoise: "deepfilter", restore: "apollo", device: "auto" }),
+      expect.objectContaining({ denoise: "deepfilter", restore: "apollo", device: "cpu" }),
     );
   });
 });
