@@ -155,6 +155,7 @@ describe("VideoPanel", () => {
     expect(await screen.findByRole("button", { name: /^Profile/ })).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByRole("button", { name: /^Model/ })).toHaveAttribute("aria-expanded", "false");
     expect(screen.getByRole("button", { name: /^Device/ })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByRole("button", { name: /^Runtime/ })).toHaveAttribute("aria-expanded", "false");
     expect(screen.getByRole("button", { name: /^FPS boost/ })).toHaveAttribute("aria-expanded", "false");
     expect(screen.getByRole("button", { name: /^Audio/ })).toHaveAttribute("aria-expanded", "false");
     expect(screen.getByRole("button", { name: /^Advanced/ })).toHaveAttribute("aria-expanded", "false");
@@ -439,6 +440,72 @@ describe("VideoPanel", () => {
     await waitFor(() => expect(vi.mocked(api.createVideoJob)).toHaveBeenCalled());
     expect(vi.mocked(api.createVideoJob).mock.calls[0][0]).toEqual(
       expect.objectContaining({ audioRestore: "apollo" }),
+    );
+  });
+
+  it("defaults the Runtime to Auto and lists the three backend options", async () => {
+    renderPanel();
+    await selectFile();
+    fireEvent.click(await screen.findByRole("radio", { name: /General Balanced 4x/ }));
+
+    expect(screen.getByRole("button", { name: /^Runtime/ })).toHaveTextContent("Auto");
+
+    openSection("Runtime");
+    expect(await screen.findByRole("radio", { name: /Auto/ })).toBeChecked();
+    expect(screen.getByRole("radio", { name: /NCNN Vulkan/ })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /ONNX DirectML/ })).toBeInTheDocument();
+  });
+
+  it("sends the chosen backend runtime and reflects it in the section summary", async () => {
+    const createResponse: CreateJobResponse = {
+      jobId: "vid-rt",
+      status: "queued",
+      statusUrl: "/api/v1/video/jobs/vid-rt",
+      downloadUrl: null,
+    };
+    vi.mocked(api.createVideoJob).mockResolvedValue(createResponse);
+    vi.mocked(api.getVideoJob).mockResolvedValue({
+      jobId: "vid-rt",
+      status: "queued",
+      originalFilename: "clip.mp4",
+      modelName: "realesrgan-x4plus",
+      scale: 4,
+      outputContainer: "mp4",
+      videoCodec: "libx264",
+      videoPreset: "medium",
+      crf: 18,
+      keepAudio: true,
+      fpsMultiplier: 1,
+      targetFps: null,
+      audioEnhance: null,
+      audioRestore: null,
+      backend: "onnx",
+      modelId: "realesrgan-x4plus",
+      device: "dml:0",
+      createdAt: "2026-01-01T00:00:00Z",
+      startedAt: null,
+      finishedAt: null,
+      error: null,
+      metadata: {},
+      progressPct: null,
+      downloadUrl: null,
+    });
+
+    renderPanel();
+    await selectFile();
+    fireEvent.click(await screen.findByRole("radio", { name: /General Balanced 4x/ }));
+
+    openSection("Runtime");
+    fireEvent.click(await screen.findByRole("radio", { name: /ONNX DirectML/ }));
+    expect(screen.getByRole("button", { name: /^Runtime/ })).toHaveTextContent("ONNX DirectML");
+
+    const submitButton = await screen.findByRole("button", { name: /upscale video/i });
+    await waitFor(() => expect(submitButton).not.toBeDisabled());
+    fireEvent.click(submitButton);
+
+    await waitFor(() => expect(vi.mocked(api.createVideoJob)).toHaveBeenCalled());
+    expect(vi.mocked(api.createVideoJob).mock.calls[0][0]).toEqual(
+      expect.objectContaining({ backend: "onnx" }),
     );
   });
 

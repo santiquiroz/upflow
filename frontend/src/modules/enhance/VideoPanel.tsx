@@ -5,10 +5,17 @@ import { AccordionSection } from "../../components/AccordionSection";
 import { DevicePicker } from "../../components/DevicePicker";
 import { JobCard } from "../../components/JobCard";
 import { ModelPicker } from "../../components/ModelPicker";
+import { RuntimePicker, formatRuntimeSummary } from "../../components/RuntimePicker";
 import { useAudioCapabilities } from "../../hooks/useAudioJob";
 import { useVideoJob, type VideoJobPhase } from "../../hooks/useVideoJob";
 import { getDevices, getModels } from "../../lib/api";
-import type { DeviceInfoResponse, DevicesResponse, ModelResponse, VideoProfileResponse } from "../../lib/apiTypes";
+import type {
+  DeviceInfoResponse,
+  DevicesResponse,
+  ModelResponse,
+  UpscaleBackend,
+  VideoProfileResponse,
+} from "../../lib/apiTypes";
 import { formatDeviceSummary, formatModelSummary } from "./accordionSummaries";
 import { AUDIO_ENHANCE_OPTIONS, AudioEnhanceControls } from "./AudioEnhanceControls";
 import { FpsBoostControls, TARGET_FPS_OPTIONS, type FpsBoostValue } from "./FpsBoostControls";
@@ -27,6 +34,8 @@ const MODEL_TOOLTIP =
   "Pick the AI model that upscales the video. Builtin models run on ncnn/Vulkan; ONNX models can run on CPU or GPU.";
 const DEVICE_TOOLTIP =
   "Pick the compute device that runs the job. A CPU device can't run a builtin (ncnn) model — that needs a Vulkan GPU.";
+const RUNTIME_TOOLTIP =
+  "Choose which backend runs the model. Auto picks the fastest backend for your GPU (ONNX/DirectML is ~2x faster on modern GPUs for video); NCNN Vulkan is the portable fallback that runs on any GPU.";
 const FPS_BOOST_TOOLTIP =
   "Interpolate extra frames to raise the video's frame rate, either by a fixed multiplier or by targeting a specific frame rate. Only one mode can be active at a time.";
 const AUDIO_TOOLTIP =
@@ -236,6 +245,7 @@ export function VideoPanel() {
   const [profile, setProfile] = useState<VideoProfileResponse | null>(null);
   const [model, setModel] = useState<ModelResponse | null>(null);
   const [device, setDevice] = useState<DeviceInfoResponse | null>(null);
+  const [backend, setBackend] = useState<UpscaleBackend>("auto");
   const [scale, setScale] = useState<number | null>(null);
   const [outputContainer, setOutputContainer] = useState("mp4");
   const [videoCodec, setVideoCodec] = useState("libx264");
@@ -321,6 +331,7 @@ export function VideoPanel() {
       profileKey: profile.key,
       modelId: model?.id ?? null,
       device: device?.id ?? null,
+      backend,
       scale,
       outputContainer,
       videoCodec,
@@ -355,6 +366,9 @@ export function VideoPanel() {
         </AccordionSection>
         <AccordionSection title="Device" summary={formatDeviceSummary(device)} tooltip={DEVICE_TOOLTIP}>
           <DevicePicker value={device?.id ?? null} onChange={setDevice} requiresGpu={requiresGpu} />
+        </AccordionSection>
+        <AccordionSection title="Runtime" summary={formatRuntimeSummary(backend)} tooltip={RUNTIME_TOOLTIP}>
+          <RuntimePicker value={backend} onChange={setBackend} />
         </AccordionSection>
         <AccordionSection
           title="FPS boost"

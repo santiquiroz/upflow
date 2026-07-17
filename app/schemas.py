@@ -50,6 +50,7 @@ class VideoJobResponse(BaseModel):
     audio_restore: str | None = Field(default=None, serialization_alias="audioRestore")
     model_id: str | None = Field(default=None, serialization_alias="modelId")
     device: str | None = None
+    backend: str | None = None
     created_at: datetime = Field(serialization_alias="createdAt")
     started_at: datetime | None = Field(default=None, serialization_alias="startedAt")
     finished_at: datetime | None = Field(default=None, serialization_alias="finishedAt")

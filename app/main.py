@@ -18,6 +18,7 @@ from app.services.devices_service import DevicesService
 from app.services.engines.apollo_restore import ApolloRestorer
 from app.services.engines.audio_enhance import AudioEnhancer
 from app.services.engines.onnx_upscaler import OnnxUpscaler
+from app.services.engines.onnx_video_upscaler import OnnxVideoUpscaler
 from app.services.engines.realesrgan_ncnn import RealEsrganNcnnEngine
 from app.services.engines.rife_ncnn import RifeNcnnEngine
 from app.services.hf_client import HfClient
@@ -47,6 +48,7 @@ async def lifespan(app: FastAPI):
     devices_service = DevicesService(settings)
     model_registry = ModelRegistry(settings)
     onnx_engine = OnnxUpscaler(settings, model_registry, devices_service)
+    onnx_video_engine = OnnxVideoUpscaler(settings, model_registry, devices_service)
     device_semaphores = DeviceSemaphores(settings)
     # Shared across both managers (like device_semaphores) so an auto-routed
     # image job and an auto-routed video job never pick the same free
@@ -70,6 +72,7 @@ async def lifespan(app: FastAPI):
         onnx_engine=onnx_engine,
         model_registry=model_registry,
         restorer=apollo_restorer,
+        onnx_video_engine=onnx_video_engine,
     )
     video_job_manager = VideoJobManager(
         settings,
@@ -104,6 +107,7 @@ async def lifespan(app: FastAPI):
     app.state.audio_enhancers = audio_enhancers
     app.state.apollo_restorer = apollo_restorer
     app.state.onnx_engine = onnx_engine
+    app.state.onnx_video_engine = onnx_video_engine
     app.state.devices_service = devices_service
     app.state.job_manager = job_manager
     app.state.video_job_manager = video_job_manager

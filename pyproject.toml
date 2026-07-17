@@ -1,6 +1,6 @@
 [project]
 name = "upflow"
-version = "0.3.1"
+version = "0.4.0"
 description = "Modern AI upscaling + frame interpolation for AMD GPUs — Vulkan-native, FastAPI, web UI + REST API."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -32,7 +32,11 @@ dependencies = [
   # SP9 - Apollo audio restore (app/services/engines/apollo_restore.py) reads
   # audio via soundfile and resamples to 44.1k via scipy.signal.resample_poly.
   "soundfile>=0.12.0,<1.0.0",
-  "scipy>=1.11.0,<2.0.0"
+  "scipy>=1.11.0,<2.0.0",
+  # SP11 - motor ONNX de video (onnx_video_upscaler.py) usa cv2.imread/imwrite
+  # para I/O de frames PNG: mucho mas rapido que PIL (PIL era el cuello,
+  # ~3.15s/frame en 5K). headless = sin deps de GUI, ~40MB.
+  "opencv-python-headless>=4.10.0,<5.0.0"
 ]
 
 [project.optional-dependencies]

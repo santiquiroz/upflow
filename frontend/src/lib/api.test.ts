@@ -272,6 +272,7 @@ describe("createVideoJob", () => {
       targetFps: null,
       audioEnhance: null,
       audioRestore: null,
+      backend: "auto" as const,
       ...overrides,
     };
   }
@@ -301,9 +302,23 @@ describe("createVideoJob", () => {
     expect(body.get("crf")).toBe("17");
     expect(body.get("keep_audio")).toBe("true");
     expect(body.get("fps_multiplier")).toBe("1");
+    expect(body.get("backend")).toBe("auto");
     expect(body.has("target_fps")).toBe(false);
     expect(body.has("audio_enhance")).toBe(false);
     expect(result).toEqual(payload);
+  });
+
+  it("sends the selected backend runtime", async () => {
+    mockFetchOnce(
+      { jobId: "vid-4", status: "queued", statusUrl: "/api/v1/video/jobs/vid-4", downloadUrl: null },
+      { status: 202 },
+    );
+
+    await createVideoJob(videoParams({ backend: "onnx" }));
+
+    const call = vi.mocked(fetch).mock.calls[0];
+    const body = call[1]?.body as FormData;
+    expect(body.get("backend")).toBe("onnx");
   });
 
   it("sends target_fps when set and omits model/device when absent", async () => {
