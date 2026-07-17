@@ -38,6 +38,7 @@ class AudioJobManager:
         self.queue: asyncio.Queue[AudioJob] = asyncio.Queue(maxsize=settings.max_queue_size)
         self.device_semaphores = device_semaphores
         self.worker_tasks: list[asyncio.Task] = []
+        self._active: dict[str, asyncio.Task] = {}
 
     async def start(self) -> None:
         if self.worker_tasks:
@@ -89,6 +90,22 @@ class AudioJobManager:
     def get_job(self, job_id: str) -> AudioJob | None:
         return self.jobs.get(job_id)
 
+    def cancel_job(self, job_id: str) -> bool:
+        job = self.jobs.get(job_id)
+        if job is None:
+            return False
+        if job.status in (JobStatus.completed, JobStatus.failed, JobStatus.cancelled):
+            return False
+        if job.status == JobStatus.queued:
+            # Still in the queue: mark it so the worker skips it on dequeue.
+            job.status = JobStatus.cancelled
+            job.finished_at = utc_now()
+            return True
+        task = self._active.get(job_id)
+        if task is not None:
+            task.cancel()
+        return True
+
     def _enqueue(self, job: AudioJob) -> None:
         try:
             self.queue.put_nowait(job)
@@ -138,6 +155,11 @@ class AudioJobManager:
     async def _worker(self) -> None:
         while True:
             job = await self.queue.get()
+            if job.status == JobStatus.cancelled:
+                # Cancelled while waiting in the queue: skip without processing.
+                self._unlink_source_safely(job.source_path)
+                self.queue.task_done()
+                continue
             await self._run_job(job)
 
     async def _run_job(self, job: AudioJob) -> None:
@@ -147,20 +169,34 @@ class AudioJobManager:
     async def _execute_job(self, job: AudioJob) -> None:
         job.status = JobStatus.running
         job.started_at = utc_now()
+        run_task = asyncio.ensure_future(self._run_engine(job))
+        self._active[job.id] = run_task
         try:
-            job.output_path = await self.pipeline.run(job)
+            await run_task
             job.status = JobStatus.completed
         except asyncio.CancelledError:
-            job.status = JobStatus.failed
-            job.error = "Job cancelled"
-            raise
+            run_task.cancel()
+            if asyncio.current_task().cancelling() > 0:
+                # The WORKER task itself was cancelled (shutdown via stop()):
+                # fail the job and re-raise so the worker actually dies.
+                job.status = JobStatus.failed
+                job.error = "Job cancelled"
+                raise
+            # Only the child engine task was cancelled (per-job cancel_job):
+            # mark cancelled and let the worker live on for other jobs.
+            job.status = JobStatus.cancelled
+            job.error = None
         except Exception as exc:  # noqa: BLE001
             job.status = JobStatus.failed
             job.error = str(exc)
         finally:
+            self._active.pop(job.id, None)
             job.finished_at = utc_now()
             self._unlink_source_safely(job.source_path)
             self.queue.task_done()
+
+    async def _run_engine(self, job: AudioJob) -> None:
+        job.output_path = await self.pipeline.run(job)
 
     @staticmethod
     def _unlink_source_safely(source_path: Path) -> None:

@@ -483,11 +483,33 @@ async def get_job(job_id: str, jobs: JobManager = Depends(get_job_manager)) -> J
     return job_to_response(job)
 
 
+@router.post("/jobs/{job_id}/cancel", response_model=JobResponse)
+async def cancel_job(job_id: str, jobs: JobManager = Depends(get_job_manager)) -> JobResponse:
+    job = jobs.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if not jobs.cancel_job(job_id):
+        raise HTTPException(status_code=409, detail="Job already finished")
+    return job_to_response(job)
+
+
 @router.get("/video/jobs/{job_id}", response_model=VideoJobResponse)
 async def get_video_job(job_id: str, video_jobs: VideoJobManager = Depends(get_video_job_manager)) -> VideoJobResponse:
     job = video_jobs.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Video job not found")
+    return video_job_to_response(job)
+
+
+@router.post("/video/jobs/{job_id}/cancel", response_model=VideoJobResponse)
+async def cancel_video_job(
+    job_id: str, video_jobs: VideoJobManager = Depends(get_video_job_manager)
+) -> VideoJobResponse:
+    job = video_jobs.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Video job not found")
+    if not video_jobs.cancel_job(job_id):
+        raise HTTPException(status_code=409, detail="Job already finished")
     return video_job_to_response(job)
 
 
@@ -571,6 +593,18 @@ async def get_audio_job(job_id: str, audio_jobs: AudioJobManager = Depends(get_a
     job = audio_jobs.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Audio job not found")
+    return audio_job_to_response(job)
+
+
+@router.post("/audio/jobs/{job_id}/cancel", response_model=AudioJobResponse)
+async def cancel_audio_job(
+    job_id: str, audio_jobs: AudioJobManager = Depends(get_audio_job_manager)
+) -> AudioJobResponse:
+    job = audio_jobs.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Audio job not found")
+    if not audio_jobs.cancel_job(job_id):
+        raise HTTPException(status_code=409, detail="Job already finished")
     return audio_job_to_response(job)
 
 

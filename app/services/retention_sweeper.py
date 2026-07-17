@@ -87,7 +87,7 @@ class RetentionSweeper:
 
     @staticmethod
     def _is_finished(job: UpscaleJob | VideoUpscaleJob | AudioJob) -> bool:
-        return job.status in (JobStatus.completed, JobStatus.failed)
+        return job.status in (JobStatus.completed, JobStatus.failed, JobStatus.cancelled)
 
     def _delete_expired_outputs(self) -> None:
         if not self.settings.outputs_path.exists():

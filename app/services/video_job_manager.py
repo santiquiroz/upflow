@@ -52,6 +52,7 @@ class VideoJobManager:
         self.device_semaphores = device_semaphores
         self.device_router = device_router or DeviceRouter(device_semaphores)
         self.worker_tasks: list[asyncio.Task] = []
+        self._active: dict[str, asyncio.Task] = {}
 
     async def start(self) -> None:
         if self.worker_tasks:
@@ -139,6 +140,22 @@ class VideoJobManager:
 
     def get_job(self, job_id: str) -> VideoUpscaleJob | None:
         return self.jobs.get(job_id)
+
+    def cancel_job(self, job_id: str) -> bool:
+        job = self.jobs.get(job_id)
+        if job is None:
+            return False
+        if job.status in (JobStatus.completed, JobStatus.failed, JobStatus.cancelled):
+            return False
+        if job.status == JobStatus.queued:
+            # Still in the queue: mark it so the worker skips it on dequeue.
+            job.status = JobStatus.cancelled
+            job.finished_at = utc_now()
+            return True
+        task = self._active.get(job_id)
+        if task is not None:
+            task.cancel()
+        return True
 
     def _enqueue(self, job: VideoUpscaleJob) -> None:
         try:
@@ -315,6 +332,11 @@ class VideoJobManager:
     async def _worker(self) -> None:
         while True:
             job = await self.queue.get()
+            if job.status == JobStatus.cancelled:
+                # Cancelled while waiting in the queue: skip without processing.
+                self._unlink_source_safely(job.source_path)
+                self.queue.task_done()
+                continue
             if job.device == AUTO_DEVICE_ID:
                 await self._run_auto_job(job)
             else:
@@ -345,20 +367,34 @@ class VideoJobManager:
     async def _execute_job(self, job: VideoUpscaleJob) -> None:
         job.status = JobStatus.running
         job.started_at = utc_now()
+        run_task = asyncio.ensure_future(self._run_engine(job))
+        self._active[job.id] = run_task
         try:
-            job.output_path = await self.upscaler.run(job, fps_multiplier=job.fps_multiplier)
+            await run_task
             job.status = JobStatus.completed
         except asyncio.CancelledError:
-            job.status = JobStatus.failed
-            job.error = "Job cancelled"
-            raise
+            run_task.cancel()
+            if asyncio.current_task().cancelling() > 0:
+                # The WORKER task itself was cancelled (shutdown via stop()):
+                # fail the job and re-raise so the worker actually dies.
+                job.status = JobStatus.failed
+                job.error = "Job cancelled"
+                raise
+            # Only the child engine task was cancelled (per-job cancel_job):
+            # mark cancelled and let the worker live on for other jobs.
+            job.status = JobStatus.cancelled
+            job.error = None
         except Exception as exc:  # noqa: BLE001
             job.status = JobStatus.failed
             job.error = str(exc)
         finally:
+            self._active.pop(job.id, None)
             job.finished_at = utc_now()
             self._unlink_source_safely(job.source_path)
             self.queue.task_done()
+
+    async def _run_engine(self, job: VideoUpscaleJob) -> None:
+        job.output_path = await self.upscaler.run(job, fps_multiplier=job.fps_multiplier)
 
     def _fail_dequeued_job(self, job: VideoUpscaleJob, error: str) -> None:
         job.status = JobStatus.failed
