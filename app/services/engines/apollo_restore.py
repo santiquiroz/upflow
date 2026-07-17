@@ -34,6 +34,9 @@ APOLLO_SAMPLE_RATE = 44100
 # 0.15s de crossfade Hann alcanza para juntar chunks sin costura audible; con chunks
 # chicos (1.0s, por el limite TDR) un overlap de 0.5s era 50% de computo redundante.
 OVERLAP_SECONDS = 0.15
+# En CPU los chunks son grandes (~30s), asi que un crossfade de 0.5s es redundancia
+# despreciable y suaviza mejor los pocos bordes.
+CPU_OVERLAP_SECONDS = 0.5
 SESSION_CACHE_SIZE = 2
 ONNX_INPUT_NAME = "audio"
 ONNX_OUTPUT_NAME = "restored"
@@ -64,17 +67,27 @@ class ApolloRestorer:
             )
         audio = _load_mono_44k(input_wav)
         session = self._get_session(device)
+        is_cpu = _is_cpu_device(device)
         # En GPU (dml:N) el cómputo satura la única tarjeta y el escritorio se
         # laguea; un respiro entre chunks le devuelve la GPU al compositor. En CPU
         # no hay contencion de GPU, asi que no se aplica (seria solo mas lento).
-        throttle = 0.0 if _is_cpu_device(device) else self.settings.audio_restore_gpu_throttle_seconds
-        restored = self._restore_chunked(session, audio, throttle)
+        throttle = 0.0 if is_cpu else self.settings.audio_restore_gpu_throttle_seconds
+        # CPU no tiene el limite TDR de DirectML, asi que usa chunks GRANDES: el
+        # modelo ve mas contexto y hay menos bordes -> mejor calidad (los chunks
+        # de 1s de la GPU emborronan pasajes dinamicos por falta de contexto y
+        # crossfades frecuentes). GPU se queda con el chunk chico TDR-safe.
+        chunk_seconds = self.settings.audio_restore_cpu_chunk_seconds if is_cpu else self.settings.audio_restore_chunk_seconds
+        overlap_seconds = CPU_OVERLAP_SECONDS if is_cpu else OVERLAP_SECONDS
+        restored = self._restore_chunked(session, audio, throttle, chunk_seconds, overlap_seconds)
         _save_wav(output_wav, restored)
 
-    def _restore_chunked(self, session: Any, audio: np.ndarray, throttle: float = 0.0) -> np.ndarray:
+    def _restore_chunked(
+        self, session: Any, audio: np.ndarray, throttle: float = 0.0,
+        chunk_seconds: float = 1.0, overlap_seconds: float = OVERLAP_SECONDS,
+    ) -> np.ndarray:
         total = audio.shape[-1]
-        window_length = max(1, int(self.settings.audio_restore_chunk_seconds * APOLLO_SAMPLE_RATE))
-        overlap = min(int(OVERLAP_SECONDS * APOLLO_SAMPLE_RATE), window_length // 2)
+        window_length = max(1, int(chunk_seconds * APOLLO_SAMPLE_RATE))
+        overlap = min(int(overlap_seconds * APOLLO_SAMPLE_RATE), window_length // 2)
         hop = max(1, window_length - overlap)
         window = np.hanning(window_length).astype(np.float64)
 
