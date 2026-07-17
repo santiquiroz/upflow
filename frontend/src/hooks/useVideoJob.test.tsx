@@ -73,6 +73,7 @@ function submitParams() {
     targetFps: null,
     audioEnhance: null,
     audioRestore: null,
+    backend: "auto" as const,
   };
 }
 

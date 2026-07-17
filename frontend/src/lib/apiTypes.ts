@@ -6,6 +6,11 @@ export type JobStatus = "queued" | "running" | "completed" | "failed" | "cancell
 
 export type StageStatus = "pending" | "active" | "done";
 
+// Upscale runtime selected per video job. Mirrors the backend UPSCALE_BACKEND
+// contract: "auto" lets the server pick the fastest available backend, "ncnn"
+// forces Real-ESRGAN NCNN Vulkan, "onnx" forces ONNX Runtime (DirectML/CUDA/CPU).
+export type UpscaleBackend = "auto" | "ncnn" | "onnx";
+
 // Mirrors app/services/progress.py::Stage (asdict()'d into job.metadata.stages).
 export interface JobStage {
   key: string;
@@ -69,6 +74,10 @@ export interface VideoJobResponse {
   targetFps: string | null;
   audioEnhance: string | null;
   audioRestore: string | null;
+  // Runtime that ran the upscale. Serialized as `backend` (single word, no
+  // camelCase transform); null until a job explicitly selects one, in which
+  // case the server behaves as "auto".
+  backend?: UpscaleBackend | null;
   modelId: string | null;
   device: string | null;
   createdAt: string;
