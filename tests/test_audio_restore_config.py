@@ -17,7 +17,7 @@ def test_audio_restore_settings_have_expected_defaults() -> None:
 
     assert settings.enable_audio_restore is False
     assert settings.apollo_restore_model == "vendor/apollo/apollo.onnx"
-    assert settings.audio_restore_chunk_seconds == 3.0
+    assert settings.audio_restore_chunk_seconds == 1.0  # <2s por chunk -> evita el TDR de Windows en DirectML
     assert settings.max_audio_upload_mb == 200
 
 

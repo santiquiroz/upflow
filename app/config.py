@@ -235,7 +235,11 @@ class Settings(BaseSettings):
     apollo_restore_model: str = Field(default="vendor/apollo/apollo.onnx", alias="APOLLO_RESTORE_MODEL")
     # DirectML breaks on long tensors: Apollo runs in chunks <=3s with a
     # 0.5s Hann overlap-add, so this bounds the per-inference tensor length.
-    audio_restore_chunk_seconds: float = Field(default=3.0, alias="AUDIO_RESTORE_CHUNK_SECONDS")
+    # 1.0s mantiene cada inferencia DirectML por debajo del limite TDR de Windows
+    # (~2s antes de que el driver resetee la GPU). En la RX 7800 XT: 3.0s -> ~2.3s/chunk
+    # (TDR, reset repetido); 1.0s -> ~0.8s/chunk (seguro). En GPUs mas debiles, si igual
+    # aparece "GPU timeout", usar device=cpu para el restore (sin TDR, correcto a cualquier largo).
+    audio_restore_chunk_seconds: float = Field(default=1.0, alias="AUDIO_RESTORE_CHUNK_SECONDS")
     max_audio_upload_mb: int = Field(default=200, alias="MAX_AUDIO_UPLOAD_MB")
 
     default_device: str = Field(default="dml:0", alias="DEFAULT_DEVICE")

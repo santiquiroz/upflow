@@ -30,7 +30,9 @@ from app.services.engines.onnx_upscaler import _build_providers, _wrap_onnx_erro
 # ---------------------------------------------------------------------------
 
 APOLLO_SAMPLE_RATE = 44100
-OVERLAP_SECONDS = 0.5
+# 0.15s de crossfade Hann alcanza para juntar chunks sin costura audible; con chunks
+# chicos (1.0s, por el limite TDR) un overlap de 0.5s era 50% de computo redundante.
+OVERLAP_SECONDS = 0.15
 SESSION_CACHE_SIZE = 2
 ONNX_INPUT_NAME = "audio"
 ONNX_OUTPUT_NAME = "restored"
