@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.config import Settings
+from app.services.engines.realesrgan_ncnn import gpu_index_for_device
 from app.services.process_runner import run_guarded_process
 
 OUTPUT_FRAME_PATTERN = "%08d.png"
@@ -26,6 +27,7 @@ class RifeNcnnEngine:
         multiplier: int = 1,
         *,
         target_frame_count: int | None = None,
+        device: str | None = None,
     ) -> Path:
         if not self.available():
             raise RuntimeError(
@@ -37,7 +39,9 @@ class RifeNcnnEngine:
         )
         frames_out.mkdir(parents=True, exist_ok=True)
 
-        command = self._build_command(frames_in, frames_out, resolved_target_frame_count)
+        command = self._build_command(
+            frames_in, frames_out, resolved_target_frame_count, self._gpu_index(device)
+        )
         _, stderr, returncode = await run_guarded_process(command, self.settings.subprocess_timeout)
 
         if returncode != 0:
@@ -55,7 +59,18 @@ class RifeNcnnEngine:
             return target_frame_count
         return source_frame_count * multiplier
 
-    def _build_command(self, frames_in: Path, frames_out: Path, target_frame_count: int) -> list[str]:
+    @staticmethod
+    def _gpu_index(device: str | None) -> str:
+        # RIFE runs on a Vulkan GPU (no CPU path). "cpu"/None -> "0" preserves the
+        # historical default instead of letting gpu_index_for_device raise on cpu;
+        # a dml:N id runs RIFE on the SAME GPU as the upscale (multi-GPU affinity).
+        if device is None or device == "cpu":
+            return "0"
+        return gpu_index_for_device(device)
+
+    def _build_command(
+        self, frames_in: Path, frames_out: Path, target_frame_count: int, gpu_index: str
+    ) -> list[str]:
         return [
             str(self.binary_path),
             "-i",
@@ -67,7 +82,7 @@ class RifeNcnnEngine:
             "-n",
             str(target_frame_count),
             "-g",
-            "0",
+            gpu_index,
             "-f",
             OUTPUT_FRAME_PATTERN,
         ]

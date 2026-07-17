@@ -16,7 +16,9 @@ export default defineConfig({
   },
   build: {
     outDir: "dist",
-    sourcemap: true,
+    // No source maps in the shipped build: the release bundles frontend/dist as
+    // static assets, and a full .map (~1.16MB) just bloats the installer.
+    sourcemap: false,
   },
   test: {
     environment: "jsdom",

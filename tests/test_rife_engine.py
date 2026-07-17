@@ -125,6 +125,34 @@ async def test_rife_engine_run_builds_expected_argv(
     ]
 
 
+@pytest.mark.parametrize(
+    "device, expected_g",
+    [("dml:0", "0"), ("dml:1", "1"), ("cpu", "0"), (None, "0")],
+)
+async def test_rife_engine_run_targets_job_device_gpu(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, device: str | None, expected_g: str
+) -> None:
+    settings = make_available_settings(tmp_path)
+    engine = RifeNcnnEngine(settings)
+    frames_in = tmp_path / "frames-in"
+    frames_out = tmp_path / "frames-out"
+    frames_in.mkdir()
+
+    calls: list[list[str]] = []
+
+    async def fake_run_guarded_process(command: list[str], timeout: float) -> tuple[bytes, bytes, int]:
+        calls.append(command)
+        write_fake_frames(frames_out, 4)
+        return b"", b"", 0
+
+    monkeypatch.setattr("app.services.engines.rife_ncnn.run_guarded_process", fake_run_guarded_process)
+
+    await engine.run(frames_in, frames_out, 2, 2, device=device)
+
+    gpu_arg = calls[0][calls[0].index("-g") + 1]
+    assert gpu_arg == expected_g
+
+
 # ---------------------------------------------------------------------------
 # output dir lifecycle + shared runner reuse
 # ---------------------------------------------------------------------------

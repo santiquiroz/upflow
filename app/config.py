@@ -219,7 +219,6 @@ class Settings(BaseSettings):
     # number of devices expected to run in parallel, or idle device
     # semaphores never get a worker to pull a job into them.
     max_concurrent_jobs: int = Field(default=4, alias="MAX_CONCURRENT_JOBS")
-    cpu_fallback_workers: int = Field(default=2, alias="CPU_FALLBACK_WORKERS")
     # Threads load:proc:save de Real-ESRGAN NCNN en el upscale de video. El proc
     # (GPU) por defecto era 2 -> subutilizaba la GPU. Medido en RX 7800 XT (720p 4x):
     # 2:2:2 -> 2.2 fps ; 2:24:12 -> 5.3 fps (~2.4x, cerca del techo de NCNN Vulkan).
@@ -318,6 +317,12 @@ class Settings(BaseSettings):
     # override to dial down on a weak/oversubscribed CPU.
     onnx_video_load_threads: int = Field(default_factory=_default_onnx_load_threads, alias="ONNX_VIDEO_LOAD_THREADS")
     onnx_video_save_threads: int = Field(default_factory=_default_onnx_save_threads, alias="ONNX_VIDEO_SAVE_THREADS")
+    # Techo de RAM del pipeline ONNX: acota cuantos frames 4x de salida (44MB c/u
+    # @5120x2880) viven a la vez en la cola de guardado. Sin esto la cola escala
+    # con save-threads (12*2=24 frames -> ~1GB solo en cola) sin relacion con la
+    # RAM. maxsize se deriva de este presupuesto y el tamano real del frame, con
+    # piso = save-threads para no matar el throughput.
+    onnx_video_max_pipeline_mb: int = Field(default=1024, alias="ONNX_VIDEO_MAX_PIPELINE_MB")
 
     update_repo: str = Field(default="santiquiroz/upflow", alias="UPDATE_REPO")
     # Package whose installed metadata gives the running version to compare

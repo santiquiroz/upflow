@@ -411,7 +411,12 @@ async def test_sweeper_runs_first_sweep_immediately_on_start(
     os.utime(stale_output, (stale_mtime, stale_mtime))
 
     await sweeper.start()
-    await asyncio.sleep(0)  # one loop cycle: the boot sweep runs before the first (1h) sleep
+    # The boot sweep now runs via asyncio.to_thread, so it completes a few loop
+    # cycles after start() rather than synchronously; poll for the deletion.
+    for _ in range(200):
+        if not stale_output.exists():
+            break
+        await asyncio.sleep(0.01)
     await sweeper.stop()
 
     assert not stale_output.exists()

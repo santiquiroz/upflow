@@ -47,7 +47,12 @@ class RetentionSweeper:
 
     async def _run(self) -> None:
         while True:
-            self._sweep_safely()
+            # The sweep does blocking disk I/O (iterdir/stat/unlink/rmtree over
+            # potentially thousands of files); run it off the event loop so it
+            # never freezes concurrent job progress polling. _prune_finished_jobs
+            # snapshots jobs.items() and uses pop(), so running in a worker thread
+            # cannot hit "dict changed size" if the loop adds a job concurrently.
+            await asyncio.to_thread(self._sweep_safely)
             await asyncio.sleep(SWEEP_INTERVAL_SECONDS)
 
     def _sweep_safely(self) -> None:
@@ -121,9 +126,11 @@ class RetentionSweeper:
         self, jobs: dict[str, UpscaleJob] | dict[str, VideoUpscaleJob] | dict[str, AudioJob]
     ) -> None:
         cutoff = utc_now() - timedelta(hours=self.settings.output_ttl_hours)
-        expired_ids = [job_id for job_id, job in jobs.items() if self._is_expired(job, cutoff)]
+        # Snapshot before iterating + pop() instead of del: this runs in a worker
+        # thread while the event loop may add/remove jobs concurrently.
+        expired_ids = [job_id for job_id, job in list(jobs.items()) if self._is_expired(job, cutoff)]
         for job_id in expired_ids:
-            del jobs[job_id]
+            jobs.pop(job_id, None)
 
     @classmethod
     def _is_expired(cls, job: UpscaleJob | VideoUpscaleJob | AudioJob, cutoff: datetime) -> bool:
