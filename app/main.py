@@ -73,6 +73,7 @@ async def lifespan(app: FastAPI):
         model_registry=model_registry,
         restorer=apollo_restorer,
         onnx_video_engine=onnx_video_engine,
+        devices=devices_service,
     )
     video_job_manager = VideoJobManager(
         settings,

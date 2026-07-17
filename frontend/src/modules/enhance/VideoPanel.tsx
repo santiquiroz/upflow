@@ -6,6 +6,7 @@ import { DevicePicker } from "../../components/DevicePicker";
 import { JobCard } from "../../components/JobCard";
 import { ModelPicker } from "../../components/ModelPicker";
 import { RuntimePicker, formatRuntimeSummary } from "../../components/RuntimePicker";
+import { EncoderPicker, formatEncoderSummary } from "../../components/EncoderPicker";
 import { useAudioCapabilities } from "../../hooks/useAudioJob";
 import { useVideoJob, type VideoJobPhase } from "../../hooks/useVideoJob";
 import { getDevices, getModels } from "../../lib/api";
@@ -14,6 +15,7 @@ import type {
   DevicesResponse,
   ModelResponse,
   UpscaleBackend,
+  VideoEncoder,
   VideoProfileResponse,
 } from "../../lib/apiTypes";
 import { formatDeviceSummary, formatModelSummary } from "./accordionSummaries";
@@ -36,6 +38,8 @@ const DEVICE_TOOLTIP =
   "Pick the compute device that runs the job. A CPU device can't run a builtin (ncnn) model — that needs a Vulkan GPU.";
 const RUNTIME_TOOLTIP =
   "Choose which backend runs the model. Auto picks the fastest backend for your GPU (ONNX/DirectML is ~2x faster on modern GPUs for video); NCNN Vulkan is the portable fallback that runs on any GPU.";
+const ENCODER_TOOLTIP =
+  "How the final video is encoded. Software (x264/x265) is best quality per bit. Auto (GPU) uses your GPU's hardware encoder (NVENC/AMF/QSV) — far faster in 4K at a small quality/size cost, with automatic fallback to software.";
 const FPS_BOOST_TOOLTIP =
   "Interpolate extra frames to raise the video's frame rate, either by a fixed multiplier or by targeting a specific frame rate. Only one mode can be active at a time.";
 const AUDIO_TOOLTIP =
@@ -246,6 +250,7 @@ export function VideoPanel() {
   const [model, setModel] = useState<ModelResponse | null>(null);
   const [device, setDevice] = useState<DeviceInfoResponse | null>(null);
   const [backend, setBackend] = useState<UpscaleBackend>("auto");
+  const [videoEncoder, setVideoEncoder] = useState<VideoEncoder>("software");
   const [scale, setScale] = useState<number | null>(null);
   const [outputContainer, setOutputContainer] = useState("mp4");
   const [videoCodec, setVideoCodec] = useState("libx264");
@@ -332,6 +337,7 @@ export function VideoPanel() {
       modelId: model?.id ?? null,
       device: device?.id ?? null,
       backend,
+      videoEncoder,
       scale,
       outputContainer,
       videoCodec,
@@ -369,6 +375,9 @@ export function VideoPanel() {
         </AccordionSection>
         <AccordionSection title="Runtime" summary={formatRuntimeSummary(backend)} tooltip={RUNTIME_TOOLTIP}>
           <RuntimePicker value={backend} onChange={setBackend} />
+        </AccordionSection>
+        <AccordionSection title="Encoder" summary={formatEncoderSummary(videoEncoder)} tooltip={ENCODER_TOOLTIP}>
+          <EncoderPicker value={videoEncoder} onChange={setVideoEncoder} />
         </AccordionSection>
         <AccordionSection
           title="FPS boost"

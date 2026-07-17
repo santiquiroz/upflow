@@ -273,6 +273,7 @@ describe("createVideoJob", () => {
       audioEnhance: null,
       audioRestore: null,
       backend: "auto" as const,
+      videoEncoder: "software" as const,
       ...overrides,
     };
   }

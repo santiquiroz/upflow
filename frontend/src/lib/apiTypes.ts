@@ -11,6 +11,11 @@ export type StageStatus = "pending" | "active" | "done";
 // forces Real-ESRGAN NCNN Vulkan, "onnx" forces ONNX Runtime (DirectML/CUDA/CPU).
 export type UpscaleBackend = "auto" | "ncnn" | "onnx";
 
+// Video encoder selected per video job. Mirrors the backend video_encoder
+// contract: "software" uses libx264/libx265 on the CPU (default), "auto" picks a
+// hardware encoder (AMF/NVENC/QSV) by the job's GPU and falls back to software.
+export type VideoEncoder = "software" | "auto";
+
 // Mirrors app/services/progress.py::Stage (asdict()'d into job.metadata.stages).
 export interface JobStage {
   key: string;
@@ -78,6 +83,8 @@ export interface VideoJobResponse {
   // camelCase transform); null until a job explicitly selects one, in which
   // case the server behaves as "auto".
   backend?: UpscaleBackend | null;
+  // Video encoder for the final re-encode. Serialized as `videoEncoder`.
+  videoEncoder?: VideoEncoder | null;
   modelId: string | null;
   device: string | null;
   createdAt: string;
