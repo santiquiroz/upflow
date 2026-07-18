@@ -190,6 +190,17 @@ class OnnxVideoUpscaler:
             return False
         return (self.settings.builtin_onnx_path / model.filename).exists()
 
+    def _select_model_file(self, model: Any, device: str) -> Path:
+        """Prefer the fp16 export on GPU when enabled and present; the fp32 file is
+        the fallback (and the only sane choice on the CPU EP, where fp16 is
+        emulated). A missing fp16 sibling silently uses fp32."""
+        onnx_dir = self.settings.builtin_onnx_path
+        if self.settings.onnx_prefer_fp16 and not device.startswith("cpu"):
+            fp16_path = onnx_dir / model.fp16_filename
+            if fp16_path.exists():
+                return fp16_path
+        return onnx_dir / model.filename
+
     # --- public video entry point ------------------------------------------
 
     async def run_frames_builtin(
@@ -203,7 +214,7 @@ class OnnxVideoUpscaler:
         model = get_builtin_onnx_model(engine_model_name)
         if model is None:
             raise RuntimeError(f"No ONNX export configured for builtin model {engine_model_name!r}")
-        onnx_path = self.settings.builtin_onnx_path / model.filename
+        onnx_path = self._select_model_file(model, device)
         frames_out.mkdir(parents=True, exist_ok=True)
         source_frame_count = self._count_frame_files(frames_in)
 

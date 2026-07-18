@@ -167,6 +167,17 @@ class ModelInstaller:
         self._jobs: dict[str, InstallJob] = {}
         self._queue: asyncio.Queue[InstallJob] = asyncio.Queue()
         self._worker_task: asyncio.Task | None = None
+        # One lock per model_id so a delete can't interleave with the install of
+        # the same model (which would leave a registry entry without its file, or
+        # resurrect a model the user just deleted).
+        self._model_locks: dict[str, asyncio.Lock] = {}
+
+    def _lock_for(self, model_id: str) -> asyncio.Lock:
+        lock = self._model_locks.get(model_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._model_locks[model_id] = lock
+        return lock
 
     async def start(self) -> None:
         if self._worker_task is not None:
@@ -194,17 +205,19 @@ class ModelInstaller:
         return self._jobs.get(install_id)
 
     async def delete(self, model_id: str) -> None:
-        # Capture the entry (and its file_path) BEFORE removing it: the
-        # builtin/unknown guards raise before touching disk, and the on-disk
-        # file is only unlinked after registry.remove() succeeds, so a failed
-        # remove never leaves the registry and disk inconsistent.
-        entry = self.registry.get(model_id)
-        if entry is None:
-            raise ModelNotFoundError(f"Unknown model id: {model_id!r}")
-        if entry.kind == ModelKind.builtin_ncnn:
-            raise ModelProtectedError(f"Cannot remove builtin model: {model_id!r}")
-        await asyncio.to_thread(self.registry.remove, model_id)
-        await asyncio.to_thread(self._delete_model_file, entry)
+        # Serialized against an in-flight install of the SAME model_id.
+        async with self._lock_for(model_id):
+            # Capture the entry (and its file_path) BEFORE removing it: the
+            # builtin/unknown guards raise before touching disk, and the on-disk
+            # file is only unlinked after registry.remove() succeeds, so a failed
+            # remove never leaves the registry and disk inconsistent.
+            entry = self.registry.get(model_id)
+            if entry is None:
+                raise ModelNotFoundError(f"Unknown model id: {model_id!r}")
+            if entry.kind == ModelKind.builtin_ncnn:
+                raise ModelProtectedError(f"Cannot remove builtin model: {model_id!r}")
+            await asyncio.to_thread(self.registry.remove, model_id)
+            await asyncio.to_thread(self._delete_model_file, entry)
 
     def _delete_model_file(self, entry: ModelEntry) -> None:
         # Only ever deletes an onnx entry's own file, and only when it
@@ -307,22 +320,27 @@ class ModelInstaller:
             scale = detected_scale
             size_bytes = weight_file.size
 
-        await self._promote_staging_file(staging_dest, final_dest)
+        # Promote + register under the model's lock so a concurrent delete() of the
+        # same model_id lands strictly before or strictly after this pair -- never
+        # between them (which would leave a registry entry pointing at a file the
+        # delete already removed, or resurrect a model the user just deleted).
+        async with self._lock_for(model_id):
+            await self._promote_staging_file(staging_dest, final_dest)
 
-        entry = ModelEntry(
-            id=model_id,
-            name=job.repo_id,
-            kind=ModelKind.onnx,
-            source=f"https://huggingface.co/{job.repo_id}",
-            size_bytes=size_bytes,
-            scale=scale,
-            arch=arch,
-            file_path=self._relative_onnx_path(model_id),
-            status=ModelStatus.installed,
-        )
-        await asyncio.to_thread(self.registry.register, entry)
-        job.model_id = model_id
-        job.status = InstallStatus.installed
+            entry = ModelEntry(
+                id=model_id,
+                name=job.repo_id,
+                kind=ModelKind.onnx,
+                source=f"https://huggingface.co/{job.repo_id}",
+                size_bytes=size_bytes,
+                scale=scale,
+                arch=arch,
+                file_path=self._relative_onnx_path(model_id),
+                status=ModelStatus.installed,
+            )
+            await asyncio.to_thread(self.registry.register, entry)
+            job.model_id = model_id
+            job.status = InstallStatus.installed
 
     async def _download_and_convert(
         self,

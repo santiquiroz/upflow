@@ -125,16 +125,23 @@ class Uint8Wrapper(nn.Module):
     """uint8 NHWC in -> uint8 NHWC out. `target_scale` differs from the base
     network scale only for the derived animevideov3 x2/x3 graphs, which resample
     the x4 output down to the requested ratio (Real-ESRGAN `outscale` behavior).
+
+    `half` runs the network body in fp16. The body dominates runtime (it works at
+    INPUT resolution regardless of scale), and on a GPU with double-rate fp16
+    (RDNA3, Ampere+) that measured 1.33x faster at 1080p->4x with a max pixel
+    delta of 3/255 vs fp32. I/O stays uint8 either way.
     """
 
-    def __init__(self, net: nn.Module, base_scale: int, target_scale: int):
+    def __init__(self, net: nn.Module, base_scale: int, target_scale: int, half: bool = False):
         super().__init__()
         self.net = net
         self.base_scale = base_scale
         self.target_scale = target_scale
+        self.half = half
 
     def forward(self, x_u8):
-        x = x_u8.permute(0, 3, 1, 2).float() / 255.0  # NHWC u8 -> NCHW f32 0..1
+        x = x_u8.permute(0, 3, 1, 2)
+        x = (x.half() if self.half else x.float()) / 255.0  # NHWC u8 -> NCHW 0..1
         y = self.net(x)  # NCHW f32 at base_scale
         if self.target_scale != self.base_scale:
             # bilinear (not area): area maps to adaptive pooling, whose output
@@ -143,7 +150,8 @@ class Uint8Wrapper(nn.Module):
             y = F.interpolate(
                 y, scale_factor=ratio, mode="bilinear", align_corners=False, recompute_scale_factor=False
             )
-        y = torch.clamp(y * 255.0, 0.0, 255.0).round()
+        # Back to fp32 before the 0..255 clamp so rounding matches the fp32 graph.
+        y = torch.clamp(y.float() * 255.0, 0.0, 255.0).round()
         return y.permute(0, 2, 3, 1).to(torch.uint8)  # NCHW -> NHWC u8
 
 
@@ -192,23 +200,36 @@ def _build_network(target: ExportTarget, weights_path: Path) -> nn.Module:
     return net
 
 
+def fp16_name(out_name: str) -> str:
+    """`foo-uint8.onnx` -> `foo-uint8-fp16.onnx` (must match backend_registry)."""
+    return out_name.replace(".onnx", "-fp16.onnx")
+
+
 def _export_one(target: ExportTarget, weights_dir: Path, out_dir: Path) -> None:
     weights_path = weights_dir / target.weights
     if not weights_path.exists():
         print(f"[skip] {target.out_name}: weights not found ({weights_path})")
         return
+    out_dir.mkdir(parents=True, exist_ok=True)
+    # Both precisions from the same weights: fp32 is the portable/CPU graph, fp16
+    # is the fast GPU graph (measured 1.33x at 1080p->4x, max pixel delta 3/255).
+    _export_precision(target, weights_path, out_dir / target.out_name, half=False)
+    _export_precision(target, weights_path, out_dir / fp16_name(target.out_name), half=True)
+
+
+def _export_precision(target: ExportTarget, weights_path: Path, out_path: Path, *, half: bool) -> None:
     net = _build_network(target, weights_path)
-    model = Uint8Wrapper(net, target.base_scale, target.target_scale).eval()
+    if half:
+        net = net.half()
+    model = Uint8Wrapper(net, target.base_scale, target.target_scale, half=half).eval()
 
     dummy = torch.randint(0, 256, (1, 64, 96, 3), dtype=torch.uint8)
     with torch.no_grad():
         out = model(dummy)
     expected = (64 * target.target_scale, 96 * target.target_scale)
-    assert tuple(out.shape[1:3]) == expected, f"{target.out_name}: got {tuple(out.shape)}"
+    assert tuple(out.shape[1:3]) == expected, f"{out_path.name}: got {tuple(out.shape)}"
     assert out.dtype == torch.uint8
 
-    out_path = out_dir / target.out_name
-    out_dir.mkdir(parents=True, exist_ok=True)
     torch.onnx.export(
         model,
         dummy,
@@ -219,7 +240,8 @@ def _export_one(target: ExportTarget, weights_dir: Path, out_dir: Path) -> None:
         opset_version=OPSET,
         dynamo=False,
     )
-    print(f"[ok]   {target.out_name}  ({out_path.stat().st_size} bytes, x{target.target_scale})")
+    precision = "fp16" if half else "fp32"
+    print(f"[ok]   {out_path.name}  ({out_path.stat().st_size} bytes, x{target.target_scale}, {precision})")
 
 
 def main() -> None:

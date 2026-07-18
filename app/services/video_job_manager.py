@@ -96,10 +96,10 @@ class VideoJobManager:
         model_id: str | None = None,
         device: str | None = None,
         backend: str | None = None,
-        video_encoder: str = "software",
+        video_encoder: str = "auto",
         job_id: str | None = None,
     ) -> VideoUpscaleJob:
-        source_fps = await self._validate_video(source_path)
+        source_fps, probe = await self._validate_video(source_path)
         validate_backend_choice(backend)
         self._validate_video_encoder(video_encoder)
         resolved_model_id = model_id if model_id is not None else model_name
@@ -139,6 +139,7 @@ class VideoJobManager:
             device=device,
             backend=backend,
             video_encoder=video_encoder,
+            probe=probe,
         )
         if job_id is not None:
             job.id = job_id
@@ -171,7 +172,9 @@ class VideoJobManager:
         except asyncio.QueueFull as exc:
             raise QueueFullError("Video job queue is full; try again later") from exc
 
-    async def _validate_video(self, source_path: Path) -> Fraction:
+    async def _validate_video(self, source_path: Path) -> tuple[Fraction, dict]:
+        """Returns (source_fps, probe). The probe travels with the job so the
+        pipeline doesn't ffprobe the same file a second time."""
         try:
             probe = await self.media_tools.ffprobe_json(source_path)
         except subprocess.CalledProcessError as exc:
@@ -180,7 +183,8 @@ class VideoJobManager:
         video_stream = next((stream for stream in streams if stream.get("codec_type") == "video"), None)
         if video_stream is None:
             raise ValueError("Uploaded file is not a valid video")
-        return resolve_video_fps(video_stream.get("avg_frame_rate"), video_stream.get("r_frame_rate"))
+        fps = resolve_video_fps(video_stream.get("avg_frame_rate"), video_stream.get("r_frame_rate"))
+        return fps, probe
 
     def _resolve_model(self, model_id: str, scale: int, device: str | None) -> VideoModelResolution:
         if model_id in self.settings.model_keys:

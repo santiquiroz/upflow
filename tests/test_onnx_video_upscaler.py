@@ -153,6 +153,46 @@ def test_builtin_onnx_available_false_for_unknown_model(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# fp16 model-file selection: GPU prefers the fp16 export when present + enabled
+# ---------------------------------------------------------------------------
+
+from app.services.backend_registry import get_builtin_onnx_model  # noqa: E402
+
+_X4 = get_builtin_onnx_model("realesr-animevideov3-x4")
+
+
+def test_select_model_file_prefers_fp16_on_gpu_when_present(tmp_path: Path) -> None:
+    engine = make_engine(tmp_path)
+    touch_builtin_onnx(engine.settings, _X4.filename)
+    touch_builtin_onnx(engine.settings, _X4.fp16_filename)
+    assert engine._select_model_file(_X4, "dml:0").name == _X4.fp16_filename
+
+
+def test_select_model_file_uses_fp32_on_cpu_even_if_fp16_present(tmp_path: Path) -> None:
+    engine = make_engine(tmp_path)
+    touch_builtin_onnx(engine.settings, _X4.filename)
+    touch_builtin_onnx(engine.settings, _X4.fp16_filename)
+    assert engine._select_model_file(_X4, "cpu").name == _X4.filename
+
+
+def test_select_model_file_falls_back_to_fp32_when_fp16_absent(tmp_path: Path) -> None:
+    engine = make_engine(tmp_path)
+    touch_builtin_onnx(engine.settings, _X4.filename)  # no fp16 sibling
+    assert engine._select_model_file(_X4, "dml:0").name == _X4.filename
+
+
+def test_select_model_file_honors_prefer_fp16_false(tmp_path: Path) -> None:
+    engine = make_engine(tmp_path, ONNX_PREFER_FP16=False)
+    touch_builtin_onnx(engine.settings, _X4.filename)
+    touch_builtin_onnx(engine.settings, _X4.fp16_filename)
+    assert engine._select_model_file(_X4, "dml:0").name == _X4.filename
+
+
+def test_fp16_filename_matches_export_convention() -> None:
+    assert _X4.fp16_filename == _X4.filename.replace(".onnx", "-fp16.onnx")
+
+
+# ---------------------------------------------------------------------------
 # run_frames_builtin end-to-end (fake session, real cv2 I/O)
 # ---------------------------------------------------------------------------
 

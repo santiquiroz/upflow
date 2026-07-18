@@ -421,7 +421,7 @@ async def create_video_job(
     # FastAPI passes `backend` as str|None; a direct unit-test call that omits
     # it receives the Form() sentinel instead, so normalize non-strings to None.
     backend_value = backend if isinstance(backend, str) else None
-    video_encoder_value = video_encoder if isinstance(video_encoder, str) else "software"
+    video_encoder_value = video_encoder if isinstance(video_encoder, str) else "auto"
 
     original_name = Path(file.filename or "upload.mp4").name
     safe_name = sanitize_filename(original_name, default="upload.mp4")
