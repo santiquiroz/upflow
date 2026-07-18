@@ -69,6 +69,9 @@ class VideoUpscaleJob:
     device: str | None = None
     # Upscale runtime override (SP11): None|auto -> Auto rule; ncnn|onnx force one.
     backend: str | None = None
+    # Video encoder (SP12): "software" (libx264/libx265, default) | "auto" (pick a
+    # hardware encoder AMF/NVENC/QSV by the job's GPU, fall back to software).
+    video_encoder: str = "software"
     id: str = field(default_factory=lambda: uuid4().hex)
     status: JobStatus = JobStatus.queued
     created_at: datetime = field(default_factory=utc_now)

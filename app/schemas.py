@@ -51,6 +51,7 @@ class VideoJobResponse(BaseModel):
     model_id: str | None = Field(default=None, serialization_alias="modelId")
     device: str | None = None
     backend: str | None = None
+    video_encoder: str = Field(default="software", serialization_alias="videoEncoder")
     created_at: datetime = Field(serialization_alias="createdAt")
     started_at: datetime | None = Field(default=None, serialization_alias="startedAt")
     finished_at: datetime | None = Field(default=None, serialization_alias="finishedAt")

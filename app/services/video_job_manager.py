@@ -11,6 +11,7 @@ from app.config import AUDIO_ENHANCE_MODES, AUDIO_RESTORE_MODES, Settings
 from app.exceptions import QueueFullError
 from app.models import JobStatus, VideoUpscaleJob, utc_now
 from app.services.backend_registry import validate_backend_choice
+from app.services.video_encoders import VIDEO_ENCODERS
 from app.services.device_router import DeviceRouter, has_compatible_device
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
@@ -95,10 +96,12 @@ class VideoJobManager:
         model_id: str | None = None,
         device: str | None = None,
         backend: str | None = None,
+        video_encoder: str = "software",
         job_id: str | None = None,
     ) -> VideoUpscaleJob:
         source_fps = await self._validate_video(source_path)
         validate_backend_choice(backend)
+        self._validate_video_encoder(video_encoder)
         resolved_model_id = model_id if model_id is not None else model_name
         if device is not None and device != AUTO_DEVICE_ID and self.devices is not None:
             await asyncio.to_thread(self.devices.validate, device)
@@ -135,6 +138,7 @@ class VideoJobManager:
             model_id=resolution.model_id,
             device=device,
             backend=backend,
+            video_encoder=video_encoder,
         )
         if job_id is not None:
             job.id = job_id
@@ -229,6 +233,11 @@ class VideoJobManager:
             if entry is not None:
                 return entry.kind
         raise ValueError(f"Cannot resolve model kind for job (model_id={job.model_id!r})")
+
+    @staticmethod
+    def _validate_video_encoder(video_encoder: str) -> None:
+        if video_encoder not in VIDEO_ENCODERS:
+            raise ValueError(f"video_encoder must be one of {sorted(VIDEO_ENCODERS)}")
 
     def _validate_request(
         self,

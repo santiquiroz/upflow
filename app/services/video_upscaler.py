@@ -9,7 +9,9 @@ from pathlib import Path
 
 from app.config import Settings
 from app.models import VideoUpscaleJob
+from app.services import video_encoders
 from app.services.backend_registry import UpscaleBackend, resolve_upscale_backend
+from app.services.devices_service import DevicesService
 from app.services.engines.apollo_restore import ApolloRestorer
 from app.services.engines.audio_enhance import AudioEnhancer
 from app.services.engines.onnx_upscaler import OnnxUpscaler
@@ -69,6 +71,7 @@ class VideoUpscaler:
         frame_stall_timeout_seconds: float | None = None,
         restorer: ApolloRestorer | None = None,
         onnx_video_engine: OnnxVideoUpscaler | None = None,
+        devices: DevicesService | None = None,
     ) -> None:
         self.settings = settings
         self.engine = engine
@@ -79,6 +82,7 @@ class VideoUpscaler:
         self.onnx_engine = onnx_engine
         self.onnx_video_engine = onnx_video_engine
         self.model_registry = model_registry
+        self.devices = devices
         self.frame_poll_interval_seconds = frame_poll_interval_seconds
         self.frame_stall_timeout_seconds = (
             settings.frame_stall_timeout_seconds
@@ -179,27 +183,17 @@ class VideoUpscaler:
             await asyncio.to_thread(self._safe_rmtree, frames_out)
 
         output_path = self.settings.outputs_path / f"{job.id}.{job.output_container}"
-        encode_cmd = [
-            str(self.settings.ffmpeg_binary_path),
-            "-y",
-            "-framerate",
-            encode_fps,
-            "-i",
-            str(encode_frames_dir / "%08d.png"),
-        ]
-        if audio_mux_path is not None:
-            encode_cmd += ["-i", str(audio_mux_path), "-map", "0:v:0", "-map", "1:a:0"]
-
-        encode_cmd += self._build_video_encode_options(job)
-
-        if audio_mux_path is not None:
-            encode_cmd += audio_codec_args
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        encode_cmd.append(str(output_path))
+        # Resolve off the loop: for "auto" this enumerates devices (DXGI) to map
+        # the job's GPU to a hardware encoder.
+        encoder = await asyncio.to_thread(self._resolve_video_encoder, job)
+        job.metadata["videoEncoder"] = encoder
 
         advance_video_stage(job, "encoding_video")
         async with self._track_encode_progress(output_path):
-            await self._run_process(encode_cmd)
+            await self._encode_with_fallback(
+                job, encode_frames_dir, encode_fps, audio_mux_path, audio_codec_args, output_path, encoder
+            )
 
         if not self._is_non_empty_file(output_path):
             raise RuntimeError("Video processing finished but no output file was produced")
@@ -588,29 +582,86 @@ class VideoUpscaler:
     def _safe_rmtree(path: Path) -> None:
         shutil.rmtree(path, ignore_errors=True)
 
-    def _build_video_encode_options(self, job: VideoUpscaleJob) -> list[str]:
-        options = [
-            "-c:v",
-            job.video_codec,
-            "-preset",
-            job.video_preset,
-            "-crf",
-            str(job.crf),
-            "-pix_fmt",
-            "yuv420p",
+    def _resolve_video_encoder(self, job: VideoUpscaleJob) -> str:
+        """Concrete ffmpeg encoder for this job. "software" (or any non-"auto")
+        keeps the picked codec (libx264/libx265). "auto" maps the job's GPU to a
+        hardware encoder, falling back to the software codec if the vendor can't
+        be resolved (cpu device, unknown GPU, no devices service)."""
+        if job.video_encoder != video_encoders.VIDEO_ENCODER_AUTO:
+            return job.video_codec
+        hw = video_encoders.resolve_hardware_encoder(self._device_name(job.device), job.video_codec)
+        return hw or job.video_codec
+
+    def _device_name(self, device_id: str | None) -> str | None:
+        if self.devices is None or not device_id:
+            return None
+        return next((d["name"] for d in self.devices.list_devices() if d["id"] == device_id), None)
+
+    def _build_video_encode_options(self, job: VideoUpscaleJob, encoder: str) -> list[str]:
+        return video_encoders.encode_options(
+            encoder=encoder,
+            crf=job.crf,
+            preset=job.video_preset,
+            x265_pools=self.settings.ffmpeg_x265_threads,
+            software_threads=self.settings.ffmpeg_encode_threads,
+        )
+
+    def _build_encode_command(
+        self,
+        job: VideoUpscaleJob,
+        encode_frames_dir: Path,
+        encode_fps: str,
+        audio_mux_path: Path | None,
+        audio_codec_args: list[str],
+        output_path: Path,
+        encoder: str,
+    ) -> list[str]:
+        cmd = [
+            str(self.settings.ffmpeg_binary_path),
+            "-y",
+            "-framerate",
+            encode_fps,
+            "-i",
+            str(encode_frames_dir / "%08d.png"),
         ]
+        if audio_mux_path is not None:
+            cmd += ["-i", str(audio_mux_path), "-map", "0:v:0", "-map", "1:a:0"]
+        cmd += self._build_video_encode_options(job, encoder)
+        if audio_mux_path is not None:
+            cmd += audio_codec_args
+        cmd.append(str(output_path))
+        return cmd
 
-        if job.video_codec == "libx265":
-            options += [
-                "-x265-params",
-                f"frame-threads=4:pools={self.settings.ffmpeg_x265_threads}",
-                "-threads",
-                str(min(self.settings.ffmpeg_x265_threads, 8)),
-            ]
-        else:
-            options += ["-threads", str(self.settings.ffmpeg_encode_threads)]
-
-        return options
+    async def _encode_with_fallback(
+        self,
+        job: VideoUpscaleJob,
+        encode_frames_dir: Path,
+        encode_fps: str,
+        audio_mux_path: Path | None,
+        audio_codec_args: list[str],
+        output_path: Path,
+        encoder: str,
+    ) -> None:
+        cmd = self._build_encode_command(
+            job, encode_frames_dir, encode_fps, audio_mux_path, audio_codec_args, output_path, encoder
+        )
+        try:
+            await self._run_process(cmd)
+            return
+        except RuntimeError:
+            # A software encoder failure is a real error; only a hardware encoder
+            # (driver/init/EP quirk) is worth retrying on the software path.
+            if not video_encoders.is_hardware_encoder(encoder):
+                raise
+        logger.warning(
+            "hardware encoder %s failed; falling back to software %s", encoder, job.video_codec
+        )
+        job.metadata["videoEncoder"] = job.video_codec
+        job.metadata["videoEncoderFallback"] = encoder
+        software_cmd = self._build_encode_command(
+            job, encode_frames_dir, encode_fps, audio_mux_path, audio_codec_args, output_path, job.video_codec
+        )
+        await self._run_process(software_cmd)
 
     async def _run_process(self, command: list[str]) -> None:
         stdout, stderr, returncode = await run_guarded_process(command, self.settings.subprocess_timeout)

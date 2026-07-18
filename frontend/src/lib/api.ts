@@ -9,6 +9,7 @@ import type {
   ModelSearchResponse,
   ModelsResponse,
   UpscaleBackend,
+  VideoEncoder,
   VideoJobResponse,
 } from "./apiTypes";
 
@@ -144,6 +145,7 @@ export interface CreateVideoJobParams {
   audioEnhance: string | null;
   audioRestore: string | null;
   backend: UpscaleBackend;
+  videoEncoder: VideoEncoder;
 }
 
 function appendVideoModelFields(formData: FormData, modelId: string | null): void {
@@ -166,6 +168,7 @@ function buildVideoJobFormData(params: CreateVideoJobParams): FormData {
   formData.append("keep_audio", String(params.keepAudio));
   formData.append("fps_multiplier", String(params.fpsMultiplier));
   formData.append("backend", params.backend);
+  formData.append("video_encoder", params.videoEncoder);
   appendVideoModelFields(formData, params.modelId);
   if (params.device) {
     formData.append("device", params.device);
