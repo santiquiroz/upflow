@@ -184,8 +184,8 @@ class VideoUpscaler:
                 job, frames_in, output_path, fps, audio_mux_path, audio_codec_args
             )
             if streamed:
-                await asyncio.to_thread(self._safe_rmtree, frames_in)
                 self._finalize_output(job, output_path)
+                await asyncio.to_thread(self._safe_rmtree, frames_in)
                 return output_path
 
         advance_video_stage(job, "upscaling_frames")
@@ -827,7 +827,12 @@ class VideoUpscaler:
         )
         try:
             async with self._track_streaming_progress(job, counter):
-                await asyncio.shield(stream_task)
+                expected = await asyncio.shield(stream_task)
+            # Guard against a silent frame drop (mirrors _validate_frame_output_count
+            # on the PNG path): fewer frames written than the engine reported means a
+            # short video -- raise so _try_streaming falls back to the file path.
+            if counter["n"] != expected:
+                raise RuntimeError(f"raw-pipe wrote {counter['n']}/{expected} frames")
             proc.stdin.close()
             returncode = await asyncio.to_thread(proc.wait)
             if returncode != 0:
