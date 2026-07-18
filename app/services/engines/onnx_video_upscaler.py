@@ -6,6 +6,7 @@ import logging
 import queue
 import threading
 from collections import OrderedDict
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -240,6 +241,142 @@ class OnnxVideoUpscaler:
 
         self._validate_frame_output_count(frames_out, source_frame_count)
         return frames_out
+
+    # --- streaming (raw-pipe) entry point ----------------------------------
+
+    async def run_frames_streaming(
+        self,
+        frames_in: Path,
+        engine_model_name: str,
+        device: str,
+        write_frame: "Callable[[np.ndarray], None]",
+    ) -> int:
+        """Upscale frames and hand each RGB HWC uint8 frame, IN ORDER, to
+        write_frame -- no PNG round-trip to disk. Returns the frame count.
+
+        Cancel-safe with the same shield+await pattern as run_frames_builtin: on
+        cancel we signal, then wait for the worker to unwind before propagating so
+        the caller can tear down its ffmpeg process without racing a live write.
+        """
+        model = get_builtin_onnx_model(engine_model_name)
+        if model is None:
+            raise RuntimeError(f"No ONNX export configured for builtin model {engine_model_name!r}")
+        onnx_path = self._select_model_file(model, device)
+
+        cancel_event = threading.Event()
+        worker = asyncio.ensure_future(
+            asyncio.to_thread(
+                self._run_streaming_blocking, frames_in, onnx_path, device, write_frame, cancel_event
+            )
+        )
+        try:
+            return await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            cancel_event.set()
+            with contextlib.suppress(BaseException):
+                await worker
+            raise
+
+    def _run_streaming_blocking(
+        self,
+        frames_in: Path,
+        onnx_path: Path,
+        device: str,
+        write_frame: "Callable[[np.ndarray], None]",
+        cancel_event: threading.Event,
+    ) -> int:
+        if not self.available():
+            raise RuntimeError("ONNX video engine is not available: onnxruntime and opencv are required")
+        if not onnx_path.exists():
+            raise RuntimeError(f"ONNX model file not found: {onnx_path}")
+        self.devices.validate(device)
+        session = self._get_session(str(onnx_path), device)
+        frame_paths = sorted(frames_in.glob("*.png"))
+        self._run_streaming_pipeline(session, frame_paths, device, write_frame, cancel_event)
+        return len(frame_paths)
+
+    def _run_streaming_pipeline(
+        self,
+        session: Any,
+        frame_paths: list[Path],
+        device: str,
+        write_frame: "Callable[[np.ndarray], None]",
+        cancel_event: threading.Event,
+    ) -> None:
+        # Exactly one loader so frames load + infer in strict index order and the
+        # writer never has to hold more than the in-flight frame (the reorder
+        # buffer below is a safety net, not the normal path). Infer is the limiter
+        # (~116ms/frame), so a single ~30ms loader is not a bottleneck.
+        load_q: queue.Queue[tuple[str, np.ndarray]] = queue.Queue(maxsize=4)
+        save_q: queue.Queue[tuple[str, np.ndarray] | None] = queue.Queue(maxsize=4)
+        todo: queue.Queue[Path] = queue.Queue()
+        for path in frame_paths:
+            todo.put(path)
+        errors: list[Exception] = []
+
+        loader = threading.Thread(
+            target=self._loader_loop, args=(todo, load_q, errors, cancel_event), daemon=True
+        )
+        writer = threading.Thread(
+            target=self._ordered_writer_loop,
+            args=(save_q, write_frame, len(frame_paths), errors, cancel_event),
+            daemon=True,
+        )
+        loader.start()
+        writer.start()
+        try:
+            self._infer_loop(session, load_q, save_q, device, len(frame_paths), [loader], errors, cancel_event)
+        finally:
+            _drain_queue(load_q)
+            save_q.put(None)  # wake the writer if infer stopped early (error/cancel)
+            for thread in (writer, loader):
+                thread.join(timeout=_THREAD_JOIN_TIMEOUT_SECONDS)
+                if thread.is_alive():
+                    logger.error("onnx streaming thread did not stop within timeout: %s", thread.name)
+        if errors:
+            raise errors[0]
+
+    @staticmethod
+    def _ordered_writer_loop(
+        save_q: queue.Queue[tuple[str, np.ndarray] | None],
+        write_frame: "Callable[[np.ndarray], None]",
+        total: int,
+        errors: list[Exception],
+        cancel_event: threading.Event,
+    ) -> None:
+        # Emit frames strictly in index order (00000001, 00000002, ...). With a
+        # single loader they already arrive in order; the pending map only ever
+        # holds the current frame, but it makes the contract robust to reordering.
+        pending: dict[int, np.ndarray] = {}
+        next_index = 1
+        written = 0
+        while written < total:
+            if cancel_event.is_set():
+                return
+            try:
+                item = save_q.get(timeout=0.2)
+            except queue.Empty:
+                if cancel_event.is_set() or errors:
+                    return
+                continue
+            if item is None:
+                return  # sentinel: infer stopped early
+            name, frame = item
+            try:
+                pending[int(Path(name).stem)] = frame
+            except ValueError as exc:  # a frame name that isn't an index
+                errors.append(exc)
+                cancel_event.set()
+                return
+            while next_index in pending:
+                try:
+                    write_frame(pending.pop(next_index)[0])  # strip batch -> HWC RGB uint8
+                except Exception as exc:  # noqa: BLE001 -- ffmpeg died / broken pipe
+                    errors.append(exc)
+                    cancel_event.set()
+                    return
+                next_index += 1
+                written += 1
 
     def _run_frames_blocking(
         self,

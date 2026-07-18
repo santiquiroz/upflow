@@ -343,6 +343,16 @@ class Settings(BaseSettings):
     # (1.33x) con diferencia maxima de 3/255 por pixel. En CPU se ignora (fp16
     # emulado = mas lento). Poner en False para forzar fp32 en todos lados.
     onnx_prefer_fp16: bool = Field(default=True, alias="ONNX_PREFER_FP16")
+    # Raw-pipe: cuando la interpolacion esta OFF y el modelo builtin corre por ONNX,
+    # pipear los frames escalados crudos (rgb24) directo a ffmpeg stdin en vez de
+    # escribir PNG a disco y re-encodear. Borra el round-trip PNG y solapa upscale+
+    # encode. Cae al camino con PNG ante cualquier fallo. False = siempre PNG.
+    enable_raw_pipe: bool = Field(default=True, alias="ENABLE_RAW_PIPE")
+    # El raw-pipe solo gana cuando el encode PNG del frame de salida es caro. Por
+    # debajo de este tamano de salida el PNG es barato y el overhead del subproceso
+    # no compensa (medido: 256x256 mas lento, 7680x4320 1.24x mas rapido). Default
+    # ~= 2560x1440 (720p->2x y para arriba usan raw-pipe; salidas chicas usan PNG).
+    raw_pipe_min_output_pixels: int = Field(default=3_686_400, alias="RAW_PIPE_MIN_OUTPUT_PIXELS")
 
     update_repo: str = Field(default="santiquiroz/upflow", alias="UPDATE_REPO")
     # Package whose installed metadata gives the running version to compare

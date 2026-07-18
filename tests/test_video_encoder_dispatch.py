@@ -120,6 +120,48 @@ async def test_encode_with_fallback_retries_software_when_hw_fails(tmp_path: Pat
     assert job.metadata["videoEncoder"] == "libx265"
 
 
+# ---------------------------------------------------------------------------
+# raw-pipe streaming gate
+# ---------------------------------------------------------------------------
+
+
+async def test_should_stream_false_without_onnx_engine(tmp_path: Path) -> None:
+    vu = make_upscaler(tmp_path)  # devices set, but onnx_video_engine is None
+    assert await vu._should_stream(make_job("software", device="dml:0"), interp_requested=False) is False
+
+
+async def test_should_stream_false_when_interpolation_requested(tmp_path: Path) -> None:
+    vu = make_upscaler(tmp_path)
+    assert await vu._should_stream(make_job("software"), interp_requested=True) is False
+
+
+async def test_should_stream_false_when_disabled(tmp_path: Path) -> None:
+    from app.config import Settings
+
+    settings = Settings(_env_file=None, RUNTIME_DIR=str(tmp_path / "runtime"), ENABLE_RAW_PIPE=False)
+    vu = VideoUpscaler(settings, _FakeEngine(), _FakeMediaTools(), devices=_FakeDevices("AMD"))
+    assert await vu._should_stream(make_job("software"), interp_requested=False) is False
+
+
+def test_output_dims_multiplies_by_scale(tmp_path: Path) -> None:
+    import numpy as np, cv2
+
+    frames = tmp_path / "frames"
+    frames.mkdir()
+    cv2.imwrite(str(frames / "00000001.png"), np.zeros((270, 480, 3), dtype=np.uint8))
+    assert VideoUpscaler._output_dims(frames, 4) == (1920, 1080)
+
+
+def test_rawpipe_command_uses_rgb24_rawvideo_at_output_size(tmp_path: Path) -> None:
+    vu = make_upscaler(tmp_path)
+    job = make_job("software", "libx264")
+    cmd = vu._build_rawpipe_command(1920, 1080, "24/1", None, [], tmp_path / "out.mp4", job, "libx264")
+    assert "rawvideo" in cmd and "rgb24" in cmd
+    assert "1920x1080" in cmd
+    assert cmd[cmd.index("-i") + 1] == "-"  # stdin
+    assert cmd[cmd.index("-c:v") + 1] == "libx264"
+
+
 async def test_encode_software_failure_propagates_without_retry(tmp_path: Path) -> None:
     vu = make_upscaler(tmp_path)
     job = make_job("software", "libx264")
