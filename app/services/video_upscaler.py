@@ -174,40 +174,41 @@ class VideoUpscaler:
 
         output_path = self.settings.outputs_path / f"{job.id}.{job.output_container}"
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        interp_requested = self._interpolation_requested(fps_multiplier, job.target_fps)
 
-        # Raw-pipe fast path: upscale + encode fused, no PNG round-trip. Only when
-        # interpolation is OFF (RIFE needs frames on disk) and the builtin model
-        # runs through the ONNX engine. Any failure falls back to the file path.
-        if await self._should_stream(job, interp_requested):
+        # Interpolation runs FIRST, at SOURCE resolution: RIFE at 1080p is ~3.6x
+        # faster than at the upscaled 4K (measured on a 7800 XT), and with the
+        # interp done up front the raw-pipe (upscale+encode fused, no PNG
+        # round-trip) becomes eligible for interpolated jobs too.
+        upscale_src, encode_fps = await self._maybe_interpolate(
+            job, frames_in, fps, fps_multiplier, job.target_fps
+        )
+        job.metadata["outputFps"] = encode_fps
+        if upscale_src != frames_in:
+            # Source frames are dead once interpolated; free the disk early
+            # (peak footprint on a long episode is tens-hundreds of GB).
+            await asyncio.to_thread(self._safe_rmtree, frames_in)
+
+        # Raw-pipe fast path: any failure falls back to the file path.
+        if await self._should_stream(job):
             streamed = await self._try_streaming(
-                job, frames_in, output_path, fps, audio_mux_path, audio_codec_args
+                job, upscale_src, output_path, encode_fps, audio_mux_path, audio_codec_args
             )
             if streamed:
                 self._finalize_output(job, output_path)
-                await asyncio.to_thread(self._safe_rmtree, frames_in)
+                await asyncio.to_thread(self._safe_rmtree, upscale_src)
                 return output_path
 
+        # The upscale denominator is the frame count it actually processes:
+        # after interpolation that is more than the source framesTotal.
+        upscale_frames_total = await asyncio.to_thread(self._count_frames, upscale_src)
         advance_video_stage(job, "upscaling_frames")
-        async with self._track_frame_progress(job, frames_out, "upscaling_frames"):
-            await self._upscale_frames(job, frames_in, frames_out)
+        async with self._track_frame_progress(
+            job, frames_out, "upscaling_frames", frames_total=upscale_frames_total
+        ):
+            await self._upscale_frames(job, upscale_src, frames_out)
 
-        # Extracted input frames are dead once upscaled; free the disk now instead
-        # of at the end (peak footprint on a long episode is tens-hundreds of GB,
-        # and concurrent jobs share the volume). work_dir is still rmtree'd in the
-        # finally as a backstop.
-        await asyncio.to_thread(self._safe_rmtree, frames_in)
-
-        encode_frames_dir, encode_fps = await self._maybe_interpolate(
-            job, frames_out, fps, fps_multiplier, job.target_fps
-        )
-        job.metadata["outputFps"] = encode_fps
-
-        # If interpolation produced a separate dir, the pre-interp upscaled frames
-        # are dead; encode reads from encode_frames_dir. (No-op when interp is OFF,
-        # where encode_frames_dir IS frames_out and must survive.)
-        if encode_frames_dir != frames_out:
-            await asyncio.to_thread(self._safe_rmtree, frames_out)
+        await asyncio.to_thread(self._safe_rmtree, upscale_src)
+        encode_frames_dir = frames_out
 
         # Resolve off the loop: for "auto" this enumerates devices (DXGI) to map
         # the job's GPU to a hardware encoder.
@@ -701,8 +702,8 @@ class VideoUpscaler:
 
     # --- raw-pipe streaming (upscale + encode fused, no PNG round-trip) -----
 
-    async def _should_stream(self, job: VideoUpscaleJob, interp_requested: bool) -> bool:
-        if not self.settings.enable_raw_pipe or interp_requested or self.onnx_video_engine is None:
+    async def _should_stream(self, job: VideoUpscaleJob) -> bool:
+        if not self.settings.enable_raw_pipe or self.onnx_video_engine is None:
             return False
         # HF-installed ONNX models use OnnxUpscaler (arbitrary graphs), not the
         # builtin streaming engine, so they stay on the file path.

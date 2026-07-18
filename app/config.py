@@ -263,6 +263,12 @@ class Settings(BaseSettings):
     rife_binary: str = Field(default="vendor/rife/rife-ncnn-vulkan.exe", alias="RIFE_BINARY")
     rife_models_dir: str = Field(default="vendor/rife/models", alias="RIFE_MODELS_DIR")
     rife_model: str = Field(default="rife-v4.6", alias="RIFE_MODEL")
+    # Threads load:proc:save del binario RIFE. "auto" escala con los nucleos
+    # (el default upstream 1:2:2 deja la GPU esperando el decode PNG a 4K).
+    rife_threads: str = Field(default="auto", alias="RIFE_THREADS")
+    # Modo UHD de RIFE (-u, flujo a media resolucion): auto = solo si los
+    # frames de entrada son >=1440p; on/off lo fuerzan.
+    rife_uhd_mode: str = Field(default="auto", alias="RIFE_UHD_MODE")
     enable_interpolation: bool = Field(default=False, alias="ENABLE_INTERPOLATION")
     allowed_fps_multipliers: str = Field(default="2,3,4", alias="ALLOWED_FPS_MULTIPLIERS")
 
@@ -417,6 +423,23 @@ class Settings(BaseSettings):
         # which would infinite-loop the chunker.
         if value <= 0:
             raise ValueError("AUDIO_RESTORE_CHUNK_SECONDS must be greater than 0")
+        return value
+
+    @field_validator("rife_threads")
+    @classmethod
+    def _validate_rife_threads(cls, value: str) -> str:
+        if value == "auto":
+            return value
+        parts = value.split(":")
+        if len(parts) != 3 or not all(part.isdigit() and int(part) >= 1 for part in parts):
+            raise ValueError('RIFE_THREADS must be "auto" or "load:proc:save" positive integers')
+        return value
+
+    @field_validator("rife_uhd_mode")
+    @classmethod
+    def _validate_rife_uhd_mode(cls, value: str) -> str:
+        if value not in ("auto", "on", "off"):
+            raise ValueError("RIFE_UHD_MODE must be one of: auto, on, off")
         return value
 
     @field_validator("audiosr_ddim_steps")

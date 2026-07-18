@@ -986,10 +986,12 @@ async def test_pipeline_passes_target_count_as_interpolation_denominator(tmp_pat
 
     await upscaler.run(job, fps_multiplier=2)
 
-    # extract/upscale are 1:1 with the source -> no explicit denominator (falls
-    # back to framesTotal); interpolation gets the doubled target (4 upscaled * 2).
+    # extract is 1:1 with the source -> no explicit denominator (falls back to
+    # framesTotal). interpolation gets the doubled target (4 source * 2), and
+    # since the reorder the upscale consumes the INTERPOLATED frames, so its
+    # honest denominator is that same doubled count.
     assert captured["extracting_frames"] is None
-    assert captured["upscaling_frames"] is None
+    assert captured["upscaling_frames"] == 8
     assert captured["interpolating_frames"] == 8
     assert job.metadata["interpFramesTotal"] == 8
 
