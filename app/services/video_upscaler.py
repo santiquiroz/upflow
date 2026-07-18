@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import shutil
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -118,7 +119,9 @@ class VideoUpscaler:
         audio_path: Path,
         fps_multiplier: int = 1,
     ) -> Path:
-        probe = await self.media_tools.ffprobe_json(job.source_path)
+        # Reuse the probe captured during job validation; only probe again for jobs
+        # built without one (direct VideoUpscaler use / older callers).
+        probe = job.probe or await self.media_tools.ffprobe_json(job.source_path)
         video_stream = next((s for s in probe.get("streams", []) if s.get("codec_type") == "video"), None)
         has_audio = any(s.get("codec_type") == "audio" for s in probe.get("streams", []))
         if not video_stream:
@@ -147,6 +150,10 @@ class VideoUpscaler:
                     "passthrough",
                     "-threads",
                     str(self.settings.ffmpeg_decode_threads),
+                    # Extracted frames are throwaway input for the upscaler, so pay
+                    # the cheapest zlib level instead of ffmpeg's default.
+                    "-compression_level",
+                    "1",
                     str(frames_in / "%08d.png"),
                 ]
             )
@@ -451,11 +458,17 @@ class VideoUpscaler:
 
     @staticmethod
     def _count_frames(directory: Path) -> int:
+        # os.scandir instead of glob: this runs on every progress poll over dirs
+        # with thousands of entries, and glob builds a Path object per entry.
+        # The `with` block matters on Windows -- a leaked dir handle blocks
+        # renaming/deleting the directory afterwards.
         # Poller may start tracking before the stage creates its output dir
         # (e.g. frames-interp only appears once the RIFE engine runs).
-        if not directory.exists():
+        try:
+            with os.scandir(directory) as entries:
+                return sum(1 for entry in entries if entry.name.endswith(".png"))
+        except (FileNotFoundError, NotADirectoryError):
             return 0
-        return sum(1 for _ in directory.glob("*.png"))
 
     @contextlib.asynccontextmanager
     async def _track_frame_progress(

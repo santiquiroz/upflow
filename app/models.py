@@ -72,6 +72,10 @@ class VideoUpscaleJob:
     # Video encoder (SP12): "software" (libx264/libx265, default) | "auto" (pick a
     # hardware encoder AMF/NVENC/QSV by the job's GPU, fall back to software).
     video_encoder: str = "software"
+    # ffprobe output captured during job validation, reused by the pipeline so the
+    # same file isn't probed twice. In-memory only: the API response is built field
+    # by field, so this never serializes (it holds the absolute source path).
+    probe: dict[str, Any] | None = None
     id: str = field(default_factory=lambda: uuid4().hex)
     status: JobStatus = JobStatus.queued
     created_at: datetime = field(default_factory=utc_now)

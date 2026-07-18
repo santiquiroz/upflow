@@ -25,6 +25,16 @@ def _default_onnx_load_threads() -> int:
     # Input PNG decode (720p, ~30ms) is cheap; a few threads saturate it.
     return max(2, min(4, _logical_cpus() // 4))
 
+
+def _default_ffmpeg_decode_threads() -> int:
+    return max(2, min(12, _logical_cpus()))
+
+
+def _default_ffmpeg_encode_threads() -> int:
+    # Capped, NOT `-threads 0`: 0 lets ffmpeg grab every core, which oversubscribes
+    # the box when several jobs encode concurrently.
+    return max(2, min(24, _logical_cpus()))
+
 NEUTRAL_BIND_HOSTS = frozenset({"127.0.0.1", "0.0.0.0", "localhost"})
 
 DEEPFILTER_MODE = "deepfilter"
@@ -229,8 +239,12 @@ class Settings(BaseSettings):
     frame_stall_timeout_seconds: float = Field(default=900, alias="FRAME_STALL_TIMEOUT_SECONDS")
     ffmpeg_binary: str = Field(default="vendor/ffmpeg/bin/ffmpeg.exe", alias="FFMPEG_BINARY")
     ffprobe_binary: str = Field(default="vendor/ffmpeg/bin/ffprobe.exe", alias="FFPROBE_BINARY")
-    ffmpeg_decode_threads: int = Field(default=12, alias="FFMPEG_DECODE_THREADS")
-    ffmpeg_encode_threads: int = Field(default=24, alias="FFMPEG_ENCODE_THREADS")
+    ffmpeg_decode_threads: int = Field(
+        default_factory=_default_ffmpeg_decode_threads, alias="FFMPEG_DECODE_THREADS"
+    )
+    ffmpeg_encode_threads: int = Field(
+        default_factory=_default_ffmpeg_encode_threads, alias="FFMPEG_ENCODE_THREADS"
+    )
     ffmpeg_x265_threads: int = Field(default=8, alias="FFMPEG_X265_THREADS")
 
     runtime_dir: str = Field(default="runtime", alias="RUNTIME_DIR")
