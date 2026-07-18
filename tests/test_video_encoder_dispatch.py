@@ -51,6 +51,27 @@ def make_job(video_encoder: str, video_codec: str = "libx265", device: str = "dm
     )
 
 
+def test_video_encoder_defaults_to_auto(tmp_path: Path) -> None:
+    # Regression guard: the software default was the dominant wall-time cost
+    # (x265 slow at 4x = ~112 min/episode vs ~16 min on the GPU). Default must
+    # stay "auto"; the HW->software fallback keeps it safe.
+    job = VideoUpscaleJob(
+        source_path=Path("x.mp4"),
+        original_filename="x.mp4",
+        model_name="realesr-animevideov3-x4",
+        scale=4,
+        output_container="mp4",
+        video_codec="libx265",
+        video_preset="slow",
+        crf=20,
+        keep_audio=False,
+    )
+    assert job.video_encoder == "auto"
+    vu = make_upscaler(tmp_path, "AMD Radeon RX 7800 XT")
+    job.device = "dml:0"
+    assert vu._resolve_video_encoder(job) == "hevc_amf"
+
+
 def test_resolve_encoder_software_keeps_codec(tmp_path: Path) -> None:
     vu = make_upscaler(tmp_path)
     assert vu._resolve_video_encoder(make_job("software", "libx265")) == "libx265"

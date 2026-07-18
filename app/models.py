@@ -69,9 +69,11 @@ class VideoUpscaleJob:
     device: str | None = None
     # Upscale runtime override (SP11): None|auto -> Auto rule; ncnn|onnx force one.
     backend: str | None = None
-    # Video encoder (SP12): "software" (libx264/libx265, default) | "auto" (pick a
-    # hardware encoder AMF/NVENC/QSV by the job's GPU, fall back to software).
-    video_encoder: str = "software"
+    # Video encoder (SP12): "auto" (default) picks a hardware encoder AMF/NVENC/QSV
+    # by the job's GPU and falls back to software; "software" forces libx264/libx265.
+    # Default is "auto" because software x265 slow at 4x costs ~112 min/episode vs
+    # ~16 min on the GPU -- the software default was the dominant wall-time cost.
+    video_encoder: str = "auto"
     # ffprobe output captured during job validation, reused by the pipeline so the
     # same file isn't probed twice. In-memory only: the API response is built field
     # by field, so this never serializes (it holds the absolute source path).

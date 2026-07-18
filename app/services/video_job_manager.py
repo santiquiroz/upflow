@@ -96,7 +96,7 @@ class VideoJobManager:
         model_id: str | None = None,
         device: str | None = None,
         backend: str | None = None,
-        video_encoder: str = "software",
+        video_encoder: str = "auto",
         job_id: str | None = None,
     ) -> VideoUpscaleJob:
         source_fps, probe = await self._validate_video(source_path)

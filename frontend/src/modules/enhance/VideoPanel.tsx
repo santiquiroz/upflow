@@ -7,6 +7,7 @@ import { JobCard } from "../../components/JobCard";
 import { ModelPicker } from "../../components/ModelPicker";
 import { RuntimePicker, formatRuntimeSummary } from "../../components/RuntimePicker";
 import { EncoderPicker, formatEncoderSummary } from "../../components/EncoderPicker";
+import { SlowPresetCostHint } from "../../components/SlowPresetCostHint";
 import { useAudioCapabilities } from "../../hooks/useAudioJob";
 import { useVideoJob, type VideoJobPhase } from "../../hooks/useVideoJob";
 import { getDevices, getModels } from "../../lib/api";
@@ -250,7 +251,7 @@ export function VideoPanel() {
   const [model, setModel] = useState<ModelResponse | null>(null);
   const [device, setDevice] = useState<DeviceInfoResponse | null>(null);
   const [backend, setBackend] = useState<UpscaleBackend>("auto");
-  const [videoEncoder, setVideoEncoder] = useState<VideoEncoder>("software");
+  const [videoEncoder, setVideoEncoder] = useState<VideoEncoder>("auto");
   const [scale, setScale] = useState<number | null>(null);
   const [outputContainer, setOutputContainer] = useState("mp4");
   const [videoCodec, setVideoCodec] = useState("libx264");
@@ -378,6 +379,7 @@ export function VideoPanel() {
         </AccordionSection>
         <AccordionSection title="Encoder" summary={formatEncoderSummary(videoEncoder)} tooltip={ENCODER_TOOLTIP}>
           <EncoderPicker value={videoEncoder} onChange={setVideoEncoder} />
+          <SlowPresetCostHint encoder={videoEncoder} preset={videoPreset} scale={scale} />
         </AccordionSection>
         <AccordionSection
           title="FPS boost"
