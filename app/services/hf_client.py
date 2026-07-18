@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,6 +12,32 @@ import httpx
 
 from app.config import Settings
 from app.exceptions import HfDownloadTooLargeError, HfInvalidSourceError
+
+logger = logging.getLogger(__name__)
+
+# A model download is tens-to-hundreds of MB over the public internet; a single
+# transient blip shouldn't abort the whole install. Retries restart the transfer
+# from zero (the temp file is opened 'wb'), so keep the attempt count low.
+DOWNLOAD_ATTEMPTS = 3
+_RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
+_TRANSIENT_ERRORS = (
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.ReadTimeout,
+    httpx.WriteTimeout,
+    httpx.PoolTimeout,
+    httpx.RemoteProtocolError,
+)
+
+
+def _is_retryable_download_error(exc: BaseException) -> bool:
+    """Only transient transport/server failures retry. A 401/404 (bad token, wrong
+    file) or a size-limit rejection is permanent and must surface immediately."""
+    if isinstance(exc, _TRANSIENT_ERRORS):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in _RETRYABLE_STATUS
+    return False
 
 # ---------------------------------------------------------------------------
 # Hugging Face REST endpoints used here (verified live against the real API,
@@ -200,6 +228,32 @@ class HfClient:
         dest.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = dest.with_name(f"{dest.name}{PARTIAL_DOWNLOAD_SUFFIX}")
 
+        for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+            try:
+                await self._stream_to_file(url, tmp_path, max_bytes, progress_cb)
+                break
+            except Exception as exc:  # noqa: BLE001 -- CancelledError is BaseException, so cancel still propagates
+                tmp_path.unlink(missing_ok=True)
+                if attempt == DOWNLOAD_ATTEMPTS or not _is_retryable_download_error(exc):
+                    raise
+                logger.warning(
+                    "Hugging Face download attempt %d/%d failed (%s); retrying",
+                    attempt,
+                    DOWNLOAD_ATTEMPTS,
+                    type(exc).__name__,
+                )
+                await asyncio.sleep(2 ** (attempt - 1))
+
+        tmp_path.replace(dest)
+        return dest
+
+    async def _stream_to_file(
+        self,
+        url: str,
+        tmp_path: Path,
+        max_bytes: int,
+        progress_cb: ProgressCallback | None,
+    ) -> None:
         async with self._build_client() as client:
             async with client.stream("GET", url, headers=self._auth_headers()) as response:
                 response.raise_for_status()
@@ -210,6 +264,3 @@ class HfClient:
                 except BaseException:
                     tmp_path.unlink(missing_ok=True)
                     raise
-
-        tmp_path.replace(dest)
-        return dest
