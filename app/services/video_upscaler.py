@@ -5,8 +5,12 @@ import contextlib
 import logging
 import os
 import shutil
+import subprocess
+import threading
 from collections.abc import AsyncIterator
 from pathlib import Path
+
+import cv2
 
 from app.config import Settings
 from app.models import VideoUpscaleJob
@@ -168,6 +172,22 @@ class VideoUpscaler:
         elif job.keep_audio and job.audio_restore:
             job.metadata["audioRestored"] = "skipped_no_audio"
 
+        output_path = self.settings.outputs_path / f"{job.id}.{job.output_container}"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        interp_requested = self._interpolation_requested(fps_multiplier, job.target_fps)
+
+        # Raw-pipe fast path: upscale + encode fused, no PNG round-trip. Only when
+        # interpolation is OFF (RIFE needs frames on disk) and the builtin model
+        # runs through the ONNX engine. Any failure falls back to the file path.
+        if await self._should_stream(job, interp_requested):
+            streamed = await self._try_streaming(
+                job, frames_in, output_path, fps, audio_mux_path, audio_codec_args
+            )
+            if streamed:
+                self._finalize_output(job, output_path)
+                await asyncio.to_thread(self._safe_rmtree, frames_in)
+                return output_path
+
         advance_video_stage(job, "upscaling_frames")
         async with self._track_frame_progress(job, frames_out, "upscaling_frames"):
             await self._upscale_frames(job, frames_in, frames_out)
@@ -189,8 +209,6 @@ class VideoUpscaler:
         if encode_frames_dir != frames_out:
             await asyncio.to_thread(self._safe_rmtree, frames_out)
 
-        output_path = self.settings.outputs_path / f"{job.id}.{job.output_container}"
-        output_path.parent.mkdir(parents=True, exist_ok=True)
         # Resolve off the loop: for "auto" this enumerates devices (DXGI) to map
         # the job's GPU to a hardware encoder.
         encoder = await asyncio.to_thread(self._resolve_video_encoder, job)
@@ -202,13 +220,15 @@ class VideoUpscaler:
                 job, encode_frames_dir, encode_fps, audio_mux_path, audio_codec_args, output_path, encoder
             )
 
+        self._finalize_output(job, output_path)
+        return output_path
+
+    def _finalize_output(self, job: VideoUpscaleJob, output_path: Path) -> None:
         if not self._is_non_empty_file(output_path):
             raise RuntimeError("Video processing finished but no output file was produced")
-
         complete_video_stages(job)
         job.metadata["outputWidth"] = job.metadata["sourceWidth"] * job.scale
         job.metadata["outputHeight"] = job.metadata["sourceHeight"] * job.scale
-        return output_path
 
     async def _upscale_frames(self, job: VideoUpscaleJob, frames_in: Path, frames_out: Path) -> None:
         # HF-installed ONNX models are onnx-only (arbitrary fp32 NCHW graphs) --
@@ -675,6 +695,206 @@ class VideoUpscaler:
             job, encode_frames_dir, encode_fps, audio_mux_path, audio_codec_args, output_path, job.video_codec
         )
         await self._run_process(software_cmd)
+
+    # --- raw-pipe streaming (upscale + encode fused, no PNG round-trip) -----
+
+    async def _should_stream(self, job: VideoUpscaleJob, interp_requested: bool) -> bool:
+        if not self.settings.enable_raw_pipe or interp_requested or self.onnx_video_engine is None:
+            return False
+        # HF-installed ONNX models use OnnxUpscaler (arbitrary graphs), not the
+        # builtin streaming engine, so they stay on the file path.
+        if self._is_onnx_model(job.model_id):
+            return False
+        backend = await asyncio.to_thread(self._resolve_builtin_backend, job)
+        return backend == UpscaleBackend.onnx
+
+    async def _try_streaming(
+        self,
+        job: VideoUpscaleJob,
+        frames_in: Path,
+        output_path: Path,
+        fps: str,
+        audio_mux_path: Path | None,
+        audio_codec_args: list[str],
+    ) -> bool:
+        """Upscale + encode by piping raw frames to ffmpeg. Returns True on success,
+        False to fall back to the PNG path (a cancel / stall still propagates)."""
+        encoder = await asyncio.to_thread(self._resolve_video_encoder, job)
+        try:
+            out_w, out_h = await asyncio.to_thread(self._output_dims, frames_in, job.scale)
+        except Exception as exc:  # noqa: BLE001 - unreadable frame -> just use the file path
+            logger.warning("raw-pipe: could not read input dims (%s); using PNG path", exc)
+            return False
+
+        # Below the threshold the PNG encode is cheap and the subprocess overhead
+        # isn't worth it -- let the (more parallel) file path handle small outputs.
+        if out_w * out_h < self.settings.raw_pipe_min_output_pixels:
+            return False
+
+        job.metadata["videoEncoder"] = encoder
+        advance_video_stage(job, "upscaling_frames")
+        try:
+            await self._upscale_encode_streaming(
+                job, frames_in, output_path, encoder, fps, audio_mux_path, audio_codec_args, out_w, out_h
+            )
+        except (asyncio.CancelledError, VideoStallError):
+            raise
+        except Exception as exc:  # noqa: BLE001 - any streaming failure -> PNG fallback
+            logger.warning("raw-pipe streaming failed (%s); falling back to the PNG encode path", exc)
+            job.metadata["rawPipeFallback"] = str(exc)
+            output_path.unlink(missing_ok=True)
+            return False
+
+        job.metadata["rawPipe"] = True
+        job.metadata["outputFps"] = fps
+        return True
+
+    @staticmethod
+    def _output_dims(frames_in: Path, scale: int) -> tuple[int, int]:
+        first = next(iter(sorted(frames_in.glob("*.png"))), None)
+        if first is None:
+            raise RuntimeError("no extracted frames to stream")
+        image = cv2.imread(str(first), cv2.IMREAD_COLOR)
+        if image is None:
+            raise RuntimeError(f"could not read first frame: {first}")
+        height, width = image.shape[:2]
+        return width * scale, height * scale
+
+    def _build_rawpipe_command(
+        self,
+        out_w: int,
+        out_h: int,
+        fps: str,
+        audio_mux_path: Path | None,
+        audio_codec_args: list[str],
+        output_path: Path,
+        job: VideoUpscaleJob,
+        encoder: str,
+    ) -> list[str]:
+        # Upscaled frames are RGB HWC uint8 (see OnnxVideoUpscaler / _load_frame),
+        # so the raw input is rgb24 at the upscaled size.
+        cmd = [
+            str(self.settings.ffmpeg_binary_path),
+            "-y",
+            "-f", "rawvideo",
+            "-pix_fmt", "rgb24",
+            "-s", f"{out_w}x{out_h}",
+            "-framerate", fps,
+            "-i", "-",
+        ]
+        if audio_mux_path is not None:
+            cmd += ["-i", str(audio_mux_path), "-map", "0:v:0", "-map", "1:a:0"]
+        cmd += self._build_video_encode_options(job, encoder)
+        if audio_mux_path is not None:
+            cmd += audio_codec_args
+        cmd.append(str(output_path))
+        return cmd
+
+    async def _upscale_encode_streaming(
+        self,
+        job: VideoUpscaleJob,
+        frames_in: Path,
+        output_path: Path,
+        encoder: str,
+        fps: str,
+        audio_mux_path: Path | None,
+        audio_codec_args: list[str],
+        out_w: int,
+        out_h: int,
+    ) -> None:
+        cmd = self._build_rawpipe_command(
+            out_w, out_h, fps, audio_mux_path, audio_codec_args, output_path, job, encoder
+        )
+        proc = subprocess.Popen(
+            cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE, stdout=subprocess.DEVNULL
+        )
+        stderr_buf: list[bytes] = []
+        stderr_thread = threading.Thread(target=self._drain_stream, args=(proc.stderr, stderr_buf), daemon=True)
+        stderr_thread.start()
+
+        counter = {"n": 0}
+
+        def write_frame(frame_hwc_rgb) -> None:
+            proc.stdin.write(frame_hwc_rgb.tobytes())  # blocks on pipe backpressure (in a worker thread)
+            counter["n"] += 1
+
+        device = job.device or self.settings.default_device
+        # Shield the engine task so a job cancel doesn't tear it down while a worker
+        # thread is blocked writing to ffmpeg's pipe. We kill ffmpeg FIRST (which
+        # unblocks that write with BrokenPipe so the engine unwinds), then await it.
+        stream_task = asyncio.ensure_future(
+            self.onnx_video_engine.run_frames_streaming(frames_in, job.model_name, device, write_frame)
+        )
+        try:
+            async with self._track_streaming_progress(job, counter):
+                expected = await asyncio.shield(stream_task)
+            # Guard against a silent frame drop (mirrors _validate_frame_output_count
+            # on the PNG path): fewer frames written than the engine reported means a
+            # short video -- raise so _try_streaming falls back to the file path.
+            if counter["n"] != expected:
+                raise RuntimeError(f"raw-pipe wrote {counter['n']}/{expected} frames")
+            proc.stdin.close()
+            returncode = await asyncio.to_thread(proc.wait)
+            if returncode != 0:
+                raise RuntimeError(self._summarize_process_error(b"".join(stderr_buf), b""))
+        except BaseException:
+            proc.kill()
+            with contextlib.suppress(BaseException):
+                await stream_task
+            with contextlib.suppress(Exception):
+                await asyncio.to_thread(proc.wait)
+            raise
+        finally:
+            stderr_thread.join(timeout=5)
+
+    @staticmethod
+    def _drain_stream(stream, sink: list[bytes]) -> None:
+        # ffmpeg fills its stderr pipe; if nobody drains it, the raw stdin writer
+        # deadlocks once that pipe buffer is full. Keep only the tail for errors.
+        try:
+            for chunk in iter(lambda: stream.read(8192), b""):
+                sink.append(chunk)
+                if len(sink) > 64:
+                    del sink[:-64]
+        except Exception:  # noqa: BLE001 - stream closed on kill
+            pass
+
+    @contextlib.asynccontextmanager
+    async def _track_streaming_progress(
+        self, job: VideoUpscaleJob, counter: dict[str, int]
+    ) -> AsyncIterator[None]:
+        # Like _track_frame_progress but reads an in-memory frame counter (there are
+        # no output files to count in the raw-pipe path). Same stall-watchdog
+        # semantics: cancel the stage if no new frame is written within the timeout.
+        frames_total = job.metadata.get("framesTotal")
+        job.metadata["framesDone"] = 0
+        stage_task = asyncio.current_task()
+        stall_watchdog = StallWatchdog(self.frame_stall_timeout_seconds)
+        poller = asyncio.create_task(self._poll_streaming_progress(job, counter, frames_total, stall_watchdog, stage_task))
+        try:
+            yield
+        except asyncio.CancelledError:
+            if not stall_watchdog.triggered:
+                raise
+            raise VideoStallError(_stall_message("frames nuevos", self.frame_stall_timeout_seconds)) from None
+        finally:
+            await self._stop_poller(poller)
+
+    async def _poll_streaming_progress(
+        self,
+        job: VideoUpscaleJob,
+        counter: dict[str, int],
+        frames_total: int | None,
+        stall_watchdog: StallWatchdog,
+        stage_task: asyncio.Task[None],
+    ) -> None:
+        while True:
+            await asyncio.sleep(self.frame_poll_interval_seconds)
+            frames_done = counter["n"]
+            self._apply_frame_progress(job, "upscaling_frames", frames_done, frames_total)
+            if stall_watchdog.observe(frames_done):
+                stage_task.cancel()
+                return
 
     async def _run_process(self, command: list[str]) -> None:
         stdout, stderr, returncode = await run_guarded_process(command, self.settings.subprocess_timeout)

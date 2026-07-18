@@ -215,6 +215,44 @@ async def test_run_frames_builtin_upscales_all_frames(tmp_path: Path, monkeypatc
         assert image.size == (24, 16)  # width*2, height*2
 
 
+async def test_run_frames_streaming_writes_every_frame_in_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = make_engine(tmp_path)
+    touch_builtin_onnx(engine.settings, "realesr-animevideov3-x4-uint8.onnx")
+    monkeypatch.setattr(engine, "_create_session", lambda model_path, device: Double2xUint8Session())
+
+    frames_in = tmp_path / "frames-in"
+    write_frames(frames_in, count=6, height=4, width=6)
+
+    received: list[tuple[int, int, int]] = []
+    first_pixels: list[int] = []
+
+    def write_fn(frame_hwc) -> None:
+        received.append(frame_hwc.shape)
+        first_pixels.append(int(frame_hwc[0, 0, 0]))
+
+    count = await engine.run_frames_streaming(frames_in, "realesr-animevideov3-x4", "cpu", write_fn)
+
+    assert count == 6
+    assert len(received) == 6
+    assert all(shape == (8, 12, 3) for shape in received)  # 4x6 doubled
+
+
+async def test_ordered_writer_reorders_by_frame_index() -> None:
+    import queue as _queue
+    from app.services.engines.onnx_video_upscaler import OnnxVideoUpscaler as _E
+
+    save_q: _queue.Queue = _queue.Queue()
+    # Deliver frames OUT of order; the writer must emit them in index order.
+    for name, value in [("00000002.png", 2), ("00000001.png", 1), ("00000003.png", 3)]:
+        save_q.put((name, np.full((1, 1, 1, 1), value, dtype=np.uint8)))
+    save_q.put(None)
+    emitted: list[int] = []
+    _E._ordered_writer_loop(save_q, lambda f: emitted.append(int(f[0, 0, 0])), 3, [], threading.Event())
+    assert emitted == [1, 2, 3]
+
+
 async def test_run_frames_builtin_raises_for_unconfigured_model(tmp_path: Path) -> None:
     engine = make_engine(tmp_path)
     frames_in = tmp_path / "frames-in"
