@@ -77,6 +77,7 @@ class AudioJobResponse(BaseModel):
 class AudioCapabilitiesResponse(BaseModel):
     denoise_modes: list[str] = Field(serialization_alias="denoiseModes")
     restore_available: bool = Field(serialization_alias="restoreAvailable")
+    restore_modes: list[str] = Field(default_factory=list, serialization_alias="restoreModes")
 
 
 class SupportedModelResponse(BaseModel):

@@ -17,7 +17,7 @@ from app.models import VideoUpscaleJob
 from app.services import video_encoders
 from app.services.backend_registry import UpscaleBackend, resolve_upscale_backend
 from app.services.devices_service import DevicesService
-from app.services.engines.apollo_restore import ApolloRestorer
+from app.services.restorer_registry import AudioRestorer
 from app.services.engines.audio_enhance import AudioEnhancer
 from app.services.engines.onnx_upscaler import OnnxUpscaler
 from app.services.engines.onnx_video_upscaler import OnnxVideoUpscaler
@@ -74,7 +74,7 @@ class VideoUpscaler:
         model_registry: ModelRegistry | None = None,
         frame_poll_interval_seconds: float = FRAME_POLL_INTERVAL_SECONDS,
         frame_stall_timeout_seconds: float | None = None,
-        restorer: ApolloRestorer | None = None,
+        restorers: dict[str, AudioRestorer] | None = None,
         onnx_video_engine: OnnxVideoUpscaler | None = None,
         devices: DevicesService | None = None,
     ) -> None:
@@ -83,7 +83,7 @@ class VideoUpscaler:
         self.media_tools = media_tools
         self.rife_engine = rife_engine
         self.audio_enhancers = audio_enhancers or {}
-        self.restorer = restorer
+        self.restorers = restorers or {}
         self.onnx_engine = onnx_engine
         self.onnx_video_engine = onnx_video_engine
         self.model_registry = model_registry
@@ -389,11 +389,14 @@ class VideoUpscaler:
         await enhancer.run(input_wav, output_wav)
 
     async def _restore_audio(self, job: VideoUpscaleJob, input_wav: Path, output_wav: Path) -> None:
-        if self.restorer is None:
-            raise RuntimeError("audio_restore requested but no Apollo restorer is configured")
+        restorer = self.restorers.get(job.audio_restore or "")
+        if restorer is None:
+            raise RuntimeError(
+                f"audio_restore mode {job.audio_restore!r} requested but no restorer is configured"
+            )
         advance_video_stage(job, "restoring_audio")
         device = job.device or self.settings.default_device
-        await self.restorer.run(input_wav, output_wav, device)
+        await restorer.run(input_wav, output_wav, device)
 
     async def _maybe_interpolate(
         self,

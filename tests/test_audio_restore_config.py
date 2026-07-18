@@ -22,7 +22,7 @@ def test_audio_restore_settings_have_expected_defaults() -> None:
 
 
 def test_audio_restore_modes_constant() -> None:
-    assert AUDIO_RESTORE_MODES == frozenset({"apollo"})
+    assert AUDIO_RESTORE_MODES == frozenset({"apollo", "audiosr"})
 
 
 def test_apollo_restore_model_path_resolves_against_project_root_not_cwd(

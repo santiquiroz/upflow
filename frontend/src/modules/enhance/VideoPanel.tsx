@@ -19,6 +19,7 @@ import type {
   VideoEncoder,
   VideoProfileResponse,
 } from "../../lib/apiTypes";
+import { restoreLabel } from "../../lib/audioLabels";
 import { formatDeviceSummary, formatModelSummary } from "./accordionSummaries";
 import { AUDIO_ENHANCE_OPTIONS, AudioEnhanceControls } from "./AudioEnhanceControls";
 import { FpsBoostControls, TARGET_FPS_OPTIONS, type FpsBoostValue } from "./FpsBoostControls";
@@ -268,7 +269,8 @@ export function VideoPanel() {
   const { phase, job, errorMessage, submit, cancel, reset } = useVideoJob();
 
   const requiresGpu = resolveRequiresGpu(model);
-  const restoreAvailable = capabilitiesQuery.data?.restoreAvailable ?? false;
+  const restoreModes = capabilitiesQuery.data?.restoreModes ?? [];
+  const restoreAvailable = restoreModes.length > 0;
 
   // Only re-applies the profile's default model the first time a given profile
   // becomes selected (including the async case where modelsQuery resolves after
@@ -405,15 +407,26 @@ export function VideoPanel() {
             </label>
             <AudioEnhanceControls value={audioEnhance} onChange={setAudioEnhance} keepAudio={keepAudio} />
             {keepAudio && restoreAvailable && (
-              <label className="flex items-center gap-2 text-sm text-text">
-                <input
-                  type="checkbox"
-                  checked={audioRestore === "apollo"}
-                  onChange={(event) => setAudioRestore(event.target.checked ? "apollo" : null)}
-                  className="h-3.5 w-3.5 accent-accent"
-                />
-                Restore compression (Apollo — experimental)
-              </label>
+              <fieldset className="flex flex-col gap-1.5">
+                <legend className="text-sm text-text">Restore compression (experimental)</legend>
+                {[null, ...restoreModes].map((mode) => (
+                  <label key={mode ?? "none"} className="flex items-center gap-2 text-sm text-text">
+                    <input
+                      type="radio"
+                      name="video-audio-restore"
+                      checked={audioRestore === mode}
+                      onChange={() => setAudioRestore(mode)}
+                      className="h-3.5 w-3.5 accent-accent"
+                    />
+                    {mode === null ? "Off" : restoreLabel(mode)}
+                  </label>
+                ))}
+                {audioRestore === "audiosr" && (
+                  <p role="status" className="text-xs text-warn">
+                    AudioSR (diffusion) adds roughly 2 minutes of processing per minute of audio on GPU.
+                  </p>
+                )}
+              </fieldset>
             )}
           </div>
         </AccordionSection>

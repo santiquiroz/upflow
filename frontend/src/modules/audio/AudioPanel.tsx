@@ -11,10 +11,8 @@ import { formatDeviceSummary } from "../enhance/accordionSummaries";
 const DENOISE_TOOLTIP =
   "Remove background noise with an AI denoiser. DeepFilterNet is stronger; RNNoise is lighter. Runs before restoration.";
 const RESTORE_TOOLTIP =
-  "Reconstruct high frequencies lost to lossy compression (MP3/AAC). Experimental — quality varies by source.";
+  "Reconstruct high frequencies lost to lossy compression (MP3/AAC). Apollo is fast band-restore; AudioSR is diffusion super-resolution — much higher quality ceiling but far slower (minutes per minute of audio on GPU). Experimental — quality varies by source.";
 const DEVICE_TOOLTIP = "Pick the compute device that runs the restoration model (CPU or a DirectML GPU).";
-
-const RESTORE_APOLLO = "apollo";
 
 interface ModeOption {
   value: string | null;
@@ -110,10 +108,12 @@ function buildDenoiseOptions(denoiseModes: string[]): ModeOption[] {
   return [{ value: null, label: "None" }, ...denoiseModes.map((mode) => ({ value: mode, label: denoiseLabel(mode) }))];
 }
 
-const RESTORE_OPTIONS: readonly ModeOption[] = [
-  { value: null, label: "None" },
-  { value: RESTORE_APOLLO, label: "Apollo", experimental: true },
-];
+function buildRestoreOptions(restoreModes: string[]): ModeOption[] {
+  return [
+    { value: null, label: "None" },
+    ...restoreModes.map((mode) => ({ value: mode, label: restoreLabel(mode), experimental: true })),
+  ];
+}
 
 export function AudioPanel() {
   const [file, setFile] = useState<File | null>(null);
@@ -125,7 +125,8 @@ export function AudioPanel() {
   const { phase, job, errorMessage, submit, cancel, reset } = useAudioJob();
 
   const denoiseModes = capabilitiesQuery.data?.denoiseModes ?? [];
-  const restoreAvailable = capabilitiesQuery.data?.restoreAvailable ?? false;
+  const restoreModes = capabilitiesQuery.data?.restoreModes ?? [];
+  const restoreAvailable = restoreModes.length > 0;
 
   function handleFileSelected(selected: File) {
     setFile(selected);
@@ -158,10 +159,16 @@ export function AudioPanel() {
           <AccordionSection title="Restore" summary={restoreLabel(restore)} tooltip={RESTORE_TOOLTIP}>
             <ModeSegmentedControl
               legend="Restore"
-              options={RESTORE_OPTIONS}
+              options={buildRestoreOptions(restoreModes)}
               value={restore}
               onChange={setRestore}
             />
+            {restore === "audiosr" && (
+              <p role="status" className="mt-2 text-xs text-warn">
+                AudioSR runs a 258M-parameter diffusion model: expect roughly 2 minutes of processing
+                per minute of audio on a GPU (much longer on CPU).
+              </p>
+            )}
           </AccordionSection>
         )}
         <AccordionSection title="Device" summary={formatDeviceSummary(device)} tooltip={DEVICE_TOOLTIP}>

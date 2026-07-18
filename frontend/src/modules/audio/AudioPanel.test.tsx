@@ -28,6 +28,7 @@ const DEVICES: DevicesResponse = {
 const FULL_CAPABILITIES: AudioCapabilities = {
   denoiseModes: ["deepfilter", "rnnoise"],
   restoreAvailable: true,
+  restoreModes: ["apollo", "audiosr"],
 };
 
 function renderPanel(capabilities: AudioCapabilities = FULL_CAPABILITIES) {
@@ -58,7 +59,7 @@ afterEach(() => {
 
 describe("AudioPanel", () => {
   it("renders only the denoise modes reported by capabilities", async () => {
-    renderPanel({ denoiseModes: ["deepfilter"], restoreAvailable: false });
+    renderPanel({ denoiseModes: ["deepfilter"], restoreAvailable: false, restoreModes: [] });
 
     expect(await screen.findByRole("button", { name: "DeepFilterNet" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "RNNoise" })).not.toBeInTheDocument();
@@ -66,7 +67,7 @@ describe("AudioPanel", () => {
   });
 
   it("keeps the Enhance CTA disabled until at least one mode is chosen", async () => {
-    renderPanel({ denoiseModes: ["deepfilter"], restoreAvailable: false });
+    renderPanel({ denoiseModes: ["deepfilter"], restoreAvailable: false, restoreModes: [] });
     const denoiseButton = await screen.findByRole("button", { name: "DeepFilterNet" });
 
     selectFile();
@@ -85,11 +86,21 @@ describe("AudioPanel", () => {
     fireEvent.click(await screen.findByRole("button", { name: /^Restore/ }));
 
     expect(await screen.findByRole("button", { name: /Apollo/ })).toBeInTheDocument();
-    expect(screen.getByText("Experimental")).toBeInTheDocument();
+    // Apollo and AudioSR both carry the badge.
+    expect(screen.getAllByText("Experimental")).toHaveLength(2);
+  });
+
+  it("offers AudioSR as a restore mode and shows its diffusion cost hint", async () => {
+    renderPanel(FULL_CAPABILITIES);
+
+    fireEvent.click(await screen.findByRole("button", { name: /^Restore/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /AudioSR/ }));
+
+    expect(await screen.findByText(/per minute of audio/i)).toBeInTheDocument();
   });
 
   it("hides the Restore section entirely when restore is not available", async () => {
-    renderPanel({ denoiseModes: ["deepfilter", "rnnoise"], restoreAvailable: false });
+    renderPanel({ denoiseModes: ["deepfilter", "rnnoise"], restoreAvailable: false, restoreModes: [] });
     await screen.findByRole("button", { name: "DeepFilterNet" });
 
     expect(screen.queryByRole("button", { name: /^Restore/ })).not.toBeInTheDocument();

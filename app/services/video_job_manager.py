@@ -13,6 +13,7 @@ from app.models import JobStatus, VideoUpscaleJob, utc_now
 from app.services.backend_registry import validate_backend_choice
 from app.services.video_encoders import VIDEO_ENCODERS
 from app.services.device_router import DeviceRouter, has_compatible_device
+from app.services.restorer_registry import validate_restore_mode_ready
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
 from app.services.media_tools import MediaTools, parse_fps_fraction, resolve_video_fps
@@ -336,15 +337,7 @@ class VideoJobManager:
             raise ValueError(f"audio_restore must be one of {sorted(AUDIO_RESTORE_MODES)}")
         if not keep_audio:
             raise ValueError("audio_restore requires keep_audio to be enabled")
-        if not self.settings.enable_audio_restore:
-            raise ValueError(
-                "Audio restoration is disabled by configuration (set ENABLE_AUDIO_RESTORE=true)"
-            )
-        if not self.settings.apollo_restore_model_path.exists():
-            raise ValueError(
-                f"Audio restore mode {audio_restore!r} requested but the Apollo model is not installed "
-                "(run scripts/download-apollo.ps1)"
-            )
+        validate_restore_mode_ready(self.settings, audio_restore)
 
     async def _worker(self) -> None:
         while True:

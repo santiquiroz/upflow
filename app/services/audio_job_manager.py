@@ -10,6 +10,7 @@ from app.models import AudioJob, JobStatus, utc_now
 from app.services.audio_pipeline import AudioPipeline
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
+from app.services.restorer_registry import validate_restore_mode_ready
 
 logger = logging.getLogger(__name__)
 
@@ -132,17 +133,7 @@ class AudioJobManager:
     def _validate_restore(self, restore: str) -> None:
         if restore not in AUDIO_RESTORE_MODES:
             raise ValueError(f"restore must be one of {sorted(AUDIO_RESTORE_MODES)}")
-        # Distinct disabled vs not-installed messages, same split as the video
-        # audio_enhance validation.
-        if not self.settings.enable_audio_restore:
-            raise ValueError(
-                "Audio restoration is disabled by configuration (set ENABLE_AUDIO_RESTORE=true)"
-            )
-        if not self.settings.apollo_restore_model_path.exists():
-            raise ValueError(
-                f"restore mode {restore!r} requested but the Apollo model is not installed "
-                "(run scripts/download-apollo.ps1)"
-            )
+        validate_restore_mode_ready(self.settings, restore)
 
     async def _validate_device(self, device: str | None) -> None:
         if device is None:

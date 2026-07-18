@@ -42,7 +42,8 @@ RNNOISE_MODE = "rnnoise"
 AUDIO_ENHANCE_MODES = frozenset({DEEPFILTER_MODE, RNNOISE_MODE})
 
 APOLLO_MODE = "apollo"
-AUDIO_RESTORE_MODES = frozenset({APOLLO_MODE})
+AUDIOSR_MODE = "audiosr"
+AUDIO_RESTORE_MODES = frozenset({APOLLO_MODE, AUDIOSR_MODE})
 
 # Upscale runtime selector (SP11). `auto` picks onnx vs ncnn per the rule in
 # app/services/backend_registry.py; `ncnn`/`onnx` force a specific runtime.
@@ -292,6 +293,18 @@ class Settings(BaseSettings):
     # de Windows entre chunks para que el PC no se laguee tanto mientras procesa.
     # Solo aplica a device=dml:N (en CPU no hay contencion de GPU). 0 = sin respiro.
     audio_restore_gpu_throttle_seconds: float = Field(default=0.15, alias="AUDIO_RESTORE_GPU_THROTTLE_SECONDS")
+    # AudioSR (segundo motor de restore, difusion latente 48kHz, port propio
+    # santiquiroz/port-audiosr-onnx). Mucho mas pesado que Apollo (RTF ~1.9 en
+    # una 7800 XT a 50 pasos) pero es super-resolucion general de audio, no
+    # solo band-restore. Flag propio: se puede habilitar sin Apollo y viceversa.
+    enable_audiosr: bool = Field(default=False, alias="ENABLE_AUDIOSR")
+    audiosr_model_dir: str = Field(default="vendor/audiosr", alias="AUDIOSR_MODEL_DIR")
+    # 50 pasos = calidad del paper; 25 corta el tiempo a la mitad con perdida
+    # leve. Cada paso son 2 pasadas del UNet 258M (CFG).
+    audiosr_ddim_steps: int = Field(default=50, alias="AUDIOSR_DDIM_STEPS")
+    # Mismo rol que audio_restore_gpu_throttle_seconds pero por paso DDIM
+    # (~90ms de UNet x2 por paso): respiro corto para el compositor de Windows.
+    audiosr_gpu_throttle_seconds: float = Field(default=0.01, alias="AUDIOSR_GPU_THROTTLE_SECONDS")
     max_audio_upload_mb: int = Field(default=200, alias="MAX_AUDIO_UPLOAD_MB")
 
     default_device: str = Field(default="dml:0", alias="DEFAULT_DEVICE")
@@ -404,6 +417,14 @@ class Settings(BaseSettings):
         # which would infinite-loop the chunker.
         if value <= 0:
             raise ValueError("AUDIO_RESTORE_CHUNK_SECONDS must be greater than 0")
+        return value
+
+    @field_validator("audiosr_ddim_steps")
+    @classmethod
+    def _validate_audiosr_ddim_steps(cls, value: int) -> int:
+        # <1 no genera nada; >500 no aporta calidad y multiplica el costo x2/paso.
+        if not 1 <= value <= 500:
+            raise ValueError("AUDIOSR_DDIM_STEPS must be between 1 and 500")
         return value
 
     @model_validator(mode="after")
@@ -539,6 +560,24 @@ class Settings(BaseSettings):
         # explicitly enabled AND the model file present. Never raises -- a
         # missing model just yields False, so the app never breaks.
         return self.enable_audio_restore and self.apollo_restore_model_path.exists()
+
+    @property
+    def audiosr_model_dir_path(self) -> Path:
+        return resolve_against_project_root(self.audiosr_model_dir)
+
+    def audiosr_available(self) -> bool:
+        if not self.enable_audiosr:
+            return False
+        from app.services.engines.audiosr.assets import AudioSrAssets
+
+        return AudioSrAssets.is_complete(self.audiosr_model_dir_path)
+
+    def audio_restore_mode_available(self, mode: str) -> bool:
+        if mode == APOLLO_MODE:
+            return self.audio_restore_available()
+        if mode == AUDIOSR_MODE:
+            return self.audiosr_available()
+        return False
 
     @property
     def model_catalog(self) -> list[ModelOption]:

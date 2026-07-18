@@ -103,7 +103,11 @@ describe("cancelAudioJob", () => {
 
 describe("fetchAudioCapabilities", () => {
   it("issues a GET to /api/v1/audio/capabilities and returns the typed payload", async () => {
-    const payload: AudioCapabilities = { denoiseModes: ["deepfilter", "rnnoise"], restoreAvailable: true };
+    const payload: AudioCapabilities = {
+      denoiseModes: ["deepfilter", "rnnoise"],
+      restoreAvailable: true,
+      restoreModes: ["apollo"],
+    };
     mockFetchOnce(payload);
 
     const result = await fetchAudioCapabilities();

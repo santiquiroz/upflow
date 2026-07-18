@@ -375,7 +375,11 @@ Con eso activado, un job de video con `keep_audio=true` puede pedir `audio_enhan
 Además de imagen y video, Upflow tiene un **apartado de Audio** propio (ruta `/audio`): subís un archivo de audio (wav/mp3/flac/m4a/ogg/opus), elegís la mejora y descargás el resultado. La cadena es `entrada → [denoise] → [restore] → salida`, cada paso opcional.
 
 - **Denoise** — quita ruido: `deepfilter` (DeepFilterNet3) o `rnnoise`. Es el mismo motor que ya se usa en video (ver sección anterior); requiere `ENABLE_AUDIO_ENHANCE=true` + `download-deepfilternet.ps1`.
-- **Restore (EXPERIMENTAL)** — `apollo`: reconstruye la banda de agudos perdida por compresión de códec (audio de WhatsApp/Telegram/redes). Motor ONNX **multi-provider** (corre en cualquier GPU DirectX12 —AMD/NVIDIA/Intel— o CPU, igual que los modelos de imagen HF). Requiere `ENABLE_AUDIO_RESTORE=true` + el modelo `apollo.onnx` (`scripts/download-apollo.ps1`). Si el modelo no está, el modo simplemente no aparece — la app nunca se rompe por esto.
+- **Restore (EXPERIMENTAL)** — dos motores, elegibles por job:
+  - `apollo`: reconstruye la banda de agudos perdida por compresión de códec (audio de WhatsApp/Telegram/redes). Rápido y liviano (~74 MB). Requiere `ENABLE_AUDIO_RESTORE=true` + `scripts/download-apollo.ps1`.
+  - `audiosr`: **super-resolución de audio general por difusión latente** (cualquier banda → 48 kHz, UNet de 258M params). Techo de calidad muy superior a Apollo pero ~2 min de proceso por minuto de audio en GPU (50 pasos DDIM con CFG). Port ONNX propio — el primero conocido de AudioSR: [santiquiroz/port-audiosr-onnx](https://github.com/santiquiroz/port-audiosr-onnx). Requiere `ENABLE_AUDIOSR=true` + `scripts/download-audiosr-onnx.ps1` (~2.6 GB).
+
+  Ambos motores son ONNX **multi-provider** (corren en cualquier GPU DirectX12 —AMD/NVIDIA/Intel— o CPU, igual que los modelos de imagen HF). Si un modelo no está instalado, ese modo simplemente no aparece — la app nunca se rompe por esto.
 
 ```powershell
 # Restore experimental: descargar el modelo Apollo (~74 MB) y habilitarlo
@@ -383,7 +387,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\download-apollo.ps1
 # en .env:  ENABLE_AUDIO_RESTORE=true
 ```
 
-API: `POST /api/v1/audio/jobs` (multipart: `file`, `denoise?`, `restore?`, `device?`) → 202; `GET /api/v1/audio/jobs/{id}` (estado + progreso), `.../download` (resultado), `GET /api/v1/audio/capabilities` (qué motores están instalados). El mismo `restore=apollo` se puede pedir en un job de video vía el campo `audio_restore` (con `keep_audio=true`), aplicado después del denoise.
+API: `POST /api/v1/audio/jobs` (multipart: `file`, `denoise?`, `restore?`, `device?`) → 202; `GET /api/v1/audio/jobs/{id}` (estado + progreso), `.../download` (resultado), `GET /api/v1/audio/capabilities` (qué motores están instalados; `restoreModes` lista los modos listos). El mismo `restore=apollo|audiosr` se puede pedir en un job de video vía el campo `audio_restore` (con `keep_audio=true`), aplicado después del denoise.
 
 > **Nota experimental:** el restore es un port ONNX del modelo Apollo (ver `docs/` y la guía del port). Funciona y es multi-provider, pero la calidad de reconstrucción y el rendimiento GPU aún se están evaluando — por eso va detrás de un flag y con badge "Experimental" en la UI.
 
