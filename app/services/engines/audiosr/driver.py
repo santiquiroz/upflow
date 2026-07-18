@@ -90,6 +90,9 @@ class AudioSrDriver:
             )
             restored_windows.append(restored)
 
+        # The merge + STFT postproc scale with clip length, so a cancel that
+        # lands after the last DDIM step must not pay for them.
+        _raise_if_cancelled(cancel_event)
         merged = _crossfade_concat(restored_windows, wav.shape[-1])
         anchored = dsp.replace_low_band_stft(merged, wav_lp)
         return _final_normalize(anchored)[:original_length]
@@ -124,8 +127,7 @@ class AudioSrDriver:
 
         x = self.noise_source(latent_shape).astype(np.float32)
         for i, t in enumerate(reversed(schedule.timesteps)):
-            if cancel_event is not None and cancel_event.is_set():
-                raise AudioSrCancelled()
+            _raise_if_cancelled(cancel_event)
             index = len(schedule.timesteps) - i - 1
             timesteps = np.array([t], dtype=np.int64)
             v_cond = self.run_graph("ddpm", {
@@ -141,6 +143,7 @@ class AudioSrDriver:
             if step_throttle is not None:
                 step_throttle()
 
+        _raise_if_cancelled(cancel_event)
         mel_out = self.run_graph("vae_decoder", {"z": x}).astype(np.float32)
 
         cutoff_melbin = dsp.locate_cutoff_bin(np.exp(mel_lp.astype(np.float64)), 0.985)
@@ -148,6 +151,11 @@ class AudioSrDriver:
 
         wav_out = self.run_graph("vocoder", {"mel": mel_out[0].transpose(0, 2, 1)})
         return np.asarray(wav_out, dtype=np.float64).reshape(-1)[: wav.shape[-1]]
+
+
+def _raise_if_cancelled(cancel_event: threading.Event | None) -> None:
+    if cancel_event is not None and cancel_event.is_set():
+        raise AudioSrCancelled()
 
 
 def _frames_for(wav: np.ndarray) -> int:

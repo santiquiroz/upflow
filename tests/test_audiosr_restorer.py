@@ -129,6 +129,48 @@ def test_build_restorers_registers_both_engines(tmp_path: Path) -> None:
     assert set(restorers) == {"apollo", "audiosr"}
 
 
+def test_cancel_waits_for_worker_thread_before_reraising(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Review HIGH: si run() re-lanza CancelledError sin esperar el thread, el
+    # finally del pipeline borra el work dir mientras un _save_wav rezagado lo
+    # resucita. El contrato es: al propagar el cancel, el thread YA terminó.
+    import threading
+    import time
+
+    restorer = AudioSrRestorer(make_settings(tmp_path))
+    worker_finished = threading.Event()
+
+    def slow_worker(input_wav: Path, output_wav: Path, device: str, cancel_event: threading.Event) -> None:
+        cancel_event.wait(timeout=10)
+        time.sleep(0.2)  # cola no-interrumpible simulada
+        worker_finished.set()
+
+    monkeypatch.setattr(restorer, "_run_and_save", slow_worker)
+
+    async def scenario() -> None:
+        task = asyncio.create_task(restorer.run(tmp_path / "in.wav", tmp_path / "out.wav", "cpu"))
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert worker_finished.is_set(), "run() propagó el cancel antes de que el thread terminara"
+
+    asyncio.run(scenario())
+
+
+def test_zero_sample_audio_raises_actionable_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    restorer = AudioSrRestorer(make_settings(tmp_path))
+    monkeypatch.setattr(restorer, "_create_sessions", fake_sessions)
+    empty_wav = tmp_path / "empty.wav"
+    sf.write(str(empty_wav), np.zeros(0, dtype=np.float32), 48000)
+
+    with pytest.raises(RuntimeError, match="zero samples"):
+        asyncio.run(restorer.run(empty_wav, tmp_path / "out.wav", "cpu"))
+
+
 def test_validate_restore_mode_ready_messages(tmp_path: Path) -> None:
     disabled = make_settings(tmp_path, enabled=False)
     with pytest.raises(ValueError, match="ENABLE_AUDIOSR"):

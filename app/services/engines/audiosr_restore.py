@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import threading
 import time
 from collections import OrderedDict
@@ -23,6 +24,11 @@ from app.services.engines.onnx_upscaler import _build_providers, _wrap_onnx_erro
 #
 # Session cache holds the 4 graphs of ONE device (LRU 1): a full set is
 # ~1.7GB of weights, so caching per-device like Apollo would double VRAM/RAM.
+#
+# TDR: unlike Apollo there is no chunk-size knob -- each DDIM step is one
+# monolithic UNet call over the model's fixed 10.24s window (~90ms on a
+# 7800 XT). A GPU ~20x slower could hit Windows' ~2s TDR limit; the fallback
+# is device=cpu (documented in .env.example).
 # ---------------------------------------------------------------------------
 
 AUDIOSR_SAMPLE_RATE = 48000
@@ -39,14 +45,19 @@ class AudioSrRestorer:
 
     async def run(self, input_wav: Path, output_wav: Path, device: str) -> None:
         cancel_event = threading.Event()
+        worker = asyncio.ensure_future(
+            asyncio.to_thread(self._run_and_save, input_wav, output_wav, device, cancel_event)
+        )
         try:
-            await asyncio.to_thread(
-                self._run_and_save, input_wav, output_wav, device, cancel_event
-            )
+            await asyncio.shield(worker)
         except asyncio.CancelledError:
             # to_thread can't interrupt the worker; the driver polls this event
-            # every DDIM step so the thread winds down within ~one UNet call.
+            # at every stage boundary. Waiting for the thread to actually
+            # finish keeps the caller's finally (rmtree of the work dir) from
+            # racing a straggler _save_wav that would resurrect the directory.
             cancel_event.set()
+            with contextlib.suppress(Exception):
+                await worker
             raise
         if not self._is_non_empty_file(output_wav):
             raise RuntimeError("AudioSR restoration completed but no output file was produced")
@@ -60,6 +71,10 @@ class AudioSrRestorer:
                 "(scripts/download-audiosr-onnx.ps1)."
             )
         audio = _load_mono_48k(input_wav)
+        if audio.shape[-1] == 0:
+            raise RuntimeError(
+                "The uploaded audio decoded to zero samples; the file is empty or corrupted"
+            )
         sessions = self._get_sessions(device)
         assets = AudioSrAssets.load(self.settings.audiosr_model_dir_path)
         throttle = 0.0 if _is_cpu_device(device) else self.settings.audiosr_gpu_throttle_seconds

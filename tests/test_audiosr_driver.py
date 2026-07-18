@@ -232,6 +232,21 @@ class TestDriver:
         with pytest.raises(AudioSrCancelled):
             driver.restore(wav, ddim_steps=3, cancel_event=cancel)
 
+    def test_cancel_after_last_step_skips_merge_and_postproc(self, tmp_path: Path) -> None:
+        # Review HIGH: el merge + postproc STFT escalan con el largo del clip;
+        # un cancel que llega tras el último paso DDIM no debe pagarlos.
+        assets = make_fake_assets(tmp_path)
+        driver = AudioSrDriver(assets, make_fake_run_graph())
+        cancel = threading.Event()
+        wav = np.random.default_rng(6).standard_normal(48000).astype(np.float32) * 0.2
+
+        def cancel_on_last_step(done: int, total: int) -> None:
+            if done == total:
+                cancel.set()
+
+        with pytest.raises(AudioSrCancelled):
+            driver.restore(wav, ddim_steps=2, progress_cb=cancel_on_last_step, cancel_event=cancel)
+
     def test_long_input_processes_multiple_windows(self, tmp_path: Path) -> None:
         assets = make_fake_assets(tmp_path)
         calls: list[str] = []
