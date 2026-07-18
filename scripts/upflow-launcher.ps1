@@ -291,6 +291,11 @@ function Start-Upflow {
 function Main {
     Write-Host '=== Upflow ===' -ForegroundColor Green
 
+    # uvicorn importa `app` y pydantic-settings lee `.env` desde el CWD del
+    # proceso: si el .bat se lanza desde otra carpeta (Start-Process, acceso
+    # directo sin "Iniciar en"), el server serviria OTRO codigo/config.
+    Set-Location $root
+
     Write-Step 'Verificando Python...'
     if ($usingBundledPython) {
         Write-Host "Python embebido detectado en $bundledPythonPath, no hace falta Python del sistema."
