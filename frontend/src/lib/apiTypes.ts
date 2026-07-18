@@ -115,6 +115,7 @@ export interface AudioJob {
 export interface AudioCapabilities {
   denoiseModes: string[];
   restoreAvailable: boolean;
+  restoreModes: string[];
 }
 
 export interface SupportedModelResponse {

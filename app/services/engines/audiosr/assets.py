@@ -32,8 +32,12 @@ class AudioSrAssets:
 
     @staticmethod
     def is_complete(model_dir: Path) -> bool:
-        required = ["manifest.json", "alphas_cumprod.npy", "mel_basis.npy"]
-        required += [f"{name}.onnx" for name in GRAPH_NAMES]
+        manifest_path = model_dir / "manifest.json"
+        if not manifest_path.exists():
+            return False
+        required = _manifest_required_files(manifest_path)
+        if required is None:
+            return False
         return all((model_dir / name).exists() for name in required)
 
     def graph_path(self, name: str) -> Path:
@@ -50,3 +54,18 @@ class AudioSrAssets:
     @property
     def unconditional_value(self) -> float:
         return float(self.manifest["cfg"]["unconditional_value"])
+
+
+def _manifest_required_files(manifest_path: Path) -> list[str] | None:
+    # The manifest lists its own file set (ddpm ships as .onnx + external
+    # .onnx.data); older manifests without the list fall back to the base set.
+    # None (unreadable/corrupt manifest) means NOT complete.
+    try:
+        listed = json.loads(manifest_path.read_text()).get("required_files")
+    except (OSError, json.JSONDecodeError):
+        return None
+    if listed:
+        return [str(name) for name in listed]
+    return ["manifest.json", "alphas_cumprod.npy", "mel_basis.npy"] + [
+        f"{name}.onnx" for name in GRAPH_NAMES
+    ]

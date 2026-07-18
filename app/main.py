@@ -15,7 +15,7 @@ from app.services.audio_pipeline import AudioPipeline
 from app.services.device_router import DeviceRouter
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.devices_service import DevicesService
-from app.services.engines.apollo_restore import ApolloRestorer
+from app.services.restorer_registry import build_restorers
 from app.services.engines.audio_enhance import AudioEnhancer
 from app.services.engines.onnx_upscaler import OnnxUpscaler
 from app.services.engines.onnx_video_upscaler import OnnxVideoUpscaler
@@ -44,7 +44,7 @@ async def lifespan(app: FastAPI):
     media_tools = MediaTools(settings)
     rife_engine = RifeNcnnEngine(settings)
     audio_enhancers = {mode: AudioEnhancer(settings, mode) for mode in AUDIO_ENHANCE_MODES}
-    apollo_restorer = ApolloRestorer(settings)
+    restorers = build_restorers(settings)
     devices_service = DevicesService(settings)
     model_registry = ModelRegistry(settings)
     onnx_engine = OnnxUpscaler(settings, model_registry, devices_service)
@@ -71,7 +71,7 @@ async def lifespan(app: FastAPI):
         audio_enhancers,
         onnx_engine=onnx_engine,
         model_registry=model_registry,
-        restorer=apollo_restorer,
+        restorers=restorers,
         onnx_video_engine=onnx_video_engine,
         devices=devices_service,
     )
@@ -84,7 +84,7 @@ async def lifespan(app: FastAPI):
         devices=devices_service,
         device_router=device_router,
     )
-    audio_pipeline = AudioPipeline(settings, audio_enhancers, apollo_restorer)
+    audio_pipeline = AudioPipeline(settings, audio_enhancers, restorers)
     audio_job_manager = AudioJobManager(
         settings,
         audio_pipeline,
@@ -106,7 +106,7 @@ async def lifespan(app: FastAPI):
     app.state.media_tools = media_tools
     app.state.rife_engine = rife_engine
     app.state.audio_enhancers = audio_enhancers
-    app.state.apollo_restorer = apollo_restorer
+    app.state.restorers = restorers
     app.state.onnx_engine = onnx_engine
     app.state.onnx_video_engine = onnx_video_engine
     app.state.devices_service = devices_service

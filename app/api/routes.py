@@ -9,7 +9,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 
-from app.config import AUDIO_ENHANCE_MODES, Settings, VideoProfile, get_settings
+from app.config import AUDIO_ENHANCE_MODES, AUDIO_RESTORE_MODES, Settings, VideoProfile, get_settings
 from app.exceptions import ModelNotFoundError, ModelProtectedError, QueueFullError
 from app.models import AudioJob, JobStatus, UpdateStatus, UpscaleJob, VideoUpscaleJob
 from app.schemas import (
@@ -593,9 +593,13 @@ async def create_audio_job(
 @router.get("/audio/capabilities", response_model=AudioCapabilitiesResponse)
 async def audio_capabilities(settings: Settings = Depends(get_settings)) -> AudioCapabilitiesResponse:
     denoise_modes = [mode for mode in sorted(AUDIO_ENHANCE_MODES) if settings.audio_enhance_available(mode)]
+    restore_modes = [
+        mode for mode in sorted(AUDIO_RESTORE_MODES) if settings.audio_restore_mode_available(mode)
+    ]
     return AudioCapabilitiesResponse(
         denoise_modes=denoise_modes,
-        restore_available=settings.audio_restore_available(),
+        restore_available=bool(restore_modes),
+        restore_modes=restore_modes,
     )
 
 

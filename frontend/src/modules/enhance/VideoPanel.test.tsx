@@ -116,6 +116,7 @@ function renderPanel(devices: DevicesResponse = DEVICES, restoreAvailable = fals
   vi.mocked(audioService.fetchAudioCapabilities).mockResolvedValue({
     denoiseModes: ["deepfilter", "rnnoise"],
     restoreAvailable,
+    restoreModes: restoreAvailable ? ["apollo", "audiosr"] : [],
   });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   function Wrapper({ children }: { children: ReactNode }) {
@@ -430,8 +431,8 @@ describe("VideoPanel", () => {
     fireEvent.click(await screen.findByRole("radio", { name: /General Balanced 4x/ }));
     openSection("Audio");
 
-    const restoreToggle = await screen.findByRole("checkbox", { name: /restore compression/i });
-    fireEvent.click(restoreToggle);
+    const apolloRadio = await screen.findByRole("radio", { name: "Apollo" });
+    fireEvent.click(apolloRadio);
 
     const submitButton = await screen.findByRole("button", { name: /upscale video/i });
     await waitFor(() => expect(submitButton).not.toBeDisabled());
@@ -441,6 +442,17 @@ describe("VideoPanel", () => {
     expect(vi.mocked(api.createVideoJob).mock.calls[0][0]).toEqual(
       expect.objectContaining({ audioRestore: "apollo" }),
     );
+  });
+
+  it("offers AudioSR as a restore mode and shows its cost hint", async () => {
+    renderPanel(DEVICES, true);
+    await selectFile();
+    openSection("Audio");
+
+    const audiosrRadio = await screen.findByRole("radio", { name: "AudioSR" });
+    fireEvent.click(audiosrRadio);
+
+    expect(await screen.findByText(/2 minutes of processing per minute/i)).toBeInTheDocument();
   });
 
   it("defaults the Runtime to Auto and lists the three backend options", async () => {

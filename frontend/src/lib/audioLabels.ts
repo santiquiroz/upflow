@@ -9,6 +9,7 @@ const DENOISE_LABELS: Record<string, string> = {
 
 const RESTORE_LABELS: Record<string, string> = {
   apollo: "Apollo",
+  audiosr: "AudioSR",
 };
 
 export function denoiseLabel(mode: string | null): string {

@@ -24,6 +24,9 @@ class DdimSchedule:
         num_train = alphas_cumprod.shape[0]
         stride = num_train // num_steps
         timesteps = np.arange(0, num_train, stride) + 1  # make_ddim_timesteps "uniform"
+        # audiosr's own make_ddim_timesteps overflows to t=1000 when num_steps
+        # does not divide 1000 (and crashes upstream); clamp instead.
+        timesteps = timesteps[timesteps < num_train]
         alphas = alphas_cumprod[timesteps]
         alphas_prev = np.concatenate([[alphas_cumprod[0]], alphas_cumprod[timesteps[:-1]]])
         sigmas = eta * np.sqrt((1 - alphas_prev) / (1 - alphas) * (1 - alphas / alphas_prev))

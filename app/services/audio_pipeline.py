@@ -6,8 +6,8 @@ from pathlib import Path
 
 from app.config import Settings
 from app.models import AudioJob
-from app.services.engines.apollo_restore import ApolloRestorer
 from app.services.engines.audio_enhance import AudioEnhancer
+from app.services.restorer_registry import AudioRestorer
 from app.services.process_runner import run_guarded_process
 from app.services.progress import advance_audio_stage, complete_audio_stages
 
@@ -31,11 +31,11 @@ class AudioPipeline:
         self,
         settings: Settings,
         audio_enhancers: dict[str, AudioEnhancer],
-        restorer: ApolloRestorer,
+        restorers: dict[str, AudioRestorer],
     ) -> None:
         self.settings = settings
         self.audio_enhancers = audio_enhancers
-        self.restorer = restorer
+        self.restorers = restorers
 
     async def run(self, job: AudioJob) -> Path:
         work_dir = self.settings.temp_path / f"audio-{job.id}"
@@ -59,7 +59,7 @@ class AudioPipeline:
         if job.restore:
             advance_audio_stage(job, "restoring")
             restored = work_dir / "restored.wav"
-            await self._restore(current, restored, job.device)
+            await self._restore(job.restore, current, restored, job.device)
             current = restored
 
         advance_audio_stage(job, "finalizing")
@@ -92,9 +92,12 @@ class AudioPipeline:
             raise RuntimeError(f"Denoise mode {mode!r} requested but no engine is configured")
         await enhancer.run(input_wav, output_wav)
 
-    async def _restore(self, input_wav: Path, output_wav: Path, device: str | None) -> None:
+    async def _restore(self, mode: str, input_wav: Path, output_wav: Path, device: str | None) -> None:
+        restorer = self.restorers.get(mode)
+        if restorer is None:
+            raise RuntimeError(f"Restore mode {mode!r} requested but no engine is configured")
         resolved_device = device or self.settings.default_device
-        await self.restorer.run(input_wav, output_wav, resolved_device)
+        await restorer.run(input_wav, output_wav, resolved_device)
 
     async def _run_process(self, command: list[str], failure_message: str) -> None:
         _, stderr, returncode = await run_guarded_process(command, self.settings.subprocess_timeout)
