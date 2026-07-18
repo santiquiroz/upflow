@@ -25,8 +25,8 @@ VIDEO_STAGE_ORDER: tuple[str, ...] = (
     "extracting_audio",
     "enhancing_audio",
     "restoring_audio",
-    "upscaling_frames",
     "interpolating_frames",
+    "upscaling_frames",
     "encoding_video",
 )
 

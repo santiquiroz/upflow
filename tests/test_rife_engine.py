@@ -43,6 +43,15 @@ def write_fake_frames(directory: Path, count: int) -> None:
         (directory / f"{index:08d}.png").write_bytes(b"fake-frame")
 
 
+def write_png_with_dimensions(path: Path, width: int, height: int) -> None:
+    import struct
+
+    signature = b"\x89PNG\r\n\x1a\n"
+    ihdr = struct.pack(">I", 13) + b"IHDR" + struct.pack(">II", width, height)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(signature + ihdr + b"\x08\x06\x00\x00\x00")
+
+
 # ---------------------------------------------------------------------------
 # availability
 # ---------------------------------------------------------------------------
@@ -120,6 +129,8 @@ async def test_rife_engine_run_builds_expected_argv(
         str(target_frame_count),
         "-g",
         "0",
+        "-j",
+        engine._thread_spec(),
         "-f",
         "%08d.png",
     ]
@@ -367,3 +378,77 @@ async def test_rife_engine_run_validates_output_against_target_frame_count(
 
     with pytest.raises(RuntimeError, match="100"):
         await engine.run(frames_in, frames_out, source_frame_count=100, target_frame_count=250)
+
+
+# ---------------------------------------------------------------------------
+# Perf flags (fix del interpolado eterno): -j threads escalados + -u UHD auto
+# ---------------------------------------------------------------------------
+
+
+def test_thread_spec_scales_with_cpu_count(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    engine = RifeNcnnEngine(make_available_settings(tmp_path))
+
+    monkeypatch.setattr("app.services.engines.rife_ncnn.os.cpu_count", lambda: 16)
+    assert engine._thread_spec() == "8:4:12"
+
+    monkeypatch.setattr("app.services.engines.rife_ncnn.os.cpu_count", lambda: 4)
+    assert engine._thread_spec() == "2:2:4"
+
+    monkeypatch.setattr("app.services.engines.rife_ncnn.os.cpu_count", lambda: None)
+    assert engine._thread_spec() == "2:2:4"
+
+
+def test_thread_spec_honors_override_setting(tmp_path: Path) -> None:
+    engine = RifeNcnnEngine(make_available_settings(tmp_path, RIFE_THREADS="3:3:3"))
+
+    assert engine._thread_spec() == "3:3:3"
+
+
+def test_rife_threads_setting_rejects_malformed_spec() -> None:
+    with pytest.raises(ValueError):
+        Settings(_env_file=None, RIFE_THREADS="muchos")
+    with pytest.raises(ValueError):
+        Settings(_env_file=None, RIFE_THREADS="0:2:2")
+
+
+def test_uhd_flag_added_for_4k_frames(tmp_path: Path) -> None:
+    engine = RifeNcnnEngine(make_available_settings(tmp_path))
+    frames_in = tmp_path / "frames-4k"
+    write_png_with_dimensions(frames_in / "00000001.png", 3840, 2160)
+
+    command = engine._build_command(frames_in, tmp_path / "out", 10, "0")
+
+    assert "-u" in command
+
+
+def test_uhd_flag_absent_for_1080p_frames(tmp_path: Path) -> None:
+    engine = RifeNcnnEngine(make_available_settings(tmp_path))
+    frames_in = tmp_path / "frames-hd"
+    write_png_with_dimensions(frames_in / "00000001.png", 1920, 1080)
+
+    command = engine._build_command(frames_in, tmp_path / "out", 10, "0")
+
+    assert "-u" not in command
+
+
+def test_uhd_mode_setting_forces_on_and_off(tmp_path: Path) -> None:
+    frames_small = tmp_path / "frames-small"
+    write_png_with_dimensions(frames_small / "00000001.png", 640, 480)
+    forced_on = RifeNcnnEngine(make_available_settings(tmp_path, RIFE_UHD_MODE="on"))
+    assert "-u" in forced_on._build_command(frames_small, tmp_path / "o1", 10, "0")
+
+    frames_big = tmp_path / "frames-big"
+    write_png_with_dimensions(frames_big / "00000001.png", 5120, 2880)
+    forced_off = RifeNcnnEngine(make_available_settings(tmp_path / "b", RIFE_UHD_MODE="off"))
+    assert "-u" not in forced_off._build_command(frames_big, tmp_path / "o2", 10, "0")
+
+
+def test_uhd_auto_tolerates_unparseable_frames(tmp_path: Path) -> None:
+    engine = RifeNcnnEngine(make_available_settings(tmp_path))
+    frames_in = tmp_path / "frames-bad"
+    frames_in.mkdir()
+    (frames_in / "00000001.png").write_bytes(b"not-a-png")
+
+    command = engine._build_command(frames_in, tmp_path / "out", 10, "0")
+
+    assert "-u" not in command

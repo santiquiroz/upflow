@@ -127,12 +127,14 @@ async def test_encode_with_fallback_retries_software_when_hw_fails(tmp_path: Pat
 
 async def test_should_stream_false_without_onnx_engine(tmp_path: Path) -> None:
     vu = make_upscaler(tmp_path)  # devices set, but onnx_video_engine is None
-    assert await vu._should_stream(make_job("software", device="dml:0"), interp_requested=False) is False
+    assert await vu._should_stream(make_job("software", device="dml:0")) is False
 
 
-async def test_should_stream_false_when_interpolation_requested(tmp_path: Path) -> None:
-    vu = make_upscaler(tmp_path)
-    assert await vu._should_stream(make_job("software"), interp_requested=True) is False
+# Desde el reorden interp->upscale, el raw-pipe tambien aplica a jobs con
+# interpolacion (RIFE ya corrio sobre los frames fuente antes del streaming).
+async def test_should_stream_no_longer_blocks_on_interpolation(tmp_path: Path) -> None:
+    vu = make_upscaler(tmp_path)  # onnx_video_engine None -> False igual, pero sin gate de interp
+    assert await vu._should_stream(make_job("software")) is False
 
 
 async def test_should_stream_false_when_disabled(tmp_path: Path) -> None:
@@ -140,7 +142,7 @@ async def test_should_stream_false_when_disabled(tmp_path: Path) -> None:
 
     settings = Settings(_env_file=None, RUNTIME_DIR=str(tmp_path / "runtime"), ENABLE_RAW_PIPE=False)
     vu = VideoUpscaler(settings, _FakeEngine(), _FakeMediaTools(), devices=_FakeDevices("AMD"))
-    assert await vu._should_stream(make_job("software"), interp_requested=False) is False
+    assert await vu._should_stream(make_job("software")) is False
 
 
 def test_output_dims_multiplies_by_scale(tmp_path: Path) -> None:

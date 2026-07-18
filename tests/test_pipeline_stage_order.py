@@ -12,8 +12,9 @@ from app.services.video_upscaler import VideoUpscaler
 
 # ---------------------------------------------------------------------------
 # Task 12 (4.4) - Wire RIFE interpolation into the video pipeline: stage
-# ordering (extract -> upscale -> interpolate -> encode) and encode source
-# selection (frames-interp when enabled, frames-out when off).
+# ordering (extract -> interpolate -> upscale -> encode; interp corre a
+# resolucion FUENTE desde el reorden — 3.6x mas barato que a 4K) and encode
+# source selection (encode siempre lee frames-out; interp alimenta al upscale).
 # ---------------------------------------------------------------------------
 
 
@@ -137,14 +138,14 @@ def write_source(upscaler: StageTrackingVideoUpscaler) -> Path:
     return source_path
 
 
-async def test_interpolation_runs_after_upscale_and_before_encode(tmp_path: Path) -> None:
+async def test_interpolation_runs_before_upscale_at_source_resolution(tmp_path: Path) -> None:
     events: list[str] = []
     upscaler = make_upscaler(tmp_path, events, FakeRifeEngine(events))
     job = make_video_job(write_source(upscaler))
 
     await upscaler.run(job, fps_multiplier=2)
 
-    assert events == ["extract", "upscale", "interpolate", "encode"]
+    assert events == ["extract", "interpolate", "upscale", "encode"]
 
 
 async def test_no_interpolation_when_multiplier_is_one(tmp_path: Path) -> None:
@@ -158,7 +159,7 @@ async def test_no_interpolation_when_multiplier_is_one(tmp_path: Path) -> None:
     assert "interpolate" not in events
 
 
-async def test_encode_reads_from_frames_interp_when_multiplier_enabled(tmp_path: Path) -> None:
+async def test_encode_reads_upscaled_frames_when_multiplier_enabled(tmp_path: Path) -> None:
     events: list[str] = []
     upscaler = make_upscaler(tmp_path, events, FakeRifeEngine(events))
     job = make_video_job(write_source(upscaler))
@@ -167,7 +168,9 @@ async def test_encode_reads_from_frames_interp_when_multiplier_enabled(tmp_path:
 
     encode_command = upscaler.encode_commands[0]
     frames_arg = encode_command[encode_command.index("-i") + 1]
-    assert "frames-interp" in frames_arg
+    # El interp alimenta al upscale; el encode siempre lee los frames escalados.
+    assert "frames-out" in frames_arg
+    assert "frames-interp" not in frames_arg
 
 
 async def test_encode_reads_from_frames_out_when_multiplier_is_one(tmp_path: Path) -> None:
@@ -207,7 +210,7 @@ async def test_encode_framerate_unchanged_when_multiplier_is_one(tmp_path: Path)
     assert framerate == "30"
 
 
-async def test_rife_engine_receives_upscaled_frame_count_and_multiplier(tmp_path: Path) -> None:
+async def test_rife_engine_receives_source_frame_count_and_multiplier(tmp_path: Path) -> None:
     events: list[str] = []
     rife_engine = FakeRifeEngine(events)
     upscaler = make_upscaler(tmp_path, events, rife_engine)
@@ -217,7 +220,7 @@ async def test_rife_engine_receives_upscaled_frame_count_and_multiplier(tmp_path
 
     assert len(rife_engine.calls) == 1
     frames_in_arg, frames_out_arg, source_frame_count, multiplier, target_frame_count = rife_engine.calls[0]
-    assert frames_in_arg.name == "frames-out"
+    assert frames_in_arg.name == "frames-in"
     assert frames_out_arg.name == "frames-interp"
     assert source_frame_count == 1
     assert multiplier == 3
@@ -345,7 +348,7 @@ async def test_keep_audio_and_fps_multiplier_combo_preserves_audio_mux_and_doubl
 
     await upscaler.run(job, fps_multiplier=2)
 
-    assert events == ["extract", "extract_audio", "upscale", "interpolate", "encode"]
+    assert events == ["extract", "extract_audio", "interpolate", "upscale", "encode"]
 
     encode_command = upscaler.encode_commands[0]
 
@@ -406,17 +409,17 @@ def make_video_job_with_target_fps(source_path: Path, target_fps: str) -> VideoU
     )
 
 
-async def test_target_fps_interpolation_runs_after_upscale_and_before_encode(tmp_path: Path) -> None:
+async def test_target_fps_interpolation_runs_before_upscale(tmp_path: Path) -> None:
     events: list[str] = []
     upscaler = make_upscaler(tmp_path, events, FakeRifeEngine(events))
     job = make_video_job_with_target_fps(write_source(upscaler), "60")
 
     await upscaler.run(job)
 
-    assert events == ["extract", "upscale", "interpolate", "encode"]
+    assert events == ["extract", "interpolate", "upscale", "encode"]
 
 
-async def test_target_fps_encode_reads_from_frames_interp(tmp_path: Path) -> None:
+async def test_target_fps_encode_reads_upscaled_frames(tmp_path: Path) -> None:
     events: list[str] = []
     upscaler = make_upscaler(tmp_path, events, FakeRifeEngine(events))
     job = make_video_job_with_target_fps(write_source(upscaler), "60")
@@ -425,7 +428,8 @@ async def test_target_fps_encode_reads_from_frames_interp(tmp_path: Path) -> Non
 
     encode_command = upscaler.encode_commands[0]
     frames_arg = encode_command[encode_command.index("-i") + 1]
-    assert "frames-interp" in frames_arg
+    assert "frames-out" in frames_arg
+    assert "frames-interp" not in frames_arg
 
 
 async def test_target_fps_encode_framerate_is_normalized_target(tmp_path: Path) -> None:
@@ -470,3 +474,35 @@ async def test_run_raises_clear_error_when_target_fps_set_without_rife_engine(tm
 
     with pytest.raises(RuntimeError, match="RIFE"):
         await upscaler.run(job)
+
+
+# ---------------------------------------------------------------------------
+# Reorden interp->upscale: el raw-pipe ahora tambien aplica a jobs con
+# interpolacion (streamea los frames YA interpolados).
+# ---------------------------------------------------------------------------
+
+
+async def test_raw_pipe_streams_interpolated_frames_when_eligible(tmp_path: Path) -> None:
+    events: list[str] = []
+    upscaler = make_upscaler(tmp_path, events, FakeRifeEngine(events))
+    job = make_video_job(write_source(upscaler))
+
+    streamed_dirs: list[Path] = []
+
+    async def fake_should_stream(job_arg) -> bool:
+        return True
+
+    async def fake_try_streaming(job_arg, frames_dir, output_path, fps, audio_mux, audio_args) -> bool:
+        streamed_dirs.append(frames_dir)
+        output_path.write_bytes(b"fake-video")
+        return True
+
+    upscaler._should_stream = fake_should_stream  # type: ignore[method-assign]
+    upscaler._try_streaming = fake_try_streaming  # type: ignore[method-assign]
+
+    output = await upscaler.run(job, fps_multiplier=2)
+
+    assert events == ["extract", "interpolate"]  # sin etapas PNG de upscale/encode
+    assert streamed_dirs[0].name == "frames-interp"
+    assert output.exists()
+    assert job.metadata["outputFps"] == "60/1"
