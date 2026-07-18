@@ -39,6 +39,16 @@ class BuiltinOnnxModel:
     filename: str
     scale: int
 
+    @property
+    def fp16_filename(self) -> str:
+        """Half-precision sibling export (see scripts/export-realesrgan-onnx.py).
+
+        The network body runs at INPUT resolution, so it dominates runtime at every
+        scale; fp16 measured 1.33x faster at 1080p->4x on RDNA3 with a max pixel
+        delta of 3/255. GPU only -- fp16 on the CPU EP is emulated and slower.
+        """
+        return self.filename.replace(".onnx", "-fp16.onnx")
+
 
 # Builtin Real-ESRGAN models that have a uint8-in/out ONNX export. Keyed by the
 # concrete engine model name (the scale-specific one the job carries in

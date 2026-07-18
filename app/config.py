@@ -337,6 +337,12 @@ class Settings(BaseSettings):
     # RAM. maxsize se deriva de este presupuesto y el tamano real del frame, con
     # piso = save-threads para no matar el throughput.
     onnx_video_max_pipeline_mb: int = Field(default=1024, alias="ONNX_VIDEO_MAX_PIPELINE_MB")
+    # Usar el export fp16 del modelo builtin cuando corre en GPU y el archivo existe.
+    # El cuerpo de la red trabaja a resolucion de ENTRADA, asi que domina el tiempo
+    # en cualquier escala; medido en 7800 XT (1080p->4x): 154.9 -> 116.5 ms/frame
+    # (1.33x) con diferencia maxima de 3/255 por pixel. En CPU se ignora (fp16
+    # emulado = mas lento). Poner en False para forzar fp32 en todos lados.
+    onnx_prefer_fp16: bool = Field(default=True, alias="ONNX_PREFER_FP16")
 
     update_repo: str = Field(default="santiquiroz/upflow", alias="UPDATE_REPO")
     # Package whose installed metadata gives the running version to compare
