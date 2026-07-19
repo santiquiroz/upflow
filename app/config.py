@@ -45,6 +45,13 @@ APOLLO_MODE = "apollo"
 AUDIOSR_MODE = "audiosr"
 AUDIO_RESTORE_MODES = frozenset({APOLLO_MODE, AUDIOSR_MODE})
 
+# Frame-interpolation engine selector (Task 4.2). `rife` is ALWAYS the
+# default -- GMFSS (much higher quality, ~10x slower, see gmfss_engine.py) is
+# strictly opt-in per job, same split as AUDIO_RESTORE_MODES's Apollo/AudioSR.
+RIFE_ENGINE = "rife"
+GMFSS_ENGINE = "gmfss"
+INTERP_ENGINES = frozenset({RIFE_ENGINE, GMFSS_ENGINE})
+
 # Upscale runtime selector (SP11). `auto` picks onnx vs ncnn per the rule in
 # app/services/backend_registry.py; `ncnn`/`onnx` force a specific runtime.
 # The selector changes the RUNTIME, never the model the user picked.
@@ -618,6 +625,13 @@ class Settings(BaseSettings):
         from app.services.engines.gmfss.assets import GmfssAssets
 
         return GmfssAssets.is_complete(self.gmfss_model_dir_path)
+
+    def interp_engine_available(self, engine: str) -> bool:
+        if engine == RIFE_ENGINE:
+            return self.interpolation_available()
+        if engine == GMFSS_ENGINE:
+            return self.gmfss_available()
+        return False
 
     @property
     def model_catalog(self) -> list[ModelOption]:

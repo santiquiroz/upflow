@@ -9,7 +9,7 @@ import { RuntimePicker, formatRuntimeSummary } from "../../components/RuntimePic
 import { EncoderPicker, formatEncoderSummary } from "../../components/EncoderPicker";
 import { SlowPresetCostHint } from "../../components/SlowPresetCostHint";
 import { useAudioCapabilities } from "../../hooks/useAudioJob";
-import { useVideoJob, type VideoJobPhase } from "../../hooks/useVideoJob";
+import { useVideoCapabilities, useVideoJob, type VideoJobPhase } from "../../hooks/useVideoJob";
 import { getDevices, getModels } from "../../lib/api";
 import type {
   DeviceInfoResponse,
@@ -23,6 +23,7 @@ import { restoreLabel } from "../../lib/audioLabels";
 import { formatDeviceSummary, formatModelSummary } from "./accordionSummaries";
 import { AUDIO_ENHANCE_OPTIONS, AudioEnhanceControls } from "./AudioEnhanceControls";
 import { FpsBoostControls, TARGET_FPS_OPTIONS, type FpsBoostValue } from "./FpsBoostControls";
+import { InterpEngineControls } from "./InterpEngineControls";
 import { VideoProfileControls } from "./VideoProfileControls";
 
 const OUTPUT_CONTAINERS = ["mp4", "mkv"] as const;
@@ -88,6 +89,10 @@ function resolveRequiresGpu(model: ModelResponse | null): boolean {
 
 function isJobBusy(phase: VideoJobPhase): boolean {
   return phase === "uploading" || phase === "queued" || phase === "running";
+}
+
+function isFpsBoostActive(value: FpsBoostValue): boolean {
+  return value.fpsMultiplier > 1 || value.targetFps !== null;
 }
 
 // A builtin-ncnn model needs a Vulkan GPU, so a cpu device can never run it.
@@ -262,15 +267,20 @@ export function VideoPanel() {
   const [fpsBoost, setFpsBoost] = useState<FpsBoostValue>({ fpsMultiplier: 1, targetFps: null });
   const [audioEnhance, setAudioEnhance] = useState<string | null>(null);
   const [audioRestore, setAudioRestore] = useState<string | null>(null);
+  const [interpEngine, setInterpEngine] = useState("rife");
 
   const modelsQuery = useQuery({ queryKey: ["models"], queryFn: getModels });
   const devicesQuery = useQuery({ queryKey: ["devices"], queryFn: getDevices });
   const capabilitiesQuery = useAudioCapabilities();
+  const videoCapabilitiesQuery = useVideoCapabilities();
   const { phase, job, errorMessage, submit, cancel, reset } = useVideoJob();
 
   const requiresGpu = resolveRequiresGpu(model);
   const restoreModes = capabilitiesQuery.data?.restoreModes ?? [];
   const restoreAvailable = restoreModes.length > 0;
+  const interpEngines = videoCapabilitiesQuery.data?.interpEngines ?? [];
+  const interpEngineSelectable = interpEngines.length > 1;
+  const fpsBoostActive = isFpsBoostActive(fpsBoost);
 
   // Only re-applies the profile's default model the first time a given profile
   // becomes selected (including the async case where modelsQuery resolves after
@@ -320,6 +330,7 @@ export function VideoPanel() {
       setAudioRestore(null);
     }
     setFpsBoost({ fpsMultiplier: 1, targetFps: null });
+    setInterpEngine("rife");
   }
 
   function handleKeepAudioChange(checked: boolean) {
@@ -351,6 +362,7 @@ export function VideoPanel() {
       targetFps: fpsBoost.targetFps,
       audioEnhance,
       audioRestore: keepAudio && restoreAvailable ? audioRestore : null,
+      interpEngine: fpsBoostActive ? interpEngine : "rife",
     });
   }
 
@@ -388,7 +400,12 @@ export function VideoPanel() {
           summary={formatFpsBoostSummary(fpsBoost)}
           tooltip={FPS_BOOST_TOOLTIP}
         >
-          <FpsBoostControls value={fpsBoost} onChange={setFpsBoost} />
+          <div className="flex flex-col gap-4">
+            <FpsBoostControls value={fpsBoost} onChange={setFpsBoost} />
+            {fpsBoostActive && interpEngineSelectable && (
+              <InterpEngineControls engines={interpEngines} value={interpEngine} onChange={setInterpEngine} />
+            )}
+          </div>
         </AccordionSection>
         <AccordionSection
           title="Audio"

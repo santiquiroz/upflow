@@ -11,15 +11,18 @@ import numpy as np
 import pytest
 
 from app.config import Settings
+from app.services.engines.gmfss import softsplat_cl
 from app.services.engines.gmfss.assets import GRAPH_NAMES, GmfssAssets
 from app.services.engines.gmfss.pipeline import GmfssDriver
 from app.services.engines.gmfss_engine import (
+    FP16_FUSIONNET_FILENAME,
     GmfssEngine,
     _build_interpolation_plan,
     _distribute_extra_frames,
     _graph_runner,
     _pair_timesteps,
 )
+import app.services.engines.gmfss_engine as gmfss_engine_module
 
 # ---------------------------------------------------------------------------
 # Task 4.1 - GmfssEngine: fake-graph inference path (patterned after
@@ -326,6 +329,95 @@ def test_create_sessions_disables_graph_optimization_for_every_graph(
     for _path, sess_options, providers in captured:
         assert sess_options.graph_optimization_level == ort.GraphOptimizationLevel.ORT_DISABLE_ALL
         assert providers == ["CPUExecutionProvider"]
+
+
+# ---------------------------------------------------------------------------
+# fp16 fusionnet + GPU splat selection (Task 4.2). Real measured config from
+# the port project's Task 3.2 (0.72-0.73fps @1080p 2x on a 7800 XT): DirectML
+# + fp16 fusionnet + OpenCL splat, vs ~0.2fps fp32/CPU-splat. fp16 only wins
+# on a GPU EP -- CPU-EP fp16 is emulated (slower), so CPU always keeps fp32,
+# same rule ONNX_PREFER_FP16 already applies to the builtin upscale models.
+# ---------------------------------------------------------------------------
+
+
+def _fake_session_path_capture(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    import onnxruntime as ort
+
+    captured_paths: list[str] = []
+
+    class FakeInferenceSession:
+        def __init__(self, path: str, sess_options: Any = None, providers: Any = None) -> None:
+            captured_paths.append(path)
+
+    monkeypatch.setattr(ort, "InferenceSession", FakeInferenceSession)
+    return captured_paths
+
+
+def test_create_sessions_uses_fp32_fusionnet_when_fp16_file_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = GmfssEngine(make_settings(tmp_path))
+    captured_paths = _fake_session_path_capture(monkeypatch)
+
+    engine._create_sessions("dml:0")
+
+    paths_by_name = dict(zip(GRAPH_NAMES, captured_paths))
+    assert Path(paths_by_name["fusionnet"]).name == "fusionnet.onnx"
+
+
+def test_create_sessions_prefers_fp16_fusionnet_on_gpu_device_when_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = make_settings(tmp_path)
+    (settings.gmfss_model_dir_path / FP16_FUSIONNET_FILENAME).write_bytes(b"fake-fp16")
+    engine = GmfssEngine(settings)
+    captured_paths = _fake_session_path_capture(monkeypatch)
+
+    engine._create_sessions("dml:0")
+
+    paths_by_name = dict(zip(GRAPH_NAMES, captured_paths))
+    assert Path(paths_by_name["fusionnet"]).name == FP16_FUSIONNET_FILENAME
+    # Only fusionnet switches -- the other 3 graphs have no fp16 variant (Task
+    # 3.2: onnxconverter-common rejected them at load time).
+    assert Path(paths_by_name["featurenet"]).name == "featurenet.onnx"
+
+
+def test_create_sessions_uses_fp32_fusionnet_on_cpu_device_even_when_fp16_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = make_settings(tmp_path)
+    (settings.gmfss_model_dir_path / FP16_FUSIONNET_FILENAME).write_bytes(b"fake-fp16")
+    engine = GmfssEngine(settings)
+    captured_paths = _fake_session_path_capture(monkeypatch)
+
+    engine._create_sessions("cpu")
+
+    paths_by_name = dict(zip(GRAPH_NAMES, captured_paths))
+    assert Path(paths_by_name["fusionnet"]).name == "fusionnet.onnx"
+
+
+def test_run_blocking_passes_gpu_splat_fn_to_gmfss_driver(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = GmfssEngine(make_settings(tmp_path))
+    monkeypatch.setattr(engine, "_create_sessions", fake_sessions)
+    captured_kwargs: dict[str, Any] = {}
+
+    class RecordingDriver(GmfssDriver):
+        def __init__(self, assets: Any, run_graph: Any, splat_fn: Any = None) -> None:
+            captured_kwargs["splat_fn"] = splat_fn
+            super().__init__(assets, run_graph, splat_fn=splat_fn)
+
+    monkeypatch.setattr(gmfss_engine_module, "GmfssDriver", RecordingDriver)
+
+    frames_in = tmp_path / "frames-in"
+    frames_out = tmp_path / "frames-out"
+    frames_out.mkdir()
+    write_fake_source_frames(frames_in, 3)
+
+    engine._run_blocking(frames_in, frames_out, 3, 4, "dml:0", threading.Event())
+
+    assert captured_kwargs["splat_fn"] is softsplat_cl.splat_softmax
 
 
 # ---------------------------------------------------------------------------

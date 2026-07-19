@@ -9,7 +9,15 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 
-from app.config import AUDIO_ENHANCE_MODES, AUDIO_RESTORE_MODES, Settings, VideoProfile, get_settings
+from app.config import (
+    AUDIO_ENHANCE_MODES,
+    AUDIO_RESTORE_MODES,
+    INTERP_ENGINES,
+    RIFE_ENGINE,
+    Settings,
+    VideoProfile,
+    get_settings,
+)
 from app.exceptions import ModelNotFoundError, ModelProtectedError, QueueFullError
 from app.models import AudioJob, JobStatus, UpdateStatus, UpscaleJob, VideoUpscaleJob
 from app.schemas import (
@@ -30,6 +38,7 @@ from app.schemas import (
     ModelsResponse,
     SupportedModelResponse,
     UpdateCheckResponse,
+    VideoCapabilitiesResponse,
     VideoJobResponse,
     VideoProfileResponse,
 )
@@ -225,6 +234,7 @@ def video_job_to_response(job: VideoUpscaleJob) -> VideoJobResponse:
         target_fps=job.target_fps,
         audio_enhance=job.audio_enhance,
         audio_restore=job.audio_restore,
+        interp_engine=job.interp_engine,
         model_id=job.model_id,
         device=job.device,
         backend=job.backend,
@@ -405,6 +415,7 @@ async def create_video_job(
     target_fps: str | None = Form(default=None),
     audio_enhance: str | None = Form(default=None),
     audio_restore: str | None = Form(default=None),
+    interp_engine: str | None = Form(default=None),
     model_id: str | None = Form(default=None),
     device: str | None = Form(default=None),
     backend: str | None = Form(default=None),
@@ -422,6 +433,7 @@ async def create_video_job(
     # it receives the Form() sentinel instead, so normalize non-strings to None.
     backend_value = backend if isinstance(backend, str) else None
     video_encoder_value = video_encoder if isinstance(video_encoder, str) else "auto"
+    interp_engine_value = interp_engine if isinstance(interp_engine, str) else RIFE_ENGINE
 
     original_name = Path(file.filename or "upload.mp4").name
     safe_name = sanitize_filename(original_name, default="upload.mp4")
@@ -460,6 +472,7 @@ async def create_video_job(
             target_fps=resolved.target_fps,
             audio_enhance=resolved.audio_enhance,
             audio_restore=audio_restore,
+            interp_engine=interp_engine_value,
             model_id=model_id,
             device=resolved_device,
             backend=backend_value,
@@ -588,6 +601,14 @@ async def create_audio_job(
         status_url=f"/api/v1/audio/jobs/{job.id}",
         download_url=None,
     )
+
+
+@router.get("/video/capabilities", response_model=VideoCapabilitiesResponse)
+async def video_capabilities(settings: Settings = Depends(get_settings)) -> VideoCapabilitiesResponse:
+    interp_engines = [
+        engine for engine in sorted(INTERP_ENGINES) if settings.interp_engine_available(engine)
+    ]
+    return VideoCapabilitiesResponse(interp_engines=interp_engines)
 
 
 @router.get("/audio/capabilities", response_model=AudioCapabilitiesResponse)

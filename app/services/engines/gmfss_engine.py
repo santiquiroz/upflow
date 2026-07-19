@@ -13,6 +13,7 @@ from typing import Any
 import numpy as np
 
 from app.config import Settings
+from app.services.engines.gmfss import softsplat_cl
 from app.services.engines.gmfss.assets import GRAPH_NAMES, GmfssAssets
 from app.services.engines.gmfss.pipeline import GmfssDriver, resize_bilinear
 from app.services.engines.onnx_upscaler import _build_providers, _wrap_onnx_error
@@ -23,6 +24,20 @@ from app.services.engines.onnx_video_upscaler import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Real measured config (port project Task 3.2, RX 7800 XT): DirectML + fp16
+# fusionnet + OpenCL splat = 0.72-0.73fps @1080p 2x, vs ~0.2fps at fp32
+# fusionnet + CPU splat (~3.5x). fp16 only wins on a GPU EP -- CPU-EP fp16 is
+# emulated (slower than fp32), same rule ONNX_PREFER_FP16 already applies to
+# the builtin upscale models -- so CPU always keeps fp32 fusionnet regardless
+# of whether the fp16 file is present. Only fusionnet has an fp16 variant:
+# featurenet/gmflow/metricnet hit a reproducible onnxconverter-common bug and
+# were never converted (see the port repo's manifest.json fp16_variants note).
+# GPU splat (driver.softsplat_cl) is always passed as splat_fn regardless of
+# device or fp16 availability -- it has its own one-time-warning CPU fallback
+# when pyopencl/an OpenCL GPU isn't actually available, so there is no
+# separate device gate to duplicate here.
+FP16_FUSIONNET_FILENAME = "fusionnet_fp16.onnx"
 
 # ---------------------------------------------------------------------------
 # GMFSS interpolation engine (ONNX, in-process). Second frame-interpolation
@@ -141,7 +156,7 @@ class GmfssEngine:
 
         sessions = self._get_sessions(device)
         assets = GmfssAssets.load(self.settings.gmfss_model_dir_path)
-        driver = GmfssDriver(assets, _graph_runner(sessions))
+        driver = GmfssDriver(assets, _graph_runner(sessions), splat_fn=softsplat_cl.splat_softmax)
 
         self._run_pair_pipeline(driver, assets.padded_hw, frame_paths, plan, frames_out, cancel_event)
 
@@ -179,10 +194,17 @@ class GmfssEngine:
             # MUST be disabled on every graph, not just MetricNet's -- see the
             # module docstring for the DXGI_ERROR_DEVICE_HUNG history.
             sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
+            graph_path = self._resolve_graph_path(model_dir, name, device)
             sessions[name] = ort.InferenceSession(
-                str(model_dir / f"{name}.onnx"), sess_options=sess_options, providers=providers
+                str(graph_path), sess_options=sess_options, providers=providers
             )
         return sessions
+
+    @staticmethod
+    def _resolve_graph_path(model_dir: Path, name: str, device: str) -> Path:
+        if name == "fusionnet" and _should_use_fp16_fusionnet(model_dir, device):
+            return model_dir / FP16_FUSIONNET_FILENAME
+        return model_dir / f"{name}.onnx"
 
     # --- threaded load/compute/save pipeline ----------------------------
 
@@ -513,6 +535,16 @@ def _execute_save_task(item: tuple, png_level: int) -> None:
         return
     _, frame_chw, original_hw, dest_path = item
     _save_frame(frame_chw, original_hw, dest_path, png_level)
+
+
+def _should_use_fp16_fusionnet(model_dir: Path, device: str) -> bool:
+    if _is_cpu_device(device):
+        return False
+    return (model_dir / FP16_FUSIONNET_FILENAME).exists()
+
+
+def _is_cpu_device(device: str) -> bool:
+    return device.strip().lower() == "cpu"
 
 
 def _graph_runner(sessions: dict[str, Any]):

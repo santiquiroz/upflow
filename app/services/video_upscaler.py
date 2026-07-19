@@ -12,13 +12,14 @@ from pathlib import Path
 
 import cv2
 
-from app.config import Settings
+from app.config import GMFSS_ENGINE, Settings
 from app.models import VideoUpscaleJob
 from app.services import video_encoders
 from app.services.backend_registry import UpscaleBackend, resolve_upscale_backend
 from app.services.devices_service import DevicesService
 from app.services.restorer_registry import AudioRestorer
 from app.services.engines.audio_enhance import AudioEnhancer
+from app.services.engines.gmfss_engine import GmfssEngine
 from app.services.engines.onnx_upscaler import OnnxUpscaler
 from app.services.engines.onnx_video_upscaler import OnnxVideoUpscaler
 from app.services.engines.realesrgan_ncnn import RealEsrganNcnnEngine, gpu_index_for_device
@@ -69,6 +70,7 @@ class VideoUpscaler:
         engine: RealEsrganNcnnEngine,
         media_tools: MediaTools,
         rife_engine: RifeNcnnEngine | None = None,
+        gmfss_engine: GmfssEngine | None = None,
         audio_enhancers: dict[str, AudioEnhancer] | None = None,
         onnx_engine: OnnxUpscaler | None = None,
         model_registry: ModelRegistry | None = None,
@@ -82,6 +84,7 @@ class VideoUpscaler:
         self.engine = engine
         self.media_tools = media_tools
         self.rife_engine = rife_engine
+        self.gmfss_engine = gmfss_engine
         self.audio_enhancers = audio_enhancers or {}
         self.restorers = restorers or {}
         self.onnx_engine = onnx_engine
@@ -410,15 +413,14 @@ class VideoUpscaler:
         if not self._interpolation_requested(fps_multiplier, target_fps):
             return frames_out, fps
 
-        if self.rife_engine is None:
-            raise RuntimeError("Frame interpolation requested but no RIFE engine is configured")
+        engine = self._resolve_interpolation_engine(job)
 
         advance_video_stage(job, "interpolating_frames")
         frames_interp = frames_out.parent / "frames-interp"
         source_frame_count = self._count_frames(frames_out)
         # Interpolation emits MORE frames than the source (mult>1 / higher fps),
         # so the source framesTotal would clamp this stage to 100% halfway through.
-        # The RIFE target count is the honest denominator for this stage only.
+        # The RIFE/GMFSS target count is the honest denominator for this stage only.
         interp_frames_total = self._interp_frames_total(
             source_frame_count, fps, fps_multiplier, target_fps
         )
@@ -429,12 +431,21 @@ class VideoUpscaler:
         ):
             if target_fps is not None:
                 return await self._interpolate_to_target_fps(
-                    frames_out, frames_interp, source_frame_count, fps, target_fps, job.device
+                    engine, frames_out, frames_interp, source_frame_count, fps, target_fps, job.device
                 )
 
             return await self._interpolate_by_multiplier(
-                frames_out, frames_interp, source_frame_count, fps, fps_multiplier, job.device
+                engine, frames_out, frames_interp, source_frame_count, fps, fps_multiplier, job.device
             )
+
+    def _resolve_interpolation_engine(self, job: VideoUpscaleJob) -> RifeNcnnEngine | GmfssEngine:
+        if job.interp_engine == GMFSS_ENGINE:
+            if self.gmfss_engine is None:
+                raise RuntimeError("Frame interpolation requested but no GMFSS engine is configured")
+            return self.gmfss_engine
+        if self.rife_engine is None:
+            raise RuntimeError("Frame interpolation requested but no RIFE engine is configured")
+        return self.rife_engine
 
     @staticmethod
     def _interp_frames_total(
@@ -450,6 +461,7 @@ class VideoUpscaler:
 
     async def _interpolate_to_target_fps(
         self,
+        engine: RifeNcnnEngine | GmfssEngine,
         frames_out: Path,
         frames_interp: Path,
         source_frame_count: int,
@@ -458,13 +470,14 @@ class VideoUpscaler:
         device: str | None = None,
     ) -> tuple[Path, str]:
         target_frame_count = compute_target_frame_count(source_frame_count, fps, target_fps)
-        await self.rife_engine.run(
+        await engine.run(
             frames_out, frames_interp, source_frame_count, target_frame_count=target_frame_count, device=device
         )
         return frames_interp, format_fps_fraction(target_fps)
 
     async def _interpolate_by_multiplier(
         self,
+        engine: RifeNcnnEngine | GmfssEngine,
         frames_out: Path,
         frames_interp: Path,
         source_frame_count: int,
@@ -472,7 +485,7 @@ class VideoUpscaler:
         fps_multiplier: int,
         device: str | None = None,
     ) -> tuple[Path, str]:
-        await self.rife_engine.run(
+        await engine.run(
             frames_out, frames_interp, source_frame_count, fps_multiplier, device=device
         )
 

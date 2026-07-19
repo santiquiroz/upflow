@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
 
-from app.config import AUDIO_ENHANCE_MODES, AUDIO_RESTORE_MODES, Settings
+from app.config import AUDIO_ENHANCE_MODES, AUDIO_RESTORE_MODES, GMFSS_ENGINE, INTERP_ENGINES, RIFE_ENGINE, Settings
 from app.exceptions import QueueFullError
 from app.models import JobStatus, VideoUpscaleJob, utc_now
 from app.services.backend_registry import validate_backend_choice
@@ -94,6 +94,7 @@ class VideoJobManager:
         target_fps: str | None = None,
         audio_enhance: str | None = None,
         audio_restore: str | None = None,
+        interp_engine: str = RIFE_ENGINE,
         model_id: str | None = None,
         device: str | None = None,
         backend: str | None = None,
@@ -119,6 +120,7 @@ class VideoJobManager:
             source_fps,
             keep_audio,
             audio_enhance,
+            interp_engine,
         )
         self._validate_audio_restore_mode(audio_restore, keep_audio)
 
@@ -136,6 +138,7 @@ class VideoJobManager:
             target_fps=target_fps,
             audio_enhance=audio_enhance,
             audio_restore=audio_restore,
+            interp_engine=interp_engine,
             model_id=resolution.model_id,
             device=device,
             backend=backend,
@@ -255,6 +258,7 @@ class VideoJobManager:
         source_fps: Fraction,
         keep_audio: bool,
         audio_enhance: str | None,
+        interp_engine: str = RIFE_ENGINE,
     ) -> None:
         if output_container not in {"mp4", "mkv"}:
             raise ValueError("Output container must be mp4 or mkv")
@@ -264,17 +268,31 @@ class VideoJobManager:
             raise ValueError("Video preset must be medium, slow, or veryslow")
         if crf < 10 or crf > 28:
             raise ValueError("CRF must be between 10 and 28")
-        self._validate_fps_mode(fps_multiplier, target_fps, source_fps)
+        self._validate_interp_engine_choice(interp_engine)
+        self._validate_fps_mode(fps_multiplier, target_fps, source_fps, interp_engine)
         self._validate_audio_enhance_mode(audio_enhance, keep_audio)
 
-    def _validate_fps_mode(self, fps_multiplier: int, target_fps: str | None, source_fps: Fraction) -> None:
+    @staticmethod
+    def _validate_interp_engine_choice(interp_engine: str) -> None:
+        if interp_engine not in INTERP_ENGINES:
+            raise ValueError(f"interp_engine must be one of {sorted(INTERP_ENGINES)}")
+
+    def _validate_fps_mode(
+        self,
+        fps_multiplier: int,
+        target_fps: str | None,
+        source_fps: Fraction,
+        interp_engine: str = RIFE_ENGINE,
+    ) -> None:
         if target_fps is not None and fps_multiplier > 1:
             raise ValueError("target_fps and fps_multiplier are mutually exclusive; provide only one")
-        self._validate_fps_multiplier(fps_multiplier)
+        self._validate_fps_multiplier(fps_multiplier, interp_engine)
         if target_fps is not None:
-            self._validate_target_fps(target_fps, source_fps)
+            self._validate_target_fps(target_fps, source_fps, interp_engine)
 
-    def _validate_target_fps(self, target_fps: str, source_fps: Fraction) -> None:
+    def _validate_target_fps(
+        self, target_fps: str, source_fps: Fraction, interp_engine: str = RIFE_ENGINE
+    ) -> None:
         target_fraction = parse_fps_fraction(target_fps)
         if target_fraction is None:
             raise ValueError(
@@ -286,9 +304,9 @@ class VideoJobManager:
             raise ValueError(
                 f"target_fps ({target_fraction}) must be greater than the source video fps ({source_fps})"
             )
-        self._validate_interpolation_enabled()
+        self._validate_interpolation_enabled(interp_engine)
 
-    def _validate_fps_multiplier(self, fps_multiplier: int) -> None:
+    def _validate_fps_multiplier(self, fps_multiplier: int, interp_engine: str = RIFE_ENGINE) -> None:
         if fps_multiplier <= 0:
             raise ValueError("fps_multiplier must be a positive integer")
         allowed_multipliers = {1, *self.settings.allowed_fps_multiplier_values}
@@ -297,9 +315,12 @@ class VideoJobManager:
                 f"fps_multiplier must be 1 (off) or one of {sorted(allowed_multipliers - {1})}"
             )
         if fps_multiplier > 1:
-            self._validate_interpolation_enabled()
+            self._validate_interpolation_enabled(interp_engine)
 
-    def _validate_interpolation_enabled(self) -> None:
+    def _validate_interpolation_enabled(self, interp_engine: str = RIFE_ENGINE) -> None:
+        if interp_engine == GMFSS_ENGINE:
+            self._validate_gmfss_ready()
+            return
         if not self.settings.enable_interpolation:
             raise ValueError(
                 "Frame interpolation is disabled by configuration (set ENABLE_INTERPOLATION=true)"
@@ -308,6 +329,17 @@ class VideoJobManager:
             raise ValueError(
                 "Frame interpolation requested but RIFE is not installed "
                 "(run scripts/download-rife.ps1)"
+            )
+
+    def _validate_gmfss_ready(self) -> None:
+        if not self.settings.enable_gmfss:
+            raise ValueError(
+                "GMFSS interpolation is disabled by configuration (set ENABLE_GMFSS=true)"
+            )
+        if not self.settings.gmfss_available():
+            raise ValueError(
+                "GMFSS interpolation requested but the models are not installed "
+                "(run scripts/download-gmfss-onnx.ps1)"
             )
 
     def _validate_audio_enhance_mode(self, audio_enhance: str | None, keep_audio: bool) -> None:
