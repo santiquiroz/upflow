@@ -24,11 +24,11 @@ printing a warning exactly once -- not once per call.
 Like driver/softsplat.py, this module depends only on numpy (+ optional
 pyopencl) and driver.softsplat, so it can be vendored standalone.
 
-Not wired into app/services/engines/gmfss_engine.py yet -- the vendored
-pipeline.py (upstream, unmodified) still imports the CPU splat_softmax
-directly; activating this GPU path is a deliberate later decision (see the
-port repo's own commit history for why "Alternative B" wasn't activated
-either), not something this vendoring pass changes.
+Wired into app/services/engines/gmfss_engine.py (Task 4.2): GmfssDriver is
+constructed with splat_fn=softsplat_cl.splat_softmax unconditionally, relying
+on this module's own CPU fallback above when pyopencl/the kernel is
+unavailable (see the port repo's own commit history for why "Alternative B"
+wasn't activated instead).
 """
 
 from __future__ import annotations
