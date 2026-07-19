@@ -42,11 +42,14 @@ FP16_FUSIONNET_FILENAME = "fusionnet_fp16.onnx"
 # ---------------------------------------------------------------------------
 # GMFSS interpolation engine (ONNX, in-process). Second frame-interpolation
 # engine next to RifeNcnnEngine: much higher quality (softmax-splatting-based,
-# anime-tuned GMFSS_Fortuna) but ~10x slower -- own port
+# anime-tuned GMFSS_Fortuna) but 10x or more slower -- own port
 # santiquiroz/port-gmfss-onnx (see app/services/engines/gmfss/ for the
-# vendored driver). `run()`'s signature is IDENTICAL to RifeNcnnEngine.run's
-# so it drops into video_upscaler._maybe_interpolate unchanged (Task 4.2
-# wires the actual engine selector; this task only builds the engine).
+# vendored driver). A short-clip smoke test measured ~20.8x full-job wall
+# time, but the clip was short enough that GMFSS's cold-start ONNX session
+# load dominated the ratio -- treat 10x as a floor, not a stable number.
+# `run()`'s signature is IDENTICAL to RifeNcnnEngine.run's so it drops into
+# video_upscaler._maybe_interpolate unchanged (Task 4.2 wires the actual
+# engine selector; this task only builds the engine).
 #
 # Unlike RIFE (an external binary that distributes frames across pairs
 # internally given `-n <count>`), GMFSS has no such binary -- this engine

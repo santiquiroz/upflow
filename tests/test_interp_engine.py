@@ -225,6 +225,77 @@ async def test_job_manager_accepts_gmfss_when_enabled_and_installed(tmp_path: Pa
     assert job.interp_engine == "gmfss"
 
 
+async def test_job_manager_accepts_gmfss_when_interpolation_flag_explicitly_off(tmp_path: Path) -> None:
+    # Regression for the whole-branch review finding: ENABLE_INTERPOLATION
+    # (RIFE's capability flag) and ENABLE_GMFSS are independent -- a job
+    # requesting GMFSS must succeed purely on ENABLE_GMFSS + installed models,
+    # even with ENABLE_INTERPOLATION explicitly false (not just left at its
+    # default), so GMFSS-only configs are reachable without also turning on
+    # RIFE's flag.
+    model_dir = _fake_gmfss_install(tmp_path)
+    settings = Settings(
+        RUNTIME_DIR=str(tmp_path / "runtime"),
+        ENABLE_INTERPOLATION=False,
+        ENABLE_GMFSS=True,
+        GMFSS_MODEL_DIR=str(model_dir),
+    )
+    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), DeviceSemaphores(settings))
+    source_path = settings.uploads_path / "clip.mp4"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_bytes(b"fake-video-bytes")
+
+    job = await video_jobs.create_job(
+        source_path=source_path,
+        original_filename="clip.mp4",
+        model_name="realesr-animevideov3-x2",
+        scale=2,
+        output_container="mp4",
+        video_codec="libx264",
+        video_preset="medium",
+        crf=18,
+        keep_audio=False,
+        fps_multiplier=2,
+        interp_engine="gmfss",
+    )
+
+    assert job.interp_engine == "gmfss"
+
+
+async def test_job_manager_accepts_rife_when_gmfss_explicitly_off(tmp_path: Path) -> None:
+    # Inverse of the regression above: a RIFE-only config (ENABLE_GMFSS
+    # explicitly false, ENABLE_INTERPOLATION true + RIFE installed) must keep
+    # working exactly as before this fix -- the per-engine gate must not have
+    # regressed the pre-existing default path.
+    binary, models_dir = _fake_rife_install(tmp_path)
+    settings = Settings(
+        RUNTIME_DIR=str(tmp_path / "runtime"),
+        ENABLE_INTERPOLATION=True,
+        RIFE_BINARY=str(binary),
+        RIFE_MODELS_DIR=str(models_dir),
+        ENABLE_GMFSS=False,
+    )
+    video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), DeviceSemaphores(settings))
+    source_path = settings.uploads_path / "clip.mp4"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_bytes(b"fake-video-bytes")
+
+    job = await video_jobs.create_job(
+        source_path=source_path,
+        original_filename="clip.mp4",
+        model_name="realesr-animevideov3-x2",
+        scale=2,
+        output_container="mp4",
+        video_codec="libx264",
+        video_preset="medium",
+        crf=18,
+        keep_audio=False,
+        fps_multiplier=2,
+        interp_engine="rife",
+    )
+
+    assert job.interp_engine == "rife"
+
+
 async def test_job_manager_rejects_gmfss_when_disabled_by_config(tmp_path: Path) -> None:
     settings = make_settings(tmp_path, ENABLE_GMFSS=False)
     video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), DeviceSemaphores(settings))

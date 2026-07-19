@@ -46,8 +46,10 @@ AUDIOSR_MODE = "audiosr"
 AUDIO_RESTORE_MODES = frozenset({APOLLO_MODE, AUDIOSR_MODE})
 
 # Frame-interpolation engine selector (Task 4.2). `rife` is ALWAYS the
-# default -- GMFSS (much higher quality, ~10x slower, see gmfss_engine.py) is
-# strictly opt-in per job, same split as AUDIO_RESTORE_MODES's Apollo/AudioSR.
+# default -- GMFSS (much higher quality, 10x or more slower -- see
+# gmfss_engine.py; short clips measure even higher due to cold-start model
+# load overhead) is strictly opt-in per job, same split as
+# AUDIO_RESTORE_MODES's Apollo/AudioSR.
 RIFE_ENGINE = "rife"
 GMFSS_ENGINE = "gmfss"
 INTERP_ENGINES = frozenset({RIFE_ENGINE, GMFSS_ENGINE})
@@ -321,8 +323,11 @@ class Settings(BaseSettings):
     max_audio_upload_mb: int = Field(default=200, alias="MAX_AUDIO_UPLOAD_MB")
 
     # GMFSS (second interpolation engine, max-quality anime frame interpolation,
-    # own port santiquiroz/port-gmfss-onnx). ~10x slower than RIFE by design --
-    # opt-in via its own flag, same split as enable_audiosr next to Apollo.
+    # own port santiquiroz/port-gmfss-onnx). 10x or more slower than RIFE by
+    # design -- a short-clip smoke test measured closer to 20x due to
+    # cold-start model load overhead, so treat 10x as a floor, not a stable
+    # figure -- opt-in via its own flag, same split as enable_audiosr next to
+    # Apollo.
     enable_gmfss: bool = Field(default=False, alias="ENABLE_GMFSS")
     gmfss_model_dir: str = Field(default="vendor/gmfss", alias="GMFSS_MODEL_DIR")
 

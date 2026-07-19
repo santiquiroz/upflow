@@ -8,7 +8,7 @@ $vendorDir = Join-Path $root 'vendor\gmfss'
 
 # GMFSS_Fortuna (98mxr/GMFSS_Fortuna + HolyWu/vs-gmfss_fortuna, MIT) ported to
 # ONNX for the EXPERIMENTAL max-quality frame-interpolation engine (GmfssEngine,
-# second engine next to RIFE, ~10x slower but much higher quality). Own port:
+# second engine next to RIFE, 10x or more slower but much higher quality). Own port:
 # https://github.com/santiquiroz/port-gmfss-onnx
 # ~55MB total (4 fp32 graphs + fp16 fusionnet variant). Runs on any ORT EP.
 $releaseTag = 'models-v1.0'

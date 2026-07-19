@@ -542,6 +542,68 @@ describe("VideoPanel", () => {
     expect(screen.queryByRole("group", { name: "Interpolation engine" })).not.toBeInTheDocument();
   });
 
+  it("shows the interpolation engine selector pre-selected on GMFSS when it is the only available engine", async () => {
+    renderPanel(DEVICES, false, ["gmfss"]);
+    await selectFile();
+    fireEvent.click(await screen.findByRole("radio", { name: /General Balanced 4x/ }));
+    openSection("FPS boost");
+    fireEvent.click(screen.getByRole("button", { name: "3×" }));
+
+    expect(await screen.findByRole("group", { name: "Interpolation engine" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /GMFSS/ })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("submits GMFSS without requiring a manual selection when it is the only available engine", async () => {
+    const createResponse: CreateJobResponse = {
+      jobId: "vid-gmfss-only",
+      status: "queued",
+      statusUrl: "/api/v1/video/jobs/vid-gmfss-only",
+      downloadUrl: null,
+    };
+    vi.mocked(api.createVideoJob).mockResolvedValue(createResponse);
+    vi.mocked(api.getVideoJob).mockResolvedValue({
+      jobId: "vid-gmfss-only",
+      status: "queued",
+      originalFilename: "clip.mp4",
+      modelName: "realesrgan-x4plus",
+      scale: 4,
+      outputContainer: "mp4",
+      videoCodec: "libx264",
+      videoPreset: "medium",
+      crf: 18,
+      keepAudio: true,
+      fpsMultiplier: 2,
+      targetFps: null,
+      audioEnhance: null,
+      audioRestore: null,
+      interpEngine: "gmfss",
+      modelId: "realesrgan-x4plus",
+      device: "dml:0",
+      createdAt: "2026-01-01T00:00:00Z",
+      startedAt: null,
+      finishedAt: null,
+      error: null,
+      metadata: {},
+      progressPct: null,
+      downloadUrl: null,
+    });
+
+    renderPanel(DEVICES, false, ["gmfss"]);
+    await selectFile();
+    fireEvent.click(await screen.findByRole("radio", { name: /General Balanced 4x/ }));
+    openSection("FPS boost");
+    fireEvent.click(screen.getByRole("button", { name: "2×" }));
+
+    const submitButton = await screen.findByRole("button", { name: /upscale video/i });
+    await waitFor(() => expect(submitButton).not.toBeDisabled());
+    fireEvent.click(submitButton);
+
+    await waitFor(() => expect(vi.mocked(api.createVideoJob)).toHaveBeenCalled());
+    expect(vi.mocked(api.createVideoJob).mock.calls[0][0]).toEqual(
+      expect.objectContaining({ interpEngine: "gmfss" }),
+    );
+  });
+
   it("hides the interpolation engine selector until FPS boost is actually active", async () => {
     renderPanel(DEVICES, false, ["rife", "gmfss"]);
     await selectFile();
