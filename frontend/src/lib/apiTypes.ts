@@ -80,7 +80,7 @@ export interface VideoJobResponse {
   audioEnhance: string | null;
   audioRestore: string | null;
   // Frame-interpolation engine used for this job: "rife" (default, always) or
-  // "gmfss" (opt-in, much higher quality, ~10x+ slower). Mirrors app.config.INTERP_ENGINES.
+  // "gmfss" (opt-in, much higher quality, 10x or more slower). Mirrors app.config.INTERP_ENGINES.
   interpEngine: string;
   // Runtime that ran the upscale. Serialized as `backend` (single word, no
   // camelCase transform); null until a job explicitly selects one, in which
