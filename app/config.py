@@ -313,6 +313,12 @@ class Settings(BaseSettings):
     audiosr_gpu_throttle_seconds: float = Field(default=0.01, alias="AUDIOSR_GPU_THROTTLE_SECONDS")
     max_audio_upload_mb: int = Field(default=200, alias="MAX_AUDIO_UPLOAD_MB")
 
+    # GMFSS (second interpolation engine, max-quality anime frame interpolation,
+    # own port santiquiroz/port-gmfss-onnx). ~10x slower than RIFE by design --
+    # opt-in via its own flag, same split as enable_audiosr next to Apollo.
+    enable_gmfss: bool = Field(default=False, alias="ENABLE_GMFSS")
+    gmfss_model_dir: str = Field(default="vendor/gmfss", alias="GMFSS_MODEL_DIR")
+
     default_device: str = Field(default="dml:0", alias="DEFAULT_DEVICE")
     # When on and a job request doesn't pin a device, routes.py hands the job
     # the "auto" sentinel instead of DEFAULT_DEVICE -- see
@@ -601,6 +607,17 @@ class Settings(BaseSettings):
         if mode == AUDIOSR_MODE:
             return self.audiosr_available()
         return False
+
+    @property
+    def gmfss_model_dir_path(self) -> Path:
+        return resolve_against_project_root(self.gmfss_model_dir)
+
+    def gmfss_available(self) -> bool:
+        if not self.enable_gmfss:
+            return False
+        from app.services.engines.gmfss.assets import GmfssAssets
+
+        return GmfssAssets.is_complete(self.gmfss_model_dir_path)
 
     @property
     def model_catalog(self) -> list[ModelOption]:
