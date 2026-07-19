@@ -60,6 +60,7 @@ La mayoría de buenos upscalers son CUDA-only, de código cerrado, o una pila de
 - 🖼️ **Upscaling de imagen** — arrastrás el archivo, elegís modelo, dispositivo y escala (2×/3×/4× según el modelo), listo. Fotos y anime/line-art por igual, con job en vivo y descarga directa desde la UI.
 - 🎬 **Upscaling de video** — pipeline completo con FFmpeg: extraer frames → upscale por lote → re-encodear preservando el audio. Perfiles listos para anime y contenido general, con opciones avanzadas (modelo, escala, códec, preset, CRF, FPS boost, mejora de audio).
 - 🌊 **FPS boost con RIFE NCNN Vulkan** — interpolación de fotogramas 2×/3×/4× sobre el video ya reescalado, mismo backend Vulkan (sin CUDA). Se activa por config y aparece como dropdown en el módulo Enhance.
+- 🎨 **GMFSS — interpolación de máxima calidad (experimental, opt-in)** — segundo motor de FPS boost, port ONNX propio de [GMFSS_Fortuna](https://github.com/santiquiroz/port-gmfss-onnx) (el mejor modelo de interpolación para anime, corriendo en cualquier GPU DirectX12 sin CUDA). Mucho más lento que RIFE (~10x o más — máxima calidad, no para uso cotidiano), se activa con `ENABLE_GMFSS=true` + `scripts/download-gmfss-onnx.ps1` y se elige por job (`interp_engine=rife|gmfss`, RIFE sigue siendo el default).
 - 🔊 **Mejora de audio con IA** — denoise opcional del audio del video con DeepFilterNet (red neuronal) o RNNoise (filtro `arnndn` de FFmpeg), como paso extra del pipeline antes de re-encodear. Se activa por config y se elige por job (`audio_enhance=deepfilter|rnnoise`).
 - 🧠 **Módulo Models** — buscá modelos de super-resolución en Hugging Face, instalalos con un click (con polling de progreso) y gestioná los ya instalados; elegí el dispositivo de cómputo (`cpu`/`dml:N`) por default o por job.
 - ⚙️ **Módulo Settings** — estado del motor, disponibilidad de ffmpeg, concurrencia de GPU y profundidad de las colas de jobs, todo en vivo.
@@ -333,6 +334,8 @@ Todas las variables leen de `.env` (ver [`.env.example`](.env.example) con los d
 | `RIFE_MODEL` | `rife-v4.6` | Modelo RIFE usado para interpolar (recomendado, general-purpose) |
 | `ENABLE_INTERPOLATION` | `false` | Habilita el FPS boost; requiere haber corrido `download-rife.ps1` |
 | `ALLOWED_FPS_MULTIPLIERS` | `2,3,4` | Multiplicadores de FPS permitidos por la API (lista separada por comas) |
+| `ENABLE_GMFSS` | `false` | Habilita el motor GMFSS (máxima calidad, muy lento); requiere `ENABLE_INTERPOLATION=true` además y haber corrido `download-gmfss-onnx.ps1` |
+| `GMFSS_MODEL_DIR` | `vendor/gmfss` | Carpeta con los 4 `.onnx` + `manifest.json` del port GMFSS (+ `fusionnet_fp16.onnx` opcional) |
 | `DEEPFILTER_BINARY` | `vendor/deepfilternet/deep-filter.exe` | Ruta al binario CLI de DeepFilterNet |
 | `RNNOISE_MODEL` | `vendor/deepfilternet/models/sh.rnnn` | Ruta al modelo `.rnnn` usado por el filtro `arnndn` de FFmpeg |
 | `ENABLE_AUDIO_ENHANCE` | `false` | Habilita la mejora de audio (`audio_enhance=deepfilter\|rnnoise`); requiere haber corrido `download-deepfilternet.ps1` |
@@ -355,6 +358,20 @@ ENABLE_INTERPOLATION=true
 ```
 
 El dropdown "FPS boost" siempre está visible en la UI de video (con las opciones de `ALLOWED_FPS_MULTIPLIERS`), pero solo funciona una vez activado: pedir un `fps_multiplier > 1` (por UI o directo en `POST /api/v1/video/jobs`) sin `ENABLE_INTERPOLATION=true` o sin el binario de RIFE instalado devuelve `400`.
+
+## Cómo activar GMFSS (interpolación de máxima calidad)
+
+GMFSS es un segundo motor de FPS boost — mucha más calidad que RIFE en anime, pero **~10x o más lento** (medido 0.72-0.73 fps @1080p 2x en una RX 7800 XT; pensalo como "máxima calidad, muy lento", no como reemplazo de RIFE para uso diario). Deshabilitado por defecto:
+
+```powershell
+# 1. Descargar los modelos ONNX de GMFSS (~55MB, port propio: santiquiroz/port-gmfss-onnx)
+powershell -ExecutionPolicy Bypass -File .\scripts\download-gmfss-onnx.ps1
+
+# 2. En .env, habilitar GMFSS (además de ENABLE_INTERPOLATION=true, arriba)
+ENABLE_GMFSS=true
+```
+
+Con ambos motores disponibles, el selector RIFE/GMFSS aparece en el dropdown de FPS boost de la UI; por API se elige con `interp_engine=rife|gmfss` en `POST /api/v1/video/jobs` (default siempre `rife`, GMFSS es opt-in por job).
 
 ## Cómo activar la mejora de audio (DeepFilterNet / RNNoise)
 
@@ -450,7 +467,7 @@ Browser
    │                        │
 Motor de imagen        Pipeline de video (FFmpeg)
 (Real-ESRGAN            extraer frames → upscale por lote →
- NCNN Vulkan)            interpolar con RIFE (opcional) → re-encode + audio
+ NCNN Vulkan)            interpolar con RIFE/GMFSS (opcional) → re-encode + audio
 ```
 
 El motor de upscaling vive detrás de una interfaz `UpscaleEngine` (`app/services/engines/base.py`), así que el backend Vulkan es un componente reemplazable. Un `RetentionSweeper` en background borra outputs y jobs vencidos según `OUTPUT_TTL_HOURS`. La SPA (`frontend/`) se compila una sola vez a `frontend/dist/` — en release, `scripts/package-release.ps1` corre `npm ci && npm run build` antes de empaquetar el `.zip`; en desarrollo, se compila a mano o se corre con hot-reload (`npm run dev`, ver "Desarrollo del frontend" arriba).
@@ -458,6 +475,7 @@ El motor de upscaling vive detrás de una interfaz `UpscaleEngine` (`app/service
 ## Roadmap
 
 - [x] 🌊 FPS boost con RIFE NCNN Vulkan (2×/3×/4×, activable por config)
+- [x] 🎨 GMFSS — segundo motor de interpolación de máxima calidad (ONNX, port propio [santiquiroz/port-gmfss-onnx](https://github.com/santiquiroz/port-gmfss-onnx)), opt-in, ~10x o más lento que RIFE
 - [x] 🧹 Limpieza automática de disco + retención de jobs (TTL)
 - [x] 🔊 Mejora de audio con IA (DeepFilterNet / RNNoise) — denoise como etapa opcional del pipeline, activable por config
 - [x] 🧠 Modelos HF + selección de dispositivo — instalar cualquier modelo de super-resolución de Hugging Face (`.onnx` directo o `.pth`/`.safetensors` vía conversión Spandrel) y elegir `cpu`/`dml:N` por job
