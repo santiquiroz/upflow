@@ -48,6 +48,7 @@ class VideoJobResponse(BaseModel):
     target_fps: str | None = Field(default=None, serialization_alias="targetFps")
     audio_enhance: str | None = Field(default=None, serialization_alias="audioEnhance")
     audio_restore: str | None = Field(default=None, serialization_alias="audioRestore")
+    interp_engine: str = Field(default="rife", serialization_alias="interpEngine")
     model_id: str | None = Field(default=None, serialization_alias="modelId")
     device: str | None = None
     backend: str | None = None
@@ -78,6 +79,10 @@ class AudioCapabilitiesResponse(BaseModel):
     denoise_modes: list[str] = Field(serialization_alias="denoiseModes")
     restore_available: bool = Field(serialization_alias="restoreAvailable")
     restore_modes: list[str] = Field(default_factory=list, serialization_alias="restoreModes")
+
+
+class VideoCapabilitiesResponse(BaseModel):
+    interp_engines: list[str] = Field(default_factory=list, serialization_alias="interpEngines")
 
 
 class SupportedModelResponse(BaseModel):

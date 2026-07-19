@@ -45,6 +45,15 @@ APOLLO_MODE = "apollo"
 AUDIOSR_MODE = "audiosr"
 AUDIO_RESTORE_MODES = frozenset({APOLLO_MODE, AUDIOSR_MODE})
 
+# Frame-interpolation engine selector (Task 4.2). `rife` is ALWAYS the
+# default -- GMFSS (much higher quality, 10x or more slower -- see
+# gmfss_engine.py; short clips measure even higher due to cold-start model
+# load overhead) is strictly opt-in per job, same split as
+# AUDIO_RESTORE_MODES's Apollo/AudioSR.
+RIFE_ENGINE = "rife"
+GMFSS_ENGINE = "gmfss"
+INTERP_ENGINES = frozenset({RIFE_ENGINE, GMFSS_ENGINE})
+
 # Upscale runtime selector (SP11). `auto` picks onnx vs ncnn per the rule in
 # app/services/backend_registry.py; `ncnn`/`onnx` force a specific runtime.
 # The selector changes the RUNTIME, never the model the user picked.
@@ -312,6 +321,15 @@ class Settings(BaseSettings):
     # (~90ms de UNet x2 por paso): respiro corto para el compositor de Windows.
     audiosr_gpu_throttle_seconds: float = Field(default=0.01, alias="AUDIOSR_GPU_THROTTLE_SECONDS")
     max_audio_upload_mb: int = Field(default=200, alias="MAX_AUDIO_UPLOAD_MB")
+
+    # GMFSS (second interpolation engine, max-quality anime frame interpolation,
+    # own port santiquiroz/port-gmfss-onnx). 10x or more slower than RIFE by
+    # design -- a short-clip smoke test measured closer to 20x due to
+    # cold-start model load overhead, so treat 10x as a floor, not a stable
+    # figure -- opt-in via its own flag, same split as enable_audiosr next to
+    # Apollo.
+    enable_gmfss: bool = Field(default=False, alias="ENABLE_GMFSS")
+    gmfss_model_dir: str = Field(default="vendor/gmfss", alias="GMFSS_MODEL_DIR")
 
     default_device: str = Field(default="dml:0", alias="DEFAULT_DEVICE")
     # When on and a job request doesn't pin a device, routes.py hands the job
@@ -600,6 +618,24 @@ class Settings(BaseSettings):
             return self.audio_restore_available()
         if mode == AUDIOSR_MODE:
             return self.audiosr_available()
+        return False
+
+    @property
+    def gmfss_model_dir_path(self) -> Path:
+        return resolve_against_project_root(self.gmfss_model_dir)
+
+    def gmfss_available(self) -> bool:
+        if not self.enable_gmfss:
+            return False
+        from app.services.engines.gmfss.assets import GmfssAssets
+
+        return GmfssAssets.is_complete(self.gmfss_model_dir_path)
+
+    def interp_engine_available(self, engine: str) -> bool:
+        if engine == RIFE_ENGINE:
+            return self.interpolation_available()
+        if engine == GMFSS_ENGINE:
+            return self.gmfss_available()
         return False
 
     @property

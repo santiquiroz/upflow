@@ -33,6 +33,7 @@ const BASE_JOB: VideoJobResponse = {
   targetFps: null,
   audioEnhance: null,
   audioRestore: null,
+  interpEngine: "rife",
   modelId: "realesrgan-x4plus",
   device: null,
   createdAt: "2026-01-01T00:00:00Z",
@@ -73,6 +74,7 @@ function submitParams() {
     targetFps: null,
     audioEnhance: null,
     audioRestore: null,
+    interpEngine: "rife",
     backend: "auto" as const,
     videoEncoder: "software" as const,
   };

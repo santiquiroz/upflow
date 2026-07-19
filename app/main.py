@@ -17,6 +17,7 @@ from app.services.device_semaphores import DeviceSemaphores
 from app.services.devices_service import DevicesService
 from app.services.restorer_registry import build_restorers
 from app.services.engines.audio_enhance import AudioEnhancer
+from app.services.engines.gmfss_engine import GmfssEngine
 from app.services.engines.onnx_upscaler import OnnxUpscaler
 from app.services.engines.onnx_video_upscaler import OnnxVideoUpscaler
 from app.services.engines.realesrgan_ncnn import RealEsrganNcnnEngine
@@ -43,6 +44,7 @@ async def lifespan(app: FastAPI):
     engine = RealEsrganNcnnEngine(settings)
     media_tools = MediaTools(settings)
     rife_engine = RifeNcnnEngine(settings)
+    gmfss_engine = GmfssEngine(settings)
     audio_enhancers = {mode: AudioEnhancer(settings, mode) for mode in AUDIO_ENHANCE_MODES}
     restorers = build_restorers(settings)
     devices_service = DevicesService(settings)
@@ -68,6 +70,7 @@ async def lifespan(app: FastAPI):
         engine,
         media_tools,
         rife_engine,
+        gmfss_engine,
         audio_enhancers,
         onnx_engine=onnx_engine,
         model_registry=model_registry,
@@ -105,6 +108,7 @@ async def lifespan(app: FastAPI):
     app.state.engine = engine
     app.state.media_tools = media_tools
     app.state.rife_engine = rife_engine
+    app.state.gmfss_engine = gmfss_engine
     app.state.audio_enhancers = audio_enhancers
     app.state.restorers = restorers
     app.state.onnx_engine = onnx_engine

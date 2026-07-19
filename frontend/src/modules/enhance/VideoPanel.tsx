@@ -9,7 +9,7 @@ import { RuntimePicker, formatRuntimeSummary } from "../../components/RuntimePic
 import { EncoderPicker, formatEncoderSummary } from "../../components/EncoderPicker";
 import { SlowPresetCostHint } from "../../components/SlowPresetCostHint";
 import { useAudioCapabilities } from "../../hooks/useAudioJob";
-import { useVideoJob, type VideoJobPhase } from "../../hooks/useVideoJob";
+import { useVideoCapabilities, useVideoJob, type VideoJobPhase } from "../../hooks/useVideoJob";
 import { getDevices, getModels } from "../../lib/api";
 import type {
   DeviceInfoResponse,
@@ -23,7 +23,33 @@ import { restoreLabel } from "../../lib/audioLabels";
 import { formatDeviceSummary, formatModelSummary } from "./accordionSummaries";
 import { AUDIO_ENHANCE_OPTIONS, AudioEnhanceControls } from "./AudioEnhanceControls";
 import { FpsBoostControls, TARGET_FPS_OPTIONS, type FpsBoostValue } from "./FpsBoostControls";
+import { InterpEngineControls } from "./InterpEngineControls";
 import { VideoProfileControls } from "./VideoProfileControls";
+
+const RIFE_ENGINE = "rife";
+
+// Picks the engine a job should default to given what's actually available:
+// RIFE whenever it's an option (existing default path, unchanged), otherwise
+// the first (only, in practice) available engine so GMFSS-only setups never
+// get stuck defaulted onto an engine that isn't reachable.
+function resolveDefaultInterpEngine(engines: string[]): string {
+  if (engines.includes(RIFE_ENGINE)) {
+    return RIFE_ENGINE;
+  }
+  return engines[0] ?? RIFE_ENGINE;
+}
+
+// The selector only needs to appear when there's something to communicate or
+// choose: two or more engines (a real choice), or a single engine that isn't
+// RIFE (the default silently changed and the user should see what will run).
+// A single RIFE-only option stays hidden, same as before this engine
+// selector existed.
+function isInterpEngineSelectorVisible(engines: string[]): boolean {
+  if (engines.length > 1) {
+    return true;
+  }
+  return engines.length === 1 && engines[0] !== RIFE_ENGINE;
+}
 
 const OUTPUT_CONTAINERS = ["mp4", "mkv"] as const;
 const VIDEO_CODECS = [
@@ -88,6 +114,10 @@ function resolveRequiresGpu(model: ModelResponse | null): boolean {
 
 function isJobBusy(phase: VideoJobPhase): boolean {
   return phase === "uploading" || phase === "queued" || phase === "running";
+}
+
+function isFpsBoostActive(value: FpsBoostValue): boolean {
+  return value.fpsMultiplier > 1 || value.targetFps !== null;
 }
 
 // A builtin-ncnn model needs a Vulkan GPU, so a cpu device can never run it.
@@ -262,15 +292,20 @@ export function VideoPanel() {
   const [fpsBoost, setFpsBoost] = useState<FpsBoostValue>({ fpsMultiplier: 1, targetFps: null });
   const [audioEnhance, setAudioEnhance] = useState<string | null>(null);
   const [audioRestore, setAudioRestore] = useState<string | null>(null);
+  const [interpEngine, setInterpEngine] = useState(RIFE_ENGINE);
 
   const modelsQuery = useQuery({ queryKey: ["models"], queryFn: getModels });
   const devicesQuery = useQuery({ queryKey: ["devices"], queryFn: getDevices });
   const capabilitiesQuery = useAudioCapabilities();
+  const videoCapabilitiesQuery = useVideoCapabilities();
   const { phase, job, errorMessage, submit, cancel, reset } = useVideoJob();
 
   const requiresGpu = resolveRequiresGpu(model);
   const restoreModes = capabilitiesQuery.data?.restoreModes ?? [];
   const restoreAvailable = restoreModes.length > 0;
+  const interpEngines = videoCapabilitiesQuery.data?.interpEngines ?? [];
+  const interpEngineSelectable = isInterpEngineSelectorVisible(interpEngines);
+  const fpsBoostActive = isFpsBoostActive(fpsBoost);
 
   // Only re-applies the profile's default model the first time a given profile
   // becomes selected (including the async case where modelsQuery resolves after
@@ -302,6 +337,18 @@ export function VideoPanel() {
     }
   }, [devicesQuery.data, requiresGpu, device]);
 
+  // Clamps interpEngine onto an actually-available engine once capabilities
+  // load. Without this, a GMFSS-only backend (ENABLE_INTERPOLATION=false,
+  // ENABLE_GMFSS=true) would leave the state stuck on the initial "rife"
+  // default -- an engine the backend would reject -- with no user action
+  // required to trigger the mismatch.
+  useEffect(() => {
+    if (interpEngines.length === 0 || interpEngines.includes(interpEngine)) {
+      return;
+    }
+    setInterpEngine(resolveDefaultInterpEngine(interpEngines));
+  }, [interpEngines, interpEngine]);
+
   function handleFileSelected(selected: File) {
     setFile(selected);
     reset();
@@ -320,6 +367,7 @@ export function VideoPanel() {
       setAudioRestore(null);
     }
     setFpsBoost({ fpsMultiplier: 1, targetFps: null });
+    setInterpEngine(resolveDefaultInterpEngine(interpEngines));
   }
 
   function handleKeepAudioChange(checked: boolean) {
@@ -351,6 +399,7 @@ export function VideoPanel() {
       targetFps: fpsBoost.targetFps,
       audioEnhance,
       audioRestore: keepAudio && restoreAvailable ? audioRestore : null,
+      interpEngine: fpsBoostActive ? interpEngine : "rife",
     });
   }
 
@@ -388,7 +437,12 @@ export function VideoPanel() {
           summary={formatFpsBoostSummary(fpsBoost)}
           tooltip={FPS_BOOST_TOOLTIP}
         >
-          <FpsBoostControls value={fpsBoost} onChange={setFpsBoost} />
+          <div className="flex flex-col gap-4">
+            <FpsBoostControls value={fpsBoost} onChange={setFpsBoost} />
+            {fpsBoostActive && interpEngineSelectable && (
+              <InterpEngineControls engines={interpEngines} value={interpEngine} onChange={setInterpEngine} />
+            )}
+          </div>
         </AccordionSection>
         <AccordionSection
           title="Audio"

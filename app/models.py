@@ -65,6 +65,11 @@ class VideoUpscaleJob:
     target_fps: str | None = None
     audio_enhance: str | None = None
     audio_restore: str | None = None
+    # Frame-interpolation engine (Task 4.2): "rife" (default, always) or
+    # "gmfss" (opt-in, much higher quality, 10x or more slower -- even higher
+    # on short clips due to model load overhead). Only consulted when
+    # interpolation is actually requested (fps_multiplier>1 or target_fps set).
+    interp_engine: str = "rife"
     model_id: str | None = None
     device: str | None = None
     # Upscale runtime override (SP11): None|auto -> Auto rule; ncnn|onnx force one.

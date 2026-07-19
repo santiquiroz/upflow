@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import type { CreateVideoJobParams } from "../lib/api";
-import { cancelVideoJob, createVideoJob, getVideoJob } from "../lib/api";
-import type { JobStatus, VideoJobResponse } from "../lib/apiTypes";
+import { cancelVideoJob, createVideoJob, getVideoCapabilities, getVideoJob } from "../lib/api";
+import type { JobStatus, VideoCapabilities, VideoJobResponse } from "../lib/apiTypes";
 import { isTerminalJobStatus } from "../lib/jobStatus";
 import { jobQueueStore, type JobQueueStore } from "../lib/jobQueueStore";
 
@@ -111,4 +111,8 @@ export function useVideoJob(
     cancel,
     reset,
   };
+}
+
+export function useVideoCapabilities() {
+  return useQuery<VideoCapabilities>({ queryKey: ["videoCapabilities"], queryFn: getVideoCapabilities });
 }

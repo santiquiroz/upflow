@@ -482,6 +482,117 @@ async def test_run_raises_clear_error_when_target_fps_set_without_rife_engine(tm
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Task 4.2 - interp_engine selector: job.interp_engine picks rife_engine vs
+# gmfss_engine in _maybe_interpolate. Default is always "rife" -- GMFSS is
+# opt-in per job.
+# ---------------------------------------------------------------------------
+
+
+class FakeGmfssEngine:
+    def __init__(self, events: list[str]) -> None:
+        self.events = events
+        self.calls: list[tuple[Path, Path, int, int, int | None]] = []
+
+    async def run(
+        self,
+        frames_in: Path,
+        frames_out: Path,
+        source_frame_count: int,
+        multiplier: int = 1,
+        *,
+        target_frame_count: int | None = None,
+        device: str | None = None,
+    ) -> Path:
+        self.events.append("interpolate_gmfss")
+        self.calls.append((frames_in, frames_out, source_frame_count, multiplier, target_frame_count))
+        resolved_count = target_frame_count if target_frame_count is not None else source_frame_count * multiplier
+        frames_out.mkdir(parents=True, exist_ok=True)
+        for index in range(resolved_count):
+            (frames_out / f"{index:08d}.png").write_bytes(b"fake-gmfss-frame")
+        return frames_out
+
+
+def make_video_job_with_engine(source_path: Path, interp_engine: str) -> VideoUpscaleJob:
+    return VideoUpscaleJob(
+        source_path=source_path,
+        original_filename=source_path.name,
+        model_name="realesr-animevideov3-x2",
+        scale=2,
+        output_container="mp4",
+        video_codec="libx264",
+        video_preset="medium",
+        crf=18,
+        keep_audio=False,
+        interp_engine=interp_engine,
+    )
+
+
+def make_upscaler_with_both_engines(
+    tmp_path: Path, events: list[str], rife_engine: FakeRifeEngine, gmfss_engine: FakeGmfssEngine
+) -> StageTrackingVideoUpscaler:
+    settings = make_settings(tmp_path)
+    StorageService(settings)
+    return StageTrackingVideoUpscaler(
+        settings, FakeVideoEngine(), FakeMediaTools(), rife_engine, gmfss_engine=gmfss_engine, events=events
+    )
+
+
+async def test_default_interp_engine_uses_rife(tmp_path: Path) -> None:
+    events: list[str] = []
+    rife_engine = FakeRifeEngine(events)
+    gmfss_engine = FakeGmfssEngine(events)
+    upscaler = make_upscaler_with_both_engines(tmp_path, events, rife_engine, gmfss_engine)
+    job = make_video_job(write_source(upscaler))
+
+    await upscaler.run(job, fps_multiplier=2)
+
+    assert "interpolate" in events
+    assert "interpolate_gmfss" not in events
+    assert len(rife_engine.calls) == 1
+    assert len(gmfss_engine.calls) == 0
+
+
+async def test_interp_engine_gmfss_uses_gmfss_engine(tmp_path: Path) -> None:
+    events: list[str] = []
+    rife_engine = FakeRifeEngine(events)
+    gmfss_engine = FakeGmfssEngine(events)
+    upscaler = make_upscaler_with_both_engines(tmp_path, events, rife_engine, gmfss_engine)
+    job = make_video_job_with_engine(write_source(upscaler), "gmfss")
+
+    await upscaler.run(job, fps_multiplier=2)
+
+    assert "interpolate_gmfss" in events
+    assert "interpolate" not in events
+    assert len(gmfss_engine.calls) == 1
+    assert len(rife_engine.calls) == 0
+
+
+async def test_interp_engine_gmfss_receives_source_frame_count_and_multiplier(tmp_path: Path) -> None:
+    events: list[str] = []
+    rife_engine = FakeRifeEngine(events)
+    gmfss_engine = FakeGmfssEngine(events)
+    upscaler = make_upscaler_with_both_engines(tmp_path, events, rife_engine, gmfss_engine)
+    job = make_video_job_with_engine(write_source(upscaler), "gmfss")
+
+    await upscaler.run(job, fps_multiplier=3)
+
+    assert len(gmfss_engine.calls) == 1
+    _, _, source_frame_count, multiplier, target_frame_count = gmfss_engine.calls[0]
+    assert source_frame_count == 1
+    assert multiplier == 3
+    assert target_frame_count is None
+
+
+async def test_run_raises_clear_error_when_gmfss_requested_without_gmfss_engine(tmp_path: Path) -> None:
+    events: list[str] = []
+    upscaler = make_upscaler(tmp_path, events, FakeRifeEngine(events))
+    job = make_video_job_with_engine(write_source(upscaler), "gmfss")
+
+    with pytest.raises(RuntimeError, match="GMFSS"):
+        await upscaler.run(job, fps_multiplier=2)
+
+
 async def test_raw_pipe_streams_interpolated_frames_when_eligible(tmp_path: Path) -> None:
     events: list[str] = []
     upscaler = make_upscaler(tmp_path, events, FakeRifeEngine(events))

@@ -79,6 +79,9 @@ export interface VideoJobResponse {
   targetFps: string | null;
   audioEnhance: string | null;
   audioRestore: string | null;
+  // Frame-interpolation engine used for this job: "rife" (default, always) or
+  // "gmfss" (opt-in, much higher quality, 10x or more slower). Mirrors app.config.INTERP_ENGINES.
+  interpEngine: string;
   // Runtime that ran the upscale. Serialized as `backend` (single word, no
   // camelCase transform); null until a job explicitly selects one, in which
   // case the server behaves as "auto".
@@ -116,6 +119,13 @@ export interface AudioCapabilities {
   denoiseModes: string[];
   restoreAvailable: boolean;
   restoreModes: string[];
+}
+
+// Mirrors app/schemas.py::VideoCapabilitiesResponse. Only lists engines the
+// server actually has ready (ENABLE_GMFSS + models installed for "gmfss"),
+// same filtering convention as AudioCapabilities.restoreModes.
+export interface VideoCapabilities {
+  interpEngines: string[];
 }
 
 export interface SupportedModelResponse {

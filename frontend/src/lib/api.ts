@@ -9,6 +9,7 @@ import type {
   ModelSearchResponse,
   ModelsResponse,
   UpscaleBackend,
+  VideoCapabilities,
   VideoEncoder,
   VideoJobResponse,
 } from "./apiTypes";
@@ -144,6 +145,7 @@ export interface CreateVideoJobParams {
   targetFps: string | null;
   audioEnhance: string | null;
   audioRestore: string | null;
+  interpEngine: string;
   backend: UpscaleBackend;
   videoEncoder: VideoEncoder;
 }
@@ -167,6 +169,7 @@ function buildVideoJobFormData(params: CreateVideoJobParams): FormData {
   formData.append("crf", String(params.crf));
   formData.append("keep_audio", String(params.keepAudio));
   formData.append("fps_multiplier", String(params.fpsMultiplier));
+  formData.append("interp_engine", params.interpEngine);
   formData.append("backend", params.backend);
   formData.append("video_encoder", params.videoEncoder);
   appendVideoModelFields(formData, params.modelId);
@@ -195,6 +198,10 @@ export function getVideoJob(jobId: string): Promise<VideoJobResponse> {
 
 export function cancelVideoJob(jobId: string): Promise<VideoJobResponse> {
   return apiPost<VideoJobResponse>(`/video/jobs/${jobId}/cancel`);
+}
+
+export function getVideoCapabilities(): Promise<VideoCapabilities> {
+  return apiGet<VideoCapabilities>("/video/capabilities");
 }
 
 export function searchHfModels(query: string): Promise<ModelSearchResponse> {

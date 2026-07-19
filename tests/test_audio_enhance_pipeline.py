@@ -145,7 +145,7 @@ def make_upscaler(
     settings = make_settings(tmp_path)
     StorageService(settings)
     return StageTrackingVideoUpscaler(
-        settings, FakeVideoEngine(), media_tools, None, audio_enhancers, events=events
+        settings, FakeVideoEngine(), media_tools, None, audio_enhancers=audio_enhancers, events=events
     )
 
 

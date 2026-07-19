@@ -12,6 +12,7 @@ import {
   getInstallStatus,
   getJob,
   getModels,
+  getVideoCapabilities,
   getVideoJob,
   installModel,
   searchHfModels,
@@ -26,6 +27,7 @@ import type {
   JobResponse,
   ModelSearchResponse,
   ModelsResponse,
+  VideoCapabilities,
   VideoJobResponse,
 } from "./apiTypes";
 
@@ -233,6 +235,7 @@ describe("cancelVideoJob", () => {
       targetFps: null,
       audioEnhance: null,
       audioRestore: null,
+      interpEngine: "rife",
       modelId: "realesr-animevideov3-x2",
       device: "dml:0",
       createdAt: "2026-01-01T00:00:00Z",
@@ -272,6 +275,7 @@ describe("createVideoJob", () => {
       targetFps: null,
       audioEnhance: null,
       audioRestore: null,
+      interpEngine: "rife",
       backend: "auto" as const,
       videoEncoder: "software" as const,
       ...overrides,
@@ -303,6 +307,7 @@ describe("createVideoJob", () => {
     expect(body.get("crf")).toBe("17");
     expect(body.get("keep_audio")).toBe("true");
     expect(body.get("fps_multiplier")).toBe("1");
+    expect(body.get("interp_engine")).toBe("rife");
     expect(body.get("backend")).toBe("auto");
     expect(body.has("target_fps")).toBe(false);
     expect(body.has("audio_enhance")).toBe(false);
@@ -320,6 +325,19 @@ describe("createVideoJob", () => {
     const call = vi.mocked(fetch).mock.calls[0];
     const body = call[1]?.body as FormData;
     expect(body.get("backend")).toBe("onnx");
+  });
+
+  it("sends the selected interpolation engine", async () => {
+    mockFetchOnce(
+      { jobId: "vid-5", status: "queued", statusUrl: "/api/v1/video/jobs/vid-5", downloadUrl: null },
+      { status: 202 },
+    );
+
+    await createVideoJob(videoParams({ interpEngine: "gmfss" }));
+
+    const call = vi.mocked(fetch).mock.calls[0];
+    const body = call[1]?.body as FormData;
+    expect(body.get("interp_engine")).toBe("gmfss");
   });
 
   it("sends target_fps when set and omits model/device when absent", async () => {
@@ -369,6 +387,7 @@ describe("getVideoJob", () => {
       targetFps: null,
       audioEnhance: null,
       audioRestore: null,
+      interpEngine: "rife",
       modelId: "realesrgan-x4plus",
       device: "dml:0",
       createdAt: "2026-01-01T00:00:00Z",
@@ -384,6 +403,21 @@ describe("getVideoJob", () => {
     const result = await getVideoJob("vid-1");
 
     expect(fetch).toHaveBeenCalledWith("/api/v1/video/jobs/vid-1", expect.objectContaining({ method: "GET" }));
+    expect(result).toEqual(payload);
+  });
+});
+
+describe("getVideoCapabilities", () => {
+  it("issues a GET to /api/v1/video/capabilities and returns the typed payload", async () => {
+    const payload: VideoCapabilities = { interpEngines: ["rife", "gmfss"] };
+    mockFetchOnce(payload);
+
+    const result = await getVideoCapabilities();
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/v1/video/capabilities",
+      expect.objectContaining({ method: "GET" }),
+    );
     expect(result).toEqual(payload);
   });
 });
