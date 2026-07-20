@@ -22,6 +22,7 @@ from app.services.engines.onnx_video_upscaler import (
     _drain_queue,
     _put_until_cancelled,
 )
+from app.services.gpu_session_coordinator import GpuSessionCoordinator
 
 logger = logging.getLogger(__name__)
 
@@ -70,13 +71,18 @@ FP16_FUSIONNET_FILENAME = "fusionnet_fp16.onnx"
 
 
 class GmfssEngine:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, gpu_coordinator: GpuSessionCoordinator) -> None:
         self.settings = settings
+        self.gpu_coordinator = gpu_coordinator
         self._session_cache: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._session_lock = threading.Lock()
 
     def available(self) -> bool:
         return self.settings.gmfss_available()
+
+    def release_device(self, device: str) -> None:
+        with self._session_lock:
+            self._session_cache.pop(device, None)
 
     async def run(
         self,
@@ -166,6 +172,7 @@ class GmfssEngine:
     # --- session cache -------------------------------------------------
 
     def _get_sessions(self, device: str) -> dict[str, Any]:
+        self.gpu_coordinator.acquire(device, self)
         with self._session_lock:
             cached = self._session_cache.get(device)
             if cached is not None:
