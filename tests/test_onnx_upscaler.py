@@ -18,6 +18,7 @@ from app.services.engines.onnx_upscaler import (
     _detect_scale,
     _tile_starts,
 )
+from app.services.gpu_session_coordinator import GpuSessionCoordinator
 from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry, ModelStatus
 
 # ---------------------------------------------------------------------------
@@ -142,7 +143,7 @@ def make_engine(tmp_path: Path, **settings_overrides: object) -> tuple[OnnxUpsca
     settings = make_settings(tmp_path, **settings_overrides)
     registry = ModelRegistry(settings)
     devices = DevicesService(settings)
-    return OnnxUpscaler(settings, registry, devices), registry, settings
+    return OnnxUpscaler(settings, registry, devices, GpuSessionCoordinator()), registry, settings
 
 
 def make_gradient_array(height: int, width: int) -> np.ndarray:
@@ -477,6 +478,52 @@ def test_get_session_treats_different_devices_as_different_cache_keys(tmp_path: 
     engine._get_session("m1", "dml:0", entry)
 
     assert set(engine._session_cache.keys()) == {("m1", "cpu"), ("m1", "dml:0")}
+
+
+# ---------------------------------------------------------------------------
+# GpuSessionCoordinator wiring (Fase 1 Task 4) - release_device evicts every
+# cache entry for that device regardless of model (cache is keyed by
+# (model_id, device), a single device can have several model entries, unlike
+# the flat per-device caches in Tasks 2-3), and acquire() runs before any
+# session is built. Same pattern as GmfssEngine/AudioSrRestorer/ApolloRestorer.
+# ---------------------------------------------------------------------------
+
+
+def test_release_device_clears_all_cached_sessions_for_that_device(tmp_path: Path) -> None:
+    engine, _, _ = make_engine(tmp_path)
+    engine._session_cache[("model-a", "dml:0")] = "fake-a"
+    engine._session_cache[("model-b", "dml:0")] = "fake-b"
+    engine._session_cache[("model-a", "dml:1")] = "fake-a-1"
+
+    engine.release_device("dml:0")
+
+    assert ("model-a", "dml:0") not in engine._session_cache
+    assert ("model-b", "dml:0") not in engine._session_cache
+    assert ("model-a", "dml:1") in engine._session_cache
+
+
+def test_release_device_on_empty_cache_is_a_noop(tmp_path: Path) -> None:
+    engine, _, _ = make_engine(tmp_path)
+
+    engine.release_device("dml:0")  # no debe lanzar
+
+
+def test_get_session_calls_coordinator_acquire_before_creating(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = make_settings(tmp_path)
+    registry = ModelRegistry(settings)
+    devices = DevicesService(settings)
+    gpu_coordinator = GpuSessionCoordinator()
+    engine = OnnxUpscaler(settings, registry, devices, gpu_coordinator)
+    calls: list[tuple[str, object]] = []
+    monkeypatch.setattr(gpu_coordinator, "acquire", lambda device, owner: calls.append((device, owner)))
+    monkeypatch.setattr(engine, "_create_session", lambda model_id, device, entry: "fake-session")
+    entry = make_onnx_entry()
+
+    engine._get_session("model-a", "dml:0", entry)
+
+    assert calls == [("dml:0", engine)]
 
 
 # ---------------------------------------------------------------------------

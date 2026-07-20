@@ -13,6 +13,7 @@ from app.config import Settings
 from app.models import UpscaleJob
 from app.services.devices_service import DevicesService
 from app.services.engines.base import UpscaleEngine
+from app.services.gpu_session_coordinator import GpuSessionCoordinator
 from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry, ModelStatus
 from app.services.progress import apply_image_tile_progress
 
@@ -154,10 +155,17 @@ def _wrap_onnx_error(context: str, exc: Exception) -> RuntimeError:
 
 
 class OnnxUpscaler(UpscaleEngine):
-    def __init__(self, settings: Settings, registry: ModelRegistry, devices: DevicesService) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        registry: ModelRegistry,
+        devices: DevicesService,
+        gpu_coordinator: GpuSessionCoordinator,
+    ) -> None:
         self.settings = settings
         self.registry = registry
         self.devices = devices
+        self.gpu_coordinator = gpu_coordinator
         self._session_cache: OrderedDict[tuple[str, str], Any] = OrderedDict()
         self._session_lock = threading.Lock()
 
@@ -167,6 +175,15 @@ class OnnxUpscaler(UpscaleEngine):
         except (ImportError, OSError):
             return False
         return True
+
+    def release_device(self, device: str) -> None:
+        # Cache is keyed by (model_id, device) -- a single device can hold
+        # several model entries, so every key whose device matches must be
+        # evicted, not just one.
+        with self._session_lock:
+            keys_to_remove = [key for key in self._session_cache if key[1] == device]
+            for key in keys_to_remove:
+                del self._session_cache[key]
 
     async def run(self, job: UpscaleJob) -> Path:
         # Only the in-memory registry lookup happens synchronously here.
@@ -244,6 +261,7 @@ class OnnxUpscaler(UpscaleEngine):
         _save_rgb_array(upscaled, output_path)
 
     def _get_session(self, model_id: str, device: str, entry: ModelEntry) -> Any:
+        self.gpu_coordinator.acquire(device, self)
         cache_key = (model_id, device)
         with self._session_lock:
             cached = self._session_cache.get(cache_key)

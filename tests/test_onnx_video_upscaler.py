@@ -17,6 +17,7 @@ from app.services.engines.onnx_video_upscaler import (
     _put_until_cancelled,
     should_tile_frame,
 )
+from app.services.gpu_session_coordinator import GpuSessionCoordinator
 from app.services.model_registry import ModelRegistry
 
 # ---------------------------------------------------------------------------
@@ -41,7 +42,7 @@ def make_settings(tmp_path: Path, **overrides: object) -> Settings:
 
 def make_engine(tmp_path: Path, **overrides: object) -> OnnxVideoUpscaler:
     settings = make_settings(tmp_path, **overrides)
-    return OnnxVideoUpscaler(settings, ModelRegistry(settings), DevicesService(settings))
+    return OnnxVideoUpscaler(settings, ModelRegistry(settings), DevicesService(settings), GpuSessionCoordinator())
 
 
 class _IoInfo:
@@ -406,6 +407,50 @@ def test_get_session_caches_by_path_and_device(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# GpuSessionCoordinator wiring (Fase 1 Task 4) - release_device evicts every
+# cache entry for that device regardless of model (cache is keyed by
+# (model_path, device), a single device can have several model entries,
+# unlike the flat per-device caches in Tasks 2-3), and acquire() runs before
+# any session is built. Same pattern as
+# GmfssEngine/AudioSrRestorer/ApolloRestorer/OnnxUpscaler.
+# ---------------------------------------------------------------------------
+
+
+def test_release_device_clears_all_cached_sessions_for_that_device(tmp_path: Path) -> None:
+    engine = make_engine(tmp_path)
+    engine._session_cache[("model-a.onnx", "dml:0")] = "fake-a"
+    engine._session_cache[("model-b.onnx", "dml:0")] = "fake-b"
+    engine._session_cache[("model-a.onnx", "dml:1")] = "fake-a-1"
+
+    engine.release_device("dml:0")
+
+    assert ("model-a.onnx", "dml:0") not in engine._session_cache
+    assert ("model-b.onnx", "dml:0") not in engine._session_cache
+    assert ("model-a.onnx", "dml:1") in engine._session_cache
+
+
+def test_release_device_on_empty_cache_is_a_noop(tmp_path: Path) -> None:
+    engine = make_engine(tmp_path)
+
+    engine.release_device("dml:0")  # no debe lanzar
+
+
+def test_get_session_calls_coordinator_acquire_before_creating(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = make_settings(tmp_path)
+    gpu_coordinator = GpuSessionCoordinator()
+    engine = OnnxVideoUpscaler(settings, ModelRegistry(settings), DevicesService(settings), gpu_coordinator)
+    calls: list[tuple[str, object]] = []
+    monkeypatch.setattr(gpu_coordinator, "acquire", lambda device, owner: calls.append((device, owner)))
+    monkeypatch.setattr(engine, "_create_session", lambda model_path, device: "fake-session")
+
+    engine._get_session("/models/x4.onnx", "dml:0")
+
+    assert calls == [("dml:0", engine)]
+
+
+# ---------------------------------------------------------------------------
 # cancellation
 # ---------------------------------------------------------------------------
 
@@ -439,7 +484,9 @@ _REAL_ONNX = Settings(_env_file=None).builtin_onnx_path / "realesr-animevideov3-
 @pytest.mark.skipif(not _REAL_ONNX.exists(), reason="vendored realesr-animevideov3-x4 ONNX not present")
 async def test_run_frames_builtin_with_real_model_on_cpu(tmp_path: Path) -> None:
     settings = Settings(_env_file=None, RUNTIME_DIR=str(tmp_path / "runtime"))  # real BUILTIN_ONNX_DIR
-    engine = OnnxVideoUpscaler(settings, ModelRegistry(settings), DevicesService(settings))
+    engine = OnnxVideoUpscaler(
+        settings, ModelRegistry(settings), DevicesService(settings), GpuSessionCoordinator()
+    )
     frames_in = tmp_path / "frames-in"
     frames_out = tmp_path / "frames-out"
     write_frames(frames_in, count=3, height=16, width=24)
