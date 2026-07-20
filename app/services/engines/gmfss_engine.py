@@ -158,6 +158,10 @@ class GmfssEngine:
         so none of run()'s threaded-teardown machinery is needed or duplicated
         here. Each yielded frame is NHWC uint8 RGB ([1,H,W,3]) at the source
         resolution -- the format OnnxVideoUpscaler consumes.
+
+        CRITICAL: Each next() call blocks on ONNX inference; when called from
+        async code, iterate this generator from inside a worker thread
+        (e.g., asyncio.to_thread), never directly on the event loop.
         """
         if not self.available():
             raise RuntimeError(
