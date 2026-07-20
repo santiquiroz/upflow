@@ -6,7 +6,7 @@ from pathlib import Path
 
 from app.config import AUDIO_ENHANCE_MODES, AUDIO_RESTORE_MODES, Settings
 from app.exceptions import QueueFullError
-from app.models import AudioJob, JobStatus, utc_now
+from app.models import TERMINAL_JOB_STATUSES, AudioJob, JobStatus, utc_now
 from app.services.audio_pipeline import AudioPipeline
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
@@ -95,7 +95,7 @@ class AudioJobManager:
         job = self.jobs.get(job_id)
         if job is None:
             return False
-        if job.status in (JobStatus.completed, JobStatus.failed, JobStatus.cancelled):
+        if job.status in TERMINAL_JOB_STATUSES:
             return False
         if job.status == JobStatus.queued:
             # Still in the queue: mark it so the worker skips it on dequeue.

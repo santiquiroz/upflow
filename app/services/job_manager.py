@@ -9,7 +9,7 @@ from PIL import Image, UnidentifiedImageError
 
 from app.config import Settings
 from app.exceptions import QueueFullError
-from app.models import JobStatus, UpscaleJob, utc_now
+from app.models import TERMINAL_JOB_STATUSES, JobStatus, UpscaleJob, utc_now
 from app.services.device_router import DeviceRouter, has_compatible_device
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
@@ -122,7 +122,7 @@ class JobManager:
         job = self.jobs.get(job_id)
         if job is None:
             return False
-        if job.status in (JobStatus.completed, JobStatus.failed, JobStatus.cancelled):
+        if job.status in TERMINAL_JOB_STATUSES:
             return False
         if job.status == JobStatus.queued:
             # Still in the queue: mark it so the worker skips it on dequeue.
