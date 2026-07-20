@@ -421,6 +421,15 @@ class VideoUpscaler:
         if model is None:
             raise RuntimeError(f"No ONNX export configured for builtin model {job.model_name!r}")
         onnx_path = engine._select_model_file(model, device)
+        # Captured here, BEFORE gmfss_engine.run_frames_fused's first next() runs
+        # GmfssEngine._get_sessions -> gpu_coordinator.acquire for this same device:
+        # that acquire only evicts the ONNX engine's cache ENTRY, not this already
+        # -captured session object, which the closure below keeps alive for the
+        # whole fused loop. So during the fused pass BOTH the GMFSS sessions and
+        # this ONNX session are resident on the GPU at once -- the coordinator's
+        # one-owner-per-device eviction does not reduce VRAM pressure here the way
+        # it does on the two-pass path. Intentional/unavoidable for fusion, not a
+        # bug -- watch VRAM headroom when benchmarking this path (Task 9).
         session = engine._get_session(str(onnx_path), device)
         state = {"force_tiled": False}
 

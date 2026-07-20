@@ -675,6 +675,8 @@ git commit -m "Aplicacion: fusiona interpolar+escalar cuando GMFSS+ONNX corren i
 
 Con el server de desarrollo, mismo clip corto, mismo device, medir fps de la etapa `interpolating_frames`+`upscaling_frames` combinadas: (a) con Fase 1 aplicada pero SIN Fase 2 (dos pasadas), (b) con Fase 1+2 (fusionado). Reportar el número real — puede ser una mejora chica, no forzar ni redondear favorablemente.
 
+**Nota de VRAM (corrección post-Task 8, ver `task-8-report.md` sección "Correction (fix round)"):** en el path fusionado, el callback de escalado ONNX captura su sesión en un closure ANTES de que el primer `next()` del generador de GMFSS dispare `GpuSessionCoordinator.acquire` para GMFSS en el mismo device — ese `acquire` solo desaloja la ENTRADA de cache del motor ONNX, no el objeto de sesión ya capturado, que sigue vivo (residente en GPU) durante todo el loop fusionado. Neto: en (b) (Fase 1+2 fusionado) ambas sesiones ONNX (las 4 de GMFSS + la del escalador) quedan residentes simultáneamente en VRAM, mientras que en (a) (dos pasadas) el coordinador SÍ alterna una sesión a la vez. Esto es esperado/no es un bug, pero en hardware con poco headroom de VRAM (AMD es la referencia de este proyecto) el benchmark de (b) podría mostrar presión de memoria o un OOM que (a) no muestra — si eso pasa, es la causa raíz esperada, no una regresión nueva a investigar.
+
 - [ ] **Step 2: Documentar**
 
 Agregar los números reales medidos a la documentación de GMFSS en `README.md` (buscar la sección ya agregada en la doc previa de GMFSS — "Cómo activar GMFSS" — y sumar una nota de performance con los números de este benchmark, marcados con el device/hardware donde se midieron).
