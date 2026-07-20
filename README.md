@@ -391,6 +391,8 @@ Medido en RX 7800 XT + Ryzen 9 7900X3D (splat GPU/OpenCL activo, `ENABLE_RAW_PIP
 
 **Resultado real: la fusión midió ~1.7x MÁS LENTA que las dos pasadas en este escenario (4x, salida 8K) — no el "impacto menor pero positivo" que el diseño anticipaba, sino una regresión medida.** Causa más probable: tanto `GmfssEngine.run` como `OnnxVideoUpscaler.run_frames_builtin` (las dos pasadas) usan pipelines con hilos separados para cargar/computar/guardar en paralelo (overlap de I/O de disco con cómputo GPU); el loop fusionado (`_run_fused_frames_blocking`) es un generador secuencial de un solo hilo sin ese overlap. A 8K de salida, el costo de codificar cada PNG deja de superponerse con el cómputo del siguiente frame, y ese costo serializado supera lo que se ahorra al no escribir el PNG intermedio (a resolución fuente, mucho más chico). No se observó ningún OOM/crash en la corrida fusionada (ambas sesiones ONNX -- las 4 de GMFSS + la del escalador -- quedan residentes en VRAM a la vez por diseño de la fusión, ver comentario en `_build_builtin_onnx_upscale_callback`; es un riesgo de memoria conocido que en este hardware/clip no se materializó).
 
+**Dado este resultado, la fusión ahora requiere `ENABLE_INTERP_UPSCALE_FUSION=true` explícito y está deshabilitada por defecto** (`_should_fuse_interpolate_upscale` la gatea primero) — el código sigue completo, probado y disponible para reactivarse una vez entendida/arreglada la regresión.
+
 ## Cómo activar la mejora de audio (DeepFilterNet / RNNoise)
 
 La mejora de audio está deshabilitada por defecto. Para activarla:
