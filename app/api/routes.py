@@ -520,7 +520,13 @@ async def analyze_video(
     safe_name = sanitize_filename(original_name, default="upload.mp4")
     token = uuid4().hex
     destination = settings.uploads_path / f"{token}-{safe_name}"
-    await storage.save_upload(file, destination, max_mb=settings.max_video_upload_mb)
+
+    try:
+        await storage.save_upload(file, destination, max_mb=settings.max_video_upload_mb)
+    except ValueError as exc:
+        if destination.exists():
+            destination.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     probe: dict[str, Any] | None = None
     try:

@@ -100,3 +100,26 @@ def test_analyze_video_returns_500_and_cleans_up_on_unexpected_probe_error(
 
     assert response.status_code == 500
     assert _uploaded_files() == []
+
+
+def test_analyze_video_rejects_oversized_upload(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Create a file that exceeds max_video_upload_mb (default 5000 MB); this will
+    # cause save_upload to raise ValueError. We use BytesIO with seek to avoid memory bloat.
+    oversized = io.BytesIO(b"x" * (100 * 1024 * 1024 + 1))  # 100 MB + 1 byte
+
+    settings = get_settings()
+    original_max = settings.max_video_upload_mb
+    try:
+        # Temporarily set a small limit to trigger the size check without needing 5GB
+        settings.max_video_upload_mb = 0.001  # ~1 KB
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/v1/video/analyze",
+                files={"file": ("huge.mp4", oversized, "video/mp4")},
+            )
+
+        assert response.status_code == 400
+        assert "exceeds" in response.json()["detail"].lower() or "size" in response.json()["detail"].lower()
+        assert _uploaded_files() == []
+    finally:
+        settings.max_video_upload_mb = original_max
