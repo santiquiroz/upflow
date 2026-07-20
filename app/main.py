@@ -45,19 +45,17 @@ async def lifespan(app: FastAPI):
     engine = RealEsrganNcnnEngine(settings)
     media_tools = MediaTools(settings)
     rife_engine = RifeNcnnEngine(settings)
-    gmfss_engine = GmfssEngine(settings)
     audio_enhancers = {mode: AudioEnhancer(settings, mode) for mode in AUDIO_ENHANCE_MODES}
     # Shared across the ONNX-session-caching engines so a device switch
     # between them evicts only the previous owner's entry for that device
-    # (see GpuSessionCoordinator docstring). Tasks 3/4/5 wire the remaining
-    # engines (GmfssEngine, OnnxUpscaler, OnnxVideoUpscaler) into this same
-    # instance.
+    # (see GpuSessionCoordinator docstring).
     gpu_coordinator = GpuSessionCoordinator()
+    gmfss_engine = GmfssEngine(settings, gpu_coordinator)
     restorers = build_restorers(settings, gpu_coordinator)
     devices_service = DevicesService(settings)
     model_registry = ModelRegistry(settings)
-    onnx_engine = OnnxUpscaler(settings, model_registry, devices_service)
-    onnx_video_engine = OnnxVideoUpscaler(settings, model_registry, devices_service)
+    onnx_engine = OnnxUpscaler(settings, model_registry, devices_service, gpu_coordinator)
+    onnx_video_engine = OnnxVideoUpscaler(settings, model_registry, devices_service, gpu_coordinator)
     device_semaphores = DeviceSemaphores(settings)
     # Shared across both managers (like device_semaphores) so an auto-routed
     # image job and an auto-routed video job never pick the same free
