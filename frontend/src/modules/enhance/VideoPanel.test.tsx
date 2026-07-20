@@ -22,6 +22,7 @@ vi.mock("../../lib/api", async (importOriginal) => {
     getDevices: vi.fn(),
     getEngineInfo: vi.fn(),
     getVideoCapabilities: vi.fn(),
+    analyzeVideo: vi.fn(),
     createVideoJob: vi.fn(),
     getVideoJob: vi.fn(),
   };
@@ -119,6 +120,11 @@ function renderPanel(
   vi.mocked(api.getDevices).mockResolvedValue(devices);
   vi.mocked(api.getEngineInfo).mockResolvedValue(ENGINE_INFO);
   vi.mocked(api.getVideoCapabilities).mockResolvedValue({ interpEngines });
+  vi.mocked(api.analyzeVideo).mockResolvedValue({
+    uploadToken: "default-token",
+    audioTracks: [],
+    subtitleTracks: [],
+  });
   vi.mocked(audioService.fetchAudioCapabilities).mockResolvedValue({
     denoiseModes: ["deepfilter", "rnnoise"],
     restoreAvailable,
@@ -151,6 +157,7 @@ afterEach(() => {
   vi.mocked(api.getDevices).mockReset();
   vi.mocked(api.getEngineInfo).mockReset();
   vi.mocked(api.getVideoCapabilities).mockReset();
+  vi.mocked(api.analyzeVideo).mockReset();
   vi.mocked(api.createVideoJob).mockReset();
   vi.mocked(api.getVideoJob).mockReset();
   vi.mocked(audioService.fetchAudioCapabilities).mockReset();
@@ -732,5 +739,79 @@ describe("VideoPanel", () => {
     fireEvent.click(submitButton);
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Video queue is full; try again later");
+  });
+
+  it("calls analyzeVideo when a file is selected, then shows the track selector", async () => {
+    vi.mocked(api.analyzeVideo).mockResolvedValueOnce({
+      uploadToken: "tok123",
+      audioTracks: [{ index: 1, codec: "aac", channels: 2, isDefault: true, language: "jpn" }],
+      subtitleTracks: [{ index: 2, codec: "ass", language: "eng" }],
+    });
+    renderPanel();
+
+    const file = makeFile();
+    const fileInput = document.getElementById("video-file-input") as HTMLInputElement;
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    await screen.findByText(/jpn/i);
+    expect(api.analyzeVideo).toHaveBeenCalledWith(file);
+  });
+
+  it("submits upload_token and selected audio/subtitle choices instead of re-uploading the file", async () => {
+    vi.mocked(api.analyzeVideo).mockResolvedValueOnce({
+      uploadToken: "tok123",
+      audioTracks: [{ index: 1, codec: "aac", channels: 2, isDefault: true, language: "jpn" }],
+      subtitleTracks: [{ index: 2, codec: "ass", language: "eng" }],
+    });
+    vi.mocked(api.createVideoJob).mockResolvedValueOnce({
+      jobId: "job1",
+      status: "queued",
+      statusUrl: "/api/v1/video/jobs/job1",
+      downloadUrl: null,
+    });
+    vi.mocked(api.getVideoJob).mockResolvedValue({
+      jobId: "job1",
+      status: "queued",
+      originalFilename: "clip.mp4",
+      modelName: "realesrgan-x4plus",
+      scale: 4,
+      outputContainer: "mp4",
+      videoCodec: "libx264",
+      videoPreset: "medium",
+      crf: 18,
+      keepAudio: true,
+      fpsMultiplier: 1,
+      targetFps: null,
+      audioEnhance: null,
+      audioRestore: null,
+      interpEngine: "rife",
+      modelId: "realesrgan-x4plus",
+      device: "dml:0",
+      createdAt: "2026-01-01T00:00:00Z",
+      startedAt: null,
+      finishedAt: null,
+      error: null,
+      metadata: {},
+      progressPct: null,
+      downloadUrl: null,
+    });
+
+    renderPanel();
+    const fileInput = document.getElementById("video-file-input") as HTMLInputElement;
+    fireEvent.change(fileInput, { target: { files: [makeFile()] } });
+    await screen.findByText(/jpn/i);
+
+    fireEvent.click(await screen.findByRole("radio", { name: /General Balanced 4x/ }));
+    fireEvent.click(screen.getByLabelText(/subtitle/i));
+
+    const submitButton = await screen.findByRole("button", { name: /upscale video/i });
+    await waitFor(() => expect(submitButton).not.toBeDisabled());
+    fireEvent.click(submitButton);
+
+    await waitFor(() => expect(api.createVideoJob).toHaveBeenCalled());
+    const params = vi.mocked(api.createVideoJob).mock.calls[0][0];
+    expect(params.uploadToken).toBe("tok123");
+    expect(params.keepSubtitles).toBe(true);
+    expect(params.file).toBeUndefined();
   });
 });
