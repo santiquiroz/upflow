@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ApiError,
+  analyzeVideo,
   cancelJob,
   cancelVideoJob,
   createImageJob,
@@ -18,6 +19,7 @@ import {
   searchHfModels,
 } from "./api";
 import type {
+  AnalyzeVideoResponse,
   CreateInstallResponse,
   CreateJobResponse,
   DevicesResponse,
@@ -367,6 +369,92 @@ describe("createVideoJob", () => {
     const call = vi.mocked(fetch).mock.calls[0];
     const body = call[1]?.body as FormData;
     expect(body.get("audio_enhance")).toBe("deepfilter");
+  });
+
+  it("sends upload_token instead of file when uploadToken is set", async () => {
+    mockFetchOnce(
+      { jobId: "vid-6", status: "queued", statusUrl: "/api/v1/video/jobs/vid-6", downloadUrl: null },
+      { status: 202 },
+    );
+
+    await createVideoJob(videoParams({ file: undefined, uploadToken: "tok-abc" }));
+
+    const call = vi.mocked(fetch).mock.calls[0];
+    const body = call[1]?.body as FormData;
+    expect(body.get("upload_token")).toBe("tok-abc");
+    expect(body.has("file")).toBe(false);
+  });
+
+  it("sends audio_track_indices as a CSV string preserving the given order (primary first)", async () => {
+    mockFetchOnce(
+      { jobId: "vid-7", status: "queued", statusUrl: "/api/v1/video/jobs/vid-7", downloadUrl: null },
+      { status: 202 },
+    );
+
+    await createVideoJob(videoParams({ audioTrackIndices: [3, 1] }));
+
+    const call = vi.mocked(fetch).mock.calls[0];
+    const body = call[1]?.body as FormData;
+    expect(body.get("audio_track_indices")).toBe("3,1");
+  });
+
+  it("omits audio_track_indices when the list is empty", async () => {
+    mockFetchOnce(
+      { jobId: "vid-8", status: "queued", statusUrl: "/api/v1/video/jobs/vid-8", downloadUrl: null },
+      { status: 202 },
+    );
+
+    await createVideoJob(videoParams({ audioTrackIndices: [] }));
+
+    const call = vi.mocked(fetch).mock.calls[0];
+    const body = call[1]?.body as FormData;
+    expect(body.has("audio_track_indices")).toBe(false);
+  });
+
+  it("sends keep_subtitles only when true", async () => {
+    mockFetchOnce(
+      { jobId: "vid-9", status: "queued", statusUrl: "/api/v1/video/jobs/vid-9", downloadUrl: null },
+      { status: 202 },
+    );
+
+    await createVideoJob(videoParams({ keepSubtitles: true }));
+
+    const call = vi.mocked(fetch).mock.calls[0];
+    const body = call[1]?.body as FormData;
+    expect(body.get("keep_subtitles")).toBe("true");
+  });
+
+  it("omits keep_subtitles when false", async () => {
+    mockFetchOnce(
+      { jobId: "vid-10", status: "queued", statusUrl: "/api/v1/video/jobs/vid-10", downloadUrl: null },
+      { status: 202 },
+    );
+
+    await createVideoJob(videoParams({ keepSubtitles: false }));
+
+    const call = vi.mocked(fetch).mock.calls[0];
+    const body = call[1]?.body as FormData;
+    expect(body.has("keep_subtitles")).toBe(false);
+  });
+});
+
+describe("analyzeVideo", () => {
+  it("issues a multipart POST to /api/v1/video/analyze with the file and returns the typed payload", async () => {
+    const payload: AnalyzeVideoResponse = {
+      uploadToken: "tok-123",
+      audioTracks: [{ index: 1, codec: "aac", channels: 2, isDefault: true, language: "jpn" }],
+      subtitleTracks: [{ index: 2, codec: "ass", language: "eng" }],
+    };
+    mockFetchOnce(payload);
+    const file = new File(["binary"], "clip.mp4", { type: "video/mp4" });
+
+    const result = await analyzeVideo(file);
+
+    expect(fetch).toHaveBeenCalledWith("/api/v1/video/analyze", expect.objectContaining({ method: "POST" }));
+    const call = vi.mocked(fetch).mock.calls[0];
+    const body = call[1]?.body as FormData;
+    expect(body.get("file")).toBe(file);
+    expect(result).toEqual(payload);
   });
 });
 
