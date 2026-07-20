@@ -682,6 +682,13 @@ class VideoUpscaler:
             next_input_index += 1
         source_input_index = self._maybe_add_source_input(cmd, job, next_input_index)
         if source_input_index is not None:
+            # Any -map switches ffmpeg to explicit-map mode and drops every
+            # unmapped stream -- including the frames video. When audio_mux_path
+            # was present the video map was already emitted above; when it was
+            # not (keep_audio=False + keep_subtitles, or no usable source audio)
+            # it must be emitted here or the output loses its video track.
+            if audio_mux_path is None:
+                cmd += ["-map", "0:v:0"]
             self._map_extra_audio_tracks(cmd, job, source_input_index)
             self._map_subtitles(cmd, job, source_input_index)
         cmd += self._build_video_encode_options(job, encoder)

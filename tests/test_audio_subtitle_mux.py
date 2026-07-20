@@ -129,6 +129,11 @@ def test_maps_subtitles_when_keep_subtitles(tmp_path: Path) -> None:
     assert "1:s?" in cmd
     assert cmd[cmd.index("1:s?") - 1] == "-map"
     assert cmd[cmd.index("-c:s") + 1] == "copy"
+    # CRITICAL: the subtitle -map switches ffmpeg to explicit-map mode; without
+    # an explicit video map the frames stream is dropped and the output has no
+    # video. The video map must be emitted even when audio_mux_path is None.
+    assert "0:v:0" in cmd
+    assert cmd[cmd.index("0:v:0") - 1] == "-map"
 
 
 def test_source_input_added_only_once_for_extra_audio_and_subtitles_together(tmp_path: Path) -> None:
@@ -145,6 +150,9 @@ def test_source_input_added_only_once_for_extra_audio_and_subtitles_together(tmp
     assert cmd.count("-i") == 3  # frames dir, audio_mux_path, source_path -- each exactly once
     assert "2:3" in cmd
     assert "2:s?" in cmd
+    # The video map must appear exactly once here -- emitted with the audio_mux
+    # input, never double-emitted by the source-input branch.
+    assert cmd.count("0:v:0") == 1
 
 
 # ---------------------------------------------------------------------------
@@ -411,4 +419,94 @@ async def test_wav_extraction_without_track_indices_is_byte_identical(tmp_path: 
         "-ar",
         "48000",
         str(audio_wav_path),
+    ]
+
+
+# ---------------------------------------------------------------------------
+# CRITICAL (fix round 2): video-stream loss. Task 3 added extra-audio/subtitle
+# maps gated by _needs_source_input, which fires INDEPENDENTLY of audio_mux_path
+# (e.g. keep_audio=False + keep_subtitles=True, or a source whose primary audio
+# is an unusable codec). Any -map puts ffmpeg in explicit-map mode and drops
+# every unmapped stream -- so without an explicit video map the frames stream
+# is silently dropped and the output has no video track. The video map must be
+# present in EVERY explicit-map branch, and emitted exactly once.
+# ---------------------------------------------------------------------------
+
+
+def test_subtitles_only_without_audio_mux_still_maps_video(tmp_path: Path) -> None:
+    # keep_audio=False-equivalent: no audio_mux_path, subtitles requested.
+    upscaler = make_upscaler(tmp_path)
+    source_path = tmp_path / "source.mkv"
+    job = make_video_job(source_path, audio_track_indices=None, keep_subtitles=True, keep_audio=False)
+
+    cmd = upscaler._build_encode_command(
+        job, tmp_path / "frames-out", "24/1", None, [], tmp_path / "out.mkv", "libx264"
+    )
+
+    assert cmd.count("0:v:0") == 1
+    assert cmd[cmd.index("0:v:0") - 1] == "-map"
+    # Video must be mapped BEFORE the subtitle stream so it stays output 0.
+    assert cmd.index("0:v:0") < cmd.index("1:s?")
+
+
+def test_extra_audio_only_without_audio_mux_still_maps_video(tmp_path: Path) -> None:
+    # audio_mux_path=None while extra tracks are requested (e.g. the primary's
+    # codec was unusable so no mux file was produced) -- the source-input branch
+    # still fires and must carry the video map.
+    upscaler = make_upscaler(tmp_path)
+    source_path = tmp_path / "source.mkv"
+    job = make_video_job(source_path, audio_track_indices=[1, 3], keep_subtitles=False)
+
+    cmd = upscaler._build_encode_command(
+        job, tmp_path / "frames-out", "24/1", None, [], tmp_path / "out.mkv", "libx264"
+    )
+
+    assert cmd.count("0:v:0") == 1
+    assert cmd[cmd.index("0:v:0") - 1] == "-map"
+    # source is input 1 (no audio_mux consumed index 1), extra audio mapped 1:3.
+    assert "1:3" in cmd
+    assert cmd.index("0:v:0") < cmd.index("1:3")
+
+
+def test_audio_present_with_source_maps_video_exactly_once_byte_identical(tmp_path: Path) -> None:
+    # Regression guard: audio_mux_path present AND source input needed. The
+    # video map is emitted exactly once (with the audio input), never doubled by
+    # the source-input branch. Full byte-for-byte assertion.
+    upscaler = make_upscaler(tmp_path)
+    source_path = tmp_path / "source.mkv"
+    job = make_video_job(source_path, audio_track_indices=[1, 3], keep_subtitles=True)
+    audio_mux_path = make_audio_mux(tmp_path)
+
+    cmd = upscaler._build_encode_command(
+        job, tmp_path / "frames-out", "24/1", audio_mux_path, ["-c:a", "copy"], tmp_path / "out.mkv", "libx264"
+    )
+
+    assert cmd.count("0:v:0") == 1
+    assert cmd == [
+        str(upscaler.settings.ffmpeg_binary_path),
+        "-y",
+        "-framerate",
+        "24/1",
+        "-i",
+        str(tmp_path / "frames-out" / "%08d.png"),
+        "-i",
+        str(audio_mux_path),
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-i",
+        str(source_path),
+        "-map",
+        "2:3",
+        "-map",
+        "2:s?",
+        *upscaler._build_video_encode_options(job, "libx264"),
+        "-c:a",
+        "copy",
+        "-c:a:1",
+        "copy",
+        "-c:s",
+        "copy",
+        str(tmp_path / "out.mkv"),
     ]
