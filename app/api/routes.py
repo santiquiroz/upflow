@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import subprocess
 from pathlib import Path
 from typing import Any, NamedTuple
 from uuid import uuid4
@@ -21,8 +22,10 @@ from app.config import (
 from app.exceptions import ModelNotFoundError, ModelProtectedError, QueueFullError
 from app.models import AudioJob, JobStatus, UpdateStatus, UpscaleJob, VideoUpscaleJob
 from app.schemas import (
+    AnalyzeVideoResponse,
     AudioCapabilitiesResponse,
     AudioJobResponse,
+    AudioTrackResponse,
     CreateInstallResponse,
     CreateJobResponse,
     DeviceInfoResponse,
@@ -36,6 +39,7 @@ from app.schemas import (
     ModelResponse,
     ModelSearchResponse,
     ModelsResponse,
+    SubtitleTrackResponse,
     SupportedModelResponse,
     UpdateCheckResponse,
     VideoCapabilitiesResponse,
@@ -46,9 +50,11 @@ from app.services.audio_job_manager import AudioJobManager
 from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
 from app.services.hf_client import HfClient
 from app.services.job_manager import JobManager
+from app.services.media_tools import MediaTools
 from app.services.model_installer import ModelInstaller
 from app.services.model_registry import ModelEntry, ModelRegistry
 from app.services.storage import StorageService
+from app.services.stream_analysis import parse_audio_tracks, parse_subtitle_tracks
 from app.services.update_service import UpdateService
 from app.services.video_job_manager import VideoJobManager
 
@@ -150,6 +156,10 @@ def get_audio_job_manager(request: Request) -> AudioJobManager:
 
 def get_storage(request: Request) -> StorageService:
     return request.app.state.storage
+
+
+def get_media_tools(request: Request) -> MediaTools:
+    return request.app.state.media_tools
 
 
 def get_devices_service(request: Request) -> DevicesService:
@@ -496,6 +506,41 @@ async def create_video_job(
         status=job.status,
         status_url=f"/api/v1/video/jobs/{job.id}",
         download_url=None,
+    )
+
+
+@router.post("/video/analyze", response_model=AnalyzeVideoResponse)
+async def analyze_video(
+    file: UploadFile = File(...),
+    storage: StorageService = Depends(get_storage),
+    settings: Settings = Depends(get_settings),
+    media_tools: MediaTools = Depends(get_media_tools),
+) -> AnalyzeVideoResponse:
+    original_name = Path(file.filename or "upload.mp4").name
+    safe_name = sanitize_filename(original_name, default="upload.mp4")
+    token = uuid4().hex
+    destination = settings.uploads_path / f"{token}-{safe_name}"
+    await storage.save_upload(file, destination)
+
+    try:
+        probe = await media_tools.ffprobe_json(destination)
+    except subprocess.CalledProcessError as exc:
+        destination.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail="Uploaded file is not a valid video") from exc
+
+    audio_tracks = parse_audio_tracks(probe)
+    subtitle_tracks = parse_subtitle_tracks(probe)
+    return AnalyzeVideoResponse(
+        upload_token=token,
+        audio_tracks=[
+            AudioTrackResponse(
+                index=t.index, codec=t.codec, channels=t.channels, is_default=t.is_default, language=t.language
+            )
+            for t in audio_tracks
+        ],
+        subtitle_tracks=[
+            SubtitleTrackResponse(index=t.index, codec=t.codec, language=t.language) for t in subtitle_tracks
+        ],
     )
 
 

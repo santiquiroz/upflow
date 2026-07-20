@@ -85,6 +85,26 @@ class VideoCapabilitiesResponse(BaseModel):
     interp_engines: list[str] = Field(default_factory=list, serialization_alias="interpEngines")
 
 
+class AudioTrackResponse(BaseModel):
+    index: int
+    codec: str
+    channels: int
+    is_default: bool = Field(serialization_alias="isDefault")
+    language: str | None = None
+
+
+class SubtitleTrackResponse(BaseModel):
+    index: int
+    codec: str
+    language: str | None = None
+
+
+class AnalyzeVideoResponse(BaseModel):
+    upload_token: str = Field(serialization_alias="uploadToken")
+    audio_tracks: list[AudioTrackResponse] = Field(serialization_alias="audioTracks")
+    subtitle_tracks: list[SubtitleTrackResponse] = Field(serialization_alias="subtitleTracks")
+
+
 class SupportedModelResponse(BaseModel):
     key: str
     label: str
