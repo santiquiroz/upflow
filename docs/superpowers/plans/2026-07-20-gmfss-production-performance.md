@@ -671,17 +671,19 @@ git commit -m "Aplicacion: fusiona interpolar+escalar cuando GMFSS+ONNX corren i
 **Files:**
 - Modify: `README.md` (o el doc de performance que ya exista para GMFSS en este repo)
 
-- [ ] **Step 1: Medir real, Fase 1 sola vs Fase 1+2**
+- [x] **Step 1: Medir real, Fase 1 sola vs Fase 1+2**
 
 Con el server de desarrollo, mismo clip corto, mismo device, medir fps de la etapa `interpolating_frames`+`upscaling_frames` combinadas: (a) con Fase 1 aplicada pero SIN Fase 2 (dos pasadas), (b) con Fase 1+2 (fusionado). Reportar el número real — puede ser una mejora chica, no forzar ni redondear favorablemente.
 
 **Nota de VRAM (corrección post-Task 8, ver `task-8-report.md` sección "Correction (fix round)"):** en el path fusionado, el callback de escalado ONNX captura su sesión en un closure ANTES de que el primer `next()` del generador de GMFSS dispare `GpuSessionCoordinator.acquire` para GMFSS en el mismo device — ese `acquire` solo desaloja la ENTRADA de cache del motor ONNX, no el objeto de sesión ya capturado, que sigue vivo (residente en GPU) durante todo el loop fusionado. Neto: en (b) (Fase 1+2 fusionado) ambas sesiones ONNX (las 4 de GMFSS + la del escalador) quedan residentes simultáneamente en VRAM, mientras que en (a) (dos pasadas) el coordinador SÍ alterna una sesión a la vez. Esto es esperado/no es un bug, pero en hardware con poco headroom de VRAM (AMD es la referencia de este proyecto) el benchmark de (b) podría mostrar presión de memoria o un OOM que (a) no muestra — si eso pasa, es la causa raíz esperada, no una regresión nueva a investigar.
 
-- [ ] **Step 2: Documentar**
+**Resultado real (2026-07-20, RX 7800 XT + Ryzen 9 7900X3D):** sin flag para forzar dos-pasadas en runtime, se parcheó temporalmente `_should_fuse_interpolate_upscale` (`app/services/video_upscaler.py`) para devolver `False`, se corrió el job de control (dos pasadas), se revirtió el parche (`git checkout`, confirmado sin diff) y se corrió el mismo job sobre el código real (fusionado) en un server recién reiniciado. Mismo clip sintético (1920x1080, 24fps, 2s, 48 frames), perfil `general-balanced-4x` (escala 4x → salida 7680x4320), `interp_engine=gmfss`, `fps_multiplier=2`, `backend=onnx`, `keep_audio=false`, `ENABLE_RAW_PIPE=false` (para no mezclar con el path de streaming crudo, que solo intentó y falló en la corrida de control con raw-pipe habilitado, contaminando esa medición con un reintento completo). Medido con los `stageStartedAt` propios del job: **dos pasadas ≈ 1104-1113s (≈0.086 fps) para las 96 frames interpolar+escalar combinadas; fusionado ≈ 1858-1872s (≈0.051 fps) para las mismas 96 frames.** La fusión midió **~1.7x MÁS LENTA que las dos pasadas, no más rápida** — contrario a la expectativa de "impacto menor pero positivo" de este diseño. Causa más probable (no verificada más a fondo): las dos pasadas usan pipelines con hilos separados para cargar/computar/guardar en paralelo (`GmfssEngine.run`, `OnnxVideoUpscaler.run_frames_builtin`), mientras que el loop fusionado (`_run_fused_frames_blocking`, Task 7/8) es un generador secuencial de un solo hilo — a 8K de salida, el costo de codificar cada PNG deja de superponerse con el cómputo GPU del siguiente frame, y ese costo serializado supera lo que se ahorra al no escribir el PNG intermedio. No se observó OOM/crash en ninguna corrida (grep de ambos logs de uvicorn por señales de OOM/tiling/warning: cero coincidencias) — el riesgo de VRAM señalado arriba no se materializó en este hardware/clip; el hallazgo es de throughput/pipelining, no de memoria. Detalle completo, incluyendo los bounds de incertidumbre de polling (~9-20s sobre totales de ~1100-1870s, <1% relativo): `task-9-report.md`.
+
+- [x] **Step 2: Documentar**
 
 Agregar los números reales medidos a la documentación de GMFSS en `README.md` (buscar la sección ya agregada en la doc previa de GMFSS — "Cómo activar GMFSS" — y sumar una nota de performance con los números de este benchmark, marcados con el device/hardware donde se midieron).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add README.md
