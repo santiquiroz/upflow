@@ -12,6 +12,7 @@ import numpy as np
 
 from app.config import Settings
 from app.services.engines.onnx_upscaler import _build_providers, _wrap_onnx_error
+from app.services.gpu_session_coordinator import GpuSessionCoordinator
 
 # ---------------------------------------------------------------------------
 # Apollo audio restoration (ONNX, in-process). Reconstructs the high band a
@@ -43,13 +44,18 @@ ONNX_OUTPUT_NAME = "restored"
 
 
 class ApolloRestorer:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, gpu_coordinator: GpuSessionCoordinator) -> None:
         self.settings = settings
+        self.gpu_coordinator = gpu_coordinator
         self._session_cache: OrderedDict[str, Any] = OrderedDict()
         self._session_lock = threading.Lock()
 
     def available(self) -> bool:
         return self.settings.audio_restore_available()
+
+    def release_device(self, device: str) -> None:
+        with self._session_lock:
+            self._session_cache.pop(device, None)
 
     async def run(self, input_wav: Path, output_wav: Path, device: str) -> None:
         # available()/session build/inference all touch native libraries
@@ -119,6 +125,7 @@ class ApolloRestorer:
         return np.asarray(result, dtype=np.float64).reshape(-1)
 
     def _get_session(self, device: str) -> Any:
+        self.gpu_coordinator.acquire(device, self)
         with self._session_lock:
             cached = self._session_cache.get(device)
             if cached is not None:

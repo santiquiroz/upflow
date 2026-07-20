@@ -15,6 +15,7 @@ from app.services.audio_pipeline import AudioPipeline
 from app.services.device_router import DeviceRouter
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.devices_service import DevicesService
+from app.services.gpu_session_coordinator import GpuSessionCoordinator
 from app.services.restorer_registry import build_restorers
 from app.services.engines.audio_enhance import AudioEnhancer
 from app.services.engines.gmfss_engine import GmfssEngine
@@ -46,7 +47,13 @@ async def lifespan(app: FastAPI):
     rife_engine = RifeNcnnEngine(settings)
     gmfss_engine = GmfssEngine(settings)
     audio_enhancers = {mode: AudioEnhancer(settings, mode) for mode in AUDIO_ENHANCE_MODES}
-    restorers = build_restorers(settings)
+    # Shared across the ONNX-session-caching engines so a device switch
+    # between them evicts only the previous owner's entry for that device
+    # (see GpuSessionCoordinator docstring). Tasks 3/4/5 wire the remaining
+    # engines (GmfssEngine, OnnxUpscaler, OnnxVideoUpscaler) into this same
+    # instance.
+    gpu_coordinator = GpuSessionCoordinator()
+    restorers = build_restorers(settings, gpu_coordinator)
     devices_service = DevicesService(settings)
     model_registry = ModelRegistry(settings)
     onnx_engine = OnnxUpscaler(settings, model_registry, devices_service)

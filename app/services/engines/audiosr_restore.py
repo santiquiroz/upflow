@@ -15,6 +15,7 @@ from app.config import Settings
 from app.services.engines.audiosr.assets import GRAPH_NAMES, AudioSrAssets
 from app.services.engines.audiosr.driver import AudioSrDriver
 from app.services.engines.onnx_upscaler import _build_providers, _wrap_onnx_error
+from app.services.gpu_session_coordinator import GpuSessionCoordinator
 
 # ---------------------------------------------------------------------------
 # AudioSR restoration (ONNX, in-process). Second restore engine next to
@@ -35,13 +36,18 @@ AUDIOSR_SAMPLE_RATE = 48000
 
 
 class AudioSrRestorer:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, gpu_coordinator: GpuSessionCoordinator) -> None:
         self.settings = settings
+        self.gpu_coordinator = gpu_coordinator
         self._session_cache: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._session_lock = threading.Lock()
 
     def available(self) -> bool:
         return self.settings.audiosr_available()
+
+    def release_device(self, device: str) -> None:
+        with self._session_lock:
+            self._session_cache.pop(device, None)
 
     async def run(self, input_wav: Path, output_wav: Path, device: str) -> None:
         cancel_event = threading.Event()
@@ -89,6 +95,7 @@ class AudioSrRestorer:
         _save_wav(output_wav, restored)
 
     def _get_sessions(self, device: str) -> dict[str, Any]:
+        self.gpu_coordinator.acquire(device, self)
         with self._session_lock:
             cached = self._session_cache.get(device)
             if cached is not None:

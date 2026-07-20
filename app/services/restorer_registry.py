@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Protocol
 
 from app.config import APOLLO_MODE, AUDIOSR_MODE, Settings
+from app.services.gpu_session_coordinator import GpuSessionCoordinator
 
 
 class AudioRestorer(Protocol):
@@ -42,11 +43,11 @@ def validate_restore_mode_ready(settings: Settings, mode: str) -> None:
     raise ValueError(f"Unknown restore mode: {mode!r}")
 
 
-def build_restorers(settings: Settings) -> dict[str, AudioRestorer]:
+def build_restorers(settings: Settings, gpu_coordinator: GpuSessionCoordinator) -> dict[str, AudioRestorer]:
     from app.services.engines.apollo_restore import ApolloRestorer
     from app.services.engines.audiosr_restore import AudioSrRestorer
 
     return {
-        APOLLO_MODE: ApolloRestorer(settings),
-        AUDIOSR_MODE: AudioSrRestorer(settings),
+        APOLLO_MODE: ApolloRestorer(settings, gpu_coordinator),
+        AUDIOSR_MODE: AudioSrRestorer(settings, gpu_coordinator),
     }

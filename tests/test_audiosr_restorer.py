@@ -11,6 +11,7 @@ import soundfile as sf
 
 from app.config import Settings
 from app.services.engines.audiosr_restore import AudioSrRestorer
+from app.services.gpu_session_coordinator import GpuSessionCoordinator
 from app.services.restorer_registry import build_restorers, validate_restore_mode_ready
 
 # ---------------------------------------------------------------------------
@@ -77,12 +78,12 @@ def write_input_wav(path: Path, seconds: float = 1.0, rate: int = 44100) -> None
 
 
 def test_available_follows_settings_gate(tmp_path: Path) -> None:
-    assert AudioSrRestorer(make_settings(tmp_path, enabled=True)).available() is True
-    assert AudioSrRestorer(make_settings(tmp_path / "off", enabled=False)).available() is False
+    assert AudioSrRestorer(make_settings(tmp_path, enabled=True), GpuSessionCoordinator()).available() is True
+    assert AudioSrRestorer(make_settings(tmp_path / "off", enabled=False), GpuSessionCoordinator()).available() is False
 
 
 def test_run_produces_48k_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    restorer = AudioSrRestorer(make_settings(tmp_path))
+    restorer = AudioSrRestorer(make_settings(tmp_path), GpuSessionCoordinator())
     monkeypatch.setattr(restorer, "_create_sessions", fake_sessions)
     input_wav = tmp_path / "in.wav"
     output_wav = tmp_path / "out.wav"
@@ -96,7 +97,7 @@ def test_run_produces_48k_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 
 
 def test_run_when_unavailable_raises_actionable_error(tmp_path: Path) -> None:
-    restorer = AudioSrRestorer(make_settings(tmp_path, enabled=False))
+    restorer = AudioSrRestorer(make_settings(tmp_path, enabled=False), GpuSessionCoordinator())
     input_wav = tmp_path / "in.wav"
     write_input_wav(input_wav)
 
@@ -105,7 +106,7 @@ def test_run_when_unavailable_raises_actionable_error(tmp_path: Path) -> None:
 
 
 def test_session_cache_keeps_single_device(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    restorer = AudioSrRestorer(make_settings(tmp_path))
+    restorer = AudioSrRestorer(make_settings(tmp_path), GpuSessionCoordinator())
     built: list[str] = []
 
     def tracking_sessions(device: str) -> dict[str, Any]:
@@ -124,7 +125,7 @@ def test_session_cache_keeps_single_device(tmp_path: Path, monkeypatch: pytest.M
 
 
 def test_build_restorers_registers_both_engines(tmp_path: Path) -> None:
-    restorers = build_restorers(make_settings(tmp_path))
+    restorers = build_restorers(make_settings(tmp_path), GpuSessionCoordinator())
 
     assert set(restorers) == {"apollo", "audiosr"}
 
@@ -138,7 +139,7 @@ def test_cancel_waits_for_worker_thread_before_reraising(
     import threading
     import time
 
-    restorer = AudioSrRestorer(make_settings(tmp_path))
+    restorer = AudioSrRestorer(make_settings(tmp_path), GpuSessionCoordinator())
     worker_finished = threading.Event()
 
     def slow_worker(input_wav: Path, output_wav: Path, device: str, cancel_event: threading.Event) -> None:
@@ -162,7 +163,7 @@ def test_cancel_waits_for_worker_thread_before_reraising(
 def test_zero_sample_audio_raises_actionable_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    restorer = AudioSrRestorer(make_settings(tmp_path))
+    restorer = AudioSrRestorer(make_settings(tmp_path), GpuSessionCoordinator())
     monkeypatch.setattr(restorer, "_create_sessions", fake_sessions)
     empty_wav = tmp_path / "empty.wav"
     sf.write(str(empty_wav), np.zeros(0, dtype=np.float32), 48000)
@@ -184,3 +185,40 @@ def test_validate_restore_mode_ready_messages(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="Unknown restore mode"):
         validate_restore_mode_ready(disabled, "nope")
+
+
+# ---------------------------------------------------------------------------
+# GpuSessionCoordinator wiring (Fase 1 Task 2) - release_device evicts only
+# its own device's cache entry, acquire() runs before any session is built.
+# ---------------------------------------------------------------------------
+
+
+def test_release_device_clears_cached_session_for_that_device_only(tmp_path: Path) -> None:
+    restorer = AudioSrRestorer(make_settings(tmp_path), GpuSessionCoordinator())
+    restorer._session_cache["dml:0"] = {"fake": "session"}
+    restorer._session_cache["dml:1"] = {"fake": "session-1"}
+
+    restorer.release_device("dml:0")
+
+    assert "dml:0" not in restorer._session_cache
+    assert "dml:1" in restorer._session_cache
+
+
+def test_release_device_on_empty_cache_is_a_noop(tmp_path: Path) -> None:
+    restorer = AudioSrRestorer(make_settings(tmp_path), GpuSessionCoordinator())
+
+    restorer.release_device("dml:0")  # no debe lanzar
+
+
+def test_get_sessions_calls_coordinator_acquire_before_creating(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gpu_coordinator = GpuSessionCoordinator()
+    restorer = AudioSrRestorer(make_settings(tmp_path), gpu_coordinator)
+    calls: list[tuple[str, Any]] = []
+    monkeypatch.setattr(gpu_coordinator, "acquire", lambda device, owner: calls.append((device, owner)))
+    monkeypatch.setattr(restorer, "_create_sessions", lambda device: {"fake": "session"})
+
+    restorer._get_sessions("dml:0")
+
+    assert calls == [("dml:0", restorer)]
