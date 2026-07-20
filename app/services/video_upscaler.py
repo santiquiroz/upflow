@@ -333,6 +333,7 @@ class VideoUpscaler:
                 "-y",
                 "-i",
                 str(job.source_path),
+                *self._primary_audio_map_args(job),
                 "-vn",
                 "-c:a",
                 "aac",
@@ -374,6 +375,7 @@ class VideoUpscaler:
                 "-y",
                 "-i",
                 str(job.source_path),
+                *self._primary_audio_map_args(job),
                 "-vn",
                 "-acodec",
                 "pcm_s16le",
@@ -685,18 +687,52 @@ class VideoUpscaler:
         cmd += self._build_video_encode_options(job, encoder)
         if audio_mux_path is not None:
             cmd += audio_codec_args
+            cmd += self._extra_audio_copy_args(job)
         if job.keep_subtitles:
             cmd += ["-c:s", "copy"]
         cmd.append(str(output_path))
         return cmd
 
+    def _extra_audio_copy_args(self, job: VideoUpscaleJob) -> list[str]:
+        # audio_codec_args uses the unindexed "-c:a" specifier, which applies
+        # to EVERY output audio stream. The extras were mapped raw from the
+        # source and must be copied verbatim (enhance/restore only ever touches
+        # the primary). A per-output-position "-c:a:<pos> copy" overrides the
+        # general codec for that stream; ffmpeg resolves conflicting codec
+        # specifiers as "last match wins", so these MUST come after
+        # audio_codec_args. Output audio 0 is the primary (from audio_mux_path);
+        # the extras occupy positions 1..N in the same order they were mapped.
+        args: list[str] = []
+        for position, _ in enumerate(self._extra_audio_track_indices(job), start=1):
+            args += [f"-c:a:{position}", "copy"]
+        return args
+
+    def _primary_audio_track_index(self, job: VideoUpscaleJob) -> int | None:
+        # The PRIMARY track is the first of the selected list; it is extracted
+        # (and enhanced/restored/copied) into audio_mux_path separately, and is
+        # mapped into the extraction ffmpeg command by this ABSOLUTE index.
+        if not job.audio_track_indices:
+            return None
+        return job.audio_track_indices[0]
+
+    def _primary_audio_map_args(self, job: VideoUpscaleJob) -> list[str]:
+        # Absolute ffprobe stream index (e.g. "0:3"), never the relative
+        # "0:a:N" form -- audio_track_indices stores absolute stream indices,
+        # so an audio-relative specifier would select the wrong stream.
+        index = self._primary_audio_track_index(job)
+        if index is None:
+            return []
+        return ["-map", f"0:{index}"]
+
     def _extra_audio_track_indices(self, job: VideoUpscaleJob) -> list[int]:
-        # The PRIMARY track (index 0 of the list) is already covered by
-        # audio_mux_path -- it went through enhance/restore/copy separately.
-        # Only a SECOND-or-later selected track counts as "extra" here.
+        # The PRIMARY track (audio_track_indices[0]) is muxed separately via
+        # audio_mux_path (extracted by absolute index in the extraction step).
+        # The extras are every OTHER selected track; a repeat of the primary
+        # later in the list is dropped so the same stream is never mapped twice.
         if not job.audio_track_indices or len(job.audio_track_indices) <= 1:
             return []
-        return job.audio_track_indices[1:]
+        primary = job.audio_track_indices[0]
+        return [index for index in job.audio_track_indices[1:] if index != primary]
 
     def _needs_source_input(self, job: VideoUpscaleJob) -> bool:
         return bool(self._extra_audio_track_indices(job)) or job.keep_subtitles

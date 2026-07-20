@@ -194,3 +194,221 @@ def test_no_audio_no_subtitles_no_extra_source_input(tmp_path: Path) -> None:
 
     assert str(source_path) not in cmd
     assert "-c:s" not in cmd
+
+
+# ---------------------------------------------------------------------------
+# Reviewer finding 1 (CRITICAL): the general "-c:a <codec>" applies to EVERY
+# output audio stream. When enhance/restore re-encodes the primary, the extra
+# tracks must NOT be dragged along -- they were mapped raw from the source and
+# must be copied verbatim. A per-output-position "-c:a:<pos> copy" (emitted
+# AFTER the general codec so ffmpeg's last-match-wins resolution keeps it) must
+# override the general codec for each extra, while the primary keeps the codec.
+# ---------------------------------------------------------------------------
+
+
+def _positions_of(cmd: list[str], needle: str) -> list[int]:
+    return [i for i, token in enumerate(cmd) if token == needle]
+
+
+def test_extra_audio_tracks_are_copied_while_primary_is_reencoded(tmp_path: Path) -> None:
+    upscaler = make_upscaler(tmp_path)
+    source_path = tmp_path / "source.mkv"
+    # audio_restore/enhance active -> primary re-encoded to AAC 192k. Extra
+    # track (absolute stream 2) must stay copy, not be transcoded.
+    job = make_video_job(source_path, audio_track_indices=[1, 2], keep_subtitles=False)
+    audio_mux_path = make_audio_mux(tmp_path)
+
+    cmd = upscaler._build_encode_command(
+        job,
+        tmp_path / "frames-out",
+        "24/1",
+        audio_mux_path,
+        ["-c:a", "aac", "-b:a", "192k"],
+        tmp_path / "out.mkv",
+        "libx264",
+    )
+
+    # The extra (output audio position 1) is overridden to copy...
+    assert "-c:a:1" in cmd
+    assert cmd[cmd.index("-c:a:1") + 1] == "copy"
+    # ...and the general aac (primary, output audio 0) is emitted BEFORE the
+    # per-position override so ffmpeg's last-match-wins keeps copy for the extra
+    # while output audio 0 stays aac.
+    general_ca = _positions_of(cmd, "-c:a")
+    assert general_ca, "primary must still receive the general -c:a aac"
+    assert min(general_ca) < cmd.index("-c:a:1")
+    assert cmd[min(general_ca) + 1] == "aac"
+    # Only one extra -> exactly one per-position override, no "-c:a:2".
+    assert "-c:a:2" not in cmd
+
+
+def test_two_extra_audio_tracks_each_get_a_copy_override(tmp_path: Path) -> None:
+    upscaler = make_upscaler(tmp_path)
+    source_path = tmp_path / "source.mkv"
+    job = make_video_job(source_path, audio_track_indices=[1, 2, 3], keep_subtitles=False)
+    audio_mux_path = make_audio_mux(tmp_path)
+
+    cmd = upscaler._build_encode_command(
+        job,
+        tmp_path / "frames-out",
+        "24/1",
+        audio_mux_path,
+        ["-c:a", "aac", "-b:a", "192k"],
+        tmp_path / "out.mkv",
+        "libx264",
+    )
+
+    assert cmd[cmd.index("-c:a:1") + 1] == "copy"
+    assert cmd[cmd.index("-c:a:2") + 1] == "copy"
+    assert "-c:a:3" not in cmd
+
+
+def test_no_extra_tracks_emits_no_per_position_copy(tmp_path: Path) -> None:
+    upscaler = make_upscaler(tmp_path)
+    source_path = tmp_path / "source.mkv"
+    job = make_video_job(source_path, audio_track_indices=[1], keep_subtitles=False)
+    audio_mux_path = make_audio_mux(tmp_path)
+
+    cmd = upscaler._build_encode_command(
+        job,
+        tmp_path / "frames-out",
+        "24/1",
+        audio_mux_path,
+        ["-c:a", "aac", "-b:a", "192k"],
+        tmp_path / "out.mkv",
+        "libx264",
+    )
+
+    assert "-c:a:1" not in cmd
+
+
+# ---------------------------------------------------------------------------
+# Reviewer finding 3 (IMPORTANT): a duplicate index (CSV-parsed with no dedup
+# at the route) must not map the primary stream twice -- once as primary, once
+# as extra.
+# ---------------------------------------------------------------------------
+
+
+def test_duplicate_primary_index_is_not_mapped_twice(tmp_path: Path) -> None:
+    upscaler = make_upscaler(tmp_path)
+    source_path = tmp_path / "source.mkv"
+    # [1, 2, 1]: 1 is primary (via audio_mux_path), 2 is the only real extra;
+    # the trailing 1 must be dropped, not re-mapped as an extra.
+    job = make_video_job(source_path, audio_track_indices=[1, 2, 1], keep_subtitles=False)
+    audio_mux_path = make_audio_mux(tmp_path)
+
+    cmd = upscaler._build_encode_command(
+        job,
+        tmp_path / "frames-out",
+        "24/1",
+        audio_mux_path,
+        ["-c:a", "aac", "-b:a", "192k"],
+        tmp_path / "out.mkv",
+        "libx264",
+    )
+
+    assert upscaler._extra_audio_track_indices(job) == [2]
+    # stream 1 is only ever the primary (never mapped as an extra "2:1")
+    assert "2:1" not in cmd
+    assert "2:2" in cmd
+    # exactly one extra -> exactly one per-position copy override
+    assert "-c:a:1" in cmd
+    assert "-c:a:2" not in cmd
+
+
+# ---------------------------------------------------------------------------
+# Reviewer finding 2 (IMPORTANT): the user's chosen PRIMARY track must be
+# selected explicitly in the extraction step. Without -map, ffmpeg picks its
+# own default stream and ignores the user's choice.
+# ---------------------------------------------------------------------------
+
+
+class _CapturingUpscaler(VideoUpscaler):
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)  # type: ignore[arg-type]
+        self.commands: list[list[str]] = []
+
+    async def _run_process(self, command: list[str]) -> None:
+        self.commands.append(list(command))
+
+
+def make_capturing_upscaler(tmp_path: Path) -> _CapturingUpscaler:
+    settings = Settings(_env_file=None, RUNTIME_DIR=str(tmp_path / "runtime"))
+    return _CapturingUpscaler(settings, _FakeEngine(), _FakeMediaTools())
+
+
+async def test_single_index_maps_primary_stream_explicitly_in_extraction(tmp_path: Path) -> None:
+    upscaler = make_capturing_upscaler(tmp_path)
+    source_path = tmp_path / "source.mkv"
+    source_path.write_bytes(b"fake")
+    job = make_video_job(source_path, audio_track_indices=[3], keep_subtitles=False)
+
+    await upscaler._prepare_original_audio(job, tmp_path / "audio.m4a")
+
+    cmd = upscaler.commands[-1]
+    assert "-map" in cmd
+    # ABSOLUTE index, mapped right after the source input, never "0:a:3".
+    map_idx = cmd.index("-map")
+    assert cmd[map_idx + 1] == "0:3"
+    assert "0:a:3" not in cmd
+    assert cmd[cmd.index(str(source_path)) - 1] == "-i"
+    assert cmd.index(str(source_path)) < map_idx
+
+
+async def test_single_index_maps_primary_stream_explicitly_in_wav_extraction(tmp_path: Path) -> None:
+    upscaler = make_capturing_upscaler(tmp_path)
+    source_path = tmp_path / "source.mkv"
+    source_path.write_bytes(b"fake")
+    job = make_video_job(source_path, audio_track_indices=[3], keep_subtitles=False)
+
+    await upscaler._extract_audio_wav(job, tmp_path / "audio.wav")
+
+    cmd = upscaler.commands[-1]
+    assert cmd[cmd.index("-map") + 1] == "0:3"
+    assert "pcm_s16le" in cmd
+
+
+async def test_extraction_without_track_indices_is_byte_identical(tmp_path: Path) -> None:
+    upscaler = make_capturing_upscaler(tmp_path)
+    source_path = tmp_path / "source.mkv"
+    source_path.write_bytes(b"fake")
+    job = make_video_job(source_path, audio_track_indices=None, keep_subtitles=False)
+    audio_path = tmp_path / "audio.m4a"
+
+    await upscaler._prepare_original_audio(job, audio_path)
+
+    assert upscaler.commands[-1] == [
+        str(upscaler.settings.ffmpeg_binary_path),
+        "-y",
+        "-i",
+        str(source_path),
+        "-vn",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        str(audio_path),
+    ]
+
+
+async def test_wav_extraction_without_track_indices_is_byte_identical(tmp_path: Path) -> None:
+    upscaler = make_capturing_upscaler(tmp_path)
+    source_path = tmp_path / "source.mkv"
+    source_path.write_bytes(b"fake")
+    job = make_video_job(source_path, audio_track_indices=None, keep_subtitles=False)
+    audio_wav_path = tmp_path / "audio.wav"
+
+    await upscaler._extract_audio_wav(job, audio_wav_path)
+
+    assert upscaler.commands[-1] == [
+        str(upscaler.settings.ffmpeg_binary_path),
+        "-y",
+        "-i",
+        str(source_path),
+        "-vn",
+        "-acodec",
+        "pcm_s16le",
+        "-ar",
+        "48000",
+        str(audio_wav_path),
+    ]
