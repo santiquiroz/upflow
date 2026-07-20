@@ -281,6 +281,104 @@ async def test_run_raises_when_source_frame_count_mismatches_directory(
 
 
 # ---------------------------------------------------------------------------
+# run_frames_fused (Fase 2 Task 7): pull-based generator yielding each output
+# frame ALREADY interpolated + upscaled (via an injected upscale_frame
+# callback), with NO intermediate PNG round-trip. Shares the load/resize/
+# interpolate logic with run() but not its threaded save pipeline -- a
+# generator is pull-based, so the caller (Task 8) owns threading/cancellation.
+# ---------------------------------------------------------------------------
+
+
+def test_run_frames_fused_calls_upscale_frame_for_every_output_frame(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = GmfssEngine(make_settings(tmp_path), GpuSessionCoordinator())
+    monkeypatch.setattr(engine, "_create_sessions", fake_sessions)
+    frames_in = tmp_path / "frames-in"
+    write_fake_source_frames(frames_in, 2)
+    upscale_calls: list[tuple[int, ...]] = []
+
+    def fake_upscale(frame: np.ndarray) -> np.ndarray:
+        upscale_calls.append(frame.shape)
+        return frame * 2  # marker: proves the yielded frame came from upscale_frame
+
+    frames = list(
+        engine.run_frames_fused(
+            frames_in,
+            source_frame_count=2,
+            multiplier=2,
+            target_frame_count=None,
+            device="cpu",
+            upscale_frame=fake_upscale,
+        )
+    )
+
+    assert len(frames) == 4  # source_frame_count * multiplier
+    assert len(upscale_calls) == 4  # every output frame passed through upscale_frame
+
+
+def test_run_frames_fused_never_writes_intermediate_png(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = GmfssEngine(make_settings(tmp_path), GpuSessionCoordinator())
+    monkeypatch.setattr(engine, "_create_sessions", fake_sessions)
+    frames_in = tmp_path / "frames-in"
+    write_fake_source_frames(frames_in, 2)
+    intermediate_dir = tmp_path / "should-stay-empty"
+    intermediate_dir.mkdir()
+
+    list(
+        engine.run_frames_fused(
+            frames_in,
+            source_frame_count=2,
+            multiplier=2,
+            target_frame_count=None,
+            device="cpu",
+            upscale_frame=lambda f: f,
+        )
+    )
+
+    assert list(intermediate_dir.iterdir()) == []  # run_frames_fused writes no PNGs
+    assert count_frames(frames_in) == 2  # source dir untouched, nothing written back
+
+
+def test_run_frames_fused_yields_nhwc_uint8_with_pixel_identical_source_frames(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Fused analog of test_run_copies_boundary_frames_byte_identical: the two
+    # boundary source frames (t=0/t=1) are the RAW decoded pixels, NOT degraded
+    # by the padding resize round-trip that interpolated frames go through, and
+    # every frame is NHWC uint8 RGB at the ORIGINAL source resolution -- the
+    # exact format OnnxVideoUpscaler._upscale_one consumes (Task 8 wiring).
+    import cv2
+
+    engine = GmfssEngine(make_settings(tmp_path), GpuSessionCoordinator())
+    monkeypatch.setattr(engine, "_create_sessions", fake_sessions)
+    frames_in = tmp_path / "frames-in"
+    write_fake_source_frames(frames_in, 2)
+
+    frames = list(
+        engine.run_frames_fused(
+            frames_in,
+            source_frame_count=2,
+            multiplier=2,
+            target_frame_count=None,
+            device="cpu",
+            upscale_frame=lambda f: f,
+        )
+    )
+
+    for frame in frames:
+        assert frame.dtype == np.uint8
+        assert frame.shape == (1, SOURCE_H, SOURCE_W, 3)  # NHWC RGB at source res
+
+    first = cv2.cvtColor(cv2.imread(str(frames_in / "00000001.png")), cv2.COLOR_BGR2RGB)
+    last = cv2.cvtColor(cv2.imread(str(frames_in / "00000002.png")), cv2.COLOR_BGR2RGB)
+    assert np.array_equal(frames[0][0], first)  # source[0] pixel-identical (t=0)
+    assert np.array_equal(frames[-1][0], last)  # source[1] pixel-identical (t=1)
+
+
+# ---------------------------------------------------------------------------
 # session cache (LRU 1, AudioSrRestorer pattern) + ORT_DISABLE_ALL
 # ---------------------------------------------------------------------------
 

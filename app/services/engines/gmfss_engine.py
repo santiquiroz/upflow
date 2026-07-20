@@ -7,6 +7,7 @@ import queue
 import shutil
 import threading
 from collections import OrderedDict
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -137,6 +138,41 @@ class GmfssEngine:
         self._validate_output_frame_count(frames_out, resolved_target_frame_count)
         return frames_out
 
+    def run_frames_fused(
+        self,
+        frames_in: Path,
+        source_frame_count: int,
+        multiplier: int = 1,
+        *,
+        target_frame_count: int | None = None,
+        device: str | None = None,
+        upscale_frame: Callable[[np.ndarray], np.ndarray],
+    ) -> Iterator[np.ndarray]:
+        """Yield each output frame ALREADY interpolated + upscaled, in order,
+        with no intermediate PNG round-trip -- the fused counterpart of run().
+
+        Unlike run() (async, threaded PNG save pipeline, cancel_event + shield),
+        this is a plain pull-based generator: the caller (Task 8) drives it and
+        owns threading/cancellation. Abandoning it unwinds the generator with a
+        GeneratorExit at the current yield -- no background thread outlives it,
+        so none of run()'s threaded-teardown machinery is needed or duplicated
+        here. Each yielded frame is NHWC uint8 RGB ([1,H,W,3]) at the source
+        resolution -- the format OnnxVideoUpscaler consumes.
+        """
+        if not self.available():
+            raise RuntimeError(
+                "GMFSS interpolation engine is not available. Enable ENABLE_GMFSS and install the "
+                "models (scripts/download-gmfss-onnx.ps1)."
+            )
+        resolved_target_frame_count = self._resolve_target_frame_count(
+            source_frame_count, multiplier, target_frame_count
+        )
+        resolved_device = device or self.settings.default_device
+        for output_frame in self._iter_interpolated_frames(
+            frames_in, source_frame_count, resolved_target_frame_count, resolved_device
+        ):
+            yield upscale_frame(output_frame)
+
     @staticmethod
     def _resolve_target_frame_count(
         source_frame_count: int, multiplier: int, target_frame_count: int | None
@@ -154,20 +190,64 @@ class GmfssEngine:
         device: str,
         cancel_event: threading.Event,
     ) -> None:
+        driver, padded_hw, frame_paths, plan = self._prepare_pipeline(
+            frames_in, source_frame_count, target_frame_count, device
+        )
+        self._run_pair_pipeline(driver, padded_hw, frame_paths, plan, frames_out, cancel_event)
+
+    def _prepare_pipeline(
+        self,
+        frames_in: Path,
+        source_frame_count: int,
+        target_frame_count: int,
+        device: str,
+    ) -> tuple[GmfssDriver, tuple[int, int], list[Path], list[list[float]]]:
+        # Setup shared by run() (threaded PNG pipeline) and run_frames_fused()
+        # (pull-based generator): frame glob + count check, interpolation plan,
+        # session load, driver build. Fail fast on a bad frame-count request
+        # before paying for session load.
         frame_paths = sorted(frames_in.glob("*.png"))
         if len(frame_paths) != source_frame_count:
             raise RuntimeError(
                 f"GMFSS expected {source_frame_count} source frames in {frames_in}, "
                 f"found {len(frame_paths)}"
             )
-        # Fail fast on a bad frame-count request before paying for session load.
         plan = _build_interpolation_plan(source_frame_count, target_frame_count)
 
         sessions = self._get_sessions(device)
         assets = GmfssAssets.load(self.settings.gmfss_model_dir_path)
         driver = GmfssDriver(assets, _graph_runner(sessions), splat_fn=softsplat_cl.splat_softmax)
+        return driver, assets.padded_hw, frame_paths, plan
 
-        self._run_pair_pipeline(driver, assets.padded_hw, frame_paths, plan, frames_out, cancel_event)
+    def _iter_interpolated_frames(
+        self,
+        frames_in: Path,
+        source_frame_count: int,
+        target_frame_count: int,
+        device: str,
+    ) -> Iterator[np.ndarray]:
+        # Same emission order and pair/timestep arithmetic as _compute_loop
+        # (source[0], interp(pair0)..., source[1], ..., source[N-1]), but
+        # synchronous and pull-based instead of pushed onto a save queue. Only
+        # one pair (prev/next) is held at a time -- next of pair i is reused as
+        # prev of pair i+1, so each source frame is decoded exactly once.
+        driver, padded_hw, frame_paths, plan = self._prepare_pipeline(
+            frames_in, source_frame_count, target_frame_count, device
+        )
+
+        prev_source, prev_chw, prev_hw = _load_source_frame(frame_paths[0], padded_hw)
+        yield prev_source  # source[0] verbatim (t=0): raw pixels, no resize round-trip
+
+        for pair_index in range(len(frame_paths) - 1):
+            next_source, next_chw, next_hw = _load_source_frame(frame_paths[pair_index + 1], padded_hw)
+
+            timesteps = plan[pair_index]
+            if timesteps:  # a 0-extra pair skips reuse()+forward passes entirely
+                for output_chw in driver.interpolate_pair(prev_chw, next_chw, timesteps):
+                    yield _chw_float_to_nhwc_uint8(output_chw, prev_hw)
+
+            yield next_source  # source[i+1] verbatim (t=1)
+            prev_source, prev_chw, prev_hw = next_source, next_chw, next_hw
 
     # --- session cache -------------------------------------------------
 
@@ -445,28 +525,63 @@ def _build_interpolation_plan(source_frame_count: int, target_frame_count: int) 
 # ---------------------------------------------------------------------------
 
 
-def _load_padded_frame(path: Path, padded_hw: tuple[int, int]) -> tuple[np.ndarray, tuple[int, int]]:
+def _decode_rgb(path: Path) -> tuple[np.ndarray, tuple[int, int]]:
     import cv2
 
     bgr = cv2.imread(str(path), cv2.IMREAD_COLOR)
     if bgr is None:
         raise RuntimeError(f"Failed to read frame {path}")
     rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-    original_hw = (rgb.shape[0], rgb.shape[1])
+    return rgb, (rgb.shape[0], rgb.shape[1])
+
+
+def _rgb_to_padded_chw(
+    rgb: np.ndarray, original_hw: tuple[int, int], padded_hw: tuple[int, int]
+) -> np.ndarray:
     chw = np.transpose(rgb, (2, 0, 1)).astype(np.float32)[np.newaxis, ...] / 255.0
     if original_hw != padded_hw:
         chw = resize_bilinear(chw, padded_hw[0], padded_hw[1])
-    return np.ascontiguousarray(chw, dtype=np.float32), original_hw
+    return np.ascontiguousarray(chw, dtype=np.float32)
+
+
+def _load_padded_frame(path: Path, padded_hw: tuple[int, int]) -> tuple[np.ndarray, tuple[int, int]]:
+    rgb, original_hw = _decode_rgb(path)
+    return _rgb_to_padded_chw(rgb, original_hw, padded_hw), original_hw
+
+
+def _load_source_frame(
+    path: Path, padded_hw: tuple[int, int]
+) -> tuple[np.ndarray, np.ndarray, tuple[int, int]]:
+    """Decode a source frame once into both representations run_frames_fused
+    needs: the raw NHWC uint8 RGB frame ([1,H,W,3], yielded verbatim for the
+    t=0/t=1 boundary frames -- pixel-identical, no resize round-trip) and the
+    padded [1,3,pH,pW] float tensor fed to the driver for interpolation."""
+    rgb, original_hw = _decode_rgb(path)
+    source_nhwc = np.ascontiguousarray(rgb)[np.newaxis, ...]
+    padded_chw = _rgb_to_padded_chw(rgb, original_hw, padded_hw)
+    return source_nhwc, padded_chw, original_hw
+
+
+def _chw_float_to_hwc_uint8(frame_chw: np.ndarray, original_hw: tuple[int, int]) -> np.ndarray:
+    """[1,3,H,W] float32 [0,1] (driver padded res) -> [H,W,3] uint8 RGB resized
+    back to original_hw. The exact numpy conversion _save_frame applies before
+    the RGB->BGR + imwrite; run_frames_fused reuses it (NHWC-batched) so the
+    fused output matches what run()'s PNGs would have held, minus the disk hop."""
+    current_hw = (frame_chw.shape[2], frame_chw.shape[3])
+    if current_hw != original_hw:
+        frame_chw = resize_bilinear(frame_chw, original_hw[0], original_hw[1])
+    hwc = np.transpose(np.clip(frame_chw[0], 0.0, 1.0), (1, 2, 0))
+    return np.rint(hwc * 255.0).astype(np.uint8)
+
+
+def _chw_float_to_nhwc_uint8(frame_chw: np.ndarray, original_hw: tuple[int, int]) -> np.ndarray:
+    return _chw_float_to_hwc_uint8(frame_chw, original_hw)[np.newaxis, ...]
 
 
 def _save_frame(frame_chw: np.ndarray, original_hw: tuple[int, int], path: Path, png_compression: int) -> None:
     import cv2
 
-    current_hw = (frame_chw.shape[2], frame_chw.shape[3])
-    if current_hw != original_hw:
-        frame_chw = resize_bilinear(frame_chw, original_hw[0], original_hw[1])
-    hwc = np.transpose(np.clip(frame_chw[0], 0.0, 1.0), (1, 2, 0))
-    rgb_u8 = np.rint(hwc * 255.0).astype(np.uint8)
+    rgb_u8 = _chw_float_to_hwc_uint8(frame_chw, original_hw)
     bgr = cv2.cvtColor(rgb_u8, cv2.COLOR_RGB2BGR)
     ok = cv2.imwrite(str(path), bgr, [cv2.IMWRITE_PNG_COMPRESSION, int(png_compression)])
     if not ok:
