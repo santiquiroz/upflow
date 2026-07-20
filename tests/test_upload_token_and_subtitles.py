@@ -7,9 +7,11 @@ import pytest
 from fastapi import HTTPException
 from starlette.datastructures import UploadFile
 
+import asyncio
+
 from app.api.routes import create_video_job, video_job_to_response
 from app.config import Settings
-from app.models import VideoUpscaleJob
+from app.models import JobStatus, VideoUpscaleJob
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.storage import StorageService
 from app.services.video_job_manager import VideoJobManager
@@ -517,6 +519,65 @@ async def test_create_video_job_route_passes_keep_subtitles_and_upgrades_contain
 # ---------------------------------------------------------------------------
 # video_job_to_response exposes the new fields
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Reviewer finding fix - two jobs created from the SAME upload_token share one
+# staged source file (by design, see
+# test_create_video_job_route_upload_token_job_id_is_independent_of_token).
+# Cleanup-on-completion must not delete that shared file while a sibling job
+# still needs it, but must still delete it once the last referencing job
+# finishes (no permanent leak).
+# ---------------------------------------------------------------------------
+
+
+async def test_shared_upload_token_source_survives_until_last_referencing_job_finishes(
+    tmp_path: Path,
+) -> None:
+    settings = make_settings(tmp_path)
+    manager = make_video_job_manager(settings)
+    staged = stage_upload(settings, "shared-token", "clip.mp4")
+
+    await manager.start()
+    try:
+        job_a = await manager.create_job(**create_job_kwargs(source_path=None, upload_token="shared-token"))
+        job_b = await manager.create_job(**create_job_kwargs(source_path=None, upload_token="shared-token"))
+
+        assert job_a.source_path == staged
+        assert job_b.source_path == staged
+        assert job_a.id != job_b.id
+
+        terminal_statuses = (JobStatus.completed, JobStatus.failed, JobStatus.cancelled)
+
+        for _ in range(300):
+            statuses = (manager.get_job(job_a.id).status, manager.get_job(job_b.id).status)
+            if statuses[0] in terminal_statuses or statuses[1] in terminal_statuses:
+                break
+            await asyncio.sleep(0.01)
+
+        first_status, second_status = (
+            manager.get_job(job_a.id).status,
+            manager.get_job(job_b.id).status,
+        )
+        assert (first_status in terminal_statuses) != (second_status in terminal_statuses), (
+            "expected exactly one sibling job to reach a terminal status first "
+            "(capacity=1 for the shared device slot should serialize them)"
+        )
+        assert staged.exists(), (
+            "shared source must survive while the sibling job still references it "
+            "(still queued or running)"
+        )
+
+        await manager.queue.join()
+
+        assert manager.get_job(job_a.id).status == JobStatus.completed
+        assert manager.get_job(job_b.id).status == JobStatus.completed
+        assert not staged.exists(), (
+            "shared source must be deleted once the last referencing job finishes, "
+            "not leaked permanently"
+        )
+    finally:
+        await manager.stop()
 
 
 def test_video_job_to_response_exposes_audio_track_indices_and_keep_subtitles() -> None:

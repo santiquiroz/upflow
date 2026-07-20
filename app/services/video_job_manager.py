@@ -403,7 +403,7 @@ class VideoJobManager:
             job = await self.queue.get()
             if job.status == JobStatus.cancelled:
                 # Cancelled while waiting in the queue: skip without processing.
-                self._unlink_source_safely(job.source_path)
+                self._unlink_source_if_unused(job)
                 self.queue.task_done()
                 continue
             if job.device == AUTO_DEVICE_ID:
@@ -459,7 +459,7 @@ class VideoJobManager:
         finally:
             self._active.pop(job.id, None)
             job.finished_at = utc_now()
-            self._unlink_source_safely(job.source_path)
+            self._unlink_source_if_unused(job)
             self.queue.task_done()
 
     async def _run_engine(self, job: VideoUpscaleJob) -> None:
@@ -469,8 +469,32 @@ class VideoJobManager:
         job.status = JobStatus.failed
         job.error = error
         job.finished_at = utc_now()
-        self._unlink_source_safely(job.source_path)
+        self._unlink_source_if_unused(job)
         self.queue.task_done()
+
+    def _unlink_source_if_unused(self, job: VideoUpscaleJob) -> None:
+        # A job created from upload_token can share its source_path with sibling
+        # jobs (see create_job/_resolve_source_path: each gets a fresh job_id on
+        # purpose, so multiple jobs may reference the same staged upload). Only
+        # unlink once no OTHER live job still references this exact path, or a
+        # sibling still queued/running loses its file out from under it. Mirrors
+        # RetentionSweeper._is_finished's definition of "still needed" so this
+        # doesn't invent a second, divergent notion of "active".
+        if self._other_job_still_needs_source(job):
+            return
+        self._unlink_source_safely(job.source_path)
+
+    def _other_job_still_needs_source(self, job: VideoUpscaleJob) -> bool:
+        return any(
+            other.id != job.id
+            and other.source_path == job.source_path
+            and not self._is_job_finished(other)
+            for other in self.jobs.values()
+        )
+
+    @staticmethod
+    def _is_job_finished(job: VideoUpscaleJob) -> bool:
+        return job.status in (JobStatus.completed, JobStatus.failed, JobStatus.cancelled)
 
     @staticmethod
     def _unlink_source_safely(source_path: Path) -> None:
