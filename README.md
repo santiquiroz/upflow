@@ -361,7 +361,7 @@ El dropdown "FPS boost" siempre está visible en la UI de video (con las opcione
 
 ## Cómo activar GMFSS (interpolación de máxima calidad)
 
-GMFSS es un segundo motor de FPS boost — mucha más calidad que RIFE en anime, pero **~10x o más lento** (medido 0.72-0.73 fps @1080p 2x en una RX 7800 XT; pensalo como "máxima calidad, muy lento", no como reemplazo de RIFE para uso diario). Deshabilitado por defecto:
+GMFSS es un segundo motor de FPS boost — mucha más calidad que RIFE en anime, pero **~10x o más lento** (medido 0.72-0.73 fps @1080p 2x en una RX 7800 XT **con splat OpenCL GPU activo** — ver nota de `pyopencl` abajo; sin él, GMFSS cae a splat por CPU y ronda 0.38fps. Pensalo como "máxima calidad, muy lento", no como reemplazo de RIFE para uso diario). Deshabilitado por defecto:
 
 ```powershell
 # 1. Descargar los modelos ONNX de GMFSS (~55MB, port propio: santiquiroz/port-gmfss-onnx)
@@ -369,6 +369,11 @@ powershell -ExecutionPolicy Bypass -File .\scripts\download-gmfss-onnx.ps1
 
 # 2. En .env, habilitar GMFSS (además de ENABLE_INTERPOLATION=true, arriba)
 ENABLE_GMFSS=true
+
+# 3. Opcional pero recomendado: splat GPU vía OpenCL (~2x más rápido que CPU-only,
+#    ver benchmarks abajo). Sin este paso, GMFSS sigue funcionando, solo cae a CPU
+#    para ese sub-paso (fallback automático, con warning único).
+.\.venv\Scripts\python -m pip install -e ".[gpu-splat]"
 ```
 
 Con ambos motores disponibles, el selector RIFE/GMFSS aparece en el dropdown de FPS boost de la UI; por API se elige con `interp_engine=rife|gmfss` en `POST /api/v1/video/jobs` (default siempre `rife`, GMFSS es opt-in por job).

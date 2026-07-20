@@ -44,6 +44,14 @@ dev = [
   "pytest>=8.3.0,<9.0.0",
   "pytest-asyncio>=0.23.0,<1.0.0"
 ]
+# GMFSS OpenCL GPU splat (app/services/engines/gmfss/softsplat_cl.py). Optional:
+# the softmax splat step falls back to the CPU reference (softsplat.py)
+# automatically, with a one-time warning, if this is not installed or no
+# working OpenCL GPU is found. Same pin as port-gmfss-onnx's
+# toolkit/requirements-gpu-splat.txt, the upstream driver this module vendors.
+gpu-splat = [
+  "pyopencl==2026.1.2"
+]
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]
