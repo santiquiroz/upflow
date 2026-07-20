@@ -20,6 +20,9 @@ class JobStatus(str, Enum):
     cancelled = "cancelled"
 
 
+TERMINAL_JOB_STATUSES = (JobStatus.completed, JobStatus.failed, JobStatus.cancelled)
+
+
 @dataclass(slots=True)
 class UpscaleJob:
     source_path: Path

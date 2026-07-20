@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from app.config import Settings
-from app.models import AudioJob, JobStatus, UpscaleJob, VideoUpscaleJob, utc_now
+from app.models import AudioJob, JobStatus, TERMINAL_JOB_STATUSES, UpscaleJob, VideoUpscaleJob, utc_now
 from app.services.audio_job_manager import AudioJobManager
 from app.services.job_manager import JobManager
 from app.services.video_job_manager import VideoJobManager
@@ -116,7 +116,7 @@ class RetentionSweeper:
 
     @staticmethod
     def _is_finished(job: UpscaleJob | VideoUpscaleJob | AudioJob) -> bool:
-        return job.status in (JobStatus.completed, JobStatus.failed, JobStatus.cancelled)
+        return job.status in TERMINAL_JOB_STATUSES
 
     def _delete_expired_outputs(self) -> None:
         if not self.settings.outputs_path.exists():

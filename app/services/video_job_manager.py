@@ -9,7 +9,7 @@ from pathlib import Path
 
 from app.config import AUDIO_ENHANCE_MODES, AUDIO_RESTORE_MODES, GMFSS_ENGINE, INTERP_ENGINES, RIFE_ENGINE, Settings
 from app.exceptions import QueueFullError
-from app.models import JobStatus, VideoUpscaleJob, utc_now
+from app.models import JobStatus, TERMINAL_JOB_STATUSES, VideoUpscaleJob, utc_now
 from app.services.backend_registry import validate_backend_choice
 from app.services.video_encoders import VIDEO_ENCODERS
 from app.services.device_router import DeviceRouter, has_compatible_device
@@ -169,7 +169,7 @@ class VideoJobManager:
         job = self.jobs.get(job_id)
         if job is None:
             return False
-        if job.status in (JobStatus.completed, JobStatus.failed, JobStatus.cancelled):
+        if job.status in TERMINAL_JOB_STATUSES:
             return False
         if job.status == JobStatus.queued:
             # Still in the queue: mark it so the worker skips it on dequeue.
@@ -494,7 +494,7 @@ class VideoJobManager:
 
     @staticmethod
     def _is_job_finished(job: VideoUpscaleJob) -> bool:
-        return job.status in (JobStatus.completed, JobStatus.failed, JobStatus.cancelled)
+        return job.status in TERMINAL_JOB_STATUSES
 
     @staticmethod
     def _unlink_source_safely(source_path: Path) -> None:
