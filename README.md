@@ -380,7 +380,7 @@ Con ambos motores disponibles, el selector RIFE/GMFSS aparece en el dropdown de 
 
 ### Benchmark real: fusión interpolar+escalar (Fase 2) vs dos pasadas (Fase 1)
 
-Cuando un job usa `interp_engine=gmfss` + backend ONNX builtin, el motor fusiona interpolar+escalar en una sola pasada (el frame interpolado se escala directamente en memoria, sin escribirlo primero a un PNG intermedio a resolución fuente) — ver `_should_fuse_interpolate_upscale` en `app/services/video_upscaler.py`.
+Cuando un job usa `interp_engine=gmfss` + backend ONNX builtin **y** `ENABLE_INTERP_UPSCALE_FUSION=true` (deshabilitado por defecto, ver más abajo), el motor fusiona interpolar+escalar en una sola pasada (el frame interpolado se escala directamente en memoria, sin escribirlo primero a un PNG intermedio a resolución fuente) — ver `_should_fuse_interpolate_upscale` en `app/services/video_upscaler.py`.
 
 Medido en RX 7800 XT + Ryzen 9 7900X3D (splat GPU/OpenCL activo, `ENABLE_RAW_PIPE=false` para no mezclar con el path de streaming crudo), mismo clip sintético de 2s/48 frames @1080p, perfil `general-balanced-4x` (escala 4x → salida 7680x4320), `fps_multiplier=2` (96 frames interpolados+escalados). Sin flag para forzar dos pasadas en runtime, la corrida de control se hizo parcheando temporalmente `_should_fuse_interpolate_upscale` para devolver `False` (revertido antes de medir la corrida fusionada — detalle completo en `.superpowers/sdd/task-9-report.md`):
 
