@@ -65,6 +65,14 @@ class VideoUpscaleJob:
     target_fps: str | None = None
     audio_enhance: str | None = None
     audio_restore: str | None = None
+    # Which audio streams to keep in the output (Fase A Task 2). None means
+    # "keep_audio decides alone" (existing behavior); a list selects specific
+    # ffprobe stream indices, consumed by the pipeline in Task 3.
+    audio_track_indices: list[int] | None = None
+    # Copy subtitle streams into the output (Fase A Task 2). Forces an mkv
+    # container upgrade when the requested container can't carry subtitles
+    # losslessly -- see VideoJobManager._resolve_output_container.
+    keep_subtitles: bool = False
     # Frame-interpolation engine (Task 4.2): "rife" (default, always) or
     # "gmfss" (opt-in, much higher quality, 10x or more slower -- even higher
     # on short clips due to model load overhead). Only consulted when

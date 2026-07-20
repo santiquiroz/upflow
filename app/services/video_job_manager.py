@@ -81,7 +81,8 @@ class VideoJobManager:
     async def create_job(
         self,
         *,
-        source_path: Path,
+        source_path: Path | None = None,
+        upload_token: str | None = None,
         original_filename: str,
         model_name: str,
         scale: int,
@@ -94,6 +95,8 @@ class VideoJobManager:
         target_fps: str | None = None,
         audio_enhance: str | None = None,
         audio_restore: str | None = None,
+        audio_track_indices: list[int] | None = None,
+        keep_subtitles: bool = False,
         interp_engine: str = RIFE_ENGINE,
         model_id: str | None = None,
         device: str | None = None,
@@ -101,7 +104,8 @@ class VideoJobManager:
         video_encoder: str = "auto",
         job_id: str | None = None,
     ) -> VideoUpscaleJob:
-        source_fps, probe = await self._validate_video(source_path)
+        resolved_source_path = self._resolve_source_path(source_path, upload_token)
+        source_fps, probe = await self._validate_video(resolved_source_path)
         validate_backend_choice(backend)
         self._validate_video_encoder(video_encoder)
         resolved_model_id = model_id if model_id is not None else model_name
@@ -123,13 +127,16 @@ class VideoJobManager:
             interp_engine,
         )
         self._validate_audio_restore_mode(audio_restore, keep_audio)
+        resolved_container, container_upgrade_reason = self._resolve_output_container(
+            output_container, keep_subtitles
+        )
 
         job = VideoUpscaleJob(
-            source_path=source_path,
+            source_path=resolved_source_path,
             original_filename=original_filename,
             model_name=resolution.engine_model_name,
             scale=resolution.scale,
-            output_container=output_container,
+            output_container=resolved_container,
             video_codec=video_codec,
             video_preset=video_preset,
             crf=crf,
@@ -138,6 +145,8 @@ class VideoJobManager:
             target_fps=target_fps,
             audio_enhance=audio_enhance,
             audio_restore=audio_restore,
+            audio_track_indices=audio_track_indices,
+            keep_subtitles=keep_subtitles,
             interp_engine=interp_engine,
             model_id=resolution.model_id,
             device=device,
@@ -145,6 +154,8 @@ class VideoJobManager:
             video_encoder=video_encoder,
             probe=probe,
         )
+        if container_upgrade_reason is not None:
+            job.metadata["containerUpgradedReason"] = container_upgrade_reason
         if job_id is not None:
             job.id = job_id
         self._enqueue(job)
@@ -175,6 +186,22 @@ class VideoJobManager:
             self.queue.put_nowait(job)
         except asyncio.QueueFull as exc:
             raise QueueFullError("Video job queue is full; try again later") from exc
+
+    def _resolve_source_path(self, source_path: Path | None, upload_token: str | None) -> Path:
+        if upload_token is not None:
+            matches = sorted(self.settings.uploads_path.glob(f"{upload_token}-*"))
+            if not matches:
+                raise ValueError(f"No staged upload found for upload_token={upload_token!r}")
+            return matches[0]
+        if source_path is None:
+            raise ValueError("Either source_path or upload_token must be provided")
+        return source_path
+
+    @staticmethod
+    def _resolve_output_container(output_container: str, keep_subtitles: bool) -> tuple[str, str | None]:
+        if keep_subtitles and output_container != "mkv":
+            return "mkv", "Output container upgraded to mkv to preserve subtitles without quality loss"
+        return output_container, None
 
     async def _validate_video(self, source_path: Path) -> tuple[Fraction, dict]:
         """Returns (source_fps, probe). The probe travels with the job so the

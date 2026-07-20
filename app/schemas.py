@@ -48,6 +48,8 @@ class VideoJobResponse(BaseModel):
     target_fps: str | None = Field(default=None, serialization_alias="targetFps")
     audio_enhance: str | None = Field(default=None, serialization_alias="audioEnhance")
     audio_restore: str | None = Field(default=None, serialization_alias="audioRestore")
+    audio_track_indices: list[int] | None = Field(default=None, serialization_alias="audioTrackIndices")
+    keep_subtitles: bool = Field(default=False, serialization_alias="keepSubtitles")
     interp_engine: str = Field(default="rife", serialization_alias="interpEngine")
     model_id: str | None = Field(default=None, serialization_alias="modelId")
     device: str | None = None
