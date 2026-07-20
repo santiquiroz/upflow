@@ -520,13 +520,22 @@ async def analyze_video(
     safe_name = sanitize_filename(original_name, default="upload.mp4")
     token = uuid4().hex
     destination = settings.uploads_path / f"{token}-{safe_name}"
-    await storage.save_upload(file, destination)
+    await storage.save_upload(file, destination, max_mb=settings.max_video_upload_mb)
 
+    probe: dict[str, Any] | None = None
     try:
         probe = await media_tools.ffprobe_json(destination)
     except subprocess.CalledProcessError as exc:
-        destination.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail="Uploaded file is not a valid video") from exc
+    except RuntimeError as exc:
+        logger.exception("ffprobe unavailable while analyzing uploaded video")
+        raise HTTPException(status_code=500, detail="Video analysis is unavailable") from exc
+    except Exception as exc:
+        logger.exception("Unexpected error while analyzing uploaded video")
+        raise HTTPException(status_code=500, detail="Failed to analyze the uploaded video") from exc
+    finally:
+        if probe is None and destination.exists():
+            destination.unlink(missing_ok=True)
 
     audio_tracks = parse_audio_tracks(probe)
     subtitle_tracks = parse_subtitle_tracks(probe)
