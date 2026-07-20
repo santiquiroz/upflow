@@ -451,17 +451,19 @@ git commit -m "Infraestructura: wiring del GpuSessionCoordinator compartido en a
 
 **Files:** ninguno (solo verificación, no código nuevo)
 
-- [ ] **Step 1: Reproducir el escenario real que disparó la investigación**
+- [x] **Step 1: Reproducir el escenario real que disparó la investigación**
 
 Con el server de desarrollo corriendo (puerto 18091, `ENABLE_GMFSS=true`, modelos GMFSS + AudioSR instalados), correr un job real con `audio_restore=audiosr` seguido de `interp_engine=gmfss` sobre un clip CORTO (unos segundos, no un episodio completo — el objetivo es medir fps de la etapa `interpolating_frames`, no esperar horas). Medir fps de esa etapa.
 
-- [ ] **Step 2: Comparar contra el baseline documentado**
+- [x] **Step 2: Comparar contra el baseline documentado**
 
 El spec documenta 0.056fps observado (contención) vs 0.38-0.72fps esperado (benchmarks aislados del puerto, sin contención). Confirmar que el fps medido ahora está en el rango esperado, no en el rango de contención. Si sigue bajo, hay una segunda causa no capturada por este plan — documentar el hallazgo real (no forzar el número) y decidir si amerita una investigación nueva.
 
-- [ ] **Step 3: Documentar el resultado real en el CHANGELOG del commit final de esta fase**
+- [x] **Step 3: Documentar el resultado real en el CHANGELOG del commit final de esta fase**
 
 No hay commit de código en este task — el resultado se documenta en el mensaje del commit de cierre de fase (ver checklist de self-review al final del plan) o en una nota aparte si amerita.
+
+**Resultado real (2026-07-20, RX 7800 XT + Ryzen 9 7900X3D):** job real vía la API HTTP (puerto 18091, `ENABLE_GMFSS=true`, `ENABLE_AUDIOSR=true`) con `audio_restore=audiosr` + `interp_engine=gmfss` + `fps_multiplier=2` sobre un clip sintético (1920x1080, 24fps, 2s, 48 frames + audio) en el mismo proceso: `restoring_audio` (AudioSR) corrió primero (~10s, incluye carga de sesión), seguido inmediatamente por `interpolating_frames` (GMFSS) en el mismo device (`dml:0`). La etapa `interpolating_frames` completó sus 96 frames (fps_multiplier=2 sobre 48 fuente) en 157.3s medidos con los timestamps propios del job (`stageStartedAt` de `interpolating_frames` vs `stageStartedAt` de la etapa siguiente) → **0.610 fps**. Esto cae dentro del rango esperado sin contención (0.38-0.72fps) y es ~10.9x más rápido que el baseline de contención (0.056fps) que motivó esta investigación. **Veredicto: el fix del `GpuSessionCoordinator` funciona — la contención DirectML entre AudioSR y GMFSS en el mismo proceso quedó resuelta. Gate de Fase 1 aprobado; Fase 2 (fusión interpolar→escalar) queda habilitada para arrancar.** Detalle completo, comandos exactos y datos crudos en `.superpowers/sdd/task-6-report.md`.
 
 ---
 
