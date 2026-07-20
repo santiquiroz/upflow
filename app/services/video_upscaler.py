@@ -674,13 +674,50 @@ class VideoUpscaler:
             "-i",
             str(encode_frames_dir / "%08d.png"),
         ]
+        next_input_index = 1
         if audio_mux_path is not None:
-            cmd += ["-i", str(audio_mux_path), "-map", "0:v:0", "-map", "1:a:0"]
+            cmd += ["-i", str(audio_mux_path), "-map", "0:v:0", "-map", f"{next_input_index}:a:0"]
+            next_input_index += 1
+        source_input_index = self._maybe_add_source_input(cmd, job, next_input_index)
+        if source_input_index is not None:
+            self._map_extra_audio_tracks(cmd, job, source_input_index)
+            self._map_subtitles(cmd, job, source_input_index)
         cmd += self._build_video_encode_options(job, encoder)
         if audio_mux_path is not None:
             cmd += audio_codec_args
+        if job.keep_subtitles:
+            cmd += ["-c:s", "copy"]
         cmd.append(str(output_path))
         return cmd
+
+    def _extra_audio_track_indices(self, job: VideoUpscaleJob) -> list[int]:
+        # The PRIMARY track (index 0 of the list) is already covered by
+        # audio_mux_path -- it went through enhance/restore/copy separately.
+        # Only a SECOND-or-later selected track counts as "extra" here.
+        if not job.audio_track_indices or len(job.audio_track_indices) <= 1:
+            return []
+        return job.audio_track_indices[1:]
+
+    def _needs_source_input(self, job: VideoUpscaleJob) -> bool:
+        return bool(self._extra_audio_track_indices(job)) or job.keep_subtitles
+
+    def _maybe_add_source_input(self, cmd: list[str], job: VideoUpscaleJob, input_index: int) -> int | None:
+        if not self._needs_source_input(job):
+            return None
+        cmd += ["-i", str(job.source_path)]
+        return input_index
+
+    def _map_extra_audio_tracks(self, cmd: list[str], job: VideoUpscaleJob, source_input_index: int) -> None:
+        # Absolute ffprobe stream index (e.g. "2:3"), not the relative "2:a:N"
+        # form -- it maps the original file's stream directly, sidestepping
+        # having to re-enumerate which "audio Nth" an absolute index is.
+        for stream_index in self._extra_audio_track_indices(job):
+            cmd += ["-map", f"{source_input_index}:{stream_index}"]
+
+    def _map_subtitles(self, cmd: list[str], job: VideoUpscaleJob, source_input_index: int) -> None:
+        if not job.keep_subtitles:
+            return
+        cmd += ["-map", f"{source_input_index}:s?"]
 
     async def _encode_with_fallback(
         self,
@@ -721,6 +758,12 @@ class VideoUpscaler:
         # HF-installed ONNX models use OnnxUpscaler (arbitrary graphs), not the
         # builtin streaming engine, so they stay on the file path.
         if self._is_onnx_model(job.model_id):
+            return False
+        # Only _build_encode_command (the PNG-based file path) knows how to map
+        # extra audio tracks / subtitles from the original source (Fase A Task
+        # 3) -- _build_rawpipe_command doesn't, so a job that needs to preserve
+        # them must not take the raw-pipe fast path.
+        if self._needs_source_input(job):
             return False
         backend = await asyncio.to_thread(self._resolve_builtin_backend, job)
         return backend == UpscaleBackend.onnx
