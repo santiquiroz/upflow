@@ -137,6 +137,10 @@ export interface CreateVideoJobParams {
   // backend rejects a request carrying both.
   file?: File;
   uploadToken?: string;
+  // Original filename for display (job queue, accessibility labels). Required
+  // when submitting via `uploadToken`, since `file` itself isn't sent in that
+  // case and callers still know the name of the file they analyzed.
+  fileName?: string;
   audioTrackIndices?: number[];
   keepSubtitles?: boolean;
   profileKey: string;

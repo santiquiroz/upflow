@@ -59,22 +59,25 @@ describe("TrackSelector", () => {
 
   it("keeps the existing order instead of sorting so the primary track stays first", () => {
     const onChange = vi.fn();
+    // Primary track deliberately has a HIGHER index (5) than the track being
+    // added (2): an ascending sort would produce [2, 5], which is exactly
+    // what this test must fail on if a `.sort()` is reintroduced.
     const reorderedTracks = [
-      { index: 5, codec: "aac", channels: 2, isDefault: false, language: "eng" },
-      { index: 2, codec: "ac3", channels: 6, isDefault: true, language: "jpn" },
+      { index: 5, codec: "aac", channels: 2, isDefault: true, language: "jpn" },
+      { index: 2, codec: "ac3", channels: 6, isDefault: false, language: "eng" },
     ];
     render(
       <TrackSelector
         audioTracks={reorderedTracks}
         subtitleTracks={[]}
-        selectedAudioIndices={[2]}
+        selectedAudioIndices={[5]}
         onChangeAudioIndices={onChange}
         keepSubtitles={false}
         onChangeKeepSubtitles={vi.fn()}
       />,
     );
     fireEvent.click(screen.getByLabelText(/eng/i));
-    expect(onChange).toHaveBeenCalledWith([2, 5]);
+    expect(onChange).toHaveBeenCalledWith([5, 2]);
   });
 
   it("renders nothing for subtitles when there are no subtitle tracks", () => {

@@ -813,5 +813,6 @@ describe("VideoPanel", () => {
     expect(params.uploadToken).toBe("tok123");
     expect(params.keepSubtitles).toBe(true);
     expect(params.file).toBeUndefined();
+    expect(params.fileName).toBe("clip.mp4");
   });
 });

@@ -412,6 +412,7 @@ export function VideoPanel() {
     }
     submit({
       ...(analyzeResult ? { uploadToken: analyzeResult.uploadToken } : { file }),
+      fileName: file.name,
       profileKey: profile.key,
       modelId: model?.id ?? null,
       device: device?.id ?? null,
