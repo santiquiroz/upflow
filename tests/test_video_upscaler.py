@@ -172,6 +172,10 @@ def make_combined_settings(tmp_path: Path, **overrides: object) -> Settings:
         "BUILTIN_ONNX_DIR": str(tmp_path / "builtin-onnx"),
         "ENABLE_GMFSS": True,
         "GMFSS_MODEL_DIR": str(gmfss_dir),
+        # These tests exercise the fused path directly (bypassing the gate),
+        # but opt in explicitly anyway (Task 9 fix: the flag defaults off) so
+        # nothing here reads as an accidental reliance on a changed default.
+        "ENABLE_INTERP_UPSCALE_FUSION": True,
     }
     kwargs.update(overrides)
     return Settings(_env_file=None, **kwargs)
@@ -220,13 +224,20 @@ def make_video_job(source_path: Path, **overrides: object) -> VideoUpscaleJob:
 
 
 def make_gate_upscaler(
-    tmp_path: Path, *, gmfss_engine: object, onnx_video_engine: object
+    tmp_path: Path, *, gmfss_engine: object, onnx_video_engine: object, **settings_overrides: object
 ) -> VideoUpscaler:
-    settings = Settings(
-        _env_file=None,
-        RUNTIME_DIR=str(tmp_path / "runtime"),
-        BUILTIN_ONNX_DIR=str(tmp_path / "builtin-onnx"),
-    )
+    settings_kwargs: dict[str, object] = {
+        "RUNTIME_DIR": str(tmp_path / "runtime"),
+        "BUILTIN_ONNX_DIR": str(tmp_path / "builtin-onnx"),
+        # The gate tests below isolate ONE other condition at a time (engine,
+        # backend, interpolation-requested, engine presence), so the fusion
+        # opt-in itself is pre-enabled here -- see
+        # test_gate_returns_false_by_default_when_fusion_setting_unset for the
+        # dedicated test of the opt-in flag itself, built without this helper.
+        "ENABLE_INTERP_UPSCALE_FUSION": True,
+    }
+    settings_kwargs.update(settings_overrides)
+    settings = Settings(_env_file=None, **settings_kwargs)
     return VideoUpscaler(
         settings,
         FakeNcnnEngine(),  # type: ignore[arg-type]
@@ -294,6 +305,35 @@ async def test_gate_selects_two_pass_for_gmfss_onnx_without_interpolation(tmp_pa
 
 async def test_gate_selects_two_pass_when_no_onnx_video_engine(tmp_path: Path) -> None:
     upscaler = make_gate_upscaler(tmp_path, gmfss_engine=object(), onnx_video_engine=None)
+    job = make_video_job(tmp_path / "clip.mp4", interp_engine="gmfss", backend="onnx", fps_multiplier=2)
+
+    assert await upscaler._should_fuse_interpolate_upscale(job, 2, None) is False
+
+
+async def test_gate_returns_false_by_default_when_fusion_setting_unset(tmp_path: Path) -> None:
+    # Task 9 fix: the fused path measured ~1.7x SLOWER than the two-pass path
+    # at 4x/8K on real hardware (see README "Benchmark real: fusion
+    # interpolar+escalar"), so it now requires ENABLE_INTERP_UPSCALE_FUSION
+    # explicitly -- default False in app/config.py. This builds Settings
+    # WITHOUT touching that flag (unlike make_gate_upscaler, whose other gate
+    # tests opt in on purpose to isolate a different condition) so it exercises
+    # the real production default, with every OTHER gate condition satisfied
+    # (gmfss engine, onnx backend, interpolation requested, both engines
+    # present) -- only the new flag stops the fuse.
+    settings = Settings(
+        _env_file=None,
+        RUNTIME_DIR=str(tmp_path / "runtime"),
+        BUILTIN_ONNX_DIR=str(tmp_path / "builtin-onnx"),
+    )
+    upscaler = VideoUpscaler(
+        settings,
+        FakeNcnnEngine(),  # type: ignore[arg-type]
+        FakeMediaTools(),  # type: ignore[arg-type]
+        gmfss_engine=object(),  # type: ignore[arg-type]
+        onnx_video_engine=FakeOnnxVideoEngine(),  # type: ignore[arg-type]
+        model_registry=ModelRegistry(settings),
+        devices=FakeDevicesService(),  # type: ignore[arg-type]
+    )
     job = make_video_job(tmp_path / "clip.mp4", interp_engine="gmfss", backend="onnx", fps_multiplier=2)
 
     assert await upscaler._should_fuse_interpolate_upscale(job, 2, None) is False

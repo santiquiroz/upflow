@@ -282,6 +282,15 @@ class VideoUpscaler:
         # ONNX models run through OnnxUpscaler, not the builtin video engine.
         # Both engines must be present, and interpolation must actually be
         # requested (otherwise there is no interpolate step to fuse).
+        #
+        # Opt-in, off by default (Task 9 fix): measured ~1.7x SLOWER than the
+        # two-pass path at 4x/8K on a RX 7800 XT (see README "Benchmark real:
+        # fusion interpolar+escalar") -- the fused loop is a single-threaded
+        # sequential generator with no load/compute/save overlap. The fused
+        # code stays fully available and tested; it just isn't picked
+        # automatically until the regression is understood/fixed.
+        if not self.settings.enable_interp_upscale_fusion:
+            return False
         if job.interp_engine != GMFSS_ENGINE:
             return False
         if not self._interpolation_requested(fps_multiplier, target_fps):
