@@ -110,7 +110,17 @@ class FakeGmfssSession:
         if self.name == "fusionnet":
             n = feeds["fusion_rgb"].shape[0]
             h_half, w_half = feeds["fusion_rgb"].shape[2], feeds["fusion_rgb"].shape[3]
-            return [np.full((n, 3, h_half * 2, w_half * 2), 0.5, dtype=np.float32)]
+            h_out, w_out = h_half * 2, w_half * 2
+            # Channel-distinct + spatially-varying (not a flat constant): a pure
+            # function of the (fixed) output shape, so it stays deterministic and
+            # reproducible across both the fused and two-pass call sites while
+            # still being able to catch a channel-order or orientation bug in the
+            # surrounding conversion/plumbing code (a flat 0.5 everywhere could not).
+            row = np.linspace(0.0, 0.2, h_out, dtype=np.float32).reshape(1, 1, h_out, 1)
+            col = np.linspace(0.0, 0.1, w_out, dtype=np.float32).reshape(1, 1, 1, w_out)
+            channel_bias = np.array([0.05, 0.35, 0.65], dtype=np.float32).reshape(1, 3, 1, 1)
+            pattern = np.broadcast_to(channel_bias + row + col, (n, 3, h_out, w_out))
+            return [pattern.astype(np.float32)]
         raise AssertionError(self.name)
 
 
@@ -175,9 +185,19 @@ def touch_builtin_onnx(settings: Settings, filename: str) -> None:
 
 def write_source_frames(directory: Path, count: int) -> None:
     directory.mkdir(parents=True, exist_ok=True)
+    # Channel-distinct (R != G != B) AND spatially-varying (per-row/per-col, not
+    # a flat fill): a uniform frame would make the byte-exact parity assertion
+    # pass even if the fused/two-pass paths disagreed on channel order (RGB vs
+    # BGR) or spatial orientation (a flip/transpose), since every pixel would
+    # already look identical regardless.
+    row = np.arange(SOURCE_H, dtype=np.int32).reshape(SOURCE_H, 1)
+    col = np.arange(SOURCE_W, dtype=np.int32).reshape(1, SOURCE_W)
     for index in range(count):
-        value = (index * 17) % 256
-        frame = np.full((SOURCE_H, SOURCE_W, 3), value, dtype=np.uint8)
+        offset = (index * 17) % 256
+        frame = np.empty((SOURCE_H, SOURCE_W, 3), dtype=np.uint8)
+        frame[:, :, 0] = (row * 9 + offset) % 256
+        frame[:, :, 1] = (col * 13 + offset * 2) % 256
+        frame[:, :, 2] = (row + col * 5 + offset * 3) % 256
         assert cv2.imwrite(str(directory / f"{index + 1:08d}.png"), frame)
 
 
