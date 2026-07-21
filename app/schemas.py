@@ -72,6 +72,7 @@ class AudioJobResponse(BaseModel):
     denoise: str | None = None
     restore: str | None = None
     device: str | None = None
+    output_format: str = Field(default="flac", serialization_alias="outputFormat")
     progress_pct: float | None = Field(default=None, serialization_alias="progressPct")
     stages: list[dict[str, Any]] | None = None
     error: str | None = None

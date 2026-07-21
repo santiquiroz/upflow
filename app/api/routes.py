@@ -280,6 +280,7 @@ def audio_job_to_response(job: AudioJob) -> AudioJobResponse:
         denoise=job.denoise,
         restore=job.restore,
         device=job.device,
+        output_format=job.output_format,
         progress_pct=_progress_pct_from_metadata(job.metadata),
         stages=job.metadata.get("stages"),
         error=job.error,
@@ -687,6 +688,7 @@ async def create_audio_job(
     denoise: str | None = Form(default=None),
     restore: str | None = Form(default=None),
     device: str | None = Form(default=None),
+    output_format: str = Form(default="flac"),
     audio_jobs: AudioJobManager = Depends(get_audio_job_manager),
     storage: StorageService = Depends(get_storage),
     settings: Settings = Depends(get_settings),
@@ -705,6 +707,7 @@ async def create_audio_job(
             denoise=denoise,
             restore=restore,
             device=device,
+            output_format=output_format,
             job_id=token,
         )
     except QueueFullError as exc:

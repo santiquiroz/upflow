@@ -4,7 +4,7 @@ import asyncio
 import logging
 from pathlib import Path
 
-from app.config import AUDIO_ENHANCE_MODES, AUDIO_RESTORE_MODES, Settings
+from app.config import AUDIO_ENHANCE_MODES, AUDIO_OUTPUT_FORMATS, AUDIO_RESTORE_MODES, Settings
 from app.exceptions import QueueFullError
 from app.models import TERMINAL_JOB_STATUSES, AudioJob, JobStatus, utc_now
 from app.services.audio_pipeline import AudioPipeline
@@ -70,9 +70,11 @@ class AudioJobManager:
         denoise: str | None = None,
         restore: str | None = None,
         device: str | None = None,
+        output_format: str = "flac",
         job_id: str | None = None,
     ) -> AudioJob:
         self._validate_modes(denoise, restore)
+        self._validate_output_format(output_format)
         await self._validate_device(device)
 
         job = AudioJob(
@@ -81,6 +83,7 @@ class AudioJobManager:
             denoise=denoise,
             restore=restore,
             device=device,
+            output_format=output_format,
         )
         if job_id is not None:
             job.id = job_id
@@ -134,6 +137,10 @@ class AudioJobManager:
         if restore not in AUDIO_RESTORE_MODES:
             raise ValueError(f"restore must be one of {sorted(AUDIO_RESTORE_MODES)}")
         validate_restore_mode_ready(self.settings, restore)
+
+    def _validate_output_format(self, output_format: str) -> None:
+        if output_format not in AUDIO_OUTPUT_FORMATS:
+            raise ValueError(f"output_format must be one of {sorted(AUDIO_OUTPUT_FORMATS)}")
 
     async def _validate_device(self, device: str | None) -> None:
         if device is None:

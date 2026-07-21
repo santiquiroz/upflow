@@ -45,6 +45,10 @@ APOLLO_MODE = "apollo"
 AUDIOSR_MODE = "audiosr"
 AUDIO_RESTORE_MODES = frozenset({APOLLO_MODE, AUDIOSR_MODE})
 
+# Standalone-module output format selector (Fase C Task 9). "flac" is the
+# default (lossless, ~50% smaller than wav); see AudioPipeline._write_output.
+AUDIO_OUTPUT_FORMATS = frozenset({"wav", "flac", "mp3"})
+
 # Frame-interpolation engine selector (Task 4.2). `rife` is ALWAYS the
 # default -- GMFSS (much higher quality, 10x or more slower -- see
 # gmfss_engine.py; short clips measure even higher due to cold-start model

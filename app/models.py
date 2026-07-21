@@ -117,6 +117,11 @@ class AudioJob:
     original_filename: str
     denoise: str | None = None
     restore: str | None = None
+    # Standalone-module output format (Fase C Task 9): "wav" (lossless, no
+    # re-encode -- current is already PCM from decode/denoise/restore),
+    # "flac" (lossless, ~50% smaller, default), "mp3" (lossy, smallest). See
+    # AudioPipeline._write_output.
+    output_format: str = "flac"
     device: str | None = None
     id: str = field(default_factory=lambda: uuid4().hex)
     status: JobStatus = JobStatus.queued

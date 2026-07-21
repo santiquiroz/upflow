@@ -17,6 +17,15 @@ logger = logging.getLogger(__name__)
 # (wav/mp3/flac/m4a/ogg/opus) to that so the denoise step is format-agnostic.
 DECODE_SAMPLE_RATE = 48000
 
+# Codec args for the final "finalizing" re-encode, keyed by output_format
+# (Fase C Task 9). "wav" is deliberately absent: current is already PCM WAV
+# from decode/denoise/restore, so it is moved into place with no re-encode
+# (see AudioPipeline._write_output).
+_OUTPUT_FORMAT_CODEC_ARGS: dict[str, list[str]] = {
+    "flac": ["-c:a", "flac"],
+    "mp3": ["-c:a", "libmp3lame", "-b:a", "192k"],
+}
+
 
 class AudioPipeline:
     """Orchestrates the standalone audio chain: decode -> [denoise] -> [restore].
@@ -63,12 +72,27 @@ class AudioPipeline:
             current = restored
 
         advance_audio_stage(job, "finalizing")
-        output_path = self.settings.outputs_path / f"{job.id}.wav"
+        output_path = self.settings.outputs_path / f"{job.id}.{job.output_format}"
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(current), str(output_path))
+        await self._write_output(current, output_path, job.output_format)
         self._validate_output(output_path)
         complete_audio_stages(job)
         return output_path
+
+    async def _write_output(self, current: Path, output_path: Path, output_format: str) -> None:
+        if output_format == "wav":
+            shutil.move(str(current), str(output_path))
+            return
+        codec_args = _OUTPUT_FORMAT_CODEC_ARGS.get(output_format, _OUTPUT_FORMAT_CODEC_ARGS["flac"])
+        command = [
+            str(self.settings.ffmpeg_binary_path),
+            "-y",
+            "-i",
+            str(current),
+            *codec_args,
+            str(output_path),
+        ]
+        await self._run_process(command, "Audio encode failed while writing the final output file")
 
     async def _decode_to_wav(self, source_path: Path, output_wav: Path) -> None:
         output_wav.parent.mkdir(parents=True, exist_ok=True)
