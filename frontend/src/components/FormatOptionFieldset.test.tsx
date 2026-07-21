@@ -31,4 +31,20 @@ describe("FormatOptionFieldset", () => {
 
     expect(onChange).toHaveBeenCalledWith("wav");
   });
+
+  it("associates each radio input with its description via aria-describedby", () => {
+    render(<FormatOptionFieldset legend="Output format" name="fmt" options={OPTIONS} value="flac" onChange={vi.fn()} />);
+
+    const flacRadio = screen.getByLabelText(/flac/i);
+    const wavRadio = screen.getByLabelText(/^wav$/i);
+
+    expect(flacRadio).toHaveAttribute("aria-describedby", "fmt-format-option-flac-description");
+    expect(wavRadio).toHaveAttribute("aria-describedby", "fmt-format-option-wav-description");
+
+    const flacDescription = document.getElementById("fmt-format-option-flac-description");
+    const wavDescription = document.getElementById("fmt-format-option-wav-description");
+
+    expect(flacDescription).toHaveTextContent("Lossless quality, about 50% smaller than WAV");
+    expect(wavDescription).toHaveTextContent("Lossless, uncompressed. Universal compatibility");
+  });
 });

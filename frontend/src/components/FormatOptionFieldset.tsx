@@ -18,6 +18,8 @@ function formatOptionClassName(isSelected: boolean): string {
 // referencing another option's name (e.g. FLAC's "~50% smaller than WAV")
 // would make that option's own accessible name ambiguously match a query for
 // the other option's label.
+// aria-describedby restores parity for assistive tech by programmatically
+// associating the description with the radio input's accessible description.
 function FormatOptionRow<T extends string>({
   option,
   name,
@@ -29,6 +31,8 @@ function FormatOptionRow<T extends string>({
   isSelected: boolean;
   onChange: (value: T) => void;
 }) {
+  const descriptionId = `${name}-format-option-${option.value}-description`;
+
   return (
     <label className={formatOptionClassName(isSelected)}>
       <span className="flex items-center gap-2">
@@ -36,13 +40,14 @@ function FormatOptionRow<T extends string>({
           type="radio"
           name={name}
           aria-label={option.label}
+          aria-describedby={descriptionId}
           checked={isSelected}
           onChange={() => onChange(option.value)}
           className="h-3.5 w-3.5 accent-accent"
         />
         <span className="text-sm text-text">{option.label}</span>
       </span>
-      <span className="pl-[26px] text-xs text-text-faint">{option.description}</span>
+      <span id={descriptionId} className="pl-[26px] text-xs text-text-faint">{option.description}</span>
     </label>
   );
 }
