@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import subprocess
 from pathlib import Path
 from typing import Any, NamedTuple
 from uuid import uuid4
@@ -21,8 +22,10 @@ from app.config import (
 from app.exceptions import ModelNotFoundError, ModelProtectedError, QueueFullError
 from app.models import AudioJob, JobStatus, UpdateStatus, UpscaleJob, VideoUpscaleJob
 from app.schemas import (
+    AnalyzeVideoResponse,
     AudioCapabilitiesResponse,
     AudioJobResponse,
+    AudioTrackResponse,
     CreateInstallResponse,
     CreateJobResponse,
     DeviceInfoResponse,
@@ -36,6 +39,7 @@ from app.schemas import (
     ModelResponse,
     ModelSearchResponse,
     ModelsResponse,
+    SubtitleTrackResponse,
     SupportedModelResponse,
     UpdateCheckResponse,
     VideoCapabilitiesResponse,
@@ -46,9 +50,11 @@ from app.services.audio_job_manager import AudioJobManager
 from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
 from app.services.hf_client import HfClient
 from app.services.job_manager import JobManager
+from app.services.media_tools import MediaTools
 from app.services.model_installer import ModelInstaller
 from app.services.model_registry import ModelEntry, ModelRegistry
 from app.services.storage import StorageService
+from app.services.stream_analysis import parse_audio_tracks, parse_subtitle_tracks
 from app.services.update_service import UpdateService
 from app.services.video_job_manager import VideoJobManager
 
@@ -73,6 +79,15 @@ def _escape_reserved_stem(name: str) -> str:
     if stem in WINDOWS_RESERVED_STEMS:
         return f"_{name}"
     return name
+
+
+def _original_filename_from_staged_upload(uploads_path: Path, upload_token: str, default: str) -> str:
+    # Best-effort only: create_job's own _resolve_source_path raises the real
+    # error for a missing token, so this never needs to fail the request.
+    matches = sorted(uploads_path.glob(f"{upload_token}-*"))
+    if not matches:
+        return default
+    return matches[0].name[len(upload_token) + 1 :]
 
 
 def sanitize_filename(filename: str | None, default: str) -> str:
@@ -150,6 +165,10 @@ def get_audio_job_manager(request: Request) -> AudioJobManager:
 
 def get_storage(request: Request) -> StorageService:
     return request.app.state.storage
+
+
+def get_media_tools(request: Request) -> MediaTools:
+    return request.app.state.media_tools
 
 
 def get_devices_service(request: Request) -> DevicesService:
@@ -234,6 +253,9 @@ def video_job_to_response(job: VideoUpscaleJob) -> VideoJobResponse:
         target_fps=job.target_fps,
         audio_enhance=job.audio_enhance,
         audio_restore=job.audio_restore,
+        audio_track_indices=job.audio_track_indices,
+        keep_subtitles=job.keep_subtitles,
+        audio_output_format=job.audio_output_format,
         interp_engine=job.interp_engine,
         model_id=job.model_id,
         device=job.device,
@@ -258,6 +280,7 @@ def audio_job_to_response(job: AudioJob) -> AudioJobResponse:
         denoise=job.denoise,
         restore=job.restore,
         device=job.device,
+        output_format=job.output_format,
         progress_pct=_progress_pct_from_metadata(job.metadata),
         stages=job.metadata.get("stages"),
         error=job.error,
@@ -402,7 +425,8 @@ async def create_job(
 @router.post("/video/jobs", response_model=CreateJobResponse, status_code=202)
 async def create_video_job(
     request: Request,
-    file: UploadFile = File(...),
+    file: UploadFile | None = File(default=None),
+    upload_token: str | None = Form(default=None),
     profile_key: str = Form(default="anime-balanced-2x"),
     model_name: str | None = Form(default=None),
     scale: int | None = Form(default=None),
@@ -415,6 +439,9 @@ async def create_video_job(
     target_fps: str | None = Form(default=None),
     audio_enhance: str | None = Form(default=None),
     audio_restore: str | None = Form(default=None),
+    audio_track_indices: str | None = Form(default=None),
+    keep_subtitles: bool = Form(default=False),
+    audio_output_format: str | None = Form(default=None),
     interp_engine: str | None = Form(default=None),
     model_id: str | None = Form(default=None),
     device: str | None = Form(default=None),
@@ -429,16 +456,24 @@ async def create_video_job(
     if not profile:
         raise HTTPException(status_code=400, detail=f"Unknown profile: {profile_key}")
 
-    # FastAPI passes `backend` as str|None; a direct unit-test call that omits
-    # it receives the Form() sentinel instead, so normalize non-strings to None.
+    # FastAPI passes these as their declared type (str|None, bool); a direct
+    # unit-test call that omits one receives the Form() sentinel instead
+    # (always truthy), so normalize anything of the wrong type to its real
+    # default -- same pattern already used below for backend/video_encoder/
+    # interp_engine.
+    upload_token_value = upload_token if isinstance(upload_token, str) else None
+    audio_track_indices_value = audio_track_indices if isinstance(audio_track_indices, str) else None
+    keep_subtitles_value = keep_subtitles if isinstance(keep_subtitles, bool) else False
+
+    has_file = bool(file and file.filename)
+    if has_file == bool(upload_token_value):
+        raise HTTPException(status_code=400, detail="Provide exactly one of file or upload_token")
+
     backend_value = backend if isinstance(backend, str) else None
     video_encoder_value = video_encoder if isinstance(video_encoder, str) else "auto"
+    audio_output_format_value = audio_output_format if isinstance(audio_output_format, str) else "auto"
     interp_engine_value = interp_engine if isinstance(interp_engine, str) else RIFE_ENGINE
 
-    original_name = Path(file.filename or "upload.mp4").name
-    safe_name = sanitize_filename(original_name, default="upload.mp4")
-    token = uuid4().hex
-    destination = settings.uploads_path / f"{token}-{safe_name}"
     resolved_device = await resolve_request_device(device, devices, settings)
 
     resolved = resolve_video_job_fields(
@@ -455,11 +490,42 @@ async def create_video_job(
         audio_enhance,
     )
 
+    destination: Path | None = None
     job: VideoUpscaleJob | None = None
     try:
-        await storage.save_upload(file, destination, max_mb=settings.max_video_upload_mb)
+        parsed_audio_track_indices = (
+            [int(i) for i in audio_track_indices_value.split(",") if i.strip()]
+            if audio_track_indices_value
+            else None
+        )
+        if has_file:
+            original_name = Path(file.filename or "upload.mp4").name
+            safe_name = sanitize_filename(original_name, default="upload.mp4")
+            new_upload_token = uuid4().hex
+            destination = settings.uploads_path / f"{new_upload_token}-{safe_name}"
+            await storage.save_upload(file, destination, max_mb=settings.max_video_upload_mb)
+            source_path = destination
+            resolved_upload_token = None
+            # The freshly-generated upload token doubles as the job id here (as
+            # before this task): one request == one upload == one job, so no
+            # collision risk. When reusing a staged upload_token below, the job
+            # id must instead be independent -- see the else branch.
+            new_job_id = new_upload_token
+        else:
+            original_name = _original_filename_from_staged_upload(
+                settings.uploads_path, upload_token_value, default="upload.mp4"
+            )
+            source_path = None
+            resolved_upload_token = upload_token_value
+            # A staged upload_token can be reused across multiple job-creation
+            # attempts (e.g. retrying with different settings after a
+            # validation error), so it must NOT double as the job id or a
+            # second successful job would overwrite the first in jobs[].
+            new_job_id = uuid4().hex
+
         job = await video_jobs.create_job(
-            source_path=destination,
+            source_path=source_path,
+            upload_token=resolved_upload_token,
             original_filename=original_name,
             model_name=resolved.model_name,
             scale=resolved.scale,
@@ -472,12 +538,15 @@ async def create_video_job(
             target_fps=resolved.target_fps,
             audio_enhance=resolved.audio_enhance,
             audio_restore=audio_restore,
+            audio_track_indices=parsed_audio_track_indices,
+            keep_subtitles=keep_subtitles_value,
+            audio_output_format=audio_output_format_value,
             interp_engine=interp_engine_value,
             model_id=model_id,
             device=resolved_device,
             backend=backend_value,
             video_encoder=video_encoder_value,
-            job_id=token,
+            job_id=new_job_id,
         )
         job.metadata["profileKey"] = profile_key
     except QueueFullError as exc:
@@ -488,7 +557,12 @@ async def create_video_job(
         logger.exception("Unexpected error while creating video job")
         raise HTTPException(status_code=500, detail="Failed to process the uploaded video") from exc
     finally:
-        if job is None and destination.exists():
+        # Only ever clean up a destination THIS request wrote (the `file`
+        # path). A staged upload_token pre-dates this request (written by a
+        # prior /video/analyze call) and must survive a failed attempt here
+        # so the caller can retry with different job parameters without
+        # re-uploading the video.
+        if job is None and destination is not None and destination.exists():
             destination.unlink(missing_ok=True)
 
     return CreateJobResponse(
@@ -496,6 +570,56 @@ async def create_video_job(
         status=job.status,
         status_url=f"/api/v1/video/jobs/{job.id}",
         download_url=None,
+    )
+
+
+@router.post("/video/analyze", response_model=AnalyzeVideoResponse)
+async def analyze_video(
+    file: UploadFile = File(...),
+    storage: StorageService = Depends(get_storage),
+    settings: Settings = Depends(get_settings),
+    media_tools: MediaTools = Depends(get_media_tools),
+) -> AnalyzeVideoResponse:
+    original_name = Path(file.filename or "upload.mp4").name
+    safe_name = sanitize_filename(original_name, default="upload.mp4")
+    token = uuid4().hex
+    destination = settings.uploads_path / f"{token}-{safe_name}"
+
+    try:
+        await storage.save_upload(file, destination, max_mb=settings.max_video_upload_mb)
+    except ValueError as exc:
+        if destination.exists():
+            destination.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    probe: dict[str, Any] | None = None
+    try:
+        probe = await media_tools.ffprobe_json(destination)
+    except subprocess.CalledProcessError as exc:
+        raise HTTPException(status_code=400, detail="Uploaded file is not a valid video") from exc
+    except RuntimeError as exc:
+        logger.exception("ffprobe unavailable while analyzing uploaded video")
+        raise HTTPException(status_code=500, detail="Video analysis is unavailable") from exc
+    except Exception as exc:
+        logger.exception("Unexpected error while analyzing uploaded video")
+        raise HTTPException(status_code=500, detail="Failed to analyze the uploaded video") from exc
+    finally:
+        if probe is None and destination.exists():
+            destination.unlink(missing_ok=True)
+
+    audio_tracks = parse_audio_tracks(probe)
+    subtitle_tracks = parse_subtitle_tracks(probe)
+    return AnalyzeVideoResponse(
+        upload_token=token,
+        audio_tracks=[
+            AudioTrackResponse(
+                index=t.index, codec=t.codec, channels=t.channels, is_default=t.is_default, language=t.language
+            )
+            for t in audio_tracks
+        ],
+        subtitle_tracks=[
+            SubtitleTrackResponse(index=t.index, codec=t.codec, language=t.language) for t in subtitle_tracks
+        ],
     )
 
 
@@ -564,6 +688,7 @@ async def create_audio_job(
     denoise: str | None = Form(default=None),
     restore: str | None = Form(default=None),
     device: str | None = Form(default=None),
+    output_format: str = Form(default="flac"),
     audio_jobs: AudioJobManager = Depends(get_audio_job_manager),
     storage: StorageService = Depends(get_storage),
     settings: Settings = Depends(get_settings),
@@ -582,6 +707,7 @@ async def create_audio_job(
             denoise=denoise,
             restore=restore,
             device=device,
+            output_format=output_format,
             job_id=token,
         )
     except QueueFullError as exc:

@@ -9,7 +9,7 @@ from pathlib import Path
 
 from app.config import AUDIO_ENHANCE_MODES, AUDIO_RESTORE_MODES, GMFSS_ENGINE, INTERP_ENGINES, RIFE_ENGINE, Settings
 from app.exceptions import QueueFullError
-from app.models import JobStatus, VideoUpscaleJob, utc_now
+from app.models import JobStatus, TERMINAL_JOB_STATUSES, VideoUpscaleJob, utc_now
 from app.services.backend_registry import validate_backend_choice
 from app.services.video_encoders import VIDEO_ENCODERS
 from app.services.device_router import DeviceRouter, has_compatible_device
@@ -81,7 +81,8 @@ class VideoJobManager:
     async def create_job(
         self,
         *,
-        source_path: Path,
+        source_path: Path | None = None,
+        upload_token: str | None = None,
         original_filename: str,
         model_name: str,
         scale: int,
@@ -94,6 +95,9 @@ class VideoJobManager:
         target_fps: str | None = None,
         audio_enhance: str | None = None,
         audio_restore: str | None = None,
+        audio_track_indices: list[int] | None = None,
+        keep_subtitles: bool = False,
+        audio_output_format: str = "auto",
         interp_engine: str = RIFE_ENGINE,
         model_id: str | None = None,
         device: str | None = None,
@@ -101,7 +105,8 @@ class VideoJobManager:
         video_encoder: str = "auto",
         job_id: str | None = None,
     ) -> VideoUpscaleJob:
-        source_fps, probe = await self._validate_video(source_path)
+        resolved_source_path = self._resolve_source_path(source_path, upload_token)
+        source_fps, probe = await self._validate_video(resolved_source_path)
         validate_backend_choice(backend)
         self._validate_video_encoder(video_encoder)
         resolved_model_id = model_id if model_id is not None else model_name
@@ -123,13 +128,16 @@ class VideoJobManager:
             interp_engine,
         )
         self._validate_audio_restore_mode(audio_restore, keep_audio)
+        resolved_container, container_upgrade_reason = self._resolve_output_container(
+            output_container, keep_subtitles, audio_restore, audio_output_format
+        )
 
         job = VideoUpscaleJob(
-            source_path=source_path,
+            source_path=resolved_source_path,
             original_filename=original_filename,
             model_name=resolution.engine_model_name,
             scale=resolution.scale,
-            output_container=output_container,
+            output_container=resolved_container,
             video_codec=video_codec,
             video_preset=video_preset,
             crf=crf,
@@ -138,6 +146,9 @@ class VideoJobManager:
             target_fps=target_fps,
             audio_enhance=audio_enhance,
             audio_restore=audio_restore,
+            audio_track_indices=audio_track_indices,
+            keep_subtitles=keep_subtitles,
+            audio_output_format=audio_output_format,
             interp_engine=interp_engine,
             model_id=resolution.model_id,
             device=device,
@@ -145,6 +156,8 @@ class VideoJobManager:
             video_encoder=video_encoder,
             probe=probe,
         )
+        if container_upgrade_reason is not None:
+            job.metadata["containerUpgradedReason"] = container_upgrade_reason
         if job_id is not None:
             job.id = job_id
         self._enqueue(job)
@@ -158,7 +171,7 @@ class VideoJobManager:
         job = self.jobs.get(job_id)
         if job is None:
             return False
-        if job.status in (JobStatus.completed, JobStatus.failed, JobStatus.cancelled):
+        if job.status in TERMINAL_JOB_STATUSES:
             return False
         if job.status == JobStatus.queued:
             # Still in the queue: mark it so the worker skips it on dequeue.
@@ -175,6 +188,32 @@ class VideoJobManager:
             self.queue.put_nowait(job)
         except asyncio.QueueFull as exc:
             raise QueueFullError("Video job queue is full; try again later") from exc
+
+    def _resolve_source_path(self, source_path: Path | None, upload_token: str | None) -> Path:
+        if upload_token is not None:
+            matches = sorted(self.settings.uploads_path.glob(f"{upload_token}-*"))
+            if not matches:
+                raise ValueError(f"No staged upload found for upload_token={upload_token!r}")
+            return matches[0]
+        if source_path is None:
+            raise ValueError("Either source_path or upload_token must be provided")
+        return source_path
+
+    @staticmethod
+    def _resolve_output_container(
+        output_container: str, keep_subtitles: bool, audio_restore: str | None, audio_output_format: str
+    ) -> tuple[str, str | None]:
+        wants_flac = audio_output_format == "flac" or (
+            audio_output_format == "auto" and audio_restore is not None
+        )
+        reasons = []
+        if keep_subtitles and output_container != "mkv":
+            reasons.append("preserve subtitles without quality loss")
+        if wants_flac and output_container != "mkv":
+            reasons.append("keep restored audio lossless (FLAC)")
+        if not reasons:
+            return output_container, None
+        return "mkv", f"Output container upgraded to mkv to {' and '.join(reasons)}"
 
     async def _validate_video(self, source_path: Path) -> tuple[Fraction, dict]:
         """Returns (source_fps, probe). The probe travels with the job so the
@@ -376,7 +415,7 @@ class VideoJobManager:
             job = await self.queue.get()
             if job.status == JobStatus.cancelled:
                 # Cancelled while waiting in the queue: skip without processing.
-                self._unlink_source_safely(job.source_path)
+                self._unlink_source_if_unused(job)
                 self.queue.task_done()
                 continue
             if job.device == AUTO_DEVICE_ID:
@@ -432,7 +471,7 @@ class VideoJobManager:
         finally:
             self._active.pop(job.id, None)
             job.finished_at = utc_now()
-            self._unlink_source_safely(job.source_path)
+            self._unlink_source_if_unused(job)
             self.queue.task_done()
 
     async def _run_engine(self, job: VideoUpscaleJob) -> None:
@@ -442,8 +481,32 @@ class VideoJobManager:
         job.status = JobStatus.failed
         job.error = error
         job.finished_at = utc_now()
-        self._unlink_source_safely(job.source_path)
+        self._unlink_source_if_unused(job)
         self.queue.task_done()
+
+    def _unlink_source_if_unused(self, job: VideoUpscaleJob) -> None:
+        # A job created from upload_token can share its source_path with sibling
+        # jobs (see create_job/_resolve_source_path: each gets a fresh job_id on
+        # purpose, so multiple jobs may reference the same staged upload). Only
+        # unlink once no OTHER live job still references this exact path, or a
+        # sibling still queued/running loses its file out from under it. Mirrors
+        # RetentionSweeper._is_finished's definition of "still needed" so this
+        # doesn't invent a second, divergent notion of "active".
+        if self._other_job_still_needs_source(job):
+            return
+        self._unlink_source_safely(job.source_path)
+
+    def _other_job_still_needs_source(self, job: VideoUpscaleJob) -> bool:
+        return any(
+            other.id != job.id
+            and other.source_path == job.source_path
+            and not self._is_job_finished(other)
+            for other in self.jobs.values()
+        )
+
+    @staticmethod
+    def _is_job_finished(job: VideoUpscaleJob) -> bool:
+        return job.status in TERMINAL_JOB_STATUSES
 
     @staticmethod
     def _unlink_source_safely(source_path: Path) -> None:

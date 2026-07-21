@@ -3,6 +3,7 @@ import { Film, UploadCloud } from "lucide-react";
 import { useEffect, useRef, useState, type ChangeEvent, type DragEvent } from "react";
 import { AccordionSection } from "../../components/AccordionSection";
 import { DevicePicker } from "../../components/DevicePicker";
+import { FormatOptionFieldset, type FormatOption } from "../../components/FormatOptionFieldset";
 import { JobCard } from "../../components/JobCard";
 import { ModelPicker } from "../../components/ModelPicker";
 import { RuntimePicker, formatRuntimeSummary } from "../../components/RuntimePicker";
@@ -10,8 +11,10 @@ import { EncoderPicker, formatEncoderSummary } from "../../components/EncoderPic
 import { SlowPresetCostHint } from "../../components/SlowPresetCostHint";
 import { useAudioCapabilities } from "../../hooks/useAudioJob";
 import { useVideoCapabilities, useVideoJob, type VideoJobPhase } from "../../hooks/useVideoJob";
-import { getDevices, getModels } from "../../lib/api";
+import { analyzeVideo, getDevices, getModels } from "../../lib/api";
 import type {
+  AnalyzeVideoResponse,
+  AudioTrackInfo,
   DeviceInfoResponse,
   DevicesResponse,
   ModelResponse,
@@ -24,6 +27,7 @@ import { formatDeviceSummary, formatModelSummary } from "./accordionSummaries";
 import { AUDIO_ENHANCE_OPTIONS, AudioEnhanceControls } from "./AudioEnhanceControls";
 import { FpsBoostControls, TARGET_FPS_OPTIONS, type FpsBoostValue } from "./FpsBoostControls";
 import { InterpEngineControls } from "./InterpEngineControls";
+import { TrackSelector } from "./TrackSelector";
 import { VideoProfileControls } from "./VideoProfileControls";
 
 const RIFE_ENGINE = "rife";
@@ -50,6 +54,21 @@ function isInterpEngineSelectorVisible(engines: string[]): boolean {
   }
   return engines.length === 1 && engines[0] !== RIFE_ENGINE;
 }
+
+type AudioOutputFormat = "auto" | "aac";
+
+const AUDIO_OUTPUT_FORMAT_OPTIONS: readonly FormatOption<AudioOutputFormat>[] = [
+  {
+    value: "auto",
+    label: "Auto",
+    description: "Recommended — lossless FLAC automatically when audio restoration is on.",
+  },
+  {
+    value: "aac",
+    label: "AAC",
+    description: "Standard, smaller files, slight quality loss if restoration is active.",
+  },
+];
 
 const OUTPUT_CONTAINERS = ["mp4", "mkv"] as const;
 const VIDEO_CODECS = [
@@ -266,6 +285,17 @@ function Dropzone({ file, onFileSelected }: { file: File | null; onFileSelected:
   );
 }
 
+// The backend treats audio_track_indices[0] as the PRIMARY track (the one
+// enhanced/restored); the rest are copied verbatim. Defaulting to the
+// isDefault track keeps that primary choice equivalent to today's implicit
+// behavior. No default track means no informed choice to make, so the
+// selection starts empty -- submit then omits audio_track_indices entirely
+// and the backend falls back to its own pre-existing track selection.
+function resolveDefaultAudioIndices(audioTracks: AudioTrackInfo[]): number[] {
+  const defaultTrack = audioTracks.find((track) => track.isDefault);
+  return defaultTrack ? [defaultTrack.index] : [];
+}
+
 function resolveModelForProfile(
   profile: VideoProfileResponse | null,
   models: ModelResponse[],
@@ -292,7 +322,11 @@ export function VideoPanel() {
   const [fpsBoost, setFpsBoost] = useState<FpsBoostValue>({ fpsMultiplier: 1, targetFps: null });
   const [audioEnhance, setAudioEnhance] = useState<string | null>(null);
   const [audioRestore, setAudioRestore] = useState<string | null>(null);
+  const [audioOutputFormat, setAudioOutputFormat] = useState<AudioOutputFormat>("auto");
   const [interpEngine, setInterpEngine] = useState(RIFE_ENGINE);
+  const [analyzeResult, setAnalyzeResult] = useState<AnalyzeVideoResponse | null>(null);
+  const [selectedAudioIndices, setSelectedAudioIndices] = useState<number[]>([]);
+  const [keepSubtitles, setKeepSubtitles] = useState(false);
 
   const modelsQuery = useQuery({ queryKey: ["models"], queryFn: getModels });
   const devicesQuery = useQuery({ queryKey: ["devices"], queryFn: getDevices });
@@ -349,9 +383,20 @@ export function VideoPanel() {
     setInterpEngine(resolveDefaultInterpEngine(interpEngines));
   }, [interpEngines, interpEngine]);
 
-  function handleFileSelected(selected: File) {
+  async function handleFileSelected(selected: File) {
     setFile(selected);
     reset();
+    setAnalyzeResult(null);
+    setSelectedAudioIndices([]);
+    setKeepSubtitles(false);
+    try {
+      const result = await analyzeVideo(selected);
+      setAnalyzeResult(result);
+      setSelectedAudioIndices(resolveDefaultAudioIndices(result.audioTracks));
+    } catch {
+      // Analysis is best-effort: leaving analyzeResult null falls back to
+      // submitting the raw file below, same as before this feature existed.
+    }
   }
 
   function handleProfileChange(nextProfile: VideoProfileResponse) {
@@ -382,8 +427,10 @@ export function VideoPanel() {
     if (!file || !profile || scale === null) {
       return;
     }
+    const resolvedAudioRestore = keepAudio && restoreAvailable ? audioRestore : null;
     submit({
-      file,
+      ...(analyzeResult ? { uploadToken: analyzeResult.uploadToken } : { file }),
+      fileName: file.name,
       profileKey: profile.key,
       modelId: model?.id ?? null,
       device: device?.id ?? null,
@@ -398,8 +445,11 @@ export function VideoPanel() {
       fpsMultiplier: fpsBoost.fpsMultiplier,
       targetFps: fpsBoost.targetFps,
       audioEnhance,
-      audioRestore: keepAudio && restoreAvailable ? audioRestore : null,
+      audioRestore: resolvedAudioRestore,
+      audioOutputFormat: resolvedAudioRestore ? audioOutputFormat : null,
       interpEngine: fpsBoostActive ? interpEngine : "rife",
+      audioTrackIndices: selectedAudioIndices.length > 0 ? selectedAudioIndices : undefined,
+      keepSubtitles,
     });
   }
 
@@ -411,6 +461,16 @@ export function VideoPanel() {
     <div className="grid grid-cols-[1fr_320px] gap-6 max-[900px]:grid-cols-1">
       <div className="flex flex-col gap-6">
         <Dropzone file={file} onFileSelected={handleFileSelected} />
+        {analyzeResult && (
+          <TrackSelector
+            audioTracks={analyzeResult.audioTracks}
+            subtitleTracks={analyzeResult.subtitleTracks}
+            selectedAudioIndices={selectedAudioIndices}
+            onChangeAudioIndices={setSelectedAudioIndices}
+            keepSubtitles={keepSubtitles}
+            onChangeKeepSubtitles={setKeepSubtitles}
+          />
+        )}
         <AccordionSection
           title="Profile"
           summary={formatProfileSummary(profile)}
@@ -481,6 +541,15 @@ export function VideoPanel() {
                   </p>
                 )}
               </fieldset>
+            )}
+            {keepAudio && restoreAvailable && audioRestore && (
+              <FormatOptionFieldset
+                legend="Output format"
+                name="video-audio-output-format"
+                options={AUDIO_OUTPUT_FORMAT_OPTIONS}
+                value={audioOutputFormat}
+                onChange={setAudioOutputFormat}
+              />
             )}
           </div>
         </AccordionSection>

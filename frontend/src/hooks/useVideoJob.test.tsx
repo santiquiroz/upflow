@@ -225,4 +225,28 @@ describe("useVideoJob", () => {
     await waitFor(() => expect(queue.getSnapshot()).toHaveLength(1));
     expect(queue.getSnapshot()[0]).toMatchObject({ id: "vid-1", kind: "video", fileName: "clip.mp4" });
   });
+
+  it("tracks the real file name when submitting via uploadToken instead of a raw file", async () => {
+    const queue = createJobQueueStore();
+    const createResponse: CreateJobResponse = {
+      jobId: "vid-1",
+      status: "queued",
+      statusUrl: "/api/v1/video/jobs/vid-1",
+      downloadUrl: null,
+    };
+    vi.mocked(api.createVideoJob).mockResolvedValue(createResponse);
+    vi.mocked(api.getVideoJob).mockResolvedValue({ ...BASE_JOB, status: "queued" });
+
+    const { result } = renderHook(() => useVideoJob(POLL_INTERVAL_MS, queue), { wrapper: createWrapper() });
+
+    const { file: _file, ...paramsWithoutFile } = submitParams();
+    void _file;
+
+    act(() => {
+      result.current.submit({ ...paramsWithoutFile, uploadToken: "upload-token-123", fileName: "clip.mp4" });
+    });
+
+    await waitFor(() => expect(queue.getSnapshot()).toHaveLength(1));
+    expect(queue.getSnapshot()[0]).toMatchObject({ id: "vid-1", kind: "video", fileName: "clip.mp4" });
+  });
 });

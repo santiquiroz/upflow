@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from app.config import Settings
+from app.config import UPSCALE_BACKEND_ONNX, Settings
 from app.models import VideoUpscaleJob
 from app.services.video_upscaler import VideoUpscaler
 
@@ -143,6 +143,79 @@ async def test_should_stream_false_when_disabled(tmp_path: Path) -> None:
     settings = Settings(_env_file=None, RUNTIME_DIR=str(tmp_path / "runtime"), ENABLE_RAW_PIPE=False)
     vu = VideoUpscaler(settings, _FakeEngine(), _FakeMediaTools(), devices=_FakeDevices("AMD"))
     assert await vu._should_stream(make_job("software")) is False
+
+
+class _FakeOnnxVideoEngine:
+    """Stands in for OnnxVideoUpscaler: always eligible for the raw-pipe path."""
+
+    def available(self) -> bool:
+        return True
+
+    def has_gpu_execution_provider(self) -> bool:
+        return True
+
+    def builtin_onnx_available(self, engine_model_name: str) -> bool:
+        return True
+
+
+def make_streaming_upscaler(tmp_path: Path) -> VideoUpscaler:
+    settings = Settings(_env_file=None, RUNTIME_DIR=str(tmp_path / "runtime"))
+    return VideoUpscaler(settings, _FakeEngine(), _FakeMediaTools(), onnx_video_engine=_FakeOnnxVideoEngine())
+
+
+# Fase A Task 3 - a job that needs to preserve extra audio tracks or
+# subtitles from the original source can't take the raw-pipe path: only the
+# PNG-based _build_encode_command knows how to map them. Without this gate,
+# the raw-pipe fast path would silently mux out those tracks whenever it was
+# eligible, defeating the whole point of Task 2/3.
+
+
+async def test_should_stream_true_baseline_for_otherwise_eligible_job(tmp_path: Path) -> None:
+    vu = make_streaming_upscaler(tmp_path)
+    job = make_job("software", device="dml:0")
+    job.backend = UPSCALE_BACKEND_ONNX
+    assert await vu._should_stream(job) is True
+
+
+async def test_should_stream_false_when_extra_audio_tracks_requested(tmp_path: Path) -> None:
+    vu = make_streaming_upscaler(tmp_path)
+    job = make_job("software", device="dml:0")
+    job.backend = UPSCALE_BACKEND_ONNX
+    # keep_audio=True: extra tracks are only "extra to preserve" when audio is
+    # actually being kept -- with keep_audio=False there is nothing to preserve
+    # and the raw-pipe path stays eligible (see keep_audio-gate tests below).
+    job.keep_audio = True
+    job.audio_track_indices = [1, 2]
+    assert await vu._should_stream(job) is False
+
+
+async def test_should_stream_true_when_keep_audio_false_even_with_multiple_indices(tmp_path: Path) -> None:
+    # Final-review fix: keep_audio=False means _extra_audio_track_indices is
+    # always empty, so there's nothing extra to preserve and the raw-pipe path
+    # must stay eligible even when audio_track_indices has 2+ entries.
+    vu = make_streaming_upscaler(tmp_path)
+    job = make_job("software", device="dml:0")
+    job.backend = UPSCALE_BACKEND_ONNX
+    job.audio_track_indices = [1, 2]
+    assert await vu._should_stream(job) is True
+
+
+async def test_should_stream_true_with_single_audio_track_index(tmp_path: Path) -> None:
+    # A single selected track is the PRIMARY only -- nothing extra to
+    # preserve, so the raw-pipe path stays eligible.
+    vu = make_streaming_upscaler(tmp_path)
+    job = make_job("software", device="dml:0")
+    job.backend = UPSCALE_BACKEND_ONNX
+    job.audio_track_indices = [1]
+    assert await vu._should_stream(job) is True
+
+
+async def test_should_stream_false_when_keep_subtitles_requested(tmp_path: Path) -> None:
+    vu = make_streaming_upscaler(tmp_path)
+    job = make_job("software", device="dml:0")
+    job.backend = UPSCALE_BACKEND_ONNX
+    job.keep_subtitles = True
+    assert await vu._should_stream(job) is False
 
 
 def test_output_dims_multiplies_by_scale(tmp_path: Path) -> None:

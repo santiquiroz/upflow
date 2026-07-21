@@ -575,6 +575,7 @@ class VideoUpscaler:
                 "-y",
                 "-i",
                 str(job.source_path),
+                *self._primary_audio_map_args(job),
                 "-vn",
                 "-c:a",
                 "aac",
@@ -604,7 +605,18 @@ class VideoUpscaler:
             current = audio_restored_path
             job.metadata["audioRestored"] = True
 
+        if self._wants_lossless_audio(job):
+            return current, ["-c:a", "flac"]
         return current, ["-c:a", "aac", "-b:a", "192k"]
+
+    @staticmethod
+    def _wants_lossless_audio(job: VideoUpscaleJob) -> bool:
+        # Mirrors VideoJobManager._resolve_output_container's wants_flac rule:
+        # "auto" only upgrades to FLAC when a restore actually ran (enhance
+        # alone stays lossy AAC); an explicit "flac" always wants it.
+        return job.audio_output_format == "flac" or (
+            job.audio_output_format == "auto" and job.audio_restore is not None
+        )
 
     async def _extract_audio_wav(self, job: VideoUpscaleJob, audio_wav_path: Path) -> None:
         # DeepFilterNet requires 48kHz input; a lossless PCM extraction avoids
@@ -616,6 +628,7 @@ class VideoUpscaler:
                 "-y",
                 "-i",
                 str(job.source_path),
+                *self._primary_audio_map_args(job),
                 "-vn",
                 "-acodec",
                 "pcm_s16le",
@@ -916,13 +929,97 @@ class VideoUpscaler:
             "-i",
             str(encode_frames_dir / "%08d.png"),
         ]
+        next_input_index = 1
         if audio_mux_path is not None:
-            cmd += ["-i", str(audio_mux_path), "-map", "0:v:0", "-map", "1:a:0"]
+            cmd += ["-i", str(audio_mux_path), "-map", "0:v:0", "-map", f"{next_input_index}:a:0"]
+            next_input_index += 1
+        source_input_index = self._maybe_add_source_input(cmd, job, next_input_index)
+        if source_input_index is not None:
+            # Any -map switches ffmpeg to explicit-map mode and drops every
+            # unmapped stream -- including the frames video. When audio_mux_path
+            # was present the video map was already emitted above; when it was
+            # not (keep_audio=False + keep_subtitles, or no usable source audio)
+            # it must be emitted here or the output loses its video track.
+            if audio_mux_path is None:
+                cmd += ["-map", "0:v:0"]
+            self._map_extra_audio_tracks(cmd, job, source_input_index)
+            self._map_subtitles(cmd, job, source_input_index)
         cmd += self._build_video_encode_options(job, encoder)
         if audio_mux_path is not None:
             cmd += audio_codec_args
+            cmd += self._extra_audio_copy_args(job)
+        if job.keep_subtitles:
+            cmd += ["-c:s", "copy"]
         cmd.append(str(output_path))
         return cmd
+
+    def _extra_audio_copy_args(self, job: VideoUpscaleJob) -> list[str]:
+        # audio_codec_args uses the unindexed "-c:a" specifier, which applies
+        # to EVERY output audio stream. The extras were mapped raw from the
+        # source and must be copied verbatim (enhance/restore only ever touches
+        # the primary). A per-output-position "-c:a:<pos> copy" overrides the
+        # general codec for that stream; ffmpeg resolves conflicting codec
+        # specifiers as "last match wins", so these MUST come after
+        # audio_codec_args. Output audio 0 is the primary (from audio_mux_path);
+        # the extras occupy positions 1..N in the same order they were mapped.
+        args: list[str] = []
+        for position, _ in enumerate(self._extra_audio_track_indices(job), start=1):
+            args += [f"-c:a:{position}", "copy"]
+        return args
+
+    def _primary_audio_track_index(self, job: VideoUpscaleJob) -> int | None:
+        # The PRIMARY track is the first of the selected list; it is extracted
+        # (and enhanced/restored/copied) into audio_mux_path separately, and is
+        # mapped into the extraction ffmpeg command by this ABSOLUTE index.
+        if not job.audio_track_indices:
+            return None
+        return job.audio_track_indices[0]
+
+    def _primary_audio_map_args(self, job: VideoUpscaleJob) -> list[str]:
+        # Absolute ffprobe stream index (e.g. "0:3"), never the relative
+        # "0:a:N" form -- audio_track_indices stores absolute stream indices,
+        # so an audio-relative specifier would select the wrong stream.
+        index = self._primary_audio_track_index(job)
+        if index is None:
+            return []
+        return ["-map", f"0:{index}"]
+
+    def _extra_audio_track_indices(self, job: VideoUpscaleJob) -> list[int]:
+        # The PRIMARY track (audio_track_indices[0]) is muxed separately via
+        # audio_mux_path (extracted by absolute index in the extraction step).
+        # The extras are every OTHER selected track; a repeat of the primary
+        # later in the list is dropped so the same stream is never mapped twice.
+        # keep_audio=False must silently drop ALL audio, extras included --
+        # otherwise _needs_source_input still fires and the extras get mapped
+        # with no codec args (audio_mux_path is None), so ffmpeg re-encodes
+        # them into the output despite the user turning audio off.
+        if not job.keep_audio:
+            return []
+        if not job.audio_track_indices or len(job.audio_track_indices) <= 1:
+            return []
+        primary = job.audio_track_indices[0]
+        return [index for index in job.audio_track_indices[1:] if index != primary]
+
+    def _needs_source_input(self, job: VideoUpscaleJob) -> bool:
+        return bool(self._extra_audio_track_indices(job)) or job.keep_subtitles
+
+    def _maybe_add_source_input(self, cmd: list[str], job: VideoUpscaleJob, input_index: int) -> int | None:
+        if not self._needs_source_input(job):
+            return None
+        cmd += ["-i", str(job.source_path)]
+        return input_index
+
+    def _map_extra_audio_tracks(self, cmd: list[str], job: VideoUpscaleJob, source_input_index: int) -> None:
+        # Absolute ffprobe stream index (e.g. "2:3"), not the relative "2:a:N"
+        # form -- it maps the original file's stream directly, sidestepping
+        # having to re-enumerate which "audio Nth" an absolute index is.
+        for stream_index in self._extra_audio_track_indices(job):
+            cmd += ["-map", f"{source_input_index}:{stream_index}"]
+
+    def _map_subtitles(self, cmd: list[str], job: VideoUpscaleJob, source_input_index: int) -> None:
+        if not job.keep_subtitles:
+            return
+        cmd += ["-map", f"{source_input_index}:s?"]
 
     async def _encode_with_fallback(
         self,
@@ -963,6 +1060,12 @@ class VideoUpscaler:
         # HF-installed ONNX models use OnnxUpscaler (arbitrary graphs), not the
         # builtin streaming engine, so they stay on the file path.
         if self._is_onnx_model(job.model_id):
+            return False
+        # Only _build_encode_command (the PNG-based file path) knows how to map
+        # extra audio tracks / subtitles from the original source (Fase A Task
+        # 3) -- _build_rawpipe_command doesn't, so a job that needs to preserve
+        # them must not take the raw-pipe fast path.
+        if self._needs_source_input(job):
             return False
         backend = await asyncio.to_thread(self._resolve_builtin_backend, job)
         return backend == UpscaleBackend.onnx

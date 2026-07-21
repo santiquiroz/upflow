@@ -83,7 +83,7 @@ export function useVideoJob(
 
   function submit(params: CreateVideoJobParams): void {
     setJobId(null);
-    pendingFileNameRef.current = params.file.name;
+    pendingFileNameRef.current = params.fileName ?? params.file?.name ?? pendingFileNameRef.current;
     uploadMutation.mutate(params);
   }
 

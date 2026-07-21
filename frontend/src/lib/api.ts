@@ -1,4 +1,5 @@
 import type {
+  AnalyzeVideoResponse,
   CreateInstallResponse,
   CreateJobResponse,
   DevicesResponse,
@@ -131,7 +132,17 @@ export function cancelJob(jobId: string): Promise<JobResponse> {
 }
 
 export interface CreateVideoJobParams {
-  file: File;
+  // Exactly one of `file` / `uploadToken` must be set: `file` re-uploads the
+  // raw video, `uploadToken` reuses a prior POST /video/analyze upload — the
+  // backend rejects a request carrying both.
+  file?: File;
+  uploadToken?: string;
+  // Original filename for display (job queue, accessibility labels). Required
+  // when submitting via `uploadToken`, since `file` itself isn't sent in that
+  // case and callers still know the name of the file they analyzed.
+  fileName?: string;
+  audioTrackIndices?: number[];
+  keepSubtitles?: boolean;
   profileKey: string;
   modelId: string | null;
   device: string | null;
@@ -145,6 +156,7 @@ export interface CreateVideoJobParams {
   targetFps: string | null;
   audioEnhance: string | null;
   audioRestore: string | null;
+  audioOutputFormat?: string | null;
   interpEngine: string;
   backend: UpscaleBackend;
   videoEncoder: VideoEncoder;
@@ -158,9 +170,19 @@ function appendVideoModelFields(formData: FormData, modelId: string | null): voi
   formData.append("model_id", modelId);
 }
 
+function appendVideoSourceFields(formData: FormData, params: CreateVideoJobParams): void {
+  if (params.uploadToken) {
+    formData.append("upload_token", params.uploadToken);
+    return;
+  }
+  if (params.file) {
+    formData.append("file", params.file);
+  }
+}
+
 function buildVideoJobFormData(params: CreateVideoJobParams): FormData {
   const formData = new FormData();
-  formData.append("file", params.file);
+  appendVideoSourceFields(formData, params);
   formData.append("profile_key", params.profileKey);
   formData.append("scale", String(params.scale));
   formData.append("output_container", params.outputContainer);
@@ -185,11 +207,26 @@ function buildVideoJobFormData(params: CreateVideoJobParams): FormData {
   if (params.audioRestore) {
     formData.append("audio_restore", params.audioRestore);
   }
+  if (params.audioOutputFormat) {
+    formData.append("audio_output_format", params.audioOutputFormat);
+  }
+  if (params.audioTrackIndices && params.audioTrackIndices.length > 0) {
+    formData.append("audio_track_indices", params.audioTrackIndices.join(","));
+  }
+  if (params.keepSubtitles) {
+    formData.append("keep_subtitles", "true");
+  }
   return formData;
 }
 
 export function createVideoJob(params: CreateVideoJobParams): Promise<CreateJobResponse> {
   return apiPostForm<CreateJobResponse>("/video/jobs", buildVideoJobFormData(params));
+}
+
+export function analyzeVideo(file: File): Promise<AnalyzeVideoResponse> {
+  const formData = new FormData();
+  formData.append("file", file);
+  return apiPostForm<AnalyzeVideoResponse>("/video/analyze", formData);
 }
 
 export function getVideoJob(jobId: string): Promise<VideoJobResponse> {

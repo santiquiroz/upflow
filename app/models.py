@@ -20,6 +20,9 @@ class JobStatus(str, Enum):
     cancelled = "cancelled"
 
 
+TERMINAL_JOB_STATUSES = (JobStatus.completed, JobStatus.failed, JobStatus.cancelled)
+
+
 @dataclass(slots=True)
 class UpscaleJob:
     source_path: Path
@@ -65,6 +68,21 @@ class VideoUpscaleJob:
     target_fps: str | None = None
     audio_enhance: str | None = None
     audio_restore: str | None = None
+    # Which audio streams to keep in the output (Fase A Task 2). None means
+    # "keep_audio decides alone" (existing behavior); a list selects specific
+    # ffprobe stream indices, consumed by the pipeline in Task 3.
+    audio_track_indices: list[int] | None = None
+    # Copy subtitle streams into the output (Fase A Task 2). Forces an mkv
+    # container upgrade when the requested container can't carry subtitles
+    # losslessly -- see VideoJobManager._resolve_output_container.
+    keep_subtitles: bool = False
+    # Elegible output codec for the (enhanced/restored) primary audio track
+    # (Fase C Task 8): "auto" (default) re-encodes to lossless FLAC only when
+    # a restore actually ran (mirrors _resolve_output_container's mkv
+    # upgrade), "flac" always wants lossless, "aac" always forces the
+    # pre-existing lossy path regardless of restore. See
+    # VideoUpscaler._prepare_processed_audio.
+    audio_output_format: str = "auto"
     # Frame-interpolation engine (Task 4.2): "rife" (default, always) or
     # "gmfss" (opt-in, much higher quality, 10x or more slower -- even higher
     # on short clips due to model load overhead). Only consulted when
@@ -99,6 +117,11 @@ class AudioJob:
     original_filename: str
     denoise: str | None = None
     restore: str | None = None
+    # Standalone-module output format (Fase C Task 9): "wav" (lossless, no
+    # re-encode -- current is already PCM from decode/denoise/restore),
+    # "flac" (lossless, ~50% smaller, default), "mp3" (lossy, smallest). See
+    # AudioPipeline._write_output.
+    output_format: str = "flac"
     device: str | None = None
     id: str = field(default_factory=lambda: uuid4().hex)
     status: JobStatus = JobStatus.queued

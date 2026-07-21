@@ -99,6 +99,32 @@ export interface VideoJobResponse {
   downloadUrl: string | null;
 }
 
+// Mirrors app/schemas.py::AudioTrackResponse / SubtitleTrackResponse — one
+// entry per audio/subtitle stream ffprobe reports on the uploaded video,
+// keyed by the stream's absolute ffprobe index (not a per-kind relative one).
+export interface AudioTrackInfo {
+  index: number;
+  codec: string;
+  channels: number;
+  isDefault: boolean;
+  language: string | null;
+}
+
+export interface SubtitleTrackInfo {
+  index: number;
+  codec: string;
+  language: string | null;
+}
+
+// Mirrors app/schemas.py::AnalyzeVideoResponse (POST /video/analyze). The
+// uploadToken identifies the staged upload server-side so a subsequent
+// POST /video/jobs can reuse it instead of re-uploading the file.
+export interface AnalyzeVideoResponse {
+  uploadToken: string;
+  audioTracks: AudioTrackInfo[];
+  subtitleTracks: SubtitleTrackInfo[];
+}
+
 // Mirrors app/schemas.py::AudioJobResponse. Unlike the image/video responses
 // this one keys the id as `id` (not `jobId`), carries no `metadata`, and puts
 // `stages` at the top level -- consumers must narrow before reading them.

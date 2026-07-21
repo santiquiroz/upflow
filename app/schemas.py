@@ -48,6 +48,9 @@ class VideoJobResponse(BaseModel):
     target_fps: str | None = Field(default=None, serialization_alias="targetFps")
     audio_enhance: str | None = Field(default=None, serialization_alias="audioEnhance")
     audio_restore: str | None = Field(default=None, serialization_alias="audioRestore")
+    audio_track_indices: list[int] | None = Field(default=None, serialization_alias="audioTrackIndices")
+    keep_subtitles: bool = Field(default=False, serialization_alias="keepSubtitles")
+    audio_output_format: str = Field(default="auto", serialization_alias="audioOutputFormat")
     interp_engine: str = Field(default="rife", serialization_alias="interpEngine")
     model_id: str | None = Field(default=None, serialization_alias="modelId")
     device: str | None = None
@@ -69,6 +72,7 @@ class AudioJobResponse(BaseModel):
     denoise: str | None = None
     restore: str | None = None
     device: str | None = None
+    output_format: str = Field(default="flac", serialization_alias="outputFormat")
     progress_pct: float | None = Field(default=None, serialization_alias="progressPct")
     stages: list[dict[str, Any]] | None = None
     error: str | None = None
@@ -83,6 +87,26 @@ class AudioCapabilitiesResponse(BaseModel):
 
 class VideoCapabilitiesResponse(BaseModel):
     interp_engines: list[str] = Field(default_factory=list, serialization_alias="interpEngines")
+
+
+class AudioTrackResponse(BaseModel):
+    index: int
+    codec: str
+    channels: int
+    is_default: bool = Field(serialization_alias="isDefault")
+    language: str | None = None
+
+
+class SubtitleTrackResponse(BaseModel):
+    index: int
+    codec: str
+    language: str | None = None
+
+
+class AnalyzeVideoResponse(BaseModel):
+    upload_token: str = Field(serialization_alias="uploadToken")
+    audio_tracks: list[AudioTrackResponse] = Field(serialization_alias="audioTracks")
+    subtitle_tracks: list[SubtitleTrackResponse] = Field(serialization_alias="subtitleTracks")
 
 
 class SupportedModelResponse(BaseModel):

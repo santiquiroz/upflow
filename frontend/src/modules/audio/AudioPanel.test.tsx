@@ -147,4 +147,47 @@ describe("AudioPanel", () => {
       expect.objectContaining({ denoise: "deepfilter", restore: "apollo", device: "cpu" }),
     );
   });
+
+  it("shows format options with friendly descriptions and defaults to FLAC", async () => {
+    renderPanel();
+
+    expect(await screen.findByRole("radio", { name: /flac/i })).toBeChecked();
+    expect(screen.getByText(/lossless.*50%|50%.*lighter|smaller/i)).toBeInTheDocument();
+    expect(screen.getByText(/only if.*size/i)).toBeInTheDocument();
+  });
+
+  it("submits the selected output format", async () => {
+    const createResponse: CreateJobResponse = {
+      jobId: "aud-2",
+      status: "queued",
+      statusUrl: "/api/v1/audio/jobs/aud-2",
+      downloadUrl: null,
+    };
+    vi.mocked(audioService.createAudioJob).mockResolvedValueOnce(createResponse);
+    vi.mocked(audioService.getAudioJob).mockResolvedValue({
+      id: "aud-2",
+      status: "queued",
+      originalFilename: "voice.wav",
+      denoise: "deepfilter",
+      restore: null,
+      device: null,
+      progressPct: null,
+      stages: null,
+      error: null,
+      downloadUrl: null,
+    });
+
+    renderPanel();
+
+    selectFile();
+    fireEvent.click(await screen.findByRole("button", { name: "DeepFilterNet" }));
+    fireEvent.click(screen.getByRole("radio", { name: /^wav$/i }));
+
+    const submitButton = screen.getByRole("button", { name: /enhance audio/i });
+    await waitFor(() => expect(submitButton).not.toBeDisabled());
+    fireEvent.click(submitButton);
+
+    await waitFor(() => expect(audioService.createAudioJob).toHaveBeenCalled());
+    expect(vi.mocked(audioService.createAudioJob).mock.calls[0][0].outputFormat).toBe("wav");
+  });
 });
