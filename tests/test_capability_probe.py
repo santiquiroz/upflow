@@ -10,8 +10,10 @@ from app.services.capability_probe import (
     Lever,
     LeverStatus,
     build_disk_write_cache_script,
+    parse_defender_exclusion_json,
     parse_disk_write_cache_json,
     parse_pcie_json,
+    probe_defender_exclusion,
     probe_disk_write_cache,
     probe_hags,
     probe_pcie_link,
@@ -271,4 +273,108 @@ def test_probe_disk_write_cache_catches_subprocess_exception(monkeypatch: pytest
     lever = asyncio.run(probe_disk_write_cache("C:/Upflow/runtime"))
 
     assert lever.status.value == "unavailable"
+    assert "Could not run" in lever.detail
+
+
+def test_parse_defender_exclusion_ok_when_path_excluded() -> None:
+    raw = json.dumps({"ok": True, "exclusions": ["C:\\Upflow\\runtime", "C:\\Other"]})
+
+    lever = parse_defender_exclusion_json(raw, "C:\\Upflow\\runtime")
+
+    assert lever.status.value == "ok"
+    assert lever.fixable is False
+
+
+def test_parse_defender_exclusion_fixable_when_not_excluded() -> None:
+    raw = json.dumps({"ok": True, "exclusions": ["C:\\Other"]})
+
+    lever = parse_defender_exclusion_json(raw, "C:\\Upflow\\runtime")
+
+    assert lever.status.value == "unavailable"
+    assert lever.fixable is True
+
+
+def test_parse_defender_exclusion_needs_admin_when_read_fails() -> None:
+    raw = json.dumps({"ok": False, "error": "Access denied"})
+
+    lever = parse_defender_exclusion_json(raw, "C:\\Upflow\\runtime")
+
+    assert lever.status.value == "needs_admin"
+
+
+def test_parse_defender_exclusion_unavailable_on_valid_but_wrong_shape() -> None:
+    # Test JSON that parses to a scalar
+    lever = parse_defender_exclusion_json("42", "C:\\Upflow\\runtime")
+    assert lever.status.value == "unavailable"
+
+    # Test JSON that parses to a list
+    lever = parse_defender_exclusion_json("[1, 2, 3]", "C:\\Upflow\\runtime")
+    assert lever.status.value == "unavailable"
+
+    # Test JSON that is a dict but exclusions is not a list
+    lever = parse_defender_exclusion_json('{"ok": true, "exclusions": 42}', "C:\\Upflow\\runtime")
+    assert lever.status.value == "unavailable"
+
+    # Test JSON that is a dict but exclusions contains non-strings
+    lever = parse_defender_exclusion_json('{"ok": true, "exclusions": [1, 2, 3]}', "C:\\Upflow\\runtime")
+    assert lever.status.value == "unavailable"
+
+
+def test_probe_defender_exclusion_not_applicable_off_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "platform", "linux")
+
+    lever = asyncio.run(probe_defender_exclusion("C:/Upflow/runtime"))
+
+    assert lever.status.value == "not_applicable"
+
+
+def test_probe_defender_exclusion_runs_powershell_and_parses_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    import app.services.capability_probe as mod
+
+    invoked_command: list[str] = []
+
+    async def fake_run_guarded_process(command: list[str], timeout: float) -> tuple[bytes, bytes, int]:
+        invoked_command.extend(command)
+        payload = json.dumps({"ok": True, "exclusions": ["C:\\Upflow\\runtime"]}).encode()
+        return payload, b"", 0
+
+    monkeypatch.setattr(mod, "run_guarded_process", fake_run_guarded_process)
+
+    lever = asyncio.run(probe_defender_exclusion("C:/Upflow/runtime"))
+
+    assert lever.status.value == "ok"
+    assert invoked_command[0] == "powershell.exe"
+
+
+def test_probe_defender_exclusion_degrades_on_subprocess_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    import app.services.capability_probe as mod
+
+    async def fake_run_guarded_process(command: list[str], timeout: float) -> tuple[bytes, bytes, int]:
+        return b"", b"boom", 1
+
+    monkeypatch.setattr(mod, "run_guarded_process", fake_run_guarded_process)
+
+    lever = asyncio.run(probe_defender_exclusion("C:/Upflow/runtime"))
+
+    assert lever.status.value == "needs_admin"
+
+
+def test_probe_defender_exclusion_catches_subprocess_exception(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    import app.services.capability_probe as mod
+
+    async def fake_run_guarded_process(command: list[str], timeout: float) -> tuple[bytes, bytes, int]:
+        raise RuntimeError("subprocess explosion")
+
+    monkeypatch.setattr(mod, "run_guarded_process", fake_run_guarded_process)
+
+    # Should not raise; should degrade gracefully
+    lever = asyncio.run(probe_defender_exclusion("C:/Upflow/runtime"))
+
+    assert lever.status.value == "needs_admin"
     assert "Could not run" in lever.detail

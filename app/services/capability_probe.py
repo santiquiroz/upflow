@@ -185,3 +185,70 @@ async def probe_disk_write_cache(runtime_path: str, timeout: float = 10.0) -> Le
     if returncode != 0:
         return Lever(lever_id, label, LeverStatus.unavailable, f"Disk write-cache probe failed: {stderr.decode(errors='replace')[:200]}", False)
     return parse_disk_write_cache_json(stdout.decode(errors="replace"))
+
+
+_DEFENDER_EXCLUSIONS_SCRIPT = """
+try {
+    $prefs = Get-MpPreference -ErrorAction Stop
+    [PSCustomObject]@{ ok = $true; exclusions = @($prefs.ExclusionPath) } | ConvertTo-Json -Compress
+} catch {
+    [PSCustomObject]@{ ok = $false; error = $_.Exception.Message } | ConvertTo-Json -Compress
+}
+""".strip()
+
+
+def _normalize_path_for_compare(path: str) -> str:
+    # Normalize path separators to backslashes, strip, remove trailing separators, lowercase
+    normalized = path.strip().replace("/", "\\").rstrip("\\").lower()
+    return normalized
+
+
+def parse_defender_exclusion_json(raw_stdout: str, runtime_path: str) -> Lever:
+    lever_id, label = "defender_exclusion", "Windows Defender exclusion on runtime/"
+    try:
+        payload = json.loads(raw_stdout)
+    except (json.JSONDecodeError, TypeError):
+        return Lever(lever_id, label, LeverStatus.unavailable, "Could not read Defender exclusions", False)
+
+    # Validate that payload is a dict before accessing keys
+    if not isinstance(payload, dict):
+        return Lever(lever_id, label, LeverStatus.unavailable, "Defender response is not a valid object", False)
+
+    if not payload.get("ok"):
+        return Lever(lever_id, label, LeverStatus.needs_admin, str(payload.get("error", "unknown error")), True)
+
+    # Validate that exclusions is a list of strings
+    exclusions_raw = payload.get("exclusions", [])
+    if not isinstance(exclusions_raw, list):
+        return Lever(lever_id, label, LeverStatus.unavailable, "Defender exclusions is not a list", False)
+
+    exclusions = set()
+    for p in exclusions_raw:
+        if not isinstance(p, str):
+            return Lever(lever_id, label, LeverStatus.unavailable, "Defender exclusions contains non-string values", False)
+        if p:
+            exclusions.add(_normalize_path_for_compare(p))
+
+    if _normalize_path_for_compare(runtime_path) in exclusions:
+        return Lever(lever_id, label, LeverStatus.ok, "runtime/ is excluded from real-time scanning", False)
+    return Lever(
+        lever_id, label, LeverStatus.unavailable,
+        "runtime/ is not excluded -- Defender real-time scanning adds overhead to every frame write",
+        True,
+    )
+
+
+async def probe_defender_exclusion(runtime_path: str, timeout: float = 10.0) -> Lever:
+    lever_id, label = "defender_exclusion", "Windows Defender exclusion on runtime/"
+    if sys.platform != "win32":
+        return Lever(lever_id, label, LeverStatus.not_applicable, "Windows only", False)
+    try:
+        stdout, stderr, returncode = await run_guarded_process(
+            ["powershell.exe", "-NoProfile", "-Command", _DEFENDER_EXCLUSIONS_SCRIPT], timeout
+        )
+    except Exception:  # noqa: BLE001 -- a probe must never raise
+        logger.warning("Defender exclusion probe failed to run", exc_info=True)
+        return Lever(lever_id, label, LeverStatus.needs_admin, "Could not run the Defender exclusion probe", True)
+    if returncode != 0:
+        return Lever(lever_id, label, LeverStatus.needs_admin, f"Defender probe failed: {stderr.decode(errors='replace')[:200]}", True)
+    return parse_defender_exclusion_json(stdout.decode(errors="replace"), runtime_path)
