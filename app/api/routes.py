@@ -255,6 +255,7 @@ def video_job_to_response(job: VideoUpscaleJob) -> VideoJobResponse:
         audio_restore=job.audio_restore,
         audio_track_indices=job.audio_track_indices,
         keep_subtitles=job.keep_subtitles,
+        audio_output_format=job.audio_output_format,
         interp_engine=job.interp_engine,
         model_id=job.model_id,
         device=job.device,
@@ -439,6 +440,7 @@ async def create_video_job(
     audio_restore: str | None = Form(default=None),
     audio_track_indices: str | None = Form(default=None),
     keep_subtitles: bool = Form(default=False),
+    audio_output_format: str | None = Form(default=None),
     interp_engine: str | None = Form(default=None),
     model_id: str | None = Form(default=None),
     device: str | None = Form(default=None),
@@ -468,6 +470,7 @@ async def create_video_job(
 
     backend_value = backend if isinstance(backend, str) else None
     video_encoder_value = video_encoder if isinstance(video_encoder, str) else "auto"
+    audio_output_format_value = audio_output_format if isinstance(audio_output_format, str) else "auto"
     interp_engine_value = interp_engine if isinstance(interp_engine, str) else RIFE_ENGINE
 
     resolved_device = await resolve_request_device(device, devices, settings)
@@ -536,6 +539,7 @@ async def create_video_job(
             audio_restore=audio_restore,
             audio_track_indices=parsed_audio_track_indices,
             keep_subtitles=keep_subtitles_value,
+            audio_output_format=audio_output_format_value,
             interp_engine=interp_engine_value,
             model_id=model_id,
             device=resolved_device,

@@ -50,6 +50,7 @@ class VideoJobResponse(BaseModel):
     audio_restore: str | None = Field(default=None, serialization_alias="audioRestore")
     audio_track_indices: list[int] | None = Field(default=None, serialization_alias="audioTrackIndices")
     keep_subtitles: bool = Field(default=False, serialization_alias="keepSubtitles")
+    audio_output_format: str = Field(default="auto", serialization_alias="audioOutputFormat")
     interp_engine: str = Field(default="rife", serialization_alias="interpEngine")
     model_id: str | None = Field(default=None, serialization_alias="modelId")
     device: str | None = None

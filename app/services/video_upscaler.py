@@ -363,7 +363,18 @@ class VideoUpscaler:
             current = audio_restored_path
             job.metadata["audioRestored"] = True
 
+        if self._wants_lossless_audio(job):
+            return current, ["-c:a", "flac"]
         return current, ["-c:a", "aac", "-b:a", "192k"]
+
+    @staticmethod
+    def _wants_lossless_audio(job: VideoUpscaleJob) -> bool:
+        # Mirrors VideoJobManager._resolve_output_container's wants_flac rule:
+        # "auto" only upgrades to FLAC when a restore actually ran (enhance
+        # alone stays lossy AAC); an explicit "flac" always wants it.
+        return job.audio_output_format == "flac" or (
+            job.audio_output_format == "auto" and job.audio_restore is not None
+        )
 
     async def _extract_audio_wav(self, job: VideoUpscaleJob, audio_wav_path: Path) -> None:
         # DeepFilterNet requires 48kHz input; a lossless PCM extraction avoids

@@ -28,6 +28,17 @@ def make_settings(tmp_path: Path) -> Settings:
     return Settings(RUNTIME_DIR=str(tmp_path))
 
 
+def make_settings_with_audio_restore(tmp_path: Path) -> Settings:
+    model_path = tmp_path / "models" / "apollo.onnx"
+    model_path.parent.mkdir(parents=True, exist_ok=True)
+    model_path.write_bytes(b"fake-apollo-model")
+    return Settings(
+        RUNTIME_DIR=str(tmp_path),
+        ENABLE_AUDIO_RESTORE=True,
+        APOLLO_RESTORE_MODEL=str(model_path),
+    )
+
+
 def make_upload(filename: str, content: bytes) -> UploadFile:
     return UploadFile(file=io.BytesIO(content), filename=filename)
 
@@ -170,6 +181,105 @@ async def test_create_job_keeps_mkv_without_upgrade_note_when_already_mkv(tmp_pa
 
     assert job.output_container == "mkv"
     assert "containerUpgradedReason" not in job.metadata
+
+
+# ---------------------------------------------------------------------------
+# VideoJobManager.create_job - audio_output_format ("auto"|"flac"|"aac",
+# Fase C Task 8) auto-upgrades the container to mkv for lossless FLAC the same
+# way keep_subtitles does above; both reasons can coexist in the same note.
+# ---------------------------------------------------------------------------
+
+
+async def test_create_job_defaults_audio_output_format_to_auto_without_upgrade(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    manager = make_video_job_manager(settings)
+    source_path = settings.uploads_path / "existing.mp4"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_bytes(b"fake-video-bytes")
+
+    job = await manager.create_job(**create_job_kwargs(source_path=source_path))
+
+    assert job.audio_output_format == "auto"
+    assert job.output_container == "mp4"
+    assert "containerUpgradedReason" not in job.metadata
+
+
+async def test_create_job_auto_format_upgrades_container_when_restore_active(tmp_path: Path) -> None:
+    settings = make_settings_with_audio_restore(tmp_path)
+    manager = make_video_job_manager(settings)
+    source_path = settings.uploads_path / "existing.mp4"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_bytes(b"fake-video-bytes")
+
+    job = await manager.create_job(
+        **create_job_kwargs(
+            source_path=source_path, audio_restore="apollo", audio_output_format="auto"
+        )
+    )
+
+    assert job.output_container == "mkv"
+    assert job.audio_output_format == "auto"
+    assert "flac" in job.metadata["containerUpgradedReason"].lower()
+
+
+async def test_create_job_explicit_aac_does_not_upgrade_container_even_with_restore(
+    tmp_path: Path,
+) -> None:
+    settings = make_settings_with_audio_restore(tmp_path)
+    manager = make_video_job_manager(settings)
+    source_path = settings.uploads_path / "existing.mp4"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_bytes(b"fake-video-bytes")
+
+    job = await manager.create_job(
+        **create_job_kwargs(
+            source_path=source_path, audio_restore="apollo", audio_output_format="aac"
+        )
+    )
+
+    assert job.output_container == "mp4"
+    assert "containerUpgradedReason" not in job.metadata
+
+
+async def test_create_job_restore_active_without_flac_format_keeps_container(tmp_path: Path) -> None:
+    # "auto" without a restore active must NOT upgrade -- only an ACTIVE
+    # restore (or an explicit flac/auto-with-restore) wants lossless audio.
+    settings = make_settings_with_audio_restore(tmp_path)
+    manager = make_video_job_manager(settings)
+    source_path = settings.uploads_path / "existing.mp4"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_bytes(b"fake-video-bytes")
+
+    job = await manager.create_job(
+        **create_job_kwargs(source_path=source_path, audio_output_format="auto")
+    )
+
+    assert job.output_container == "mp4"
+    assert "containerUpgradedReason" not in job.metadata
+
+
+async def test_create_job_upgrades_container_once_when_subtitles_and_flac_both_apply(
+    tmp_path: Path,
+) -> None:
+    settings = make_settings_with_audio_restore(tmp_path)
+    manager = make_video_job_manager(settings)
+    source_path = settings.uploads_path / "existing.mp4"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_bytes(b"fake-video-bytes")
+
+    job = await manager.create_job(
+        **create_job_kwargs(
+            source_path=source_path,
+            keep_subtitles=True,
+            audio_restore="apollo",
+            audio_output_format="auto",
+        )
+    )
+
+    assert job.output_container == "mkv"
+    reason = job.metadata["containerUpgradedReason"].lower()
+    assert "subtitles" in reason
+    assert "flac" in reason
 
 
 # ---------------------------------------------------------------------------
@@ -516,6 +626,81 @@ async def test_create_video_job_route_passes_keep_subtitles_and_upgrades_contain
     assert "subtitles" in job.metadata["containerUpgradedReason"]
 
 
+async def test_create_video_job_route_passes_audio_output_format_and_upgrades_container(
+    tmp_path: Path,
+) -> None:
+    settings = make_settings_with_audio_restore(tmp_path)
+    storage = StorageService(settings)
+    video_jobs = make_video_job_manager(settings)
+
+    response = await create_video_job(
+        request=None,
+        file=make_upload("clip.mp4", b"fake-video-bytes"),
+        upload_token=None,
+        profile_key="anime-balanced-2x",
+        model_name=None,
+        scale=None,
+        output_container="mp4",
+        video_codec=None,
+        video_preset=None,
+        crf=None,
+        keep_audio=None,
+        fps_multiplier=None,
+        target_fps=None,
+        audio_enhance=None,
+        audio_restore="apollo",
+        audio_output_format="auto",
+        model_id=None,
+        device=None,
+        video_jobs=video_jobs,
+        storage=storage,
+        settings=settings,
+        devices=FakeDevicesService(),
+    )
+
+    job = video_jobs.get_job(response.job_id)
+    assert job is not None
+    assert job.audio_output_format == "auto"
+    assert job.output_container == "mkv"
+    assert "flac" in job.metadata["containerUpgradedReason"].lower()
+
+
+async def test_create_video_job_route_defaults_audio_output_format_to_auto_when_omitted(
+    tmp_path: Path,
+) -> None:
+    settings = make_settings(tmp_path)
+    storage = StorageService(settings)
+    video_jobs = make_video_job_manager(settings)
+
+    response = await create_video_job(
+        request=None,
+        file=make_upload("clip.mp4", b"fake-video-bytes"),
+        upload_token=None,
+        profile_key="anime-balanced-2x",
+        model_name=None,
+        scale=None,
+        output_container=None,
+        video_codec=None,
+        video_preset=None,
+        crf=None,
+        keep_audio=None,
+        fps_multiplier=None,
+        target_fps=None,
+        audio_enhance=None,
+        audio_restore=None,
+        model_id=None,
+        device=None,
+        video_jobs=video_jobs,
+        storage=storage,
+        settings=settings,
+        devices=FakeDevicesService(),
+    )
+
+    job = video_jobs.get_job(response.job_id)
+    assert job is not None
+    assert job.audio_output_format == "auto"
+
+
 # ---------------------------------------------------------------------------
 # video_job_to_response exposes the new fields
 # ---------------------------------------------------------------------------
@@ -602,3 +787,25 @@ def test_video_job_to_response_exposes_audio_track_indices_and_keep_subtitles() 
     serialized = response.model_dump(by_alias=True)
     assert serialized["audioTrackIndices"] == [1, 2]
     assert serialized["keepSubtitles"] is True
+
+
+def test_video_job_to_response_exposes_audio_output_format() -> None:
+    job = VideoUpscaleJob(
+        source_path=Path("clip.mp4"),
+        original_filename="clip.mp4",
+        model_name="realesr-animevideov3-x2",
+        scale=2,
+        output_container="mkv",
+        video_codec="libx264",
+        video_preset="medium",
+        crf=18,
+        keep_audio=True,
+        audio_restore="apollo",
+        audio_output_format="flac",
+    )
+
+    response = video_job_to_response(job)
+
+    assert response.audio_output_format == "flac"
+    serialized = response.model_dump(by_alias=True)
+    assert serialized["audioOutputFormat"] == "flac"

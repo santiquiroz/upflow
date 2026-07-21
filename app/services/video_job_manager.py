@@ -97,6 +97,7 @@ class VideoJobManager:
         audio_restore: str | None = None,
         audio_track_indices: list[int] | None = None,
         keep_subtitles: bool = False,
+        audio_output_format: str = "auto",
         interp_engine: str = RIFE_ENGINE,
         model_id: str | None = None,
         device: str | None = None,
@@ -128,7 +129,7 @@ class VideoJobManager:
         )
         self._validate_audio_restore_mode(audio_restore, keep_audio)
         resolved_container, container_upgrade_reason = self._resolve_output_container(
-            output_container, keep_subtitles
+            output_container, keep_subtitles, audio_restore, audio_output_format
         )
 
         job = VideoUpscaleJob(
@@ -147,6 +148,7 @@ class VideoJobManager:
             audio_restore=audio_restore,
             audio_track_indices=audio_track_indices,
             keep_subtitles=keep_subtitles,
+            audio_output_format=audio_output_format,
             interp_engine=interp_engine,
             model_id=resolution.model_id,
             device=device,
@@ -198,10 +200,20 @@ class VideoJobManager:
         return source_path
 
     @staticmethod
-    def _resolve_output_container(output_container: str, keep_subtitles: bool) -> tuple[str, str | None]:
+    def _resolve_output_container(
+        output_container: str, keep_subtitles: bool, audio_restore: str | None, audio_output_format: str
+    ) -> tuple[str, str | None]:
+        wants_flac = audio_output_format == "flac" or (
+            audio_output_format == "auto" and audio_restore is not None
+        )
+        reasons = []
         if keep_subtitles and output_container != "mkv":
-            return "mkv", "Output container upgraded to mkv to preserve subtitles without quality loss"
-        return output_container, None
+            reasons.append("preserve subtitles without quality loss")
+        if wants_flac and output_container != "mkv":
+            reasons.append("keep restored audio lossless (FLAC)")
+        if not reasons:
+            return output_container, None
+        return "mkv", f"Output container upgraded to mkv to {' and '.join(reasons)}"
 
     async def _validate_video(self, source_path: Path) -> tuple[Fraction, dict]:
         """Returns (source_fps, probe). The probe travels with the job so the
