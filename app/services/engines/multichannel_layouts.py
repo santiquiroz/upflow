@@ -29,9 +29,10 @@ def restore_surround(audio: np.ndarray, layout: str, restore_mono: RestoreMonoFn
     fl, fr = spec["front"]
     out[:, fl], out[:, fr] = _restore_pair_mid_side(audio[:, fl], audio[:, fr], restore_mono)
 
-    # El centro (FC) ya es contenido mono de dialogo: se restaura directo, sin M/S ni RMS-match.
+    # El centro (FC) ya es contenido mono de dialogo: se restaura directo, sin M/S,
+    # pero se RMS-matchea a la señal original (como todos los otros canales).
     center = spec["center"]
-    out[:, center] = restore_mono(audio[:, center])
+    out[:, center] = _rms_match(restore_mono(audio[:, center]), audio[:, center])
 
     # LFE (spec["lfe"]) se deja intacto: out ya es una copia de audio, no se toca.
 

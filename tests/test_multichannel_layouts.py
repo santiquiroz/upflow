@@ -26,7 +26,7 @@ def test_51_lfe_channel_untouched():
     np.testing.assert_allclose(result[:, 3], audio[:, 3])
 
 
-def test_51_center_channel_goes_through_restore_mono_directly():
+def test_51_center_channel_is_rms_matched_to_original_level():
     audio = np.zeros((100, 6), dtype=np.float32)
     audio[:, 2] = 0.5  # FC
 
@@ -34,7 +34,8 @@ def test_51_center_channel_goes_through_restore_mono_directly():
         return mono * 2
 
     result = restore_surround(audio, "5.1", double)
-    np.testing.assert_allclose(result[:, 2], np.full(100, 1.0))
+    # Even with a double restore model, RMS-match brings the level back to the original 0.5
+    np.testing.assert_allclose(result[:, 2], np.full(100, 0.5))
 
 
 def test_71_has_eight_channels_round_trip():
