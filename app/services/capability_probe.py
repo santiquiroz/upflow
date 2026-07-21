@@ -315,8 +315,6 @@ async def _run_elevated(inner_script: str, timeout: float) -> tuple[bool, str]:
 
 
 class CapabilityProbe:
-    """Orchestrates lever probing and elevated fixes for the Optimization Center."""
-
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self._cache: list[Lever] | None = None
