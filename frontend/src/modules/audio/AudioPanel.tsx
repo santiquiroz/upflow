@@ -2,11 +2,20 @@ import { AudioWaveform, UploadCloud } from "lucide-react";
 import { useState, type ChangeEvent, type DragEvent } from "react";
 import { AccordionSection } from "../../components/AccordionSection";
 import { CPU_DEVICE, DevicePicker } from "../../components/DevicePicker";
+import { FormatOptionFieldset, type FormatOption } from "../../components/FormatOptionFieldset";
 import { JobCard } from "../../components/JobCard";
 import { useAudioCapabilities, useAudioJob, type AudioJobPhase } from "../../hooks/useAudioJob";
 import { denoiseLabel, restoreLabel } from "../../lib/audioLabels";
 import type { DeviceInfoResponse } from "../../lib/apiTypes";
 import { formatDeviceSummary } from "../enhance/accordionSummaries";
+
+type AudioOutputFormat = "flac" | "wav" | "mp3";
+
+const OUTPUT_FORMAT_OPTIONS: readonly FormatOption<AudioOutputFormat>[] = [
+  { value: "flac", label: "FLAC (recommended)", description: "Lossless quality, about 50% smaller than WAV." },
+  { value: "wav", label: "WAV", description: "Lossless, uncompressed. Universal compatibility." },
+  { value: "mp3", label: "MP3", description: "Lossy, smallest file — only if size matters more than quality." },
+];
 
 const DENOISE_TOOLTIP =
   "Remove background noise with an AI denoiser. DeepFilterNet is stronger; RNNoise is lighter. Runs before restoration.";
@@ -119,6 +128,7 @@ export function AudioPanel() {
   const [file, setFile] = useState<File | null>(null);
   const [denoise, setDenoise] = useState<string | null>(null);
   const [restore, setRestore] = useState<string | null>(null);
+  const [outputFormat, setOutputFormat] = useState<AudioOutputFormat>("flac");
   const [device, setDevice] = useState<DeviceInfoResponse | null>(CPU_DEVICE);
 
   const capabilitiesQuery = useAudioCapabilities();
@@ -137,7 +147,7 @@ export function AudioPanel() {
     if (!file || (denoise === null && restore === null)) {
       return;
     }
-    submit({ file, denoise, restore, device: device?.id ?? null });
+    submit({ file, denoise, restore, outputFormat, device: device?.id ?? null });
   }
 
   const hasSelection = denoise !== null || restore !== null;
@@ -174,6 +184,13 @@ export function AudioPanel() {
         <AccordionSection title="Device" summary={formatDeviceSummary(device)} tooltip={DEVICE_TOOLTIP}>
           <DevicePicker value={device?.id ?? null} onChange={setDevice} requiresGpu={false} allowAuto={false} />
         </AccordionSection>
+        <FormatOptionFieldset
+          legend="Output format"
+          name="audio-output-format"
+          options={OUTPUT_FORMAT_OPTIONS}
+          value={outputFormat}
+          onChange={setOutputFormat}
+        />
         <div className="flex flex-col gap-2">
           {!hasSelection && (
             <p role="status" className="text-xs text-text-faint">

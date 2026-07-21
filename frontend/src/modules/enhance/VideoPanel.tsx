@@ -3,6 +3,7 @@ import { Film, UploadCloud } from "lucide-react";
 import { useEffect, useRef, useState, type ChangeEvent, type DragEvent } from "react";
 import { AccordionSection } from "../../components/AccordionSection";
 import { DevicePicker } from "../../components/DevicePicker";
+import { FormatOptionFieldset, type FormatOption } from "../../components/FormatOptionFieldset";
 import { JobCard } from "../../components/JobCard";
 import { ModelPicker } from "../../components/ModelPicker";
 import { RuntimePicker, formatRuntimeSummary } from "../../components/RuntimePicker";
@@ -53,6 +54,21 @@ function isInterpEngineSelectorVisible(engines: string[]): boolean {
   }
   return engines.length === 1 && engines[0] !== RIFE_ENGINE;
 }
+
+type AudioOutputFormat = "auto" | "aac";
+
+const AUDIO_OUTPUT_FORMAT_OPTIONS: readonly FormatOption<AudioOutputFormat>[] = [
+  {
+    value: "auto",
+    label: "Auto",
+    description: "Recommended — lossless FLAC automatically when audio restoration is on.",
+  },
+  {
+    value: "aac",
+    label: "AAC",
+    description: "Standard, smaller files, slight quality loss if restoration is active.",
+  },
+];
 
 const OUTPUT_CONTAINERS = ["mp4", "mkv"] as const;
 const VIDEO_CODECS = [
@@ -306,6 +322,7 @@ export function VideoPanel() {
   const [fpsBoost, setFpsBoost] = useState<FpsBoostValue>({ fpsMultiplier: 1, targetFps: null });
   const [audioEnhance, setAudioEnhance] = useState<string | null>(null);
   const [audioRestore, setAudioRestore] = useState<string | null>(null);
+  const [audioOutputFormat, setAudioOutputFormat] = useState<AudioOutputFormat>("auto");
   const [interpEngine, setInterpEngine] = useState(RIFE_ENGINE);
   const [analyzeResult, setAnalyzeResult] = useState<AnalyzeVideoResponse | null>(null);
   const [selectedAudioIndices, setSelectedAudioIndices] = useState<number[]>([]);
@@ -410,6 +427,7 @@ export function VideoPanel() {
     if (!file || !profile || scale === null) {
       return;
     }
+    const resolvedAudioRestore = keepAudio && restoreAvailable ? audioRestore : null;
     submit({
       ...(analyzeResult ? { uploadToken: analyzeResult.uploadToken } : { file }),
       fileName: file.name,
@@ -427,7 +445,8 @@ export function VideoPanel() {
       fpsMultiplier: fpsBoost.fpsMultiplier,
       targetFps: fpsBoost.targetFps,
       audioEnhance,
-      audioRestore: keepAudio && restoreAvailable ? audioRestore : null,
+      audioRestore: resolvedAudioRestore,
+      audioOutputFormat: resolvedAudioRestore ? audioOutputFormat : null,
       interpEngine: fpsBoostActive ? interpEngine : "rife",
       audioTrackIndices: selectedAudioIndices.length > 0 ? selectedAudioIndices : undefined,
       keepSubtitles,
@@ -522,6 +541,15 @@ export function VideoPanel() {
                   </p>
                 )}
               </fieldset>
+            )}
+            {keepAudio && restoreAvailable && audioRestore && (
+              <FormatOptionFieldset
+                legend="Output format"
+                name="video-audio-output-format"
+                options={AUDIO_OUTPUT_FORMAT_OPTIONS}
+                value={audioOutputFormat}
+                onChange={setAudioOutputFormat}
+              />
             )}
           </div>
         </AccordionSection>

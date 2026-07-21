@@ -41,6 +41,7 @@ function submitParams() {
     file: new File(["binary"], "voice.wav", { type: "audio/wav" }),
     denoise: "deepfilter",
     restore: null,
+    outputFormat: "flac",
     device: null,
   };
 }

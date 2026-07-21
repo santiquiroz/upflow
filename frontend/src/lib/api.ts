@@ -156,6 +156,7 @@ export interface CreateVideoJobParams {
   targetFps: string | null;
   audioEnhance: string | null;
   audioRestore: string | null;
+  audioOutputFormat?: string | null;
   interpEngine: string;
   backend: UpscaleBackend;
   videoEncoder: VideoEncoder;
@@ -205,6 +206,9 @@ function buildVideoJobFormData(params: CreateVideoJobParams): FormData {
   }
   if (params.audioRestore) {
     formData.append("audio_restore", params.audioRestore);
+  }
+  if (params.audioOutputFormat) {
+    formData.append("audio_output_format", params.audioOutputFormat);
   }
   if (params.audioTrackIndices && params.audioTrackIndices.length > 0) {
     formData.append("audio_track_indices", params.audioTrackIndices.join(","));

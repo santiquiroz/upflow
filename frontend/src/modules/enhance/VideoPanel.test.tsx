@@ -472,6 +472,120 @@ describe("VideoPanel", () => {
     expect(await screen.findByText(/2 minutes of processing per minute/i)).toBeInTheDocument();
   });
 
+  it("hides the audio output format selector until a restore mode is active", async () => {
+    renderPanel(DEVICES, true);
+    await selectFile();
+    openSection("Audio");
+
+    expect(screen.queryByRole("radio", { name: "Auto" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: "AAC" })).not.toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole("radio", { name: "Apollo" }));
+
+    expect(await screen.findByRole("radio", { name: "Auto" })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "AAC" })).not.toBeChecked();
+  });
+
+  it("submits the chosen audio output format only while restore is active", async () => {
+    const createResponse: CreateJobResponse = {
+      jobId: "vid-fmt",
+      status: "queued",
+      statusUrl: "/api/v1/video/jobs/vid-fmt",
+      downloadUrl: null,
+    };
+    vi.mocked(api.createVideoJob).mockResolvedValue(createResponse);
+    vi.mocked(api.getVideoJob).mockResolvedValue({
+      jobId: "vid-fmt",
+      status: "queued",
+      originalFilename: "clip.mp4",
+      modelName: "realesrgan-x4plus",
+      scale: 4,
+      outputContainer: "mp4",
+      videoCodec: "libx264",
+      videoPreset: "medium",
+      crf: 18,
+      keepAudio: true,
+      fpsMultiplier: 1,
+      targetFps: null,
+      audioEnhance: null,
+      audioRestore: "apollo",
+      interpEngine: "rife",
+      modelId: "realesrgan-x4plus",
+      device: "dml:0",
+      createdAt: "2026-01-01T00:00:00Z",
+      startedAt: null,
+      finishedAt: null,
+      error: null,
+      metadata: {},
+      progressPct: null,
+      downloadUrl: null,
+    });
+
+    renderPanel(DEVICES, true);
+    await selectFile();
+    fireEvent.click(await screen.findByRole("radio", { name: /General Balanced 4x/ }));
+    openSection("Audio");
+
+    fireEvent.click(await screen.findByRole("radio", { name: "Apollo" }));
+    fireEvent.click(await screen.findByRole("radio", { name: "AAC" }));
+
+    const submitButton = await screen.findByRole("button", { name: /upscale video/i });
+    await waitFor(() => expect(submitButton).not.toBeDisabled());
+    fireEvent.click(submitButton);
+
+    await waitFor(() => expect(vi.mocked(api.createVideoJob)).toHaveBeenCalled());
+    expect(vi.mocked(api.createVideoJob).mock.calls[0][0]).toEqual(
+      expect.objectContaining({ audioOutputFormat: "aac" }),
+    );
+  });
+
+  it("omits the audio output format when no restore mode is active", async () => {
+    const createResponse: CreateJobResponse = {
+      jobId: "vid-noformat",
+      status: "queued",
+      statusUrl: "/api/v1/video/jobs/vid-noformat",
+      downloadUrl: null,
+    };
+    vi.mocked(api.createVideoJob).mockResolvedValue(createResponse);
+    vi.mocked(api.getVideoJob).mockResolvedValue({
+      jobId: "vid-noformat",
+      status: "queued",
+      originalFilename: "clip.mp4",
+      modelName: "realesrgan-x4plus",
+      scale: 4,
+      outputContainer: "mp4",
+      videoCodec: "libx264",
+      videoPreset: "medium",
+      crf: 18,
+      keepAudio: true,
+      fpsMultiplier: 1,
+      targetFps: null,
+      audioEnhance: null,
+      audioRestore: null,
+      interpEngine: "rife",
+      modelId: "realesrgan-x4plus",
+      device: "dml:0",
+      createdAt: "2026-01-01T00:00:00Z",
+      startedAt: null,
+      finishedAt: null,
+      error: null,
+      metadata: {},
+      progressPct: null,
+      downloadUrl: null,
+    });
+
+    renderPanel(DEVICES, true);
+    await selectFile();
+    fireEvent.click(await screen.findByRole("radio", { name: /General Balanced 4x/ }));
+
+    const submitButton = await screen.findByRole("button", { name: /upscale video/i });
+    await waitFor(() => expect(submitButton).not.toBeDisabled());
+    fireEvent.click(submitButton);
+
+    await waitFor(() => expect(vi.mocked(api.createVideoJob)).toHaveBeenCalled());
+    expect(vi.mocked(api.createVideoJob).mock.calls[0][0].audioOutputFormat).toBeFalsy();
+  });
+
   it("defaults the Runtime to Auto and lists the three backend options", async () => {
     renderPanel();
     await selectFile();

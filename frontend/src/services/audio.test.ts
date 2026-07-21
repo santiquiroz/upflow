@@ -25,13 +25,20 @@ describe("createAudioJob", () => {
     mockFetchOnce(payload, { status: 202 });
     const file = new File(["binary"], "voice.wav", { type: "audio/wav" });
 
-    const result = await createAudioJob({ file, denoise: "deepfilter", restore: "apollo", device: "dml:0" });
+    const result = await createAudioJob({
+      file,
+      denoise: "deepfilter",
+      restore: "apollo",
+      outputFormat: "flac",
+      device: "dml:0",
+    });
 
     expect(fetch).toHaveBeenCalledWith("/api/v1/audio/jobs", expect.objectContaining({ method: "POST" }));
     const body = vi.mocked(fetch).mock.calls[0][1]?.body as FormData;
     expect(body.get("file")).toBe(file);
     expect(body.get("denoise")).toBe("deepfilter");
     expect(body.get("restore")).toBe("apollo");
+    expect(body.get("output_format")).toBe("flac");
     expect(body.get("device")).toBe("dml:0");
     expect(result).toEqual(payload);
   });
@@ -43,12 +50,25 @@ describe("createAudioJob", () => {
     );
     const file = new File(["binary"], "voice.wav", { type: "audio/wav" });
 
-    await createAudioJob({ file, denoise: "rnnoise", restore: null, device: null });
+    await createAudioJob({ file, denoise: "rnnoise", restore: null, outputFormat: "flac", device: null });
 
     const body = vi.mocked(fetch).mock.calls[0][1]?.body as FormData;
     expect(body.get("denoise")).toBe("rnnoise");
     expect(body.has("restore")).toBe(false);
     expect(body.has("device")).toBe(false);
+  });
+
+  it("always sends the chosen output_format", async () => {
+    mockFetchOnce(
+      { jobId: "aud-3", status: "queued", statusUrl: "/api/v1/audio/jobs/aud-3", downloadUrl: null },
+      { status: 202 },
+    );
+    const file = new File(["binary"], "voice.wav", { type: "audio/wav" });
+
+    await createAudioJob({ file, denoise: null, restore: null, outputFormat: "mp3", device: null });
+
+    const body = vi.mocked(fetch).mock.calls[0][1]?.body as FormData;
+    expect(body.get("output_format")).toBe("mp3");
   });
 });
 

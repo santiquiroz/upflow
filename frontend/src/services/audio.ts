@@ -5,12 +5,14 @@ export interface CreateAudioJobParams {
   file: File;
   denoise: string | null;
   restore: string | null;
+  outputFormat: string;
   device: string | null;
 }
 
 function buildAudioJobFormData(params: CreateAudioJobParams): FormData {
   const formData = new FormData();
   formData.append("file", params.file);
+  formData.append("output_format", params.outputFormat);
   if (params.denoise) {
     formData.append("denoise", params.denoise);
   }

@@ -436,6 +436,32 @@ describe("createVideoJob", () => {
     const body = call[1]?.body as FormData;
     expect(body.has("keep_subtitles")).toBe(false);
   });
+
+  it("sends audio_output_format when set", async () => {
+    mockFetchOnce(
+      { jobId: "vid-11", status: "queued", statusUrl: "/api/v1/video/jobs/vid-11", downloadUrl: null },
+      { status: 202 },
+    );
+
+    await createVideoJob(videoParams({ audioRestore: "apollo", audioOutputFormat: "aac" }));
+
+    const call = vi.mocked(fetch).mock.calls[0];
+    const body = call[1]?.body as FormData;
+    expect(body.get("audio_output_format")).toBe("aac");
+  });
+
+  it("omits audio_output_format when not set", async () => {
+    mockFetchOnce(
+      { jobId: "vid-12", status: "queued", statusUrl: "/api/v1/video/jobs/vid-12", downloadUrl: null },
+      { status: 202 },
+    );
+
+    await createVideoJob(videoParams());
+
+    const call = vi.mocked(fetch).mock.calls[0];
+    const body = call[1]?.body as FormData;
+    expect(body.has("audio_output_format")).toBe(false);
+  });
 });
 
 describe("analyzeVideo", () => {
