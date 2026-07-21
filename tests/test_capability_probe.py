@@ -6,7 +6,15 @@ import sys
 
 import pytest
 
-from app.services.capability_probe import Lever, LeverStatus, parse_pcie_json, probe_hags, probe_pcie_link
+from app.services.capability_probe import (
+    Lever,
+    LeverStatus,
+    parse_disk_write_cache_json,
+    parse_pcie_json,
+    probe_disk_write_cache,
+    probe_hags,
+    probe_pcie_link,
+)
 
 HAGS_KEY_PATH = r"SYSTEM\CurrentControlSet\Control\GraphicsDrivers"
 
@@ -151,3 +159,53 @@ def test_probe_pcie_link_degrades_on_subprocess_failure(monkeypatch: pytest.Monk
     lever = asyncio.run(probe_pcie_link())
 
     assert lever.status.value == "unavailable"
+
+
+def test_parse_disk_write_cache_ok_when_enabled() -> None:
+    raw = json.dumps({"ok": True, "diskName": "NVMe SSD", "writeCacheEnabled": True})
+
+    lever = parse_disk_write_cache_json(raw)
+
+    assert lever.status.value == "ok"
+    assert lever.fixable is False
+
+
+def test_parse_disk_write_cache_fixable_when_disabled() -> None:
+    raw = json.dumps({"ok": True, "diskName": "NVMe SSD", "writeCacheEnabled": False})
+
+    lever = parse_disk_write_cache_json(raw)
+
+    assert lever.status.value == "unavailable"
+    assert lever.fixable is True
+
+
+def test_parse_disk_write_cache_degrades_on_script_error() -> None:
+    raw = json.dumps({"ok": False, "error": "Access denied"})
+
+    lever = parse_disk_write_cache_json(raw)
+
+    assert lever.status.value == "unavailable"
+    assert "Access denied" in lever.detail
+    assert lever.fixable is False
+
+
+def test_parse_disk_write_cache_unavailable_on_valid_but_wrong_shape() -> None:
+    # Test JSON that parses to a scalar
+    lever = parse_disk_write_cache_json("42")
+    assert lever.status.value == "unavailable"
+
+    # Test JSON that parses to a list
+    lever = parse_disk_write_cache_json("[1, 2, 3]")
+    assert lever.status.value == "unavailable"
+
+    # Test JSON that is a dict but missing required keys
+    lever = parse_disk_write_cache_json("{}")
+    assert lever.status.value == "unavailable"
+
+
+def test_probe_disk_write_cache_not_applicable_off_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "platform", "linux")
+
+    lever = asyncio.run(probe_disk_write_cache("C:/Upflow/runtime"))
+
+    assert lever.status.value == "not_applicable"

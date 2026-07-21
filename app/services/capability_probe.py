@@ -119,3 +119,69 @@ async def probe_pcie_link(timeout: float = 10.0) -> Lever:
     except Exception:  # noqa: BLE001 -- a probe must never raise
         logger.warning("PCIe link probe failed to run", exc_info=True)
         return Lever(lever_id, label, LeverStatus.unavailable, "Could not run the PCIe link probe", False)
+
+
+_DISK_WRITE_CACHE_SCRIPT_TEMPLATE = """
+try {{
+    $target = {path_literal}
+    $drive = (Get-Item -LiteralPath $target -ErrorAction Stop).PSDrive.Name
+    $partition = Get-Partition -DriveLetter $drive -ErrorAction Stop
+    $disk = Get-Disk -Number $partition.DiskNumber -ErrorAction Stop
+    $pnp = Get-PnpDevice -Class DiskDrive -ErrorAction Stop | Where-Object {{ $_.FriendlyName -eq $disk.FriendlyName }} | Select-Object -First 1
+    $regPath = "HKLM:\\SYSTEM\\CurrentControlSet\\Enum\\$($pnp.InstanceId)\\Device Parameters\\Disk"
+    $cache = (Get-ItemProperty -Path $regPath -Name "UserWriteCacheSetting" -ErrorAction Stop).UserWriteCacheSetting
+    [PSCustomObject]@{{ ok = $true; diskName = $disk.FriendlyName; writeCacheEnabled = [bool]$cache }} | ConvertTo-Json -Compress
+}} catch {{
+    [PSCustomObject]@{{ ok = $false; error = $_.Exception.Message }} | ConvertTo-Json -Compress
+}}
+""".strip()
+
+
+def _ps_single_quote(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def build_disk_write_cache_script(runtime_path: str) -> str:
+    return _DISK_WRITE_CACHE_SCRIPT_TEMPLATE.format(path_literal=_ps_single_quote(runtime_path))
+
+
+def parse_disk_write_cache_json(raw_stdout: str) -> Lever:
+    lever_id, label = "disk_write_cache", "Disk write-cache policy"
+    try:
+        payload = json.loads(raw_stdout)
+    except (json.JSONDecodeError, TypeError):
+        return Lever(lever_id, label, LeverStatus.unavailable, "Could not read disk write-cache policy", False)
+
+    # Validate that payload is a dict before accessing keys
+    if not isinstance(payload, dict):
+        return Lever(lever_id, label, LeverStatus.unavailable, "Disk write-cache response is not a valid object", False)
+
+    if not payload.get("ok"):
+        return Lever(lever_id, label, LeverStatus.unavailable, str(payload.get("error", "unknown error")), False)
+
+    enabled = bool(payload.get("writeCacheEnabled"))
+    disk_name = payload.get("diskName", "disk")
+    if enabled:
+        return Lever(lever_id, label, LeverStatus.ok, f"Write caching enabled on {disk_name}", False)
+    return Lever(
+        lever_id, label, LeverStatus.unavailable,
+        f"Write caching disabled on {disk_name} ('Quick removal' policy) -- affects save-bound video jobs. Fix requires a reboot to take effect.",
+        True,
+    )
+
+
+async def probe_disk_write_cache(runtime_path: str, timeout: float = 10.0) -> Lever:
+    lever_id, label = "disk_write_cache", "Disk write-cache policy"
+    if sys.platform != "win32":
+        return Lever(lever_id, label, LeverStatus.not_applicable, "Windows only", False)
+    script = build_disk_write_cache_script(runtime_path)
+    try:
+        stdout, stderr, returncode = await run_guarded_process(
+            ["powershell.exe", "-NoProfile", "-Command", script], timeout
+        )
+    except Exception:  # noqa: BLE001 -- a probe must never raise
+        logger.warning("disk write-cache probe failed to run", exc_info=True)
+        return Lever(lever_id, label, LeverStatus.unavailable, "Could not run the disk write-cache probe", False)
+    if returncode != 0:
+        return Lever(lever_id, label, LeverStatus.unavailable, f"Disk write-cache probe failed: {stderr.decode(errors='replace')[:200]}", False)
+    return parse_disk_write_cache_json(stdout.decode(errors="replace"))
