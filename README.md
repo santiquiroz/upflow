@@ -58,7 +58,8 @@ La mayoría de buenos upscalers son CUDA-only, de código cerrado, o una pila de
 ## Características
 
 - 🖼️ **Upscaling de imagen** — arrastrás el archivo, elegís modelo, dispositivo y escala (2×/3×/4× según el modelo), listo. Fotos y anime/line-art por igual, con job en vivo y descarga directa desde la UI.
-- 🎬 **Upscaling de video** — pipeline completo con FFmpeg: extraer frames → upscale por lote → re-encodear preservando el audio. Perfiles listos para anime y contenido general, con opciones avanzadas (modelo, escala, códec, preset, CRF, FPS boost, mejora de audio).
+- 🎬 **Upscaling de video** — pipeline completo con FFmpeg: extraer frames → upscale por lote → re-encodear preservando el audio. Perfiles listos para anime y contenido general, con opciones avanzadas (modelo, escala, códec, preset, CRF, FPS boost, mejora de audio, formato de audio de salida).
+- 🎞️ **Selección de pistas de audio y subtítulos** — `POST /api/v1/video/analyze` inspecciona el video subido (pistas de audio con idioma/codec/canales, pistas de subtítulos) antes de crear el job; elegís qué pista(s) de audio conservar (la primera de la lista es la primaria, la única que pasa por enhance/restore) y si querés preservar subtítulos, que sube el contenedor a `.mkv` automáticamente si hacía falta (con aviso en `job.metadata`, nunca en silencio).
 - 🌊 **FPS boost con RIFE NCNN Vulkan** — interpolación de fotogramas 2×/3×/4× sobre el video ya reescalado, mismo backend Vulkan (sin CUDA). Se activa por config y aparece como dropdown en el módulo Enhance.
 - 🎨 **GMFSS — interpolación de máxima calidad (experimental, opt-in)** — segundo motor de FPS boost, port ONNX propio de [GMFSS_Fortuna](https://github.com/santiquiroz/port-gmfss-onnx) (el mejor modelo de interpolación para anime, corriendo en cualquier GPU DirectX12 sin CUDA). Mucho más lento que RIFE (~10x o más — máxima calidad, no para uso cotidiano), se activa con `ENABLE_GMFSS=true` + `scripts/download-gmfss-onnx.ps1` y se elige por job (`interp_engine=rife|gmfss`, RIFE sigue siendo el default).
 - 🔊 **Mejora de audio con IA** — denoise opcional del audio del video con DeepFilterNet (red neuronal) o RNNoise (filtro `arnndn` de FFmpeg), como paso extra del pipeline antes de re-encodear. Se activa por config y se elige por job (`audio_enhance=deepfilter|rnnoise`).
@@ -141,7 +142,7 @@ La SPA de React tiene cuatro módulos, accesibles desde la barra lateral:
 
 - **Enhance** (`/`) — imagen y video en la misma pantalla, con tabs:
   - *Imagen*: subís el archivo, elegís modelo, dispositivo de cómputo (`cpu`/`dml:N`) y escala (la lista se filtra automáticamente según lo que soporta cada modelo), formato de salida. Job en vivo con progreso y descarga directa al terminar.
-  - *Video*: subís el archivo y elegís un perfil (ver tabla de perfiles abajo), con opciones avanzadas para sobreescribir modelo, escala, contenedor, códec, preset, CRF, audio, el dropdown **FPS boost** (Off, o 2×/3×/4×; solo produce resultado si tenés `ENABLE_INTERPOLATION=true` y RIFE instalado — ver más abajo) y **mejora de audio** (Off/RNNoise/DeepFilterNet).
+  - *Video*: subís el archivo (se analiza automáticamente con `/video/analyze`) y elegís un perfil (ver tabla de perfiles abajo), con opciones avanzadas para sobreescribir modelo, escala, contenedor, códec, preset, CRF, audio, el dropdown **FPS boost** (Off, o 2×/3×/4×; solo produce resultado si tenés `ENABLE_INTERPOLATION=true` y RIFE instalado — ver más abajo), **mejora de audio** (Off/RNNoise/DeepFilterNet) y **formato de audio de salida** (Auto/FLAC/AAC). Si el video trae más de una pista de audio o subtítulos embebidos, aparece un **selector de pistas**: tildá cuáles pistas de audio conservar (la primera tildada es la primaria, la única que pasa por enhance/restore) y si querés preservar los subtítulos (sube el contenedor a `.mkv` automáticamente si hacía falta).
 - **Models** (`/models`) — buscador de modelos de super-resolución en Hugging Face, instalación con un click (con polling de progreso hasta `done`/`error`), lista de modelos instalados con borrado, y selección de dispositivo por default.
 - **Settings** (`/settings`) — estado del motor (disponibilidad, ffmpeg), concurrencia de GPU y profundidad de las colas de jobs, en vivo.
 - **Realtime** (`/realtime`) — página de roadmap: explica el plan de interpolación en tiempo real (Fase 7) y por qué el frame generation en vivo no es viable todavía en Windows sin driver hooks propietarios.
@@ -165,6 +166,7 @@ Todos los endpoints viven bajo `/api/v1`. Los campos de formulario (subida) van 
 | `POST` | `/api/v1/jobs` | Crea un job de imagen (`202`) |
 | `GET` | `/api/v1/jobs/{job_id}` | Estado de un job de imagen (`404` si no existe) |
 | `GET` | `/api/v1/jobs/{job_id}/download` | Descarga el resultado (`404` si no existe, `409` si aún no terminó) |
+| `POST` | `/api/v1/video/analyze` | Analiza un video subido (pistas de audio y subtítulos vía `ffprobe`) sin crear un job; devuelve `uploadToken` reutilizable en `POST /api/v1/video/jobs` |
 | `POST` | `/api/v1/video/jobs` | Crea un job de video (`202`) |
 | `GET` | `/api/v1/video/jobs/{job_id}` | Estado de un job de video, incluye `metadata` (stage, fps, dimensiones, `outputFps`) |
 | `GET` | `/api/v1/video/jobs/{job_id}/download` | Descarga el video resultante (`404`/`409` igual que arriba) |
@@ -186,7 +188,7 @@ curl -X POST http://127.0.0.1:8090/api/v1/jobs \
   -F "output_format=png"
 ```
 
-**Crear un job de video** — campos de formulario: `file` (requerido), `profile_key` (default `anime-balanced-2x`), y overrides opcionales del perfil: `model_name`, `model_id` (modelo ONNX instalado desde HF, ver sección Modelos), `device` (`cpu`/`dml:N`, ver sección Dispositivos), `scale`, `output_container` (`mp4`/`mkv`), `video_codec` (`libx264`/`libx265`), `video_preset` (`medium`/`slow`/`veryslow`), `crf` (`10`-`28`), `keep_audio`, `fps_multiplier` (`1` = sin boost, o uno de `ALLOWED_FPS_MULTIPLIERS`), `audio_enhance` (`deepfilter`/`rnnoise`, omitido = sin mejora; requiere `keep_audio=true` y `ENABLE_AUDIO_ENHANCE=true` — ver "Cómo activar la mejora de audio" abajo):
+**Crear un job de video** — campos de formulario: `file` **o** `upload_token` (exactamente uno de los dos: `file` sube el video directo, `upload_token` reutiliza el análisis previo de `POST /api/v1/video/analyze` sin volver a subir el archivo), `profile_key` (default `anime-balanced-2x`), y overrides opcionales del perfil: `model_name`, `model_id` (modelo ONNX instalado desde HF, ver sección Modelos), `device` (`cpu`/`dml:N`, ver sección Dispositivos), `scale`, `output_container` (`mp4`/`mkv`), `video_codec` (`libx264`/`libx265`), `video_preset` (`medium`/`slow`/`veryslow`), `crf` (`10`-`28`), `keep_audio`, `fps_multiplier` (`1` = sin boost, o uno de `ALLOWED_FPS_MULTIPLIERS`), `audio_enhance` (`deepfilter`/`rnnoise`, omitido = sin mejora; requiere `keep_audio=true` y `ENABLE_AUDIO_ENHANCE=true` — ver "Cómo activar la mejora de audio" abajo), `audio_track_indices` (índices de pista separados por coma, ej. `0,2`; omitido = ffmpeg elige la pista default como hoy — la primera pista de la lista es la **primaria**, la única que pasa por enhance/restore, el resto se copia sin procesar), `keep_subtitles` (default `false`; copia todas las pistas de subtítulos detectadas — sube el contenedor a `.mkv` automáticamente si hacía falta, con aviso en `job.metadata.containerUpgradedReason`), `audio_output_format` (`auto`/`flac`/`aac`, default `auto`: con `audio_restore` activo sube a FLAC lossless + `.mkv` automático, si no mantiene el comportamiento actual):
 
 ```bash
 curl -X POST http://127.0.0.1:8090/api/v1/video/jobs \
@@ -200,6 +202,15 @@ curl -X POST http://127.0.0.1:8090/api/v1/video/jobs \
   -F "profile_key=anime-balanced-2x" \
   -F "keep_audio=true" \
   -F "audio_enhance=deepfilter"
+
+# analizar primero (pistas de audio/subtítulos), despues crear el job reusando el upload
+curl -X POST http://127.0.0.1:8090/api/v1/video/analyze -F "file=@input.mkv"
+# -> {"uploadToken": "...", "audioTracks": [...], "subtitleTracks": [...]}
+curl -X POST http://127.0.0.1:8090/api/v1/video/jobs \
+  -F "upload_token=<uploadToken>" \
+  -F "profile_key=anime-balanced-2x" \
+  -F "audio_track_indices=0,2" \
+  -F "keep_subtitles=true"
 ```
 
 **Consultar y descargar:**
@@ -213,7 +224,7 @@ curl -OJ http://127.0.0.1:8090/api/v1/video/jobs/<job_id>/download
 
 La cola de jobs global muestra una barra de progreso en vivo para cada job; hacer click en un job abre un **modal de detalle** con:
 
-- **Stepper de etapas** — cada tipo de job tiene sus propias etapas ponderadas (video: `probing` → `extracting_frames` → `extracting_audio`/`enhancing_audio` (si aplica) → `upscaling_frames` → `interpolating_frames` (si el FPS boost está activo) → `encoding_video`; imagen: `validating` → `upscaling`), cada una con estado `pending`/`active`/`done`.
+- **Stepper de etapas** — cada tipo de job tiene sus propias etapas ponderadas (video: `probing` → `extracting_frames` → `extracting_audio`/`enhancing_audio`/`restoring_audio` (si aplica) → `upscaling_frames` → `interpolating_frames` (si el FPS boost está activo) → `encoding_video`; imagen: `validating` → `upscaling`), cada una con estado `pending`/`active`/`done`.
 - **Frames X / Y** — en video, cuenta de frames procesados sobre el total real (extraídos del contenedor con `ffprobe`, o derivados de duración × fps cuando el origen es VFR y no trae `nb_frames`). En imagen, solo aparece para modelos **ONNX con tiling** (`ONNX_TILE_SIZE` activo en un lado más grande que el tile): cuenta tiles procesados sobre el total, actualizado entre cada tile de la grilla de inferencia. Los modelos **builtin NCNN** (subprocess único, sin conteo intermedio) y las imágenes **ONNX que caben en un solo tile** se quedan en etapas coarse (`validating`/`upscaling` sin frames) — a propósito: no hay conteo honesto que reportar ahí, así que no se inventa uno.
 - **ETA** — solo se muestra cuando hay suficiente señal para ser confiable (frames/tiles con denominador real y throughput medido); si no, se omite en vez de mostrar un número inventado.
 
@@ -396,7 +407,8 @@ Además de imagen y video, Upflow tiene un **apartado de Audio** propio (ruta `/
   - `apollo`: reconstruye la banda de agudos perdida por compresión de códec (audio de WhatsApp/Telegram/redes). Rápido y liviano (~74 MB). Requiere `ENABLE_AUDIO_RESTORE=true` + `scripts/download-apollo.ps1`.
   - `audiosr`: **super-resolución de audio general por difusión latente** (cualquier banda → 48 kHz, UNet de 258M params). Techo de calidad muy superior a Apollo pero ~2 min de proceso por minuto de audio en GPU (50 pasos DDIM con CFG). Port ONNX propio — el primero conocido de AudioSR: [santiquiroz/port-audiosr-onnx](https://github.com/santiquiroz/port-audiosr-onnx). Requiere `ENABLE_AUDIOSR=true` + `scripts/download-audiosr-onnx.ps1` (~2.6 GB).
 
-  Ambos motores son ONNX **multi-provider** (corren en cualquier GPU DirectX12 —AMD/NVIDIA/Intel— o CPU, igual que los modelos de imagen HF). Si un modelo no está instalado, ese modo simplemente no aparece — la app nunca se rompe por esto.
+  Ambos motores son ONNX **multi-provider** (corren en cualquier GPU DirectX12 —AMD/NVIDIA/Intel— o CPU, igual que los modelos de imagen HF). Si un modelo no está instalado, ese modo simplemente no aparece — la app nunca se rompe por esto. **Preservan estéreo/surround**: en vez de downmixear a mono antes de restaurar, decodifican Mid/Side (restauran solo el Mid, el Side queda intacto) en estéreo, y en 5.1/7.1 restauran frente/rears por par M/S + centro directo + LFE intacto, con RMS-match por canal contra el original al final; un layout de canales no reconocido cae a mono con warning explícito (nunca en silencio).
+- **Formato de salida** — `output_format: wav|flac|mp3`, default **`flac`** (sin pérdida, ~50% más liviano que WAV). `wav` para compatibilidad con editores viejos, `mp3` solo si el tamaño del archivo importa más que la calidad.
 
 ```powershell
 # Restore experimental: descargar el modelo Apollo (~74 MB) y habilitarlo
@@ -404,7 +416,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\download-apollo.ps1
 # en .env:  ENABLE_AUDIO_RESTORE=true
 ```
 
-API: `POST /api/v1/audio/jobs` (multipart: `file`, `denoise?`, `restore?`, `device?`) → 202; `GET /api/v1/audio/jobs/{id}` (estado + progreso), `.../download` (resultado), `GET /api/v1/audio/capabilities` (qué motores están instalados; `restoreModes` lista los modos listos). El mismo `restore=apollo|audiosr` se puede pedir en un job de video vía el campo `audio_restore` (con `keep_audio=true`), aplicado después del denoise.
+API: `POST /api/v1/audio/jobs` (multipart: `file`, `denoise?`, `restore?`, `output_format?` default `flac`, `device?`) → 202; `GET /api/v1/audio/jobs/{id}` (estado + progreso), `.../download` (resultado), `GET /api/v1/audio/capabilities` (qué motores están instalados; `restoreModes` lista los modos listos). El mismo `restore=apollo|audiosr` se puede pedir en un job de video vía el campo `audio_restore` (con `keep_audio=true`), aplicado después del denoise; el formato de salida de esa pista restaurada se controla con `audio_output_format` (ver "Crear un job de video" arriba).
 
 > **Nota experimental:** el restore es un port ONNX del modelo Apollo (ver `docs/` y la guía del port). Funciona y es multi-provider, pero la calidad de reconstrucción y el rendimiento GPU aún se están evaluando — por eso va detrás de un flag y con badge "Experimental" en la UI.
 
