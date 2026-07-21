@@ -11,6 +11,7 @@ from typing import Any
 import numpy as np
 
 from app.config import Settings
+from app.services.engines.multichannel_restore import restore_multichannel
 from app.services.engines.onnx_upscaler import _build_providers, _wrap_onnx_error
 
 # ---------------------------------------------------------------------------
@@ -65,7 +66,7 @@ class ApolloRestorer:
                 "Apollo restoration is not available. Enable ENABLE_AUDIO_RESTORE and install the model "
                 "(scripts/download-apollo.ps1)."
             )
-        audio = _load_mono_44k(input_wav)
+        audio = _load_audio_44k(input_wav)
         session = self._get_session(device)
         is_cpu = _is_cpu_device(device)
         # En GPU (dml:N) el cómputo satura la única tarjeta y el escritorio se
@@ -78,7 +79,11 @@ class ApolloRestorer:
         # crossfades frecuentes). GPU se queda con el chunk chico TDR-safe.
         chunk_seconds = self.settings.audio_restore_cpu_chunk_seconds if is_cpu else self.settings.audio_restore_chunk_seconds
         overlap_seconds = CPU_OVERLAP_SECONDS if is_cpu else OVERLAP_SECONDS
-        restored = self._restore_chunked(session, audio, throttle, chunk_seconds, overlap_seconds)
+
+        def restore_mono(mono: np.ndarray) -> np.ndarray:
+            return self._restore_chunked(session, mono, throttle, chunk_seconds, overlap_seconds)
+
+        restored = restore_multichannel(audio, restore_mono)
         _save_wav(output_wav, restored)
 
     def _restore_chunked(
@@ -159,12 +164,12 @@ def _is_cpu_device(device: str) -> bool:
     return device.strip().lower() == "cpu"
 
 
-def _load_mono_44k(input_wav: Path) -> np.ndarray:
+def _load_audio_44k(input_wav: Path) -> np.ndarray:
     import soundfile as sf
 
     data, sample_rate = sf.read(str(input_wav), dtype="float32", always_2d=True)
-    mono = data.mean(axis=1)
-    return _resample(mono, sample_rate, APOLLO_SAMPLE_RATE)
+    channels = [_resample(data[:, c], sample_rate, APOLLO_SAMPLE_RATE) for c in range(data.shape[1])]
+    return np.stack(channels, axis=1)
 
 
 def _resample(signal: np.ndarray, source_rate: int, target_rate: int) -> np.ndarray:

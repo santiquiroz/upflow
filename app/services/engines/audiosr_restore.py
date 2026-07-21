@@ -14,6 +14,7 @@ import numpy as np
 from app.config import Settings
 from app.services.engines.audiosr.assets import GRAPH_NAMES, AudioSrAssets
 from app.services.engines.audiosr.driver import AudioSrDriver
+from app.services.engines.multichannel_restore import restore_multichannel
 from app.services.engines.onnx_upscaler import _build_providers, _wrap_onnx_error
 
 # ---------------------------------------------------------------------------
@@ -70,8 +71,8 @@ class AudioSrRestorer:
                 "AudioSR restoration is not available. Enable ENABLE_AUDIOSR and install the models "
                 "(scripts/download-audiosr-onnx.ps1)."
             )
-        audio = _load_mono_48k(input_wav)
-        if audio.shape[-1] == 0:
+        audio = _load_audio_48k(input_wav)
+        if audio.shape[0] == 0:
             raise RuntimeError(
                 "The uploaded audio decoded to zero samples; the file is empty or corrupted"
             )
@@ -80,12 +81,16 @@ class AudioSrRestorer:
         throttle = 0.0 if _is_cpu_device(device) else self.settings.audiosr_gpu_throttle_seconds
 
         driver = AudioSrDriver(assets, _session_runner(sessions))
-        restored = driver.restore(
-            audio,
-            ddim_steps=self.settings.audiosr_ddim_steps,
-            cancel_event=cancel_event,
-            step_throttle=(lambda: time.sleep(throttle)) if throttle > 0 else None,
-        )
+
+        def restore_mono(mono: np.ndarray) -> np.ndarray:
+            return driver.restore(
+                mono,
+                ddim_steps=self.settings.audiosr_ddim_steps,
+                cancel_event=cancel_event,
+                step_throttle=(lambda: time.sleep(throttle)) if throttle > 0 else None,
+            )
+
+        restored = restore_multichannel(audio, restore_mono)
         _save_wav(output_wav, restored)
 
     def _get_sessions(self, device: str) -> dict[str, Any]:
@@ -143,12 +148,12 @@ def _is_cpu_device(device: str) -> bool:
     return device.strip().lower() == "cpu"
 
 
-def _load_mono_48k(input_wav: Path) -> np.ndarray:
+def _load_audio_48k(input_wav: Path) -> np.ndarray:
     import soundfile as sf
 
     data, sample_rate = sf.read(str(input_wav), dtype="float32", always_2d=True)
-    mono = data.mean(axis=1)
-    return _resample(mono, sample_rate, AUDIOSR_SAMPLE_RATE)
+    channels = [_resample(data[:, c], sample_rate, AUDIOSR_SAMPLE_RATE) for c in range(data.shape[1])]
+    return np.stack(channels, axis=1)
 
 
 def _resample(signal: np.ndarray, source_rate: int, target_rate: int) -> np.ndarray:

@@ -104,6 +104,28 @@ def test_run_when_unavailable_raises_actionable_error(tmp_path: Path) -> None:
         asyncio.run(restorer.run(input_wav, tmp_path / "out.wav", device="cpu"))
 
 
+def write_stereo_input_wav(path: Path, seconds: float = 1.0, rate: int = 44100) -> None:
+    t = np.arange(int(rate * seconds)) / rate
+    left = (0.4 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
+    right = (0.4 * np.sin(2 * np.pi * 220 * t)).astype(np.float32)
+    sf.write(str(path), np.stack([left, right], axis=1), rate)
+
+
+def test_run_and_save_preserves_stereo_via_multichannel_restore(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    restorer = AudioSrRestorer(make_settings(tmp_path))
+    monkeypatch.setattr(restorer, "_create_sessions", fake_sessions)
+    input_wav = tmp_path / "in.wav"
+    output_wav = tmp_path / "out.wav"
+    write_stereo_input_wav(input_wav)
+
+    asyncio.run(restorer.run(input_wav, output_wav, device="cpu"))
+
+    result, rate = sf.read(str(output_wav), always_2d=True)
+    assert result.shape[1] == 2  # sigue estereo, no colapsa a mono
+
+
 def test_session_cache_keeps_single_device(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     restorer = AudioSrRestorer(make_settings(tmp_path))
     built: list[str] = []
