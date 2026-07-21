@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import sys
-import winreg
 from dataclasses import dataclass
 from enum import Enum
+
+if sys.platform == "win32":
+    import winreg
 
 # ---------------------------------------------------------------------------
 # Optimization Center: detects OS/driver-level levers the app cannot
@@ -48,6 +50,6 @@ def probe_hags() -> Lever:
         return Lever(lever_id, label, LeverStatus.ok, "Enabled (HwSchMode=2)", False)
     return Lever(
         lever_id, label, LeverStatus.unavailable,
-        "Disabled (HwSchMode=1). Measured impact on this workload is ~0 -- informational only.",
+        f"Disabled (HwSchMode={value}). Measured impact on this workload is ~0 -- informational only.",
         True,
     )
