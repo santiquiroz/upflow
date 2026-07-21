@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import sys
@@ -9,6 +10,7 @@ from enum import Enum
 if sys.platform == "win32":
     import winreg
 
+from app.config import Settings
 from app.services.process_runner import run_guarded_process
 
 logger = logging.getLogger(__name__)
@@ -252,3 +254,97 @@ async def probe_defender_exclusion(runtime_path: str, timeout: float = 10.0) -> 
     if returncode != 0:
         return Lever(lever_id, label, LeverStatus.needs_admin, f"Defender probe failed: {stderr.decode(errors='replace')[:200]}", True)
     return parse_defender_exclusion_json(stdout.decode(errors="replace"), runtime_path)
+
+
+# ---------------------------------------------------------------------------
+# Fix scripts + elevation runner. Unlike the probes above (read-only), these
+# mutate machine state, so they always run through an elevated (UAC) child
+# process -- the backend itself never runs elevated.
+#
+# Safety constraint: the disk write-cache fix writes the registry value ONLY.
+# It must never call Disable-PnpDevice/Restart-Device or anything else that
+# live-cycles a disk device -- the target disk can be the boot volume, and a
+# live device reset on it is a real crash/hang risk. The change requires a
+# reboot to take effect (see probe_disk_write_cache's detail message), which
+# is the intended, safe path.
+# ---------------------------------------------------------------------------
+
+_HAGS_FIX_SCRIPT = (
+    "Set-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\GraphicsDrivers' "
+    "-Name HwSchMode -Value 2"
+)
+
+_DISK_WRITE_CACHE_FIX_TEMPLATE = """
+$target = {path_literal}
+$drive = (Get-Item -LiteralPath $target -ErrorAction Stop).PSDrive.Name
+$partition = Get-Partition -DriveLetter $drive -ErrorAction Stop
+$disk = Get-Disk -Number $partition.DiskNumber -ErrorAction Stop
+$pnp = Get-PnpDevice -Class DiskDrive -ErrorAction Stop | Where-Object {{ $_.FriendlyName -eq $disk.FriendlyName }} | Select-Object -First 1
+$regPath = "HKLM:\\SYSTEM\\CurrentControlSet\\Enum\\$($pnp.InstanceId)\\Device Parameters\\Disk"
+Set-ItemProperty -Path $regPath -Name "UserWriteCacheSetting" -Value 1
+""".strip()
+
+
+def build_fix_script(lever_id: str, runtime_path: str) -> str:
+    if lever_id == "hags":
+        return _HAGS_FIX_SCRIPT
+    if lever_id == "defender_exclusion":
+        return f"Add-MpPreference -ExclusionPath {_ps_single_quote(runtime_path)}"
+    if lever_id == "disk_write_cache":
+        return _DISK_WRITE_CACHE_FIX_TEMPLATE.format(path_literal=_ps_single_quote(runtime_path))
+    raise ValueError(f"Lever {lever_id!r} has no fix script (not fixable or unknown)")
+
+
+async def _run_elevated(inner_script: str, timeout: float) -> tuple[bool, str]:
+    # -EncodedCommand (base64 UTF-16LE) avoids nested PowerShell quoting bugs
+    # that string concatenation into -Command would hit when passing an
+    # already-quoted inner script through an outer Start-Process call.
+    encoded = base64.b64encode(inner_script.encode("utf-16-le")).decode("ascii")
+    outer = (
+        "$p = Start-Process powershell.exe "
+        f"-ArgumentList '-NoProfile','-EncodedCommand','{encoded}' "
+        "-Verb RunAs -Wait -PassThru; exit $p.ExitCode"
+    )
+    try:
+        _, _, returncode = await run_guarded_process(["powershell.exe", "-NoProfile", "-Command", outer], timeout)
+    except Exception:  # noqa: BLE001 -- elevation failures must degrade, never raise
+        return False, "Elevation failed to run"
+    if returncode != 0:
+        return False, "Elevation was cancelled or failed"
+    return True, ""
+
+
+class CapabilityProbe:
+    """Orchestrates lever probing and elevated fixes for the Optimization Center."""
+
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
+        self._cache: list[Lever] | None = None
+
+    async def list_levers(self) -> list[Lever]:
+        if self._cache is None:
+            self._cache = await self._probe_all()
+        return self._cache
+
+    async def rescan(self) -> list[Lever]:
+        self._cache = await self._probe_all()
+        return self._cache
+
+    async def apply_fix(self, lever_id: str) -> Lever:
+        runtime_path = str(self.settings.runtime_path)
+        script = build_fix_script(lever_id, runtime_path)
+        ok, message = await _run_elevated(script, self.settings.capability_fix_timeout_seconds)
+        levers = await self.rescan()
+        lever = next(l for l in levers if l.id == lever_id)
+        if not ok and lever.status != LeverStatus.ok:
+            return Lever(lever.id, lever.label, lever.status, f"{lever.detail} ({message})", lever.fixable)
+        return lever
+
+    async def _probe_all(self) -> list[Lever]:
+        runtime_path = str(self.settings.runtime_path)
+        return [
+            probe_hags(),
+            await probe_pcie_link(),
+            await probe_disk_write_cache(runtime_path),
+            await probe_defender_exclusion(runtime_path),
+        ]

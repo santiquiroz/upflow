@@ -418,6 +418,10 @@ class Settings(BaseSettings):
     # TTL. A successful result (even "up to date") uses the full TTL above.
     update_error_retry_seconds: int = Field(default=300, alias="UPDATE_ERROR_RETRY_SECONDS")
     update_api_timeout_seconds: float = Field(default=5.0, alias="UPDATE_API_TIMEOUT_SECONDS")
+    # Elevated (UAC) PowerShell fix scripts launched by CapabilityProbe.apply_fix
+    # (HAGS registry write, disk write-cache registry write, Defender exclusion
+    # add) -- bounds how long the backend waits on the elevated child process.
+    capability_fix_timeout_seconds: float = Field(default=120.0, alias="CAPABILITY_FIX_TIMEOUT_SECONDS")
 
     @field_validator("per_device_gpu_concurrency", "cpu_concurrency", "max_concurrent_jobs")
     @classmethod

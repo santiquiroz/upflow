@@ -6,10 +6,13 @@ import sys
 
 import pytest
 
+from app.config import Settings
 from app.services.capability_probe import (
+    CapabilityProbe,
     Lever,
     LeverStatus,
     build_disk_write_cache_script,
+    build_fix_script,
     parse_defender_exclusion_json,
     parse_disk_write_cache_json,
     parse_pcie_json,
@@ -378,3 +381,119 @@ def test_probe_defender_exclusion_catches_subprocess_exception(monkeypatch: pyte
 
     assert lever.status.value == "needs_admin"
     assert "Could not run" in lever.detail
+
+
+def test_build_fix_script_hags_sets_registry_value() -> None:
+    script = build_fix_script("hags", "C:/Upflow/runtime")
+    assert "HwSchMode" in script
+    assert "-Value 2" in script
+
+
+def test_build_fix_script_defender_adds_exclusion() -> None:
+    script = build_fix_script("defender_exclusion", "C:/Upflow/runtime")
+    assert "Add-MpPreference" in script
+    assert "C:/Upflow/runtime" in script
+
+
+def test_build_fix_script_disk_write_cache_never_restarts_device() -> None:
+    script = build_fix_script("disk_write_cache", "C:/Upflow/runtime")
+    assert "Set-ItemProperty" in script
+    assert "Restart-Device" not in script
+    assert "Disable-PnpDevice" not in script
+
+
+def test_build_fix_script_rejects_non_fixable_lever() -> None:
+    with pytest.raises(ValueError):
+        build_fix_script("pcie_link", "C:/Upflow/runtime")
+
+
+def test_build_fix_script_rejects_unknown_lever() -> None:
+    with pytest.raises(ValueError):
+        build_fix_script("not_a_real_lever", "C:/Upflow/runtime")
+
+
+def make_settings(**overrides: object) -> Settings:
+    return Settings(_env_file=None, **overrides)  # type: ignore[arg-type]
+
+
+def test_capability_probe_list_levers_caches_until_rescan(monkeypatch: pytest.MonkeyPatch) -> None:
+    probe = CapabilityProbe(make_settings())
+
+    import app.services.capability_probe as mod
+
+    monkeypatch.setattr(mod, "probe_hags", lambda: Lever("hags", "HAGS", LeverStatus.ok, "d", False))
+    monkeypatch.setattr(mod, "probe_pcie_link", _async_stub_lever("pcie_link"))
+    monkeypatch.setattr(mod, "probe_disk_write_cache", _async_stub_lever_with_arg("disk_write_cache"))
+    monkeypatch.setattr(mod, "probe_defender_exclusion", _async_stub_lever_with_arg("defender_exclusion"))
+
+    first = asyncio.run(probe.list_levers())
+    second = asyncio.run(probe.list_levers())
+
+    assert [lever.id for lever in first] == ["hags", "pcie_link", "disk_write_cache", "defender_exclusion"]
+    assert first == second
+
+
+def _async_stub_lever(lever_id: str):
+    async def _stub(*args: object, **kwargs: object) -> Lever:
+        return Lever(lever_id, lever_id, LeverStatus.ok, "d", False)
+
+    return _stub
+
+
+def _async_stub_lever_with_arg(lever_id: str):
+    async def _stub(runtime_path: str, *args: object, **kwargs: object) -> Lever:
+        return Lever(lever_id, lever_id, LeverStatus.ok, "d", False)
+
+    return _stub
+
+
+def test_capability_probe_rescan_reprobes_everything(monkeypatch: pytest.MonkeyPatch) -> None:
+    import app.services.capability_probe as mod
+
+    probe = CapabilityProbe(make_settings())
+    monkeypatch.setattr(mod, "probe_hags", lambda: Lever("hags", "HAGS", LeverStatus.ok, "d", False))
+    monkeypatch.setattr(mod, "probe_pcie_link", _async_stub_lever("pcie_link"))
+    monkeypatch.setattr(mod, "probe_disk_write_cache", _async_stub_lever_with_arg("disk_write_cache"))
+    monkeypatch.setattr(mod, "probe_defender_exclusion", _async_stub_lever_with_arg("defender_exclusion"))
+    asyncio.run(probe.list_levers())
+
+    monkeypatch.setattr(mod, "probe_hags", lambda: Lever("hags", "HAGS", LeverStatus.unavailable, "changed", True))
+    levers = asyncio.run(probe.rescan())
+
+    assert next(l for l in levers if l.id == "hags").detail == "changed"
+
+
+def test_capability_probe_apply_fix_reprobes_after_elevation(monkeypatch: pytest.MonkeyPatch) -> None:
+    import app.services.capability_probe as mod
+
+    probe = CapabilityProbe(make_settings())
+
+    async def fake_run_guarded_process(command: list[str], timeout: float):
+        return b"", b"", 0
+
+    monkeypatch.setattr(mod, "run_guarded_process", fake_run_guarded_process)
+    monkeypatch.setattr(mod, "probe_hags", lambda: Lever("hags", "HAGS", LeverStatus.ok, "now enabled", False))
+
+    lever = asyncio.run(probe.apply_fix("hags"))
+
+    assert lever.status == LeverStatus.ok
+    assert lever.detail == "now enabled"
+
+
+def test_capability_probe_apply_fix_reports_elevation_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    import app.services.capability_probe as mod
+
+    probe = CapabilityProbe(make_settings())
+
+    async def fake_run_guarded_process(command: list[str], timeout: float):
+        return b"", b"", 1
+
+    monkeypatch.setattr(mod, "run_guarded_process", fake_run_guarded_process)
+    monkeypatch.setattr(
+        mod, "probe_hags", lambda: Lever("hags", "HAGS", LeverStatus.unavailable, "still disabled", True)
+    )
+
+    lever = asyncio.run(probe.apply_fix("hags"))
+
+    assert lever.status == LeverStatus.unavailable
+    assert "cancelled" in lever.detail.lower() or "failed" in lever.detail.lower()
