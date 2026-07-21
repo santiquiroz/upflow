@@ -74,7 +74,12 @@ def test_rms_matches_original_within_tolerance():
     assert result_rms == pytest.approx(original_rms, rel=0.05)
 
 
-def test_more_than_two_channels_raises_not_implemented():
-    audio = np.zeros((8, 6), dtype=np.float32)  # surround: Task 7
-    with pytest.raises(NotImplementedError):
-        restore_multichannel(audio, _identity)
+def test_unknown_channel_count_falls_back_to_mono_with_warning(caplog):
+    audio = np.random.default_rng(4).uniform(-0.3, 0.3, size=(200, 4)).astype(np.float32)
+    with caplog.at_level("WARNING"):
+        result = restore_multichannel(audio, lambda mono: mono)
+    assert "channel" in caplog.text.lower()
+    assert result.shape == audio.shape
+    # las 4 columnas son la misma señal mono repetida
+    for c in range(1, 4):
+        np.testing.assert_allclose(result[:, c], result[:, 0])

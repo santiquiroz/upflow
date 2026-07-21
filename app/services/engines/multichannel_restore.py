@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 from typing import Callable
 
 import numpy as np
 
 RestoreMonoFn = Callable[[np.ndarray], np.ndarray]
+
+logger = logging.getLogger(__name__)
 
 
 def restore_multichannel(audio: np.ndarray, restore_mono: RestoreMonoFn) -> np.ndarray:
@@ -12,7 +15,9 @@ def restore_multichannel(audio: np.ndarray, restore_mono: RestoreMonoFn) -> np.n
 
     1 canal: pasa directo por restore_mono.
     2 canales: decodifica Mid/Side, restaura solo Mid, side queda intacto.
-    Otros layouts: ver multichannel_layouts.py (Task 7).
+    6/8 canales: 5.1/7.1 via multichannel_layouts (frente+rears por par, centro
+    directo, LFE intacto).
+    Otros conteos: fallback a downmix mono con warning explicito (nunca silencioso).
     """
     channels = audio.shape[1]
     if channels == 1:
@@ -20,7 +25,26 @@ def restore_multichannel(audio: np.ndarray, restore_mono: RestoreMonoFn) -> np.n
         return _rms_match(restored, audio[:, 0]).reshape(-1, 1)
     if channels == 2:
         return _restore_stereo_mid_side(audio, restore_mono)
-    raise NotImplementedError(f"{channels}-channel audio requires multichannel_layouts (Task 7)")
+    if channels == 6:
+        from app.services.engines.multichannel_layouts import restore_surround
+
+        return restore_surround(audio, "5.1", restore_mono)
+    if channels == 8:
+        from app.services.engines.multichannel_layouts import restore_surround
+
+        return restore_surround(audio, "7.1", restore_mono)
+    return _restore_unknown_layout_as_mono(audio, restore_mono, channels)
+
+
+def _restore_unknown_layout_as_mono(
+    audio: np.ndarray, restore_mono: RestoreMonoFn, channels: int
+) -> np.ndarray:
+    logger.warning(
+        "Unrecognized channel layout (%d channels); falling back to mono restoration", channels
+    )
+    mono = audio.mean(axis=1)
+    restored = _rms_match(restore_mono(mono), mono)
+    return np.tile(restored.reshape(-1, 1), (1, channels)).astype(np.float32)
 
 
 def _restore_stereo_mid_side(audio: np.ndarray, restore_mono: RestoreMonoFn) -> np.ndarray:
