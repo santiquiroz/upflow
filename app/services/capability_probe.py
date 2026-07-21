@@ -295,15 +295,36 @@ def build_fix_script(lever_id: str, runtime_path: str) -> str:
     raise ValueError(f"Lever {lever_id!r} has no fix script (not fixable or unknown)")
 
 
+# Start-Process -Verb RunAs launches the elevated child through ShellExecuteEx,
+# which is NOT a child process of this (non-elevated) outer wrapper. If the
+# outer run_guarded_process timeout fires first, killing the wrapper does not
+# reliably terminate the elevated process or dismiss its UAC prompt, orphaning
+# it on the user's desktop, untracked by the backend. So the wrapper itself
+# tracks the elevated process (via -PassThru) and kills it on an inner
+# deadline that is always shorter than the outer timeout, guaranteeing this
+# fires first.
+_ELEVATION_WAIT_MARGIN_SECONDS = 5.0
+_MIN_ELEVATION_WAIT_SECONDS = 1.0
+
+
+def _elevation_wait_milliseconds(timeout: float) -> int:
+    wait_seconds = max(timeout - _ELEVATION_WAIT_MARGIN_SECONDS, _MIN_ELEVATION_WAIT_SECONDS)
+    return int(wait_seconds * 1000)
+
+
 async def _run_elevated(inner_script: str, timeout: float) -> tuple[bool, str]:
     # -EncodedCommand (base64 UTF-16LE) avoids nested PowerShell quoting bugs
     # that string concatenation into -Command would hit when passing an
     # already-quoted inner script through an outer Start-Process call.
     encoded = base64.b64encode(inner_script.encode("utf-16-le")).decode("ascii")
+    wait_ms = _elevation_wait_milliseconds(timeout)
     outer = (
         "$p = Start-Process powershell.exe "
         f"-ArgumentList '-NoProfile','-EncodedCommand','{encoded}' "
-        "-Verb RunAs -Wait -PassThru; exit $p.ExitCode"
+        "-Verb RunAs -PassThru; "
+        f"if (-not $p.WaitForExit({wait_ms})) {{ "
+        "Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue; exit 1 "
+        "}; exit $p.ExitCode"
     )
     try:
         _, _, returncode = await run_guarded_process(["powershell.exe", "-NoProfile", "-Command", outer], timeout)

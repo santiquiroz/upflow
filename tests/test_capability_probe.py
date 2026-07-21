@@ -497,3 +497,36 @@ def test_capability_probe_apply_fix_reports_elevation_failure(monkeypatch: pytes
 
     assert lever.status == LeverStatus.unavailable
     assert "cancelled" in lever.detail.lower() or "failed" in lever.detail.lower()
+
+
+def test_run_elevated_tracks_and_kills_process_instead_of_bare_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    import app.services.capability_probe as mod
+
+    captured_command: list[str] = []
+
+    async def fake_run_guarded_process(command: list[str], timeout: float) -> tuple[bytes, bytes, int]:
+        captured_command.extend(command)
+        return b"", b"", 0
+
+    monkeypatch.setattr(mod, "run_guarded_process", fake_run_guarded_process)
+
+    ok, message = asyncio.run(mod._run_elevated("Set-ItemProperty -Path x -Name y -Value 1", 30.0))
+
+    outer_script = captured_command[-1]
+    assert "WaitForExit" in outer_script
+    assert "Stop-Process" in outer_script
+    assert "-Wait" not in outer_script
+    assert ok is True
+    assert message == ""
+
+
+def test_elevation_wait_milliseconds_applies_margin_below_outer_timeout() -> None:
+    import app.services.capability_probe as mod
+
+    assert mod._elevation_wait_milliseconds(30.0) == 25_000
+
+
+def test_elevation_wait_milliseconds_has_floor_for_small_timeout() -> None:
+    import app.services.capability_probe as mod
+
+    assert mod._elevation_wait_milliseconds(3.0) == 1_000
