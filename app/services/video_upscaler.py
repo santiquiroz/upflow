@@ -747,6 +747,12 @@ class VideoUpscaler:
         # audio_mux_path (extracted by absolute index in the extraction step).
         # The extras are every OTHER selected track; a repeat of the primary
         # later in the list is dropped so the same stream is never mapped twice.
+        # keep_audio=False must silently drop ALL audio, extras included --
+        # otherwise _needs_source_input still fires and the extras get mapped
+        # with no codec args (audio_mux_path is None), so ffmpeg re-encodes
+        # them into the output despite the user turning audio off.
+        if not job.keep_audio:
+            return []
         if not job.audio_track_indices or len(job.audio_track_indices) <= 1:
             return []
         primary = job.audio_track_indices[0]

@@ -468,6 +468,63 @@ def test_extra_audio_only_without_audio_mux_still_maps_video(tmp_path: Path) -> 
     assert cmd.index("0:v:0") < cmd.index("1:3")
 
 
+# ---------------------------------------------------------------------------
+# Final-review finding (IMPORTANT): extra-audio mapping must be gated by
+# keep_audio. Before this fix, a job with keep_audio=False (so audio_mux_path
+# is None) but audio_track_indices with 2+ entries still added the source
+# input and mapped the extras -- since audio_mux_path was None,
+# _extra_audio_copy_args never ran, so ffmpeg silently RE-ENCODED the extra
+# track to the container default codec instead of honoring "keep audio off".
+# ---------------------------------------------------------------------------
+
+
+def test_keep_audio_false_maps_no_extra_audio_even_with_multiple_indices(tmp_path: Path) -> None:
+    upscaler = make_upscaler(tmp_path)
+    source_path = tmp_path / "source.mkv"
+    job = make_video_job(
+        source_path, audio_track_indices=[0, 1], keep_subtitles=False, keep_audio=False
+    )
+
+    assert upscaler._extra_audio_track_indices(job) == []
+    assert upscaler._needs_source_input(job) is False
+
+    cmd = upscaler._build_encode_command(
+        job, tmp_path / "frames-out", "24/1", None, [], tmp_path / "out.mkv", "libx264"
+    )
+
+    # No source input at all -- nothing extra to preserve, so no re-encoded
+    # stray audio track can sneak into the output.
+    assert str(source_path) not in cmd
+    assert "-c:a" not in cmd
+
+
+def test_keep_audio_false_with_keep_subtitles_still_maps_subs_and_video(tmp_path: Path) -> None:
+    # Must-not-break regression: keep_audio=False + keep_subtitles=True is a
+    # VALID, independent combination -- subtitles have nothing to do with audio.
+    upscaler = make_upscaler(tmp_path)
+    source_path = tmp_path / "source.mkv"
+    job = make_video_job(
+        source_path, audio_track_indices=[0, 1], keep_subtitles=True, keep_audio=False
+    )
+
+    assert upscaler._extra_audio_track_indices(job) == []
+    assert upscaler._needs_source_input(job) is True
+
+    cmd = upscaler._build_encode_command(
+        job, tmp_path / "frames-out", "24/1", None, [], tmp_path / "out.mkv", "libx264"
+    )
+
+    source_idx = cmd.index(str(source_path))
+    assert cmd[source_idx - 1] == "-i"
+    assert cmd.count("0:v:0") == 1
+    assert cmd[cmd.index("0:v:0") - 1] == "-map"
+    assert "1:s?" in cmd
+    assert cmd[cmd.index("-c:s") + 1] == "copy"
+    # No extra audio stream index (e.g. "1:1") was mapped from the source.
+    assert "1:1" not in cmd
+    assert "-c:a" not in cmd
+
+
 def test_audio_present_with_source_maps_video_exactly_once_byte_identical(tmp_path: Path) -> None:
     # Regression guard: audio_mux_path present AND source input needed. The
     # video map is emitted exactly once (with the audio input), never doubled by

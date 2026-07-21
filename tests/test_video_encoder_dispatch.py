@@ -181,8 +181,23 @@ async def test_should_stream_false_when_extra_audio_tracks_requested(tmp_path: P
     vu = make_streaming_upscaler(tmp_path)
     job = make_job("software", device="dml:0")
     job.backend = UPSCALE_BACKEND_ONNX
+    # keep_audio=True: extra tracks are only "extra to preserve" when audio is
+    # actually being kept -- with keep_audio=False there is nothing to preserve
+    # and the raw-pipe path stays eligible (see keep_audio-gate tests below).
+    job.keep_audio = True
     job.audio_track_indices = [1, 2]
     assert await vu._should_stream(job) is False
+
+
+async def test_should_stream_true_when_keep_audio_false_even_with_multiple_indices(tmp_path: Path) -> None:
+    # Final-review fix: keep_audio=False means _extra_audio_track_indices is
+    # always empty, so there's nothing extra to preserve and the raw-pipe path
+    # must stay eligible even when audio_track_indices has 2+ entries.
+    vu = make_streaming_upscaler(tmp_path)
+    job = make_job("software", device="dml:0")
+    job.backend = UPSCALE_BACKEND_ONNX
+    job.audio_track_indices = [1, 2]
+    assert await vu._should_stream(job) is True
 
 
 async def test_should_stream_true_with_single_audio_track_index(tmp_path: Path) -> None:
