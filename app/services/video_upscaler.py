@@ -7,21 +7,29 @@ import os
 import shutil
 import subprocess
 import threading
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 
 import cv2
+import numpy as np
 
 from app.config import GMFSS_ENGINE, Settings
 from app.models import VideoUpscaleJob
 from app.services import video_encoders
-from app.services.backend_registry import UpscaleBackend, resolve_upscale_backend
+from app.services.backend_registry import (
+    UpscaleBackend,
+    get_builtin_onnx_model,
+    resolve_upscale_backend,
+)
 from app.services.devices_service import DevicesService
 from app.services.restorer_registry import AudioRestorer
 from app.services.engines.audio_enhance import AudioEnhancer
 from app.services.engines.gmfss_engine import GmfssEngine
 from app.services.engines.onnx_upscaler import OnnxUpscaler
-from app.services.engines.onnx_video_upscaler import OnnxVideoUpscaler
+from app.services.engines.onnx_video_upscaler import (
+    OnnxVideoUpscaler,
+    _save_frame as _onnx_video_save_frame,
+)
 from app.services.engines.realesrgan_ncnn import RealEsrganNcnnEngine, gpu_index_for_device
 from app.services.engines.rife_ncnn import RifeNcnnEngine
 from app.services.media_tools import (
@@ -178,10 +186,63 @@ class VideoUpscaler:
         output_path = self.settings.outputs_path / f"{job.id}.{job.output_container}"
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Interpolation runs FIRST, at SOURCE resolution: RIFE at 1080p is ~3.6x
-        # faster than at the upscaled 4K (measured on a 7800 XT), and with the
-        # interp done up front the raw-pipe (upscale+encode fused, no PNG
-        # round-trip) becomes eligible for interpolated jobs too.
+        encode_frames_dir, encode_fps = await self._interpolate_and_upscale(
+            job, frames_in, frames_out, fps, fps_multiplier, output_path, audio_mux_path, audio_codec_args
+        )
+        # The raw-pipe path already produced AND finalized output_path; there is
+        # no PNG directory left to encode.
+        if encode_frames_dir is None:
+            return output_path
+
+        # Resolve off the loop: for "auto" this enumerates devices (DXGI) to map
+        # the job's GPU to a hardware encoder.
+        encoder = await asyncio.to_thread(self._resolve_video_encoder, job)
+        job.metadata["videoEncoder"] = encoder
+
+        advance_video_stage(job, "encoding_video")
+        async with self._track_encode_progress(output_path):
+            await self._encode_with_fallback(
+                job, encode_frames_dir, encode_fps, audio_mux_path, audio_codec_args, output_path, encoder
+            )
+
+        self._finalize_output(job, output_path)
+        return output_path
+
+    async def _interpolate_and_upscale(
+        self,
+        job: VideoUpscaleJob,
+        frames_in: Path,
+        frames_out: Path,
+        fps: str,
+        fps_multiplier: int,
+        output_path: Path,
+        audio_mux_path: Path | None,
+        audio_codec_args: list[str],
+    ) -> tuple[Path | None, str]:
+        """Interpolate (optional) then upscale into frames_out, returning
+        (encode_frames_dir, encode_fps). encode_frames_dir is None when the
+        raw-pipe path already produced AND finalized output_path (the caller
+        returns output_path directly, skipping the PNG encode).
+
+        Interpolation runs FIRST, at SOURCE resolution: RIFE at 1080p is ~3.6x
+        faster than at the upscaled 4K (measured on a 7800 XT), and with the
+        interp done up front the raw-pipe (upscale+encode fused, no PNG
+        round-trip) becomes eligible for interpolated jobs too.
+
+        Gate: when GMFSS interpolation is requested AND the resolved upscale
+        backend is the in-process ONNX one, fuse interpolate+upscale in a single
+        pass (no frames-interp PNG round-trip). Every other combination -- RIFE,
+        the NCNN upscaler, HF ONNX models -- takes the unchanged two-pass path.
+        """
+        if await self._should_fuse_interpolate_upscale(job, fps_multiplier, job.target_fps):
+            encode_fps = await self._run_fused_interpolate_upscale(
+                job, frames_in, frames_out, fps, fps_multiplier, job.target_fps
+            )
+            job.metadata["outputFps"] = encode_fps
+            # Source frames are dead once fused into frames_out; free the disk early.
+            await asyncio.to_thread(self._safe_rmtree, frames_in)
+            return frames_out, encode_fps
+
         upscale_src, encode_fps = await self._maybe_interpolate(
             job, frames_in, fps, fps_multiplier, job.target_fps
         )
@@ -199,7 +260,7 @@ class VideoUpscaler:
             if streamed:
                 self._finalize_output(job, output_path)
                 await asyncio.to_thread(self._safe_rmtree, upscale_src)
-                return output_path
+                return None, encode_fps
 
         # The upscale denominator is the frame count it actually processes:
         # after interpolation that is more than the source framesTotal.
@@ -211,21 +272,202 @@ class VideoUpscaler:
             await self._upscale_frames(job, upscale_src, frames_out)
 
         await asyncio.to_thread(self._safe_rmtree, upscale_src)
-        encode_frames_dir = frames_out
+        return frames_out, encode_fps
 
-        # Resolve off the loop: for "auto" this enumerates devices (DXGI) to map
-        # the job's GPU to a hardware encoder.
-        encoder = await asyncio.to_thread(self._resolve_video_encoder, job)
-        job.metadata["videoEncoder"] = encoder
+    async def _should_fuse_interpolate_upscale(
+        self, job: VideoUpscaleJob, fps_multiplier: int, target_fps: str | None
+    ) -> bool:
+        # Fuse ONLY GMFSS + the in-process ONNX upscaler: RIFE and the NCNN
+        # upscaler are external subprocesses (nothing to fuse in-process), and HF
+        # ONNX models run through OnnxUpscaler, not the builtin video engine.
+        # Both engines must be present, and interpolation must actually be
+        # requested (otherwise there is no interpolate step to fuse).
+        #
+        # Opt-in, off by default (Task 9 fix): measured ~1.7x SLOWER than the
+        # two-pass path at 4x/8K on a RX 7800 XT (see README "Benchmark real:
+        # fusion interpolar+escalar") -- the fused loop is a single-threaded
+        # sequential generator with no load/compute/save overlap. The fused
+        # code stays fully available and tested; it just isn't picked
+        # automatically until the regression is understood/fixed.
+        if not self.settings.enable_interp_upscale_fusion:
+            return False
+        if job.interp_engine != GMFSS_ENGINE:
+            return False
+        if not self._interpolation_requested(fps_multiplier, target_fps):
+            return False
+        if self.gmfss_engine is None or self.onnx_video_engine is None:
+            return False
+        if self._is_onnx_model(job.model_id):
+            return False
+        # Off the loop: the first resolve may do a cold `import onnxruntime` +
+        # get_available_providers (same reason _should_stream/_upscale_frames do).
+        backend = await asyncio.to_thread(self._resolve_builtin_backend, job)
+        return backend == UpscaleBackend.onnx
 
-        advance_video_stage(job, "encoding_video")
-        async with self._track_encode_progress(output_path):
-            await self._encode_with_fallback(
-                job, encode_frames_dir, encode_fps, audio_mux_path, audio_codec_args, output_path, encoder
+    async def _run_fused_interpolate_upscale(
+        self,
+        job: VideoUpscaleJob,
+        frames_in: Path,
+        frames_out: Path,
+        fps: str,
+        fps_multiplier: int,
+        target_fps: str | None,
+    ) -> str:
+        """Fused GMFSS interpolate + ONNX upscale: drive GmfssEngine.run_frames_fused
+        from a worker thread, writing each already-upscaled frame straight to
+        frames_out as %08d.png (no frames-interp PNG round-trip). Returns the
+        encode fps -- the same value the two-pass _maybe_interpolate derives."""
+        device = job.device or self.settings.default_device
+        source_frame_count = await asyncio.to_thread(self._count_frames, frames_in)
+        target_frame_count = (
+            compute_target_frame_count(source_frame_count, fps, target_fps)
+            if target_fps is not None
+            else None
+        )
+        expected_output_count = (
+            target_frame_count if target_frame_count is not None else source_frame_count * fps_multiplier
+        )
+        frames_out.mkdir(parents=True, exist_ok=True)
+        # The fused pass does BOTH interpolate and upscale, so it reports under
+        # the upscaling stage; advancing to it marks the (collapsed) interpolating
+        # stage done. The denominator is the interpolated (== output) frame count.
+        advance_video_stage(job, "upscaling_frames")
+        async with self._track_frame_progress(
+            job, frames_out, "upscaling_frames", frames_total=expected_output_count
+        ):
+            await self._run_fused_frames_shielded(
+                job, frames_in, frames_out, source_frame_count, fps_multiplier, target_frame_count, device
+            )
+        self._validate_fused_output_count(frames_out, expected_output_count)
+        return self._interpolated_encode_fps(fps, fps_multiplier, target_fps)
+
+    async def _run_fused_frames_shielded(
+        self,
+        job: VideoUpscaleJob,
+        frames_in: Path,
+        frames_out: Path,
+        source_frame_count: int,
+        fps_multiplier: int,
+        target_frame_count: int | None,
+        device: str,
+    ) -> None:
+        # Same shield+await+cancel_event contract as OnnxVideoUpscaler.run_frames_*
+        # / GmfssEngine.run: run_frames_fused is a blocking generator with no
+        # cancel hook of its own, so a threading.Event is the only way to stop it,
+        # and we MUST wait for the worker to fully unwind before propagating so the
+        # caller's work-dir cleanup can't race a straggler PNG write.
+        cancel_event = threading.Event()
+        worker = asyncio.ensure_future(
+            asyncio.to_thread(
+                self._run_fused_frames_blocking,
+                job,
+                frames_in,
+                frames_out,
+                source_frame_count,
+                fps_multiplier,
+                target_frame_count,
+                device,
+                cancel_event,
+            )
+        )
+        try:
+            await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            cancel_event.set()
+            with contextlib.suppress(BaseException):
+                await worker
+            raise
+
+    def _run_fused_frames_blocking(
+        self,
+        job: VideoUpscaleJob,
+        frames_in: Path,
+        frames_out: Path,
+        source_frame_count: int,
+        fps_multiplier: int,
+        target_frame_count: int | None,
+        device: str,
+        cancel_event: threading.Event,
+    ) -> None:
+        # Runs in a worker thread: run_frames_fused blocks on ONNX inference per
+        # frame, so it must NEVER be iterated on the event loop. cancel_event is
+        # checked between frames -- the generator's natural checkpoint boundary,
+        # the same granularity the two-pass GMFSS/ONNX compute loops use. Closing
+        # the generator unwinds it (GeneratorExit) with no background thread to
+        # leak (it is pull-based; nothing outlives this call).
+        upscale_frame = self._build_builtin_onnx_upscale_callback(job, device)
+        png_level = self.settings.onnx_video_png_compression
+        frames = self.gmfss_engine.run_frames_fused(
+            frames_in,
+            source_frame_count,
+            fps_multiplier,
+            target_frame_count=target_frame_count,
+            device=device,
+            upscale_frame=upscale_frame,
+        )
+        index = 1
+        try:
+            for frame_nhwc in frames:
+                if cancel_event.is_set():
+                    return
+                _onnx_video_save_frame(frame_nhwc, frames_out / f"{index:08d}.png", png_level)
+                index += 1
+        finally:
+            frames.close()
+
+    def _build_builtin_onnx_upscale_callback(
+        self, job: VideoUpscaleJob, device: str
+    ) -> Callable[[np.ndarray], np.ndarray]:
+        # Build the per-frame upscale closure from the SAME resolved builtin ONNX
+        # session + _upscale_one path the two-pass builtin engine uses, so a fused
+        # frame is upscaled byte-for-byte identically to a two-pass frame. The
+        # sticky force_tiled flag mirrors OnnxVideoUpscaler._infer_loop (a
+        # whole-frame OOM downgrades the rest of the run to tiling).
+        engine = self.onnx_video_engine
+        if engine is None:
+            raise RuntimeError("Fused GMFSS path requires the ONNX video engine, which is not configured")
+        model = get_builtin_onnx_model(job.model_name)
+        if model is None:
+            raise RuntimeError(f"No ONNX export configured for builtin model {job.model_name!r}")
+        onnx_path = engine._select_model_file(model, device)
+        # Captured here, BEFORE gmfss_engine.run_frames_fused's first next() runs
+        # GmfssEngine._get_sessions -> gpu_coordinator.acquire for this same device:
+        # that acquire only evicts the ONNX engine's cache ENTRY, not this already
+        # -captured session object, which the closure below keeps alive for the
+        # whole fused loop. So during the fused pass BOTH the GMFSS sessions and
+        # this ONNX session are resident on the GPU at once -- the coordinator's
+        # one-owner-per-device eviction does not reduce VRAM pressure here the way
+        # it does on the two-pass path. Intentional/unavoidable for fusion, not a
+        # bug -- watch VRAM headroom when benchmarking this path (Task 9).
+        session = engine._get_session(str(onnx_path), device)
+        state = {"force_tiled": False}
+
+        def upscale_frame(frame_nhwc: np.ndarray) -> np.ndarray:
+            upscaled, state["force_tiled"] = engine._upscale_one(
+                session, frame_nhwc, device, state["force_tiled"]
+            )
+            return upscaled
+
+        return upscale_frame
+
+    def _validate_fused_output_count(self, frames_out: Path, expected_count: int) -> None:
+        actual_count = self._count_frames(frames_out)
+        if actual_count == 0:
+            raise RuntimeError("Fused GMFSS+ONNX pass completed but no output frames were produced")
+        if actual_count != expected_count:
+            raise RuntimeError(
+                f"Fused GMFSS+ONNX pass completed with {actual_count} frames, expected {expected_count}"
             )
 
-        self._finalize_output(job, output_path)
-        return output_path
+    @staticmethod
+    def _interpolated_encode_fps(fps: str, fps_multiplier: int, target_fps: str | None) -> str:
+        # Mirrors the encode-fps values _interpolate_to_target_fps /
+        # _interpolate_by_multiplier return, so the fused path encodes at the
+        # exact same rate the two-pass path would.
+        if target_fps is not None:
+            return format_fps_fraction(target_fps)
+        new_rate = compute_interpolated_fps(fps, fps_multiplier)
+        return f"{new_rate.numerator}/{new_rate.denominator}"
 
     def _finalize_output(self, job: VideoUpscaleJob, output_path: Path) -> None:
         if not self._is_non_empty_file(output_path):

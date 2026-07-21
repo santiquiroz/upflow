@@ -23,6 +23,7 @@ from app.services.engines.gmfss_engine import (
     _pair_timesteps,
 )
 import app.services.engines.gmfss_engine as gmfss_engine_module
+from app.services.gpu_session_coordinator import GpuSessionCoordinator
 
 # ---------------------------------------------------------------------------
 # Task 4.1 - GmfssEngine: fake-graph inference path (patterned after
@@ -119,12 +120,12 @@ def count_frames(directory: Path) -> int:
 
 
 def test_available_follows_settings_gate(tmp_path: Path) -> None:
-    assert GmfssEngine(make_settings(tmp_path, enabled=True)).available() is True
-    assert GmfssEngine(make_settings(tmp_path / "off", enabled=False)).available() is False
+    assert GmfssEngine(make_settings(tmp_path, enabled=True), GpuSessionCoordinator()).available() is True
+    assert GmfssEngine(make_settings(tmp_path / "off", enabled=False), GpuSessionCoordinator()).available() is False
 
 
 async def test_run_when_unavailable_raises_actionable_error(tmp_path: Path) -> None:
-    engine = GmfssEngine(make_settings(tmp_path, enabled=False))
+    engine = GmfssEngine(make_settings(tmp_path, enabled=False), GpuSessionCoordinator())
     frames_in = tmp_path / "frames-in"
     write_fake_source_frames(frames_in, 4)
 
@@ -213,7 +214,7 @@ async def test_run_produces_exact_frame_count_for_multiplier(
     multiplier: int,
     expected_total: int,
 ) -> None:
-    engine = GmfssEngine(make_settings(tmp_path))
+    engine = GmfssEngine(make_settings(tmp_path), GpuSessionCoordinator())
     monkeypatch.setattr(engine, "_create_sessions", fake_sessions)
     frames_in = tmp_path / "frames-in"
     frames_out = tmp_path / "frames-out"
@@ -236,7 +237,7 @@ async def test_run_produces_exact_frame_count_for_multiplier(
 async def test_run_produces_exact_frame_count_for_target_fps(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source_frame_count: int, target_frame_count: int
 ) -> None:
-    engine = GmfssEngine(make_settings(tmp_path))
+    engine = GmfssEngine(make_settings(tmp_path), GpuSessionCoordinator())
     monkeypatch.setattr(engine, "_create_sessions", fake_sessions)
     frames_in = tmp_path / "frames-in"
     frames_out = tmp_path / "frames-out"
@@ -256,7 +257,7 @@ async def test_run_copies_boundary_frames_byte_identical(
     # Design decision: source frames are never re-synthesized through the
     # network at t=0/t=1 -- they are copied byte-for-byte into their output
     # slot. This verifies that decision instead of just the total count.
-    engine = GmfssEngine(make_settings(tmp_path))
+    engine = GmfssEngine(make_settings(tmp_path), GpuSessionCoordinator())
     monkeypatch.setattr(engine, "_create_sessions", fake_sessions)
     frames_in = tmp_path / "frames-in"
     frames_out = tmp_path / "frames-out"
@@ -270,7 +271,7 @@ async def test_run_copies_boundary_frames_byte_identical(
 async def test_run_raises_when_source_frame_count_mismatches_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    engine = GmfssEngine(make_settings(tmp_path))
+    engine = GmfssEngine(make_settings(tmp_path), GpuSessionCoordinator())
     monkeypatch.setattr(engine, "_create_sessions", fake_sessions)
     frames_in = tmp_path / "frames-in"
     write_fake_source_frames(frames_in, 3)
@@ -280,12 +281,110 @@ async def test_run_raises_when_source_frame_count_mismatches_directory(
 
 
 # ---------------------------------------------------------------------------
+# run_frames_fused (Fase 2 Task 7): pull-based generator yielding each output
+# frame ALREADY interpolated + upscaled (via an injected upscale_frame
+# callback), with NO intermediate PNG round-trip. Shares the load/resize/
+# interpolate logic with run() but not its threaded save pipeline -- a
+# generator is pull-based, so the caller (Task 8) owns threading/cancellation.
+# ---------------------------------------------------------------------------
+
+
+def test_run_frames_fused_calls_upscale_frame_for_every_output_frame(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = GmfssEngine(make_settings(tmp_path), GpuSessionCoordinator())
+    monkeypatch.setattr(engine, "_create_sessions", fake_sessions)
+    frames_in = tmp_path / "frames-in"
+    write_fake_source_frames(frames_in, 2)
+    upscale_calls: list[tuple[int, ...]] = []
+
+    def fake_upscale(frame: np.ndarray) -> np.ndarray:
+        upscale_calls.append(frame.shape)
+        return frame * 2  # marker: proves the yielded frame came from upscale_frame
+
+    frames = list(
+        engine.run_frames_fused(
+            frames_in,
+            source_frame_count=2,
+            multiplier=2,
+            target_frame_count=None,
+            device="cpu",
+            upscale_frame=fake_upscale,
+        )
+    )
+
+    assert len(frames) == 4  # source_frame_count * multiplier
+    assert len(upscale_calls) == 4  # every output frame passed through upscale_frame
+
+
+def test_run_frames_fused_never_writes_intermediate_png(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = GmfssEngine(make_settings(tmp_path), GpuSessionCoordinator())
+    monkeypatch.setattr(engine, "_create_sessions", fake_sessions)
+    frames_in = tmp_path / "frames-in"
+    write_fake_source_frames(frames_in, 2)
+    intermediate_dir = tmp_path / "should-stay-empty"
+    intermediate_dir.mkdir()
+
+    list(
+        engine.run_frames_fused(
+            frames_in,
+            source_frame_count=2,
+            multiplier=2,
+            target_frame_count=None,
+            device="cpu",
+            upscale_frame=lambda f: f,
+        )
+    )
+
+    assert list(intermediate_dir.iterdir()) == []  # run_frames_fused writes no PNGs
+    assert count_frames(frames_in) == 2  # source dir untouched, nothing written back
+
+
+def test_run_frames_fused_yields_nhwc_uint8_with_pixel_identical_source_frames(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Fused analog of test_run_copies_boundary_frames_byte_identical: the two
+    # boundary source frames (t=0/t=1) are the RAW decoded pixels, NOT degraded
+    # by the padding resize round-trip that interpolated frames go through, and
+    # every frame is NHWC uint8 RGB at the ORIGINAL source resolution -- the
+    # exact format OnnxVideoUpscaler._upscale_one consumes (Task 8 wiring).
+    import cv2
+
+    engine = GmfssEngine(make_settings(tmp_path), GpuSessionCoordinator())
+    monkeypatch.setattr(engine, "_create_sessions", fake_sessions)
+    frames_in = tmp_path / "frames-in"
+    write_fake_source_frames(frames_in, 2)
+
+    frames = list(
+        engine.run_frames_fused(
+            frames_in,
+            source_frame_count=2,
+            multiplier=2,
+            target_frame_count=None,
+            device="cpu",
+            upscale_frame=lambda f: f,
+        )
+    )
+
+    for frame in frames:
+        assert frame.dtype == np.uint8
+        assert frame.shape == (1, SOURCE_H, SOURCE_W, 3)  # NHWC RGB at source res
+
+    first = cv2.cvtColor(cv2.imread(str(frames_in / "00000001.png")), cv2.COLOR_BGR2RGB)
+    last = cv2.cvtColor(cv2.imread(str(frames_in / "00000002.png")), cv2.COLOR_BGR2RGB)
+    assert np.array_equal(frames[0][0], first)  # source[0] pixel-identical (t=0)
+    assert np.array_equal(frames[-1][0], last)  # source[1] pixel-identical (t=1)
+
+
+# ---------------------------------------------------------------------------
 # session cache (LRU 1, AudioSrRestorer pattern) + ORT_DISABLE_ALL
 # ---------------------------------------------------------------------------
 
 
 def test_session_cache_keeps_single_device(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    engine = GmfssEngine(make_settings(tmp_path))
+    engine = GmfssEngine(make_settings(tmp_path), GpuSessionCoordinator())
     built: list[str] = []
 
     def tracking_sessions(device: str) -> dict[str, Any]:
@@ -311,7 +410,7 @@ def test_create_sessions_disables_graph_optimization_for_every_graph(
     # _create_sessions is what gets asserted on. Regression guard for the
     # DXGI_ERROR_DEVICE_HUNG MetricNet gotcha -- applied to EVERY graph, not
     # just metricnet's.
-    engine = GmfssEngine(make_settings(tmp_path))
+    engine = GmfssEngine(make_settings(tmp_path), GpuSessionCoordinator())
     captured: list[tuple[str, Any, Any]] = []
 
     import onnxruntime as ort
@@ -329,6 +428,44 @@ def test_create_sessions_disables_graph_optimization_for_every_graph(
     for _path, sess_options, providers in captured:
         assert sess_options.graph_optimization_level == ort.GraphOptimizationLevel.ORT_DISABLE_ALL
         assert providers == ["CPUExecutionProvider"]
+
+
+# ---------------------------------------------------------------------------
+# GpuSessionCoordinator wiring (Fase 1 Task 3) - release_device evicts only
+# its own device's cache entry, acquire() runs before any session is built.
+# Same pattern as AudioSrRestorer/ApolloRestorer (Fase 1 Task 2).
+# ---------------------------------------------------------------------------
+
+
+def test_release_device_clears_cached_sessions_for_that_device_only(tmp_path: Path) -> None:
+    engine = GmfssEngine(make_settings(tmp_path), GpuSessionCoordinator())
+    engine._session_cache["dml:0"] = {"featurenet": "fake"}
+    engine._session_cache["dml:1"] = {"featurenet": "fake-1"}
+
+    engine.release_device("dml:0")
+
+    assert "dml:0" not in engine._session_cache
+    assert "dml:1" in engine._session_cache
+
+
+def test_release_device_on_empty_cache_is_a_noop(tmp_path: Path) -> None:
+    engine = GmfssEngine(make_settings(tmp_path), GpuSessionCoordinator())
+
+    engine.release_device("dml:0")  # no debe lanzar
+
+
+def test_get_sessions_calls_coordinator_acquire_before_creating(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gpu_coordinator = GpuSessionCoordinator()
+    engine = GmfssEngine(make_settings(tmp_path), gpu_coordinator)
+    calls: list[tuple[str, Any]] = []
+    monkeypatch.setattr(gpu_coordinator, "acquire", lambda device, owner: calls.append((device, owner)))
+    monkeypatch.setattr(engine, "_create_sessions", lambda device: {"featurenet": "fake"})
+
+    engine._get_sessions("dml:0")
+
+    assert calls == [("dml:0", engine)]
 
 
 # ---------------------------------------------------------------------------
@@ -356,7 +493,7 @@ def _fake_session_path_capture(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 def test_create_sessions_uses_fp32_fusionnet_when_fp16_file_absent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    engine = GmfssEngine(make_settings(tmp_path))
+    engine = GmfssEngine(make_settings(tmp_path), GpuSessionCoordinator())
     captured_paths = _fake_session_path_capture(monkeypatch)
 
     engine._create_sessions("dml:0")
@@ -370,7 +507,7 @@ def test_create_sessions_prefers_fp16_fusionnet_on_gpu_device_when_present(
 ) -> None:
     settings = make_settings(tmp_path)
     (settings.gmfss_model_dir_path / FP16_FUSIONNET_FILENAME).write_bytes(b"fake-fp16")
-    engine = GmfssEngine(settings)
+    engine = GmfssEngine(settings, GpuSessionCoordinator())
     captured_paths = _fake_session_path_capture(monkeypatch)
 
     engine._create_sessions("dml:0")
@@ -387,7 +524,7 @@ def test_create_sessions_uses_fp32_fusionnet_on_cpu_device_even_when_fp16_presen
 ) -> None:
     settings = make_settings(tmp_path)
     (settings.gmfss_model_dir_path / FP16_FUSIONNET_FILENAME).write_bytes(b"fake-fp16")
-    engine = GmfssEngine(settings)
+    engine = GmfssEngine(settings, GpuSessionCoordinator())
     captured_paths = _fake_session_path_capture(monkeypatch)
 
     engine._create_sessions("cpu")
@@ -399,7 +536,7 @@ def test_create_sessions_uses_fp32_fusionnet_on_cpu_device_even_when_fp16_presen
 def test_run_blocking_passes_gpu_splat_fn_to_gmfss_driver(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    engine = GmfssEngine(make_settings(tmp_path))
+    engine = GmfssEngine(make_settings(tmp_path), GpuSessionCoordinator())
     monkeypatch.setattr(engine, "_create_sessions", fake_sessions)
     captured_kwargs: dict[str, Any] = {}
 
@@ -434,7 +571,7 @@ async def test_run_cancel_waits_for_worker_thread_before_reraising(
     # finally-block rmtree of the work dir races a straggler write that
     # would resurrect it. The contract is: by the time the cancel propagates,
     # the worker thread has ALREADY finished.
-    engine = GmfssEngine(make_settings(tmp_path))
+    engine = GmfssEngine(make_settings(tmp_path), GpuSessionCoordinator())
     worker_finished = threading.Event()
 
     def slow_worker(
@@ -466,7 +603,7 @@ def test_run_pair_pipeline_stops_immediately_when_cancel_event_preset(
     tmp_path: Path,
 ) -> None:
     settings = make_settings(tmp_path)
-    engine = GmfssEngine(settings)
+    engine = GmfssEngine(settings, GpuSessionCoordinator())
     frames_in = tmp_path / "frames-in"
     frames_out = tmp_path / "frames-out"
     frames_out.mkdir()

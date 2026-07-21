@@ -15,6 +15,7 @@ from app.services.audio_pipeline import AudioPipeline
 from app.services.device_router import DeviceRouter
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.devices_service import DevicesService
+from app.services.gpu_session_coordinator import GpuSessionCoordinator
 from app.services.restorer_registry import build_restorers
 from app.services.engines.audio_enhance import AudioEnhancer
 from app.services.engines.gmfss_engine import GmfssEngine
@@ -44,13 +45,17 @@ async def lifespan(app: FastAPI):
     engine = RealEsrganNcnnEngine(settings)
     media_tools = MediaTools(settings)
     rife_engine = RifeNcnnEngine(settings)
-    gmfss_engine = GmfssEngine(settings)
     audio_enhancers = {mode: AudioEnhancer(settings, mode) for mode in AUDIO_ENHANCE_MODES}
-    restorers = build_restorers(settings)
+    # Shared across the ONNX-session-caching engines so a device switch
+    # between them evicts only the previous owner's entry for that device
+    # (see GpuSessionCoordinator docstring).
+    gpu_coordinator = GpuSessionCoordinator()
+    gmfss_engine = GmfssEngine(settings, gpu_coordinator)
+    restorers = build_restorers(settings, gpu_coordinator)
     devices_service = DevicesService(settings)
     model_registry = ModelRegistry(settings)
-    onnx_engine = OnnxUpscaler(settings, model_registry, devices_service)
-    onnx_video_engine = OnnxVideoUpscaler(settings, model_registry, devices_service)
+    onnx_engine = OnnxUpscaler(settings, model_registry, devices_service, gpu_coordinator)
+    onnx_video_engine = OnnxVideoUpscaler(settings, model_registry, devices_service, gpu_coordinator)
     device_semaphores = DeviceSemaphores(settings)
     # Shared across both managers (like device_semaphores) so an auto-routed
     # image job and an auto-routed video job never pick the same free

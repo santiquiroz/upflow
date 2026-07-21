@@ -81,6 +81,7 @@ from app.services.engines.onnx_upscaler import (
     _tile_weights,
     _wrap_onnx_error,
 )
+from app.services.gpu_session_coordinator import GpuSessionCoordinator
 
 # ---------------------------------------------------------------------------
 # SP11 - optimized ONNX Runtime video frame engine.
@@ -142,10 +143,17 @@ def _save_frame(frame_nhwc: np.ndarray, output_path: Path, png_compression: int)
 
 
 class OnnxVideoUpscaler:
-    def __init__(self, settings: Settings, registry: Any, devices: DevicesService) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        registry: Any,
+        devices: DevicesService,
+        gpu_coordinator: GpuSessionCoordinator,
+    ) -> None:
         self.settings = settings
         self.registry = registry
         self.devices = devices
+        self.gpu_coordinator = gpu_coordinator
         self._session_cache: OrderedDict[tuple[str, str], Any] = OrderedDict()
         self._session_lock = threading.Lock()
         self._gpu_ep_cache: bool | None = None
@@ -155,6 +163,15 @@ class OnnxVideoUpscaler:
 
     def available(self) -> bool:
         return self._onnxruntime_available() and self._opencv_available()
+
+    def release_device(self, device: str) -> None:
+        # Cache is keyed by (model_path, device) -- a single device can hold
+        # several model entries, so every key whose device matches must be
+        # evicted, not just one.
+        with self._session_lock:
+            keys_to_remove = [key for key in self._session_cache if key[1] == device]
+            for key in keys_to_remove:
+                del self._session_cache[key]
 
     @staticmethod
     def _onnxruntime_available() -> bool:
@@ -675,6 +692,7 @@ class OnnxVideoUpscaler:
     # --- session cache -----------------------------------------------------
 
     def _get_session(self, model_path: str, device: str) -> Any:
+        self.gpu_coordinator.acquire(device, self)
         cache_key = (model_path, device)
         with self._session_lock:
             cached = self._session_cache.get(cache_key)
