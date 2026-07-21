@@ -115,7 +115,7 @@ def write_stereo_input_wav(path: Path, seconds: float = 1.0, rate: int = 44100) 
 def test_run_and_save_preserves_stereo_via_multichannel_restore(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    restorer = AudioSrRestorer(make_settings(tmp_path))
+    restorer = AudioSrRestorer(make_settings(tmp_path), GpuSessionCoordinator())
     monkeypatch.setattr(restorer, "_create_sessions", fake_sessions)
     input_wav = tmp_path / "in.wav"
     output_wav = tmp_path / "out.wav"
