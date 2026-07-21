@@ -86,11 +86,15 @@ def parse_pcie_json(raw_stdout: str) -> Lever:
         return Lever(lever_id, label, LeverStatus.unavailable, "Could not read PCIe link info", False)
     if isinstance(entries, dict):
         entries = [entries]
+    if not isinstance(entries, list):
+        return Lever(lever_id, label, LeverStatus.unavailable, "PCIe link data is not a list", False)
     if not entries:
         return Lever(lever_id, label, LeverStatus.unavailable, "No GPU adapter found to check", False)
     descriptions = []
     downgraded = False
     for entry in entries:
+        if not isinstance(entry, dict):
+            return Lever(lever_id, label, LeverStatus.unavailable, "PCIe link data entry is malformed", False)
         gen = _PCIE_GEN_LABELS.get(entry.get("linkSpeed"), "unknown")
         width = entry.get("linkWidth")
         descriptions.append(f"{entry.get('name', 'GPU')}: {gen} x{width}")
@@ -109,9 +113,9 @@ async def probe_pcie_link(timeout: float = 10.0) -> Lever:
         stdout, stderr, returncode = await run_guarded_process(
             ["powershell.exe", "-NoProfile", "-Command", _PCIE_LINK_SCRIPT], timeout
         )
+        if returncode != 0:
+            return Lever(lever_id, label, LeverStatus.unavailable, f"PCIe link probe failed: {stderr.decode(errors='replace')[:200]}", False)
+        return parse_pcie_json(stdout.decode(errors="replace"))
     except Exception:  # noqa: BLE001 -- a probe must never raise
         logger.warning("PCIe link probe failed to run", exc_info=True)
         return Lever(lever_id, label, LeverStatus.unavailable, "Could not run the PCIe link probe", False)
-    if returncode != 0:
-        return Lever(lever_id, label, LeverStatus.unavailable, f"PCIe link probe failed: {stderr.decode(errors='replace')[:200]}", False)
-    return parse_pcie_json(stdout.decode(errors="replace"))

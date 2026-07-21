@@ -99,6 +99,17 @@ def test_parse_pcie_json_unavailable_on_garbage() -> None:
     assert lever.status.value == "unavailable"
 
 
+def test_parse_pcie_json_unavailable_on_valid_but_wrong_shape() -> None:
+    # Test JSON that parses but isn't a list of dicts
+    lever = parse_pcie_json("[1, 2, 3]")
+    assert lever.status.value == "unavailable"
+    assert "malformed" in lever.detail.lower()
+
+    # Test JSON that parses to a scalar
+    lever = parse_pcie_json("42")
+    assert lever.status.value == "unavailable"
+
+
 def test_probe_pcie_link_not_applicable_off_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "platform", "linux")
 
@@ -112,7 +123,10 @@ def test_probe_pcie_link_runs_powershell_and_parses_result(monkeypatch: pytest.M
 
     import app.services.capability_probe as mod
 
+    invoked_command: list[str] = []
+
     async def fake_run_guarded_process(command: list[str], timeout: float) -> tuple[bytes, bytes, int]:
+        invoked_command.extend(command)
         payload = json.dumps([{"name": "GPU", "linkSpeed": 4, "linkWidth": 16}]).encode()
         return payload, b"", 0
 
@@ -121,6 +135,7 @@ def test_probe_pcie_link_runs_powershell_and_parses_result(monkeypatch: pytest.M
     lever = asyncio.run(probe_pcie_link())
 
     assert lever.status.value == "ok"
+    assert invoked_command[0] == "powershell.exe"
 
 
 def test_probe_pcie_link_degrades_on_subprocess_failure(monkeypatch: pytest.MonkeyPatch) -> None:
