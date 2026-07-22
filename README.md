@@ -358,7 +358,7 @@ Todas las variables leen de `.env` (ver [`.env.example`](.env.example) con los d
 
 ## Optimization Center
 
-El **Optimization Center** (en el módulo Settings) detecta y corrige automáticamente cuatro configuraciones del sistema que afectan el rendimiento de upscaling en GPUs DirectML de AMD:
+El **Optimization Center** (en el módulo Settings) detecta cinco configuraciones del sistema que afectan el rendimiento de upscaling en GPUs DirectML de AMD; tres son corregibles con un click (requieren confirmación UAC), dos son diagnóstico de solo lectura:
 
 | Detección | Qué es | Fija automáticamente | Requiere reboot |
 |---|---|---|---|
@@ -374,14 +374,14 @@ Todos los fixes ejecutan vía **elevated PowerShell** (pide UAC una sola vez). E
 
 La interfaz también incluye un **checklist informativo** para Resizable BAR y Above 4G Decoding (configuraciones BIOS):
 
-- **Resizable BAR** — permite que la CPU acceda a toda la VRAM de la GPU en una sola pasada (vs. el default de 256 MB por ventana). Típicamente activa en BIOS como "Resizable BAR" o "Smart Access Memory (SAM)" según el fabricante. En Windows: `GET /api/v1/capabilities/resizable-bar-checklist` devuelve una lista de pasos para activarlo en BIOS + un checkbox persisted en localStorage para confirmar manualmente que ya lo hiciste — nunca bloquea lógica, es solo orientativo.
+- **Resizable BAR** — permite que la CPU acceda a toda la VRAM de la GPU en una sola pasada (vs. el default de 256 MB por ventana). Típicamente activa en BIOS como "Resizable BAR" o "Smart Access Memory (SAM)" según el fabricante. Una lista de pasos está disponible en la UI de Settings; hay un checkbox para confirmar manualmente que ya lo activaste en BIOS (se persiste en localStorage con la clave `upflow.resizableBarConfirmed`) — nunca bloquea lógica ni hace llamadas al backend, es solo orientativo.
 - **Above 4G Decoding** — permite direccionar framebuffers >4GB (relevante solo si tienes >8GB de VRAM en la GPU + resolutions extremas). Misma mecánica: checklist informativa, sin enforce automático.
 
 Ambas están **fuera del alcance de fix automatizado** en esta iteración (requieren cambios en BIOS/firmware, no en software).
 
 ### AudioSR e IOBinding de GMFSS (deferred)
 
-- **Retrofit IOBinding** (Fase 0.2, Task 10): `ApolloRestorer` ganó un fast-path IOBinding para DirectML, pero `AudioSrRestorer` y `GmfssEngine` lo **difirieron explícitamente** — sus arquitecturas (AudioSR: loop DDIM con shapes dinámicas por step; GMFSS: 4 grafos con constraints frágiles `ORT_DISABLE_ALL`) necesitan auditoría y retrofit dedicados en una pass futura. El código de Apollo es la referencia.
+- **Retrofit IOBinding** (Fase 0.2, Task 10): `ApolloRestorer` ganó un fast-path IOBinding para DirectML, pero `AudioSrRestorer`, `GmfssEngine` y `OnnxUpscaler` lo **difirieron explícitamente** — sus arquitecturas (AudioSR: loop DDIM con shapes dinámicas por step; GMFSS: 4 grafos con constraints frágiles `ORT_DISABLE_ALL`; OnnxUpscaler: auditoría pendiente) necesitan análisis y retrofit dedicados en passes futuras. El código de Apollo es la referencia.
 - **Manual BIOS Checklist** (Fase 2): la comprobación de Resizable BAR/Above 4G no tiene backend de detección automática (requeriría acceso a BIOS/firmware propietario) — es un checklist guiado + confirmación manual en localStorage, nunca bloquea la lógica.
 
 ## Cómo activar el FPS boost (RIFE)
