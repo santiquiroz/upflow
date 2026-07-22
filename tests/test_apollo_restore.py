@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -230,3 +231,23 @@ def test_infer_chunk_falls_back_when_iobinding_raises(tmp_path: Path, monkeypatc
     result = restorer._infer_chunk(session, segment, device="dml:0")
 
     assert result.shape == (8,)
+
+
+def test_infer_chunk_logs_iobinding_failure_only_once_across_chunks(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # A whole restore job runs _infer_chunk once per chunk (many chunks per
+    # clip). If IOBinding fails persistently, only the FIRST failure should be
+    # logged -- otherwise a long clip spams one warning per chunk, defeating
+    # the point of "log once".
+    restorer = ApolloRestorer(make_settings(tmp_path), GpuSessionCoordinator())
+    session = fake_session("dml:0")  # plain FakeApolloSession has no io_binding()
+    segment = np.ones(8, dtype=np.float32)
+
+    with caplog.at_level(logging.WARNING, logger="app.services.engines.apollo_restore"):
+        for _ in range(5):
+            restorer._infer_chunk(session, segment, device="dml:0")
+
+    warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert restorer._iobinding_warned is True
