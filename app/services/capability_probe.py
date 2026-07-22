@@ -129,7 +129,15 @@ try {{
     $drive = (Get-Item -LiteralPath $target -ErrorAction Stop).PSDrive.Name
     $partition = Get-Partition -DriveLetter $drive -ErrorAction Stop
     $disk = Get-Disk -Number $partition.DiskNumber -ErrorAction Stop
-    $pnp = Get-PnpDevice -Class DiskDrive -ErrorAction Stop | Where-Object {{ $_.FriendlyName -eq $disk.FriendlyName }} | Select-Object -First 1
+    # Get-Disk's FriendlyName ("AMD-RAID Array 1") is a PREFIX of
+    # Get-PnpDevice's FriendlyName ("AMD-RAID Array 1  SCSI Disk Device") on
+    # real RAID/Storport-backed disks -- an exact -eq match never fires on
+    # that class of hardware (confirmed on a real RX 7800 XT + AMD-RAID
+    # machine), silently degrading every such disk to "unavailable" even
+    # when the real state IS determinable. -like with a trailing wildcard
+    # matches both the plain and suffixed forms.
+    $pnp = Get-PnpDevice -Class DiskDrive -ErrorAction Stop | Where-Object {{ $_.FriendlyName -like "$($disk.FriendlyName)*" }} | Select-Object -First 1
+    if (-not $pnp) {{ throw "No matching PnP disk device found for '$($disk.FriendlyName)'" }}
     $regPath = "HKLM:\\SYSTEM\\CurrentControlSet\\Enum\\$($pnp.InstanceId)\\Device Parameters\\Disk"
     $cache = (Get-ItemProperty -Path $regPath -Name "UserWriteCacheSetting" -ErrorAction Stop).UserWriteCacheSetting
     [PSCustomObject]@{{ ok = $true; diskName = $disk.FriendlyName; writeCacheEnabled = [bool]$cache }} | ConvertTo-Json -Compress
@@ -279,7 +287,10 @@ $target = {path_literal}
 $drive = (Get-Item -LiteralPath $target -ErrorAction Stop).PSDrive.Name
 $partition = Get-Partition -DriveLetter $drive -ErrorAction Stop
 $disk = Get-Disk -Number $partition.DiskNumber -ErrorAction Stop
-$pnp = Get-PnpDevice -Class DiskDrive -ErrorAction Stop | Where-Object {{ $_.FriendlyName -eq $disk.FriendlyName }} | Select-Object -First 1
+# Same -like prefix match as the probe script -- see its comment for why
+# -eq never matches on RAID/Storport-backed disks.
+$pnp = Get-PnpDevice -Class DiskDrive -ErrorAction Stop | Where-Object {{ $_.FriendlyName -like "$($disk.FriendlyName)*" }} | Select-Object -First 1
+if (-not $pnp) {{ throw "No matching PnP disk device found for '$($disk.FriendlyName)'" }}
 $regPath = "HKLM:\\SYSTEM\\CurrentControlSet\\Enum\\$($pnp.InstanceId)\\Device Parameters\\Disk"
 Set-ItemProperty -Path $regPath -Name "UserWriteCacheSetting" -Value 1
 """.strip()

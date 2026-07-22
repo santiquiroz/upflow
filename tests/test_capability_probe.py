@@ -228,6 +228,28 @@ def test_build_disk_write_cache_script_escapes_single_quotes() -> None:
     assert runtime_path not in script  # Raw path should not appear unescaped
 
 
+def test_build_disk_write_cache_script_matches_pnp_friendly_name_by_prefix() -> None:
+    # Get-Disk's FriendlyName ("AMD-RAID Array 1") is a strict PREFIX of
+    # Get-PnpDevice's FriendlyName ("AMD-RAID Array 1  SCSI Disk Device") on
+    # real RAID/Storport-backed disks -- confirmed on real hardware. An
+    # exact -eq match never fires for that disk class, so the script must
+    # use -like with a trailing wildcard, and must guard the no-match case
+    # instead of building a regPath from a null PnP device.
+    script = build_disk_write_cache_script("C:/Upflow/runtime")
+
+    assert "-like" in script
+    assert "-eq $disk.FriendlyName" not in script
+    assert "if (-not $pnp)" in script
+
+
+def test_build_fix_script_disk_write_cache_matches_pnp_friendly_name_by_prefix() -> None:
+    script = build_fix_script("disk_write_cache", "C:/Upflow/runtime")
+
+    assert "-like" in script
+    assert "-eq $disk.FriendlyName" not in script
+    assert "if (-not $pnp)" in script
+
+
 def test_probe_disk_write_cache_runs_powershell_and_parses_result(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "platform", "win32")
 
