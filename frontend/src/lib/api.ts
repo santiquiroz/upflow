@@ -1,14 +1,18 @@
 import type {
   AnalyzeVideoResponse,
+  CapabilitiesResponse,
   CreateInstallResponse,
   CreateJobResponse,
   DevicesResponse,
   EngineInfoResponse,
+  FixLeverResponse,
   HealthResponse,
   InstallStatusResponse,
   JobResponse,
   ModelSearchResponse,
   ModelsResponse,
+  OnnxDiagnosticsResponse,
+  ScanOnnxDiagnosticResponse,
   UpscaleBackend,
   VideoCapabilities,
   VideoEncoder,
@@ -255,4 +259,24 @@ export function getInstallStatus(installId: string): Promise<InstallStatusRespon
 
 export function deleteModel(modelId: string): Promise<void> {
   return apiDelete(`/models/${modelId}`);
+}
+
+export function getCapabilities(): Promise<CapabilitiesResponse> {
+  return apiGet<CapabilitiesResponse>("/capabilities");
+}
+
+export function rescanCapabilities(): Promise<CapabilitiesResponse> {
+  return apiPost<CapabilitiesResponse>("/capabilities/rescan");
+}
+
+export function fixLever(leverId: string): Promise<FixLeverResponse> {
+  return apiPost<FixLeverResponse>(`/capabilities/${leverId}/fix`);
+}
+
+export function getOnnxDiagnostics(): Promise<OnnxDiagnosticsResponse> {
+  return apiGet<OnnxDiagnosticsResponse>("/capabilities/onnx-diagnostics");
+}
+
+export function scanOnnxDiagnostic(modelId: string, deviceId: string): Promise<ScanOnnxDiagnosticResponse> {
+  return apiPost<ScanOnnxDiagnosticResponse>(`/capabilities/onnx-diagnostics/${modelId}/${deviceId}/scan`);
 }
