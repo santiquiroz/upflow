@@ -5,6 +5,7 @@ import json
 import sys
 
 import pytest
+from pydantic import ValidationError
 
 from app.config import Settings
 from app.services.capability_probe import (
@@ -530,3 +531,8 @@ def test_elevation_wait_milliseconds_has_floor_for_small_timeout() -> None:
     import app.services.capability_probe as mod
 
     assert mod._elevation_wait_milliseconds(3.0) == 1_000
+
+
+def test_capability_fix_timeout_rejects_values_below_minimum() -> None:
+    with pytest.raises(ValidationError):
+        make_settings(CAPABILITY_FIX_TIMEOUT_SECONDS=0.5)

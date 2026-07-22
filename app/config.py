@@ -446,6 +446,18 @@ class Settings(BaseSettings):
             raise ValueError("UPDATE_API_TIMEOUT_SECONDS must be greater than 0")
         return value
 
+    @field_validator("capability_fix_timeout_seconds")
+    @classmethod
+    def _validate_capability_fix_timeout_minimum(cls, value: float) -> float:
+        # capability_probe._run_elevated derives an inner PowerShell-side
+        # WaitForExit deadline from this value (5s margin, 1s floor) that must
+        # always fire before this outer run_guarded_process timeout, or the
+        # elevated process can be orphaned on the user's desktop instead of
+        # being killed. 10s is comfortably above margin + floor (6s).
+        if value < 10.0:
+            raise ValueError("CAPABILITY_FIX_TIMEOUT_SECONDS must be at least 10 seconds")
+        return value
+
     @field_validator("upscale_backend")
     @classmethod
     def _validate_upscale_backend(cls, value: str) -> str:
