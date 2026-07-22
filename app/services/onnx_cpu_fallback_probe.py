@@ -152,7 +152,22 @@ class OnnxCpuFallbackProbe:
         # field, so unwrap the tuple case.
         first = providers[0]
         device_ep = first[0] if isinstance(first, tuple) else first
+        model_path = self._model_path_for(model_id)
+        return str(model_path), providers, device_ep
+
+    def _model_path_for(self, model_id: str) -> Path:
         if model_id == "apollo":
-            return str(self.settings.apollo_restore_model_path), providers, device_ep
-        model = BUILTIN_ONNX_MODELS[model_id]
-        return str(self.settings.builtin_onnx_path / model.filename), providers, device_ep
+            model_path = self.settings.apollo_restore_model_path
+        else:
+            model = BUILTIN_ONNX_MODELS[model_id]
+            model_path = self.settings.builtin_onnx_path / model.filename
+        # catalog() only lists a (model_id, device_id) pair when the file
+        # existed at catalog-build time (apollo) or unconditionally
+        # (builtins) -- either way, the file may be missing or have been
+        # deleted since, and ORT's own missing-file exception isn't a
+        # FileNotFoundError/RuntimeError the route layer catches. Raise the
+        # same explicit, pre-flight error onnx_video_upscaler.py raises for
+        # the same condition, before onnxruntime ever opens the file.
+        if not model_path.exists():
+            raise RuntimeError(f"ONNX model file not found: {model_path}")
+        return model_path

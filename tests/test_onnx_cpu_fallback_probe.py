@@ -171,3 +171,33 @@ def test_onnx_cpu_fallback_probe_scan_caches_result(tmp_path: Path, monkeypatch:
     first = asyncio.run(probe.scan("realesrgan-x4plus", "cpu"))
     assert probe.cached("realesrgan-x4plus", "cpu") == first
     assert calls["n"] == 1
+
+
+def test_onnx_cpu_fallback_probe_scan_raises_when_model_file_missing(tmp_path: Path) -> None:
+    # Regression: catalog() lists every BUILTIN_ONNX_MODELS entry
+    # unconditionally, regardless of whether the vendored .onnx file has
+    # actually been downloaded/placed -- so scan() must raise a well-known
+    # exception type (caught by the route as HTTP 400) instead of letting
+    # onnxruntime's own missing-file exception (not a FileNotFoundError or
+    # RuntimeError) propagate as an unhandled 500.
+    missing_onnx_dir = tmp_path / "missing-onnx-dir"
+    settings = make_settings(tmp_path, BUILTIN_ONNX_DIR=str(missing_onnx_dir))
+    devices = DevicesService(settings)
+    probe = OnnxCpuFallbackProbe(settings, devices)
+
+    with pytest.raises(RuntimeError, match="ONNX model file not found"):
+        asyncio.run(probe.scan("realesrgan-x4plus", "cpu"))
+
+
+def test_onnx_cpu_fallback_probe_scan_raises_when_apollo_file_missing(tmp_path: Path) -> None:
+    # Same guard, apollo branch: catalog() only includes ("apollo", device_id)
+    # pairs when apollo_restore_model_path.exists() at catalog-build time, but
+    # _resolve() doesn't recheck -- a file deleted between listing and
+    # scanning must still surface as HTTP 400, not an unhandled 500.
+    missing_apollo_model = tmp_path / "missing-apollo.onnx"
+    settings = make_settings(tmp_path, APOLLO_RESTORE_MODEL=str(missing_apollo_model))
+    devices = DevicesService(settings)
+    probe = OnnxCpuFallbackProbe(settings, devices)
+
+    with pytest.raises(RuntimeError, match="ONNX model file not found"):
+        asyncio.run(probe.scan("apollo", "cpu"))

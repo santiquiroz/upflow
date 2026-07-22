@@ -80,6 +80,17 @@ class FakeOnnxCpuFallbackProbe:
         return CpuFallbackReport(model_id, device_id, ("Conv",), False)
 
 
+class UncachedOnnxCpuFallbackProbe:
+    def catalog(self) -> list[tuple[str, str]]:
+        return [("realesrgan-x4plus", "cpu")]
+
+    def cached(self, model_id: str, device_id: str) -> CpuFallbackReport | None:
+        return None
+
+    async def scan(self, model_id: str, device_id: str) -> CpuFallbackReport:
+        raise AssertionError("scan should not be called when reading uncached diagnostics")
+
+
 class CachedOnnxCpuFallbackProbe:
     def catalog(self) -> list[tuple[str, str]]:
         return [("realesrgan-x4plus", "cpu")]
@@ -111,7 +122,7 @@ def make_diagnostics_client(fake_probe, fake_onnx_probe) -> TestClient:
 
 
 def test_get_onnx_diagnostics_lists_catalog_with_cached_results() -> None:
-    client = make_diagnostics_client(FakeCapabilityProbe(), FakeOnnxCpuFallbackProbe())
+    client = make_diagnostics_client(FakeCapabilityProbe(), UncachedOnnxCpuFallbackProbe())
 
     response = client.get("/api/v1/capabilities/onnx-diagnostics")
 
