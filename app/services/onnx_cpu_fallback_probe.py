@@ -69,11 +69,21 @@ def hot_cpu_ops(profile_events: list[dict], device_provider: str) -> list[str]:
     return hot
 
 
-def probe_cpu_fallback(model_path: str, device_id: str, device_ep: str, providers: list[Any]) -> CpuFallbackReport:
-    # device_id is the user-facing id ("cpu"/"dml:0") stored on the report for
-    # cache/catalog keying; device_ep is the raw ORT provider string
-    # ("CPUExecutionProvider"/"DmlExecutionProvider") that profiling stamps on
-    # each node -- the two are NOT interchangeable for GPU devices, see
+def probe_cpu_fallback(
+    model_path: str, model_id: str, device_id: str, device_ep: str, providers: list[Any]
+) -> CpuFallbackReport:
+    # model_id is the catalog id (e.g. "realesrgan-x4plus") stored on the
+    # report -- it must be passed in explicitly rather than derived from
+    # model_path's filename stem, because every builtin model's vendored
+    # filename carries a "-uint8" suffix the catalog id does not
+    # (BUILTIN_ONNX_MODELS["realesrgan-x4plus"].filename ==
+    # "realesrgan-x4plus-uint8.onnx"); deriving it from the path would make
+    # this report's model_id diverge from the catalog's model_id for every
+    # builtin model except apollo. device_id is likewise the user-facing id
+    # ("cpu"/"dml:0") stored on the report for cache/catalog keying; device_ep
+    # is the raw ORT provider string ("CPUExecutionProvider"/
+    # "DmlExecutionProvider") that profiling stamps on each node -- the two
+    # are NOT interchangeable for GPU devices, see
     # OnnxCpuFallbackProbe._resolve for where device_ep actually comes from.
     import onnxruntime as ort
 
@@ -89,7 +99,7 @@ def probe_cpu_fallback(model_path: str, device_id: str, device_ep: str, provider
     finally:
         Path(profile_path).unlink(missing_ok=True)
     hot_ops = tuple(hot_cpu_ops(events, device_ep))
-    return CpuFallbackReport(model_id=Path(model_path).stem, device_id=device_id, hot_ops=hot_ops, clean=not hot_ops)
+    return CpuFallbackReport(model_id=model_id, device_id=device_id, hot_ops=hot_ops, clean=not hot_ops)
 
 
 class OnnxCpuFallbackProbe:
@@ -126,7 +136,9 @@ class OnnxCpuFallbackProbe:
     async def scan(self, model_id: str, device_id: str) -> CpuFallbackReport:
         model_path, providers, device_ep = self._resolve(model_id, device_id)
         async with self._lock:
-            report = await asyncio.to_thread(probe_cpu_fallback, model_path, device_id, device_ep, providers)
+            report = await asyncio.to_thread(
+                probe_cpu_fallback, model_path, model_id, device_id, device_ep, providers
+            )
             self._cache[(model_id, device_id)] = report
             return report
 

@@ -108,11 +108,33 @@ def test_probe_cpu_fallback_reports_clean_when_all_on_target_ep(tmp_path: Path) 
     # ("CPUExecutionProvider"/"DmlExecutionProvider") -- NOT the user-facing
     # device_id ("cpu"/"dml:0"), which is a separate argument (see the
     # OnnxCpuFallbackProbe._resolve fix below for where these come from).
-    report = probe_cpu_fallback(str(model_path), "cpu", "CPUExecutionProvider", providers=["CPUExecutionProvider"])
+    # model_id is likewise passed in explicitly ("trivial-model", deliberately
+    # NOT equal to the "trivial" filename stem) to prove it is not derived
+    # from model_path.
+    report = probe_cpu_fallback(
+        str(model_path), "trivial-model", "cpu", "CPUExecutionProvider", providers=["CPUExecutionProvider"]
+    )
 
     assert report.clean is True
     assert report.hot_ops == ()
+    assert report.model_id == "trivial-model"
     assert report.device_id == "cpu"
+
+
+def test_probe_cpu_fallback_uses_passed_model_id_not_path_stem(tmp_path: Path) -> None:
+    # Regression: every BUILTIN_ONNX_MODELS filename carries a "-uint8" suffix
+    # the catalog model_id does not (e.g. "realesrgan-x4plus" ->
+    # "realesrgan-x4plus-uint8.onnx"). Deriving model_id from
+    # Path(model_path).stem would report "realesrgan-x4plus-uint8" here,
+    # diverging from the catalog id the API's outer response field uses.
+    model_path = tmp_path / "realesrgan-x4plus-uint8.onnx"
+    _write_trivial_relu_model(model_path)
+
+    report = probe_cpu_fallback(
+        str(model_path), "realesrgan-x4plus", "cpu", "CPUExecutionProvider", providers=["CPUExecutionProvider"]
+    )
+
+    assert report.model_id == "realesrgan-x4plus"
 
 
 def test_onnx_cpu_fallback_probe_catalog_includes_builtin_models(tmp_path: Path) -> None:
@@ -134,10 +156,10 @@ def test_onnx_cpu_fallback_probe_scan_caches_result(tmp_path: Path, monkeypatch:
     calls = {"n": 0}
 
     def fake_probe_cpu_fallback(
-        model_path: str, device_id: str, device_ep: str, providers: list[str]
+        model_path: str, model_id: str, device_id: str, device_ep: str, providers: list[str]
     ) -> CpuFallbackReport:
         calls["n"] += 1
-        return CpuFallbackReport("realesrgan-x4plus", "cpu", (), True)
+        return CpuFallbackReport(model_id, device_id, (), True)
 
     import app.services.onnx_cpu_fallback_probe as mod
 
