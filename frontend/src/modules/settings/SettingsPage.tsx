@@ -3,6 +3,7 @@ import { Info } from "lucide-react";
 import { getEngineInfo, getHealth } from "../../lib/api";
 import type { EngineInfoResponse, HealthResponse } from "../../lib/apiTypes";
 import { DeviceDefault } from "../models/DeviceDefault";
+import { OptimizationCenter } from "./OptimizationCenter";
 
 function AvailabilityRow({ label, available }: { label: string; available: boolean }) {
   const toneClassName = available ? "text-ok" : "text-danger";
@@ -120,6 +121,7 @@ export function SettingsPage() {
         <CapacitySectionStatus query={healthQuery} />
         <DeviceDefault />
       </div>
+      <OptimizationCenter />
     </div>
   );
 }
