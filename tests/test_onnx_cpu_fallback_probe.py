@@ -1,8 +1,22 @@
 from __future__ import annotations
 
-import numpy as np
+import asyncio
+from pathlib import Path
 
-from app.services.onnx_cpu_fallback_probe import build_synthetic_inputs, hot_cpu_ops
+import numpy as np
+import onnx
+import pytest
+from onnx import TensorProto, helper
+
+from app.config import Settings
+from app.services.devices_service import CPU_DEVICE, DevicesService
+from app.services.onnx_cpu_fallback_probe import (
+    CpuFallbackReport,
+    OnnxCpuFallbackProbe,
+    build_synthetic_inputs,
+    hot_cpu_ops,
+    probe_cpu_fallback,
+)
 
 
 class _FakeInputNode:
@@ -69,3 +83,69 @@ def test_hot_cpu_ops_ignores_events_without_provider_arg() -> None:
     hot = hot_cpu_ops(events, device_provider="DmlExecutionProvider")
 
     assert hot == []
+
+
+def make_settings(tmp_path: Path, **overrides: object) -> Settings:
+    return Settings(_env_file=None, **overrides)  # type: ignore[arg-type]
+
+
+def _write_trivial_relu_model(path: Path) -> None:
+    # A single-node graph (Relu) is enough to exercise real ORT profiling
+    # end-to-end on the CPU EP without any GPU or vendored model file.
+    x = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 4])
+    y = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 4])
+    node = helper.make_node("Relu", ["x"], ["y"])
+    graph = helper.make_graph([node], "trivial", [x], [y])
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    onnx.save(model, str(path))
+
+
+def test_probe_cpu_fallback_reports_clean_when_all_on_target_ep(tmp_path: Path) -> None:
+    model_path = tmp_path / "trivial.onnx"
+    _write_trivial_relu_model(model_path)
+
+    # device_ep is the raw ORT provider string profiling stamps on each node
+    # ("CPUExecutionProvider"/"DmlExecutionProvider") -- NOT the user-facing
+    # device_id ("cpu"/"dml:0"), which is a separate argument (see the
+    # OnnxCpuFallbackProbe._resolve fix below for where these come from).
+    report = probe_cpu_fallback(str(model_path), "cpu", "CPUExecutionProvider", providers=["CPUExecutionProvider"])
+
+    assert report.clean is True
+    assert report.hot_ops == ()
+    assert report.device_id == "cpu"
+
+
+def test_onnx_cpu_fallback_probe_catalog_includes_builtin_models(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    devices = DevicesService(settings)
+    probe = OnnxCpuFallbackProbe(settings, devices)
+
+    catalog = probe.catalog()
+
+    # DevicesService always includes CPU_DEVICE (id "cpu") even with no GPU
+    # present, so every builtin model is guaranteed to appear at least once.
+    assert ("realesrgan-x4plus", CPU_DEVICE["id"]) in catalog
+
+
+def test_onnx_cpu_fallback_probe_scan_caches_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = make_settings(tmp_path)
+    devices = DevicesService(settings)
+    probe = OnnxCpuFallbackProbe(settings, devices)
+    calls = {"n": 0}
+
+    def fake_probe_cpu_fallback(
+        model_path: str, device_id: str, device_ep: str, providers: list[str]
+    ) -> CpuFallbackReport:
+        calls["n"] += 1
+        return CpuFallbackReport("realesrgan-x4plus", "cpu", (), True)
+
+    import app.services.onnx_cpu_fallback_probe as mod
+
+    monkeypatch.setattr(mod, "probe_cpu_fallback", fake_probe_cpu_fallback)
+
+    # "realesrgan-x4plus" is a real BUILTIN_ONNX_MODELS key so _resolve()
+    # succeeds before the (mocked) probe ever runs; scan() never touches the
+    # model file itself since probe_cpu_fallback is monkeypatched out.
+    first = asyncio.run(probe.scan("realesrgan-x4plus", "cpu"))
+    assert probe.cached("realesrgan-x4plus", "cpu") == first
+    assert calls["n"] == 1
