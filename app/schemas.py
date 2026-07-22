@@ -236,3 +236,24 @@ class InstallStatusResponse(BaseModel):
     progress_pct: float | None = Field(default=None, serialization_alias="progressPct")
     model_id: str | None = Field(default=None, serialization_alias="modelId")
     error: str | None = None
+
+
+class CpuFallbackReportResponse(BaseModel):
+    model_id: str = Field(serialization_alias="modelId")
+    device_id: str = Field(serialization_alias="deviceId")
+    hot_ops: list[str] = Field(serialization_alias="hotOps")
+    clean: bool
+
+
+class OnnxDiagnosticEntryResponse(BaseModel):
+    model_id: str = Field(serialization_alias="modelId")
+    device_id: str = Field(serialization_alias="deviceId")
+    report: CpuFallbackReportResponse | None = None
+
+
+class OnnxDiagnosticsResponse(BaseModel):
+    entries: list[OnnxDiagnosticEntryResponse]
+
+
+class ScanOnnxDiagnosticResponse(BaseModel):
+    report: CpuFallbackReportResponse

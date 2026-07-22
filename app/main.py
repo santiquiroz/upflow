@@ -30,6 +30,7 @@ from app.services.job_manager import JobManager
 from app.services.media_tools import MediaTools
 from app.services.model_installer import ModelInstaller
 from app.services.model_registry import ModelRegistry
+from app.services.onnx_cpu_fallback_probe import OnnxCpuFallbackProbe
 from app.services.retention_sweeper import RetentionSweeper
 from app.services.storage import StorageService
 from app.services.update_service import UpdateService
@@ -56,6 +57,7 @@ async def lifespan(app: FastAPI):
     restorers = build_restorers(settings, gpu_coordinator)
     devices_service = DevicesService(settings)
     capability_probe = CapabilityProbe(settings)
+    onnx_cpu_fallback_probe = OnnxCpuFallbackProbe(settings, devices_service)
     model_registry = ModelRegistry(settings)
     onnx_engine = OnnxUpscaler(settings, model_registry, devices_service, gpu_coordinator)
     onnx_video_engine = OnnxVideoUpscaler(settings, model_registry, devices_service, gpu_coordinator)
@@ -123,6 +125,7 @@ async def lifespan(app: FastAPI):
     app.state.onnx_video_engine = onnx_video_engine
     app.state.devices_service = devices_service
     app.state.capability_probe = capability_probe
+    app.state.onnx_cpu_fallback_probe = onnx_cpu_fallback_probe
     app.state.job_manager = job_manager
     app.state.video_job_manager = video_job_manager
     app.state.audio_job_manager = audio_job_manager
