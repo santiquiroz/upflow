@@ -6,6 +6,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models import JobStatus
+from app.services.capability_probe import LeverStatus
 
 
 class CreateJobResponse(BaseModel):
@@ -87,6 +88,22 @@ class AudioCapabilitiesResponse(BaseModel):
 
 class VideoCapabilitiesResponse(BaseModel):
     interp_engines: list[str] = Field(default_factory=list, serialization_alias="interpEngines")
+
+
+class LeverResponse(BaseModel):
+    id: str
+    label: str
+    status: LeverStatus
+    detail: str
+    fixable: bool
+
+
+class CapabilitiesResponse(BaseModel):
+    levers: list[LeverResponse]
+
+
+class FixLeverResponse(BaseModel):
+    lever: LeverResponse
 
 
 class AudioTrackResponse(BaseModel):

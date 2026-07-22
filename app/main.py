@@ -7,11 +7,13 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from app.api.capability_routes import router as capability_router
 from app.api.routes import router as api_router
 from app.config import AUDIO_ENHANCE_MODES, get_settings
 from app.security import OriginGuardMiddleware
 from app.services.audio_job_manager import AudioJobManager
 from app.services.audio_pipeline import AudioPipeline
+from app.services.capability_probe import CapabilityProbe
 from app.services.device_router import DeviceRouter
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.devices_service import DevicesService
@@ -53,6 +55,7 @@ async def lifespan(app: FastAPI):
     gmfss_engine = GmfssEngine(settings, gpu_coordinator)
     restorers = build_restorers(settings, gpu_coordinator)
     devices_service = DevicesService(settings)
+    capability_probe = CapabilityProbe(settings)
     model_registry = ModelRegistry(settings)
     onnx_engine = OnnxUpscaler(settings, model_registry, devices_service, gpu_coordinator)
     onnx_video_engine = OnnxVideoUpscaler(settings, model_registry, devices_service, gpu_coordinator)
@@ -119,6 +122,7 @@ async def lifespan(app: FastAPI):
     app.state.onnx_engine = onnx_engine
     app.state.onnx_video_engine = onnx_video_engine
     app.state.devices_service = devices_service
+    app.state.capability_probe = capability_probe
     app.state.job_manager = job_manager
     app.state.video_job_manager = video_job_manager
     app.state.audio_job_manager = audio_job_manager
@@ -179,4 +183,5 @@ settings = get_settings()
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
 app.add_middleware(OriginGuardMiddleware, allowed_origins=settings.allowed_origin_values)
 app.include_router(api_router)
+app.include_router(capability_router)
 configure_web_routes(app)
