@@ -57,7 +57,7 @@ async def lifespan(app: FastAPI):
     restorers = build_restorers(settings, gpu_coordinator)
     devices_service = DevicesService(settings)
     capability_probe = CapabilityProbe(settings)
-    onnx_cpu_fallback_probe = OnnxCpuFallbackProbe(settings, devices_service)
+    onnx_cpu_fallback_probe = OnnxCpuFallbackProbe(settings, devices_service, gpu_coordinator)
     model_registry = ModelRegistry(settings)
     onnx_engine = OnnxUpscaler(settings, model_registry, devices_service, gpu_coordinator)
     onnx_video_engine = OnnxVideoUpscaler(settings, model_registry, devices_service, gpu_coordinator)

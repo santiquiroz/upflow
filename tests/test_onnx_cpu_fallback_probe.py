@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import onnx
@@ -10,6 +11,7 @@ from onnx import TensorProto, helper
 
 from app.config import Settings
 from app.services.devices_service import CPU_DEVICE, DevicesService
+from app.services.gpu_session_coordinator import GpuSessionCoordinator
 from app.services.onnx_cpu_fallback_probe import (
     CpuFallbackReport,
     OnnxCpuFallbackProbe,
@@ -140,7 +142,7 @@ def test_probe_cpu_fallback_uses_passed_model_id_not_path_stem(tmp_path: Path) -
 def test_onnx_cpu_fallback_probe_catalog_includes_builtin_models(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     devices = DevicesService(settings)
-    probe = OnnxCpuFallbackProbe(settings, devices)
+    probe = OnnxCpuFallbackProbe(settings, devices, GpuSessionCoordinator())
 
     catalog = probe.catalog()
 
@@ -152,7 +154,7 @@ def test_onnx_cpu_fallback_probe_catalog_includes_builtin_models(tmp_path: Path)
 def test_onnx_cpu_fallback_probe_scan_caches_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     settings = make_settings(tmp_path)
     devices = DevicesService(settings)
-    probe = OnnxCpuFallbackProbe(settings, devices)
+    probe = OnnxCpuFallbackProbe(settings, devices, GpuSessionCoordinator())
     calls = {"n": 0}
 
     def fake_probe_cpu_fallback(
@@ -183,10 +185,39 @@ def test_onnx_cpu_fallback_probe_scan_raises_when_model_file_missing(tmp_path: P
     missing_onnx_dir = tmp_path / "missing-onnx-dir"
     settings = make_settings(tmp_path, BUILTIN_ONNX_DIR=str(missing_onnx_dir))
     devices = DevicesService(settings)
-    probe = OnnxCpuFallbackProbe(settings, devices)
+    probe = OnnxCpuFallbackProbe(settings, devices, GpuSessionCoordinator())
 
     with pytest.raises(RuntimeError, match="ONNX model file not found"):
         asyncio.run(probe.scan("realesrgan-x4plus", "cpu"))
+
+
+def test_scan_calls_coordinator_acquire_before_creating_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Regression: an unmanaged real ORT session created by this probe's
+    # scan() with no involvement of GpuSessionCoordinator would contend with
+    # a concurrent job's DirectML session on the same device -- see
+    # GpuSessionCoordinator's docstring for the measured 10-16x slowdown
+    # this project hit from unmanaged concurrent sessions.
+    settings = make_settings(tmp_path)
+    devices = DevicesService(settings)
+    gpu_coordinator = GpuSessionCoordinator()
+    probe = OnnxCpuFallbackProbe(settings, devices, gpu_coordinator)
+    calls: list[tuple[str, Any]] = []
+    monkeypatch.setattr(gpu_coordinator, "acquire", lambda device, owner: calls.append((device, owner)))
+
+    def fake_probe_cpu_fallback(
+        model_path: str, model_id: str, device_id: str, device_ep: str, providers: list[str]
+    ) -> CpuFallbackReport:
+        return CpuFallbackReport(model_id, device_id, (), True)
+
+    import app.services.onnx_cpu_fallback_probe as mod
+
+    monkeypatch.setattr(mod, "probe_cpu_fallback", fake_probe_cpu_fallback)
+
+    asyncio.run(probe.scan("realesrgan-x4plus", "cpu"))
+
+    assert calls == [("cpu", probe)]
 
 
 def test_onnx_cpu_fallback_probe_scan_raises_when_apollo_file_missing(tmp_path: Path) -> None:
@@ -197,7 +228,7 @@ def test_onnx_cpu_fallback_probe_scan_raises_when_apollo_file_missing(tmp_path: 
     missing_apollo_model = tmp_path / "missing-apollo.onnx"
     settings = make_settings(tmp_path, APOLLO_RESTORE_MODEL=str(missing_apollo_model))
     devices = DevicesService(settings)
-    probe = OnnxCpuFallbackProbe(settings, devices)
+    probe = OnnxCpuFallbackProbe(settings, devices, GpuSessionCoordinator())
 
     with pytest.raises(RuntimeError, match="ONNX model file not found"):
         asyncio.run(probe.scan("apollo", "cpu"))

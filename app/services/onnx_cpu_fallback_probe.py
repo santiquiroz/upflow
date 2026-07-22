@@ -11,6 +11,7 @@ import numpy as np
 from app.config import Settings
 from app.services.backend_registry import BUILTIN_ONNX_MODELS
 from app.services.devices_service import DevicesService
+from app.services.gpu_session_coordinator import GpuSessionCoordinator
 
 # ---------------------------------------------------------------------------
 # Fase 0.1: detects ONNX Runtime ops that silently fall back to the CPU EP on
@@ -108,11 +109,20 @@ class OnnxCpuFallbackProbe:
     Optimization Center diagnostics panel, one (model, device) pair at a
     time."""
 
-    def __init__(self, settings: Settings, devices: DevicesService) -> None:
+    def __init__(self, settings: Settings, devices: DevicesService, gpu_coordinator: GpuSessionCoordinator) -> None:
         self.settings = settings
         self.devices = devices
+        self.gpu_coordinator = gpu_coordinator
         self._cache: dict[tuple[str, str], CpuFallbackReport] = {}
         self._lock = asyncio.Lock()
+
+    def release_device(self, device: str) -> None:
+        # No-op: unlike OnnxUpscaler/OnnxVideoUpscaler/ApolloRestorer/GmfssEngine,
+        # this probe creates a throwaway session per scan() call (no
+        # _session_cache), so there is nothing cached for `device` to evict.
+        # Still required to satisfy the GpuSessionOwner protocol so acquire()
+        # can call it on this owner when another engine takes the device next.
+        pass
 
     def catalog(self) -> list[tuple[str, str]]:
         # Builtin Real-ESRGAN ONNX exports + Apollo -- both have a single,
@@ -135,6 +145,14 @@ class OnnxCpuFallbackProbe:
 
     async def scan(self, model_id: str, device_id: str) -> CpuFallbackReport:
         model_path, providers, device_ep = self._resolve(model_id, device_id)
+        # acquire() is synchronous/fast (in-memory bookkeeping only), so it
+        # runs directly on the event loop -- only the actual session
+        # creation + inference below goes through asyncio.to_thread. This
+        # keeps this probe's real ORT session creation from racing with a
+        # concurrent job's session on the same device (see
+        # GpuSessionCoordinator's docstring for why unmanaged concurrent
+        # DirectML sessions on one device caused a measured 10-16x slowdown).
+        self.gpu_coordinator.acquire(device_id, self)
         async with self._lock:
             report = await asyncio.to_thread(
                 probe_cpu_fallback, model_path, model_id, device_id, device_ep, providers
