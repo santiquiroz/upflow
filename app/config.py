@@ -418,6 +418,10 @@ class Settings(BaseSettings):
     # TTL. A successful result (even "up to date") uses the full TTL above.
     update_error_retry_seconds: int = Field(default=300, alias="UPDATE_ERROR_RETRY_SECONDS")
     update_api_timeout_seconds: float = Field(default=5.0, alias="UPDATE_API_TIMEOUT_SECONDS")
+    # Elevated (UAC) PowerShell fix scripts launched by CapabilityProbe.apply_fix
+    # (HAGS registry write, disk write-cache registry write, Defender exclusion
+    # add) -- bounds how long the backend waits on the elevated child process.
+    capability_fix_timeout_seconds: float = Field(default=120.0, alias="CAPABILITY_FIX_TIMEOUT_SECONDS")
 
     @field_validator("per_device_gpu_concurrency", "cpu_concurrency", "max_concurrent_jobs")
     @classmethod
@@ -440,6 +444,18 @@ class Settings(BaseSettings):
     def _validate_update_timeout_positive(cls, value: float) -> float:
         if value <= 0:
             raise ValueError("UPDATE_API_TIMEOUT_SECONDS must be greater than 0")
+        return value
+
+    @field_validator("capability_fix_timeout_seconds")
+    @classmethod
+    def _validate_capability_fix_timeout_minimum(cls, value: float) -> float:
+        # capability_probe._run_elevated derives an inner PowerShell-side
+        # WaitForExit deadline from this value (5s margin, 1s floor) that must
+        # always fire before this outer run_guarded_process timeout, or the
+        # elevated process can be orphaned on the user's desktop instead of
+        # being killed. 10s is comfortably above margin + floor (6s).
+        if value < 10.0:
+            raise ValueError("CAPABILITY_FIX_TIMEOUT_SECONDS must be at least 10 seconds")
         return value
 
     @field_validator("upscale_backend")

@@ -6,6 +6,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models import JobStatus
+from app.services.capability_probe import LeverStatus
 
 
 class CreateJobResponse(BaseModel):
@@ -87,6 +88,22 @@ class AudioCapabilitiesResponse(BaseModel):
 
 class VideoCapabilitiesResponse(BaseModel):
     interp_engines: list[str] = Field(default_factory=list, serialization_alias="interpEngines")
+
+
+class LeverResponse(BaseModel):
+    id: str
+    label: str
+    status: LeverStatus
+    detail: str
+    fixable: bool
+
+
+class CapabilitiesResponse(BaseModel):
+    levers: list[LeverResponse]
+
+
+class FixLeverResponse(BaseModel):
+    lever: LeverResponse
 
 
 class AudioTrackResponse(BaseModel):
@@ -219,3 +236,24 @@ class InstallStatusResponse(BaseModel):
     progress_pct: float | None = Field(default=None, serialization_alias="progressPct")
     model_id: str | None = Field(default=None, serialization_alias="modelId")
     error: str | None = None
+
+
+class CpuFallbackReportResponse(BaseModel):
+    model_id: str = Field(serialization_alias="modelId")
+    device_id: str = Field(serialization_alias="deviceId")
+    hot_ops: list[str] = Field(serialization_alias="hotOps")
+    clean: bool
+
+
+class OnnxDiagnosticEntryResponse(BaseModel):
+    model_id: str = Field(serialization_alias="modelId")
+    device_id: str = Field(serialization_alias="deviceId")
+    report: CpuFallbackReportResponse | None = None
+
+
+class OnnxDiagnosticsResponse(BaseModel):
+    entries: list[OnnxDiagnosticEntryResponse]
+
+
+class ScanOnnxDiagnosticResponse(BaseModel):
+    report: CpuFallbackReportResponse

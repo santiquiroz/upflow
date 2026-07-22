@@ -268,3 +268,42 @@ export interface InstallStatusResponse {
   modelId: string | null;
   error: string | null;
 }
+
+export type LeverStatus = "ok" | "unavailable" | "not_applicable" | "needs_admin";
+
+export interface LeverResponse {
+  id: string;
+  label: string;
+  status: LeverStatus;
+  detail: string;
+  fixable: boolean;
+}
+
+export interface CapabilitiesResponse {
+  levers: LeverResponse[];
+}
+
+export interface FixLeverResponse {
+  lever: LeverResponse;
+}
+
+export interface CpuFallbackReportResponse {
+  modelId: string;
+  deviceId: string;
+  hotOps: string[];
+  clean: boolean;
+}
+
+export interface OnnxDiagnosticEntryResponse {
+  modelId: string;
+  deviceId: string;
+  report: CpuFallbackReportResponse | null;
+}
+
+export interface OnnxDiagnosticsResponse {
+  entries: OnnxDiagnosticEntryResponse[];
+}
+
+export interface ScanOnnxDiagnosticResponse {
+  report: CpuFallbackReportResponse;
+}

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 import time
 from collections import OrderedDict
@@ -12,8 +13,10 @@ import numpy as np
 
 from app.config import Settings
 from app.services.engines.multichannel_restore import restore_multichannel
-from app.services.engines.onnx_upscaler import _build_providers, _wrap_onnx_error
+from app.services.engines.onnx_upscaler import _build_providers, _parse_dml_device_id, _wrap_onnx_error
 from app.services.gpu_session_coordinator import GpuSessionCoordinator
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Apollo audio restoration (ONNX, in-process). Reconstructs the high band a
@@ -42,6 +45,13 @@ CPU_OVERLAP_SECONDS = 0.5
 SESSION_CACHE_SIZE = 2
 ONNX_INPUT_NAME = "audio"
 ONNX_OUTPUT_NAME = "restored"
+DML_DEVICE_PREFIX = "dml:"
+
+
+def _import_onnxruntime() -> Any:
+    import onnxruntime as ort
+
+    return ort
 
 
 class ApolloRestorer:
@@ -50,6 +60,7 @@ class ApolloRestorer:
         self.gpu_coordinator = gpu_coordinator
         self._session_cache: OrderedDict[str, Any] = OrderedDict()
         self._session_lock = threading.Lock()
+        self._iobinding_warned = False
 
     def available(self) -> bool:
         return self.settings.audio_restore_available()
@@ -87,13 +98,13 @@ class ApolloRestorer:
         overlap_seconds = CPU_OVERLAP_SECONDS if is_cpu else OVERLAP_SECONDS
 
         def restore_mono(mono: np.ndarray) -> np.ndarray:
-            return self._restore_chunked(session, mono, throttle, chunk_seconds, overlap_seconds)
+            return self._restore_chunked(session, mono, device, throttle, chunk_seconds, overlap_seconds)
 
         restored = restore_multichannel(audio, restore_mono)
         _save_wav(output_wav, restored)
 
     def _restore_chunked(
-        self, session: Any, audio: np.ndarray, throttle: float = 0.0,
+        self, session: Any, audio: np.ndarray, device: str, throttle: float = 0.0,
         chunk_seconds: float = 1.0, overlap_seconds: float = OVERLAP_SECONDS,
     ) -> np.ndarray:
         total = audio.shape[-1]
@@ -109,7 +120,7 @@ class ApolloRestorer:
             end = min(start + window_length, total)
             segment = audio[start:end]
             weights = window[: end - start]
-            restored = self._infer_chunk(session, segment)
+            restored = self._infer_chunk(session, segment, device)
             accumulator[start:end] += restored * weights
             weight_sum[start:end] += weights
             if end >= total:
@@ -119,15 +130,45 @@ class ApolloRestorer:
                 time.sleep(throttle)  # deja respirar al escritorio entre inferencias GPU
         return (accumulator / np.maximum(weight_sum, 1e-8)).astype(np.float32)
 
-    def _infer_chunk(self, session: Any, segment: np.ndarray) -> np.ndarray:
+    def _infer_chunk(self, session: Any, segment: np.ndarray, device: str) -> np.ndarray:
         batch = segment.reshape(1, 1, -1).astype(np.float32)
         input_name = session.get_inputs()[0].name
         output_name = session.get_outputs()[0].name
+        if device.startswith(DML_DEVICE_PREFIX):
+            bound = self._infer_iobinding(session, batch, input_name, output_name, device)
+            if bound is not None:
+                return np.asarray(bound, dtype=np.float64).reshape(-1)
         try:
             result = session.run([output_name], {input_name: batch})[0]
         except Exception as exc:  # onnxruntime raises its own native exception types
             raise _wrap_onnx_error("Apollo inference failed", exc) from exc
         return np.asarray(result, dtype=np.float64).reshape(-1)
+
+    def _infer_iobinding(
+        self, session: Any, batch: np.ndarray, input_name: str, output_name: str, device: str
+    ) -> np.ndarray | None:
+        # Best-effort, same contract as OnnxVideoUpscaler._infer_iobinding: any
+        # failure (older ort, EP quirk, missing io_binding on a test double)
+        # falls back to a plain run rather than failing the job, and a
+        # persistent failure is logged once (not once per chunk) so it
+        # doesn't silently downgrade every chunk to the slower path forever.
+        try:
+            ort = _import_onnxruntime()
+            device_id = _parse_dml_device_id(device)
+            io_binding = session.io_binding()
+            input_value = ort.OrtValue.ortvalue_from_numpy(batch, "dml", device_id)
+            io_binding.bind_ortvalue_input(input_name, input_value)
+            io_binding.bind_output(output_name, "dml")
+            session.run_with_iobinding(io_binding)
+            return io_binding.copy_outputs_to_cpu()[0]
+        except Exception:  # noqa: BLE001
+            if not self._iobinding_warned:
+                self._iobinding_warned = True
+                logger.warning(
+                    "Apollo ONNX IO binding failed on %s; falling back to the slower plain-run path", device,
+                    exc_info=True,
+                )
+            return None
 
     def _get_session(self, device: str) -> Any:
         self.gpu_coordinator.acquire(device, self)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -148,3 +149,105 @@ def test_run_and_save_preserves_stereo_via_multichannel_restore(
 
     result, rate = sf.read(str(output_wav), always_2d=True)
     assert result.shape[1] == 2  # sigue estereo, no colapsa a mono
+
+
+class FakeIoBinding:
+    def __init__(self) -> None:
+        self.bound_input: tuple[str, Any] | None = None
+        self.bound_output: str | None = None
+
+    def bind_ortvalue_input(self, name: str, value: Any) -> None:
+        self.bound_input = (name, value)
+
+    def bind_output(self, name: str, device: str) -> None:
+        self.bound_output = name
+
+    def copy_outputs_to_cpu(self) -> list[np.ndarray]:
+        return [self.bound_input[1].numpy() * 2.0]  # arbitrary marker so the test can assert this path ran
+
+
+class FakeDmlSession:
+    def __init__(self) -> None:
+        self.io_binding_calls = 0
+        self.run_with_iobinding_calls = 0
+
+    def get_inputs(self) -> list[FakeIoInfo]:
+        return [FakeIoInfo("audio")]
+
+    def get_outputs(self) -> list[FakeIoInfo]:
+        return [FakeIoInfo("restored")]
+
+    def io_binding(self) -> FakeIoBinding:
+        self.io_binding_calls += 1
+        return FakeIoBinding()
+
+    def run_with_iobinding(self, binding: FakeIoBinding) -> None:
+        self.run_with_iobinding_calls += 1
+
+
+def test_infer_chunk_uses_iobinding_on_dml_device(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    restorer = ApolloRestorer(make_settings(tmp_path), GpuSessionCoordinator())
+    session = FakeDmlSession()
+    segment = np.ones(8, dtype=np.float32)
+
+    class _FakeOrtValue:
+        def __init__(self, array: np.ndarray) -> None:
+            self._array = array
+
+        def numpy(self) -> np.ndarray:
+            return self._array
+
+    class _FakeOrt:
+        class OrtValue:
+            @staticmethod
+            def ortvalue_from_numpy(array: np.ndarray, device: str, device_id: int) -> "_FakeOrtValue":
+                return _FakeOrtValue(array)
+
+    monkeypatch.setattr("app.services.engines.apollo_restore._import_onnxruntime", lambda: _FakeOrt)
+
+    result = restorer._infer_chunk(session, segment, device="dml:0")
+
+    assert session.io_binding_calls == 1
+    assert session.run_with_iobinding_calls == 1
+    assert result.shape == (8,)
+    assert np.array_equal(result, segment.astype(np.float64) * 2.0)
+
+
+def test_infer_chunk_falls_back_to_plain_run_off_dml(tmp_path: Path) -> None:
+    restorer = ApolloRestorer(make_settings(tmp_path), GpuSessionCoordinator())
+    session = fake_session("cpu")
+    segment = np.ones(8, dtype=np.float32)
+
+    result = restorer._infer_chunk(session, segment, device="cpu")
+
+    assert result.shape == (8,)
+
+
+def test_infer_chunk_falls_back_when_iobinding_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    restorer = ApolloRestorer(make_settings(tmp_path), GpuSessionCoordinator())
+    session = fake_session("dml:0")  # plain FakeApolloSession has no io_binding()
+    segment = np.ones(8, dtype=np.float32)
+
+    result = restorer._infer_chunk(session, segment, device="dml:0")
+
+    assert result.shape == (8,)
+
+
+def test_infer_chunk_logs_iobinding_failure_only_once_across_chunks(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # A whole restore job runs _infer_chunk once per chunk (many chunks per
+    # clip). If IOBinding fails persistently, only the FIRST failure should be
+    # logged -- otherwise a long clip spams one warning per chunk, defeating
+    # the point of "log once".
+    restorer = ApolloRestorer(make_settings(tmp_path), GpuSessionCoordinator())
+    session = fake_session("dml:0")  # plain FakeApolloSession has no io_binding()
+    segment = np.ones(8, dtype=np.float32)
+
+    with caplog.at_level(logging.WARNING, logger="app.services.engines.apollo_restore"):
+        for _ in range(5):
+            restorer._infer_chunk(session, segment, device="dml:0")
+
+    warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert restorer._iobinding_warned is True

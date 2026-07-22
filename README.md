@@ -356,6 +356,34 @@ Todas las variables leen de `.env` (ver [`.env.example`](.env.example) con los d
 | `MAX_MODEL_DOWNLOAD_MB` | `2048` | Tamaño máximo permitido para un archivo de modelo descargado desde HF (MB) |
 | `ONNX_TILE_SIZE` | `256` | Tamaño de tile (px) para inferencia ONNX por partes, con blend de 16px de solape; `0` desactiva el tiling (imagen completa de una pasada) |
 
+## Optimization Center
+
+El **Optimization Center** (en el módulo Settings) detecta cinco configuraciones del sistema que afectan el rendimiento de upscaling en GPUs DirectML de AMD; tres son corregibles con un click (requieren confirmación UAC), dos son diagnóstico de solo lectura:
+
+| Detección | Qué es | Fija automáticamente | Requiere reboot |
+|---|---|---|---|
+| **HAGS** (Hardware Accelerated GPU Scheduling) | Necesario para DirectML moderno en AMD; activa el scheduler de GPU del OS | Sí, un click | Sí |
+| **Disk write-cache** | Caché de escritura en disco — cuando está apagado, cada PNG intermedio se sincroniza a disco antes de continuar (penalidad de latencia grave en video) | Sí, un click | Sí |
+| **Defender en runtime/** | Exclusión del antivirus para `runtime/` — si está activado, el scanner de Windows ralentiza I/O de frames | Sí, un click | No |
+| **PCIe link** | Velocidad y ancho del enlace PCIe entre la GPU y la CPU | Diagnóstico: solo lectura (no hay fix de software) | — |
+| **ONNX CPU fallback** | Detecta qué operaciones de los modelos reales corren en CPU en vez de GPU — herramienta de diagnóstico para identificar cuellos de botella | Manual: ejecutar diagnóstico desde el panel | — |
+
+Todos los fixes ejecutan vía **elevated PowerShell** (pide UAC una sola vez). El timeout de espera es `CAPABILITY_FIX_TIMEOUT_SECONDS` (default 120s) — si el usuario no responde al prompt UAC en ese tiempo, el fix falla sin romper nada.
+
+### Resizable BAR y Above 4G Decoding
+
+La interfaz también incluye un **checklist informativo** para Resizable BAR y Above 4G Decoding (configuraciones BIOS):
+
+- **Resizable BAR** — permite que la CPU acceda a toda la VRAM de la GPU en una sola pasada (vs. el default de 256 MB por ventana). Típicamente activa en BIOS como "Resizable BAR" o "Smart Access Memory (SAM)" según el fabricante. Una lista de pasos está disponible en la UI de Settings; hay un checkbox para confirmar manualmente que ya lo activaste en BIOS (se persiste en localStorage con la clave `upflow.resizableBarConfirmed`) — nunca bloquea lógica ni hace llamadas al backend, es solo orientativo.
+- **Above 4G Decoding** — permite direccionar framebuffers >4GB (relevante solo si tienes >8GB de VRAM en la GPU + resolutions extremas). Misma mecánica: checklist informativa, sin enforce automático.
+
+Ambas están **fuera del alcance de fix automatizado** en esta iteración (requieren cambios en BIOS/firmware, no en software).
+
+### AudioSR e IOBinding de GMFSS (deferred)
+
+- **Retrofit IOBinding** (Fase 0.2, Task 10): `ApolloRestorer` ganó un fast-path IOBinding para DirectML, pero `AudioSrRestorer`, `GmfssEngine` y `OnnxUpscaler` lo **difirieron explícitamente** — sus arquitecturas (AudioSR: loop DDIM con shapes dinámicas por step; GMFSS: 4 grafos con constraints frágiles `ORT_DISABLE_ALL`; OnnxUpscaler: auditoría pendiente) necesitan análisis y retrofit dedicados en passes futuras. El código de Apollo es la referencia.
+- **Manual BIOS Checklist** (Fase 2): la comprobación de Resizable BAR/Above 4G no tiene backend de detección automática (requeriría acceso a BIOS/firmware propietario) — es un checklist guiado + confirmación manual en localStorage, nunca bloquea la lógica.
+
 ## Cómo activar el FPS boost (RIFE)
 
 El FPS boost está deshabilitado por defecto. Para activarlo:
