@@ -2311,8 +2311,12 @@ function buildRequestBody(params: CreateGenerationJobParams): Record<string, unk
   return body;
 }
 
-export function createGenerationJob(params: CreateGenerationJobParams): Promise<CreateJobResponse> {
-  return apiPostJson<CreateJobResponse>("/generation/jobs", buildRequestBody(params));
+// NOTA (contrato real, Task 9): POST /generation/jobs devuelve el GenerationJob
+// completo (id, status, downloadUrl...) con 201 — NO el CreateJobResponse/202
+// (jobId/statusUrl) de los otros kinds. Deviación intencional documentada; no
+// "arreglarla" para parecerse a audio.
+export function createGenerationJob(params: CreateGenerationJobParams): Promise<GenerationJob> {
+  return apiPostJson<GenerationJob>("/generation/jobs", buildRequestBody(params));
 }
 
 export function getGenerationJob(jobId: string): Promise<GenerationJob> {
