@@ -1155,6 +1155,16 @@ def test_generation_step_progress_reports_generating_stage() -> None:
     assert [s["key"] for s in job.metadata["stages"]] == ["generating"]
 
 
+def test_generation_step_progress_scales_within_generating_weight() -> None:
+    job = make_generation_job()
+
+    apply_generation_step_progress(job, steps_done=5, steps_total=25, include_upscale=True)
+
+    # generating(85%) at 5/25=20% fraction = 0.85 * 0.2
+    assert job.metadata["progress"] == pytest.approx(0.17)
+    assert [s["key"] for s in job.metadata["stages"]] == ["generating", "upscaling"]
+
+
 def test_generation_stages_include_upscaling_when_auto_upscale() -> None:
     job = make_generation_job()
 
