@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -13,13 +14,17 @@ from app.services.engines.base import UpscaleEngine
 from app.services.job_manager import JobManager
 from app.services.progress import (
     Stage,
+    advance_generation_stage,
     advance_image_stage,
     advance_video_stage,
+    apply_generation_step_progress,
     apply_image_tile_progress,
     apply_stage_transition,
+    build_generation_stages,
     build_image_stages,
     build_video_stages,
     compute_progress,
+    complete_generation_stages,
     complete_image_stages,
     complete_video_stages,
     mark_all_done,
@@ -1124,3 +1129,59 @@ async def test_frames_counter_reflects_current_stage_not_previous(tmp_path: Path
 
     # The finally-block authoritative count settles on this stage's 3 frames.
     assert job.metadata["framesDone"] == 3
+
+
+# ---------------------------------------------------------------------------
+# Task 6 - generation stages (generating 85 / upscaling 15, or generating 100
+# alone when auto-upscale is off). Mirrors the image-stage functions above;
+# job is a bare SimpleNamespace since these functions only touch .metadata
+# and Task 8's GenerationJob dataclass does not exist yet.
+# ---------------------------------------------------------------------------
+
+
+def make_generation_job() -> SimpleNamespace:
+    return SimpleNamespace(metadata={})
+
+
+def test_generation_step_progress_reports_generating_stage() -> None:
+    job = make_generation_job()
+
+    apply_generation_step_progress(job, steps_done=5, steps_total=25, include_upscale=False)
+
+    assert job.metadata["stage"] == "generating"
+    assert job.metadata["framesDone"] == 5
+    assert job.metadata["framesTotal"] == 25
+    assert 0.0 < job.metadata["progress"] < 1.0
+    assert [s["key"] for s in job.metadata["stages"]] == ["generating"]
+
+
+def test_generation_stages_include_upscaling_when_auto_upscale() -> None:
+    job = make_generation_job()
+
+    advance_generation_stage(job, "upscaling", include_upscale=True)
+
+    assert [s["key"] for s in job.metadata["stages"]] == ["generating", "upscaling"]
+    assert job.metadata["stage"] == "upscaling"
+
+
+def test_complete_generation_stages_reaches_full_progress() -> None:
+    job = make_generation_job()
+
+    complete_generation_stages(job, include_upscale=True)
+
+    assert job.metadata["progress"] == 1.0
+
+
+def test_build_generation_stages_excludes_upscaling_and_normalizes_to_one() -> None:
+    stages = build_generation_stages(include_upscale=False)
+
+    assert [stage.key for stage in stages] == ["generating"]
+    assert stages[0].weight == pytest.approx(1.0)
+
+
+def test_build_generation_stages_weights_generating_and_upscaling() -> None:
+    stages = build_generation_stages(include_upscale=True)
+
+    assert [stage.key for stage in stages] == ["generating", "upscaling"]
+    assert stages[0].weight == pytest.approx(0.85)
+    assert stages[1].weight == pytest.approx(0.15)

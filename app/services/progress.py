@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, replace
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 from app.models import AudioJob, UpscaleJob, VideoUpscaleJob, utc_now
 from app.services.media_tools import parse_fps_fraction
@@ -46,6 +46,11 @@ AUDIO_STAGE_WEIGHTS: dict[str, tuple[str, float]] = {
 
 AUDIO_STAGE_ORDER: tuple[str, ...] = ("decoding", "denoising", "restoring", "finalizing")
 
+GENERATION_STAGE_DEFS: tuple[tuple[str, str, float], ...] = (
+    ("generating", "Generating", 85.0),
+    ("upscaling", "Upscaling", 15.0),
+)
+
 
 @dataclass(frozen=True, slots=True)
 class Stage:
@@ -53,6 +58,12 @@ class Stage:
     label: str
     weight: float
     status: StageStatus = "pending"
+
+
+class HasMetadata(Protocol):
+    # Task 8's GenerationJob dataclass does not exist yet; this Protocol lets
+    # the generation-stage functions below stay decoupled from that task.
+    metadata: dict[str, Any]
 
 
 def video_interpolation_active(job: VideoUpscaleJob) -> bool:
@@ -239,4 +250,39 @@ def apply_image_tile_progress(job: UpscaleJob, tiles_done: int, tiles_total: int
     job.metadata["stages"] = [asdict(stage) for stage in stages]
     job.metadata["framesDone"] = tiles_done
     job.metadata["framesTotal"] = tiles_total
+    job.metadata["progress"] = compute_progress(stages, current_fraction=fraction)
+
+
+def build_generation_stages(include_upscale: bool) -> list[Stage]:
+    if include_upscale:
+        raw_stages = list(GENERATION_STAGE_DEFS)
+    else:
+        key, label, _ = GENERATION_STAGE_DEFS[0]
+        raw_stages = [(key, label, 100.0)]
+    return _normalize_weights(raw_stages)
+
+
+def advance_generation_stage(job: HasMetadata, stage_key: str, include_upscale: bool) -> None:
+    stages = apply_stage_transition(build_generation_stages(include_upscale), stage_key)
+    _write_stage_metadata(job, stages, stage_key)
+
+
+def complete_generation_stages(job: HasMetadata, include_upscale: bool) -> None:
+    stages = mark_all_done(build_generation_stages(include_upscale))
+    _write_stage_metadata(job, stages, "completed", progress_override=1.0)
+
+
+def apply_generation_step_progress(
+    job: HasMetadata, steps_done: int, steps_total: int, include_upscale: bool
+) -> None:
+    # Mirrors apply_image_tile_progress -- called between diffusion steps, so
+    # this stays a direct metadata write rather than routing through
+    # _write_stage_metadata (which would stamp a fresh stageStartedAt on
+    # every step).
+    stages = apply_stage_transition(build_generation_stages(include_upscale), "generating")
+    fraction = frame_stage_fraction(steps_done, steps_total)
+    job.metadata["stage"] = "generating"
+    job.metadata["stages"] = [asdict(stage) for stage in stages]
+    job.metadata["framesDone"] = steps_done
+    job.metadata["framesTotal"] = steps_total
     job.metadata["progress"] = compute_progress(stages, current_fraction=fraction)
