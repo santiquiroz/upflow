@@ -100,6 +100,22 @@ def _filter_to_declared(files: list[HfFile], declared: list[str]) -> list[HfFile
     return kept
 
 
+def _is_inside(candidate: Path, root: Path) -> bool:
+    return candidate.resolve().is_relative_to(root.resolve())
+
+
+def _safe_staging_dest(staging_root: Path, relative_path: str) -> Path:
+    # model_index.json declares its own component names (an attacker-
+    # controlled repo file), and repo_files() lists whatever the repo
+    # actually contains -- both feed _filter_to_declared, so a malicious repo
+    # could otherwise smuggle a "declared component" like "../../etc" plus a
+    # matching file path and have it written outside staging_root.
+    dest = staging_root / relative_path
+    if not _is_inside(dest, staging_root):
+        raise ValueError(f"Archivo del repo escapa el directorio de staging: {relative_path!r}")
+    return dest
+
+
 def _patch_legacy_component_configs(staging_root: Path) -> None:
     # Los repos amd/ legacy (_class_name: OnnxStableDiffusionPipeline) no traen
     # config.json por componente y optimum-onnx lo exige (findings, hallazgo
@@ -112,6 +128,11 @@ def _patch_legacy_component_configs(staging_root: Path) -> None:
         return
     for component in _read_declared_components(staging_root):
         component_dir = staging_root / component
+        if not _is_inside(component_dir, staging_root):
+            # Nombre de componente (atacante-controlado via model_index.json)
+            # intenta escapar staging_root -- salteo silencioso: la validacion
+            # estructural de mas adelante ya falla con su propio mensaje.
+            continue
         config_path = component_dir / "config.json"
         vendored = LEGACY_CONFIGS_ASSETS_DIR / component / "config.json"
         if component_dir.is_dir() and not config_path.exists() and vendored.is_file():
@@ -138,12 +159,7 @@ def _validate_structure(staging_root: Path) -> None:
     index_path = staging_root / MODEL_INDEX_FILENAME
     if not index_path.is_file():
         raise ValueError(f"Descarga incompleta: falta {MODEL_INDEX_FILENAME}.")
-    index = json.loads(index_path.read_text(encoding="utf-8"))
-    declared = [
-        name
-        for name, value in index.items()
-        if not name.startswith("_") and isinstance(value, list)
-    ]
+    declared = _read_declared_components(staging_root)
     missing = sorted(name for name in declared if not (staging_root / name).is_dir())
     if missing:
         raise ValueError(f"Faltan componentes del pipeline en el repo: {', '.join(missing)}.")
@@ -232,7 +248,7 @@ class GenerationModelInstaller:
             await self.hf_client.download(
                 job.repo_id,
                 MODEL_INDEX_FILENAME,
-                staging_root / MODEL_INDEX_FILENAME,
+                _safe_staging_dest(staging_root, MODEL_INDEX_FILENAME),
                 max_bytes=max_file_bytes,
             )
             declared = _read_declared_components(staging_root)
@@ -242,7 +258,7 @@ class GenerationModelInstaller:
             total_bytes = sum(f.size for f in selected) or 1
             downloaded_bytes = 0
             for hf_file in selected:
-                dest = staging_root / hf_file.path
+                dest = _safe_staging_dest(staging_root, hf_file.path)
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 await self.hf_client.download(
                     job.repo_id, hf_file.path, dest, max_bytes=max_file_bytes
@@ -278,9 +294,29 @@ class GenerationModelInstaller:
                 shutil.rmtree(staging_root, ignore_errors=True)
 
     async def _promote_staging_dir(self, staging_root: Path, final_dir: Path) -> None:
+        # Move-aside + rollback, not delete-then-replace: deleting final_dir
+        # up front means a permanently-locked staging->final replace (a real
+        # Windows file-lock case in this repo, see PROMOTE_RETRY_DELAYS_SECONDS)
+        # loses BOTH the previous working install and the new staging build.
+        # The previous install is parked at final_dir + ".old" until the
+        # replace actually succeeds, and restored on any failure.
         final_dir.parent.mkdir(parents=True, exist_ok=True)
-        if final_dir.exists():
-            shutil.rmtree(final_dir)
+        backup_dir = final_dir.with_name(final_dir.name + ".old")
+        if backup_dir.exists():
+            shutil.rmtree(backup_dir)
+        had_previous = final_dir.exists()
+        if had_previous:
+            final_dir.replace(backup_dir)
+        try:
+            await self._replace_with_retries(staging_root, final_dir)
+        except Exception:
+            if had_previous and not final_dir.exists():
+                backup_dir.replace(final_dir)
+            raise
+        if had_previous:
+            shutil.rmtree(backup_dir, ignore_errors=True)
+
+    async def _replace_with_retries(self, staging_root: Path, final_dir: Path) -> None:
         last_error: Exception | None = None
         for delay in (0.0, *PROMOTE_RETRY_DELAYS_SECONDS):
             if delay:
