@@ -4,6 +4,7 @@ import type { JobQueueEntry } from "../hooks/useJobQueue";
 import type { AudioJob, JobResponse, JobStage, VideoJobResponse } from "../lib/apiTypes";
 import { denoiseLabel, restoreLabel } from "../lib/audioLabels";
 import { estimateEta, formatEta, type EtaSample } from "../lib/eta";
+import { formatDuration } from "../lib/formatDuration";
 import { formatFps } from "../lib/formatFps";
 import {
   areFramesReportable,
@@ -146,6 +147,7 @@ function JobTypeSummary({ entry, job }: { entry: JobQueueEntry; job: AnyJobRespo
     if (job.device) {
       items.push({ label: "Device", value: job.device });
     }
+    pushDurationItem(items, job);
     return <DetailList items={items} />;
   }
   items.push({ label: "Model", value: job.modelName });
@@ -163,7 +165,17 @@ function JobTypeSummary({ entry, job }: { entry: JobQueueEntry; job: AnyJobRespo
   } else {
     items.push({ label: "Format", value: job.outputFormat.toUpperCase() });
   }
+  pushDurationItem(items, job);
   return <DetailList items={items} />;
+}
+
+// Only meaningful once the job has actually finished (completed/failed/cancelled) --
+// while running, finishedAt is still null so the row is omitted.
+function pushDurationItem(items: DetailItem[], job: AnyJobResponse): void {
+  if (!job.finishedAt) {
+    return;
+  }
+  items.push({ label: "Duration", value: formatDuration(job.startedAt, job.finishedAt) });
 }
 
 function detailValueClassName(isNumeric: boolean | undefined): string {

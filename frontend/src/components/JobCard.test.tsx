@@ -109,6 +109,20 @@ describe("JobCard", () => {
     );
   });
 
+  it("shows the elapsed duration when completed", () => {
+    const job: JobResponse = {
+      ...BASE_JOB,
+      status: "completed",
+      downloadUrl: "/download",
+      startedAt: "2026-01-01T00:00:00Z",
+      finishedAt: "2026-01-01T00:03:12Z",
+    };
+    render(<JobCard phase="completed" job={job} />);
+
+    expect(screen.getByText("Duration")).toBeInTheDocument();
+    expect(screen.getByText("3m 12s")).toBeInTheDocument();
+  });
+
   it("shows an error message when failed", () => {
     const job: JobResponse = { ...BASE_JOB, status: "failed", error: "Model crashed" };
     render(<JobCard phase="failed" job={job} />);

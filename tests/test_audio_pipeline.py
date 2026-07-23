@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -259,3 +260,24 @@ def test_audio_job_response_serializes_output_format_camel_case(tmp_path: Path) 
     serialized = audio_job_to_response(job).model_dump(by_alias=True)
 
     assert serialized["outputFormat"] == "mp3"
+
+
+def test_audio_job_to_response_exposes_timestamps(tmp_path: Path) -> None:
+    started = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    finished = datetime(2026, 1, 1, 0, 3, 12, tzinfo=timezone.utc)
+    job = make_audio_job(tmp_path / "clip.wav", started_at=started, finished_at=finished)
+
+    response = audio_job_to_response(job)
+
+    assert response.started_at == started
+    assert response.finished_at == finished
+
+
+def test_audio_job_response_serializes_timestamps_camel_case(tmp_path: Path) -> None:
+    job = make_audio_job(tmp_path / "clip.wav")
+
+    serialized = audio_job_to_response(job).model_dump(by_alias=True)
+
+    assert "createdAt" in serialized
+    assert "startedAt" in serialized
+    assert "finishedAt" in serialized

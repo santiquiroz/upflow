@@ -74,6 +74,9 @@ class AudioJobResponse(BaseModel):
     restore: str | None = None
     device: str | None = None
     output_format: str = Field(default="flac", serialization_alias="outputFormat")
+    created_at: datetime = Field(serialization_alias="createdAt")
+    started_at: datetime | None = Field(default=None, serialization_alias="startedAt")
+    finished_at: datetime | None = Field(default=None, serialization_alias="finishedAt")
     progress_pct: float | None = Field(default=None, serialization_alias="progressPct")
     stages: list[dict[str, Any]] | None = None
     error: str | None = None

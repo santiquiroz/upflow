@@ -135,6 +135,9 @@ export interface AudioJob {
   denoise: string | null;
   restore: string | null;
   device: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
   progressPct: number | null;
   stages: JobStage[] | null;
   error: string | null;

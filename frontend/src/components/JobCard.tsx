@@ -1,6 +1,7 @@
 import { AlertTriangle, Ban, CheckCircle2, Clock, Download, ImageIcon, Loader2, UploadCloud } from "lucide-react";
 import type { AudioJob, JobResponse, VideoJobResponse } from "../lib/apiTypes";
 import { denoiseLabel, restoreLabel } from "../lib/audioLabels";
+import { formatDuration } from "../lib/formatDuration";
 import { formatFps } from "../lib/formatFps";
 import { isProgressDeterminate } from "../lib/jobProgress";
 import { DeterminateProgressBar } from "./DeterminateProgressBar";
@@ -129,6 +130,15 @@ function CancelledState() {
   );
 }
 
+function DurationDetailItem({ job }: { job: AnyJobResponse }) {
+  return (
+    <div className="flex items-center gap-1">
+      <dt className="text-text-faint">Duration</dt>
+      <dd className="font-mono-tabular text-text">{formatDuration(job.startedAt, job.finishedAt)}</dd>
+    </div>
+  );
+}
+
 function ImageCompletedDetails({ job }: { job: JobResponse }) {
   return (
     <>
@@ -148,6 +158,7 @@ function ImageCompletedDetails({ job }: { job: JobResponse }) {
           <dt className="sr-only">Format</dt>
           <dd className="uppercase text-text">{job.outputFormat}</dd>
         </div>
+        <DurationDetailItem job={job} />
       </dl>
     </>
   );
@@ -171,6 +182,7 @@ function VideoCompletedDetails({ job }: { job: VideoJobResponse }) {
           <dd className="font-mono-tabular text-text">{formatFps(outputFps)}</dd>
         </div>
       )}
+      <DurationDetailItem job={job} />
     </dl>
   );
 }
@@ -186,6 +198,7 @@ function AudioCompletedDetails({ job }: { job: AudioJob }) {
         <dt className="text-text-faint">Restore</dt>
         <dd className="text-text">{restoreLabel(job.restore)}</dd>
       </div>
+      <DurationDetailItem job={job} />
     </dl>
   );
 }
