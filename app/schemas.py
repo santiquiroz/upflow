@@ -241,6 +241,59 @@ class InstallStatusResponse(BaseModel):
     error: str | None = None
 
 
+class CreateGenerationJobRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    prompt: str = Field(min_length=1, max_length=2000)
+    negative_prompt: str | None = Field(default=None, alias="negativePrompt", max_length=2000)
+    model_id: str = Field(alias="modelId")
+    steps: int = Field(default=25, ge=1, le=100)
+    guidance: float = Field(default=7.5, ge=0, le=30)
+    width: int = Field(default=512, ge=64, le=1024, multiple_of=64)
+    height: int = Field(default=512, ge=64, le=1024, multiple_of=64)
+    seed: int | None = Field(default=None, ge=0)
+    device: str | None = None
+    auto_upscale: bool = Field(default=False, alias="autoUpscale")
+    upscale_model_name: str | None = Field(default=None, alias="upscaleModelName")
+    upscale_scale: int | None = Field(default=None, alias="upscaleScale", ge=2, le=4)
+    upscale_model_id: str | None = Field(default=None, alias="upscaleModelId")
+
+
+class GenerationJobResponse(BaseModel):
+    id: str
+    status: JobStatus
+    prompt: str
+    negative_prompt: str | None = Field(default=None, serialization_alias="negativePrompt")
+    model_id: str = Field(serialization_alias="modelId")
+    steps: int
+    guidance: float
+    width: int
+    height: int
+    seed: int | None = None
+    device: str | None = None
+    auto_upscale: bool = Field(default=False, serialization_alias="autoUpscale")
+    created_at: datetime = Field(serialization_alias="createdAt")
+    started_at: datetime | None = Field(default=None, serialization_alias="startedAt")
+    finished_at: datetime | None = Field(default=None, serialization_alias="finishedAt")
+    progress_pct: float | None = Field(default=None, serialization_alias="progressPct")
+    stages: list[dict[str, Any]] | None = None
+    error: str | None = None
+    download_url: str | None = Field(default=None, serialization_alias="downloadUrl")
+
+
+class GenerationModelSummary(BaseModel):
+    id: str
+    name: str
+
+
+class GenerationCapabilitiesResponse(BaseModel):
+    available: bool
+    reason: str | None = None
+    models: list[GenerationModelSummary] = Field(default_factory=list)
+    devices: list[str] = Field(default_factory=list)
+    cpu_only: bool = Field(default=False, serialization_alias="cpuOnly")
+
+
 class CpuFallbackReportResponse(BaseModel):
     model_id: str = Field(serialization_alias="modelId")
     device_id: str = Field(serialization_alias="deviceId")

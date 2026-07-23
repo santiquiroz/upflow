@@ -20,17 +20,21 @@ from app.config import (
     get_settings,
 )
 from app.exceptions import ModelNotFoundError, ModelProtectedError, QueueFullError
-from app.models import AudioJob, JobStatus, UpdateStatus, UpscaleJob, VideoUpscaleJob
+from app.models import AudioJob, GenerationJob, JobStatus, UpdateStatus, UpscaleJob, VideoUpscaleJob
 from app.schemas import (
     AnalyzeVideoResponse,
     AudioCapabilitiesResponse,
     AudioJobResponse,
     AudioTrackResponse,
+    CreateGenerationJobRequest,
     CreateInstallResponse,
     CreateJobResponse,
     DeviceInfoResponse,
     DevicesResponse,
     EngineInfoResponse,
+    GenerationCapabilitiesResponse,
+    GenerationJobResponse,
+    GenerationModelSummary,
     HealthResponse,
     HfModelSearchResultResponse,
     InstallModelRequest,
@@ -48,11 +52,14 @@ from app.schemas import (
 )
 from app.services.audio_job_manager import AudioJobManager
 from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
+from app.services.engines.generation_onnx import generation_dependencies_available
+from app.services.generation_installer import GenerationModelInstaller
+from app.services.generation_job_manager import GenerationJobManager
 from app.services.hf_client import HfClient
 from app.services.job_manager import JobManager
 from app.services.media_tools import MediaTools
 from app.services.model_installer import ModelInstaller
-from app.services.model_registry import ModelEntry, ModelRegistry
+from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry
 from app.services.storage import StorageService
 from app.services.stream_analysis import parse_audio_tracks, parse_subtitle_tracks
 from app.services.update_service import UpdateService
@@ -161,6 +168,14 @@ def get_video_job_manager(request: Request) -> VideoJobManager:
 
 def get_audio_job_manager(request: Request) -> AudioJobManager:
     return request.app.state.audio_job_manager
+
+
+def get_generation_job_manager(request: Request) -> GenerationJobManager:
+    return request.app.state.generation_job_manager
+
+
+def get_generation_installer(request: Request) -> GenerationModelInstaller:
+    return request.app.state.generation_installer
 
 
 def get_storage(request: Request) -> StorageService:
@@ -288,6 +303,20 @@ def audio_job_to_response(job: AudioJob) -> AudioJobResponse:
         stages=job.metadata.get("stages"),
         error=job.error,
         download_url=download_url,
+    )
+
+
+def generation_job_to_response(job: GenerationJob) -> GenerationJobResponse:
+    download_url = (
+        f"/api/v1/generation/jobs/{job.id}/download" if job.status == JobStatus.completed else None
+    )
+    return GenerationJobResponse(
+        id=job.id, status=job.status, prompt=job.prompt, negative_prompt=job.negative_prompt,
+        model_id=job.model_id, steps=job.steps, guidance=job.guidance, width=job.width,
+        height=job.height, seed=job.seed, device=job.device, auto_upscale=job.auto_upscale,
+        created_at=job.created_at, started_at=job.started_at, finished_at=job.finished_at,
+        progress_pct=_progress_pct_from_metadata(job.metadata), stages=job.metadata.get("stages"),
+        error=job.error, download_url=download_url,
     )
 
 
@@ -857,3 +886,113 @@ async def delete_model(
     except ModelProtectedError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return Response(status_code=204)
+
+
+@router.post("/generation/jobs", response_model=GenerationJobResponse, status_code=201)
+async def create_generation_job(
+    payload: CreateGenerationJobRequest,
+    generation_jobs: GenerationJobManager = Depends(get_generation_job_manager),
+) -> GenerationJobResponse:
+    try:
+        job = await generation_jobs.create_job(
+            prompt=payload.prompt, negative_prompt=payload.negative_prompt, model_id=payload.model_id,
+            steps=payload.steps, guidance=payload.guidance, width=payload.width, height=payload.height,
+            seed=payload.seed, device=payload.device, auto_upscale=payload.auto_upscale,
+            upscale_model_name=payload.upscale_model_name, upscale_scale=payload.upscale_scale,
+            upscale_model_id=payload.upscale_model_id,
+        )
+    except QueueFullError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Unexpected error while creating generation job")
+        raise HTTPException(status_code=500, detail="Failed to create the generation job") from exc
+    return generation_job_to_response(job)
+
+
+@router.get("/generation/jobs/{job_id}", response_model=GenerationJobResponse)
+async def get_generation_job(
+    job_id: str, generation_jobs: GenerationJobManager = Depends(get_generation_job_manager)
+) -> GenerationJobResponse:
+    job = generation_jobs.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Generation job not found")
+    return generation_job_to_response(job)
+
+
+@router.post("/generation/jobs/{job_id}/cancel", response_model=GenerationJobResponse)
+async def cancel_generation_job(
+    job_id: str, generation_jobs: GenerationJobManager = Depends(get_generation_job_manager)
+) -> GenerationJobResponse:
+    job = generation_jobs.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Generation job not found")
+    if not generation_jobs.cancel_job(job_id):
+        raise HTTPException(status_code=409, detail="Job already finished")
+    return generation_job_to_response(job)
+
+
+@router.get("/generation/jobs/{job_id}/download")
+async def download_generation_job(
+    job_id: str, generation_jobs: GenerationJobManager = Depends(get_generation_job_manager)
+) -> FileResponse:
+    job = generation_jobs.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Generation job not found")
+    if job.status != JobStatus.completed or not job.output_path:
+        raise HTTPException(status_code=409, detail="Generation job is not completed yet")
+    return FileResponse(path=job.output_path, filename=job.output_path.name, media_type="image/png")
+
+
+@router.get("/generation/capabilities", response_model=GenerationCapabilitiesResponse)
+async def generation_capabilities(
+    registry: ModelRegistry = Depends(get_model_registry),
+    devices_service: DevicesService = Depends(get_devices_service),
+) -> GenerationCapabilitiesResponse:
+    available, reason = generation_dependencies_available()
+    if not available:
+        return GenerationCapabilitiesResponse(available=False, reason=reason, cpu_only=True)
+    models = [
+        GenerationModelSummary(id=entry.id, name=entry.name)
+        for entry in registry.list()
+        if entry.kind == ModelKind.diffusion_onnx
+    ]
+    device_infos = devices_service.list_devices()
+    return GenerationCapabilitiesResponse(
+        available=True,
+        models=models,
+        devices=[info["id"] for info in device_infos],
+        cpu_only=all(info["kind"] != "gpu" for info in device_infos),
+    )
+
+
+@router.post("/generation/models", response_model=CreateInstallResponse, status_code=202)
+async def install_generation_model(
+    payload: InstallModelRequest,
+    installer: GenerationModelInstaller = Depends(get_generation_installer),
+) -> CreateInstallResponse:
+    try:
+        install_id = await installer.install_from_hf(payload.repo_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return CreateInstallResponse(
+        install_id=install_id, status_url=f"/api/v1/generation/models/install/{install_id}"
+    )
+
+
+@router.get("/generation/models/install/{install_id}", response_model=InstallStatusResponse)
+async def get_generation_install_status(
+    install_id: str, installer: GenerationModelInstaller = Depends(get_generation_installer)
+) -> InstallStatusResponse:
+    job = installer.status(install_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Install job not found")
+    return InstallStatusResponse(
+        install_id=job.id,
+        repo_id=job.repo_id,
+        status=job.status.value,
+        progress_pct=job.progress_pct,
+        model_id=job.model_id,
+        error=job.error,
+    )
