@@ -14,11 +14,13 @@ from PIL import Image
 
 from app.config import Settings
 from app.main import app
-from app.models import JobStatus, UpscaleJob, VideoUpscaleJob, utc_now
+from app.models import GenerationJob, JobStatus, UpscaleJob, VideoUpscaleJob, utc_now
 from app.services import retention_sweeper as retention_sweeper_module
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.engines.base import UpscaleEngine
+from app.services.generation_job_manager import GenerationJobManager
 from app.services.job_manager import JobManager
+from app.services.model_registry import ModelRegistry
 from app.services.retention_sweeper import RetentionSweeper
 from app.services.storage import StorageService
 from app.services.video_job_manager import VideoJobManager
@@ -140,6 +142,21 @@ class FailingImageEngine(UpscaleEngine):
 class FailingVideoUpscaler:
     async def run(self, job: VideoUpscaleJob, fps_multiplier: int = 1) -> Path:
         raise RuntimeError("simulated engine crash")
+
+
+class FakeGenerationEngine:
+    async def run(self, **kwargs: object) -> Path:
+        raise RuntimeError("not invoked in retention-sweeper tests")
+
+
+def make_generation_job_manager(settings: Settings) -> GenerationJobManager:
+    return GenerationJobManager(
+        settings,
+        FakeGenerationEngine(),
+        DeviceSemaphores(settings),
+        registry=ModelRegistry(settings),
+        upscale_engine=FakeImageEngine(settings),
+    )
 
 
 async def test_video_upscaler_removes_work_dir_after_success(tmp_path: Path) -> None:
@@ -374,6 +391,46 @@ def test_retention_sweeper_prunes_old_finished_jobs_but_keeps_recent_and_running
     assert old_job.id not in job_manager.jobs
     assert recent_job.id in job_manager.jobs
     assert running_job.id in job_manager.jobs
+
+
+def test_retention_sweeper_prunes_old_finished_generation_jobs_but_keeps_recent_and_running(
+    tmp_path: Path,
+) -> None:
+    settings = make_settings(tmp_path, output_ttl_hours=1)
+    StorageService(settings)
+    job_manager = JobManager(
+        settings, FakeImageEngine(settings), DeviceSemaphores(settings)
+    )
+    video_job_manager = VideoJobManager(
+        settings,
+        FailingVideoUpscaler(),
+        FakeMediaTools(),
+        DeviceSemaphores(settings),
+    )
+    generation_job_manager = make_generation_job_manager(settings)
+    sweeper = RetentionSweeper(
+        settings, job_manager, video_job_manager, generation_job_manager=generation_job_manager
+    )
+
+    def make_generation_job(status: JobStatus, finished_at) -> GenerationJob:
+        job = GenerationJob(prompt="a red apple", model_id="gen--amd--sd15")
+        job.status = status
+        job.finished_at = finished_at
+        return job
+
+    old_job = make_generation_job(JobStatus.completed, utc_now() - timedelta(hours=2))
+    recent_job = make_generation_job(JobStatus.completed, utc_now())
+    running_job = make_generation_job(JobStatus.running, None)
+
+    generation_job_manager.jobs[old_job.id] = old_job
+    generation_job_manager.jobs[recent_job.id] = recent_job
+    generation_job_manager.jobs[running_job.id] = running_job
+
+    sweeper.sweep_once()
+
+    assert old_job.id not in generation_job_manager.jobs
+    assert recent_job.id in generation_job_manager.jobs
+    assert running_job.id in generation_job_manager.jobs
 
 
 def test_lifespan_starts_and_stops_retention_sweeper() -> None:

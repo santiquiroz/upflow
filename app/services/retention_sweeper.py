@@ -10,8 +10,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from app.config import Settings
-from app.models import AudioJob, JobStatus, TERMINAL_JOB_STATUSES, UpscaleJob, VideoUpscaleJob, utc_now
+from app.models import AudioJob, GenerationJob, JobStatus, TERMINAL_JOB_STATUSES, UpscaleJob, VideoUpscaleJob, utc_now
 from app.services.audio_job_manager import AudioJobManager
+from app.services.generation_job_manager import GenerationJobManager
 from app.services.job_manager import JobManager
 from app.services.video_job_manager import VideoJobManager
 
@@ -27,11 +28,13 @@ class RetentionSweeper:
         job_manager: JobManager,
         video_job_manager: VideoJobManager,
         audio_job_manager: AudioJobManager | None = None,
+        generation_job_manager: GenerationJobManager | None = None,
     ) -> None:
         self.settings = settings
         self.job_manager = job_manager
         self.video_job_manager = video_job_manager
         self.audio_job_manager = audio_job_manager
+        self.generation_job_manager = generation_job_manager
         self.sweep_task: asyncio.Task | None = None
         self._stop_event = threading.Event()
 
@@ -95,6 +98,8 @@ class RetentionSweeper:
         self._prune_finished_jobs(self.video_job_manager.jobs)
         if self.audio_job_manager is not None:
             self._prune_finished_jobs(self.audio_job_manager.jobs)
+        if self.generation_job_manager is not None:
+            self._prune_finished_jobs(self.generation_job_manager.jobs)
 
     def _audio_jobs(self) -> list[AudioJob]:
         if self.audio_job_manager is None:
@@ -115,7 +120,7 @@ class RetentionSweeper:
         }
 
     @staticmethod
-    def _is_finished(job: UpscaleJob | VideoUpscaleJob | AudioJob) -> bool:
+    def _is_finished(job: UpscaleJob | VideoUpscaleJob | AudioJob | GenerationJob) -> bool:
         return job.status in TERMINAL_JOB_STATUSES
 
     def _delete_expired_outputs(self) -> None:
@@ -147,7 +152,8 @@ class RetentionSweeper:
                 shutil.rmtree(work_dir, ignore_errors=True)
 
     def _prune_finished_jobs(
-        self, jobs: dict[str, UpscaleJob] | dict[str, VideoUpscaleJob] | dict[str, AudioJob]
+        self,
+        jobs: dict[str, UpscaleJob] | dict[str, VideoUpscaleJob] | dict[str, AudioJob] | dict[str, GenerationJob],
     ) -> None:
         cutoff = utc_now() - timedelta(hours=self.settings.output_ttl_hours)
         # Snapshot before iterating + pop() instead of del: this runs in a worker
@@ -157,7 +163,7 @@ class RetentionSweeper:
             jobs.pop(job_id, None)
 
     @classmethod
-    def _is_expired(cls, job: UpscaleJob | VideoUpscaleJob | AudioJob, cutoff: datetime) -> bool:
+    def _is_expired(cls, job: UpscaleJob | VideoUpscaleJob | AudioJob | GenerationJob, cutoff: datetime) -> bool:
         if not cls._is_finished(job):
             return False
         return job.finished_at is not None and job.finished_at < cutoff
