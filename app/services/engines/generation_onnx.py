@@ -66,6 +66,17 @@ def _wrap_generation_error(exc: Exception) -> RuntimeError:
     return RuntimeError(f"Image generation failed: {message}")
 
 
+def _build_providers_for_validation(device: str) -> dict[str, Any]:
+    primary = _build_providers(device)[0]
+    kwargs: dict[str, Any] = {"use_io_binding": False}
+    if isinstance(primary, tuple):
+        provider_name, provider_options = primary
+        kwargs.update(provider=provider_name, provider_options=provider_options)
+    else:
+        kwargs["provider"] = primary
+    return kwargs
+
+
 def _build_seed_generator(seed: int) -> Any:
     # torch.Generator, NO np.random.RandomState: __call__ es el de diffusers y
     # randn_tensor accede a generator.device (findings §d/§e, verificado empirico).
