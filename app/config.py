@@ -357,6 +357,7 @@ class Settings(BaseSettings):
 
     hf_token: str | None = Field(default=None, alias="HF_TOKEN")
     max_model_download_mb: int = Field(default=2048, alias="MAX_MODEL_DOWNLOAD_MB")
+    max_generation_model_download_mb: int = Field(default=8192, alias="MAX_GENERATION_MODEL_DOWNLOAD_MB")
 
     onnx_tile_size: int = Field(default=256, alias="ONNX_TILE_SIZE")
 

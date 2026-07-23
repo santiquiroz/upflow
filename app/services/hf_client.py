@@ -221,10 +221,12 @@ class HfClient:
         filename: str,
         dest: Path,
         progress_cb: ProgressCallback | None = None,
+        max_bytes: int | None = None,
     ) -> Path:
         url = _download_url(repo_id, filename)
         _validate_https_huggingface_host(url)
-        max_bytes = self.settings.max_model_download_mb * 1024 * 1024
+        if max_bytes is None:
+            max_bytes = self.settings.max_model_download_mb * 1024 * 1024
         dest.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = dest.with_name(f"{dest.name}{PARTIAL_DOWNLOAD_SUFFIX}")
 

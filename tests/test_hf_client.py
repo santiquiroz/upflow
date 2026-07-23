@@ -466,3 +466,25 @@ def test_download_rejects_non_huggingface_host() -> None:
 
 def test_download_accepts_https_huggingface_host() -> None:
     _validate_https_huggingface_host("https://huggingface.co/org/repo/resolve/main/model.onnx")
+
+
+def test_settings_generation_download_cap_defaults_to_8192(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    assert settings.max_generation_model_download_mb == 8192
+
+
+@pytest.mark.anyio
+async def test_download_honors_max_bytes_override(tmp_path: Path) -> None:
+    # max_model_download_mb is generous (10 MB), but max_bytes override is small (1 KB).
+    # The override should be honored and reject the 2 KB payload.
+    oversized_payload = b"x" * 2048
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=oversized_payload)
+
+    settings = make_settings(tmp_path, MAX_MODEL_DOWNLOAD_MB=10)
+    client = HfClient(settings, transport=transport_for(handler))
+    dest = tmp_path / "file.onnx"
+
+    with pytest.raises(HfDownloadTooLargeError):
+        await client.download("owner/name", "file.onnx", dest, max_bytes=1024)
