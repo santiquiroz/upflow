@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 import pytest
 
+import app.services.engines.generation_onnx as generation_onnx_module
 from app.config import Settings
 from app.services.engines.generation_onnx import (
     CUDA_ONLY_MESSAGE,
@@ -158,6 +159,41 @@ def test_wrap_generation_error_maps_vram() -> None:
 def test_wrap_generation_error_maps_cuda_only() -> None:
     wrapped = _wrap_generation_error(RuntimeError("CUDAExecutionProvider is not available"))
     assert CUDA_ONLY_MESSAGE in str(wrapped)
+
+
+def test_create_pipeline_builds_expected_from_pretrained_kwargs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[Any, dict[str, Any]]] = []
+    tuned: list[tuple[Any, str]] = []
+
+    class FakePipelineClass:
+        @staticmethod
+        def from_pretrained(path: Any, **kwargs: Any) -> Any:
+            calls.append((path, kwargs))
+            return object()
+
+    def fake_tune(sess_options: Any, device: str) -> None:
+        tuned.append((sess_options, device))
+
+    monkeypatch.setattr(generation_onnx_module, "_load_pipeline_class", lambda: FakePipelineClass)
+    monkeypatch.setattr(generation_onnx_module, "_tune_session_options_for_device", fake_tune)
+
+    engine = GenerationEngine(make_settings(tmp_path), RecordingCoordinator())  # type: ignore[arg-type]
+
+    engine._create_pipeline(tmp_path, "dml:1")
+    path, kwargs = calls[0]
+    assert path == str(tmp_path)
+    assert kwargs["use_io_binding"] is False
+    assert kwargs["provider"] == "DmlExecutionProvider"
+    assert kwargs["provider_options"] == {"device_id": 1}
+    assert kwargs["session_options"] is tuned[0][0]
+    assert tuned[0][1] == "dml:1"
+
+    engine._create_pipeline(tmp_path, "cpu")
+    _path_cpu, kwargs_cpu = calls[1]
+    assert kwargs_cpu["provider"] == "CPUExecutionProvider"
+    assert "provider_options" not in kwargs_cpu
 
 
 @pytest.mark.anyio
