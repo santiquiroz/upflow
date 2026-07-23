@@ -1,14 +1,15 @@
 import { useQueries, useQueryClient } from "@tanstack/react-query";
 import { useSyncExternalStore } from "react";
 import { cancelJob, cancelVideoJob, getJob, getVideoJob } from "../lib/api";
-import type { AudioJob, JobResponse, JobStatus, VideoJobResponse } from "../lib/apiTypes";
+import type { AudioJob, GenerationJob, JobResponse, JobStatus, VideoJobResponse } from "../lib/apiTypes";
 import { isTerminalJobStatus } from "../lib/jobStatus";
 import { jobQueueStore, type JobQueueStore, type TrackedJob } from "../lib/jobQueueStore";
 import { cancelAudioJob, getAudioJob } from "../services/audio";
+import { cancelGenerationJob, getGenerationJob } from "../services/generation";
 
 export const DEFAULT_QUEUE_POLL_INTERVAL_MS = 1500;
 
-export type TrackedJobResponse = JobResponse | VideoJobResponse | AudioJob;
+export type TrackedJobResponse = JobResponse | VideoJobResponse | AudioJob | GenerationJob;
 
 export interface JobQueueEntry {
   id: string;
@@ -32,12 +33,14 @@ const QUERY_KEY_BY_KIND: Record<TrackedJob["kind"], string> = {
   image: "job",
   video: "videoJob",
   audio: "audioJob",
+  generation: "generationJob",
 };
 
 const CANCEL_BY_KIND: Record<TrackedJob["kind"], (id: string) => Promise<TrackedJobResponse>> = {
   image: cancelJob,
   video: cancelVideoJob,
   audio: cancelAudioJob,
+  generation: cancelGenerationJob,
 };
 
 function fetchTrackedJob(tracked: TrackedJob): Promise<TrackedJobResponse> {
@@ -46,6 +49,9 @@ function fetchTrackedJob(tracked: TrackedJob): Promise<TrackedJobResponse> {
   }
   if (tracked.kind === "audio") {
     return getAudioJob(tracked.id);
+  }
+  if (tracked.kind === "generation") {
+    return getGenerationJob(tracked.id);
   }
   return getVideoJob(tracked.id);
 }

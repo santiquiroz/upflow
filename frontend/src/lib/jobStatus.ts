@@ -12,12 +12,13 @@ export function isCancellableJobStatus(status: JobStatus): boolean {
   return CANCELLABLE_JOB_STATUSES.includes(status);
 }
 
-export type JobKind = "image" | "video" | "audio";
+export type JobKind = "image" | "video" | "audio" | "generation";
 
 const JOB_KIND_LABELS: Record<JobKind, string> = {
   image: "Image",
   video: "Video",
   audio: "Audio",
+  generation: "Generation",
 };
 
 export function jobKindLabel(kind: JobKind): string {

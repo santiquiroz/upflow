@@ -3,13 +3,19 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as api from "../lib/api";
-import type { JobResponse, VideoJobResponse } from "../lib/apiTypes";
+import type { GenerationJob, JobResponse, VideoJobResponse } from "../lib/apiTypes";
 import { createJobQueueStore } from "../lib/jobQueueStore";
+import * as generationService from "../services/generation";
 import { useJobQueue } from "./useJobQueue";
 
 vi.mock("../lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/api")>();
   return { ...actual, getJob: vi.fn(), getVideoJob: vi.fn() };
+});
+
+vi.mock("../services/generation", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/generation")>();
+  return { ...actual, getGenerationJob: vi.fn(), cancelGenerationJob: vi.fn() };
 });
 
 const POLL_INTERVAL_MS = 10;
@@ -59,6 +65,28 @@ const BASE_VIDEO_JOB: VideoJobResponse = {
   downloadUrl: null,
 };
 
+const BASE_GENERATION_JOB: GenerationJob = {
+  id: "g1",
+  status: "completed",
+  prompt: "a red apple",
+  negativePrompt: null,
+  modelId: "gen--amd--sd15",
+  steps: 25,
+  guidance: 7.5,
+  width: 512,
+  height: 512,
+  seed: 42,
+  device: "dml:0",
+  autoUpscale: false,
+  createdAt: "2026-01-01T00:00:00Z",
+  startedAt: "2026-01-01T00:00:01Z",
+  finishedAt: "2026-01-01T00:00:05Z",
+  progressPct: 100,
+  stages: null,
+  error: null,
+  downloadUrl: "/api/v1/generation/jobs/g1/download",
+};
+
 function createWrapper() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return function Wrapper({ children }: { children: ReactNode }) {
@@ -69,6 +97,8 @@ function createWrapper() {
 afterEach(() => {
   vi.mocked(api.getJob).mockReset();
   vi.mocked(api.getVideoJob).mockReset();
+  vi.mocked(generationService.getGenerationJob).mockReset();
+  vi.mocked(generationService.cancelGenerationJob).mockReset();
 });
 
 describe("useJobQueue", () => {
@@ -93,6 +123,22 @@ describe("useJobQueue", () => {
     await waitFor(() => expect(result.current.entries).toHaveLength(2));
     expect(result.current.entries.map((entry) => entry.id)).toEqual(["vid-1", "img-1"]);
     expect(result.current.entries.map((entry) => entry.kind)).toEqual(["video", "image"]);
+  });
+
+  it("aggregates a completed generation job with its download URL", async () => {
+    const store = createJobQueueStore();
+    vi.mocked(generationService.getGenerationJob).mockResolvedValue(BASE_GENERATION_JOB);
+
+    store.addTrackedJob({ id: "g1", kind: "generation", fileName: "a red apple", createdAt: 1 });
+
+    const { result } = renderHook(() => useJobQueue(store, POLL_INTERVAL_MS), { wrapper: createWrapper() });
+
+    await waitFor(() => expect(result.current.entries[0]?.status).toBe("completed"));
+    expect(result.current.entries[0]).toMatchObject({
+      id: "g1",
+      kind: "generation",
+      downloadUrl: "/api/v1/generation/jobs/g1/download",
+    });
   });
 
   it("reports live status and stops polling a terminal job", async () => {

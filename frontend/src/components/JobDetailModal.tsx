@@ -1,7 +1,7 @@
 import { AlertTriangle, Ban, CheckCircle2, Circle, Loader2 } from "lucide-react";
 import { Fragment, useEffect, useState } from "react";
 import type { JobQueueEntry } from "../hooks/useJobQueue";
-import type { AudioJob, JobResponse, JobStage, VideoJobResponse } from "../lib/apiTypes";
+import type { AudioJob, GenerationJob, JobResponse, JobStage, VideoJobResponse } from "../lib/apiTypes";
 import { denoiseLabel, restoreLabel } from "../lib/audioLabels";
 import { estimateEta, formatEta, type EtaSample } from "../lib/eta";
 import { formatDuration } from "../lib/formatDuration";
@@ -24,7 +24,7 @@ interface JobDetailModalProps {
   onCancel?: (id: string) => void;
 }
 
-type AnyJobResponse = JobResponse | VideoJobResponse | AudioJob;
+type AnyJobResponse = JobResponse | VideoJobResponse | AudioJob | GenerationJob;
 
 const MAX_ETA_SAMPLES = 5;
 
@@ -41,13 +41,17 @@ function isAudioJob(job: AnyJobResponse): job is AudioJob {
   return "denoise" in job;
 }
 
-// Audio jobs carry stages at the top level (no `metadata`), image/video jobs
-// nest them under metadata -- normalize both to the same list.
+function isGenerationJob(job: AnyJobResponse): job is GenerationJob {
+  return "prompt" in job;
+}
+
+// Audio and generation jobs carry stages at the top level (no `metadata`),
+// image/video jobs nest them under metadata -- normalize both to the same list.
 function resolveStages(job: AnyJobResponse | undefined): JobStage[] | undefined {
   if (!job) {
     return undefined;
   }
-  if (isAudioJob(job)) {
+  if (isAudioJob(job) || isGenerationJob(job)) {
     return job.stages ?? undefined;
   }
   return job.metadata.stages;
@@ -144,6 +148,24 @@ function JobTypeSummary({ entry, job }: { entry: JobQueueEntry; job: AnyJobRespo
   if (isAudioJob(job)) {
     items.push({ label: "Denoise", value: denoiseLabel(job.denoise) });
     items.push({ label: "Restore", value: restoreLabel(job.restore) });
+    if (job.device) {
+      items.push({ label: "Device", value: job.device });
+    }
+    pushDurationItem(items, job);
+    return <DetailList items={items} />;
+  }
+  if (isGenerationJob(job)) {
+    items.push({ label: "Prompt", value: job.prompt });
+    if (job.negativePrompt) {
+      items.push({ label: "Negative prompt", value: job.negativePrompt });
+    }
+    items.push({ label: "Model", value: job.modelId });
+    items.push({ label: "Steps", value: String(job.steps), isNumeric: true });
+    items.push({ label: "Guidance", value: String(job.guidance), isNumeric: true });
+    items.push({ label: "Size", value: `${job.width}x${job.height}` });
+    if (job.seed !== null) {
+      items.push({ label: "Seed", value: String(job.seed), isNumeric: true });
+    }
     if (job.device) {
       items.push({ label: "Device", value: job.device });
     }
@@ -250,7 +272,7 @@ function ProgressSection({ job, monotonicProgressPct }: { job: AnyJobResponse | 
 }
 
 function FramesReadout({ job }: { job: AnyJobResponse | undefined }) {
-  if (!job || isAudioJob(job)) {
+  if (!job || isAudioJob(job) || isGenerationJob(job)) {
     return null;
   }
   const framesDone = job.metadata.framesDone;
