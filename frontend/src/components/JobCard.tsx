@@ -1,5 +1,5 @@
 import { AlertTriangle, Ban, CheckCircle2, Clock, Download, ImageIcon, Loader2, UploadCloud } from "lucide-react";
-import type { AudioJob, JobResponse, VideoJobResponse } from "../lib/apiTypes";
+import type { AudioJob, GenerationJob, JobResponse, VideoJobResponse } from "../lib/apiTypes";
 import { denoiseLabel, restoreLabel } from "../lib/audioLabels";
 import { formatDuration } from "../lib/formatDuration";
 import { formatFps } from "../lib/formatFps";
@@ -9,7 +9,7 @@ import { IndeterminateProgressBar } from "./IndeterminateProgressBar";
 
 export type JobCardPhase = "idle" | "uploading" | "queued" | "running" | "completed" | "failed" | "cancelled";
 
-type AnyJobResponse = JobResponse | VideoJobResponse | AudioJob;
+type AnyJobResponse = JobResponse | VideoJobResponse | AudioJob | GenerationJob;
 
 interface JobCardProps {
   phase: JobCardPhase;
@@ -25,6 +25,10 @@ function isVideoJob(job: AnyJobResponse): job is VideoJobResponse {
 
 function isAudioJob(job: AnyJobResponse): job is AudioJob {
   return "denoise" in job;
+}
+
+function isGenerationJob(job: AnyJobResponse): job is GenerationJob {
+  return "autoUpscale" in job;
 }
 
 function readOutputFps(job: VideoJobResponse): string | null {
@@ -203,12 +207,38 @@ function AudioCompletedDetails({ job }: { job: AudioJob }) {
   );
 }
 
+function GenerationCompletedDetails({ job }: { job: GenerationJob }) {
+  return (
+    <>
+      {job.downloadUrl && (
+        <img
+          src={job.downloadUrl}
+          alt="Generated image"
+          className="max-h-48 w-full rounded border border-border bg-bg object-contain"
+        />
+      )}
+      <dl className="flex gap-4 text-xs text-text-dim">
+        <div className="flex items-center gap-1">
+          <dt className="sr-only">Dimensions</dt>
+          <dd className="font-mono-tabular text-text">
+            {job.width}x{job.height}
+          </dd>
+        </div>
+        <DurationDetailItem job={job} />
+      </dl>
+    </>
+  );
+}
+
 function CompletedDetails({ job }: { job: AnyJobResponse }) {
   if (isVideoJob(job)) {
     return <VideoCompletedDetails job={job} />;
   }
   if (isAudioJob(job)) {
     return <AudioCompletedDetails job={job} />;
+  }
+  if (isGenerationJob(job)) {
+    return <GenerationCompletedDetails job={job} />;
   }
   return <ImageCompletedDetails job={job} />;
 }
