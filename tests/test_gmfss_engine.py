@@ -430,6 +430,55 @@ def test_create_sessions_disables_graph_optimization_for_every_graph(
         assert providers == ["CPUExecutionProvider"]
 
 
+def test_create_sessions_tunes_mem_pattern_and_threads_for_dml_device(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # DirectML-specific SessionOptions tuning (enable_mem_pattern/intra_op_num_threads)
+    # only makes sense when DML is the actual compute backend -- see
+    # _tune_session_options_for_device's docstring.
+    engine = GmfssEngine(make_settings(tmp_path), GpuSessionCoordinator())
+    captured: list[tuple[str, Any, Any]] = []
+
+    import onnxruntime as ort
+
+    class FakeInferenceSession:
+        def __init__(self, path: str, sess_options: Any = None, providers: Any = None) -> None:
+            captured.append((path, sess_options, providers))
+
+    monkeypatch.setattr(ort, "InferenceSession", FakeInferenceSession)
+
+    engine._create_sessions("dml:0")
+
+    assert len(captured) == len(GRAPH_NAMES)
+    for _path, sess_options, _providers in captured:
+        assert sess_options.enable_mem_pattern is False
+        assert sess_options.intra_op_num_threads == 1
+
+
+def test_create_sessions_leaves_mem_pattern_and_threads_default_for_cpu_device(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = GmfssEngine(make_settings(tmp_path), GpuSessionCoordinator())
+    captured: list[tuple[str, Any, Any]] = []
+
+    import onnxruntime as ort
+
+    default_options = ort.SessionOptions()
+
+    class FakeInferenceSession:
+        def __init__(self, path: str, sess_options: Any = None, providers: Any = None) -> None:
+            captured.append((path, sess_options, providers))
+
+    monkeypatch.setattr(ort, "InferenceSession", FakeInferenceSession)
+
+    engine._create_sessions("cpu")
+
+    assert len(captured) == len(GRAPH_NAMES)
+    for _path, sess_options, _providers in captured:
+        assert sess_options.enable_mem_pattern == default_options.enable_mem_pattern
+        assert sess_options.intra_op_num_threads == default_options.intra_op_num_threads
+
+
 # ---------------------------------------------------------------------------
 # GpuSessionCoordinator wiring (Fase 1 Task 3) - release_device evicts only
 # its own device's cache entry, acquire() runs before any session is built.

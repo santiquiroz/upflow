@@ -288,6 +288,7 @@ class GmfssEngine:
             # MUST be disabled on every graph, not just MetricNet's -- see the
             # module docstring for the DXGI_ERROR_DEVICE_HUNG history.
             sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
+            _tune_session_options_for_device(sess_options, device)
             graph_path = self._resolve_graph_path(model_dir, name, device)
             sessions[name] = ort.InferenceSession(
                 str(graph_path), sess_options=sess_options, providers=providers
@@ -674,6 +675,23 @@ def _should_use_fp16_fusionnet(model_dir: Path, device: str) -> bool:
 
 def _is_cpu_device(device: str) -> bool:
     return device.strip().lower() == "cpu"
+
+
+def _tune_session_options_for_device(sess_options: Any, device: str) -> None:
+    """DirectML execution-provider guidance (onnxruntime docs): the DML EP
+    manages its own GPU allocator, so ORT's memory-pattern reuse optimization
+    is not just useless there -- it's a known contributor to the same class of
+    driver instability as the MetricNet DXGI_ERROR_DEVICE_HUNG bug documented
+    in the module docstring above, so disable it whenever compute actually
+    runs on DML. Single intra-op thread avoids spinning up CPU worker threads
+    for graphs this tiny, whose real cost is GPU dispatch overhead rather than
+    CPU-side op parallelism; the CPU device path is left at ORT's defaults
+    since CPU *is* the compute backend there and benefits from its own
+    multi-threading."""
+    if _is_cpu_device(device):
+        return
+    sess_options.enable_mem_pattern = False
+    sess_options.intra_op_num_threads = 1
 
 
 def _graph_runner(sessions: dict[str, Any]):
