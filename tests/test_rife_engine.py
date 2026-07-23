@@ -17,7 +17,7 @@ def make_settings(tmp_path: Path, **overrides: object) -> Settings:
     return Settings(RUNTIME_DIR=str(tmp_path), **overrides)  # type: ignore[arg-type]
 
 
-def make_fake_rife_install(tmp_path: Path, model_name: str = "rife-v4.6") -> tuple[Path, Path]:
+def make_fake_rife_install(tmp_path: Path, model_name: str = "rife-v4.25") -> tuple[Path, Path]:
     tmp_path.mkdir(parents=True, exist_ok=True)
     binary = tmp_path / "rife-ncnn-vulkan.exe"
     binary.write_bytes(b"fake")
@@ -26,7 +26,7 @@ def make_fake_rife_install(tmp_path: Path, model_name: str = "rife-v4.6") -> tup
     return binary, models_dir
 
 
-def make_available_settings(tmp_path: Path, model_name: str = "rife-v4.6", **overrides: object) -> Settings:
+def make_available_settings(tmp_path: Path, model_name: str = "rife-v4.25", **overrides: object) -> Settings:
     binary, models_dir = make_fake_rife_install(tmp_path / "install", model_name)
     return make_settings(
         tmp_path,

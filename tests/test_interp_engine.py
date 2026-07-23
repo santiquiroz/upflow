@@ -31,7 +31,7 @@ def make_upload(filename: str, content: bytes) -> UploadFile:
     return UploadFile(file=io.BytesIO(content), filename=filename)
 
 
-def _fake_rife_install(tmp_path: Path, model_name: str = "rife-v4.6") -> tuple[Path, Path]:
+def _fake_rife_install(tmp_path: Path, model_name: str = "rife-v4.25") -> tuple[Path, Path]:
     tmp_path.mkdir(parents=True, exist_ok=True)
     binary = tmp_path / "rife-ncnn-vulkan.exe"
     binary.write_bytes(b"fake")

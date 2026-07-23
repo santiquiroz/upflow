@@ -166,7 +166,7 @@ function Test-FfmpegPresent {
 
 function Test-RifePresent {
     $binary = Join-Path $root 'vendor\rife\rife-ncnn-vulkan.exe'
-    $defaultModel = Join-Path $root 'vendor\rife\models\rife-v4.6'
+    $defaultModel = Join-Path $root 'vendor\rife\models\rife-v4.25'
     return (Test-Path $binary) -and (Test-Path $defaultModel)
 }
 

@@ -275,7 +275,7 @@ class Settings(BaseSettings):
 
     rife_binary: str = Field(default="vendor/rife/rife-ncnn-vulkan.exe", alias="RIFE_BINARY")
     rife_models_dir: str = Field(default="vendor/rife/models", alias="RIFE_MODELS_DIR")
-    rife_model: str = Field(default="rife-v4.6", alias="RIFE_MODEL")
+    rife_model: str = Field(default="rife-v4.25", alias="RIFE_MODEL")
     # Threads load:proc:save del binario RIFE. "auto" escala con los nucleos
     # (el default upstream 1:2:2 deja la GPU esperando el decode PNG a 4K).
     rife_threads: str = Field(default="auto", alias="RIFE_THREADS")

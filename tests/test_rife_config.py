@@ -20,7 +20,7 @@ def test_rife_settings_have_expected_defaults() -> None:
 
     assert settings.rife_binary == "vendor/rife/rife-ncnn-vulkan.exe"
     assert settings.rife_models_dir == "vendor/rife/models"
-    assert settings.rife_model == "rife-v4.6"
+    assert settings.rife_model == "rife-v4.25"
     assert settings.enable_interpolation is False
     assert settings.allowed_fps_multipliers == "2,3,4"
 
@@ -73,7 +73,7 @@ def test_allowed_fps_multiplier_values_parses_custom_csv() -> None:
     assert settings.allowed_fps_multiplier_values == [2, 4]
 
 
-def _make_fake_rife_install(tmp_path: Path, model_name: str = "rife-v4.6") -> tuple[Path, Path]:
+def _make_fake_rife_install(tmp_path: Path, model_name: str = "rife-v4.25") -> tuple[Path, Path]:
     binary = tmp_path / "rife-ncnn-vulkan.exe"
     binary.write_bytes(b"fake")
     models_dir = tmp_path / "models"
