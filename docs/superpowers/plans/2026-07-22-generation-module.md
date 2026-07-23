@@ -413,13 +413,16 @@ git commit -m "feat: cap de descarga para modelos de generacion y max_bytes en H
 
 - [ ] **Step 1: agregar dependencia e instalar**
 
-En `pyproject.toml`, sección de dependencias, agregar la línea EXACTA que dicte el findings doc de Task 1 (ejemplo esperado — reemplazar por el pin real):
+En `pyproject.toml`, sección de dependencias, agregar EXACTAMENTE (pins del findings doc de Task 1, §a/§b — NUNCA el extra `optimum[onnxruntime]`: ese extra arrastra `onnxruntime` vanilla que pisa `onnxruntime-directml`):
 
 ```toml
-    "optimum[onnxruntime]==<PIN_DEL_FINDINGS_DOC>",
+    "optimum==2.1.0",
+    "optimum-onnx==0.1.0",
+    "transformers>=4.36,<4.58",
+    "diffusers>=0.30,<1.0",
 ```
 
-Si la receta segura del findings fue "instalar --no-deps + deps a mano", replicar eso en el pyproject (listar las deps explícitas en lugar del extra) y anotar el porqué en un comentario de una línea. Instalar en el venv del repo siguiendo la receta y verificar:
+(`optimum==2.2.0` es incompatible con `optimum-onnx==0.1.0`; `transformers>=4.58` rompe `optimum-onnx` — ambos conflictos verificados con `pip check` en el spike.) Instalar en el venv del repo (`pip install optimum==2.1.0 optimum-onnx==0.1.0 "transformers>=4.36,<4.58" "diffusers>=0.30,<1.0"` — sin extras, el orden no importa porque ninguno declara onnxruntime como dep base) y verificar:
 
 ```powershell
 python -c "import onnxruntime as ort; assert ort.get_available_providers().__contains__('DmlExecutionProvider'), ort.get_available_providers(); import optimum.onnxruntime; print('OK')"
@@ -690,10 +693,11 @@ def _wrap_generation_error(exc: Exception) -> RuntimeError:
 
 
 def _build_seed_generator(seed: int) -> Any:
-    # Tipo confirmado por el spike; optimum ONNX usa numpy RandomState.
-    import numpy as np
+    # torch.Generator, NO np.random.RandomState: __call__ es el de diffusers y
+    # randn_tensor accede a generator.device (findings §d/§e, verificado empirico).
+    import torch
 
-    return np.random.RandomState(seed)
+    return torch.Generator(device="cpu").manual_seed(seed)
 
 
 @dataclass(slots=True, kw_only=True)
@@ -820,7 +824,12 @@ class GenerationEngine:
         sess_options = ort.SessionOptions()
         _tune_session_options_for_device(sess_options, device)
         primary = providers[0]
-        from_pretrained_kwargs: dict[str, Any] = {"session_options": sess_options}
+        # use_io_binding=False explicito: hoy es el default para DML pero se
+        # blinda ante cambios de default de optimum (IOBinding+DML vetado en este repo).
+        from_pretrained_kwargs: dict[str, Any] = {
+            "session_options": sess_options,
+            "use_io_binding": False,
+        }
         if isinstance(primary, tuple):
             provider_name, provider_options = primary
             from_pretrained_kwargs["provider"] = provider_name
@@ -830,7 +839,7 @@ class GenerationEngine:
         return pipeline_cls.from_pretrained(str(pipeline_dir), **from_pretrained_kwargs)
 ```
 
-Ajustar `callback`/`callback_steps`/`generator`/`session_options` a lo que diga el findings doc de Task 1 si difiere (un solo lugar cada uno: `_run_blocking`, `_build_seed_generator`, `_create_pipeline`).
+Kwargs confirmados por el findings doc (§d): `session_options` aceptado; `callback`/`callback_steps` funcionan en diffusers 0.39.0 (deprecados, FutureWarning una vez por proceso — aceptado en MVP por ser la ruta VERIFICADA empíricamente; no migrar a `callback_on_step_end` en esta task).
 
 - [ ] **Step 5: correr — pasan**
 
@@ -853,6 +862,7 @@ git commit -m "feat: GenerationEngine ONNX DirectML con cache LRU(1) y errores e
 
 **Files:**
 - Create: `app/services/generation_installer.py`
+- Create: `app/assets/generation/sd15_legacy_configs/{unet,text_encoder,vae_decoder,vae_encoder,safety_checker}/config.json` — vendorizados una sola vez desde `sd-legacy/stable-diffusion-v1-5` en Hugging Face (`unet/config.json`, `text_encoder/config.json`, `safety_checker/config.json`, y `vae/config.json` copiado DOS veces: a `vae_decoder/` y `vae_encoder/`). Son KBs estáticos; descargarlos con `curl`/`Invoke-WebRequest` de `https://huggingface.co/sd-legacy/stable-diffusion-v1-5/raw/main/<path>` y commitearlos. Razón: los repos `amd/` legacy no traen `config.json` por componente y `optimum-onnx` lo exige (findings doc, hallazgo bloqueante).
 - Test: `tests/test_generation_installer.py`
 
 **Interfaces:**
@@ -901,6 +911,7 @@ PIPELINE_FILES = [
     HfFile(path="tokenizer/tokenizer_config.json", size=5),
     HfFile(path="scheduler/scheduler_config.json", size=5),
     HfFile(path="v1-5-pruned.ckpt", size=4_000_000_000),  # duplicado torch: debe saltearse
+    HfFile(path="MXR/unet.mxr", size=5_000_000_000),  # binarios MIGraphX: carpeta NO declarada, debe saltearse
 ]
 
 
@@ -939,8 +950,18 @@ def test_select_files_skips_torch_checkpoints() -> None:
     assert any(f.path == "unet/model.onnx" for f in selected)
 
 
+def test_filter_to_declared_drops_undeclared_dirs_and_model_index() -> None:
+    declared = ["text_encoder", "unet", "vae_decoder", "tokenizer", "scheduler"]
+    kept = _filter_to_declared(_select_files(PIPELINE_FILES), declared)
+    paths = [f.path for f in kept]
+    assert "MXR/unet.mxr" not in paths          # carpeta no declarada
+    assert "model_index.json" not in paths       # se baja aparte, en fase 1
+    assert "unet/model.onnx" in paths
+    assert "tokenizer/tokenizer_config.json" in paths
+
+
 def test_install_happy_path_registers_diffusion_model(tmp_path: Path, monkeypatch) -> None:
-    installer, registry, settings, _hf = make_installer(tmp_path, files=PIPELINE_FILES)
+    installer, registry, settings, hf = make_installer(tmp_path, files=PIPELINE_FILES)
     monkeypatch.setattr(installer, "_create_validation_pipeline", lambda pipeline_dir: FakeValidationPipeline())
 
     job = install_and_drain(installer, "amd/sd15")
@@ -951,7 +972,14 @@ def test_install_happy_path_registers_diffusion_model(tmp_path: Path, monkeypatc
     assert entry.kind == ModelKind.diffusion_onnx
     assert entry.scale is None
     assert entry.file_path == "generation/gen--amd--sd15"
-    assert (settings.models_path / "generation" / "gen--amd--sd15" / "model_index.json").is_file()
+    final_dir = settings.models_path / "generation" / "gen--amd--sd15"
+    assert (final_dir / "model_index.json").is_file()
+    # patch legacy: _class_name == OnnxStableDiffusionPipeline y los componentes
+    # no traian config.json -> el installer los completa desde los vendorizados
+    assert (final_dir / "unet" / "config.json").is_file()
+    assert (final_dir / "text_encoder" / "config.json").is_file()
+    # MXR/ no declarado: nunca se descargo
+    assert not any("MXR" in call for call in map(str, hf.download_calls))
 
 
 def test_install_rejects_repo_without_model_index(tmp_path: Path) -> None:
@@ -976,7 +1004,9 @@ def test_install_rejects_when_total_size_exceeds_cap(tmp_path: Path) -> None:
     job = install_and_drain(installer, "amd/sdxl-huge")
 
     assert job.status == InstallStatus.error
-    assert hf.download_calls == []
+    # el cap se chequea DESPUES de bajar model_index.json (fase 1, KBs) pero
+    # ANTES de bajar cualquier peso:
+    assert [str(c) for c in hf.download_calls if "model_index" not in str(c)] == []
 
 
 def test_install_cuda_only_model_fails_with_friendly_message(tmp_path: Path, monkeypatch) -> None:
@@ -1045,6 +1075,8 @@ from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry, Mo
 MODEL_INDEX_FILENAME = "model_index.json"
 GENERATION_MODELS_SUBDIR = "generation"
 SKIP_WEIGHT_SUFFIXES = (".ckpt", ".pth", ".safetensors", ".bin", ".msgpack", ".h5")
+LEGACY_PIPELINE_CLASS = "OnnxStableDiffusionPipeline"
+LEGACY_CONFIGS_ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets" / "generation" / "sd15_legacy_configs"
 VALIDATION_PROMPT = "validation"
 VALIDATION_SIZE = 64
 VALIDATION_STEPS = 1
@@ -1056,6 +1088,50 @@ def _generation_model_id(repo_id: str) -> str:
 
 def _select_files(files: list[HfFile]) -> list[HfFile]:
     return [f for f in files if not f.path.lower().endswith(SKIP_WEIGHT_SUFFIXES)]
+
+
+def _read_declared_components(staging_root: Path) -> list[str]:
+    index = json.loads((staging_root / MODEL_INDEX_FILENAME).read_text(encoding="utf-8"))
+    return [
+        name
+        for name, value in index.items()
+        if not name.startswith("_") and isinstance(value, list)
+    ]
+
+
+def _filter_to_declared(files: list[HfFile], declared: list[str]) -> list[HfFile]:
+    # Solo componentes declarados en model_index + metadata chica top-level.
+    # Evita bajar carpetas ajenas al pipeline (ej. MXR/ binarios MIGraphX ~GBs,
+    # controlnet/ no declarado) presentes en los repos amd/ (findings, repo id real).
+    kept: list[HfFile] = []
+    for hf_file in files:
+        if hf_file.path == MODEL_INDEX_FILENAME:
+            continue  # se descarga aparte, antes que el resto
+        top_segment = hf_file.path.split("/", 1)[0]
+        if "/" in hf_file.path:
+            if top_segment in declared:
+                kept.append(hf_file)
+        elif hf_file.path.lower().endswith((".json", ".txt")):
+            kept.append(hf_file)
+    return kept
+
+
+def _patch_legacy_component_configs(staging_root: Path) -> None:
+    # Los repos amd/ legacy (_class_name: OnnxStableDiffusionPipeline) no traen
+    # config.json por componente y optimum-onnx lo exige (findings, hallazgo
+    # bloqueante). Se completan desde los configs SD1.5 vendorizados en
+    # app/assets/generation/sd15_legacy_configs/. Solo para esa clase legacy:
+    # otros layouts o traen sus configs o fallan la validacion funcional con
+    # mensaje accionable.
+    index = json.loads((staging_root / MODEL_INDEX_FILENAME).read_text(encoding="utf-8"))
+    if index.get("_class_name") != LEGACY_PIPELINE_CLASS:
+        return
+    for component in _read_declared_components(staging_root):
+        component_dir = staging_root / component
+        config_path = component_dir / "config.json"
+        vendored = LEGACY_CONFIGS_ASSETS_DIR / component / "config.json"
+        if component_dir.is_dir() and not config_path.exists() and vendored.is_file():
+            shutil.copyfile(vendored, config_path)
 
 
 def _ensure_model_index_listed(files: list[HfFile], repo_id: str) -> None:
@@ -1157,8 +1233,6 @@ class GenerationModelInstaller:
     async def _download_and_register(self, job: InstallJob) -> None:
         files = await self.hf_client.repo_files(job.repo_id)
         _ensure_model_index_listed(files, job.repo_id)
-        selected = _select_files(files)
-        _ensure_size_cap(selected, self.settings.max_generation_model_download_mb)
 
         model_id = _generation_model_id(job.repo_id)
         staging_root = self.settings.temp_path / f"gen-staging-{model_id}"
@@ -1167,10 +1241,22 @@ class GenerationModelInstaller:
         staging_root.mkdir(parents=True, exist_ok=True)
 
         max_file_bytes = self.settings.max_generation_model_download_mb * 1024 * 1024
-        total_bytes = sum(f.size for f in selected) or 1
-        downloaded_bytes = 0
         job.status = InstallStatus.downloading
         try:
+            # Fase 1: model_index.json primero (KBs) para conocer los componentes
+            # declarados y filtrar la descarga a lo que el pipeline realmente usa.
+            await self.hf_client.download(
+                job.repo_id,
+                MODEL_INDEX_FILENAME,
+                staging_root / MODEL_INDEX_FILENAME,
+                max_bytes=max_file_bytes,
+            )
+            declared = _read_declared_components(staging_root)
+            selected = _filter_to_declared(_select_files(files), declared)
+            _ensure_size_cap(selected, self.settings.max_generation_model_download_mb)
+
+            total_bytes = sum(f.size for f in selected) or 1
+            downloaded_bytes = 0
             for hf_file in selected:
                 dest = staging_root / hf_file.path
                 dest.parent.mkdir(parents=True, exist_ok=True)
@@ -1181,6 +1267,7 @@ class GenerationModelInstaller:
                 job.progress_pct = round(downloaded_bytes / total_bytes * 100, 1)
 
             _validate_structure(staging_root)
+            _patch_legacy_component_configs(staging_root)
             job.status = InstallStatus.validating
             await asyncio.to_thread(self._validate_pipeline, staging_root)
 
@@ -1248,10 +1335,13 @@ Además, en `app/services/engines/generation_onnx.py`, agregar el helper que est
 ```python
 def _build_providers_for_validation(device: str) -> dict[str, Any]:
     primary = _build_providers(device)[0]
+    kwargs: dict[str, Any] = {"use_io_binding": False}
     if isinstance(primary, tuple):
         provider_name, provider_options = primary
-        return {"provider": provider_name, "provider_options": provider_options}
-    return {"provider": primary}
+        kwargs.update(provider=provider_name, provider_options=provider_options)
+    else:
+        kwargs["provider"] = primary
+    return kwargs
 ```
 
 - [ ] **Step 4: correr — pasan**
