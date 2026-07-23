@@ -36,7 +36,19 @@ dependencies = [
   # SP11 - motor ONNX de video (onnx_video_upscaler.py) usa cv2.imread/imwrite
   # para I/O de frames PNG: mucho mas rapido que PIL (PIL era el cuello,
   # ~3.15s/frame en 5K). headless = sin deps de GUI, ~40MB.
-  "opencv-python-headless>=4.10.0,<5.0.0"
+  "opencv-python-headless>=4.10.0,<5.0.0",
+  # Task 4 - GenerationEngine (app/services/engines/generation_onnx.py) usa
+  # optimum.onnxruntime.ORTStableDiffusionPipeline. Pins exactos del spike
+  # (docs/superpowers/specs/2026-07-22-optimum-spike-findings.md): NUNCA el
+  # extra `optimum[onnxruntime]` -- arrastra `onnxruntime` vanilla que pisa
+  # `onnxruntime-directml`. optimum==2.2.0 es incompatible con
+  # optimum-onnx==0.1.0 (exige optimum~=2.1.0); transformers>=4.58 rompe
+  # optimum-onnx (exige transformers<4.58,>=4.36) -- ambos verificados con
+  # `pip check` en el spike.
+  "optimum==2.1.0",
+  "optimum-onnx==0.1.0",
+  "transformers>=4.36,<4.58",
+  "diffusers>=0.30,<1.0",
 ]
 
 [project.optional-dependencies]
