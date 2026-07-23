@@ -246,7 +246,16 @@ class GenerationJobManager:
             complete_generation_stages(job, include_upscale)
             return
         advance_generation_stage(job, "upscaling", include_upscale)
-        job.output_path = await self._run_auto_upscale(job, generated, device)
+        try:
+            job.output_path = await self._run_auto_upscale(job, generated, device)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            # Upscale failed after generation already succeeded: fall back to
+            # the generated image rather than orphaning it as a failed job --
+            # the un-upscaled result is still a valid, usable output.
+            job.metadata["upscaleError"] = str(exc)
+            job.output_path = generated
         complete_generation_stages(job, include_upscale)
 
     def _resolve_pipeline_dir(self, entry: Any) -> Path:

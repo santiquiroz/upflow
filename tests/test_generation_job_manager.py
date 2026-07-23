@@ -41,6 +41,15 @@ class FakeUpscaleEngine:
         return out
 
 
+class FailingUpscaleEngine:
+    def __init__(self) -> None:
+        self.calls: list[Any] = []
+
+    async def run(self, job: Any) -> Path:
+        self.calls.append(job)
+        raise RuntimeError("boom")
+
+
 def register_generation_model(registry: ModelRegistry, settings: Settings, model_id: str = "gen--amd--sd15") -> None:
     model_dir = settings.models_path / "generation" / model_id
     model_dir.mkdir(parents=True, exist_ok=True)
@@ -110,6 +119,33 @@ async def test_auto_upscale_runs_two_stages_in_one_job(tmp_path: Path) -> None:
     assert stage_keys == ["generating", "upscaling"]
     generated_intermediate = engine.calls[0]["output_path"]
     assert not generated_intermediate.exists()  # intermedio borrado tras upscale OK
+    assert len(manager.jobs) == 1
+
+
+async def test_auto_upscale_failure_falls_back_to_generated_image(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    registry = ModelRegistry(settings)
+    engine = FakeGenerationEngine()
+    upscaler = FailingUpscaleEngine()
+    manager = GenerationJobManager(
+        settings, engine, DeviceSemaphores(settings),
+        registry=registry, upscale_engine=upscaler, onnx_upscale_engine=None,
+    )
+    register_generation_model(registry, settings)
+    job = await manager.create_job(
+        prompt="a red apple", model_id="gen--amd--sd15", device="cpu",
+        auto_upscale=True, upscale_model_name="realesrgan-x4plus", upscale_scale=4,
+    )
+
+    await drain(manager)
+
+    final = manager.get_job(job.id)
+    generated = engine.calls[0]["output_path"]
+    assert final.status == JobStatus.completed
+    assert final.output_path == generated
+    assert final.output_path.exists()
+    assert "boom" in final.metadata["upscaleError"]
+    assert final.metadata["stages"]
 
 
 async def test_create_job_rejects_unknown_model(tmp_path: Path) -> None:
