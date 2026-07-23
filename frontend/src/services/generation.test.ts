@@ -65,6 +65,30 @@ describe("generation service", () => {
     expect(body.upscaleScale).toBe(4);
     expect(body.seed).toBe(42);
     expect(body.negativePrompt).toBe("blurry");
+    expect(body.device).toBe("dml:0");
+  });
+
+  it("includes seed=0 in the body (does not regress on falsy checks)", async () => {
+    vi.mocked(apiPostJson).mockResolvedValue({ id: "j1" });
+
+    await createGenerationJob({
+      prompt: "x",
+      negativePrompt: null,
+      modelId: "m",
+      steps: 25,
+      guidance: 7.5,
+      width: 512,
+      height: 512,
+      seed: 0,
+      device: null,
+      autoUpscale: false,
+      upscaleModelName: null,
+      upscaleScale: null,
+      upscaleModelId: null,
+    });
+
+    const body = vi.mocked(apiPostJson).mock.calls[0][1] as Record<string, unknown>;
+    expect(body.seed).toBe(0);
   });
 
   it("gets a job by id", async () => {
