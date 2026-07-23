@@ -744,9 +744,14 @@ async def test_delete_diffusion_model_removes_directory_recursively(tmp_path: Pa
 
 
 async def test_delete_diffusion_model_rejects_path_escaping_models_root(tmp_path: Path) -> None:
+    # A manipulated/corrupt entry whose file_path escapes the models dir must
+    # never let delete() remove an arbitrary directory on disk. The registry entry
+    # is still removed; only the out-of-dir directory deletion is refused.
     installer, registry, _, settings = make_installer(tmp_path, files=[])
     outside = tmp_path / "outside-dir"
     outside.mkdir()
+    (outside / "nested").mkdir()
+    (outside / "nested" / "file.txt").write_text("do-not-delete-me")
     registry.register(
         ModelEntry(
             id="gen--evil",
@@ -755,13 +760,15 @@ async def test_delete_diffusion_model_rejects_path_escaping_models_root(tmp_path
             source="hf:evil/evil",
             size_bytes=1,
             scale=None,
-            file_path="../outside-dir",
+            file_path=str(outside),
         )
     )
 
     await installer.delete("gen--evil")
 
-    assert outside.exists()  # guard: nunca borrar fuera de models_path
+    assert outside.exists(), "delete() must not rmtree directories outside the models dir"
+    assert (outside / "nested" / "file.txt").exists(), "nested content must survive"
+    assert registry.get("gen--evil") is None
 
 
 # ---------------------------------------------------------------------------
