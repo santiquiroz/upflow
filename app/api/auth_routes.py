@@ -157,6 +157,8 @@ async def setup(
 ) -> dict[str, bool]:
     if settings.auth_mode != "multi":
         raise HTTPException(status_code=403, detail="Setup solo disponible en AUTH_MODE=multi")
+    if not user_store.is_empty():
+        raise HTTPException(status_code=403, detail="Setup ya fue completado")
     salt = generate_salt()
     password_hash = hash_password(payload.password, salt)
     try:
