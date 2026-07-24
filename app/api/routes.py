@@ -10,6 +10,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 
+from app.api.auth_deps import current_user_from_request, require
 from app.config import (
     AUDIO_ENHANCE_MODES,
     AUDIO_RESTORE_MODES,
@@ -19,12 +20,13 @@ from app.config import (
     VideoProfile,
     get_settings,
 )
-from app.exceptions import ModelNotFoundError, ModelProtectedError, QueueFullError
+from app.exceptions import ModelNotFoundError, ModelProtectedError, QueueFullError, QuotaExceededError
 from app.models import AudioJob, GenerationJob, JobStatus, UpdateStatus, UpscaleJob, VideoUpscaleJob
 from app.schemas import (
     AnalyzeVideoResponse,
     AudioCapabilitiesResponse,
     AudioJobResponse,
+    AudioJobsListResponse,
     AudioTrackResponse,
     CreateGenerationJobRequest,
     CreateInstallResponse,
@@ -34,12 +36,14 @@ from app.schemas import (
     EngineInfoResponse,
     GenerationCapabilitiesResponse,
     GenerationJobResponse,
+    GenerationJobsListResponse,
     GenerationModelSummary,
     HealthResponse,
     HfModelSearchResultResponse,
     InstallModelRequest,
     InstallStatusResponse,
     JobResponse,
+    JobsListResponse,
     ModelResponse,
     ModelSearchResponse,
     ModelsResponse,
@@ -48,9 +52,12 @@ from app.schemas import (
     UpdateCheckResponse,
     VideoCapabilitiesResponse,
     VideoJobResponse,
+    VideoJobsListResponse,
     VideoProfileResponse,
 )
 from app.services.audio_job_manager import AudioJobManager
+from app.services.auth.identity import AuthenticatedUser
+from app.services.auth.permissions import Permission
 from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
 from app.services.engines.generation_onnx import generation_dependencies_available
 from app.services.generation_installer import GenerationModelInstaller
@@ -251,6 +258,19 @@ def job_to_response(job: UpscaleJob) -> JobResponse:
     )
 
 
+def _can_view_job(job: Any, user: AuthenticatedUser) -> bool:
+    return Permission.jobs_read_all in user.permissions or job.owner_id == user.id
+
+
+def _can_cancel_job(job: Any, user: AuthenticatedUser) -> bool:
+    return Permission.jobs_cancel_any in user.permissions or job.owner_id == user.id
+
+
+def _require_read_all_if_requested(all_users: bool, current_user: AuthenticatedUser) -> None:
+    if all_users and Permission.jobs_read_all not in current_user.permissions:
+        raise HTTPException(status_code=403, detail="No tenés permiso para ver los jobs de todos los usuarios")
+
+
 def video_job_to_response(job: VideoUpscaleJob) -> VideoJobResponse:
     download_url = f"/api/v1/video/jobs/{job.id}/download" if job.status == JobStatus.completed else None
     return VideoJobResponse(
@@ -402,7 +422,10 @@ async def list_devices(devices: DevicesService = Depends(get_devices_service)) -
     )
 
 
-@router.post("/jobs", response_model=CreateJobResponse, status_code=202)
+@router.post(
+    "/jobs", response_model=CreateJobResponse, status_code=202,
+    dependencies=[Depends(require(Permission.jobs_create))],
+)
 async def create_job(
     request: Request,
     file: UploadFile = File(...),
@@ -421,6 +444,7 @@ async def create_job(
     token = uuid4().hex
     destination = settings.uploads_path / f"{token}-{safe_name}"
     resolved_device = await resolve_request_device(device, devices, settings)
+    current_user = current_user_from_request(request)
 
     job: UpscaleJob | None = None
     try:
@@ -434,8 +458,11 @@ async def create_job(
             scale=scale,
             output_format=output_format,
             job_id=token,
+            owner=current_user,
         )
     except QueueFullError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except QuotaExceededError as exc:
         raise HTTPException(status_code=429, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -655,18 +682,45 @@ async def analyze_video(
     )
 
 
-@router.get("/jobs/{job_id}", response_model=JobResponse)
-async def get_job(job_id: str, jobs: JobManager = Depends(get_job_manager)) -> JobResponse:
+@router.get("/jobs", response_model=JobsListResponse)
+async def list_jobs(
+    all_users: bool = Query(default=False, alias="all"),
+    jobs: JobManager = Depends(get_job_manager),
+    current_user: AuthenticatedUser = Depends(require(Permission.jobs_read_own)),
+) -> JobsListResponse:
+    _require_read_all_if_requested(all_users, current_user)
+    visible = [job for job in jobs.jobs.values() if all_users or job.owner_id == current_user.id]
+    return JobsListResponse(jobs=[job_to_response(job) for job in visible])
+
+
+@router.get("/jobs/{job_id}", response_model=JobResponse, dependencies=[Depends(require(Permission.jobs_read_own))])
+async def get_job(
+    job_id: str,
+    jobs: JobManager = Depends(get_job_manager),
+    # Bare `Request` (not `Request | None`) so FastAPI's special-case
+    # injection still recognizes it -- `lenient_issubclass` rejects unions.
+    # Direct/unit-test calls that omit this kwarg still get `None`.
+    request: Request = None,
+) -> JobResponse:
     job = jobs.get_job(job_id)
-    if not job:
+    current_user = current_user_from_request(request)
+    if not job or (current_user is not None and not _can_view_job(job, current_user)):
         raise HTTPException(status_code=404, detail="Job not found")
     return job_to_response(job)
 
 
-@router.post("/jobs/{job_id}/cancel", response_model=JobResponse)
-async def cancel_job(job_id: str, jobs: JobManager = Depends(get_job_manager)) -> JobResponse:
+@router.post(
+    "/jobs/{job_id}/cancel", response_model=JobResponse,
+    dependencies=[Depends(require(Permission.jobs_cancel_own))],
+)
+async def cancel_job(
+    job_id: str,
+    jobs: JobManager = Depends(get_job_manager),
+    request: Request = None,
+) -> JobResponse:
     job = jobs.get_job(job_id)
-    if job is None:
+    current_user = current_user_from_request(request)
+    if job is None or (current_user is not None and not _can_cancel_job(job, current_user)):
         raise HTTPException(status_code=404, detail="Job not found")
     if not jobs.cancel_job(job_id):
         raise HTTPException(status_code=409, detail="Job already finished")
@@ -693,10 +747,15 @@ async def cancel_video_job(
     return video_job_to_response(job)
 
 
-@router.get("/jobs/{job_id}/download")
-async def download_job(job_id: str, jobs: JobManager = Depends(get_job_manager)) -> FileResponse:
+@router.get("/jobs/{job_id}/download", dependencies=[Depends(require(Permission.jobs_read_own))])
+async def download_job(
+    job_id: str,
+    jobs: JobManager = Depends(get_job_manager),
+    request: Request = None,
+) -> FileResponse:
     job = jobs.get_job(job_id)
-    if not job:
+    current_user = current_user_from_request(request)
+    if not job or (current_user is not None and not _can_view_job(job, current_user)):
         raise HTTPException(status_code=404, detail="Job not found")
     if job.status != JobStatus.completed or not job.output_path:
         raise HTTPException(status_code=409, detail="Job is not completed yet")
