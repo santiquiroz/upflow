@@ -10,6 +10,8 @@ from PIL import Image, UnidentifiedImageError
 from app.config import Settings
 from app.exceptions import QueueFullError
 from app.models import TERMINAL_JOB_STATUSES, JobStatus, UpscaleJob, utc_now
+from app.services.auth.identity import AuthenticatedUser
+from app.services.auth.quotas import QuotaService
 from app.services.device_router import DeviceRouter, has_compatible_device
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
@@ -58,6 +60,7 @@ class JobManager:
         registry: ModelRegistry | None = None,
         devices: DevicesService | None = None,
         device_router: DeviceRouter | None = None,
+        quota_service: QuotaService | None = None,
     ) -> None:
         self.settings = settings
         self.engine = engine
@@ -70,6 +73,7 @@ class JobManager:
         self.device_router = device_router or DeviceRouter(device_semaphores)
         self.worker_tasks: list[asyncio.Task] = []
         self._active: dict[str, asyncio.Task] = {}
+        self.quota_service = quota_service
 
     async def start(self) -> None:
         if self.worker_tasks:
@@ -103,6 +107,7 @@ class JobManager:
         model_id: str | None = None,
         device: str | None = None,
         job_id: str | None = None,
+        owner: AuthenticatedUser | None = None,
     ) -> UpscaleJob:
         await asyncio.to_thread(self._validate_input_image, source_path)
         resolved_model_id = model_id if model_id is not None else model_name
@@ -116,6 +121,8 @@ class JobManager:
         )
         if device == AUTO_DEVICE_ID:
             await self._validate_auto_device(resolution.kind)
+        if owner is not None and self.quota_service is not None:
+            self.quota_service.check_admission(owner)
 
         job = UpscaleJob(
             source_path=source_path,
@@ -125,6 +132,7 @@ class JobManager:
             output_format=output_format,
             model_id=resolution.model_id,
             device=device,
+            owner_id=owner.id if owner is not None else None,
         )
         if job_id is not None:
             job.id = job_id
@@ -307,6 +315,7 @@ class JobManager:
             job.finished_at = utc_now()
             self._unlink_source_safely(job.source_path)
             self.queue.task_done()
+            self._record_quota_usage(job)
 
     async def _run_engine(self, job: UpscaleJob) -> None:
         engine = self._select_engine(job)
@@ -325,3 +334,9 @@ class JobManager:
             source_path.unlink(missing_ok=True)
         except OSError:
             logger.exception("Failed to delete source upload %s", source_path)
+
+    def _record_quota_usage(self, job: UpscaleJob) -> None:
+        if self.quota_service is None or job.started_at is None:
+            return
+        duration = (job.finished_at - job.started_at).total_seconds()
+        self.quota_service.record_usage(job.owner_id, duration)
