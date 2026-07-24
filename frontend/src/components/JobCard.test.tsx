@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { JobResponse, VideoJobResponse } from "../lib/apiTypes";
+import type { GenerationJob, JobResponse, VideoJobResponse } from "../lib/apiTypes";
 import { JobCard } from "./JobCard";
 
 const BASE_JOB: JobResponse = {
@@ -45,6 +45,28 @@ const BASE_VIDEO_JOB: VideoJobResponse = {
   error: null,
   metadata: {},
   progressPct: null,
+  downloadUrl: null,
+};
+
+const BASE_GENERATION_JOB: GenerationJob = {
+  id: "gen-1",
+  status: "queued",
+  prompt: "a red apple",
+  negativePrompt: null,
+  modelId: "gen--amd--sd15",
+  steps: 25,
+  guidance: 7.5,
+  width: 512,
+  height: 512,
+  seed: null,
+  device: null,
+  autoUpscale: false,
+  createdAt: "2026-01-01T00:00:00Z",
+  startedAt: null,
+  finishedAt: null,
+  progressPct: null,
+  stages: null,
+  error: null,
   downloadUrl: null,
 };
 
@@ -109,6 +131,20 @@ describe("JobCard", () => {
     );
   });
 
+  it("shows the elapsed duration when completed", () => {
+    const job: JobResponse = {
+      ...BASE_JOB,
+      status: "completed",
+      downloadUrl: "/download",
+      startedAt: "2026-01-01T00:00:00Z",
+      finishedAt: "2026-01-01T00:03:12Z",
+    };
+    render(<JobCard phase="completed" job={job} />);
+
+    expect(screen.getByText("Duration")).toBeInTheDocument();
+    expect(screen.getByText("3m 12s")).toBeInTheDocument();
+  });
+
   it("shows an error message when failed", () => {
     const job: JobResponse = { ...BASE_JOB, status: "failed", error: "Model crashed" };
     render(<JobCard phase="failed" job={job} />);
@@ -151,6 +187,29 @@ describe("JobCard", () => {
     const link = screen.getByRole("link", { name: /download/i });
     expect(link).toHaveAttribute("href", "/api/v1/video/jobs/vid-1/download");
     expect(screen.getByText("2x")).toHaveClass("font-mono-tabular");
+  });
+
+  it("shows a preview image and dimensions for a completed generation job", () => {
+    const job: GenerationJob = {
+      ...BASE_GENERATION_JOB,
+      status: "completed",
+      downloadUrl: "/api/v1/generation/jobs/gen-1/download",
+      width: 512,
+      height: 512,
+      steps: 25,
+    };
+    render(<JobCard phase="completed" job={job} />);
+
+    const img = screen.getByRole("img", { name: /generated image/i });
+    expect(img).toHaveAttribute("src", "/api/v1/generation/jobs/gen-1/download");
+    // Dimensions are rendered as "512x512" split across text nodes, so check the DD element
+    expect(
+      screen.getByText((content, element) => {
+        return element?.tagName === "DD" && /512/.test(content);
+      }),
+    ).toHaveTextContent("512x512");
+    const link = screen.getByRole("link", { name: /download/i });
+    expect(link).toHaveAttribute("href", "/api/v1/generation/jobs/gen-1/download");
   });
 
   it("shows a determinate progress bar with a tabular percentage when progressPct is available while running", () => {

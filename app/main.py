@@ -20,11 +20,14 @@ from app.services.devices_service import DevicesService
 from app.services.gpu_session_coordinator import GpuSessionCoordinator
 from app.services.restorer_registry import build_restorers
 from app.services.engines.audio_enhance import AudioEnhancer
+from app.services.engines.generation_onnx import GenerationEngine
 from app.services.engines.gmfss_engine import GmfssEngine
 from app.services.engines.onnx_upscaler import OnnxUpscaler
 from app.services.engines.onnx_video_upscaler import OnnxVideoUpscaler
 from app.services.engines.realesrgan_ncnn import RealEsrganNcnnEngine
 from app.services.engines.rife_ncnn import RifeNcnnEngine
+from app.services.generation_installer import GenerationModelInstaller
+from app.services.generation_job_manager import GenerationJobManager
 from app.services.hf_client import HfClient
 from app.services.job_manager import JobManager
 from app.services.media_tools import MediaTools
@@ -62,6 +65,16 @@ async def lifespan(app: FastAPI):
     onnx_engine = OnnxUpscaler(settings, model_registry, devices_service, gpu_coordinator)
     onnx_video_engine = OnnxVideoUpscaler(settings, model_registry, devices_service, gpu_coordinator)
     device_semaphores = DeviceSemaphores(settings)
+    generation_engine = GenerationEngine(settings, gpu_coordinator)
+    generation_job_manager = GenerationJobManager(
+        settings,
+        generation_engine,
+        device_semaphores,
+        registry=model_registry,
+        upscale_engine=engine,
+        onnx_upscale_engine=onnx_engine,
+        devices=devices_service,
+    )
     # Shared across both managers (like device_semaphores) so an auto-routed
     # image job and an auto-routed video job never pick the same free
     # device in the same race window -- see DeviceRouter's docstring.
@@ -104,15 +117,23 @@ async def lifespan(app: FastAPI):
         device_semaphores,
         devices=devices_service,
     )
-    retention_sweeper = RetentionSweeper(settings, job_manager, video_job_manager, audio_job_manager)
+    retention_sweeper = RetentionSweeper(
+        settings, job_manager, video_job_manager, audio_job_manager,
+        generation_job_manager=generation_job_manager,
+    )
     update_service = UpdateService(settings)
     hf_client = HfClient(settings)
     model_installer = ModelInstaller(settings, model_registry, hf_client)
+    generation_installer = GenerationModelInstaller(
+        settings, model_registry, hf_client, gpu_coordinator, device_semaphores
+    )
     await job_manager.start()
     await video_job_manager.start()
     await audio_job_manager.start()
     await retention_sweeper.start()
     await model_installer.start()
+    await generation_job_manager.start()
+    await generation_installer.start()
 
     app.state.storage = storage
     app.state.engine = engine
@@ -134,6 +155,8 @@ async def lifespan(app: FastAPI):
     app.state.update_service = update_service
     app.state.hf_client = hf_client
     app.state.model_installer = model_installer
+    app.state.generation_job_manager = generation_job_manager
+    app.state.generation_installer = generation_installer
     try:
         yield
     finally:
@@ -142,6 +165,8 @@ async def lifespan(app: FastAPI):
         await audio_job_manager.stop()
         await retention_sweeper.stop()
         await model_installer.stop()
+        await generation_job_manager.stop()
+        await generation_installer.stop()
 
 
 def _serve_index(index_path: Path) -> Response:

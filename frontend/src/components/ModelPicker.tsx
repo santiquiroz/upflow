@@ -12,6 +12,8 @@ interface ModelGroup {
   models: ModelResponse[];
 }
 
+// Explicit kind === "onnx" (not "everything non-builtin") so kinds like
+// diffusion-onnx never leak into the upscale picker's Installed group.
 function groupModels(models: ModelResponse[]): ModelGroup[] {
   const groups: ModelGroup[] = [
     { label: "Builtin", models: models.filter((model) => model.kind === "builtin-ncnn") },

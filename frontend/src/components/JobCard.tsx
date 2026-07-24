@@ -1,14 +1,14 @@
 import { AlertTriangle, Ban, CheckCircle2, Clock, Download, ImageIcon, Loader2, UploadCloud } from "lucide-react";
-import type { AudioJob, JobResponse, VideoJobResponse } from "../lib/apiTypes";
+import type { AudioJob, GenerationJob, JobResponse, VideoJobResponse } from "../lib/apiTypes";
 import { denoiseLabel, restoreLabel } from "../lib/audioLabels";
+import { formatDuration } from "../lib/formatDuration";
 import { formatFps } from "../lib/formatFps";
 import { isProgressDeterminate } from "../lib/jobProgress";
+import { isGenerationJob, type AnyJobResponse } from "../lib/jobTypeGuards";
 import { DeterminateProgressBar } from "./DeterminateProgressBar";
 import { IndeterminateProgressBar } from "./IndeterminateProgressBar";
 
 export type JobCardPhase = "idle" | "uploading" | "queued" | "running" | "completed" | "failed" | "cancelled";
-
-type AnyJobResponse = JobResponse | VideoJobResponse | AudioJob;
 
 interface JobCardProps {
   phase: JobCardPhase;
@@ -129,6 +129,15 @@ function CancelledState() {
   );
 }
 
+function DurationDetailItem({ job }: { job: AnyJobResponse }) {
+  return (
+    <div className="flex items-center gap-1">
+      <dt className="text-text-faint">Duration</dt>
+      <dd className="font-mono-tabular text-text">{formatDuration(job.startedAt, job.finishedAt)}</dd>
+    </div>
+  );
+}
+
 function ImageCompletedDetails({ job }: { job: JobResponse }) {
   return (
     <>
@@ -148,6 +157,7 @@ function ImageCompletedDetails({ job }: { job: JobResponse }) {
           <dt className="sr-only">Format</dt>
           <dd className="uppercase text-text">{job.outputFormat}</dd>
         </div>
+        <DurationDetailItem job={job} />
       </dl>
     </>
   );
@@ -171,6 +181,7 @@ function VideoCompletedDetails({ job }: { job: VideoJobResponse }) {
           <dd className="font-mono-tabular text-text">{formatFps(outputFps)}</dd>
         </div>
       )}
+      <DurationDetailItem job={job} />
     </dl>
   );
 }
@@ -186,7 +197,31 @@ function AudioCompletedDetails({ job }: { job: AudioJob }) {
         <dt className="text-text-faint">Restore</dt>
         <dd className="text-text">{restoreLabel(job.restore)}</dd>
       </div>
+      <DurationDetailItem job={job} />
     </dl>
+  );
+}
+
+function GenerationCompletedDetails({ job }: { job: GenerationJob }) {
+  return (
+    <>
+      {job.downloadUrl && (
+        <img
+          src={job.downloadUrl}
+          alt="Generated image"
+          className="max-h-48 w-full rounded border border-border bg-bg object-contain"
+        />
+      )}
+      <dl className="flex gap-4 text-xs text-text-dim">
+        <div className="flex items-center gap-1">
+          <dt className="sr-only">Dimensions</dt>
+          <dd className="font-mono-tabular text-text">
+            {job.width}x{job.height}
+          </dd>
+        </div>
+        <DurationDetailItem job={job} />
+      </dl>
+    </>
   );
 }
 
@@ -196,6 +231,9 @@ function CompletedDetails({ job }: { job: AnyJobResponse }) {
   }
   if (isAudioJob(job)) {
     return <AudioCompletedDetails job={job} />;
+  }
+  if (isGenerationJob(job)) {
+    return <GenerationCompletedDetails job={job} />;
   }
   return <ImageCompletedDetails job={job} />;
 }

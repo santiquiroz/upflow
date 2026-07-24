@@ -7,7 +7,7 @@ $root = Split-Path -Parent $PSScriptRoot
 $vendorDir = Join-Path $root 'vendor\rife'
 $modelsDir = Join-Path $vendorDir 'models'
 $binaryPath = Join-Path $vendorDir 'rife-ncnn-vulkan.exe'
-$defaultModelDir = Join-Path $modelsDir 'rife-v4.6'
+$defaultModelDir = Join-Path $modelsDir 'rife-v4.25'
 $tempDir = Join-Path $root 'runtime\temp'
 $zipPath = Join-Path $tempDir 'rife-ncnn-vulkan.zip'
 $extractDir = Join-Path $tempDir 'rife-ncnn-vulkan-extract'
@@ -84,4 +84,4 @@ finally {
 Write-Host 'RIFE NCNN Vulkan downloaded to:' $vendorDir
 Write-Host 'Binary:' $binaryPath
 Write-Host 'Models:' $modelsDir
-Write-Host 'Default model (recommended, general-purpose): rife-v4.6 -- set RIFE_MODEL to switch (e.g. rife-anime, rife-v4.25-lite, rife-v4.26).'
+Write-Host 'Default model (recommended, general-purpose): rife-v4.25 -- set RIFE_MODEL to switch (e.g. rife-anime, rife-v4.25-lite, rife-v4.26).'

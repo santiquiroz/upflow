@@ -342,7 +342,7 @@ Todas las variables leen de `.env` (ver [`.env.example`](.env.example) con los d
 | `MAX_QUEUE_SIZE` | `20` | Tamaño máximo de cada cola de jobs (imagen y video por separado); responde `429` si se llena |
 | `RIFE_BINARY` | `vendor/rife/rife-ncnn-vulkan.exe` | Ruta al binario de RIFE NCNN Vulkan |
 | `RIFE_MODELS_DIR` | `vendor/rife/models` | Carpeta de modelos de RIFE |
-| `RIFE_MODEL` | `rife-v4.6` | Modelo RIFE usado para interpolar (recomendado, general-purpose) |
+| `RIFE_MODEL` | `rife-v4.25` | Modelo RIFE usado para interpolar (recomendado, general-purpose) |
 | `ENABLE_INTERPOLATION` | `false` | Habilita el FPS boost; requiere haber corrido `download-rife.ps1` |
 | `ALLOWED_FPS_MULTIPLIERS` | `2,3,4` | Multiplicadores de FPS permitidos por la API (lista separada por comas) |
 | `ENABLE_GMFSS` | `false` | Habilita el motor GMFSS (máxima calidad, muy lento); requiere `ENABLE_INTERPOLATION=true` además y haber corrido `download-gmfss-onnx.ps1` |

@@ -23,6 +23,7 @@ BUILTIN_MODEL_IDS = frozenset(option["key"] for option in MODEL_CATALOG)
 class ModelKind(str, Enum):
     builtin_ncnn = "builtin-ncnn"
     onnx = "onnx"
+    diffusion_onnx = "diffusion-onnx"
 
 
 class ModelStatus(str, Enum):

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -717,6 +719,98 @@ async def test_delete_does_not_remove_file_outside_models_dir(tmp_path: Path) ->
 
     assert outside_file.exists(), "delete() must not unlink files outside the models dir"
     assert registry.get("evil-entry") is None
+
+
+async def test_delete_diffusion_model_removes_directory_recursively(tmp_path: Path) -> None:
+    installer, registry, _, settings = make_installer(tmp_path, files=[])
+    model_dir = settings.models_path / "generation" / "gen--amd--sd15"
+    (model_dir / "unet").mkdir(parents=True)
+    (model_dir / "model_index.json").write_text("{}", encoding="utf-8")
+    (model_dir / "unet" / "model.onnx").write_bytes(b"onnx")
+    registry.register(
+        ModelEntry(
+            id="gen--amd--sd15",
+            name="amd/sd15",
+            kind=ModelKind.diffusion_onnx,
+            source="hf:amd/sd15",
+            size_bytes=4,
+            scale=None,
+            file_path="generation/gen--amd--sd15",
+        )
+    )
+
+    await installer.delete("gen--amd--sd15")
+
+    assert not model_dir.exists()
+    assert registry.get("gen--amd--sd15") is None
+
+
+async def test_delete_diffusion_model_rejects_path_escaping_models_root(tmp_path: Path) -> None:
+    # A manipulated/corrupt entry whose file_path escapes the models dir must
+    # never let delete() remove an arbitrary directory on disk. The registry entry
+    # is still removed; only the out-of-dir directory deletion is refused.
+    installer, registry, _, settings = make_installer(tmp_path, files=[])
+    outside = tmp_path / "outside-dir"
+    outside.mkdir()
+    (outside / "nested").mkdir()
+    (outside / "nested" / "file.txt").write_text("do-not-delete-me")
+    registry.register(
+        ModelEntry(
+            id="gen--evil",
+            name="evil",
+            kind=ModelKind.diffusion_onnx,
+            source="hf:evil/evil",
+            size_bytes=1,
+            scale=None,
+            file_path=str(outside),
+        )
+    )
+
+    await installer.delete("gen--evil")
+
+    assert outside.exists(), "delete() must not rmtree directories outside the models dir"
+    assert (outside / "nested" / "file.txt").exists(), "nested content must survive"
+    assert registry.get("gen--evil") is None
+
+
+async def test_delete_diffusion_model_logs_and_swallows_locked_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Item 2 (final whole-branch review): shutil.rmtree(..., ignore_errors=True)
+    # swallowed the error INSIDE rmtree itself, so the surrounding `except
+    # OSError` (which logs) never fired for a locked directory -- unlike the
+    # sibling file-unlink path a few lines up, which does log. A multi-GB
+    # install could silently fail to delete with zero trace.
+    installer, registry, _, settings = make_installer(tmp_path, files=[])
+    model_dir = settings.models_path / "generation" / "gen--amd--sd15"
+    (model_dir / "unet").mkdir(parents=True)
+    (model_dir / "model_index.json").write_text("{}", encoding="utf-8")
+    registry.register(
+        ModelEntry(
+            id="gen--amd--sd15",
+            name="amd/sd15",
+            kind=ModelKind.diffusion_onnx,
+            source="hf:amd/sd15",
+            size_bytes=4,
+            scale=None,
+            file_path="generation/gen--amd--sd15",
+        )
+    )
+
+    def flaky_rmtree(path, *args, ignore_errors: bool = False, **kwargs: object) -> None:
+        if ignore_errors:
+            return  # mirrors real shutil.rmtree(ignore_errors=True): swallows silently
+        raise OSError("[WinError 5] Access is denied")
+
+    monkeypatch.setattr(shutil, "rmtree", flaky_rmtree)
+
+    with caplog.at_level(logging.ERROR):
+        await installer.delete("gen--amd--sd15")  # must not raise
+
+    assert any(record.levelno >= logging.ERROR for record in caplog.records), (
+        "a locked directory delete failure must be logged, matching the file-unlink path"
+    )
+    assert registry.get("gen--amd--sd15") is None
 
 
 # ---------------------------------------------------------------------------

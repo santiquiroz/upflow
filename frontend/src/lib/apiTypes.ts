@@ -135,6 +135,9 @@ export interface AudioJob {
   denoise: string | null;
   restore: string | null;
   device: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
   progressPct: number | null;
   stages: JobStage[] | null;
   error: string | null;
@@ -306,4 +309,39 @@ export interface OnnxDiagnosticsResponse {
 
 export interface ScanOnnxDiagnosticResponse {
   report: CpuFallbackReportResponse;
+}
+
+export interface GenerationJob {
+  id: string;
+  status: JobStatus;
+  prompt: string;
+  negativePrompt: string | null;
+  modelId: string;
+  steps: number;
+  guidance: number;
+  width: number;
+  height: number;
+  seed: number | null;
+  device: string | null;
+  autoUpscale: boolean;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  progressPct: number | null;
+  stages: JobStage[] | null;
+  error: string | null;
+  downloadUrl: string | null;
+}
+
+export interface GenerationModelSummary {
+  id: string;
+  name: string;
+}
+
+export interface GenerationCapabilities {
+  available: boolean;
+  reason: string | null;
+  models: GenerationModelSummary[];
+  devices: string[];
+  cpuOnly: boolean;
 }

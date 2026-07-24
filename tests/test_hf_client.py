@@ -253,6 +253,50 @@ async def test_repo_files_raises_on_404(tmp_path: Path) -> None:
         await client.repo_files("does-not/exist")
 
 
+async def test_repo_files_retries_on_transport_error_then_succeeds(tmp_path: Path) -> None:
+    """Test that repo_files retries transient transport errors and succeeds on retry."""
+    attempt_count = {"value": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempt_count["value"] += 1
+        if attempt_count["value"] == 1:
+            # First attempt: simulate transient connection error
+            raise httpx.ConnectError("transient DNS failure")
+        # Second attempt: success
+        return httpx.Response(200, json=REPO_INFO_FIXTURE)
+
+    client = HfClient(make_settings(tmp_path), transport=transport_for(handler))
+
+    files = await client.repo_files("Kim2091/ClearRealityV1")
+
+    assert len(files) == 4
+    assert files[0].path == ".gitattributes"
+    assert attempt_count["value"] == 2
+
+
+async def test_repo_files_raises_when_all_retry_attempts_fail(tmp_path: Path) -> None:
+    """Test that repo_files raises original error when all retries are exhausted."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        # All attempts fail with transient error
+        raise httpx.ConnectError("persistent DNS failure")
+
+    client = HfClient(make_settings(tmp_path), transport=transport_for(handler))
+
+    with pytest.raises(httpx.ConnectError, match="persistent DNS failure"):
+        await client.repo_files("Kim2091/ClearRealityV1")
+
+
+async def test_repo_files_raises_non_retryable_errors_immediately(tmp_path: Path) -> None:
+    """Test that repo_files does not retry permanent errors like 404."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"error": "Repository not found"})
+
+    client = HfClient(make_settings(tmp_path), transport=transport_for(handler))
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await client.repo_files("does-not/exist")
+
+
 # ---------------------------------------------------------------------------
 # pick_weight_file()
 # ---------------------------------------------------------------------------
@@ -466,3 +510,25 @@ def test_download_rejects_non_huggingface_host() -> None:
 
 def test_download_accepts_https_huggingface_host() -> None:
     _validate_https_huggingface_host("https://huggingface.co/org/repo/resolve/main/model.onnx")
+
+
+def test_settings_generation_download_cap_defaults_to_8192(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    assert settings.max_generation_model_download_mb == 8192
+
+
+@pytest.mark.anyio
+async def test_download_honors_max_bytes_override(tmp_path: Path) -> None:
+    # max_model_download_mb is generous (10 MB), but max_bytes override is small (1 KB).
+    # The override should be honored and reject the 2 KB payload.
+    oversized_payload = b"x" * 2048
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=oversized_payload)
+
+    settings = make_settings(tmp_path, MAX_MODEL_DOWNLOAD_MB=10)
+    client = HfClient(settings, transport=transport_for(handler))
+    dest = tmp_path / "file.onnx"
+
+    with pytest.raises(HfDownloadTooLargeError):
+        await client.download("owner/name", "file.onnx", dest, max_bytes=1024)

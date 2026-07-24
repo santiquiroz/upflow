@@ -68,6 +68,27 @@ describe("JobDetailModal", () => {
     expect(screen.getByText("realesr-animevideov3-x2")).not.toHaveClass("font-mono-tabular");
   });
 
+  it("shows the elapsed duration once the job has finished", () => {
+    const entry = buildEntry({
+      status: "completed",
+      startedAt: "2026-01-01T00:00:00Z",
+      finishedAt: "2026-01-01T00:03:12Z",
+    });
+
+    render(<JobDetailModal entry={entry} onClose={vi.fn()} />);
+
+    expect(screen.getByText("Duration")).toBeInTheDocument();
+    expect(screen.getByText("3m 12s")).toBeInTheDocument();
+  });
+
+  it("omits the duration row while the job is still running", () => {
+    const entry = buildEntry({ status: "running", startedAt: "2026-01-01T00:00:00Z", finishedAt: null });
+
+    render(<JobDetailModal entry={entry} onClose={vi.fn()} />);
+
+    expect(screen.queryByText("Duration")).not.toBeInTheDocument();
+  });
+
   it("renders a vertical stepper from job.metadata.stages", () => {
     const entry = buildEntry({
       metadata: {

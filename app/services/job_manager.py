@@ -30,6 +30,23 @@ class ModelResolution:
     scale: int
 
 
+def select_upscale_engine(
+    job: UpscaleJob,
+    registry: ModelRegistry | None,
+    builtin_engine: UpscaleEngine,
+    onnx_engine: UpscaleEngine | None,
+) -> UpscaleEngine:
+    if job.model_id is not None and registry is not None:
+        entry = registry.get(job.model_id)
+        if entry is not None and entry.kind == ModelKind.onnx:
+            if onnx_engine is None:
+                raise RuntimeError(
+                    f"Model {job.model_id!r} requires the ONNX engine, which is not configured"
+                )
+            return onnx_engine
+    return builtin_engine
+
+
 class JobManager:
     def __init__(
         self,
@@ -183,15 +200,7 @@ class JobManager:
         return ModelResolution(model_id=model_id, engine_model_name=model_id, kind=ModelKind.onnx, scale=entry.scale)
 
     def _select_engine(self, job: UpscaleJob) -> UpscaleEngine:
-        if job.model_id is not None and self.registry is not None:
-            entry = self.registry.get(job.model_id)
-            if entry is not None and entry.kind == ModelKind.onnx:
-                if self.onnx_engine is None:
-                    raise RuntimeError(
-                        f"Model {job.model_id!r} requires the ONNX engine, which is not configured"
-                    )
-                return self.onnx_engine
-        return self.engine
+        return select_upscale_engine(job, self.registry, self.engine, self.onnx_engine)
 
     async def _validate_auto_device(self, kind: ModelKind) -> None:
         if self.devices is None:

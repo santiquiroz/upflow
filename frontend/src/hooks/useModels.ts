@@ -6,7 +6,7 @@ import { isTerminalInstallStatus } from "../lib/installStatus";
 
 export const DEFAULT_INSTALL_POLL_INTERVAL_MS = 1500;
 
-const MODELS_QUERY_KEY = ["models"] as const;
+export const MODELS_QUERY_KEY = ["models"] as const;
 
 export type InstallState = "downloading" | "validating" | "converting" | "installed" | "error";
 export type ModelInstallPhase = "idle" | "starting" | InstallState;
@@ -24,7 +24,7 @@ export interface UseModelInstallResult {
 // first status poll returning: without this the phase would briefly read "idle"
 // and the card would re-show "Install", letting a second click fire a duplicate
 // install. A status-fetch error clears it so the spinner never sticks forever.
-function isAwaitingFirstStatus(
+export function isAwaitingFirstStatus(
   installId: string | null,
   statusData: InstallStatusResponse | undefined,
   statusIsError: boolean,
@@ -32,7 +32,7 @@ function isAwaitingFirstStatus(
   return installId !== null && statusData === undefined && !statusIsError;
 }
 
-function resolveInstallPhase(
+export function resolveInstallPhase(
   isStarting: boolean,
   isAwaitingStatus: boolean,
   status: InstallState | undefined,
@@ -43,7 +43,7 @@ function resolveInstallPhase(
   return status ?? "idle";
 }
 
-function resolveInstallErrorMessage(
+export function resolveInstallErrorMessage(
   startError: unknown,
   statusError: unknown,
   statusData: InstallStatusResponse | undefined,

@@ -35,6 +35,18 @@ const ONNX_MODEL: ModelResponse = {
   error: null,
 };
 
+const DIFFUSION_MODEL: ModelResponse = {
+  id: "amd--stable-diffusion-1-5",
+  name: "Stable Diffusion 1.5 (AMD)",
+  kind: "diffusion-onnx",
+  source: "https://huggingface.co/amd/stable-diffusion-1.5_io16_amdgpu",
+  scale: null,
+  arch: null,
+  sizeBytes: 2_147_483_648,
+  status: "installed",
+  error: null,
+};
+
 function renderList(models: ModelResponse[]) {
   vi.mocked(api.getModels).mockResolvedValue({ models } satisfies ModelsResponse);
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
@@ -75,6 +87,13 @@ describe("InstalledModels", () => {
     renderList([BUILTIN_MODEL]);
 
     expect(await screen.findByText(/no custom onnx models installed yet/i)).toBeInTheDocument();
+  });
+
+  it("does not list a diffusion-onnx model in either the builtin or ONNX group", async () => {
+    renderList([BUILTIN_MODEL, ONNX_MODEL, DIFFUSION_MODEL]);
+
+    await screen.findByText("Custom Anime 2x");
+    expect(screen.queryByText("Stable Diffusion 1.5 (AMD)")).not.toBeInTheDocument();
   });
 
   it("requires a destructive confirmation before deleting an onnx model", async () => {

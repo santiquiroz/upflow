@@ -62,7 +62,7 @@ def make_video_job(source_path: Path, **overrides: object) -> VideoUpscaleJob:
     return VideoUpscaleJob(**fields)
 
 
-def _fake_rife_install(tmp_path: Path, model_name: str = "rife-v4.6") -> tuple[Path, Path]:
+def _fake_rife_install(tmp_path: Path, model_name: str = "rife-v4.25") -> tuple[Path, Path]:
     tmp_path.mkdir(parents=True, exist_ok=True)
     binary = tmp_path / "rife-ncnn-vulkan.exe"
     binary.write_bytes(b"fake")

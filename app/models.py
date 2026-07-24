@@ -131,3 +131,28 @@ class AudioJob:
     error: str | None = None
     output_path: Path | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class GenerationJob:
+    prompt: str
+    model_id: str
+    negative_prompt: str | None = None
+    steps: int = 25
+    guidance: float = 7.5
+    width: int = 512
+    height: int = 512
+    seed: int | None = None
+    device: str | None = None
+    auto_upscale: bool = False
+    upscale_model_name: str | None = None
+    upscale_scale: int | None = None
+    upscale_model_id: str | None = None
+    id: str = field(default_factory=lambda: uuid4().hex)
+    status: JobStatus = JobStatus.queued
+    created_at: datetime = field(default_factory=utc_now)
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    error: str | None = None
+    output_path: Path | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)

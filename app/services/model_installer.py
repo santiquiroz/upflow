@@ -4,6 +4,7 @@ import asyncio
 import gc
 import logging
 import re
+import shutil
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
@@ -220,10 +221,11 @@ class ModelInstaller:
             await asyncio.to_thread(self._delete_model_file, entry)
 
     def _delete_model_file(self, entry: ModelEntry) -> None:
-        # Only ever deletes an onnx entry's own file, and only when it
-        # resolves INSIDE settings.models_path -- guards a manipulated/corrupt
-        # file_path (traversal, absolute path) from unlinking arbitrary files.
-        if entry.kind != ModelKind.onnx or entry.file_path is None:
+        # Only ever deletes an onnx/diffusion_onnx entry's own file/directory,
+        # and only when it resolves INSIDE settings.models_path -- guards a
+        # manipulated/corrupt file_path (traversal, absolute path) from
+        # unlinking arbitrary files.
+        if entry.kind not in (ModelKind.onnx, ModelKind.diffusion_onnx) or entry.file_path is None:
             return
         models_root = self.settings.models_path.resolve()
         target = (self.settings.models_path / entry.file_path).resolve()
@@ -231,7 +233,10 @@ class ModelInstaller:
             logger.warning("Refusing to delete model file outside models dir: %s", target)
             return
         try:
-            target.unlink(missing_ok=True)
+            if target.is_dir():
+                shutil.rmtree(target)
+            else:
+                target.unlink(missing_ok=True)
         except OSError:
             # Windows can hold a lock on a file still mapped by a warm ORT
             # session; log and move on rather than failing the delete.
