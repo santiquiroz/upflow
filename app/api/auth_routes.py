@@ -7,12 +7,11 @@ from collections import defaultdict
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
-from app.api.auth_deps import get_current_user, get_user_store, off_mode_user
+from app.api.auth_deps import get_current_user, get_user_store, off_mode_user, resolve_session_user
 from app.config import Settings, get_settings
 from app.schemas import ChangePasswordRequest, LoginRequest, MeResponse, QuotaStatusResponse, SetupRequest
 from app.services.auth.identity import AuthenticatedUser, LocalPasswordProvider, authenticated_user_from_record
 from app.services.auth.passwords import generate_salt, hash_password, verify_password
-from app.services.auth.permissions import Role
 from app.services.auth.quotas import QuotaService, QuotaStatus
 from app.services.auth.sessions import SESSION_COOKIE_NAME, SESSION_TTL_SECONDS, create_session_cookie_value
 from app.services.auth.user_store import UserStore
@@ -120,16 +119,7 @@ async def me(
 ) -> MeResponse:
     if settings.auth_mode == "off":
         return _me_response(off_mode_user(), settings, quotas)
-    cookie_value = request.cookies.get(SESSION_COOKIE_NAME)
-    user = None
-    if cookie_value is not None:
-        from app.services.auth.sessions import verify_session_cookie
-
-        payload = verify_session_cookie(cookie_value, settings.auth_secret or "")
-        if payload is not None:
-            candidate = user_store.get(payload.user_id)
-            if candidate is not None and not candidate.disabled and candidate.session_ver == payload.session_ver:
-                user = candidate
+    user = resolve_session_user(request, settings.auth_secret, user_store)
     if user is None:
         setup_required = user_store.is_empty()
         raise HTTPException(
@@ -167,12 +157,10 @@ async def setup(
 ) -> dict[str, bool]:
     if settings.auth_mode != "multi":
         raise HTTPException(status_code=403, detail="Setup solo disponible en AUTH_MODE=multi")
-    if not user_store.is_empty():
-        raise HTTPException(status_code=403, detail="Setup ya fue completado")
     salt = generate_salt()
     password_hash = hash_password(payload.password, salt)
-    user_store.create(
-        username=payload.username, password_hash=password_hash, salt=salt,
-        role=Role.admin, must_change_password=False,
-    )
+    try:
+        user_store.create_first_admin(username=payload.username, password_hash=password_hash, salt=salt)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail="Setup ya fue completado") from exc
     return {"ok": True}

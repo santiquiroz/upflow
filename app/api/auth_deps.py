@@ -27,7 +27,7 @@ def off_mode_user() -> AuthenticatedUser:
     )
 
 
-def _resolve_session_user(request: Request, secret: str | None, user_store: UserStore) -> User | None:
+def resolve_session_user(request: Request, secret: str | None, user_store: UserStore) -> User | None:
     cookie_value = request.cookies.get(SESSION_COOKIE_NAME)
     if cookie_value is None or not secret:
         return None
@@ -57,7 +57,7 @@ async def get_current_user(
     if settings.auth_mode == "off":
         resolved = off_mode_user()
     else:
-        user = _resolve_session_user(request, settings.auth_secret, user_store)
+        user = resolve_session_user(request, settings.auth_secret, user_store)
         if user is None:
             raise HTTPException(status_code=401, detail="No autenticado")
         _renew_session_cookie(response, user, settings.auth_secret or "")

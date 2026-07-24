@@ -41,6 +41,25 @@ def test_create_rejects_duplicate_username(tmp_path: Path) -> None:
         store.create(username="alice", password_hash="h2", salt="s2", role=Role.user)
 
 
+def test_create_first_admin_creates_admin_when_store_is_empty(tmp_path: Path) -> None:
+    store = UserStore(make_settings(tmp_path))
+
+    user = store.create_first_admin(username="admin", password_hash="hash", salt="salt")
+
+    assert user.username == "admin"
+    assert user.role == Role.admin
+    assert user.must_change_password is False
+    assert store.get(user.id).username == "admin"
+
+
+def test_create_first_admin_rejects_when_store_already_has_users(tmp_path: Path) -> None:
+    store = UserStore(make_settings(tmp_path))
+    store.create(username="alice", password_hash="h", salt="s", role=Role.user)
+
+    with pytest.raises(ValueError, match="already been completed"):
+        store.create_first_admin(username="admin", password_hash="hash", salt="salt")
+
+
 def test_get_by_username_finds_existing_user(tmp_path: Path) -> None:
     store = UserStore(make_settings(tmp_path))
     store.create(username="bob", password_hash="h", salt="s", role=Role.user)

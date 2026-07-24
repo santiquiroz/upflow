@@ -85,6 +85,18 @@ class UserStore:
         with self._lock:
             return not self._users
 
+    def create_first_admin(self, *, username: str, password_hash: str, salt: str) -> User:
+        with self._lock:
+            if self._users:
+                raise ValueError("Setup has already been completed")
+            user = User(
+                id=uuid4().hex, username=username, password_hash=password_hash, salt=salt,
+                role=Role.admin, must_change_password=False,
+            )
+            self._users[user.id] = user
+            self._persist()
+            return user
+
     def create(
         self, *, username: str, password_hash: str, salt: str, role: Role,
         must_change_password: bool = True,
