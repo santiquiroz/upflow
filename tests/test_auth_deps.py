@@ -62,11 +62,27 @@ async def test_get_current_user_accepts_valid_cookie_when_multi(tmp_path: Path) 
     salt = generate_salt()
     stored = user_store.create(username="alice", password_hash=hash_password("pw", salt), salt=salt, role=Role.user)
     cookie = create_session_cookie_value(stored.id, stored.session_ver, settings.auth_secret)
+    response = FakeResponse()
 
-    user = await get_current_user(FakeRequest({SESSION_COOKIE_NAME: cookie}), FakeResponse(), settings, user_store)
+    user = await get_current_user(FakeRequest({SESSION_COOKIE_NAME: cookie}), response, settings, user_store)
 
     assert user.id == stored.id
     assert user.role == Role.user
+    assert any(
+        name == SESSION_COOKIE_NAME and value
+        for name, value in response.cookies_set
+    )
+
+
+async def test_get_current_user_rejects_cookie_for_unknown_user_id(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path, AUTH_MODE="multi", AUTH_SECRET="s" * 32)
+    user_store = UserStore(settings)
+    cookie = create_session_cookie_value("unknown-user-id", 0, settings.auth_secret)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_current_user(FakeRequest({SESSION_COOKIE_NAME: cookie}), FakeResponse(), settings, user_store)
+
+    assert exc_info.value.status_code == 401
 
 
 async def test_get_current_user_rejects_cookie_after_logout_all(tmp_path: Path) -> None:
