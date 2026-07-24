@@ -234,7 +234,7 @@ class ModelInstaller:
             return
         try:
             if target.is_dir():
-                shutil.rmtree(target, ignore_errors=True)
+                shutil.rmtree(target)
             else:
                 target.unlink(missing_ok=True)
         except OSError:

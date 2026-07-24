@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from app.config import Settings
+from app.services.device_semaphores import DeviceSemaphores
 from app.services.generation_installer import (
     GenerationModelInstaller,
     _filter_to_declared,
@@ -14,9 +15,11 @@ from app.services.generation_installer import (
     _patch_legacy_component_configs,
     _select_files,
 )
+from app.services.gpu_session_coordinator import GpuSessionCoordinator
 from app.services.hf_client import HfFile
 from app.services.model_installer import InstallStatus
 from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry
+from test_generation_engine import RecordingCoordinator
 from test_model_installer import FakeHfClient as _BaseFakeHfClient
 
 # ---------------------------------------------------------------------------
@@ -82,11 +85,24 @@ def make_settings(tmp_path: Path, **overrides: object) -> Settings:
     return Settings(RUNTIME_DIR=str(tmp_path), _env_file=None, **overrides)
 
 
-def make_installer(tmp_path: Path, files: list[HfFile], **hf_kwargs: Any):
+def make_installer(
+    tmp_path: Path,
+    files: list[HfFile],
+    *,
+    gpu_coordinator: Any | None = None,
+    device_semaphores: Any | None = None,
+    **hf_kwargs: Any,
+):
     settings = make_settings(tmp_path)
     registry = ModelRegistry(settings)
     hf = FakeHfClient(files=files, **hf_kwargs)
-    installer = GenerationModelInstaller(settings, registry, hf)
+    installer = GenerationModelInstaller(
+        settings,
+        registry,
+        hf,
+        gpu_coordinator if gpu_coordinator is not None else GpuSessionCoordinator(),
+        device_semaphores if device_semaphores is not None else DeviceSemaphores(settings),
+    )
     # el download fake debe escribir el model_index real para la validación estructural:
     hf.download_bytes_by_path = {"model_index.json": MODEL_INDEX.encode("utf-8")}
     return installer, registry, settings, hf
@@ -143,6 +159,26 @@ def test_install_happy_path_registers_diffusion_model(tmp_path: Path, monkeypatc
     assert (final_dir / "text_encoder" / "config.json").is_file()
     # MXR/ no declarado: nunca se descargo
     assert not any("MXR" in call for call in map(str, hf.download_calls))
+
+
+def test_install_validation_acquires_gpu_coordinator(tmp_path: Path, monkeypatch) -> None:
+    # Item 1 (final whole-branch review): la validacion del installer es la
+    # UNICA sesion DML del codebase invisible al GpuSessionCoordinator -- debe
+    # anunciarse igual que los 6 engines (ver GenerationEngine._get_pipeline).
+    coordinator = RecordingCoordinator()
+    installer, registry, settings, hf = make_installer(
+        tmp_path, files=PIPELINE_FILES, gpu_coordinator=coordinator
+    )
+    monkeypatch.setattr(installer, "_create_validation_pipeline", lambda pipeline_dir: FakeValidationPipeline())
+
+    job = install_and_drain(installer, "amd/sd15")
+
+    assert job.status == InstallStatus.installed
+    assert len(coordinator.acquired) == 1
+    device, owner = coordinator.acquired[0]
+    assert device == settings.default_device
+    assert hasattr(owner, "release_device")
+    owner.release_device(device)  # no-op, protocol requires the method
 
 
 def test_install_rejects_repo_without_model_index(tmp_path: Path) -> None:

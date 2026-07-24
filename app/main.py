@@ -124,7 +124,9 @@ async def lifespan(app: FastAPI):
     update_service = UpdateService(settings)
     hf_client = HfClient(settings)
     model_installer = ModelInstaller(settings, model_registry, hf_client)
-    generation_installer = GenerationModelInstaller(settings, model_registry, hf_client)
+    generation_installer = GenerationModelInstaller(
+        settings, model_registry, hf_client, gpu_coordinator, device_semaphores
+    )
     await job_manager.start()
     await video_job_manager.start()
     await audio_job_manager.start()

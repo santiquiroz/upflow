@@ -10,12 +10,14 @@ from pathlib import Path
 from typing import Any
 
 from app.config import Settings
+from app.services.device_semaphores import DeviceSemaphores
 from app.services.engines.generation_onnx import (
     _build_providers_for_validation,
     _load_pipeline_class,
     _wrap_generation_error,
     generation_dependencies_available,
 )
+from app.services.gpu_session_coordinator import GpuSessionCoordinator
 from app.services.hf_client import HfClient, HfFile
 from app.services.model_installer import (
     InstallJob,
@@ -165,11 +167,28 @@ def _validate_structure(staging_root: Path) -> None:
         raise ValueError(f"Faltan componentes del pipeline en el repo: {', '.join(missing)}.")
 
 
+class _ValidationSessionOwner:
+    def release_device(self, device: str) -> None:
+        # La sesion de validacion se descarta apenas termina _validate_pipeline
+        # (ver finally: del pipeline) -- no hay nada que evacuar, pero el
+        # protocolo GpuSessionOwner exige el metodo.
+        pass
+
+
 class GenerationModelInstaller:
-    def __init__(self, settings: Settings, registry: ModelRegistry, hf_client: HfClient) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        registry: ModelRegistry,
+        hf_client: HfClient,
+        gpu_coordinator: GpuSessionCoordinator,
+        device_semaphores: DeviceSemaphores,
+    ) -> None:
         self.settings = settings
         self.registry = registry
         self.hf_client = hf_client
+        self.gpu_coordinator = gpu_coordinator
+        self.device_semaphores = device_semaphores
         self._queue: asyncio.Queue[InstallJob] = asyncio.Queue()
         self._jobs: dict[str, InstallJob] = {}
         self._worker_task: asyncio.Task | None = None
@@ -269,7 +288,8 @@ class GenerationModelInstaller:
             _validate_structure(staging_root)
             _patch_legacy_component_configs(staging_root)
             job.status = InstallStatus.validating
-            await asyncio.to_thread(self._validate_pipeline, staging_root)
+            async with self.device_semaphores.acquire(self.settings.default_device):
+                await asyncio.to_thread(self._validate_pipeline, staging_root)
 
             final_dir = (
                 self.settings.models_path / GENERATION_MODELS_SUBDIR / model_id
@@ -331,6 +351,7 @@ class GenerationModelInstaller:
     def _validate_pipeline(self, pipeline_dir: Path) -> None:
         pipeline = None
         try:
+            self.gpu_coordinator.acquire(self.settings.default_device, _ValidationSessionOwner())
             pipeline = self._create_validation_pipeline(pipeline_dir)
             pipeline(
                 prompt=VALIDATION_PROMPT,
