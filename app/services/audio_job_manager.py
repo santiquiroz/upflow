@@ -7,6 +7,8 @@ from pathlib import Path
 from app.config import AUDIO_ENHANCE_MODES, AUDIO_OUTPUT_FORMATS, AUDIO_RESTORE_MODES, Settings
 from app.exceptions import QueueFullError
 from app.models import TERMINAL_JOB_STATUSES, AudioJob, JobStatus, utc_now
+from app.services.auth.identity import AuthenticatedUser
+from app.services.auth.quotas import QuotaService
 from app.services.audio_pipeline import AudioPipeline
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
@@ -31,6 +33,7 @@ class AudioJobManager:
         device_semaphores: DeviceSemaphores,
         *,
         devices: DevicesService | None = None,
+        quota_service: QuotaService | None = None,
     ) -> None:
         self.settings = settings
         self.pipeline = pipeline
@@ -40,6 +43,7 @@ class AudioJobManager:
         self.device_semaphores = device_semaphores
         self.worker_tasks: list[asyncio.Task] = []
         self._active: dict[str, asyncio.Task] = {}
+        self.quota_service = quota_service
 
     async def start(self) -> None:
         if self.worker_tasks:
@@ -72,10 +76,14 @@ class AudioJobManager:
         device: str | None = None,
         output_format: str = "flac",
         job_id: str | None = None,
+        owner: AuthenticatedUser | None = None,
     ) -> AudioJob:
         self._validate_modes(denoise, restore)
         self._validate_output_format(output_format)
         await self._validate_device(device)
+
+        if owner is not None and self.quota_service is not None:
+            self.quota_service.check_admission(owner)
 
         job = AudioJob(
             source_path=source_path,
@@ -84,6 +92,7 @@ class AudioJobManager:
             restore=restore,
             device=device,
             output_format=output_format,
+            owner_id=owner.id if owner is not None else None,
         )
         if job_id is not None:
             job.id = job_id
@@ -192,6 +201,7 @@ class AudioJobManager:
             job.finished_at = utc_now()
             self._unlink_source_safely(job.source_path)
             self.queue.task_done()
+            self._record_quota_usage(job)
 
     async def _run_engine(self, job: AudioJob) -> None:
         job.output_path = await self.pipeline.run(job)
@@ -202,3 +212,9 @@ class AudioJobManager:
             source_path.unlink(missing_ok=True)
         except OSError:
             logger.exception("Failed to delete source upload %s", source_path)
+
+    def _record_quota_usage(self, job: AudioJob) -> None:
+        if self.quota_service is None or job.started_at is None:
+            return
+        duration = (job.finished_at - job.started_at).total_seconds()
+        self.quota_service.record_usage(job.owner_id, duration)
