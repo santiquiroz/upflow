@@ -205,15 +205,27 @@ class HfClient:
         return [_parse_model_summary(item) for item in payload]
 
     async def repo_files(self, repo_id: str) -> list[HfFile]:
-        async with self._build_client() as client:
-            response = await client.get(
-                f"{HF_API_BASE}/models/{repo_id}",
-                params={"blobs": "true"},
-                headers=self._auth_headers(),
-            )
-            response.raise_for_status()
-            payload = response.json()
-        return [_parse_sibling_file(sibling) for sibling in payload.get("siblings", [])]
+        for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+            try:
+                async with self._build_client() as client:
+                    response = await client.get(
+                        f"{HF_API_BASE}/models/{repo_id}",
+                        params={"blobs": "true"},
+                        headers=self._auth_headers(),
+                    )
+                    response.raise_for_status()
+                    payload = response.json()
+                return [_parse_sibling_file(sibling) for sibling in payload.get("siblings", [])]
+            except Exception as exc:  # noqa: BLE001 -- CancelledError is BaseException, so cancel still propagates
+                if attempt == DOWNLOAD_ATTEMPTS or not _is_retryable_download_error(exc):
+                    raise
+                logger.warning(
+                    "Hugging Face repo_files attempt %d/%d failed (%s); retrying",
+                    attempt,
+                    DOWNLOAD_ATTEMPTS,
+                    type(exc).__name__,
+                )
+                await asyncio.sleep(2 ** (attempt - 1))
 
     async def download(
         self,
