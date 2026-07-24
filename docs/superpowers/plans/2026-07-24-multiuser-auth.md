@@ -12,6 +12,7 @@
 
 - `AUTH_MODE=off` (default) MUST leave the existing backend suite (1207 tests, `.venv\Scripts\python.exe -m pytest tests/ -q`) and frontend suite (447 tests, `cd frontend && npx vitest run && npx tsc --noEmit`) passing with **zero modifications to existing test files**. This is the hard non-regression gate for this plan — see the "Backward-compatibility mechanics" note below.
 - Zero new pip/npm dependencies. Passwords: `hashlib.scrypt` (N=2^14, r=8, p=1, 16-byte urandom salt per user). Sessions: HMAC-SHA256 over a JSON payload, stdlib `hmac`/`hashlib`/`base64`/`json`.
+  - **Amendment (2026-07-24):** `argon2-cffi` is now an approved, deliberate exception to the zero-new-dependencies constraint. An automated security review flagged the scrypt cost parameter (N=2^14) as weak by current OWASP standards; the human approved switching password hashing to argon2id via `argon2-cffi`. Sessions remain stdlib-only. See Task 3 below for the updated implementation.
 - New JSON storage (`users.json`, `usage.json`) follows the existing `ModelRegistry` atomic-write pattern (`app/services/model_registry.py`): write to a temp file in the *same directory*, then `Path.replace()`. `ModelRegistry` itself is **not modified** by this plan (it's stable and fully tested); the atomic-write/corrupt-backup mechanics are extracted into a new shared `app/services/json_store.py` used only by new code.
 - Commit messages, roles/permissions/quota copy, and error strings shown to users are in Spanish where the existing app already uses Spanish comments/strings for user-facing text (see the exact error strings quoted in each task below — use them verbatim, they come from the approved spec).
 - Repo branch prefix `feature/` is enforced by a pre-commit hook — branch as `feature/multiuser-auth`.
@@ -312,14 +313,14 @@ git commit -m "feat: add Role/Permission tables for multi-user auth"
 
 ---
 
-## Task 3: `passwords.py` — scrypt hash/verify
+## Task 3: `passwords.py` — argon2id hash/verify (amended from scrypt 2026-07-24)
 
 **Files:**
 - Create: `app/services/auth/passwords.py`
 - Test: `tests/test_passwords.py`
 
 **Interfaces:**
-- Produces: `generate_salt() -> str` (hex), `hash_password(password: str, salt: str) -> str` (hex), `verify_password(password: str, password_hash: str, salt: str) -> bool` — consumed by Tasks 6, 7, 13, 14.
+- Produces: `generate_salt() -> str` (hex), `hash_password(password: str, salt: str) -> str` (argon2id-encoded string, amended 2026-07-24 — was hex scrypt digest), `verify_password(password: str, password_hash: str, salt: str) -> bool` — consumed by Tasks 6, 7, 13, 14.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -362,19 +363,22 @@ Expected: FAIL with `ModuleNotFoundError: No module named 'app.services.auth.pas
 
 - [ ] **Step 3: Write the implementation**
 
+Amended post-review (2026-07-24): the original implementation below used `hashlib.scrypt` (N=2^14); an automated security review flagged that cost parameter as weak by current OWASP standards, and the human decided to switch to argon2id via `argon2-cffi` instead. The code block reflects the final, amended implementation.
+
 ```python
 # app/services/auth/passwords.py
 from __future__ import annotations
 
-import hashlib
 import hmac
 import secrets
 
-SCRYPT_N = 2**14
-SCRYPT_R = 8
-SCRYPT_P = 1
+from argon2.low_level import Type, hash_secret
+
+ARGON2_TIME_COST = 3
+ARGON2_MEMORY_COST = 65536  # 64 MiB
+ARGON2_PARALLELISM = 4
+ARGON2_HASH_LEN = 32
 SALT_BYTES = 16
-KEY_LENGTH = 32
 
 
 def generate_salt() -> str:
@@ -382,11 +386,12 @@ def generate_salt() -> str:
 
 
 def hash_password(password: str, salt: str) -> str:
-    derived = hashlib.scrypt(
-        password.encode("utf-8"), salt=bytes.fromhex(salt),
-        n=SCRYPT_N, r=SCRYPT_R, p=SCRYPT_P, dklen=KEY_LENGTH,
+    hashed = hash_secret(
+        password.encode("utf-8"), bytes.fromhex(salt),
+        time_cost=ARGON2_TIME_COST, memory_cost=ARGON2_MEMORY_COST,
+        parallelism=ARGON2_PARALLELISM, hash_len=ARGON2_HASH_LEN, type=Type.ID,
     )
-    return derived.hex()
+    return hashed.decode("utf-8")
 
 
 def verify_password(password: str, password_hash: str, salt: str) -> bool:
@@ -403,7 +408,7 @@ Expected: PASS (5 tests)
 
 ```bash
 git add app/services/auth/passwords.py tests/test_passwords.py
-git commit -m "feat: add scrypt password hashing for local auth"
+git commit -m "fix: switch password hashing from scrypt to argon2id per security review"
 ```
 
 ---

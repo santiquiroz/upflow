@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-import hashlib
 import hmac
 import secrets
 
-SCRYPT_N = 2**14
-SCRYPT_R = 8
-SCRYPT_P = 1
+from argon2.low_level import Type, hash_secret
+
+ARGON2_TIME_COST = 3
+ARGON2_MEMORY_COST = 65536  # 64 MiB
+ARGON2_PARALLELISM = 4
+ARGON2_HASH_LEN = 32
 SALT_BYTES = 16
-KEY_LENGTH = 32
 
 
 def generate_salt() -> str:
@@ -16,11 +17,12 @@ def generate_salt() -> str:
 
 
 def hash_password(password: str, salt: str) -> str:
-    derived = hashlib.scrypt(
-        password.encode("utf-8"), salt=bytes.fromhex(salt),
-        n=SCRYPT_N, r=SCRYPT_R, p=SCRYPT_P, dklen=KEY_LENGTH,
+    hashed = hash_secret(
+        password.encode("utf-8"), bytes.fromhex(salt),
+        time_cost=ARGON2_TIME_COST, memory_cost=ARGON2_MEMORY_COST,
+        parallelism=ARGON2_PARALLELISM, hash_len=ARGON2_HASH_LEN, type=Type.ID,
     )
-    return derived.hex()
+    return hashed.decode("utf-8")
 
 
 def verify_password(password: str, password_hash: str, salt: str) -> bool:

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+# passwords.py hashes with argon2id (argon2-cffi) as of the Task 3 amendment;
+# these tests exercise the same public contract regardless of the underlying
+# KDF, so they remain valid unchanged.
 from app.services.auth.passwords import generate_salt, hash_password, verify_password
 
 
