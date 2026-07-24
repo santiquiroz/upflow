@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as api from "../../lib/api";
@@ -119,12 +119,34 @@ describe("GenerationModelsSection", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(/cuda is required/i);
   });
 
-  it("deletes an installed diffusion model", async () => {
-    vi.mocked(api.deleteModel).mockResolvedValue(undefined);
+  it("requires a destructive confirmation before deleting a diffusion model", async () => {
     renderSection([DIFFUSION_MODEL]);
 
     fireEvent.click(await screen.findByRole("button", { name: /delete stable diffusion 1\.5/i }));
 
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText(/delete stable diffusion 1\.5 \(amd\)\?/i)).toBeInTheDocument();
+    expect(api.deleteModel).not.toHaveBeenCalled();
+  });
+
+  it("cancels without deleting when the cancel action is chosen", async () => {
+    renderSection([DIFFUSION_MODEL]);
+
+    fireEvent.click(await screen.findByRole("button", { name: /delete stable diffusion 1\.5/i }));
+    fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(api.deleteModel).not.toHaveBeenCalled();
+  });
+
+  it("deletes the diffusion model once the destructive action is confirmed", async () => {
+    vi.mocked(api.deleteModel).mockResolvedValue(undefined);
+    renderSection([DIFFUSION_MODEL]);
+
+    fireEvent.click(await screen.findByRole("button", { name: /delete stable diffusion 1\.5/i }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /^delete$/i }));
+
     await waitFor(() => expect(vi.mocked(api.deleteModel).mock.calls[0]?.[0]).toBe(DIFFUSION_MODEL.id));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 });
