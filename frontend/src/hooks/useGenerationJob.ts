@@ -1,15 +1,27 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { GenerationCapabilities, GenerationJob, JobStatus } from "../lib/apiTypes";
+import { isTerminalInstallStatus } from "../lib/installStatus";
 import { isTerminalJobStatus } from "../lib/jobStatus";
 import { jobQueueStore, type JobQueueStore } from "../lib/jobQueueStore";
 import {
   cancelGenerationJob,
   createGenerationJob,
   fetchGenerationCapabilities,
+  getGenerationInstallStatus,
   getGenerationJob,
+  installGenerationModel,
   type CreateGenerationJobParams,
 } from "../services/generation";
+import {
+  DEFAULT_INSTALL_POLL_INTERVAL_MS,
+  MODELS_QUERY_KEY,
+  isAwaitingFirstStatus,
+  resolveInstallErrorMessage,
+  resolveInstallPhase,
+  type InstallState,
+  type ModelInstallPhase,
+} from "./useModels";
 
 export const DEFAULT_POLL_INTERVAL_MS = 1500;
 
@@ -126,4 +138,67 @@ export function useGenerationCapabilities() {
     queryKey: ["generationCapabilities"],
     queryFn: fetchGenerationCapabilities,
   });
+}
+
+export interface UseGenerationModelInstallResult {
+  phase: ModelInstallPhase;
+  progressPct: number | null;
+  errorMessage: string | null;
+  modelId: string | null;
+  install: (repoId: string) => void;
+  reset: () => void;
+}
+
+// Sibling of useModelInstall (../hooks/useModels.ts): same state machine, poll
+// mechanics and query invalidation, wired to the generation-model install
+// endpoints instead of the upscaler ones. Shares the pure phase/error helpers
+// and the "models" query key so both flows refresh the same installed list.
+export function useGenerationModelInstall(
+  pollIntervalMs: number = DEFAULT_INSTALL_POLL_INTERVAL_MS,
+): UseGenerationModelInstallResult {
+  const [installId, setInstallId] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+
+  const startMutation = useMutation({
+    mutationFn: installGenerationModel,
+    onSuccess: (data) => setInstallId(data.installId),
+  });
+
+  const statusQuery = useQuery({
+    queryKey: ["generation-model-install", installId],
+    queryFn: () => getGenerationInstallStatus(installId as string),
+    enabled: installId !== null,
+    refetchInterval: (query) =>
+      isTerminalInstallStatus(query.state.data?.status ?? "downloading") ? false : pollIntervalMs,
+  });
+
+  const installedModelId = statusQuery.data?.status === "installed" ? statusQuery.data.modelId : null;
+  useEffect(() => {
+    if (installedModelId) {
+      queryClient.invalidateQueries({ queryKey: MODELS_QUERY_KEY });
+    }
+  }, [installedModelId, queryClient]);
+
+  function install(repoId: string): void {
+    setInstallId(null);
+    startMutation.mutate(repoId);
+  }
+
+  function reset(): void {
+    setInstallId(null);
+    startMutation.reset();
+  }
+
+  return {
+    phase: resolveInstallPhase(
+      startMutation.isPending,
+      isAwaitingFirstStatus(installId, statusQuery.data, statusQuery.isError),
+      statusQuery.data?.status as InstallState | undefined,
+    ),
+    progressPct: statusQuery.data?.progressPct ?? null,
+    errorMessage: resolveInstallErrorMessage(startMutation.error, statusQuery.error, statusQuery.data),
+    modelId: statusQuery.data?.modelId ?? null,
+    install,
+    reset,
+  };
 }

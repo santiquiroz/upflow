@@ -1,4 +1,5 @@
 import { DeviceDefault } from "../modules/models/DeviceDefault";
+import { GenerationModelsSection } from "../modules/models/GenerationModelsSection";
 import { HfSearch } from "../modules/models/HfSearch";
 import { InstalledModels } from "../modules/models/InstalledModels";
 
@@ -15,6 +16,7 @@ export function ModelsPage() {
         <div className="flex flex-col gap-8">
           <HfSearch />
           <InstalledModels />
+          <GenerationModelsSection />
         </div>
         <DeviceDefault />
       </div>
