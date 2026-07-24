@@ -36,12 +36,6 @@ def select_upscale_engine(
     builtin_engine: UpscaleEngine,
     onnx_engine: UpscaleEngine | None,
 ) -> UpscaleEngine:
-    """Select the appropriate upscale engine for a job based on its model_id.
-
-    If the job has a model_id and it's registered as an ONNX model, return the ONNX engine.
-    If the ONNX engine is not configured but the model requires it, raise RuntimeError.
-    Otherwise, return the builtin engine.
-    """
     if job.model_id is not None and registry is not None:
         entry = registry.get(job.model_id)
         if entry is not None and entry.kind == ModelKind.onnx:

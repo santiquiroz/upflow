@@ -1,7 +1,7 @@
 import { AlertTriangle, Ban, CheckCircle2, Circle, Loader2 } from "lucide-react";
 import { Fragment, useEffect, useState } from "react";
 import type { JobQueueEntry } from "../hooks/useJobQueue";
-import type { AudioJob, GenerationJob, JobResponse, JobStage, VideoJobResponse } from "../lib/apiTypes";
+import type { AudioJob, JobStage, VideoJobResponse } from "../lib/apiTypes";
 import { denoiseLabel, restoreLabel } from "../lib/audioLabels";
 import { estimateEta, formatEta, type EtaSample } from "../lib/eta";
 import { formatDuration } from "../lib/formatDuration";
@@ -14,6 +14,7 @@ import {
   toMonotonicProgressPct,
 } from "../lib/jobProgress";
 import { isCancellableJobStatus, jobKindLabel } from "../lib/jobStatus";
+import { isGenerationJob, type AnyJobResponse } from "../lib/jobTypeGuards";
 import { DeterminateProgressBar } from "./DeterminateProgressBar";
 import { IndeterminateProgressBar } from "./IndeterminateProgressBar";
 import { Modal } from "./Modal";
@@ -23,8 +24,6 @@ interface JobDetailModalProps {
   onClose: () => void;
   onCancel?: (id: string) => void;
 }
-
-type AnyJobResponse = JobResponse | VideoJobResponse | AudioJob | GenerationJob;
 
 const MAX_ETA_SAMPLES = 5;
 
@@ -39,10 +38,6 @@ function isVideoJob(job: AnyJobResponse): job is VideoJobResponse {
 
 function isAudioJob(job: AnyJobResponse): job is AudioJob {
   return "denoise" in job;
-}
-
-function isGenerationJob(job: AnyJobResponse): job is GenerationJob {
-  return "prompt" in job;
 }
 
 // Audio and generation jobs carry stages at the top level (no `metadata`),

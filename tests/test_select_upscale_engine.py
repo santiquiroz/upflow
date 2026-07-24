@@ -6,13 +6,10 @@ from app.services.engines.base import UpscaleEngine
 from app.services.job_manager import select_upscale_engine
 from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry, ModelStatus
 from pathlib import Path
-import tempfile
 from app.config import Settings
 
 
 class FakeUpscaleEngine(UpscaleEngine):
-    """Minimal fake engine for testing."""
-
     def available(self) -> bool:
         return True
 
@@ -22,31 +19,26 @@ class FakeUpscaleEngine(UpscaleEngine):
 
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
-    """Create settings pointing to a temporary directory."""
     return Settings(_env_file=None, RUNTIME_DIR=str(tmp_path / "runtime"))
 
 
 @pytest.fixture
 def registry(settings: Settings) -> ModelRegistry:
-    """Create a real ModelRegistry with temporary storage."""
     return ModelRegistry(settings)
 
 
 @pytest.fixture
 def builtin_engine() -> UpscaleEngine:
-    """Create a fake builtin engine."""
     return FakeUpscaleEngine()
 
 
 @pytest.fixture
 def onnx_engine() -> UpscaleEngine:
-    """Create a fake ONNX engine."""
     return FakeUpscaleEngine()
 
 
 @pytest.fixture
 def source_image(tmp_path: Path) -> Path:
-    """Create a dummy source image."""
     image_path = tmp_path / "source.png"
     image_path.write_bytes(b"fake-png")
     return image_path
@@ -58,7 +50,6 @@ def test_select_upscale_engine_prefers_onnx_for_onnx_model(
     onnx_engine: UpscaleEngine,
     source_image: Path,
 ) -> None:
-    """When job has an ONNX model_id, select_upscale_engine returns onnx_engine."""
     # Arrange: Register an ONNX model
     onnx_entry = ModelEntry(
         id="test-onnx-model",
@@ -96,7 +87,6 @@ def test_select_upscale_engine_uses_builtin_when_no_model_id(
     onnx_engine: UpscaleEngine,
     source_image: Path,
 ) -> None:
-    """When job has no model_id, select_upscale_engine returns builtin_engine."""
     # Arrange: Create job without model_id
     job = UpscaleJob(
         source_path=source_image,
@@ -120,7 +110,6 @@ def test_select_upscale_engine_raises_when_onnx_model_without_onnx_engine(
     builtin_engine: UpscaleEngine,
     source_image: Path,
 ) -> None:
-    """When job has ONNX model_id but onnx_engine is None, raises RuntimeError."""
     # Arrange: Register an ONNX model
     onnx_entry = ModelEntry(
         id="test-onnx-model",
@@ -158,7 +147,6 @@ def test_select_upscale_engine_uses_builtin_when_registry_is_none(
     onnx_engine: UpscaleEngine,
     source_image: Path,
 ) -> None:
-    """When registry is None, select_upscale_engine returns builtin_engine."""
     # Arrange: Create job with model_id but no registry
     job = UpscaleJob(
         source_path=source_image,

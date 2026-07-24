@@ -4,12 +4,11 @@ import { denoiseLabel, restoreLabel } from "../lib/audioLabels";
 import { formatDuration } from "../lib/formatDuration";
 import { formatFps } from "../lib/formatFps";
 import { isProgressDeterminate } from "../lib/jobProgress";
+import { isGenerationJob, type AnyJobResponse } from "../lib/jobTypeGuards";
 import { DeterminateProgressBar } from "./DeterminateProgressBar";
 import { IndeterminateProgressBar } from "./IndeterminateProgressBar";
 
 export type JobCardPhase = "idle" | "uploading" | "queued" | "running" | "completed" | "failed" | "cancelled";
-
-type AnyJobResponse = JobResponse | VideoJobResponse | AudioJob | GenerationJob;
 
 interface JobCardProps {
   phase: JobCardPhase;
@@ -25,10 +24,6 @@ function isVideoJob(job: AnyJobResponse): job is VideoJobResponse {
 
 function isAudioJob(job: AnyJobResponse): job is AudioJob {
   return "denoise" in job;
-}
-
-function isGenerationJob(job: AnyJobResponse): job is GenerationJob {
-  return "autoUpscale" in job;
 }
 
 function readOutputFps(job: VideoJobResponse): string | null {
