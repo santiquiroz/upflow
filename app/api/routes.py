@@ -716,6 +716,9 @@ async def get_job(
 async def cancel_job(
     job_id: str,
     jobs: JobManager = Depends(get_job_manager),
+    # Bare `Request` (not `Request | None`) so FastAPI's special-case
+    # injection still recognizes it -- `lenient_issubclass` rejects unions.
+    # Direct/unit-test calls that omit this kwarg still get `None`.
     request: Request = None,
 ) -> JobResponse:
     job = jobs.get_job(job_id)
@@ -751,6 +754,9 @@ async def cancel_video_job(
 async def download_job(
     job_id: str,
     jobs: JobManager = Depends(get_job_manager),
+    # Bare `Request` (not `Request | None`) so FastAPI's special-case
+    # injection still recognizes it -- `lenient_issubclass` rejects unions.
+    # Direct/unit-test calls that omit this kwarg still get `None`.
     request: Request = None,
 ) -> FileResponse:
     job = jobs.get_job(job_id)
