@@ -110,6 +110,7 @@ class VideoUpscaleJob:
     error: str | None = None
     output_path: Path | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    owner_id: str | None = None
 
 
 @dataclass(slots=True)
