@@ -29,6 +29,7 @@ class JobResponse(BaseModel):
     started_at: datetime | None = Field(default=None, serialization_alias="startedAt")
     finished_at: datetime | None = Field(default=None, serialization_alias="finishedAt")
     error: str | None = None
+    owner_id: str | None = Field(default=None, serialization_alias="ownerId")
     metadata: dict[str, Any] = Field(default_factory=dict)
     progress_pct: float | None = Field(default=None, serialization_alias="progressPct")
     download_url: str | None = Field(default=None, serialization_alias="downloadUrl")
@@ -61,6 +62,7 @@ class VideoJobResponse(BaseModel):
     started_at: datetime | None = Field(default=None, serialization_alias="startedAt")
     finished_at: datetime | None = Field(default=None, serialization_alias="finishedAt")
     error: str | None = None
+    owner_id: str | None = Field(default=None, serialization_alias="ownerId")
     metadata: dict[str, Any] = Field(default_factory=dict)
     progress_pct: float | None = Field(default=None, serialization_alias="progressPct")
     download_url: str | None = Field(default=None, serialization_alias="downloadUrl")
@@ -80,6 +82,7 @@ class AudioJobResponse(BaseModel):
     progress_pct: float | None = Field(default=None, serialization_alias="progressPct")
     stages: list[dict[str, Any]] | None = None
     error: str | None = None
+    owner_id: str | None = Field(default=None, serialization_alias="ownerId")
     download_url: str | None = Field(default=None, serialization_alias="downloadUrl")
 
 
@@ -278,6 +281,7 @@ class GenerationJobResponse(BaseModel):
     progress_pct: float | None = Field(default=None, serialization_alias="progressPct")
     stages: list[dict[str, Any]] | None = None
     error: str | None = None
+    owner_id: str | None = Field(default=None, serialization_alias="ownerId")
     download_url: str | None = Field(default=None, serialization_alias="downloadUrl")
 
 
@@ -313,3 +317,114 @@ class OnnxDiagnosticsResponse(BaseModel):
 
 class ScanOnnxDiagnosticResponse(BaseModel):
     report: CpuFallbackReportResponse
+
+
+class LoginRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    username: str
+    password: str
+
+
+class ChangePasswordRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    current_password: str = Field(alias="currentPassword")
+    new_password: str = Field(alias="newPassword", min_length=8)
+
+
+class SetupRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    username: str = Field(min_length=3)
+    password: str = Field(min_length=8)
+
+
+class QuotaStatusResponse(BaseModel):
+    max_concurrent: int = Field(serialization_alias="maxConcurrent")
+    max_queued: int = Field(serialization_alias="maxQueued")
+    max_jobs_per_day: int = Field(serialization_alias="maxJobsPerDay")
+    max_gpu_seconds_per_day: int = Field(serialization_alias="maxGpuSecondsPerDay")
+    used_jobs_today: int = Field(serialization_alias="usedJobsToday")
+    used_gpu_seconds_today: float = Field(serialization_alias="usedGpuSecondsToday")
+
+
+class MeResponse(BaseModel):
+    user_id: str | None = Field(serialization_alias="userId")
+    username: str
+    role: str
+    permissions: list[str]
+    must_change_password: bool = Field(serialization_alias="mustChangePassword")
+    auth_mode: str = Field(serialization_alias="authMode")
+    quota: QuotaStatusResponse
+
+
+class UserSummaryResponse(BaseModel):
+    id: str
+    username: str
+    role: str
+    disabled: bool
+    must_change_password: bool = Field(serialization_alias="mustChangePassword")
+    quota_overrides: dict[str, int] = Field(default_factory=dict, serialization_alias="quotaOverrides")
+    created_at: datetime = Field(serialization_alias="createdAt")
+    used_jobs_today: int = Field(serialization_alias="usedJobsToday")
+    used_gpu_seconds_today: float = Field(serialization_alias="usedGpuSecondsToday")
+
+
+class UsersListResponse(BaseModel):
+    users: list[UserSummaryResponse]
+
+
+class CreateUserRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    username: str = Field(min_length=3)
+    role: str = Field(default="user")
+
+
+class CreateUserResponse(BaseModel):
+    user: UserSummaryResponse
+    temporary_password: str = Field(serialization_alias="temporaryPassword")
+
+
+class UpdateUserRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    role: str | None = None
+    disabled: bool | None = None
+    quota_overrides: dict[str, int] | None = Field(default=None, alias="quotaOverrides")
+    reset_password: bool = Field(default=False, alias="resetPassword")
+
+
+class UpdateUserResponse(BaseModel):
+    user: UserSummaryResponse
+    temporary_password: str | None = Field(default=None, serialization_alias="temporaryPassword")
+
+
+class OwnedJobSummaryResponse(BaseModel):
+    id: str
+    kind: str
+    status: JobStatus
+    original_filename: str | None = Field(default=None, serialization_alias="originalFilename")
+    created_at: datetime = Field(serialization_alias="createdAt")
+    finished_at: datetime | None = Field(default=None, serialization_alias="finishedAt")
+
+
+class UserJobsResponse(BaseModel):
+    jobs: list[OwnedJobSummaryResponse]
+
+
+class JobsListResponse(BaseModel):
+    jobs: list[JobResponse]
+
+
+class VideoJobsListResponse(BaseModel):
+    jobs: list[VideoJobResponse]
+
+
+class AudioJobsListResponse(BaseModel):
+    jobs: list[AudioJobResponse]
+
+
+class GenerationJobsListResponse(BaseModel):
+    jobs: list[GenerationJobResponse]
