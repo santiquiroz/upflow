@@ -25,5 +25,6 @@
     "UpDecoderBlock2D",
     "UpDecoderBlock2D",
     "UpDecoderBlock2D"
-  ]
+  ],
+  "scaling_factor": 0.18215
 }

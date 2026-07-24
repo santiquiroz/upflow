@@ -9,6 +9,7 @@ import pytest
 from app.config import Settings
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.generation_installer import (
+    LEGACY_CONFIGS_ASSETS_DIR,
     GenerationModelInstaller,
     _filter_to_declared,
     _generation_model_id,
@@ -400,3 +401,14 @@ def test_patch_legacy_component_configs_skips_non_legacy_pipeline_class(tmp_path
     _patch_legacy_component_configs(staging_root)
 
     assert not (unet_dir / "config.json").exists()
+
+
+def test_vendored_vae_configs_carry_scaling_factor() -> None:
+    # Sin scaling_factor, optimum lo inventa como 2**(len(block_out_channels)-1) == 8
+    # (modeling_diffusion.py:790/844) y el decode queda 43x mal escalado -> imagen lavada.
+    for component in ("vae_decoder", "vae_encoder"):
+        config_path = LEGACY_CONFIGS_ASSETS_DIR / component / "config.json"
+        payload = json.loads(config_path.read_text(encoding="utf-8"))
+        assert payload.get("scaling_factor") == 0.18215, (
+            f"{component}/config.json sin scaling_factor correcto: {payload.get('scaling_factor')!r}"
+        )
