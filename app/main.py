@@ -7,12 +7,17 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from app.api.auth_routes import router as auth_router
 from app.api.capability_routes import router as capability_router
 from app.api.routes import router as api_router
-from app.config import AUDIO_ENHANCE_MODES, get_settings
-from app.security import OriginGuardMiddleware
+from app.api.users_routes import router as users_router
+from app.config import AUDIO_ENHANCE_MODES, ensure_auth_secret, get_settings
+from app.security import LoopbackGuardMiddleware, OriginGuardMiddleware
 from app.services.audio_job_manager import AudioJobManager
 from app.services.audio_pipeline import AudioPipeline
+from app.services.auth.identity import LocalPasswordProvider
+from app.services.auth.quotas import QuotaService
+from app.services.auth.user_store import UserStore
 from app.services.capability_probe import CapabilityProbe
 from app.services.device_router import DeviceRouter
 from app.services.device_semaphores import DeviceSemaphores
@@ -47,6 +52,11 @@ FRONTEND_DIST_DIR = APP_DIR.parent / "frontend" / "dist"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
+    if settings.auth_mode == "multi":
+        ensure_auth_secret(settings)
+    user_store = UserStore(settings)
+    identity_provider = LocalPasswordProvider(user_store)
+    quota_service = QuotaService(settings)
     storage = StorageService(settings)
     engine = RealEsrganNcnnEngine(settings)
     media_tools = MediaTools(settings)
@@ -74,6 +84,7 @@ async def lifespan(app: FastAPI):
         upscale_engine=engine,
         onnx_upscale_engine=onnx_engine,
         devices=devices_service,
+        quota_service=quota_service,
     )
     # Shared across both managers (like device_semaphores) so an auto-routed
     # image job and an auto-routed video job never pick the same free
@@ -87,6 +98,7 @@ async def lifespan(app: FastAPI):
         registry=model_registry,
         devices=devices_service,
         device_router=device_router,
+        quota_service=quota_service,
     )
     video_upscaler = VideoUpscaler(
         settings,
@@ -109,6 +121,7 @@ async def lifespan(app: FastAPI):
         registry=model_registry,
         devices=devices_service,
         device_router=device_router,
+        quota_service=quota_service,
     )
     audio_pipeline = AudioPipeline(settings, audio_enhancers, restorers)
     audio_job_manager = AudioJobManager(
@@ -116,7 +129,9 @@ async def lifespan(app: FastAPI):
         audio_pipeline,
         device_semaphores,
         devices=devices_service,
+        quota_service=quota_service,
     )
+    quota_service.attach_managers(job_manager, video_job_manager, audio_job_manager, generation_job_manager)
     retention_sweeper = RetentionSweeper(
         settings, job_manager, video_job_manager, audio_job_manager,
         generation_job_manager=generation_job_manager,
@@ -157,6 +172,9 @@ async def lifespan(app: FastAPI):
     app.state.model_installer = model_installer
     app.state.generation_job_manager = generation_job_manager
     app.state.generation_installer = generation_installer
+    app.state.user_store = user_store
+    app.state.identity_provider = identity_provider
+    app.state.quota_service = quota_service
     try:
         yield
     finally:
@@ -210,6 +228,9 @@ def configure_web_routes(app: FastAPI, frontend_dist: Path = FRONTEND_DIST_DIR) 
 settings = get_settings()
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
 app.add_middleware(OriginGuardMiddleware, allowed_origins=settings.allowed_origin_values)
+app.add_middleware(LoopbackGuardMiddleware, auth_mode=settings.auth_mode)
 app.include_router(api_router)
 app.include_router(capability_router)
+app.include_router(auth_router)
+app.include_router(users_router)
 configure_web_routes(app)
