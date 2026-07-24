@@ -33,6 +33,14 @@ const CPU_ONLY_DEVICES: DevicesResponse = {
   defaultDeviceId: "cpu",
 };
 
+const MIXED_DEVICES: DevicesResponse = {
+  devices: [
+    { id: "cpu", kind: "cpu", name: "CPU", backend: "cpu" },
+    { id: "dml:0", kind: "gpu", name: "AMD Radeon RX 7900", backend: "directml" },
+  ],
+  defaultDeviceId: "cpu",
+};
+
 const UPSCALE_MODELS: ModelsResponse = {
   models: [
     {
@@ -207,6 +215,45 @@ describe("GeneratePanel", () => {
     await waitFor(() => expect(generationService.createGenerationJob).toHaveBeenCalledTimes(2));
     expect(vi.mocked(generationService.createGenerationJob).mock.calls[1][0]).toEqual(
       expect.objectContaining({ upscaleModelName: "RealESRGAN x4plus", upscaleModelId: null, upscaleScale: 3 }),
+    );
+  });
+
+  it("does not offer the Auto device option (the generation backend rejects device='auto')", async () => {
+    renderPanel();
+    await fillPromptAndModel();
+
+    expect(await screen.findByRole("radio", { name: /AMD Radeon RX 7900/ })).toBeInTheDocument();
+    const deviceOptionValues = screen.getAllByRole("radio").map((radio) => radio.getAttribute("value"));
+    expect(deviceOptionValues).not.toContain("auto");
+  });
+
+  it("clears the stale CPU-only warning once the device changes away from CPU, and submits directly", async () => {
+    vi.mocked(generationService.createGenerationJob).mockResolvedValue({ ...BASE_JOB });
+    vi.mocked(generationService.getGenerationJob).mockResolvedValue({ ...BASE_JOB });
+
+    renderPanel(CPU_ONLY_CAPABILITIES, MIXED_DEVICES);
+    await fillPromptAndModel();
+
+    const submitButton = await screen.findByRole("button", { name: /^generate$/i });
+    await waitFor(() => expect(submitButton).not.toBeDisabled());
+    fireEvent.click(submitButton);
+
+    expect(
+      await screen.findByText("No se detectó GPU compatible (DirectX 12). Generar en CPU tarda varios minutos por imagen. ¿Continuar igual?"),
+    ).toBeInTheDocument();
+    expect(generationService.createGenerationJob).not.toHaveBeenCalled();
+
+    fireEvent.click(await screen.findByRole("radio", { name: /AMD Radeon RX 7900/ }));
+
+    expect(
+      screen.queryByText("No se detectó GPU compatible (DirectX 12). Generar en CPU tarda varios minutos por imagen. ¿Continuar igual?"),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(submitButton);
+
+    await waitFor(() => expect(generationService.createGenerationJob).toHaveBeenCalled());
+    expect(vi.mocked(generationService.createGenerationJob).mock.calls[0][0]).toEqual(
+      expect.objectContaining({ device: "dml:0" }),
     );
   });
 });

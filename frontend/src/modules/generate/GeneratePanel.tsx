@@ -6,7 +6,7 @@ import { JobCard } from "../../components/JobCard";
 import { ModelPicker } from "../../components/ModelPicker";
 import { useGenerationCapabilities, useGenerationJob, type GenerationJobPhase } from "../../hooks/useGenerationJob";
 import type { CreateGenerationJobParams } from "../../services/generation";
-import type { GenerationModelSummary, ModelResponse } from "../../lib/apiTypes";
+import type { DeviceInfoResponse, GenerationModelSummary, ModelResponse } from "../../lib/apiTypes";
 
 const SIZE_OPTIONS = [256, 384, 512, 640, 768, 896, 1024];
 const UPSCALE_SCALE_OPTIONS = [2, 3, 4];
@@ -188,6 +188,14 @@ export function GeneratePanel() {
     setAutoUpscale(event.target.checked);
   }
 
+  // A device change invalidates any already-armed CPU-only confirmation --
+  // otherwise switching from cpu to a GPU device after arming would leave a
+  // stale warning on screen for a device that no longer needs confirming.
+  function handleDeviceChange(selected: DeviceInfoResponse) {
+    setDevice(selected.id);
+    setCpuConfirmPending(false);
+  }
+
   const canSubmit = prompt.trim() !== "" && modelId !== null && !isJobBusy(phase);
 
   return (
@@ -275,7 +283,7 @@ export function GeneratePanel() {
             />
           </div>
         </div>
-        <DevicePicker value={device} onChange={(selected) => setDevice(selected.id)} requiresGpu={false} />
+        <DevicePicker value={device} onChange={handleDeviceChange} requiresGpu={false} allowAuto={false} />
         <div className="flex flex-col gap-3 rounded border border-border bg-surface p-3">
           <label className="flex items-center gap-2 text-sm text-text">
             <input
@@ -310,7 +318,9 @@ export function GeneratePanel() {
           )}
         </div>
         <div className="flex flex-col gap-2">
-          {cpuConfirmPending && <CpuConfirmBanner onConfirm={handleGenerate} onCancel={handleCancelCpuConfirm} />}
+          {cpuConfirmPending && needsCpuConfirm && (
+            <CpuConfirmBanner onConfirm={handleGenerate} onCancel={handleCancelCpuConfirm} />
+          )}
           <button
             type="button"
             onClick={handleGenerate}
