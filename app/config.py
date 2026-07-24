@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import os
+import secrets
 from functools import lru_cache
 from pathlib import Path
 from typing import TypedDict
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.services.json_store import write_text_atomically
 
 
 def _logical_cpus() -> int:
@@ -67,6 +70,12 @@ UPSCALE_BACKEND_ONNX = "onnx"
 UPSCALE_BACKENDS = frozenset({UPSCALE_BACKEND_AUTO, UPSCALE_BACKEND_NCNN, UPSCALE_BACKEND_ONNX})
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+AUTH_MODE_OFF = "off"
+AUTH_MODE_MULTI = "multi"
+AUTH_MODES = frozenset({AUTH_MODE_OFF, AUTH_MODE_MULTI})
+
+ENV_FILE_PATH = PROJECT_ROOT / ".env"
 
 
 def resolve_against_project_root(path_str: str) -> Path:
@@ -424,6 +433,10 @@ class Settings(BaseSettings):
     # add) -- bounds how long the backend waits on the elevated child process.
     capability_fix_timeout_seconds: float = Field(default=120.0, alias="CAPABILITY_FIX_TIMEOUT_SECONDS")
 
+    auth_mode: str = Field(default=AUTH_MODE_OFF, alias="AUTH_MODE")
+    auth_secret: str | None = Field(default=None, alias="AUTH_SECRET")
+    auth_dir: str = Field(default="auth", alias="AUTH_DIR")
+
     @field_validator("per_device_gpu_concurrency", "cpu_concurrency", "max_concurrent_jobs")
     @classmethod
     def _validate_concurrency_at_least_one(cls, value: int) -> int:
@@ -500,6 +513,13 @@ class Settings(BaseSettings):
             raise ValueError("AUDIOSR_DDIM_STEPS must be between 1 and 500")
         return value
 
+    @field_validator("auth_mode")
+    @classmethod
+    def _validate_auth_mode(cls, value: str) -> str:
+        if value not in AUTH_MODES:
+            raise ValueError(f"AUTH_MODE must be one of {sorted(AUTH_MODES)}")
+        return value
+
     @model_validator(mode="after")
     def _apply_default_allowed_origins(self) -> "Settings":
         """Fills ALLOWED_ORIGINS from app_host/app_port when the caller left it unset.
@@ -546,6 +566,18 @@ class Settings(BaseSettings):
         # MODELS_DIR override still wins outright (Path.__truediv__ discards
         # the left side when the right side is absolute).
         return self.runtime_path / self.models_dir
+
+    @property
+    def auth_path(self) -> Path:
+        return self.runtime_path / self.auth_dir
+
+    @property
+    def users_file_path(self) -> Path:
+        return self.auth_path / "users.json"
+
+    @property
+    def usage_file_path(self) -> Path:
+        return self.auth_path / "usage.json"
 
     @property
     def builtin_onnx_path(self) -> Path:
@@ -699,6 +731,22 @@ class Settings(BaseSettings):
         if option:
             return option["engine_name"]
         return model_name
+
+
+def _append_env_var(env_path: Path, key: str, value: str) -> None:
+    existing = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
+    if existing and not existing.endswith("\n"):
+        existing += "\n"
+    write_text_atomically(env_path, f"{existing}{key}={value}\n")
+
+
+def ensure_auth_secret(settings: Settings) -> str:
+    if settings.auth_secret:
+        return settings.auth_secret
+    secret = secrets.token_hex(32)
+    _append_env_var(ENV_FILE_PATH, "AUTH_SECRET", secret)
+    settings.auth_secret = secret
+    return secret
 
 
 @lru_cache(maxsize=1)
