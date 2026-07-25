@@ -35,6 +35,20 @@ def test_patch_hf_token_persists(client, tmp_path, monkeypatch) -> None:
     assert "HF_TOKEN=hf_xyz" in env_path.read_text(encoding="utf-8")
 
 
+def test_patch_rebar_confirmed_persists(client, tmp_path, monkeypatch) -> None:
+    from app.services import settings_service
+
+    env_path = tmp_path / ".env"
+    monkeypatch.setattr(settings_service, "ENV_FILE_PATH", env_path)
+    response = client.patch(
+        "/api/v1/settings",
+        json={"key": "rebar_confirmed", "value": "true"},
+    )
+    assert response.status_code == 200
+    assert response.json() == {"key": "rebar_confirmed"}
+    assert "REBAR_CONFIRMED=true" in env_path.read_text(encoding="utf-8")
+
+
 def test_patch_hf_token_rejects_env_file_injection(client, tmp_path, monkeypatch) -> None:
     from app.services import settings_service
 

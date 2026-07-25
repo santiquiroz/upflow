@@ -29,8 +29,8 @@ def clear_live_settings_registry():
     settings_service._LIVE_SETTINGS.clear()
 
 
-def test_whitelist_only_contains_hf_token() -> None:
-    assert EDITABLE_SETTINGS_WHITELIST == frozenset({"hf_token"})
+def test_whitelist_contains_hf_token_and_rebar_confirmed() -> None:
+    assert EDITABLE_SETTINGS_WHITELIST == frozenset({"hf_token", "rebar_confirmed"})
 
 
 def test_update_setting_rejects_key_outside_whitelist(env_file: Path) -> None:
@@ -139,6 +139,12 @@ def test_concurrent_updates_do_not_corrupt_env(env_file: Path) -> None:
 
 def test_editable_settings_status_reports_configured_flag() -> None:
     configured = editable_settings_status(Settings(_env_file=None, HF_TOKEN="x"))
-    assert configured == [{"key": "hf_token", "configured": True}]
+    assert configured == [
+        {"key": "hf_token", "configured": True},
+        {"key": "rebar_confirmed", "configured": False},
+    ]
     empty = editable_settings_status(Settings(_env_file=None))
-    assert empty == [{"key": "hf_token", "configured": False}]
+    assert empty == [
+        {"key": "hf_token", "configured": False},
+        {"key": "rebar_confirmed", "configured": False},
+    ]

@@ -136,9 +136,28 @@ try {{
     # machine), silently degrading every such disk to "unavailable" even
     # when the real state IS determinable. -like with a trailing wildcard
     # matches both the plain and suffixed forms.
-    $pnp = Get-PnpDevice -Class DiskDrive -ErrorAction Stop | Where-Object {{ $_.FriendlyName -like "$($disk.FriendlyName)*" }} | Select-Object -First 1
-    if (-not $pnp) {{ throw "No matching PnP disk device found for '$($disk.FriendlyName)'" }}
-    $regPath = "HKLM:\\SYSTEM\\CurrentControlSet\\Enum\\$($pnp.InstanceId)\\Device Parameters\\Disk"
+    $candidates = @(Get-PnpDevice -Class DiskDrive -ErrorAction Stop | Where-Object {{ $_.Status -eq 'OK' -and $_.FriendlyName -like "$($disk.FriendlyName)*" }})
+    if (-not $candidates) {{ throw "No matching PnP disk device found for '$($disk.FriendlyName)'" }}
+    $pnp = $null
+    $regPath = $null
+    foreach ($candidate in $candidates) {{
+        $candidateRegPath = "HKLM:\\SYSTEM\\CurrentControlSet\\Enum\\$($candidate.InstanceId)\\Device Parameters\\Disk"
+        if (Test-Path $candidateRegPath) {{
+            $pnp = $candidate
+            $regPath = $candidateRegPath
+            break
+        }}
+    }}
+    if (-not $pnp) {{
+        $pnp = $candidates | Select-Object -First 1
+        $regPath = "HKLM:\\SYSTEM\\CurrentControlSet\\Enum\\$($pnp.InstanceId)\\Device Parameters\\Disk"
+    }}
+    if (-not (Test-Path $regPath)) {{
+        # Windows only creates this policy key after the policy is changed.
+        # Until then, fixed disks use the Windows default: write caching enabled.
+        [PSCustomObject]@{{ ok = $true; diskName = $disk.FriendlyName; writeCacheEnabled = $true; defaultPolicy = $true }} | ConvertTo-Json -Compress
+        return
+    }}
     $cache = (Get-ItemProperty -Path $regPath -Name "UserWriteCacheSetting" -ErrorAction Stop).UserWriteCacheSetting
     [PSCustomObject]@{{ ok = $true; diskName = $disk.FriendlyName; writeCacheEnabled = [bool]$cache }} | ConvertTo-Json -Compress
 }} catch {{
@@ -169,8 +188,17 @@ def parse_disk_write_cache_json(raw_stdout: str) -> Lever:
     if not payload.get("ok"):
         return Lever(lever_id, label, LeverStatus.unavailable, str(payload.get("error", "unknown error")), False)
 
-    enabled = bool(payload.get("writeCacheEnabled"))
     disk_name = payload.get("diskName", "disk")
+    if payload.get("defaultPolicy") is True:
+        return Lever(
+            lever_id,
+            label,
+            LeverStatus.ok,
+            f"Write caching activo (política default de Windows) en {disk_name}",
+            False,
+        )
+
+    enabled = bool(payload.get("writeCacheEnabled"))
     if enabled:
         return Lever(lever_id, label, LeverStatus.ok, f"Write caching enabled on {disk_name}", False)
     return Lever(
@@ -236,6 +264,15 @@ def parse_defender_exclusion_json(raw_stdout: str, runtime_path: str) -> Lever:
     for p in exclusions_raw:
         if not isinstance(p, str):
             return Lever(lever_id, label, LeverStatus.unavailable, "Defender exclusions contains non-string values", False)
+        if p.strip().startswith("N/A:"):
+            return Lever(
+                lever_id,
+                label,
+                LeverStatus.needs_admin,
+                "Defender oculta la lista de exclusiones a procesos sin elevación — no se puede verificar el estado "
+                "real; si aplicaste el Fix antes, es probable que siga activa. El Fix se puede re-aplicar sin riesgo.",
+                True,
+            )
         if p:
             exclusions.add(_normalize_path_for_compare(p))
 
@@ -292,6 +329,9 @@ $disk = Get-Disk -Number $partition.DiskNumber -ErrorAction Stop
 $pnp = Get-PnpDevice -Class DiskDrive -ErrorAction Stop | Where-Object {{ $_.FriendlyName -like "$($disk.FriendlyName)*" }} | Select-Object -First 1
 if (-not $pnp) {{ throw "No matching PnP disk device found for '$($disk.FriendlyName)'" }}
 $regPath = "HKLM:\\SYSTEM\\CurrentControlSet\\Enum\\$($pnp.InstanceId)\\Device Parameters\\Disk"
+if (-not (Test-Path $regPath)) {{
+    New-Item -Path $regPath -Force | Out-Null
+}}
 Set-ItemProperty -Path $regPath -Name "UserWriteCacheSetting" -Value 1
 """.strip()
 

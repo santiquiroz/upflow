@@ -361,6 +361,7 @@ class Settings(BaseSettings):
     # app/services/device_router.py for the actual routing decision. Off by
     # default: existing per-job device selection behavior is unchanged.
     enable_auto_route: bool = Field(default=False, alias="ENABLE_AUTO_ROUTE")
+    rebar_confirmed: bool = Field(default=False, alias="REBAR_CONFIRMED")
 
     models_dir: str = Field(default="models", alias="MODELS_DIR")
 
