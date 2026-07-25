@@ -8,22 +8,25 @@ import pytest
 
 from app.api.routes import job_to_response, video_job_to_response
 from app.config import Settings
-from app.models import JobStatus, UpscaleJob, VideoUpscaleJob
+from app.models import ConversionJob, JobStatus, UpscaleJob, VideoUpscaleJob
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.engines.base import UpscaleEngine
 from app.services.job_manager import JobManager
 from app.services.progress import (
     Stage,
+    advance_conversion_stage,
     advance_generation_stage,
     advance_image_stage,
     advance_video_stage,
     apply_generation_step_progress,
     apply_image_tile_progress,
     apply_stage_transition,
+    build_conversion_stages,
     build_generation_stages,
     build_image_stages,
     build_video_stages,
     compute_progress,
+    complete_conversion_stages,
     complete_generation_stages,
     complete_image_stages,
     complete_video_stages,
@@ -1195,3 +1198,44 @@ def test_build_generation_stages_weights_generating_and_upscaling() -> None:
     assert [stage.key for stage in stages] == ["generating", "upscaling"]
     assert stages[0].weight == pytest.approx(0.85)
     assert stages[1].weight == pytest.approx(0.15)
+
+
+def test_build_conversion_stages_one_export_stage_per_component() -> None:
+    stages = build_conversion_stages(["unet", "vae_decoder", "text_encoder"])
+    keys = [stage.key for stage in stages]
+    assert keys == [
+        "downloading",
+        "exporting:unet",
+        "exporting:vae_decoder",
+        "exporting:text_encoder",
+        "validating",
+    ]
+    assert abs(sum(stage.weight for stage in stages) - 1.0) < 1e-9
+
+
+def test_build_conversion_stages_without_components_uses_single_export_stage() -> None:
+    # Antes de leer model_index.json no se conocen los componentes.
+    keys = [stage.key for stage in build_conversion_stages([])]
+    assert keys == ["downloading", "exporting", "validating"]
+
+
+def test_advance_conversion_stage_writes_job_metadata() -> None:
+    job = ConversionJob(repo_id="amd/x")
+    advance_conversion_stage(job, ["unet"], "exporting:unet")
+    assert job.metadata["stage"] == "exporting:unet"
+    assert job.metadata["stages"][0]["status"] == "done"      # downloading
+    assert job.metadata["stages"][1]["status"] == "active"    # exporting:unet
+    assert 0.0 < job.metadata["progress"] < 1.0
+
+
+def test_complete_conversion_stages_marks_all_done() -> None:
+    job = ConversionJob(repo_id="amd/x")
+    complete_conversion_stages(job, ["unet"])
+    assert job.metadata["progress"] == 1.0
+    assert all(stage["status"] == "done" for stage in job.metadata["stages"])
+
+
+def test_conversion_job_defaults() -> None:
+    job = ConversionJob(repo_id="amd/x")
+    assert job.status == JobStatus.queued
+    assert job.model_id is None and job.error is None

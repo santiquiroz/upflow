@@ -160,3 +160,16 @@ class GenerationJob:
     output_path: Path | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     owner_id: str | None = None
+
+
+@dataclass(slots=True)
+class ConversionJob:
+    repo_id: str
+    id: str = field(default_factory=lambda: uuid4().hex)
+    status: JobStatus = JobStatus.queued
+    created_at: datetime = field(default_factory=utc_now)
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    error: str | None = None
+    model_id: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
