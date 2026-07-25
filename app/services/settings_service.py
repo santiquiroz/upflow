@@ -15,6 +15,10 @@ EDITABLE_SETTINGS_WHITELIST = frozenset({"hf_token"})
 # Serializa read-modify-write del .env entre requests concurrentes.
 _ENV_WRITE_LOCK = threading.Lock()
 
+# Instancias retenidas por servicios de vida larga. El lifespan registra la
+# suya explícitamente para que los updates no dependan del estado de la cache.
+_LIVE_SETTINGS: list[Settings] = []
+
 
 class SettingNotEditableError(ValueError):
     pass
@@ -29,12 +33,21 @@ class EditableSettingStatus(TypedDict):
     configured: bool
 
 
+def register_live_settings(settings: Settings) -> None:
+    if settings not in _LIVE_SETTINGS:
+        _LIVE_SETTINGS.append(settings)
+
+
 def _env_alias(key: str) -> str:
     field = Settings.model_fields[key]
     return field.alias or key.upper()
 
 
 def _validate_value(key: str, value: str) -> None:
+    if any(ch in value for ch in ("\n", "\r", "\x00")):
+        raise SettingValueError(
+            f"Valor inválido para {key}: no puede contener saltos de línea ni caracteres de control."
+        )
     # Reusa la validación pydantic real del campo: un valor inválido para el
     # tipo del campo revienta acá con 400, nunca llega al .env.
     try:
@@ -69,12 +82,13 @@ def update_setting(key: str, value: str) -> None:
         # update-si-existe-o-append, con la misma escritura atómica.
         existing = ENV_FILE_PATH.read_text(encoding="utf-8") if ENV_FILE_PATH.exists() else ""
         write_text_atomically(ENV_FILE_PATH, _render_env_text(existing, alias, value))
-    # Los servicios de vida larga (HfClient, installers) guardan la instancia
-    # de Settings del lifespan -- que es la cacheada en get_settings() antes
-    # del clear. Mutarla propaga el valor nuevo sin reiniciar (mismo patrón
-    # que ensure_auth_secret con auth_secret).
-    setattr(get_settings(), key, value)
-    get_settings.cache_clear()
+        # Los servicios de vida larga (HfClient, installers) guardan la
+        # instancia registrada por el lifespan. Se muta directamente sin
+        # depender de qué instancia esté cacheada después de updates previos.
+        for live in _LIVE_SETTINGS:
+            setattr(live, key, value)
+        setattr(get_settings(), key, value)
+        get_settings.cache_clear()
 
 
 def editable_settings_status(settings: Settings) -> list[EditableSettingStatus]:

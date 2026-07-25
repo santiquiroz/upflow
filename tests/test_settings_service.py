@@ -10,6 +10,7 @@ from app.services.settings_service import (
     SettingNotEditableError,
     SettingValueError,
     editable_settings_status,
+    register_live_settings,
     update_setting,
 )
 
@@ -19,6 +20,13 @@ def env_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     path = tmp_path / ".env"
     monkeypatch.setattr(settings_service, "ENV_FILE_PATH", path)
     return path
+
+
+@pytest.fixture(autouse=True)
+def clear_live_settings_registry():
+    settings_service._LIVE_SETTINGS.clear()
+    yield
+    settings_service._LIVE_SETTINGS.clear()
 
 
 def test_whitelist_only_contains_hf_token() -> None:
@@ -43,6 +51,14 @@ def test_update_setting_replaces_existing_line_preserving_others(env_file: Path)
     assert lines == ["APP_PORT=8090", "HF_TOKEN=hf_new", "DEFAULT_DEVICE=dml:0"]
 
 
+def test_update_setting_rejects_env_file_injection(env_file: Path) -> None:
+    original = "APP_PORT=8090\n"
+    env_file.write_text(original, encoding="utf-8")
+    with pytest.raises(SettingValueError, match="Valor inválido"):
+        update_setting("hf_token", "x\nAPP_HOST=evil")
+    assert env_file.read_text(encoding="utf-8") == original
+
+
 def test_update_setting_clears_get_settings_cache(env_file: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # get_settings lee env_file=".env" relativo al CWD -- se apunta el CWD al
     # tmp para que la lectura y la escritura miren el mismo archivo.
@@ -63,9 +79,24 @@ def test_update_setting_propagates_to_live_settings_instance(
     monkeypatch.delenv("HF_TOKEN", raising=False)
     get_settings.cache_clear()
     live_instance = get_settings()  # como hace main.py en el lifespan
+    register_live_settings(live_instance)
     assert live_instance.hf_token is None
     update_setting("hf_token", "hf_live")
     assert live_instance.hf_token == "hf_live"
+    get_settings.cache_clear()
+
+
+def test_update_setting_propagates_across_multiple_updates(
+    env_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(env_file.parent)
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    get_settings.cache_clear()
+    live = get_settings()
+    register_live_settings(live)
+    update_setting("hf_token", "token_A")
+    update_setting("hf_token", "token_B")
+    assert live.hf_token == "token_B"
     get_settings.cache_clear()
 
 

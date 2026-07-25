@@ -40,6 +40,7 @@ from app.services.model_installer import ModelInstaller
 from app.services.model_registry import ModelRegistry
 from app.services.onnx_cpu_fallback_probe import OnnxCpuFallbackProbe
 from app.services.retention_sweeper import RetentionSweeper
+from app.services.settings_service import register_live_settings
 from app.services.storage import StorageService
 from app.services.update_service import UpdateService
 from app.services.video_job_manager import VideoJobManager
@@ -52,6 +53,7 @@ FRONTEND_DIST_DIR = APP_DIR.parent / "frontend" / "dist"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
+    register_live_settings(settings)
     if settings.auth_mode == "multi":
         ensure_auth_secret(settings)
     user_store = UserStore(settings)

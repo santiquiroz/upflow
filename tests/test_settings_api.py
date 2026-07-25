@@ -33,3 +33,17 @@ def test_patch_hf_token_persists(client, tmp_path, monkeypatch) -> None:
     assert response.status_code == 200
     assert response.json() == {"key": "hf_token"}
     assert "HF_TOKEN=hf_xyz" in env_path.read_text(encoding="utf-8")
+
+
+def test_patch_hf_token_rejects_env_file_injection(client, tmp_path, monkeypatch) -> None:
+    from app.services import settings_service
+
+    env_path = tmp_path / ".env"
+    monkeypatch.setattr(settings_service, "ENV_FILE_PATH", env_path)
+    response = client.patch(
+        "/api/v1/settings",
+        json={"key": "hf_token", "value": "x\nAPP_HOST=evil"},
+    )
+    assert response.status_code == 400
+    assert "Valor inválido" in response.json()["detail"]
+    assert not env_path.exists()
