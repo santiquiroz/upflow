@@ -4,12 +4,14 @@ import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as api from "../../lib/api";
 import type { DevicesResponse, EngineInfoResponse, HealthResponse } from "../../lib/apiTypes";
+import * as settingsService from "../../services/settings";
 import { SettingsPage } from "./SettingsPage";
 
 vi.mock("../../lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/api")>();
   return { ...actual, getEngineInfo: vi.fn(), getHealth: vi.fn(), getDevices: vi.fn() };
 });
+vi.mock("../../services/settings", () => ({ fetchEditableSettings: vi.fn(), patchSetting: vi.fn() }));
 
 const ENGINE_INFO: EngineInfoResponse = {
   engine: "realesrgan-ncnn",
@@ -43,6 +45,9 @@ function renderPage(engine: EngineInfoResponse = ENGINE_INFO) {
   vi.mocked(api.getEngineInfo).mockResolvedValue(engine);
   vi.mocked(api.getHealth).mockResolvedValue(HEALTH);
   vi.mocked(api.getDevices).mockResolvedValue(DEVICES);
+  vi.mocked(settingsService.fetchEditableSettings).mockResolvedValue({
+    settings: [{ key: "hf_token", configured: false }],
+  });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   function Wrapper({ children }: { children: ReactNode }) {
     return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
@@ -54,14 +59,16 @@ afterEach(() => {
   vi.mocked(api.getEngineInfo).mockReset();
   vi.mocked(api.getHealth).mockReset();
   vi.mocked(api.getDevices).mockReset();
+  vi.mocked(settingsService.fetchEditableSettings).mockReset();
+  vi.mocked(settingsService.patchSetting).mockReset();
 });
 
 describe("SettingsPage", () => {
-  it("shows a clear explanation that settings are read-only and come from .env", () => {
+  it("explains that most .env settings are read-only and credentials are editable", () => {
     renderPage();
 
     expect(screen.getByText(/\.env configuration/i)).toBeInTheDocument();
-    expect(screen.getByText(/nothing on this page is editable/i)).toBeInTheDocument();
+    expect(screen.getByText(/credentials section below is editable/i)).toBeInTheDocument();
   });
 
   it("shows the read-only engine configuration once loaded", async () => {
@@ -104,6 +111,9 @@ describe("SettingsPage", () => {
     vi.mocked(api.getHealth).mockResolvedValue(HEALTH);
     vi.mocked(api.getDevices).mockResolvedValue(DEVICES);
     vi.mocked(api.getEngineInfo).mockRejectedValue(new Error("network down"));
+    vi.mocked(settingsService.fetchEditableSettings).mockResolvedValue({
+      settings: [{ key: "hf_token", configured: false }],
+    });
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<SettingsPage />, {
       wrapper: ({ children }: { children: ReactNode }) => (

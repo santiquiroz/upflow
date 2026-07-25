@@ -3,6 +3,7 @@ import { Info } from "lucide-react";
 import { getEngineInfo, getHealth } from "../../lib/api";
 import type { EngineInfoResponse, HealthResponse } from "../../lib/apiTypes";
 import { DeviceDefault } from "../models/DeviceDefault";
+import { EditableSettingsSection } from "./EditableSettingsSection";
 import { OptimizationCenter } from "./OptimizationCenter";
 
 function AvailabilityRow({ label, available }: { label: string; available: boolean }) {
@@ -69,11 +70,11 @@ function EnvExplanationNote() {
     <div className="flex items-start gap-2 rounded border border-border bg-surface-2 px-3 py-2 text-xs text-text-faint">
       <Info aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
       <span>
-        These values come from the app&apos;s .env configuration, set at install time. There is no settings-write API
-        yet, so nothing on this page is editable from the UI — including audio enhance, frame interpolation, output
-        retention (TTL), upload size limits, and auto-routing queued jobs to a free GPU (ENABLE_AUTO_ROUTE), which
-        are configured but not exposed by the API. Pick &quot;Auto&quot; in a job&apos;s Device section to opt into
-        auto-routing per job regardless of this setting.
+        Most values come from the app&apos;s .env configuration, set at install time, and are read-only here; the
+        Credentials section below is editable. Audio enhance, frame interpolation, output retention (TTL), upload
+        size limits, and auto-routing queued jobs to a free GPU (ENABLE_AUTO_ROUTE) are configured but not exposed by
+        the settings API. Pick &quot;Auto&quot; in a job&apos;s Device section to opt into auto-routing per job
+        regardless of this setting.
       </span>
     </div>
   );
@@ -119,6 +120,7 @@ export function SettingsPage() {
       <div className="grid grid-cols-2 gap-4 max-[900px]:grid-cols-1">
         <EngineSectionStatus query={engineQuery} />
         <CapacitySectionStatus query={healthQuery} />
+        <EditableSettingsSection />
         <DeviceDefault />
       </div>
       <OptimizationCenter />

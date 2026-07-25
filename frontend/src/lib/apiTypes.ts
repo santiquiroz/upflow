@@ -407,3 +407,12 @@ export interface OwnedJobSummary {
 export interface UserJobsResponse {
   jobs: OwnedJobSummary[];
 }
+
+export interface EditableSettingStatus {
+  key: string;
+  configured: boolean;
+}
+
+export interface EditableSettingsResponse {
+  settings: EditableSettingStatus[];
+}
