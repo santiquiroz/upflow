@@ -15,7 +15,7 @@
 - **Imports de optimum/torch siempre perezosos** (dentro de funciones), nunca a nivel de módulo en `app/services/` — patrón existente en `generation_onnx.py`.
 - Mensajes de error orientados a usuario en **español**, accionables, nunca stacktrace crudo (patrón `CUDA_ONLY_MESSAGE`/`VRAM_MESSAGE` de `generation_onnx.py`).
 - Commits en español, formato convencional (`feat:`/`fix:`/`docs:`/`refactor:`/`test:`), SIN `Co-Authored-By`.
-- Subproyectos B (admisión por capacidad) y C (multiusuario/auth) NO están mergeados en master: no dependas de `DeviceSemaphores` con contabilidad de VRAM ni de `Permission.settings_write`/`json_store.py`. Donde el spec los menciona, este plan indica el equivalente autocontenido.
+- Subproyecto B (admisión por capacidad) NO está mergeado: no dependas de contabilidad de VRAM. Subproyecto C (multiusuario/auth) SÍ está mergeado (PR #2 en origin/master): USAR `app/services/json_store.py::write_text_atomically`, `app.config.ENV_FILE_PATH`, y gatear los endpoints nuevos con `Depends(require(Permission...))` de `app.api.auth_deps` siguiendo el patrón de los vecinos. Con `AUTH_MODE=off` (default, y el de los tests) los gates pasan solos — los tests del plan no necesitan fixtures de auth.
 - Tests backend: `pytest` desde la raíz del repo (`.venv\Scripts\python -m pytest`). Tests frontend: `npm test -- --run <archivo>` desde `frontend/`.
 - La suite entera debe quedar verde al final de cada task (`.venv\Scripts\python -m pytest -q` y `cd frontend && npx vitest run`).
 
@@ -628,7 +628,7 @@ git commit -m "feat: buscador de modelos de generación en la página Models"
 - Produces: `EDITABLE_SETTINGS_WHITELIST = frozenset({"hf_token"})`; `update_setting(key: str, value: str) -> None`; `editable_settings_status(settings: Settings) -> list[EditableSettingStatus]`; excepciones `SettingNotEditableError(ValueError)` y `SettingValueError(ValueError)`; endpoints `GET /api/v1/settings` y `PATCH /api/v1/settings`.
 - El frontend (Task 7) consume `{ settings: [{ key: "hf_token", configured: bool }] }` y `PATCH {key, value} -> 200 {key}`.
 
-Contexto: el spec referencia `_append_env_var`/`write_text_atomically` del subproyecto C — C NO está mergeado. `settings_service.py` es autocontenido: incluye su propio `_write_text_atomically` (mkstemp mismo-directorio + `Path.replace`, byte-idéntico en semántica al `json_store.write_text_atomically` de C; al mergear C, dedup en un refactor trivial). Gate de permisos: sin protección en el MVP (equivalente a `AUTH_MODE=off`), con comentario indicando dónde enchufa `Permission.settings_write` cuando C aterrice.
+Contexto: el subproyecto C YA está mergeado en master — `app/services/json_store.py::write_text_atomically` y `app.config.ENV_FILE_PATH` existen y se REUSAN (no duplicar). El spec pide extender el patrón `_append_env_var` de `config.py` (append-si-falta) a update-si-existe-o-append: esa lógica vive en `settings_service.py`. Gate de permisos: `GET /settings` → `Permission.settings_read`, `PATCH /settings` → `Permission.settings_write` (mismo patrón que `capability_routes.py` líneas 48/57/84).
 
 - [ ] **Step 1: Escribir los tests que fallan (`tests/test_settings_service.py`)**
 
@@ -730,22 +730,17 @@ Expected: FAIL con `ModuleNotFoundError: No module named 'app.services.settings_
 ```python
 from __future__ import annotations
 
-import tempfile
 import threading
-from pathlib import Path
 from typing import TypedDict
 
 from pydantic import ValidationError
 
-from app.config import PROJECT_ROOT, Settings, get_settings
+from app.config import ENV_FILE_PATH, Settings, get_settings
+from app.services.json_store import write_text_atomically
 
 # Primer campo real de la whitelist. Crece en subproyectos futuros sin tocar
 # el mecanismo (spec 2026-07-25-generation-third-party-models-design.md §5).
 EDITABLE_SETTINGS_WHITELIST = frozenset({"hf_token"})
-
-# Mismo path que usa el proceso (Settings lee env_file=".env" con CWD=raíz del
-# proyecto; uvicorn/pyinstaller arrancan desde ahí).
-ENV_FILE_PATH = PROJECT_ROOT / ".env"
 
 # Serializa read-modify-write del .env entre requests concurrentes.
 _ENV_WRITE_LOCK = threading.Lock()
@@ -794,30 +789,16 @@ def _render_env_text(existing_text: str, alias: str, value: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _write_text_atomically(path: Path, text: str) -> None:
-    # Duplicado deliberado de json_store.write_text_atomically (subproyecto C,
-    # sin mergear): mkstemp en el MISMO directorio para que replace sea rename
-    # atómico, nunca copia cross-device. Dedup cuando C aterrice.
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
-    tmp_path = Path(tmp_name)
-    try:
-        with open(descriptor, "w", encoding="utf-8") as handle:
-            handle.write(text)
-        tmp_path.replace(path)
-    except BaseException:
-        tmp_path.unlink(missing_ok=True)
-        raise
-
-
 def update_setting(key: str, value: str) -> None:
     if key not in EDITABLE_SETTINGS_WHITELIST:
         raise SettingNotEditableError(f"El setting {key!r} no es editable desde la UI.")
     _validate_value(key, value)
     alias = _env_alias(key)
     with _ENV_WRITE_LOCK:
+        # Extiende _append_env_var de config.py (append-si-falta) a
+        # update-si-existe-o-append, con la misma escritura atómica.
         existing = ENV_FILE_PATH.read_text(encoding="utf-8") if ENV_FILE_PATH.exists() else ""
-        _write_text_atomically(ENV_FILE_PATH, _render_env_text(existing, alias, value))
+        write_text_atomically(ENV_FILE_PATH, _render_env_text(existing, alias, value))
     get_settings.cache_clear()
 
 
@@ -889,18 +870,23 @@ class UpdateSettingResponse(BaseModel):
 `app/api/routes.py` (al final, sección nueva; imports de `settings_service`):
 
 ```python
-# Sin gate de permisos en el MVP (subproyecto C sin mergear): mismo nivel de
-# protección que el resto de la app bajo AUTH_MODE=off. Cuando C aterrice,
-# este endpoint recibe Depends(require_permission(Permission.settings_write))
-# sin cambio de forma.
-@router.get("/settings", response_model=EditableSettingsResponse)
+# Gates con los permisos que C ya define (mismo patrón que capability_routes):
+# settings_read para leer, settings_write para escribir. Con AUTH_MODE=off el
+# usuario off-mode tiene todos los permisos y esto es transparente.
+@router.get(
+    "/settings", response_model=EditableSettingsResponse,
+    dependencies=[Depends(require(Permission.settings_read))],
+)
 async def get_editable_settings(settings: Settings = Depends(get_settings)) -> EditableSettingsResponse:
     return EditableSettingsResponse(
         settings=[EditableSettingStatusResponse(**item) for item in editable_settings_status(settings)]
     )
 
 
-@router.patch("/settings", response_model=UpdateSettingResponse)
+@router.patch(
+    "/settings", response_model=UpdateSettingResponse,
+    dependencies=[Depends(require(Permission.settings_write))],
+)
 async def patch_setting(payload: UpdateSettingRequest) -> UpdateSettingResponse:
     try:
         await asyncio.to_thread(update_setting, payload.key, payload.value)
@@ -998,7 +984,7 @@ export interface EditableSettingsResponse {
 }
 ```
 
-`services/settings.ts` (usa `apiGet` existente; agregar `apiPatchJson` a `lib/api.ts` calcado de `apiPostJson` con `method: "PATCH"`):
+`services/settings.ts` (`apiGet` y `apiPatchJson` YA existen en `lib/api.ts` — C agregó `apiPatchJson`; no crear otro):
 
 ```ts
 import { apiGet, apiPatchJson } from "../lib/api";
@@ -1671,7 +1657,10 @@ def get_generation_converter(request: Request) -> GenerationModelConverter:
     return request.app.state.generation_converter
 
 
-@router.post("/generation/models/convert", response_model=CreateConversionResponse, status_code=202)
+@router.post(
+    "/generation/models/convert", response_model=CreateConversionResponse, status_code=202,
+    dependencies=[Depends(require(Permission.models_install))],
+)
 async def convert_generation_model(
     payload: InstallModelRequest,
     converter: GenerationModelConverter = Depends(get_generation_converter),
@@ -1868,7 +1857,7 @@ En `_download_and_register`:
             return
 ```
 
-`routes.py` — los DOS builders de `InstallStatusResponse` (upscaler línea ~868 y generación línea ~991) agregan `conversion_id=job.conversion_id`; `schemas.py`:
+`routes.py` — los DOS builders de `InstallStatusResponse` (en `get_install_status` y `get_generation_install_status`) agregan `conversion_id=job.conversion_id`; `schemas.py`:
 
 ```python
 class InstallStatusResponse(BaseModel):
@@ -2062,4 +2051,4 @@ Documentado por el spec como validación manual, no CI:
 - **SDXL Turbo**: misma clase que SDXL — no hay tarea propia. Sus defaults de inferencia (steps bajos, guidance ~0) se eligen por job: `steps`/`guidance` ya son parámetros del request de generación. Documentado en el comentario del mapa (Task 2).
 - **SD3.5**: si el spike (Task 1) determina que `optimum-onnx==0.1.0` no expone la clase, se quita la entrada del mapa y se registra como fase futura en el findings doc — el resto del plan no cambia.
 - **B sin mergear**: la conversión no tiene admisión por capacidad; su única fase GPU (validación funcional) sí pasa por `device_semaphores` al reusar `validate_and_promote`. Zona ciega restante: RAM/CPU del export — aceptada (Task 10).
-- **C sin mergear**: `PATCH /settings` queda sin gate de permisos (comentario en el endpoint indica dónde enchufa `Permission.settings_write`); `_write_text_atomically` duplicado deliberado de `json_store.py` de C (dedup al mergear).
+- **C mergeado** (PR #2, verificado en origin/master): `GET/PATCH /settings` nacen gateados con `Permission.settings_read`/`settings_write`; `write_text_atomically` se importa de `app/services/json_store.py` (cero duplicación); `POST /generation/models/convert` gateado con `Permission.models_install` como sus vecinos. Bajo `AUTH_MODE=off` (default) todo esto es transparente.
