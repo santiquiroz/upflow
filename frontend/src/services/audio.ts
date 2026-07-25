@@ -37,6 +37,10 @@ export function cancelAudioJob(jobId: string): Promise<AudioJob> {
   return apiPost<AudioJob>(`/audio/jobs/${jobId}/cancel`);
 }
 
+export function listAudioJobs(all: boolean): Promise<{ jobs: AudioJob[] }> {
+  return apiGet<{ jobs: AudioJob[] }>(`/audio/jobs?all=${all}`);
+}
+
 export function fetchAudioCapabilities(): Promise<AudioCapabilities> {
   return apiGet<AudioCapabilities>("/audio/capabilities");
 }

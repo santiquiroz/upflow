@@ -143,6 +143,10 @@ export function getJob(jobId: string): Promise<JobResponse> {
   return apiGet<JobResponse>(`/jobs/${jobId}`);
 }
 
+export function listJobs(all: boolean): Promise<{ jobs: JobResponse[] }> {
+  return apiGet<{ jobs: JobResponse[] }>(`/jobs?all=${all}`);
+}
+
 export function cancelJob(jobId: string): Promise<JobResponse> {
   return apiPost<JobResponse>(`/jobs/${jobId}/cancel`);
 }
@@ -247,6 +251,10 @@ export function analyzeVideo(file: File): Promise<AnalyzeVideoResponse> {
 
 export function getVideoJob(jobId: string): Promise<VideoJobResponse> {
   return apiGet<VideoJobResponse>(`/video/jobs/${jobId}`);
+}
+
+export function listVideoJobs(all: boolean): Promise<{ jobs: VideoJobResponse[] }> {
+  return apiGet<{ jobs: VideoJobResponse[] }>(`/video/jobs?all=${all}`);
 }
 
 export function cancelVideoJob(jobId: string): Promise<VideoJobResponse> {

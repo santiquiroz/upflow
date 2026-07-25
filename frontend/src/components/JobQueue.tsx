@@ -1,5 +1,7 @@
 import { AlertTriangle, Ban, CheckCircle2, Clock, Download, Loader2, X } from "lucide-react";
 import { useState } from "react";
+import { useAllJobsView, type AllJobsEntry } from "../hooks/useAllJobs";
+import { useAuth } from "../hooks/useAuth";
 import { type JobQueueEntry, useJobQueue } from "../hooks/useJobQueue";
 import { isCancellableJobStatus, isTerminalJobStatus, jobKindLabel } from "../lib/jobStatus";
 import { IndeterminateProgressBar } from "./IndeterminateProgressBar";
@@ -174,8 +176,29 @@ function EmptyQueueState() {
   return <p className="text-sm text-text-faint">No active jobs.</p>;
 }
 
+function AllJobsRow({ entry }: { entry: AllJobsEntry }) {
+  return (
+    <li className="flex flex-col gap-1 rounded border border-border bg-surface-2 p-3">
+      <div className="flex items-start justify-between gap-2">
+        <span className="truncate text-xs text-text" title={entry.fileName}>
+          {entry.fileName}
+        </span>
+        <span className="text-[10px] uppercase tracking-wide text-text-faint">{jobKindLabel(entry.kind)}</span>
+      </div>
+      <div className="flex items-center justify-between text-[10px] text-text-faint">
+        <span>owner: {entry.ownerId ?? "—"}</span>
+        <span>{entry.status}</span>
+      </div>
+    </li>
+  );
+}
+
 export function JobQueue() {
   const { entries, dismiss, cancel, clearCompleted } = useJobQueue();
+  const { hasPermission } = useAuth();
+  const [viewAll, setViewAll] = useState(false);
+  const allJobsEntries = useAllJobsView(viewAll);
+  const canViewAll = hasPermission("jobs:read_all");
   const hasCompletedOrFailed = entries.some((entry) => isTerminalJobStatus(entry.status));
   const [detailJobId, setDetailJobId] = useState<string | null>(null);
   const detailEntry = entries.find((entry) => entry.id === detailJobId);
@@ -184,9 +207,25 @@ export function JobQueue() {
     <div className="flex h-full flex-col gap-3">
       <div className="flex items-center justify-between gap-2">
         <h2 className="font-heading text-xs font-semibold uppercase tracking-wide text-text-dim">Job Queue</h2>
-        <QueueCount count={entries.length} />
+        <QueueCount count={viewAll ? allJobsEntries.length : entries.length} />
       </div>
-      {entries.length === 0 ? (
+      {canViewAll && (
+        <label className="flex items-center gap-1.5 text-xs text-text-dim">
+          <input type="checkbox" checked={viewAll} onChange={(event) => setViewAll(event.target.checked)} />
+          Ver todos
+        </label>
+      )}
+      {viewAll ? (
+        allJobsEntries.length === 0 ? (
+          <EmptyQueueState />
+        ) : (
+          <ul className="flex flex-col gap-2 overflow-y-auto">
+            {allJobsEntries.map((entry) => (
+              <AllJobsRow key={`${entry.kind}-${entry.id}`} entry={entry} />
+            ))}
+          </ul>
+        )
+      ) : entries.length === 0 ? (
         <EmptyQueueState />
       ) : (
         <ul className="flex flex-col gap-2 overflow-y-auto">
@@ -201,7 +240,7 @@ export function JobQueue() {
           ))}
         </ul>
       )}
-      {hasCompletedOrFailed && (
+      {!viewAll && hasCompletedOrFailed && (
         <button
           type="button"
           onClick={clearCompleted}

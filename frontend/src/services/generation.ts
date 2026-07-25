@@ -59,6 +59,10 @@ export function cancelGenerationJob(jobId: string): Promise<GenerationJob> {
   return apiPost<GenerationJob>(`/generation/jobs/${jobId}/cancel`);
 }
 
+export function listGenerationJobs(all: boolean): Promise<{ jobs: GenerationJob[] }> {
+  return apiGet<{ jobs: GenerationJob[] }>(`/generation/jobs?all=${all}`);
+}
+
 export function fetchGenerationCapabilities(): Promise<GenerationCapabilities> {
   return apiGet<GenerationCapabilities>("/generation/capabilities");
 }
