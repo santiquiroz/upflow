@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { NavLink } from "react-router-dom";
+import { useAuth } from "../hooks/useAuth";
 import { NAV_ENTRIES } from "../lib/navigation";
 import { Header } from "./Header";
 import { JobQueue } from "./JobQueue";
@@ -21,6 +22,10 @@ function navLinkClassName({ isActive }: { isActive: boolean }): string {
 }
 
 export function AppShell({ children }: AppShellProps) {
+  const { hasPermission } = useAuth();
+  const visibleEntries = NAV_ENTRIES.filter(
+    (entry) => !entry.requiredPermission || hasPermission(entry.requiredPermission),
+  );
   return (
     <div className="flex h-screen flex-col">
       <UpdateBanner />
@@ -31,7 +36,7 @@ export function AppShell({ children }: AppShellProps) {
             <Header />
           </div>
           <nav className="flex flex-col gap-1">
-            {NAV_ENTRIES.map((entry) => {
+            {visibleEntries.map((entry) => {
               const Icon = entry.icon;
               return (
                 <NavLink key={entry.path} to={entry.path} end={entry.path === "/"} className={navLinkClassName}>

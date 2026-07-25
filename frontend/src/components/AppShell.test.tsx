@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import { AppShell } from "./AppShell";
@@ -67,5 +67,25 @@ describe("AppShell", () => {
 
     expect(screen.getByRole("heading", { name: "Job Queue" })).toBeInTheDocument();
     expect(screen.getByText(/no active jobs/i)).toBeInTheDocument();
+  });
+
+  it("hides the Users nav entry when the user lacks users:manage", async () => {
+    vi.mocked(authService.getMe).mockResolvedValue({
+      userId: "u1", username: "alice", role: "user", permissions: ["jobs:create"], mustChangePassword: false,
+      authMode: "multi", quota: { maxConcurrent: 1, maxQueued: 5, maxJobsPerDay: 50, maxGpuSecondsPerDay: 3600, usedJobsToday: 0, usedGpuSecondsToday: 0 },
+    });
+    renderAt("/");
+
+    await waitFor(() => expect(screen.queryByRole("link", { name: /users/i })).not.toBeInTheDocument());
+  });
+
+  it("shows the Users nav entry when the user has users:manage", async () => {
+    vi.mocked(authService.getMe).mockResolvedValue({
+      userId: "u1", username: "admin", role: "admin", permissions: ["users:manage"], mustChangePassword: false,
+      authMode: "multi", quota: { maxConcurrent: 0, maxQueued: 0, maxJobsPerDay: 0, maxGpuSecondsPerDay: 0, usedJobsToday: 0, usedGpuSecondsToday: 0 },
+    });
+    renderAt("/");
+
+    await waitFor(() => expect(screen.getByRole("link", { name: /users/i })).toBeInTheDocument());
   });
 });
