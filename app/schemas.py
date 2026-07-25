@@ -428,3 +428,21 @@ class AudioJobsListResponse(BaseModel):
 
 class GenerationJobsListResponse(BaseModel):
     jobs: list[GenerationJobResponse]
+
+
+class EditableSettingStatusResponse(BaseModel):
+    key: str
+    configured: bool
+
+
+class EditableSettingsResponse(BaseModel):
+    settings: list[EditableSettingStatusResponse]
+
+
+class UpdateSettingRequest(BaseModel):
+    key: str = Field(min_length=1)
+    value: str
+
+
+class UpdateSettingResponse(BaseModel):
+    key: str

@@ -33,6 +33,8 @@ from app.schemas import (
     CreateJobResponse,
     DeviceInfoResponse,
     DevicesResponse,
+    EditableSettingStatusResponse,
+    EditableSettingsResponse,
     EngineInfoResponse,
     GenerationCapabilitiesResponse,
     GenerationJobResponse,
@@ -50,6 +52,8 @@ from app.schemas import (
     SubtitleTrackResponse,
     SupportedModelResponse,
     UpdateCheckResponse,
+    UpdateSettingRequest,
+    UpdateSettingResponse,
     VideoCapabilitiesResponse,
     VideoJobResponse,
     VideoJobsListResponse,
@@ -67,6 +71,7 @@ from app.services.job_manager import JobManager
 from app.services.media_tools import MediaTools
 from app.services.model_installer import ModelInstaller
 from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry
+from app.services.settings_service import editable_settings_status, update_setting
 from app.services.storage import StorageService
 from app.services.stream_analysis import parse_audio_tracks, parse_subtitle_tracks
 from app.services.update_service import UpdateService
@@ -1225,3 +1230,35 @@ async def search_generation_models(
         logger.exception("Hugging Face generation search failed for query %r", q)
         raise HTTPException(status_code=502, detail="Hugging Face search failed") from exc
     return _search_results_to_response(results)
+
+
+# Gates con los permisos que C ya define (mismo patrón que capability_routes):
+# settings_read para leer, settings_write para escribir. Con AUTH_MODE=off el
+# usuario off-mode tiene todos los permisos y esto es transparente.
+@router.get(
+    "/settings",
+    response_model=EditableSettingsResponse,
+    dependencies=[Depends(require(Permission.settings_read))],
+)
+async def get_editable_settings(
+    settings: Settings = Depends(get_settings),
+) -> EditableSettingsResponse:
+    return EditableSettingsResponse(
+        settings=[
+            EditableSettingStatusResponse(**item)
+            for item in editable_settings_status(settings)
+        ]
+    )
+
+
+@router.patch(
+    "/settings",
+    response_model=UpdateSettingResponse,
+    dependencies=[Depends(require(Permission.settings_write))],
+)
+async def patch_setting(payload: UpdateSettingRequest) -> UpdateSettingResponse:
+    try:
+        await asyncio.to_thread(update_setting, payload.key, payload.value)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return UpdateSettingResponse(key=payload.key)
