@@ -13,6 +13,10 @@ class HfDownloadTooLargeError(HfDownloadError):
     """Raised when a download exceeds settings.max_model_download_mb."""
 
 
+class HfAuthError(ValueError):
+    """401/403 de Hugging Face con mensaje accionable para el usuario."""
+
+
 class HfInvalidSourceError(HfDownloadError):
     """Raised when a download URL is not HTTPS huggingface.co."""
 

@@ -11,7 +11,7 @@ import aiofiles
 import httpx
 
 from app.config import Settings
-from app.exceptions import HfDownloadTooLargeError, HfInvalidSourceError
+from app.exceptions import HfAuthError, HfDownloadTooLargeError, HfInvalidSourceError
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +38,23 @@ def _is_retryable_download_error(exc: BaseException) -> bool:
     if isinstance(exc, httpx.HTTPStatusError):
         return exc.response.status_code in _RETRYABLE_STATUS
     return False
+
+
+def _wrap_hf_auth_error(exc: Exception, repo_id: str) -> Exception:
+    if not isinstance(exc, httpx.HTTPStatusError):
+        return exc
+    status = exc.response.status_code
+    if status == 401:
+        return HfAuthError(
+            "Tu HF_TOKEN no es válido o no está configurado — revisalo en Settings."
+        )
+    if status == 403:
+        return HfAuthError(
+            f"El repo {repo_id} requiere aceptar su licencia en "
+            f"huggingface.co/{repo_id} antes de poder descargarlo."
+        )
+    return exc
+
 
 # ---------------------------------------------------------------------------
 # Hugging Face REST endpoints used here (verified live against the real API,
@@ -66,6 +83,7 @@ HF_HOST = "huggingface.co"
 HF_API_BASE = "https://huggingface.co/api"
 HF_RESOLVE_BASE = "https://huggingface.co"
 SEARCH_TASK_TAGS = ("image-to-image", "super-resolution")
+GENERATION_SEARCH_TASK_TAGS = ("text-to-image",)
 WEIGHT_EXTENSION_PRIORITY = (".onnx", ".safetensors", ".pth")
 DOWNLOAD_CHUNK_BYTES = 1024 * 1024
 REQUEST_TIMEOUT_SECONDS = 30.0
@@ -189,10 +207,13 @@ class HfClient:
             return {}
         return {"Authorization": f"Bearer {self.settings.hf_token}"}
 
-    async def search(self, query: str, limit: int = 20) -> list[HfModelSummary]:
+    async def search(
+        self, query: str, limit: int = 20, task_tags: tuple[str, ...] | None = None
+    ) -> list[HfModelSummary]:
+        tags = SEARCH_TASK_TAGS if task_tags is None else task_tags
         params = {
             "search": query,
-            "filter": list(SEARCH_TASK_TAGS),
+            "filter": list(tags),
             "limit": limit,
             "full": "true",
         }
@@ -218,7 +239,7 @@ class HfClient:
                 return [_parse_sibling_file(sibling) for sibling in payload.get("siblings", [])]
             except Exception as exc:  # noqa: BLE001 -- CancelledError is BaseException, so cancel still propagates
                 if attempt == DOWNLOAD_ATTEMPTS or not _is_retryable_download_error(exc):
-                    raise
+                    raise _wrap_hf_auth_error(exc, repo_id) from exc
                 logger.warning(
                     "Hugging Face repo_files attempt %d/%d failed (%s); retrying",
                     attempt,
@@ -249,7 +270,7 @@ class HfClient:
             except Exception as exc:  # noqa: BLE001 -- CancelledError is BaseException, so cancel still propagates
                 tmp_path.unlink(missing_ok=True)
                 if attempt == DOWNLOAD_ATTEMPTS or not _is_retryable_download_error(exc):
-                    raise
+                    raise _wrap_hf_auth_error(exc, repo_id) from exc
                 logger.warning(
                     "Hugging Face download attempt %d/%d failed (%s); retrying",
                     attempt,

@@ -6,6 +6,7 @@ import gc
 import json
 import shutil
 import uuid
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,7 @@ from app.services.device_semaphores import DeviceSemaphores
 from app.services.engines.generation_onnx import (
     _build_providers_for_validation,
     _load_pipeline_class,
+    _read_declared_class_name,
     _wrap_generation_error,
     generation_dependencies_available,
 )
@@ -74,6 +76,31 @@ def _generation_model_id(repo_id: str) -> str:
 
 def _select_files(files: list[HfFile]) -> list[HfFile]:
     return [f for f in files if not f.path.lower().endswith(SKIP_WEIGHT_SUFFIXES)]
+
+
+def _top_level_dirs(files: list[HfFile]) -> set[str]:
+    return {f.path.split("/", 1)[0] for f in files if "/" in f.path}
+
+
+def _dirs_with_suffix(
+    files: list[HfFile], suffixes: tuple[str, ...]
+) -> set[str]:
+    return _top_level_dirs(
+        [f for f in files if f.path.lower().endswith(suffixes)]
+    )
+
+
+def _needs_conversion(files: list[HfFile]) -> bool:
+    # La decisión es por componente, no global: repos mixtos reales como
+    # stabilityai/sdxl-turbo publican ONNX para unet pero sólo pesos PyTorch
+    # para vae (findings doc sección (a):
+    # docs/superpowers/specs/2026-07-25-third-party-spike-findings.md).
+    # Descargar sólo el payload ONNX deja un pipeline parcial; convertir desde
+    # los pesos torch produce todos los componentes. En un repo ONNX completo,
+    # cada directorio que contiene pesos torch también tiene su propio ONNX.
+    torch_dirs = _dirs_with_suffix(files, (".safetensors", ".bin"))
+    onnx_dirs = _dirs_with_suffix(files, (".onnx",))
+    return bool(torch_dirs - onnx_dirs)
 
 
 def _read_declared_components(staging_root: Path) -> list[str]:
@@ -189,6 +216,7 @@ class GenerationModelInstaller:
         self.hf_client = hf_client
         self.gpu_coordinator = gpu_coordinator
         self.device_semaphores = device_semaphores
+        self.enqueue_conversion: Callable[[str], Awaitable[str]] | None = None
         self._queue: asyncio.Queue[InstallJob] = asyncio.Queue()
         self._jobs: dict[str, InstallJob] = {}
         self._worker_task: asyncio.Task | None = None
@@ -252,6 +280,20 @@ class GenerationModelInstaller:
     async def _download_and_register(self, job: InstallJob) -> None:
         files = await self.hf_client.repo_files(job.repo_id)
         _ensure_model_index_listed(files, job.repo_id)
+        if _needs_conversion(files):
+            # Pipeline con al menos un componente publicado sólo en PyTorch:
+            # se auto-rutea a un job de conversión separado y visible.
+            if self.enqueue_conversion is None:
+                raise ValueError(
+                    f"El repo {job.repo_id!r} publica al menos un componente "
+                    "con pesos PyTorch pero sin ONNX propio y la conversión "
+                    "no está disponible."
+                )
+            job.conversion_id = await self.enqueue_conversion(job.repo_id)
+            # Estado terminal del install job: el progreso real vive en el
+            # conversion job y el frontend hace el hand-off con conversion_id.
+            job.status = InstallStatus.converting
+            return
 
         model_id = _generation_model_id(job.repo_id)
         staging_root = self.settings.temp_path / f"gen-staging-{model_id}"
@@ -285,33 +327,41 @@ class GenerationModelInstaller:
                 downloaded_bytes += hf_file.size
                 job.progress_pct = round(downloaded_bytes / total_bytes * 100, 1)
 
-            _validate_structure(staging_root)
-            _patch_legacy_component_configs(staging_root)
             job.status = InstallStatus.validating
-            async with self.device_semaphores.acquire(self.settings.default_device):
-                await asyncio.to_thread(self._validate_pipeline, staging_root)
-
-            final_dir = (
-                self.settings.models_path / GENERATION_MODELS_SUBDIR / model_id
+            job.model_id = await self.validate_and_promote(
+                staging_root,
+                job.repo_id,
+                sum(f.size for f in selected),
             )
-            async with self._lock_for(model_id):
-                await self._promote_staging_dir(staging_root, final_dir)
-                entry = ModelEntry(
-                    id=model_id,
-                    name=job.repo_id,
-                    kind=ModelKind.diffusion_onnx,
-                    source=f"hf:{job.repo_id}",
-                    size_bytes=sum(f.size for f in selected),
-                    scale=None,
-                    file_path=f"{GENERATION_MODELS_SUBDIR}/{model_id}",
-                    status=ModelStatus.installed,
-                )
-                self.registry.register(entry)
-            job.model_id = model_id
             job.status = InstallStatus.installed
         finally:
             if staging_root.exists():
                 shutil.rmtree(staging_root, ignore_errors=True)
+
+    async def validate_and_promote(
+        self, staging_root: Path, repo_id: str, size_bytes: int
+    ) -> str:
+        _validate_structure(staging_root)
+        _patch_legacy_component_configs(staging_root)
+        async with self.device_semaphores.acquire(self.settings.default_device):
+            await asyncio.to_thread(self._validate_pipeline, staging_root)
+
+        model_id = _generation_model_id(repo_id)
+        final_dir = self.settings.models_path / GENERATION_MODELS_SUBDIR / model_id
+        async with self._lock_for(model_id):
+            await self._promote_staging_dir(staging_root, final_dir)
+            entry = ModelEntry(
+                id=model_id,
+                name=repo_id,
+                kind=ModelKind.diffusion_onnx,
+                source=f"hf:{repo_id}",
+                size_bytes=size_bytes,
+                scale=None,
+                file_path=f"{GENERATION_MODELS_SUBDIR}/{model_id}",
+                status=ModelStatus.installed,
+            )
+            self.registry.register(entry)
+        return model_id
 
     async def _promote_staging_dir(self, staging_root: Path, final_dir: Path) -> None:
         # Move-aside + rollback, not delete-then-replace: deleting final_dir
@@ -366,6 +416,6 @@ class GenerationModelInstaller:
             gc.collect()
 
     def _create_validation_pipeline(self, pipeline_dir: Path) -> Any:
-        pipeline_cls = _load_pipeline_class()
+        pipeline_cls = _load_pipeline_class(_read_declared_class_name(pipeline_dir))
         kwargs = _build_providers_for_validation(self.settings.default_device)
         return pipeline_cls.from_pretrained(str(pipeline_dir), **kwargs)

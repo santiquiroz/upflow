@@ -50,6 +50,14 @@ def test_install_generation_model_requires_models_install_permission(bob_client:
     assert response.status_code == 403
 
 
+def test_convert_generation_model_requires_models_install_permission(bob_client: TestClient) -> None:
+    response = bob_client.post(
+        "/api/v1/generation/models/convert",
+        json={"repoId": "org/model"},
+    )
+    assert response.status_code == 403
+
+
 def test_rescan_capabilities_requires_settings_write_permission(bob_client: TestClient) -> None:
     response = bob_client.post("/api/v1/capabilities/rescan")
     assert response.status_code == 403
@@ -62,6 +70,26 @@ def test_fix_lever_requires_settings_write_permission(bob_client: TestClient) ->
 
 def test_scan_onnx_diagnostic_requires_settings_write_permission(bob_client: TestClient) -> None:
     response = bob_client.post("/api/v1/capabilities/onnx-diagnostics/some-model/dml:0/scan")
+    assert response.status_code == 403
+
+
+def test_get_settings_requires_settings_read_permission(
+    bob_client: TestClient,
+) -> None:
+    assert bob_client.get("/api/v1/settings").status_code == 200
+
+    bob_client.post("/api/v1/auth/logout")
+
+    assert bob_client.get("/api/v1/settings").status_code in (401, 403)
+
+
+def test_patch_settings_requires_settings_write_permission(
+    bob_client: TestClient,
+) -> None:
+    response = bob_client.patch(
+        "/api/v1/settings",
+        json={"key": "hf_token", "value": "hf_test"},
+    )
     assert response.status_code == 403
 
 

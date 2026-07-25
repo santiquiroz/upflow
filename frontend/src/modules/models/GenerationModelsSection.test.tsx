@@ -14,7 +14,12 @@ vi.mock("../../lib/api", async (importOriginal) => {
 
 vi.mock("../../services/generation", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../services/generation")>();
-  return { ...actual, installGenerationModel: vi.fn(), getGenerationInstallStatus: vi.fn() };
+  return {
+    ...actual,
+    installGenerationModel: vi.fn(),
+    getGenerationInstallStatus: vi.fn(),
+    getConversionStatus: vi.fn(),
+  };
 });
 
 const POLL_INTERVAL_MS = 10;
@@ -62,6 +67,7 @@ afterEach(() => {
   vi.mocked(api.deleteModel).mockReset();
   vi.mocked(generationService.installGenerationModel).mockReset();
   vi.mocked(generationService.getGenerationInstallStatus).mockReset();
+  vi.mocked(generationService.getConversionStatus).mockReset();
 });
 
 describe("GenerationModelsSection", () => {
@@ -88,6 +94,7 @@ describe("GenerationModelsSection", () => {
 
     renderSection([]);
     await screen.findByText(/no generation models installed yet/i);
+    vi.mocked(api.getModels).mockResolvedValue({ models: [DIFFUSION_MODEL] } satisfies ModelsResponse);
 
     typeRepoId("amd/sd15");
     fireEvent.click(screen.getByRole("button", { name: /install/i }));
@@ -97,7 +104,6 @@ describe("GenerationModelsSection", () => {
     );
     await waitFor(() => expect(screen.getByText("30%")).toBeInTheDocument());
 
-    vi.mocked(api.getModels).mockResolvedValue({ models: [DIFFUSION_MODEL] } satisfies ModelsResponse);
     await waitFor(() => expect(screen.getByText("Stable Diffusion 1.5 (AMD)")).toBeInTheDocument());
   });
 
@@ -117,6 +123,46 @@ describe("GenerationModelsSection", () => {
     fireEvent.click(screen.getByRole("button", { name: /install/i }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(/cuda is required/i);
+  });
+
+  it("shows the active conversion stage beside its progress", async () => {
+    vi.mocked(generationService.installGenerationModel).mockResolvedValue({
+      installId: "install-convert",
+      statusUrl: "/x",
+    });
+    vi.mocked(generationService.getGenerationInstallStatus).mockResolvedValue({
+      installId: "install-convert",
+      repoId: "amd/sd15",
+      status: "converting",
+      progressPct: null,
+      modelId: null,
+      error: null,
+      conversionId: "convert-1",
+    });
+    vi.mocked(generationService.getConversionStatus).mockResolvedValue({
+      conversionId: "convert-1",
+      repoId: "amd/sd15",
+      status: "running",
+      progressPct: 40,
+      stage: "exporting:unet",
+      stages: [
+        {
+          key: "exporting:unet",
+          label: "Exporting unet",
+          weight: 40,
+          status: "active",
+        },
+      ],
+      modelId: null,
+      error: null,
+    });
+
+    renderSection([]);
+    typeRepoId("amd/sd15");
+    fireEvent.click(screen.getByRole("button", { name: /install/i }));
+
+    expect(await screen.findByText("Converting — Exporting unet")).toBeInTheDocument();
+    expect(screen.getByText("40%")).toBeInTheDocument();
   });
 
   it("requires a destructive confirmation before deleting a diffusion model", async () => {

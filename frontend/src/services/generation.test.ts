@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { apiGet, apiPostJson } from "../lib/api";
-import { createGenerationJob, getGenerationJob } from "./generation";
+import {
+  convertGenerationModel,
+  createGenerationJob,
+  getConversionStatus,
+  getGenerationJob,
+} from "./generation";
 
 vi.mock("../lib/api", () => ({
   apiGet: vi.fn(),
@@ -95,5 +100,21 @@ describe("generation service", () => {
     vi.mocked(apiGet).mockResolvedValue({ id: "j1" });
     await getGenerationJob("j1");
     expect(apiGet).toHaveBeenCalledWith("/generation/jobs/j1");
+  });
+
+  it("starts a generation model conversion", async () => {
+    vi.mocked(apiPostJson).mockResolvedValue({ conversionId: "c1", statusUrl: "/x" });
+
+    await convertGenerationModel("amd/x");
+
+    expect(apiPostJson).toHaveBeenCalledWith("/generation/models/convert", { repoId: "amd/x" });
+  });
+
+  it("gets a generation model conversion by id", async () => {
+    vi.mocked(apiGet).mockResolvedValue({ conversionId: "c1" });
+
+    await getConversionStatus("c1");
+
+    expect(apiGet).toHaveBeenCalledWith("/generation/models/convert/c1");
   });
 });

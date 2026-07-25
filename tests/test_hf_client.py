@@ -6,11 +6,14 @@ import httpx
 import pytest
 
 from app.config import Settings
-from app.exceptions import HfDownloadTooLargeError, HfInvalidSourceError
+from app.exceptions import HfAuthError, HfDownloadTooLargeError, HfInvalidSourceError
 from app.services.hf_client import (
+    GENERATION_SEARCH_TASK_TAGS,
     HfClient,
     HfFile,
     HfModelSummary,
+    SEARCH_TASK_TAGS,
+    _wrap_hf_auth_error,
     _validate_https_huggingface_host,
     pick_weight_file,
 )
@@ -45,9 +48,63 @@ def transport_for(handler) -> httpx.MockTransport:
     return httpx.MockTransport(handler)
 
 
+def _status_error(status_code: int) -> httpx.HTTPStatusError:
+    request = httpx.Request("GET", "https://huggingface.co/api/models/x/y")
+    response = httpx.Response(status_code, request=request)
+    return httpx.HTTPStatusError("boom", request=request, response=response)
+
+
+def test_wrap_hf_auth_error_401_points_to_settings() -> None:
+    wrapped = _wrap_hf_auth_error(_status_error(401), "amd/some-model")
+    assert isinstance(wrapped, HfAuthError)
+    assert "HF_TOKEN" in str(wrapped)
+    assert "Settings" in str(wrapped)
+
+
+def test_wrap_hf_auth_error_403_names_the_repo_license_page() -> None:
+    wrapped = _wrap_hf_auth_error(_status_error(403), "amd/some-model")
+    assert isinstance(wrapped, HfAuthError)
+    assert "huggingface.co/amd/some-model" in str(wrapped)
+    assert "licencia" in str(wrapped)
+
+
+def test_wrap_hf_auth_error_leaves_other_errors_untouched() -> None:
+    original = _status_error(500)
+    assert _wrap_hf_auth_error(original, "a/b") is original
+    plain = ValueError("x")
+    assert _wrap_hf_auth_error(plain, "a/b") is plain
+
+
 # ---------------------------------------------------------------------------
 # search()
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_search_default_uses_upscaler_task_tags(tmp_path: Path) -> None:
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["params"] = request.url.params
+        return httpx.Response(200, json=[])
+
+    client = HfClient(make_settings(tmp_path), transport=transport_for(handler))
+    await client.search("esrgan")
+    assert captured["params"].get_list("filter") == list(SEARCH_TASK_TAGS)
+
+
+@pytest.mark.anyio
+async def test_search_task_tags_override(tmp_path: Path) -> None:
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["params"] = request.url.params
+        return httpx.Response(200, json=[])
+
+    client = HfClient(make_settings(tmp_path), transport=transport_for(handler))
+    await client.search("sdxl", task_tags=GENERATION_SEARCH_TASK_TAGS)
+    assert captured["params"].get_list("filter") == ["text-to-image"]
+
 
 SEARCH_RESPONSE_FIXTURE = [
     {
@@ -297,6 +354,14 @@ async def test_repo_files_raises_non_retryable_errors_immediately(tmp_path: Path
         await client.repo_files("does-not/exist")
 
 
+async def test_repo_files_401_raises_actionable_auth_error(tmp_path: Path) -> None:
+    transport = transport_for(lambda request: httpx.Response(401))
+    client = HfClient(make_settings(tmp_path), transport=transport)
+
+    with pytest.raises(HfAuthError, match="HF_TOKEN"):
+        await client.repo_files("amd/gated-model")
+
+
 # ---------------------------------------------------------------------------
 # pick_weight_file()
 # ---------------------------------------------------------------------------
@@ -462,6 +527,18 @@ async def test_download_raises_on_http_error_status(tmp_path: Path) -> None:
         await client.download("org/repo", "missing.onnx", dest)
 
     assert not dest.exists()
+
+
+async def test_download_403_raises_actionable_auth_error(tmp_path: Path) -> None:
+    transport = transport_for(lambda request: httpx.Response(403))
+    client = HfClient(make_settings(tmp_path), transport=transport)
+
+    with pytest.raises(HfAuthError, match="huggingface.co/amd/gated-model"):
+        await client.download(
+            "amd/gated-model",
+            "model_index.json",
+            tmp_path / "mi.json",
+        )
 
 
 async def test_download_rejects_declared_size_over_limit_before_writing(tmp_path: Path) -> None:

@@ -31,6 +31,7 @@ from app.services.engines.onnx_upscaler import OnnxUpscaler
 from app.services.engines.onnx_video_upscaler import OnnxVideoUpscaler
 from app.services.engines.realesrgan_ncnn import RealEsrganNcnnEngine
 from app.services.engines.rife_ncnn import RifeNcnnEngine
+from app.services.generation_converter import GenerationModelConverter
 from app.services.generation_installer import GenerationModelInstaller
 from app.services.generation_job_manager import GenerationJobManager
 from app.services.hf_client import HfClient
@@ -40,6 +41,7 @@ from app.services.model_installer import ModelInstaller
 from app.services.model_registry import ModelRegistry
 from app.services.onnx_cpu_fallback_probe import OnnxCpuFallbackProbe
 from app.services.retention_sweeper import RetentionSweeper
+from app.services.settings_service import register_live_settings
 from app.services.storage import StorageService
 from app.services.update_service import UpdateService
 from app.services.video_job_manager import VideoJobManager
@@ -52,6 +54,7 @@ FRONTEND_DIST_DIR = APP_DIR.parent / "frontend" / "dist"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
+    register_live_settings(settings)
     if settings.auth_mode == "multi":
         ensure_auth_secret(settings)
     user_store = UserStore(settings)
@@ -142,6 +145,8 @@ async def lifespan(app: FastAPI):
     generation_installer = GenerationModelInstaller(
         settings, model_registry, hf_client, gpu_coordinator, device_semaphores
     )
+    generation_converter = GenerationModelConverter(settings, generation_installer, hf_client)
+    generation_installer.enqueue_conversion = generation_converter.convert_from_hf
     await job_manager.start()
     await video_job_manager.start()
     await audio_job_manager.start()
@@ -149,6 +154,7 @@ async def lifespan(app: FastAPI):
     await model_installer.start()
     await generation_job_manager.start()
     await generation_installer.start()
+    await generation_converter.start()
 
     app.state.storage = storage
     app.state.engine = engine
@@ -172,6 +178,7 @@ async def lifespan(app: FastAPI):
     app.state.model_installer = model_installer
     app.state.generation_job_manager = generation_job_manager
     app.state.generation_installer = generation_installer
+    app.state.generation_converter = generation_converter
     app.state.user_store = user_store
     app.state.identity_provider = identity_provider
     app.state.quota_service = quota_service
@@ -185,6 +192,7 @@ async def lifespan(app: FastAPI):
         await model_installer.stop()
         await generation_job_manager.stop()
         await generation_installer.stop()
+        await generation_converter.stop()
 
 
 def _serve_index(index_path: Path) -> Response:

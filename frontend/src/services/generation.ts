@@ -1,9 +1,11 @@
 import { apiGet, apiPost, apiPostJson } from "../lib/api";
 import type {
+  ConversionStatusResponse,
   CreateInstallResponse,
   GenerationCapabilities,
   GenerationJob,
   InstallStatusResponse,
+  ModelSearchResponse,
 } from "../lib/apiTypes";
 
 export interface CreateGenerationJobParams {
@@ -67,10 +69,24 @@ export function fetchGenerationCapabilities(): Promise<GenerationCapabilities> {
   return apiGet<GenerationCapabilities>("/generation/capabilities");
 }
 
+export function searchGenerationModels(query: string): Promise<ModelSearchResponse> {
+  return apiGet<ModelSearchResponse>(`/generation/models/search?q=${encodeURIComponent(query)}`);
+}
+
 export function installGenerationModel(repoId: string): Promise<CreateInstallResponse> {
   return apiPostJson<CreateInstallResponse>("/generation/models", { repoId });
 }
 
 export function getGenerationInstallStatus(installId: string): Promise<InstallStatusResponse> {
   return apiGet<InstallStatusResponse>(`/generation/models/install/${installId}`);
+}
+
+export function convertGenerationModel(
+  repoId: string,
+): Promise<{ conversionId: string; statusUrl: string }> {
+  return apiPostJson("/generation/models/convert", { repoId });
+}
+
+export function getConversionStatus(conversionId: string): Promise<ConversionStatusResponse> {
+  return apiGet<ConversionStatusResponse>(`/generation/models/convert/${conversionId}`);
 }

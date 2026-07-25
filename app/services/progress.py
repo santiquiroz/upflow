@@ -286,3 +286,30 @@ def apply_generation_step_progress(
     job.metadata["framesDone"] = steps_done
     job.metadata["framesTotal"] = steps_total
     job.metadata["progress"] = compute_progress(stages, current_fraction=fraction)
+
+
+CONVERSION_DOWNLOAD_STAGE = ("downloading", "Downloading weights", 15.0)
+CONVERSION_VALIDATE_STAGE = ("validating", "Validating pipeline", 15.0)
+CONVERSION_EXPORT_TOTAL_WEIGHT = 70.0
+
+
+def build_conversion_stages(component_keys: list[str]) -> list[Stage]:
+    if component_keys:
+        export_weight = CONVERSION_EXPORT_TOTAL_WEIGHT / len(component_keys)
+        export_stages = [
+            (f"exporting:{key}", f"Exporting {key}", export_weight) for key in component_keys
+        ]
+    else:
+        export_stages = [("exporting", "Exporting to ONNX", CONVERSION_EXPORT_TOTAL_WEIGHT)]
+    raw_stages = [CONVERSION_DOWNLOAD_STAGE, *export_stages, CONVERSION_VALIDATE_STAGE]
+    return _normalize_weights(raw_stages)
+
+
+def advance_conversion_stage(job: HasMetadata, component_keys: list[str], stage_key: str) -> None:
+    stages = apply_stage_transition(build_conversion_stages(component_keys), stage_key)
+    _write_stage_metadata(job, stages, stage_key)
+
+
+def complete_conversion_stages(job: HasMetadata, component_keys: list[str]) -> None:
+    stages = mark_all_done(build_conversion_stages(component_keys))
+    _write_stage_metadata(job, stages, "completed", progress_override=1.0)

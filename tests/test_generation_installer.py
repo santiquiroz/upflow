@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any
@@ -162,6 +163,116 @@ def test_install_happy_path_registers_diffusion_model(tmp_path: Path, monkeypatc
     assert not any("MXR" in call for call in map(str, hf.download_calls))
 
 
+def test_install_routes_pytorch_only_repo_to_conversion(tmp_path: Path) -> None:
+    files = [
+        HfFile(path="model_index.json", size=100),
+        HfFile(path="unet/diffusion_pytorch_model.safetensors", size=1000),
+        HfFile(path="unet/config.json", size=10),
+    ]
+    installer, _registry, _settings, _hf = make_installer(tmp_path, files=files)
+    enqueued: list[str] = []
+
+    async def fake_enqueue(repo_id: str) -> str:
+        enqueued.append(repo_id)
+        return "conv456"
+
+    installer.enqueue_conversion = fake_enqueue
+    job = install_and_drain(installer, "amd/sdxl-torch")
+
+    assert enqueued == ["amd/sdxl-torch"]
+    assert job.status == InstallStatus.converting
+    assert job.conversion_id == "conv456"
+    assert job.error is None
+
+
+def test_install_pytorch_only_repo_without_converter_keeps_actionable_error(tmp_path: Path) -> None:
+    files = [
+        HfFile(path="model_index.json", size=100),
+        HfFile(path="unet/diffusion_pytorch_model.safetensors", size=1000),
+    ]
+    installer, _registry, _settings, _hf = make_installer(tmp_path, files=files)
+    installer.enqueue_conversion = None
+
+    job = install_and_drain(installer, "amd/sdxl-torch")
+
+    assert job.status == InstallStatus.error
+    assert "conversión" in (job.error or "")
+
+
+def test_install_mixed_repo_with_torch_only_component_routes_to_conversion(
+    tmp_path: Path,
+) -> None:
+    files = [
+        HfFile(path="model_index.json", size=100),
+        HfFile(path="unet/model.onnx", size=1000),
+        HfFile(path="unet/diffusion_pytorch_model.safetensors", size=1000),
+        HfFile(path="vae/diffusion_pytorch_model.safetensors", size=500),
+    ]
+    installer, _registry, _settings, _hf = make_installer(tmp_path, files=files)
+    enqueued: list[str] = []
+
+    async def fake_enqueue(repo_id: str) -> str:
+        enqueued.append(repo_id)
+        return "conv-mixed"
+
+    installer.enqueue_conversion = fake_enqueue
+    job = install_and_drain(installer, "stabilityai/sdxl-turbo")
+
+    assert enqueued == ["stabilityai/sdxl-turbo"]
+    assert job.status == InstallStatus.converting
+    assert job.conversion_id == "conv-mixed"
+    assert job.error is None
+
+
+def test_install_complete_onnx_repo_with_duplicate_torch_weights_does_not_convert(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    files = PIPELINE_FILES + [
+        HfFile(path="unet/diffusion_pytorch_model.safetensors", size=1000),
+        HfFile(path="vae_decoder/diffusion_pytorch_model.bin", size=500),
+    ]
+    installer, _registry, _settings, _hf = make_installer(tmp_path, files=files)
+    monkeypatch.setattr(
+        installer,
+        "_create_validation_pipeline",
+        lambda pipeline_dir: FakeValidationPipeline(),
+    )
+    enqueued: list[str] = []
+
+    async def fake_enqueue(repo_id: str) -> str:
+        enqueued.append(repo_id)
+        return "should-not-convert"
+
+    installer.enqueue_conversion = fake_enqueue
+    job = install_and_drain(installer, "example/complete-onnx")
+
+    assert enqueued == []
+    assert job.status == InstallStatus.installed
+    assert job.conversion_id is None
+
+
+def test_install_repo_with_onnx_files_never_routes_to_conversion(
+    tmp_path: Path, monkeypatch
+) -> None:
+    installer, _registry, _settings, _hf = make_installer(tmp_path, files=PIPELINE_FILES)
+    monkeypatch.setattr(
+        installer,
+        "_create_validation_pipeline",
+        lambda pipeline_dir: FakeValidationPipeline(),
+    )
+    called: list[str] = []
+
+    async def fake_enqueue(repo_id: str) -> str:
+        called.append(repo_id)
+        return "nope"
+
+    installer.enqueue_conversion = fake_enqueue
+    job = install_and_drain(installer, "amd/onnx-model")
+
+    assert job.status == InstallStatus.installed
+    assert called == []
+
+
 def test_install_validation_acquires_gpu_coordinator(tmp_path: Path, monkeypatch) -> None:
     # Item 1 (final whole-branch review): la validacion del installer es la
     # UNICA sesion DML del codebase invisible al GpuSessionCoordinator -- debe
@@ -230,6 +341,43 @@ class FakeValidationPipeline:
             images = [object()]
 
         return _R()
+
+
+def test_validate_and_promote_registers_from_arbitrary_staging(
+    tmp_path: Path, monkeypatch
+) -> None:
+    installer, registry, settings, _hf = make_installer(tmp_path, files=[])
+    monkeypatch.setattr(
+        installer,
+        "_create_validation_pipeline",
+        lambda pipeline_dir: FakeValidationPipeline(),
+    )
+    staging = settings.temp_path / "conv-staging"
+    (staging / "unet").mkdir(parents=True)
+    (staging / "model_index.json").write_text(
+        json.dumps(
+            {
+                "_class_name": "StableDiffusionXLPipeline",
+                "unet": ["diffusers", "x"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    model_id = asyncio.run(
+        installer.validate_and_promote(staging, "amd/conv-model", 123)
+    )
+
+    entry = registry.get(model_id)
+    assert entry is not None
+    assert entry.kind == ModelKind.diffusion_onnx
+    assert entry.size_bytes == 123
+    assert (
+        settings.models_path
+        / "generation"
+        / model_id
+        / "model_index.json"
+    ).exists()
 
 
 # ---------------------------------------------------------------------------

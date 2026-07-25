@@ -97,6 +97,7 @@ class InstallJob:
     progress_pct: float | None = None
     model_id: str | None = None
     error: str | None = None
+    conversion_id: str | None = None
 
 
 def _reject_control_characters(repo_id: str) -> None:

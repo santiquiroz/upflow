@@ -5,11 +5,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GenerationJob } from "../lib/apiTypes";
 import { createJobQueueStore } from "../lib/jobQueueStore";
 import * as generationService from "../services/generation";
-import { useGenerationJob } from "./useGenerationJob";
+import { useGenerationJob, useGenerationModelInstall } from "./useGenerationJob";
 
 vi.mock("../services/generation", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../services/generation")>();
-  return { ...actual, createGenerationJob: vi.fn(), getGenerationJob: vi.fn() };
+  return {
+    ...actual,
+    createGenerationJob: vi.fn(),
+    getGenerationJob: vi.fn(),
+    installGenerationModel: vi.fn(),
+    getGenerationInstallStatus: vi.fn(),
+    getConversionStatus: vi.fn(),
+  };
 });
 
 const POLL_INTERVAL_MS = 10;
@@ -67,6 +74,9 @@ function submitParams() {
 afterEach(() => {
   vi.mocked(generationService.createGenerationJob).mockReset();
   vi.mocked(generationService.getGenerationJob).mockReset();
+  vi.mocked(generationService.installGenerationModel).mockReset();
+  vi.mocked(generationService.getGenerationInstallStatus).mockReset();
+  vi.mocked(generationService.getConversionStatus).mockReset();
 });
 
 describe("useGenerationJob", () => {
@@ -133,5 +143,98 @@ describe("useGenerationJob", () => {
       kind: "generation",
       fileName: "a red fox in the snow",
     });
+  });
+});
+
+describe("useGenerationModelInstall", () => {
+  it("follows the conversion hand-off and finishes installed", async () => {
+    vi.mocked(generationService.installGenerationModel).mockResolvedValue({ installId: "i1", statusUrl: "/x" });
+    vi.mocked(generationService.getGenerationInstallStatus).mockResolvedValue({
+      installId: "i1",
+      repoId: "amd/x",
+      status: "converting",
+      progressPct: null,
+      modelId: null,
+      error: null,
+      conversionId: "c1",
+    });
+    vi.mocked(generationService.getConversionStatus)
+      .mockResolvedValueOnce({
+        conversionId: "c1",
+        repoId: "amd/x",
+        status: "running",
+        progressPct: 40,
+        stage: "exporting:unet",
+        stages: [
+          {
+            key: "exporting:unet",
+            label: "Exporting unet",
+            weight: 40,
+            status: "active",
+          },
+        ],
+        modelId: null,
+        error: null,
+      })
+      .mockImplementation(async () => {
+        await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS * 5));
+        return {
+          conversionId: "c1",
+          repoId: "amd/x",
+          status: "completed",
+          progressPct: 100,
+          stage: "completed",
+          stages: [],
+          modelId: "gen--amd--x",
+          error: null,
+        };
+      });
+
+    const { result } = renderHook(() => useGenerationModelInstall(POLL_INTERVAL_MS), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      result.current.install("amd/x");
+    });
+
+    await waitFor(() => expect(result.current.phase).toBe("converting"));
+    await waitFor(() => expect(result.current.stageLabel).toBe("Exporting unet"));
+    await waitFor(() => expect(result.current.phase).toBe("installed"));
+    expect(result.current.modelId).toBe("gen--amd--x");
+  });
+
+  it("propagates the conversion job error", async () => {
+    vi.mocked(generationService.installGenerationModel).mockResolvedValue({ installId: "i1", statusUrl: "/x" });
+    vi.mocked(generationService.getGenerationInstallStatus).mockResolvedValue({
+      installId: "i1",
+      repoId: "amd/x",
+      status: "converting",
+      progressPct: null,
+      modelId: null,
+      error: null,
+      conversionId: "c1",
+    });
+    vi.mocked(generationService.getConversionStatus).mockResolvedValue({
+      conversionId: "c1",
+      repoId: "amd/x",
+      status: "failed",
+      progressPct: null,
+      stage: null,
+      stages: [],
+      modelId: null,
+      error: "export reventó",
+    });
+
+    const { result } = renderHook(() => useGenerationModelInstall(POLL_INTERVAL_MS), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      result.current.install("amd/x");
+    });
+
+    await waitFor(() => expect(result.current.phase).toBe("error"));
+    expect(result.current.errorMessage).toContain("export reventó");
   });
 });

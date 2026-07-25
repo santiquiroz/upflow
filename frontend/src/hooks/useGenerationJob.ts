@@ -1,6 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import type { GenerationCapabilities, GenerationJob, JobStatus } from "../lib/apiTypes";
+import type {
+  ConversionStatusResponse,
+  GenerationCapabilities,
+  GenerationJob,
+  JobStatus,
+  ModelSearchResponse,
+} from "../lib/apiTypes";
 import { isTerminalInstallStatus } from "../lib/installStatus";
 import { isTerminalJobStatus } from "../lib/jobStatus";
 import { jobQueueStore, type JobQueueStore } from "../lib/jobQueueStore";
@@ -8,9 +14,11 @@ import {
   cancelGenerationJob,
   createGenerationJob,
   fetchGenerationCapabilities,
+  getConversionStatus,
   getGenerationInstallStatus,
   getGenerationJob,
   installGenerationModel,
+  searchGenerationModels,
   type CreateGenerationJobParams,
 } from "../services/generation";
 import {
@@ -140,13 +148,56 @@ export function useGenerationCapabilities() {
   });
 }
 
+export function useGenerationHfSearchResults(query: string) {
+  const trimmed = query.trim();
+  return useQuery<ModelSearchResponse>({
+    queryKey: ["generation-hf-search", trimmed],
+    queryFn: () => searchGenerationModels(trimmed),
+    enabled: trimmed.length > 0,
+  });
+}
+
 export interface UseGenerationModelInstallResult {
   phase: ModelInstallPhase;
   progressPct: number | null;
+  stageLabel: string | null;
   errorMessage: string | null;
   modelId: string | null;
   install: (repoId: string) => void;
   reset: () => void;
+}
+
+function resolveConversionPhase(
+  conversionId: string | null,
+  conversionStatus: JobStatus | undefined,
+  conversionIsError: boolean,
+): ModelInstallPhase | null {
+  if (conversionId === null) {
+    return null;
+  }
+  if (conversionIsError || conversionStatus === "failed" || conversionStatus === "cancelled") {
+    return "error";
+  }
+  if (conversionStatus === "completed") {
+    return "installed";
+  }
+  return "converting";
+}
+
+function resolveConversionErrorMessage(
+  queryError: unknown,
+  conversion: ConversionStatusResponse | undefined,
+): string | null {
+  if (queryError instanceof Error) {
+    return queryError.message;
+  }
+  if (conversion?.status === "failed") {
+    return conversion.error ?? "The model conversion failed.";
+  }
+  if (conversion?.status === "cancelled") {
+    return conversion.error ?? "The model conversion was cancelled.";
+  }
+  return null;
 }
 
 // Sibling of useModelInstall (../hooks/useModels.ts): same state machine, poll
@@ -168,11 +219,34 @@ export function useGenerationModelInstall(
     queryKey: ["generation-model-install", installId],
     queryFn: () => getGenerationInstallStatus(installId as string),
     enabled: installId !== null,
-    refetchInterval: (query) =>
-      isTerminalInstallStatus(query.state.data?.status ?? "downloading") ? false : pollIntervalMs,
+    refetchInterval: (query) => {
+      const status = query.state.data;
+      return status?.conversionId != null ||
+        isTerminalInstallStatus(status?.status ?? "downloading")
+        ? false
+        : pollIntervalMs;
+    },
   });
 
-  const installedModelId = statusQuery.data?.status === "installed" ? statusQuery.data.modelId : null;
+  const conversionId =
+    statusQuery.data?.status === "converting"
+      ? (statusQuery.data.conversionId ?? null)
+      : null;
+
+  const conversionQuery = useQuery({
+    queryKey: ["generation-model-conversion", conversionId],
+    queryFn: () => getConversionStatus(conversionId as string),
+    enabled: conversionId !== null,
+    refetchInterval: (query) =>
+      isTerminalJobStatus(query.state.data?.status ?? "queued") ? false : pollIntervalMs,
+  });
+
+  const installedModelId =
+    conversionQuery.data?.status === "completed"
+      ? conversionQuery.data.modelId
+      : statusQuery.data?.status === "installed"
+        ? statusQuery.data.modelId
+        : null;
   useEffect(() => {
     if (installedModelId) {
       queryClient.invalidateQueries({ queryKey: MODELS_QUERY_KEY });
@@ -189,15 +263,30 @@ export function useGenerationModelInstall(
     startMutation.reset();
   }
 
-  return {
-    phase: resolveInstallPhase(
+  const phase =
+    resolveConversionPhase(
+      conversionId,
+      conversionQuery.data?.status,
+      conversionQuery.isError,
+    ) ??
+    resolveInstallPhase(
       startMutation.isPending,
       isAwaitingFirstStatus(installId, statusQuery.data, statusQuery.isError),
       statusQuery.data?.status as InstallState | undefined,
-    ),
-    progressPct: statusQuery.data?.progressPct ?? null,
-    errorMessage: resolveInstallErrorMessage(startMutation.error, statusQuery.error, statusQuery.data),
-    modelId: statusQuery.data?.modelId ?? null,
+    );
+  const stageLabel =
+    phase === "converting"
+      ? (conversionQuery.data?.stages?.find((stage) => stage.status === "active")?.label ?? null)
+      : null;
+
+  return {
+    phase,
+    progressPct: conversionQuery.data?.progressPct ?? statusQuery.data?.progressPct ?? null,
+    stageLabel,
+    errorMessage:
+      resolveInstallErrorMessage(startMutation.error, statusQuery.error, statusQuery.data) ??
+      resolveConversionErrorMessage(conversionQuery.error, conversionQuery.data),
+    modelId: conversionQuery.data?.modelId ?? statusQuery.data?.modelId ?? null,
     install,
     reset,
   };

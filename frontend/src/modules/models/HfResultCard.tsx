@@ -1,5 +1,9 @@
 import { CheckCircle2, Download, Heart } from "lucide-react";
-import { DEFAULT_INSTALL_POLL_INTERVAL_MS, useModelInstall } from "../../hooks/useModels";
+import {
+  DEFAULT_INSTALL_POLL_INTERVAL_MS,
+  useModelInstall,
+  type ModelInstallPhase,
+} from "../../hooks/useModels";
 import type { HfModelSearchResultResponse } from "../../lib/apiTypes";
 import { InstallError, InstallProgress, isInstallInFlight } from "./installUi";
 
@@ -12,7 +16,7 @@ function formatCount(count: number): string {
   return count.toLocaleString("en-US");
 }
 
-function InstalledIndicator() {
+export function InstalledIndicator() {
   return (
     <div className="flex items-center gap-2 text-sm text-ok">
       <CheckCircle2 aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />
@@ -21,7 +25,7 @@ function InstalledIndicator() {
   );
 }
 
-function InstallButton({ onInstall }: { onInstall: () => void }) {
+export function InstallButton({ onInstall }: { onInstall: () => void }) {
   return (
     <button
       type="button"
@@ -34,7 +38,7 @@ function InstallButton({ onInstall }: { onInstall: () => void }) {
   );
 }
 
-function ResultMeta({ result }: { result: HfModelSearchResultResponse }) {
+export function ResultMeta({ result }: { result: HfModelSearchResultResponse }) {
   return (
     <dl className="flex flex-wrap items-center gap-4 text-xs text-text-dim">
       <div className="flex items-center gap-1">
@@ -52,9 +56,25 @@ function ResultMeta({ result }: { result: HfModelSearchResultResponse }) {
   );
 }
 
-export function HfResultCard({ result, pollIntervalMs = DEFAULT_INSTALL_POLL_INTERVAL_MS }: HfResultCardProps) {
-  const { phase, progressPct, errorMessage, install, reset } = useModelInstall(pollIntervalMs);
+interface ResultCardLayoutProps {
+  result: HfModelSearchResultResponse;
+  phase: ModelInstallPhase;
+  progressPct: number | null;
+  stageLabel?: string | null;
+  errorMessage: string | null;
+  onInstall: () => void;
+  onReset: () => void;
+}
 
+export function ResultCardLayout({
+  result,
+  phase,
+  progressPct,
+  stageLabel,
+  errorMessage,
+  onInstall,
+  onReset,
+}: ResultCardLayoutProps) {
   return (
     <div className="flex flex-col gap-3 rounded border border-border bg-surface p-4">
       <div className="flex items-start justify-between gap-3">
@@ -62,12 +82,29 @@ export function HfResultCard({ result, pollIntervalMs = DEFAULT_INSTALL_POLL_INT
           <span className="text-sm font-medium text-text">{result.id}</span>
           {result.author && <span className="text-xs text-text-faint">{result.author}</span>}
         </div>
-        {phase === "idle" && <InstallButton onInstall={() => install(result.id)} />}
+        {phase === "idle" && <InstallButton onInstall={onInstall} />}
       </div>
       <ResultMeta result={result} />
-      {isInstallInFlight(phase) && <InstallProgress phase={phase} progressPct={progressPct} />}
+      {isInstallInFlight(phase) && (
+        <InstallProgress phase={phase} progressPct={progressPct} stageLabel={stageLabel} />
+      )}
       {phase === "installed" && <InstalledIndicator />}
-      {phase === "error" && errorMessage && <InstallError message={errorMessage} onRetry={reset} />}
+      {phase === "error" && errorMessage && <InstallError message={errorMessage} onRetry={onReset} />}
     </div>
+  );
+}
+
+export function HfResultCard({ result, pollIntervalMs = DEFAULT_INSTALL_POLL_INTERVAL_MS }: HfResultCardProps) {
+  const { phase, progressPct, errorMessage, install, reset } = useModelInstall(pollIntervalMs);
+
+  return (
+    <ResultCardLayout
+      result={result}
+      phase={phase}
+      progressPct={progressPct}
+      errorMessage={errorMessage}
+      onInstall={() => install(result.id)}
+      onReset={reset}
+    />
   );
 }
