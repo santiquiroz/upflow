@@ -1002,7 +1002,10 @@ async def search_models(
     )
 
 
-@router.post("/models/install", response_model=CreateInstallResponse, status_code=202)
+@router.post(
+    "/models/install", response_model=CreateInstallResponse, status_code=202,
+    dependencies=[Depends(require(Permission.models_install))],
+)
 async def install_model(
     payload: InstallModelRequest,
     installer: ModelInstaller = Depends(get_model_installer),
@@ -1033,7 +1036,10 @@ async def get_install_status(
     )
 
 
-@router.delete("/models/{model_id}", status_code=204)
+@router.delete(
+    "/models/{model_id}", status_code=204,
+    dependencies=[Depends(require(Permission.models_delete))],
+)
 async def delete_model(
     model_id: str, installer: ModelInstaller = Depends(get_model_installer)
 ) -> Response:
@@ -1167,7 +1173,10 @@ async def generation_capabilities(
     )
 
 
-@router.post("/generation/models", response_model=CreateInstallResponse, status_code=202)
+@router.post(
+    "/generation/models", response_model=CreateInstallResponse, status_code=202,
+    dependencies=[Depends(require(Permission.models_install))],
+)
 async def install_generation_model(
     payload: InstallModelRequest,
     installer: GenerationModelInstaller = Depends(get_generation_installer),

@@ -11,6 +11,8 @@ from app.schemas import (
     OnnxDiagnosticsResponse,
     ScanOnnxDiagnosticResponse,
 )
+from app.api.auth_deps import require
+from app.services.auth.permissions import Permission
 from app.services.capability_probe import CapabilityProbe, Lever
 from app.services.onnx_cpu_fallback_probe import CpuFallbackReport, OnnxCpuFallbackProbe
 
@@ -41,13 +43,19 @@ async def get_capabilities(probe: CapabilityProbe = Depends(get_capability_probe
     return CapabilitiesResponse(levers=[_to_response(lever) for lever in levers])
 
 
-@router.post("/rescan", response_model=CapabilitiesResponse)
+@router.post(
+    "/rescan", response_model=CapabilitiesResponse,
+    dependencies=[Depends(require(Permission.settings_write))],
+)
 async def rescan_capabilities(probe: CapabilityProbe = Depends(get_capability_probe)) -> CapabilitiesResponse:
     levers = await probe.rescan()
     return CapabilitiesResponse(levers=[_to_response(lever) for lever in levers])
 
 
-@router.post("/{lever_id}/fix", response_model=FixLeverResponse)
+@router.post(
+    "/{lever_id}/fix", response_model=FixLeverResponse,
+    dependencies=[Depends(require(Permission.settings_write))],
+)
 async def fix_lever(lever_id: str, probe: CapabilityProbe = Depends(get_capability_probe)) -> FixLeverResponse:
     try:
         lever = await probe.apply_fix(lever_id)
@@ -71,7 +79,10 @@ async def get_onnx_diagnostics(
     return OnnxDiagnosticsResponse(entries=entries)
 
 
-@router.post("/onnx-diagnostics/{model_id}/{device_id}/scan", response_model=ScanOnnxDiagnosticResponse)
+@router.post(
+    "/onnx-diagnostics/{model_id}/{device_id}/scan", response_model=ScanOnnxDiagnosticResponse,
+    dependencies=[Depends(require(Permission.settings_write))],
+)
 async def scan_onnx_diagnostic(
     model_id: str, device_id: str, probe: OnnxCpuFallbackProbe = Depends(get_onnx_cpu_fallback_probe)
 ) -> ScanOnnxDiagnosticResponse:
