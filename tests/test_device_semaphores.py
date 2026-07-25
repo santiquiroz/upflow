@@ -155,3 +155,34 @@ async def test_cpu_device_id_constant_matches_devices_service(tmp_path: Path) ->
         async with semaphores.acquire(CPU_DEVICE_ID):
             async with semaphores.acquire(CPU_DEVICE_ID):
                 assert semaphores.in_flight(CPU_DEVICE_ID) == 3, "cpu concurrency must use CPU_CONCURRENCY, not GPU"
+
+
+@pytest.mark.parametrize("field_alias", ["MIN_FREE_VRAM_MB", "MIN_FREE_RAM_MB"])
+def test_min_free_mb_settings_reject_negative_values(tmp_path: Path, field_alias: str) -> None:
+    with pytest.raises(ValidationError):
+        make_settings(tmp_path, **{field_alias: -1})
+
+
+def test_min_free_mb_settings_accept_zero_as_no_floor(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path, MIN_FREE_VRAM_MB=0, MIN_FREE_RAM_MB=0)
+
+    assert settings.min_free_vram_mb == 0
+    assert settings.min_free_ram_mb == 0
+
+
+def test_min_free_mb_settings_have_documented_defaults(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+
+    assert settings.min_free_vram_mb == 768
+    assert settings.min_free_ram_mb == 1024
+
+
+def test_resource_poll_interval_rejects_non_positive_values(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError):
+        make_settings(tmp_path, RESOURCE_POLL_INTERVAL_SECONDS=0)
+
+
+def test_resource_poll_interval_default(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+
+    assert settings.resource_poll_interval_seconds == 5.0

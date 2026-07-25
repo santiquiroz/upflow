@@ -424,11 +424,37 @@ class Settings(BaseSettings):
     # add) -- bounds how long the backend waits on the elevated child process.
     capability_fix_timeout_seconds: float = Field(default=120.0, alias="CAPABILITY_FIX_TIMEOUT_SECONDS")
 
+    # Subproyecto B (admision por capacidad, ver docs/superpowers/specs/
+    # 2026-07-24-gpu-capacity-admission-design.md): piso minimo de recurso
+    # libre para admitir un job nuevo en el device seleccionado. 0 = sin piso
+    # (equivale al comportamiento de antes de este subproyecto: solo conteo).
+    min_free_vram_mb: int = Field(default=768, alias="MIN_FREE_VRAM_MB")
+    min_free_ram_mb: int = Field(default=1024, alias="MIN_FREE_RAM_MB")
+    # Cada cuanto se re-evalua el predicado de recursos mientras un job
+    # espera gateado por VRAM/RAM, ademas del notify_all() que ya dispara un
+    # release() propio -- necesario porque liberar memoria por un proceso
+    # EXTERNO a Upflow no dispara ningun notify interno.
+    resource_poll_interval_seconds: float = Field(default=5.0, alias="RESOURCE_POLL_INTERVAL_SECONDS")
+
     @field_validator("per_device_gpu_concurrency", "cpu_concurrency", "max_concurrent_jobs")
     @classmethod
     def _validate_concurrency_at_least_one(cls, value: int) -> int:
         if value < 1:
             raise ValueError("Concurrency settings must be at least 1")
+        return value
+
+    @field_validator("min_free_vram_mb", "min_free_ram_mb")
+    @classmethod
+    def _validate_min_free_mb_non_negative(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("MIN_FREE_VRAM_MB and MIN_FREE_RAM_MB must be >= 0")
+        return value
+
+    @field_validator("resource_poll_interval_seconds")
+    @classmethod
+    def _validate_resource_poll_interval_positive(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("RESOURCE_POLL_INTERVAL_SECONDS must be greater than 0")
         return value
 
     @field_validator("update_check_ttl_seconds", "update_error_retry_seconds")
