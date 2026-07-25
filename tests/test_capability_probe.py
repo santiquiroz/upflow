@@ -177,6 +177,21 @@ def test_parse_disk_write_cache_ok_when_enabled() -> None:
     assert lever.fixable is False
 
 
+def test_parse_disk_write_cache_ok_when_using_windows_default_policy() -> None:
+    raw = json.dumps({
+        "ok": True,
+        "diskName": "AMD-RAID Array 1",
+        "writeCacheEnabled": True,
+        "defaultPolicy": True,
+    })
+
+    lever = parse_disk_write_cache_json(raw)
+
+    assert lever.status.value == "ok"
+    assert lever.detail == "Write caching activo (política default de Windows) en AMD-RAID Array 1"
+    assert lever.fixable is False
+
+
 def test_parse_disk_write_cache_fixable_when_disabled() -> None:
     raw = json.dumps({"ok": True, "diskName": "NVMe SSD", "writeCacheEnabled": False})
 
@@ -242,12 +257,40 @@ def test_build_disk_write_cache_script_matches_pnp_friendly_name_by_prefix() -> 
     assert "if (-not $pnp)" in script
 
 
+def test_build_disk_write_cache_script_prefers_ok_candidate_with_registry_key() -> None:
+    script = build_disk_write_cache_script("C:/Upflow/runtime")
+
+    assert "$_.Status -eq 'OK'" in script
+    assert "foreach ($candidate in $candidates)" in script
+    assert "if (Test-Path $candidateRegPath)" in script
+    assert "$pnp = $candidate" in script
+    assert "$pnp = $candidates | Select-Object -First 1" in script
+
+
+def test_build_disk_write_cache_script_reports_windows_default_when_key_is_missing() -> None:
+    script = build_disk_write_cache_script("C:/Upflow/runtime")
+
+    assert "if (-not (Test-Path $regPath))" in script
+    assert "writeCacheEnabled = $true" in script
+    assert "defaultPolicy = $true" in script
+
+
 def test_build_fix_script_disk_write_cache_matches_pnp_friendly_name_by_prefix() -> None:
     script = build_fix_script("disk_write_cache", "C:/Upflow/runtime")
 
     assert "-like" in script
     assert "-eq $disk.FriendlyName" not in script
     assert "if (-not $pnp)" in script
+
+
+def test_build_fix_script_disk_write_cache_creates_missing_registry_key() -> None:
+    script = build_fix_script("disk_write_cache", "C:/Upflow/runtime")
+
+    create_key = "New-Item -Path $regPath -Force | Out-Null"
+    set_value = 'Set-ItemProperty -Path $regPath -Name "UserWriteCacheSetting" -Value 1'
+    assert "if (-not (Test-Path $regPath))" in script
+    assert create_key in script
+    assert script.index(create_key) < script.index(set_value)
 
 
 def test_probe_disk_write_cache_runs_powershell_and_parses_result(monkeypatch: pytest.MonkeyPatch) -> None:
