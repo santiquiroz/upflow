@@ -1,17 +1,31 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AppShell } from "./AppShell";
+import { AuthProvider } from "../hooks/useAuth";
+import * as authService from "../services/auth";
+
+vi.mock("../services/auth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/auth")>();
+  return { ...actual, getMe: vi.fn() };
+});
+
+vi.mocked(authService.getMe).mockResolvedValue({
+  userId: null, username: "local", role: "admin", permissions: [], mustChangePassword: false,
+  authMode: "off", quota: { maxConcurrent: 0, maxQueued: 0, maxJobsPerDay: 0, maxGpuSecondsPerDay: 0, usedJobsToday: 0, usedGpuSecondsToday: 0 },
+});
 
 function renderAt(path: string) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={[path]}>
-        <AppShell>
-          <div>content</div>
-        </AppShell>
+        <AuthProvider>
+          <AppShell>
+            <div>content</div>
+          </AppShell>
+        </AuthProvider>
       </MemoryRouter>
     </QueryClientProvider>,
   );
