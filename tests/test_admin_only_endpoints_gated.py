@@ -50,6 +50,14 @@ def test_install_generation_model_requires_models_install_permission(bob_client:
     assert response.status_code == 403
 
 
+def test_convert_generation_model_requires_models_install_permission(bob_client: TestClient) -> None:
+    response = bob_client.post(
+        "/api/v1/generation/models/convert",
+        json={"repoId": "org/model"},
+    )
+    assert response.status_code == 403
+
+
 def test_rescan_capabilities_requires_settings_write_permission(bob_client: TestClient) -> None:
     response = bob_client.post("/api/v1/capabilities/rescan")
     assert response.status_code == 403

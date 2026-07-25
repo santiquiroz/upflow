@@ -506,6 +506,21 @@ def test_convert_endpoint_enqueues_conversion(client, monkeypatch) -> None:
     assert converter.convert_calls == ["amd/sdxl-torch"]
 
 
+def test_convert_endpoint_returns_400_for_invalid_repo_id(client, monkeypatch) -> None:
+    converter = FakeGenerationConverter()
+    converter.convert_error = ValueError("repo inválido")
+    monkeypatch.setattr(app.state, "generation_converter", converter, raising=False)
+
+    response = client.post(
+        "/api/v1/generation/models/convert",
+        json={"repoId": "amd/sdxl-torch"},
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "repo inválido"}
+    assert converter.convert_calls == ["amd/sdxl-torch"]
+
+
 def test_conversion_status_endpoint_returns_job(client, monkeypatch) -> None:
     job = ConversionJob(repo_id="amd/sdxl-torch")
     job.status = JobStatus.running
