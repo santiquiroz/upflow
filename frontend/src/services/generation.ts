@@ -1,5 +1,6 @@
 import { apiGet, apiPost, apiPostJson } from "../lib/api";
 import type {
+  ConversionStatusResponse,
   CreateInstallResponse,
   GenerationCapabilities,
   GenerationJob,
@@ -78,4 +79,14 @@ export function installGenerationModel(repoId: string): Promise<CreateInstallRes
 
 export function getGenerationInstallStatus(installId: string): Promise<InstallStatusResponse> {
   return apiGet<InstallStatusResponse>(`/generation/models/install/${installId}`);
+}
+
+export function convertGenerationModel(
+  repoId: string,
+): Promise<{ conversionId: string; statusUrl: string }> {
+  return apiPostJson("/generation/models/convert", { repoId });
+}
+
+export function getConversionStatus(conversionId: string): Promise<ConversionStatusResponse> {
+  return apiGet<ConversionStatusResponse>(`/generation/models/convert/${conversionId}`);
 }

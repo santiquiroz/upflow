@@ -60,6 +60,7 @@ interface ResultCardLayoutProps {
   result: HfModelSearchResultResponse;
   phase: ModelInstallPhase;
   progressPct: number | null;
+  stageLabel?: string | null;
   errorMessage: string | null;
   onInstall: () => void;
   onReset: () => void;
@@ -69,6 +70,7 @@ export function ResultCardLayout({
   result,
   phase,
   progressPct,
+  stageLabel,
   errorMessage,
   onInstall,
   onReset,
@@ -83,7 +85,9 @@ export function ResultCardLayout({
         {phase === "idle" && <InstallButton onInstall={onInstall} />}
       </div>
       <ResultMeta result={result} />
-      {isInstallInFlight(phase) && <InstallProgress phase={phase} progressPct={progressPct} />}
+      {isInstallInFlight(phase) && (
+        <InstallProgress phase={phase} progressPct={progressPct} stageLabel={stageLabel} />
+      )}
       {phase === "installed" && <InstalledIndicator />}
       {phase === "error" && errorMessage && <InstallError message={errorMessage} onRetry={onReset} />}
     </div>

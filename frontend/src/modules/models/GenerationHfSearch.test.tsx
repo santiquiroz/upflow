@@ -13,6 +13,7 @@ vi.mock("../../services/generation", async (importOriginal) => {
     searchGenerationModels: vi.fn(),
     installGenerationModel: vi.fn(),
     getGenerationInstallStatus: vi.fn(),
+    getConversionStatus: vi.fn(),
   };
 });
 
@@ -43,6 +44,7 @@ afterEach(() => {
   vi.mocked(generationService.searchGenerationModels).mockReset();
   vi.mocked(generationService.installGenerationModel).mockReset();
   vi.mocked(generationService.getGenerationInstallStatus).mockReset();
+  vi.mocked(generationService.getConversionStatus).mockReset();
 });
 
 describe("GenerationHfSearch", () => {
@@ -77,5 +79,47 @@ describe("GenerationHfSearch", () => {
     await waitFor(() =>
       expect(vi.mocked(generationService.installGenerationModel).mock.calls[0]?.[0]).toBe("amd/sdxl-onnx"),
     );
+  });
+
+  it("shows the active conversion stage for a search result install", async () => {
+    vi.mocked(generationService.searchGenerationModels).mockResolvedValue(SEARCH_RESULT);
+    vi.mocked(generationService.installGenerationModel).mockResolvedValue({
+      installId: "abc",
+      statusUrl: "/x",
+    });
+    vi.mocked(generationService.getGenerationInstallStatus).mockResolvedValue({
+      installId: "abc",
+      repoId: "amd/sdxl-onnx",
+      status: "converting",
+      progressPct: null,
+      modelId: null,
+      error: null,
+      conversionId: "convert-1",
+    });
+    vi.mocked(generationService.getConversionStatus).mockResolvedValue({
+      conversionId: "convert-1",
+      repoId: "amd/sdxl-onnx",
+      status: "running",
+      progressPct: 65,
+      stage: "optimizing",
+      stages: [
+        {
+          key: "optimizing",
+          label: "Optimizing graph",
+          weight: 20,
+          status: "active",
+        },
+      ],
+      modelId: null,
+      error: null,
+    });
+
+    renderSearch();
+    fireEvent.change(screen.getByRole("searchbox", { name: /search hugging face/i }), {
+      target: { value: "sdxl" },
+    });
+    fireEvent.click(await screen.findByRole("button", { name: /install/i }));
+
+    expect(await screen.findByText("Converting — Optimizing graph")).toBeInTheDocument();
   });
 });

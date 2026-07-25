@@ -273,6 +273,18 @@ export interface InstallStatusResponse {
   progressPct: number | null;
   modelId: string | null;
   error: string | null;
+  conversionId?: string | null;
+}
+
+export interface ConversionStatusResponse {
+  conversionId: string;
+  repoId: string;
+  status: JobStatus;
+  progressPct: number | null;
+  stage: string | null;
+  stages: Array<{ key: string; label: string; weight: number; status: string }> | null;
+  modelId: string | null;
+  error: string | null;
 }
 
 export type LeverStatus = "ok" | "unavailable" | "not_applicable" | "needs_admin";

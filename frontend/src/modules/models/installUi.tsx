@@ -24,8 +24,19 @@ export function installPhaseLabel(phase: ModelInstallPhase): string {
   }
 }
 
-export function InstallProgress({ phase, progressPct }: { phase: ModelInstallPhase; progressPct: number | null }) {
-  const label = installPhaseLabel(phase);
+export function InstallProgress({
+  phase,
+  progressPct,
+  stageLabel,
+}: {
+  phase: ModelInstallPhase;
+  progressPct: number | null;
+  stageLabel?: string | null;
+}) {
+  const label =
+    phase === "converting" && stageLabel
+      ? `Converting — ${stageLabel}`
+      : installPhaseLabel(phase);
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-center gap-2 text-sm text-text">

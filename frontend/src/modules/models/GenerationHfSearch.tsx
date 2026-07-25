@@ -20,13 +20,15 @@ interface GenerationHfSearchProps {
 }
 
 function GenerationResultCard({ result }: { result: HfModelSearchResultResponse }) {
-  const { phase, progressPct, errorMessage, install, reset } = useGenerationModelInstall();
+  const { phase, progressPct, stageLabel, errorMessage, install, reset } =
+    useGenerationModelInstall();
 
   return (
     <ResultCardLayout
       result={result}
       phase={phase}
       progressPct={progressPct}
+      stageLabel={stageLabel}
       errorMessage={errorMessage}
       onInstall={() => install(result.id)}
       onReset={reset}

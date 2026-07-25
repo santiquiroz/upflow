@@ -31,11 +31,11 @@ afterEach(() => {
 });
 
 describe("ModelsPage", () => {
-  it("renders the search, installed models and default device sections", async () => {
+  it("renders both searches, installed models and default device sections", async () => {
     renderPage();
 
     expect(screen.getByRole("heading", { name: "Models", level: 1 })).toBeInTheDocument();
-    expect(screen.getByRole("searchbox", { name: /search hugging face/i })).toBeInTheDocument();
+    expect(screen.getAllByRole("searchbox", { name: /search hugging face/i })).toHaveLength(2);
     expect(await screen.findByText(/no custom onnx models installed yet/i)).toBeInTheDocument();
     expect(await screen.findByText("CPU")).toBeInTheDocument();
   });
