@@ -363,6 +363,23 @@ def test_parse_defender_exclusion_fixable_when_not_excluded() -> None:
     assert lever.fixable is True
 
 
+def test_parse_defender_exclusion_needs_admin_for_na_sentinel() -> None:
+    raw = json.dumps(
+        {
+            "ok": True,
+            "exclusions": [
+                " N/A: Must be an administrator to view exclusions ",
+            ],
+        }
+    )
+
+    lever = parse_defender_exclusion_json(raw, "C:\\Upflow\\runtime")
+
+    assert lever.status.value == "needs_admin"
+    assert lever.fixable is True
+    assert "not excluded" not in lever.detail
+
+
 def test_parse_defender_exclusion_needs_admin_when_read_fails() -> None:
     raw = json.dumps({"ok": False, "error": "Access denied"})
 

@@ -264,6 +264,15 @@ def parse_defender_exclusion_json(raw_stdout: str, runtime_path: str) -> Lever:
     for p in exclusions_raw:
         if not isinstance(p, str):
             return Lever(lever_id, label, LeverStatus.unavailable, "Defender exclusions contains non-string values", False)
+        if p.strip().startswith("N/A:"):
+            return Lever(
+                lever_id,
+                label,
+                LeverStatus.needs_admin,
+                "Defender oculta la lista de exclusiones a procesos sin elevación — no se puede verificar el estado "
+                "real; si aplicaste el Fix antes, es probable que siga activa. El Fix se puede re-aplicar sin riesgo.",
+                True,
+            )
         if p:
             exclusions.add(_normalize_path_for_compare(p))
 
