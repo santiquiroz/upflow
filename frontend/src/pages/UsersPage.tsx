@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { ApiError } from "../lib/api";
 import { useCreateUser, useUpdateUser, useUserJobs, useUsers } from "../hooks/useUsers";
 
 function CreateUserForm() {
@@ -6,12 +7,18 @@ function CreateUserForm() {
   const [username, setUsername] = useState("");
   const [role, setRole] = useState("user");
   const [temporaryPassword, setTemporaryPassword] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
-    const result = await createUserMutation.mutateAsync({ username, role });
-    setTemporaryPassword(result.temporaryPassword);
-    setUsername("");
+    setError(null);
+    try {
+      const result = await createUserMutation.mutateAsync({ username, role });
+      setTemporaryPassword(result.temporaryPassword);
+      setUsername("");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "No se pudo crear el usuario");
+    }
   }
 
   return (
@@ -37,9 +44,14 @@ function CreateUserForm() {
           <option value="admin">admin</option>
         </select>
       </label>
-      <button type="submit" className="rounded bg-accent px-3 py-1.5 text-sm font-medium text-bg">
+      <button
+        type="submit"
+        disabled={createUserMutation.isPending}
+        className="rounded bg-accent px-3 py-1.5 text-sm font-medium text-bg disabled:opacity-50"
+      >
         Crear usuario
       </button>
+      {error && <p role="alert" className="w-full text-xs text-danger">{error}</p>}
       {temporaryPassword && (
         <p className="w-full text-xs text-text-dim">
           Contraseña temporal para el nuevo usuario: <span className="font-mono-tabular text-text">{temporaryPassword}</span>
@@ -75,23 +87,34 @@ export function UsersPage() {
   const { data, isLoading } = useUsers();
   const updateUserMutation = useUpdateUser();
   const [viewingJobsFor, setViewingJobsFor] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  async function runUpdate(userId: string, params: Parameters<typeof updateUserMutation.mutateAsync>[0]["params"]) {
+    setActionError(null);
+    try {
+      await updateUserMutation.mutateAsync({ userId, params });
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : "No se pudo actualizar el usuario");
+    }
+  }
 
   async function handleRoleChange(userId: string, role: string) {
-    await updateUserMutation.mutateAsync({ userId, params: { role } });
+    await runUpdate(userId, { role });
   }
 
   async function handleToggleDisabled(userId: string, disabled: boolean) {
-    await updateUserMutation.mutateAsync({ userId, params: { disabled: !disabled } });
+    await runUpdate(userId, { disabled: !disabled });
   }
 
   async function handleResetPassword(userId: string) {
-    await updateUserMutation.mutateAsync({ userId, params: { resetPassword: true } });
+    await runUpdate(userId, { resetPassword: true });
   }
 
   return (
     <div className="flex flex-col gap-4">
       <h1 className="font-heading text-xl font-semibold text-text">Users</h1>
       <CreateUserForm />
+      {actionError && <p role="alert" className="text-xs text-danger">{actionError}</p>}
       {isLoading && <p className="text-sm text-text-faint">Cargando...</p>}
       {data && (
         <table className="w-full text-left text-sm text-text">
