@@ -67,6 +67,19 @@ def _is_oom_error(exc: BaseException) -> bool:
     text = str(exc).lower()
     return any(sig in text for sig in _OOM_SIGNATURES)
 
+
+def derive_queue_maxsize(frame_bytes: int, budget_bytes: int, floor: int, ceiling: int) -> int:
+    """Cuántos frames caben en cola bajo un presupuesto de RAM en bytes.
+
+    Extraído de _save_queue_maxsize para compartirlo con las colas del stream
+    pipeline (spec 2026-07-25-stream-frame-pipeline-design.md): mismo criterio,
+    piso para no matar throughput y techo para no acumular de más.
+    """
+    if frame_bytes <= 0:
+        return ceiling
+    return max(floor, min(ceiling, budget_bytes // frame_bytes))
+
+
 from app.config import Settings
 from app.services.backend_registry import get_builtin_onnx_model
 from app.services.devices_service import DevicesService
@@ -427,10 +440,8 @@ class OnnxVideoUpscaler:
         if not frame_paths or scale < 1:
             return default
         out_bytes = self._output_frame_bytes(frame_paths[0], scale)
-        if out_bytes <= 0:
-            return default
         budget_bytes = max(1, self.settings.onnx_video_max_pipeline_mb) * 1024 * 1024
-        return max(n_save, min(default, budget_bytes // out_bytes))
+        return derive_queue_maxsize(out_bytes, budget_bytes, floor=n_save, ceiling=default)
 
     @staticmethod
     def _output_frame_bytes(frame_path: Path, scale: int) -> int:

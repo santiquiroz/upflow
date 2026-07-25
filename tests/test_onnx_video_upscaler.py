@@ -352,6 +352,26 @@ def test_upscale_one_reraises_non_oom_error(tmp_path: Path, monkeypatch: pytest.
         engine._upscale_one(None, frame, "dml:0")
 
 
+from app.services.engines.onnx_video_upscaler import derive_queue_maxsize
+
+
+def test_derive_queue_maxsize_budget_decides_between_floor_and_ceiling() -> None:
+    # 48MB/frame, presupuesto 150MB -> 150//48 = 3, estrictamente entre piso 2 y techo 4.
+    assert derive_queue_maxsize(48 * 1024 * 1024, 150 * 1024 * 1024, 2, 4) == 3
+
+
+def test_derive_queue_maxsize_floors_and_ceils() -> None:
+    assert derive_queue_maxsize(48 * 1024 * 1024, 1 * 1024 * 1024, 5, 10) == 5  # piso
+    assert derive_queue_maxsize(1024, 1024 * 1024 * 1024, 2, 16) == 16  # techo
+
+
+def test_derive_queue_maxsize_nonpositive_frame_bytes_returns_ceiling() -> None:
+    # Sin tamaño de frame conocido no hay presupuesto que aplicar: techo (el
+    # caso "sin frames" que _save_queue_maxsize ya resolvía con el default).
+    assert derive_queue_maxsize(0, 100, 2, 8) == 8
+    assert derive_queue_maxsize(-1, 100, 2, 8) == 8
+
+
 def test_save_queue_maxsize_capped_by_byte_budget(tmp_path: Path) -> None:
     # 1024x1024 input x4 = 4096x4096x3 = 48.0 MB/frame. Budget 150MB // 48 = 3,
     # which sits strictly between the floor (n_save=2) and ceiling (n_save*2=4),
