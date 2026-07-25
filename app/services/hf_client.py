@@ -11,7 +11,7 @@ import aiofiles
 import httpx
 
 from app.config import Settings
-from app.exceptions import HfDownloadTooLargeError, HfInvalidSourceError
+from app.exceptions import HfAuthError, HfDownloadTooLargeError, HfInvalidSourceError
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +38,23 @@ def _is_retryable_download_error(exc: BaseException) -> bool:
     if isinstance(exc, httpx.HTTPStatusError):
         return exc.response.status_code in _RETRYABLE_STATUS
     return False
+
+
+def _wrap_hf_auth_error(exc: Exception, repo_id: str) -> Exception:
+    if not isinstance(exc, httpx.HTTPStatusError):
+        return exc
+    status = exc.response.status_code
+    if status == 401:
+        return HfAuthError(
+            "Tu HF_TOKEN no es válido o no está configurado — revisalo en Settings."
+        )
+    if status == 403:
+        return HfAuthError(
+            f"El repo {repo_id} requiere aceptar su licencia en "
+            f"huggingface.co/{repo_id} antes de poder descargarlo."
+        )
+    return exc
+
 
 # ---------------------------------------------------------------------------
 # Hugging Face REST endpoints used here (verified live against the real API,
@@ -218,7 +235,7 @@ class HfClient:
                 return [_parse_sibling_file(sibling) for sibling in payload.get("siblings", [])]
             except Exception as exc:  # noqa: BLE001 -- CancelledError is BaseException, so cancel still propagates
                 if attempt == DOWNLOAD_ATTEMPTS or not _is_retryable_download_error(exc):
-                    raise
+                    raise _wrap_hf_auth_error(exc, repo_id) from exc
                 logger.warning(
                     "Hugging Face repo_files attempt %d/%d failed (%s); retrying",
                     attempt,
@@ -249,7 +266,7 @@ class HfClient:
             except Exception as exc:  # noqa: BLE001 -- CancelledError is BaseException, so cancel still propagates
                 tmp_path.unlink(missing_ok=True)
                 if attempt == DOWNLOAD_ATTEMPTS or not _is_retryable_download_error(exc):
-                    raise
+                    raise _wrap_hf_auth_error(exc, repo_id) from exc
                 logger.warning(
                     "Hugging Face download attempt %d/%d failed (%s); retrying",
                     attempt,
