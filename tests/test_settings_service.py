@@ -86,6 +86,21 @@ def test_update_setting_propagates_to_live_settings_instance(
     get_settings.cache_clear()
 
 
+def test_register_live_settings_registers_equal_but_distinct_instances(
+    env_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(env_file.parent)
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    first = Settings(_env_file=None)
+    second = Settings(_env_file=None)
+    assert first == second and first is not second
+    register_live_settings(first)
+    register_live_settings(second)
+    update_setting("hf_token", "hf_both")
+    assert first.hf_token == "hf_both"
+    assert second.hf_token == "hf_both"
+
+
 def test_update_setting_propagates_across_multiple_updates(
     env_file: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

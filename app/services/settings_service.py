@@ -34,7 +34,9 @@ class EditableSettingStatus(TypedDict):
 
 
 def register_live_settings(settings: Settings) -> None:
-    if settings not in _LIVE_SETTINGS:
+    # Dedup por IDENTIDAD, no __eq__ de pydantic: dos instancias distintas con
+    # valores iguales son servicios vivos distintos y ambas deben mutarse.
+    if not any(existing is settings for existing in _LIVE_SETTINGS):
         _LIVE_SETTINGS.append(settings)
 
 
