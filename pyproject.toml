@@ -49,6 +49,10 @@ dependencies = [
   "optimum-onnx==0.1.0",
   "transformers>=4.36,<4.58",
   "diffusers>=0.30,<1.0",
+  # Subproyecto B (admision por capacidad, ver docs/superpowers/specs/
+  # 2026-07-24-gpu-capacity-admission-design.md) - RAM libre real para
+  # SystemRamProbe (app/services/resource_probes.py), jobs en cpu.
+  "psutil>=6.0.0,<7.0.0",
 ]
 
 [project.optional-dependencies]

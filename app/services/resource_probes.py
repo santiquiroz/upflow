@@ -22,3 +22,21 @@ class NullProbe:
 
     def free_capacity_mb(self, device_id: str) -> int | None:
         return None
+
+
+def _probe_psutil_available_mb() -> int | None:
+    # Lazy + tolerant import, same pattern as devices_service._probe_onnxruntime:
+    # keeps the app/tests working even if psutil is somehow absent (fresh
+    # checkout not yet pip install-ed, trimmed embedded-Python build).
+    try:
+        import psutil  # type: ignore[import-not-found]
+    except ImportError:
+        return None
+    return int(psutil.virtual_memory().available // (1024 * 1024))
+
+
+class SystemRamProbe:
+    """Real system RAM probe for cpu-kind devices."""
+
+    def free_capacity_mb(self, device_id: str) -> int | None:
+        return _probe_psutil_available_mb()
