@@ -77,8 +77,11 @@ def test_frames_raises_when_ffmpeg_exits_nonzero(tmp_path: Path, monkeypatch: py
     fake = FakeDecodeProc(raw_frames(2, 4, 2), returncode=1)
     monkeypatch.setattr(source, "_spawn", lambda command: fake)
 
-    with pytest.raises(RuntimeError, match="exit 1"):
+    with pytest.raises(RuntimeError) as exc_info:
         list(source.frames(threading.Event()))
+    assert str(exc_info.value) == (
+        "ffmpeg falló al decodificar (código de salida 1): fake ffmpeg stderr line"
+    )
 
 
 def test_frames_kills_process_when_cancelled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

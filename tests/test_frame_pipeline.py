@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import threading
 
 import numpy as np
@@ -11,6 +12,7 @@ from app.services.frame_pipeline import (
     FramePipeline,
     MapStage,
     derive_stream_queue_maxsizes,
+    drain_stream,
 )
 
 
@@ -47,6 +49,14 @@ class FailingStage:
         if self.seen == 3:
             raise RuntimeError("boom en frame 3")
         return [f]
+
+    def flush(self) -> list[np.ndarray]:
+        return []
+
+
+class NonIterableStage:
+    def process(self, f: np.ndarray) -> None:
+        return None
 
     def flush(self) -> list[np.ndarray]:
         return []
@@ -99,23 +109,51 @@ def test_stage_error_propagates_and_joins_all_threads() -> None:
     assert set(threading.enumerate()) <= threads_before, "quedó un thread vivo tras el error"
 
 
+def test_non_iterable_stage_output_raises_without_hanging() -> None:
+    cancel = threading.Event()
+    pipeline = FramePipeline(iter([frame(1)]), [NonIterableStage()], lambda f: None, [1, 1])
+    errors: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            pipeline.run(cancel)
+        except BaseException as exc:  # noqa: BLE001 - el test captura el error del thread llamador
+            errors.append(exc)
+
+    runner = threading.Thread(target=run, daemon=True)
+    runner.start()
+    runner.join(timeout=2)
+    finished_without_cancel = not runner.is_alive()
+    if not finished_without_cancel:
+        cancel.set()
+        runner.join(timeout=2)
+
+    assert finished_without_cancel, "run() quedó colgado con una salida de etapa no iterable"
+    assert len(errors) == 1
+    assert isinstance(errors[0], TypeError)
+
+
 def test_source_error_propagates() -> None:
     def broken_source():
         yield frame(1)
         raise RuntimeError("decode roto")
 
+    threads_before = set(threading.enumerate())
     pipeline = FramePipeline(broken_source(), [MapStage(lambda f: f)], lambda f: None, [2, 2])
     with pytest.raises(RuntimeError, match="decode roto"):
         pipeline.run(threading.Event())
+    assert set(threading.enumerate()) <= threads_before, "quedó un thread vivo tras el error"
 
 
 def test_sink_error_propagates() -> None:
     def bad_sink(f: np.ndarray) -> None:
         raise ValueError("sink roto")
 
+    threads_before = set(threading.enumerate())
     pipeline = FramePipeline(iter([frame(1)]), [MapStage(lambda f: f)], bad_sink, [2, 2])
     with pytest.raises(ValueError, match="sink roto"):
         pipeline.run(threading.Event())
+    assert set(threading.enumerate()) <= threads_before, "quedó un thread vivo tras el error"
 
 
 def test_preset_cancel_delivers_nothing_and_leaks_no_threads() -> None:
@@ -132,9 +170,87 @@ def test_preset_cancel_delivers_nothing_and_leaks_no_threads() -> None:
     assert set(threading.enumerate()) <= threads_before
 
 
+def test_cancel_releases_producer_blocked_on_full_queue() -> None:
+    cancel = threading.Event()
+    sink_started = threading.Event()
+    third_frame_requested = threading.Event()
+    release_sink = threading.Event()
+    delivered: list[int] = []
+    errors: list[BaseException] = []
+    threads_before = set(threading.enumerate())
+
+    def contended_source():
+        for value in range(4):
+            if value == 2:
+                third_frame_requested.set()
+            yield frame(value)
+
+    def slow_sink(f: np.ndarray) -> None:
+        sink_started.set()
+        release_sink.wait(timeout=5)
+
+    pipeline = FramePipeline(contended_source(), [], slow_sink, [1])
+
+    def run() -> None:
+        try:
+            delivered.append(pipeline.run(cancel))
+        except BaseException as exc:  # noqa: BLE001 - evidencia cualquier fallo del pipeline
+            errors.append(exc)
+
+    runner = threading.Thread(target=run, daemon=True)
+    runner.start()
+    assert sink_started.wait(timeout=2), "el sink no recibió el primer frame"
+    assert third_frame_requested.wait(timeout=2), "el productor no llegó a la cola llena"
+    assert pipeline._queues[0].full(), "la cola debía estar llena antes de cancelar"
+
+    cancel.set()
+    release_sink.set()
+    runner.join(timeout=3)
+
+    assert not runner.is_alive(), "run() no retornó después de cancelar bajo contención"
+    assert errors == []
+    assert delivered == [1]
+    assert set(threading.enumerate()) <= threads_before, "quedó un thread vivo tras cancelar"
+
+
+def test_source_iterator_closes_deterministically_after_error() -> None:
+    closed = threading.Event()
+
+    def source():
+        try:
+            value = 0
+            while True:
+                yield frame(value)
+                value += 1
+        finally:
+            closed.set()
+
+    def bad_sink(f: np.ndarray) -> None:
+        raise RuntimeError("sink roto")
+
+    source_iterator = source()
+    pipeline = FramePipeline(source_iterator, [], bad_sink, [1])
+
+    with pytest.raises(RuntimeError, match="sink roto"):
+        pipeline.run(threading.Event())
+
+    assert closed.is_set(), "el iterador fuente no se cerró durante el teardown"
+
+
 def test_queue_maxsizes_must_match_stage_count() -> None:
     with pytest.raises(ValueError, match="queue_maxsizes"):
         FramePipeline(iter([]), [MapStage(lambda f: f)], lambda f: None, [2])
+
+
+@pytest.mark.parametrize("invalid_maxsize", [0, -1])
+def test_queue_maxsizes_must_be_positive(invalid_maxsize: int) -> None:
+    with pytest.raises(ValueError, match=r">= 1"):
+        FramePipeline(
+            iter([]),
+            [MapStage(lambda f: f)],
+            lambda f: None,
+            [invalid_maxsize, 2],
+        )
 
 
 def test_derive_stream_queue_maxsizes_splits_budget_globally() -> None:
@@ -149,3 +265,39 @@ def test_derive_stream_queue_maxsizes_splits_budget_globally() -> None:
 def test_derive_stream_queue_maxsizes_floors_tiny_budget() -> None:
     sizes = derive_stream_queue_maxsizes(10_000_000, 160_000_000, 2, 1024)
     assert sizes == [STREAM_QUEUE_FLOOR] * 3
+
+
+def test_drain_stream_accumulates_chunks() -> None:
+    sink: list[bytes] = []
+
+    drain_stream(io.BytesIO(b"a" * 8192 + b"tail"), sink)
+
+    assert sink == [b"a" * 8192, b"tail"]
+
+
+def test_drain_stream_keeps_only_bounded_tail() -> None:
+    sink: list[bytes] = []
+    stream = io.BytesIO(b"".join(bytes([value]) * 8192 for value in range(70)))
+
+    drain_stream(stream, sink)
+
+    assert len(sink) == 64
+    assert [chunk[0] for chunk in sink] == list(range(6, 70))
+
+
+def test_drain_stream_swallows_read_errors() -> None:
+    class BrokenStream:
+        def __init__(self) -> None:
+            self._reads = 0
+
+        def read(self, size: int) -> bytes:
+            self._reads += 1
+            if self._reads == 1:
+                return b"antes del error"
+            raise OSError("pipe cerrado")
+
+    sink: list[bytes] = []
+
+    drain_stream(BrokenStream(), sink)
+
+    assert sink == [b"antes del error"]

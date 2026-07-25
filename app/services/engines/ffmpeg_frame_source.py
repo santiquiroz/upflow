@@ -62,7 +62,10 @@ class FfmpegFrameSource:
             returncode = proc.wait()
             if returncode != 0:
                 tail = b"".join(stderr_buf).decode("utf-8", errors="ignore").strip()
-                raise RuntimeError(f"ffmpeg decode failed (exit {returncode}): {tail[-_STDERR_TAIL_CHARS:]}")
+                raise RuntimeError(
+                    f"ffmpeg falló al decodificar (código de salida {returncode}): "
+                    f"{tail[-_STDERR_TAIL_CHARS:]}"
+                )
         finally:
             if proc.poll() is None:
                 proc.kill()

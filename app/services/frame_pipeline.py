@@ -99,11 +99,13 @@ class FramePipeline:
     ) -> None:
         if len(queue_maxsizes) != len(stages) + 1:
             raise ValueError("queue_maxsizes debe tener len(stages) + 1 entradas")
+        if any(size < 1 for size in queue_maxsizes):
+            raise ValueError("todos los valores de queue_maxsizes deben ser >= 1")
         self._source = source
         self._stages = list(stages)
         self._sink = sink
         self._queues: list[queue.Queue] = [queue.Queue(maxsize=size) for size in queue_maxsizes]
-        self._errors: list[Exception] = []
+        self._errors: list[BaseException] = []
 
     def run(self, cancel_event: threading.Event) -> int:
         threads = [
@@ -136,6 +138,7 @@ class FramePipeline:
                 thread.join(timeout=_THREAD_JOIN_TIMEOUT_SECONDS)
                 if thread.is_alive():
                     logger.error("frame pipeline thread did not stop within timeout: %s", thread.name)
+            self._close_source()
         if self._errors:
             raise self._errors[0]
         return delivered
@@ -148,10 +151,9 @@ class FramePipeline:
                     return
                 if not _put_until_cancelled(out_q, source_frame, cancel_event):
                     return
-        except Exception as exc:  # noqa: BLE001 - un decode roto es error de pipeline, no crash
+            _put_until_cancelled(out_q, None, cancel_event)
+        except BaseException as exc:  # noqa: BLE001 - todo fallo debe cancelar el pipeline
             self._fail(exc, cancel_event)
-            return
-        _put_until_cancelled(out_q, None, cancel_event)
 
     def _stage_loop(
         self,
@@ -160,24 +162,23 @@ class FramePipeline:
         out_q: queue.Queue,
         cancel_event: threading.Event,
     ) -> None:
-        while True:
-            if cancel_event.is_set() or self._errors:
-                return
-            try:
-                item = in_q.get(timeout=_QUEUE_POLL_SECONDS)
-            except queue.Empty:
-                continue
-            try:
-                outputs = stage.flush() if item is None else stage.process(item)
-            except Exception as exc:  # noqa: BLE001
-                self._fail(exc, cancel_event)
-                return
-            for output_frame in outputs:
-                if not _put_until_cancelled(out_q, output_frame, cancel_event):
+        try:
+            while True:
+                if cancel_event.is_set() or self._errors:
                     return
-            if item is None:
-                _put_until_cancelled(out_q, None, cancel_event)
-                return
+                try:
+                    item = in_q.get(timeout=_QUEUE_POLL_SECONDS)
+                except queue.Empty:
+                    continue
+                outputs = stage.flush() if item is None else stage.process(item)
+                for output_frame in outputs:
+                    if not _put_until_cancelled(out_q, output_frame, cancel_event):
+                        return
+                if item is None:
+                    _put_until_cancelled(out_q, None, cancel_event)
+                    return
+        except BaseException as exc:  # noqa: BLE001 - todo fallo debe cancelar el pipeline
+            self._fail(exc, cancel_event)
 
     def _sink_loop(self, cancel_event: threading.Event) -> int:
         delivered = 0
@@ -198,6 +199,14 @@ class FramePipeline:
                 return delivered
             delivered += 1
 
-    def _fail(self, exc: Exception, cancel_event: threading.Event) -> None:
+    def _fail(self, exc: BaseException, cancel_event: threading.Event) -> None:
         self._errors.append(exc)
         cancel_event.set()
+
+    def _close_source(self) -> None:
+        try:
+            close = getattr(self._source, "close", None)
+            if callable(close):
+                close()
+        except BaseException:  # noqa: BLE001 - el cierre no debe tapar el error original
+            logger.exception("no se pudo cerrar el iterador fuente del frame pipeline")
