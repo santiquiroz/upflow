@@ -6,6 +6,20 @@ from contextlib import asynccontextmanager
 
 from app.config import Settings
 from app.services.devices_service import CPU_DEVICE_ID
+from app.services.resource_probes import ResourceProbe
+
+_GPU_DEVICE_PREFIX = "dml:"
+_NPU_DEVICE_PREFIX = "npu:"
+
+
+def _device_kind(device_id: str | None) -> str | None:
+    if device_id == CPU_DEVICE_ID:
+        return "cpu"
+    if device_id is not None and device_id.startswith(_GPU_DEVICE_PREFIX):
+        return "gpu"
+    if device_id is not None and device_id.startswith(_NPU_DEVICE_PREFIX):
+        return "npu"
+    return None
 
 
 class DeviceSemaphores:
@@ -28,12 +42,29 @@ class DeviceSemaphores:
     free" (needed by the router's atomic pick) and the shared release signal
     share the exact same in_flight ledger and capacity limit as the blocking
     `acquire()` used by pinned-device jobs.
+
+    Subproyecto B (ver docs/superpowers/specs/2026-07-24-gpu-capacity-
+    admission-design.md): admission ALSO consults an optional
+    `resource_probes` registry (device kind -> ResourceProbe), checking real
+    free VRAM/RAM before granting a permit, on top of the job-count check
+    above. A probe returning None (or no probe registered for a kind) is
+    fail-open -- identical behavior to not having this feature at all. The
+    wait loop polls periodically (not just on notify_all()) because a
+    resource freed by a process OUTSIDE this app never triggers our own
+    release()'s notify.
     """
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self, settings: Settings, resource_probes: dict[str, ResourceProbe] | None = None
+    ) -> None:
         self._settings = settings
         self._in_flight: dict[str | None, int] = {}
         self._condition = asyncio.Condition()
+        self._resource_probes = resource_probes or {}
+        self._min_free_mb: dict[str, int] = {
+            "gpu": settings.min_free_vram_mb,
+            "cpu": settings.min_free_ram_mb,
+        }
 
     def capacity_for(self, device_id: str | None) -> int:
         if device_id == CPU_DEVICE_ID:
@@ -62,8 +93,25 @@ class DeviceSemaphores:
         AND have already confirmed `free_capacity(device_id) > 0` under it."""
         self._in_flight[device_id] = self.in_flight(device_id) + 1
 
+    def _has_enough_resources(self, device_id: str | None) -> bool:
+        kind = _device_kind(device_id)
+        if kind is None:
+            return True
+        probe = self._resource_probes.get(kind)
+        if probe is None:
+            return True
+        free_mb = probe.free_capacity_mb(device_id)
+        if free_mb is None:
+            return True
+        threshold = self._min_free_mb.get(kind)
+        if threshold is None:
+            return True
+        return free_mb >= threshold
+
     def _reserve_if_free(self, device_id: str | None) -> bool:
         if self.free_capacity(device_id) <= 0:
+            return False
+        if not self._has_enough_resources(device_id):
             return False
         self.reserve(device_id)
         return True
@@ -79,10 +127,25 @@ class DeviceSemaphores:
     @asynccontextmanager
     async def acquire(self, device_id: str | None) -> AsyncIterator[None]:
         # Blocking reserve for a pinned device: wait until this specific
-        # device has a free permit, take it, then run the job WITHOUT holding
-        # the condition (it's a leaf lock, held only during reserve/release).
+        # device has a free permit AND (if a resource probe applies) enough
+        # free VRAM/RAM, take it, then run the job WITHOUT holding the
+        # condition (it's a leaf lock, held only during reserve/release).
+        #
+        # The wait uses a bounded asyncio.wait_for(...) around each
+        # condition.wait() instead of one plain wait_for(predicate) so the
+        # predicate gets re-evaluated periodically even when nothing calls
+        # notify_all() -- required for resource pressure that clears for
+        # reasons outside this app. This relies on asyncio.Condition.wait()
+        # re-acquiring its lock even when cancelled by the outer timeout,
+        # guaranteed since Python 3.11 (this project's floor).
         async with self._condition:
-            await self._condition.wait_for(lambda: self._reserve_if_free(device_id))
+            while not self._reserve_if_free(device_id):
+                try:
+                    await asyncio.wait_for(
+                        self._condition.wait(), timeout=self._settings.resource_poll_interval_seconds
+                    )
+                except TimeoutError:
+                    pass
         try:
             yield
         finally:
