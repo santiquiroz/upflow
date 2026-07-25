@@ -83,6 +83,7 @@ HF_HOST = "huggingface.co"
 HF_API_BASE = "https://huggingface.co/api"
 HF_RESOLVE_BASE = "https://huggingface.co"
 SEARCH_TASK_TAGS = ("image-to-image", "super-resolution")
+GENERATION_SEARCH_TASK_TAGS = ("text-to-image",)
 WEIGHT_EXTENSION_PRIORITY = (".onnx", ".safetensors", ".pth")
 DOWNLOAD_CHUNK_BYTES = 1024 * 1024
 REQUEST_TIMEOUT_SECONDS = 30.0
@@ -206,10 +207,13 @@ class HfClient:
             return {}
         return {"Authorization": f"Bearer {self.settings.hf_token}"}
 
-    async def search(self, query: str, limit: int = 20) -> list[HfModelSummary]:
+    async def search(
+        self, query: str, limit: int = 20, task_tags: tuple[str, ...] | None = None
+    ) -> list[HfModelSummary]:
+        tags = SEARCH_TASK_TAGS if task_tags is None else task_tags
         params = {
             "search": query,
-            "filter": list(SEARCH_TASK_TAGS),
+            "filter": list(tags),
             "limit": limit,
             "full": "true",
         }

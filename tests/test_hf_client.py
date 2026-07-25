@@ -8,9 +8,11 @@ import pytest
 from app.config import Settings
 from app.exceptions import HfAuthError, HfDownloadTooLargeError, HfInvalidSourceError
 from app.services.hf_client import (
+    GENERATION_SEARCH_TASK_TAGS,
     HfClient,
     HfFile,
     HfModelSummary,
+    SEARCH_TASK_TAGS,
     _wrap_hf_auth_error,
     _validate_https_huggingface_host,
     pick_weight_file,
@@ -76,6 +78,33 @@ def test_wrap_hf_auth_error_leaves_other_errors_untouched() -> None:
 # ---------------------------------------------------------------------------
 # search()
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_search_default_uses_upscaler_task_tags(tmp_path: Path) -> None:
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["params"] = request.url.params
+        return httpx.Response(200, json=[])
+
+    client = HfClient(make_settings(tmp_path), transport=transport_for(handler))
+    await client.search("esrgan")
+    assert captured["params"].get_list("filter") == list(SEARCH_TASK_TAGS)
+
+
+@pytest.mark.anyio
+async def test_search_task_tags_override(tmp_path: Path) -> None:
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["params"] = request.url.params
+        return httpx.Response(200, json=[])
+
+    client = HfClient(make_settings(tmp_path), transport=transport_for(handler))
+    await client.search("sdxl", task_tags=GENERATION_SEARCH_TASK_TAGS)
+    assert captured["params"].get_list("filter") == ["text-to-image"]
+
 
 SEARCH_RESPONSE_FIXTURE = [
     {

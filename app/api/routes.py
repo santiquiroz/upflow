@@ -62,7 +62,7 @@ from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
 from app.services.engines.generation_onnx import generation_dependencies_available
 from app.services.generation_installer import GenerationModelInstaller
 from app.services.generation_job_manager import GenerationJobManager
-from app.services.hf_client import HfClient
+from app.services.hf_client import GENERATION_SEARCH_TASK_TAGS, HfClient
 from app.services.job_manager import JobManager
 from app.services.media_tools import MediaTools
 from app.services.model_installer import ModelInstaller
@@ -980,16 +980,7 @@ async def list_models(registry: ModelRegistry = Depends(get_model_registry)) -> 
     return ModelsResponse(models=[model_entry_to_response(entry) for entry in registry.list()])
 
 
-@router.get("/models/search", response_model=ModelSearchResponse)
-async def search_models(
-    q: str = Query(..., min_length=1),
-    hf_client: HfClient = Depends(get_hf_client),
-) -> ModelSearchResponse:
-    try:
-        results = await hf_client.search(q)
-    except Exception as exc:
-        logger.exception("Hugging Face search failed for query %r", q)
-        raise HTTPException(status_code=502, detail="Hugging Face search failed") from exc
+def _search_results_to_response(results: list) -> ModelSearchResponse:
     return ModelSearchResponse(
         results=[
             HfModelSearchResultResponse(
@@ -1003,6 +994,19 @@ async def search_models(
             for item in results
         ]
     )
+
+
+@router.get("/models/search", response_model=ModelSearchResponse)
+async def search_models(
+    q: str = Query(..., min_length=1),
+    hf_client: HfClient = Depends(get_hf_client),
+) -> ModelSearchResponse:
+    try:
+        results = await hf_client.search(q)
+    except Exception as exc:
+        logger.exception("Hugging Face search failed for query %r", q)
+        raise HTTPException(status_code=502, detail="Hugging Face search failed") from exc
+    return _search_results_to_response(results)
 
 
 @router.post(
@@ -1208,3 +1212,16 @@ async def get_generation_install_status(
         model_id=job.model_id,
         error=job.error,
     )
+
+
+@router.get("/generation/models/search", response_model=ModelSearchResponse)
+async def search_generation_models(
+    q: str = Query(..., min_length=1),
+    hf_client: HfClient = Depends(get_hf_client),
+) -> ModelSearchResponse:
+    try:
+        results = await hf_client.search(q, task_tags=GENERATION_SEARCH_TASK_TAGS)
+    except Exception as exc:
+        logger.exception("Hugging Face generation search failed for query %r", q)
+        raise HTTPException(status_code=502, detail="Hugging Face search failed") from exc
+    return _search_results_to_response(results)

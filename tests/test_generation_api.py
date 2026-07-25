@@ -450,6 +450,24 @@ def client():
         yield test_client
 
 
+def test_generation_search_endpoint_uses_generation_tags(client, monkeypatch) -> None:
+    calls: dict = {}
+
+    class FakeHf:
+        async def search(self, query, limit=20, task_tags=None):
+            calls["query"] = query
+            calls["task_tags"] = task_tags
+            return []
+
+    monkeypatch.setattr(app.state, "hf_client", FakeHf())
+
+    response = client.get("/api/v1/generation/models/search", params={"q": "sdxl"})
+
+    assert response.status_code == 200
+    assert response.json() == {"results": []}
+    assert calls["task_tags"] == ("text-to-image",)
+
+
 @pytest.fixture
 def client_with_model(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
