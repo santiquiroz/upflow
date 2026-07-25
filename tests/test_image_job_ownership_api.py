@@ -5,8 +5,14 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from app.api import auth_routes
 from app.config import get_settings
 from app.main import app
+
+
+@pytest.fixture(autouse=True)
+def _reset_login_rate_limit() -> None:
+    auth_routes._login_attempts.clear()
 
 
 @pytest.fixture
