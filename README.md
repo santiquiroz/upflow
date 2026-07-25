@@ -283,6 +283,14 @@ Cada dispositivo tiene su **propia cola de concurrencia**: un job toma un permis
 - **`CPU_CONCURRENCY`** (default `2`) — jobs simultáneos en `cpu` (modelos ONNX). El `cpu` no compite con las GPUs.
 - **`MAX_CONCURRENT_JOBS`** (default `4`) — workers por manager (imagen y video por separado). Debe **superar** la cantidad de dispositivos que quieras correr en paralelo, o no habrá worker libre para desencolar el segundo job.
 
+Además del conteo de jobs, cada permiso también puede exigir recursos libres reales del device antes de otorgarse (`app/services/resource_probes.py`):
+
+- **`MIN_FREE_VRAM_MB`** (default `768`) — VRAM libre mínima para admitir un job GPU nuevo, medida en vivo vía `IDXGIAdapter3::QueryVideoMemoryInfo` (detecta presión de **otras apps**, no solo jobs propios). `0` = sin piso.
+- **`MIN_FREE_RAM_MB`** (default `1024`) — RAM libre mínima para admitir un job `cpu` nuevo, vía `psutil`. `0` = sin piso.
+- **`RESOURCE_POLL_INTERVAL_SECONDS`** (default `5`) — cada cuánto se re-chequea mientras un job espera gateado por recursos, para detectar presión externa que se libera sola.
+
+Un job nunca falla por esto — si no hay recursos suficientes, espera en cola (igual que por conteo de jobs) hasta que se liberen, propios o ajenos.
+
 **Auto-router opcional** (`ENABLE_AUTO_ROUTE`, default `False`): con el toggle activado, los jobs sin dispositivo fijo (o con `device="auto"`) se reparten al **primer dispositivo compatible libre** en vez de encolarse todos en `dml:0`. La compatibilidad depende del modelo:
 
 | Tipo de modelo | Dispositivos compatibles |
@@ -320,6 +328,9 @@ Todas las variables leen de `.env` (ver [`.env.example`](.env.example) con los d
 | `MAX_IMAGE_PIXELS` | `120000000` | Límite de píxeles (ancho × alto) para evitar decompression bombs |
 | `PER_DEVICE_GPU_CONCURRENCY` | `1` | Jobs simultáneos **por GPU** (semáforo por dispositivo; imagen y video comparten el de esa GPU) — no subirlo sin perfilar VRAM. Ver [Multi-GPU](#multi-gpu-colas-por-dispositivo--auto-router-opcional) |
 | `CPU_CONCURRENCY` | `2` | Jobs simultáneos en `cpu` (modelos ONNX); no compite con las GPUs |
+| `MIN_FREE_VRAM_MB` | `768` | VRAM libre mínima (MB) para admitir un job GPU nuevo; `0` = sin piso. Ver [Multi-GPU](#multi-gpu-colas-por-dispositivo--auto-router-opcional) |
+| `MIN_FREE_RAM_MB` | `1024` | RAM libre mínima (MB) para admitir un job `cpu` nuevo; `0` = sin piso |
+| `RESOURCE_POLL_INTERVAL_SECONDS` | `5` | Cada cuánto se re-chequea VRAM/RAM mientras un job espera por presión externa |
 | `MAX_CONCURRENT_JOBS` | `4` | Workers por manager (imagen y video por separado); debe superar la cantidad de dispositivos a correr en paralelo |
 | `ENABLE_AUTO_ROUTE` | `False` | Auto-router: reparte jobs sin dispositivo fijo (o `device="auto"`) al primer dispositivo compatible libre. Ver [Multi-GPU](#multi-gpu-colas-por-dispositivo--auto-router-opcional) |
 | `SUBPROCESS_TIMEOUT` | `86400` | Backstop absoluto (24h) para matar cualquier subproceso; NO es el mecanismo real (ver `FRAME_STALL_TIMEOUT_SECONDS`) |
