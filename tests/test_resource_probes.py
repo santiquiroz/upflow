@@ -43,3 +43,31 @@ def test_probe_psutil_available_mb_survives_missing_psutil(
     monkeypatch.setitem(sys.modules, "psutil", None)
 
     assert resource_probes._probe_psutil_available_mb() is None
+
+
+import app.services.devices_service as devices_service
+
+
+def test_dxgi_vram_probe_delegates_to_devices_service_seam(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        devices_service, "_query_adapter_free_vram_mb", lambda index: 2048 if index == 1 else None
+    )
+    probe = resource_probes.DxgiVramProbe()
+
+    assert probe.free_capacity_mb("dml:1") == 2048
+    assert probe.free_capacity_mb("dml:0") is None
+
+
+def test_dxgi_vram_probe_returns_none_for_non_dml_device_id() -> None:
+    probe = resource_probes.DxgiVramProbe()
+
+    assert probe.free_capacity_mb("cpu") is None
+    assert probe.free_capacity_mb("npu:0") is None
+
+
+def test_dxgi_vram_probe_returns_none_for_malformed_dml_device_id() -> None:
+    probe = resource_probes.DxgiVramProbe()
+
+    assert probe.free_capacity_mb("dml:not-a-number") is None

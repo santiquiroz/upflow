@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Protocol
 
+from app.services import devices_service
+
 
 class ResourceProbe(Protocol):
     """A read-only probe of free capacity (in MB) for one device kind.
@@ -40,3 +42,21 @@ class SystemRamProbe:
 
     def free_capacity_mb(self, device_id: str) -> int | None:
         return _probe_psutil_available_mb()
+
+
+_DML_DEVICE_PREFIX = "dml:"
+
+
+class DxgiVramProbe:
+    """Real VRAM probe for gpu-kind devices (dml:N), Windows/DirectML only.
+    Thin adapter: parses the device_id and delegates the actual DXGI query
+    to devices_service, which owns the ctypes/COM bindings."""
+
+    def free_capacity_mb(self, device_id: str) -> int | None:
+        if not device_id.startswith(_DML_DEVICE_PREFIX):
+            return None
+        try:
+            adapter_index = int(device_id[len(_DML_DEVICE_PREFIX):])
+        except ValueError:
+            return None
+        return devices_service._query_adapter_free_vram_mb(adapter_index)
