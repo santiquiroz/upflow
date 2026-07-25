@@ -481,7 +481,10 @@ async def create_job(
     )
 
 
-@router.post("/video/jobs", response_model=CreateJobResponse, status_code=202)
+@router.post(
+    "/video/jobs", response_model=CreateJobResponse, status_code=202,
+    dependencies=[Depends(require(Permission.jobs_create))],
+)
 async def create_video_job(
     request: Request,
     file: UploadFile | None = File(default=None),
@@ -534,6 +537,7 @@ async def create_video_job(
     interp_engine_value = interp_engine if isinstance(interp_engine, str) else RIFE_ENGINE
 
     resolved_device = await resolve_request_device(device, devices, settings)
+    current_user = current_user_from_request(request)
 
     resolved = resolve_video_job_fields(
         profile,
@@ -606,9 +610,12 @@ async def create_video_job(
             backend=backend_value,
             video_encoder=video_encoder_value,
             job_id=new_job_id,
+            owner=current_user,
         )
         job.metadata["profileKey"] = profile_key
     except QueueFullError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except QuotaExceededError as exc:
         raise HTTPException(status_code=429, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -730,20 +737,51 @@ async def cancel_job(
     return job_to_response(job)
 
 
-@router.get("/video/jobs/{job_id}", response_model=VideoJobResponse)
-async def get_video_job(job_id: str, video_jobs: VideoJobManager = Depends(get_video_job_manager)) -> VideoJobResponse:
+@router.get("/video/jobs", response_model=VideoJobsListResponse)
+async def list_video_jobs(
+    all_users: bool = Query(default=False, alias="all"),
+    video_jobs: VideoJobManager = Depends(get_video_job_manager),
+    current_user: AuthenticatedUser = Depends(require(Permission.jobs_read_own)),
+) -> VideoJobsListResponse:
+    _require_read_all_if_requested(all_users, current_user)
+    visible = [job for job in video_jobs.jobs.values() if all_users or job.owner_id == current_user.id]
+    return VideoJobsListResponse(jobs=[video_job_to_response(job) for job in visible])
+
+
+@router.get(
+    "/video/jobs/{job_id}", response_model=VideoJobResponse,
+    dependencies=[Depends(require(Permission.jobs_read_own))],
+)
+async def get_video_job(
+    job_id: str,
+    video_jobs: VideoJobManager = Depends(get_video_job_manager),
+    # Bare `Request` (not `Request | None`) so FastAPI's special-case
+    # injection still recognizes it -- `lenient_issubclass` rejects unions.
+    # Direct/unit-test calls that omit this kwarg still get `None`.
+    request: Request = None,
+) -> VideoJobResponse:
     job = video_jobs.get_job(job_id)
-    if not job:
+    current_user = current_user_from_request(request)
+    if not job or (current_user is not None and not _can_view_job(job, current_user)):
         raise HTTPException(status_code=404, detail="Video job not found")
     return video_job_to_response(job)
 
 
-@router.post("/video/jobs/{job_id}/cancel", response_model=VideoJobResponse)
+@router.post(
+    "/video/jobs/{job_id}/cancel", response_model=VideoJobResponse,
+    dependencies=[Depends(require(Permission.jobs_cancel_own))],
+)
 async def cancel_video_job(
-    job_id: str, video_jobs: VideoJobManager = Depends(get_video_job_manager)
+    job_id: str,
+    video_jobs: VideoJobManager = Depends(get_video_job_manager),
+    # Bare `Request` (not `Request | None`) so FastAPI's special-case
+    # injection still recognizes it -- `lenient_issubclass` rejects unions.
+    # Direct/unit-test calls that omit this kwarg still get `None`.
+    request: Request = None,
 ) -> VideoJobResponse:
     job = video_jobs.get_job(job_id)
-    if job is None:
+    current_user = current_user_from_request(request)
+    if job is None or (current_user is not None and not _can_cancel_job(job, current_user)):
         raise HTTPException(status_code=404, detail="Video job not found")
     if not video_jobs.cancel_job(job_id):
         raise HTTPException(status_code=409, detail="Job already finished")
@@ -768,10 +806,18 @@ async def download_job(
     return FileResponse(path=job.output_path, filename=job.output_path.name, media_type="application/octet-stream")
 
 
-@router.get("/video/jobs/{job_id}/download")
-async def download_video_job(job_id: str, video_jobs: VideoJobManager = Depends(get_video_job_manager)) -> FileResponse:
+@router.get("/video/jobs/{job_id}/download", dependencies=[Depends(require(Permission.jobs_read_own))])
+async def download_video_job(
+    job_id: str,
+    video_jobs: VideoJobManager = Depends(get_video_job_manager),
+    # Bare `Request` (not `Request | None`) so FastAPI's special-case
+    # injection still recognizes it -- `lenient_issubclass` rejects unions.
+    # Direct/unit-test calls that omit this kwarg still get `None`.
+    request: Request = None,
+) -> FileResponse:
     job = video_jobs.get_job(job_id)
-    if not job:
+    current_user = current_user_from_request(request)
+    if not job or (current_user is not None and not _can_view_job(job, current_user)):
         raise HTTPException(status_code=404, detail="Video job not found")
     if job.status != JobStatus.completed or not job.output_path:
         raise HTTPException(status_code=409, detail="Video job is not completed yet")
