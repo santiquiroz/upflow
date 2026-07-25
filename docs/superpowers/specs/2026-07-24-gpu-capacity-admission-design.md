@@ -77,9 +77,9 @@ Nuevos bindings ctypes para `IDXGIAdapter3::QueryVideoMemoryInfo` (GUID, vtable 
 - `MIN_FREE_RAM_MB` (default: 1024).
 - `RESOURCE_POLL_INTERVAL_SECONDS` (default: 5).
 
-### 5. `requirements.txt`
+### 5. `pyproject.toml`
 
-- `psutil` — nueva dependencia, pin de versión a resolver en el plan.
+- `psutil` — nueva dependencia (el proyecto declara deps en `pyproject.toml`, no `requirements.txt`), pin de versión a resolver en el plan.
 
 ## Manejo de errores
 
