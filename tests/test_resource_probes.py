@@ -4,6 +4,7 @@ import sys
 
 import pytest
 
+import app.services.devices_service as devices_service
 import app.services.resource_probes as resource_probes
 from app.services.resource_probes import NullProbe
 
@@ -43,9 +44,6 @@ def test_probe_psutil_available_mb_survives_missing_psutil(
     monkeypatch.setitem(sys.modules, "psutil", None)
 
     assert resource_probes._probe_psutil_available_mb() is None
-
-
-import app.services.devices_service as devices_service
 
 
 def test_dxgi_vram_probe_delegates_to_devices_service_seam(
