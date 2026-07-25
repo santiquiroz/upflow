@@ -255,6 +255,7 @@ def job_to_response(job: UpscaleJob) -> JobResponse:
         metadata=job.metadata,
         progress_pct=_progress_pct_from_metadata(job.metadata),
         download_url=download_url,
+        owner_id=job.owner_id,
     )
 
 
@@ -303,6 +304,7 @@ def video_job_to_response(job: VideoUpscaleJob) -> VideoJobResponse:
         metadata=job.metadata,
         progress_pct=_progress_pct_from_metadata(job.metadata),
         download_url=download_url,
+        owner_id=job.owner_id,
     )
 
 
@@ -323,6 +325,7 @@ def audio_job_to_response(job: AudioJob) -> AudioJobResponse:
         stages=job.metadata.get("stages"),
         error=job.error,
         download_url=download_url,
+        owner_id=job.owner_id,
     )
 
 
@@ -336,7 +339,7 @@ def generation_job_to_response(job: GenerationJob) -> GenerationJobResponse:
         height=job.height, seed=job.seed, device=job.device, auto_upscale=job.auto_upscale,
         created_at=job.created_at, started_at=job.started_at, finished_at=job.finished_at,
         progress_pct=_progress_pct_from_metadata(job.metadata), stages=job.metadata.get("stages"),
-        error=job.error, download_url=download_url,
+        error=job.error, download_url=download_url, owner_id=job.owner_id,
     )
 
 
