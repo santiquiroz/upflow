@@ -824,7 +824,10 @@ async def download_video_job(
     return FileResponse(path=job.output_path, filename=job.output_path.name, media_type="application/octet-stream")
 
 
-@router.post("/audio/jobs", response_model=CreateJobResponse, status_code=202)
+@router.post(
+    "/audio/jobs", response_model=CreateJobResponse, status_code=202,
+    dependencies=[Depends(require(Permission.jobs_create))],
+)
 async def create_audio_job(
     request: Request,
     file: UploadFile = File(...),
@@ -840,6 +843,7 @@ async def create_audio_job(
     safe_name = sanitize_filename(original_name, default="upload.wav")
     token = uuid4().hex
     destination = settings.uploads_path / f"{token}-{safe_name}"
+    current_user = current_user_from_request(request)
 
     job: AudioJob | None = None
     try:
@@ -852,8 +856,11 @@ async def create_audio_job(
             device=device,
             output_format=output_format,
             job_id=token,
+            owner=current_user,
         )
     except QueueFullError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except QuotaExceededError as exc:
         raise HTTPException(status_code=429, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -893,32 +900,69 @@ async def audio_capabilities(settings: Settings = Depends(get_settings)) -> Audi
     )
 
 
-@router.get("/audio/jobs/{job_id}", response_model=AudioJobResponse)
-async def get_audio_job(job_id: str, audio_jobs: AudioJobManager = Depends(get_audio_job_manager)) -> AudioJobResponse:
+@router.get("/audio/jobs", response_model=AudioJobsListResponse)
+async def list_audio_jobs(
+    all_users: bool = Query(default=False, alias="all"),
+    audio_jobs: AudioJobManager = Depends(get_audio_job_manager),
+    current_user: AuthenticatedUser = Depends(require(Permission.jobs_read_own)),
+) -> AudioJobsListResponse:
+    _require_read_all_if_requested(all_users, current_user)
+    visible = [job for job in audio_jobs.jobs.values() if all_users or job.owner_id == current_user.id]
+    return AudioJobsListResponse(jobs=[audio_job_to_response(job) for job in visible])
+
+
+@router.get(
+    "/audio/jobs/{job_id}", response_model=AudioJobResponse,
+    dependencies=[Depends(require(Permission.jobs_read_own))],
+)
+async def get_audio_job(
+    job_id: str,
+    audio_jobs: AudioJobManager = Depends(get_audio_job_manager),
+    # Bare `Request` (not `Request | None`) so FastAPI's special-case
+    # injection still recognizes it -- `lenient_issubclass` rejects unions.
+    # Direct/unit-test calls that omit this kwarg still get `None`.
+    request: Request = None,
+) -> AudioJobResponse:
     job = audio_jobs.get_job(job_id)
-    if not job:
+    current_user = current_user_from_request(request)
+    if not job or (current_user is not None and not _can_view_job(job, current_user)):
         raise HTTPException(status_code=404, detail="Audio job not found")
     return audio_job_to_response(job)
 
 
-@router.post("/audio/jobs/{job_id}/cancel", response_model=AudioJobResponse)
+@router.post(
+    "/audio/jobs/{job_id}/cancel", response_model=AudioJobResponse,
+    dependencies=[Depends(require(Permission.jobs_cancel_own))],
+)
 async def cancel_audio_job(
-    job_id: str, audio_jobs: AudioJobManager = Depends(get_audio_job_manager)
+    job_id: str,
+    audio_jobs: AudioJobManager = Depends(get_audio_job_manager),
+    # Bare `Request` (not `Request | None`) so FastAPI's special-case
+    # injection still recognizes it -- `lenient_issubclass` rejects unions.
+    # Direct/unit-test calls that omit this kwarg still get `None`.
+    request: Request = None,
 ) -> AudioJobResponse:
     job = audio_jobs.get_job(job_id)
-    if job is None:
+    current_user = current_user_from_request(request)
+    if job is None or (current_user is not None and not _can_cancel_job(job, current_user)):
         raise HTTPException(status_code=404, detail="Audio job not found")
     if not audio_jobs.cancel_job(job_id):
         raise HTTPException(status_code=409, detail="Job already finished")
     return audio_job_to_response(job)
 
 
-@router.get("/audio/jobs/{job_id}/download")
+@router.get("/audio/jobs/{job_id}/download", dependencies=[Depends(require(Permission.jobs_read_own))])
 async def download_audio_job(
-    job_id: str, audio_jobs: AudioJobManager = Depends(get_audio_job_manager)
+    job_id: str,
+    audio_jobs: AudioJobManager = Depends(get_audio_job_manager),
+    # Bare `Request` (not `Request | None`) so FastAPI's special-case
+    # injection still recognizes it -- `lenient_issubclass` rejects unions.
+    # Direct/unit-test calls that omit this kwarg still get `None`.
+    request: Request = None,
 ) -> FileResponse:
     job = audio_jobs.get_job(job_id)
-    if not job:
+    current_user = current_user_from_request(request)
+    if not job or (current_user is not None and not _can_view_job(job, current_user)):
         raise HTTPException(status_code=404, detail="Audio job not found")
     if job.status != JobStatus.completed or not job.output_path:
         raise HTTPException(status_code=409, detail="Audio job is not completed yet")
