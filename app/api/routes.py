@@ -1043,20 +1043,30 @@ async def delete_model(
     return Response(status_code=204)
 
 
-@router.post("/generation/jobs", response_model=GenerationJobResponse, status_code=201)
+@router.post(
+    "/generation/jobs", response_model=GenerationJobResponse, status_code=201,
+    dependencies=[Depends(require(Permission.jobs_create))],
+)
 async def create_generation_job(
     payload: CreateGenerationJobRequest,
     generation_jobs: GenerationJobManager = Depends(get_generation_job_manager),
+    # Bare `Request` (not `Request | None`) so FastAPI's special-case
+    # injection still recognizes it -- `lenient_issubclass` rejects unions.
+    # Direct/unit-test calls that omit this kwarg still get `None`.
+    request: Request = None,
 ) -> GenerationJobResponse:
+    current_user = current_user_from_request(request)
     try:
         job = await generation_jobs.create_job(
             prompt=payload.prompt, negative_prompt=payload.negative_prompt, model_id=payload.model_id,
             steps=payload.steps, guidance=payload.guidance, width=payload.width, height=payload.height,
             seed=payload.seed, device=payload.device, auto_upscale=payload.auto_upscale,
             upscale_model_name=payload.upscale_model_name, upscale_scale=payload.upscale_scale,
-            upscale_model_id=payload.upscale_model_id,
+            upscale_model_id=payload.upscale_model_id, owner=current_user,
         )
     except QueueFullError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except QuotaExceededError as exc:
         raise HTTPException(status_code=429, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1066,34 +1076,66 @@ async def create_generation_job(
     return generation_job_to_response(job)
 
 
-@router.get("/generation/jobs/{job_id}", response_model=GenerationJobResponse)
+@router.get("/generation/jobs", response_model=GenerationJobsListResponse)
+async def list_generation_jobs(
+    all_users: bool = Query(default=False, alias="all"),
+    generation_jobs: GenerationJobManager = Depends(get_generation_job_manager),
+    current_user: AuthenticatedUser = Depends(require(Permission.jobs_read_own)),
+) -> GenerationJobsListResponse:
+    _require_read_all_if_requested(all_users, current_user)
+    visible = [job for job in generation_jobs.jobs.values() if all_users or job.owner_id == current_user.id]
+    return GenerationJobsListResponse(jobs=[generation_job_to_response(job) for job in visible])
+
+
+@router.get(
+    "/generation/jobs/{job_id}", response_model=GenerationJobResponse,
+    dependencies=[Depends(require(Permission.jobs_read_own))],
+)
 async def get_generation_job(
-    job_id: str, generation_jobs: GenerationJobManager = Depends(get_generation_job_manager)
+    job_id: str, generation_jobs: GenerationJobManager = Depends(get_generation_job_manager),
+    # Bare `Request` (not `Request | None`) so FastAPI's special-case
+    # injection still recognizes it -- `lenient_issubclass` rejects unions.
+    # Direct/unit-test calls that omit this kwarg still get `None`.
+    request: Request = None,
 ) -> GenerationJobResponse:
     job = generation_jobs.get_job(job_id)
-    if not job:
+    current_user = current_user_from_request(request)
+    if not job or (current_user is not None and not _can_view_job(job, current_user)):
         raise HTTPException(status_code=404, detail="Generation job not found")
     return generation_job_to_response(job)
 
 
-@router.post("/generation/jobs/{job_id}/cancel", response_model=GenerationJobResponse)
+@router.post(
+    "/generation/jobs/{job_id}/cancel", response_model=GenerationJobResponse,
+    dependencies=[Depends(require(Permission.jobs_cancel_own))],
+)
 async def cancel_generation_job(
-    job_id: str, generation_jobs: GenerationJobManager = Depends(get_generation_job_manager)
+    job_id: str, generation_jobs: GenerationJobManager = Depends(get_generation_job_manager),
+    # Bare `Request` (not `Request | None`) so FastAPI's special-case
+    # injection still recognizes it -- `lenient_issubclass` rejects unions.
+    # Direct/unit-test calls that omit this kwarg still get `None`.
+    request: Request = None,
 ) -> GenerationJobResponse:
     job = generation_jobs.get_job(job_id)
-    if job is None:
+    current_user = current_user_from_request(request)
+    if job is None or (current_user is not None and not _can_cancel_job(job, current_user)):
         raise HTTPException(status_code=404, detail="Generation job not found")
     if not generation_jobs.cancel_job(job_id):
         raise HTTPException(status_code=409, detail="Job already finished")
     return generation_job_to_response(job)
 
 
-@router.get("/generation/jobs/{job_id}/download")
+@router.get("/generation/jobs/{job_id}/download", dependencies=[Depends(require(Permission.jobs_read_own))])
 async def download_generation_job(
-    job_id: str, generation_jobs: GenerationJobManager = Depends(get_generation_job_manager)
+    job_id: str, generation_jobs: GenerationJobManager = Depends(get_generation_job_manager),
+    # Bare `Request` (not `Request | None`) so FastAPI's special-case
+    # injection still recognizes it -- `lenient_issubclass` rejects unions.
+    # Direct/unit-test calls that omit this kwarg still get `None`.
+    request: Request = None,
 ) -> FileResponse:
     job = generation_jobs.get_job(job_id)
-    if not job:
+    current_user = current_user_from_request(request)
+    if not job or (current_user is not None and not _can_view_job(job, current_user)):
         raise HTTPException(status_code=404, detail="Generation job not found")
     if job.status != JobStatus.completed or not job.output_path:
         raise HTTPException(status_code=409, detail="Generation job is not completed yet")
