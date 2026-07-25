@@ -5,8 +5,6 @@ import contextlib
 import logging
 import os
 import shutil
-import subprocess
-import threading
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -22,6 +20,7 @@ from app.services.backend_registry import (
 from app.services.devices_service import DevicesService
 from app.services.restorer_registry import AudioRestorer
 from app.services.engines.audio_enhance import AudioEnhancer
+from app.services.engines.ffmpeg_frame_sink import RawPipeEncoder
 from app.services.engines.gmfss_engine import GmfssEngine
 from app.services.engines.onnx_upscaler import OnnxUpscaler
 from app.services.engines.onnx_video_upscaler import OnnxVideoUpscaler
@@ -953,18 +952,15 @@ class VideoUpscaler:
         cmd = self._build_rawpipe_command(
             out_w, out_h, fps, audio_mux_path, audio_codec_args, output_path, job, encoder
         )
-        proc = subprocess.Popen(
-            cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE, stdout=subprocess.DEVNULL
-        )
-        stderr_buf: list[bytes] = []
-        stderr_thread = threading.Thread(target=self._drain_stream, args=(proc.stderr, stderr_buf), daemon=True)
-        stderr_thread.start()
+        # Mismo resumen de errores que el encode PNG (mensajes x265 amigables, etc.).
+        pipe_encoder = RawPipeEncoder(cmd, summarize_error=lambda stderr: self._summarize_process_error(stderr, b""))
+        pipe_encoder.start()
 
         counter = {"n": 0}
 
         def write_frame(frame_hwc_rgb) -> None:
-            proc.stdin.write(frame_hwc_rgb.tobytes())  # blocks on pipe backpressure (in a worker thread)
-            counter["n"] += 1
+            pipe_encoder.write_frame(frame_hwc_rgb)  # blocks on pipe backpressure (worker thread)
+            counter["n"] = pipe_encoder.frames_written
 
         device = job.device or self.settings.default_device
         # Shield the engine task so a job cancel doesn't tear it down while a worker
@@ -976,36 +972,14 @@ class VideoUpscaler:
         try:
             async with self._track_streaming_progress(job, counter):
                 expected = await asyncio.shield(stream_task)
-            # Guard against a silent frame drop (mirrors _validate_frame_output_count
-            # on the PNG path): fewer frames written than the engine reported means a
-            # short video -- raise so _try_streaming falls back to the file path.
             if counter["n"] != expected:
                 raise RuntimeError(f"raw-pipe wrote {counter['n']}/{expected} frames")
-            proc.stdin.close()
-            returncode = await asyncio.to_thread(proc.wait)
-            if returncode != 0:
-                raise RuntimeError(self._summarize_process_error(b"".join(stderr_buf), b""))
+            await asyncio.to_thread(pipe_encoder.finish)
         except BaseException:
-            proc.kill()
+            pipe_encoder.kill()
             with contextlib.suppress(BaseException):
                 await stream_task
-            with contextlib.suppress(Exception):
-                await asyncio.to_thread(proc.wait)
             raise
-        finally:
-            stderr_thread.join(timeout=5)
-
-    @staticmethod
-    def _drain_stream(stream, sink: list[bytes]) -> None:
-        # ffmpeg fills its stderr pipe; if nobody drains it, the raw stdin writer
-        # deadlocks once that pipe buffer is full. Keep only the tail for errors.
-        try:
-            for chunk in iter(lambda: stream.read(8192), b""):
-                sink.append(chunk)
-                if len(sink) > 64:
-                    del sink[:-64]
-        except Exception:  # noqa: BLE001 - stream closed on kill
-            pass
 
     @contextlib.asynccontextmanager
     async def _track_streaming_progress(
