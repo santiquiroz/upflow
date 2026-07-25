@@ -307,6 +307,36 @@ class OnnxVideoUpscaler:
                 await worker
             raise
 
+    # --- per-frame closure for the stream pipeline ---------------------------
+
+    def build_frame_upscaler(self, engine_model_name: str, device: str) -> "Callable[[np.ndarray], np.ndarray]":
+        """Closure NHWC uint8 → NHWC uint8 sobre la MISMA sesión/tiling/fp16 que
+        run_frames_builtin: la etapa de upscale del stream pipeline (MapStage).
+
+        La sesión se resuelve UNA vez acá (cache + GpuSessionCoordinator.acquire
+        — la serialización GPU existente); el flag sticky de tiling replica el
+        contrato de _infer_loop para el resto del run.
+        """
+        if not self.available():
+            raise RuntimeError("ONNX video engine is not available: onnxruntime and opencv are required")
+        model = get_builtin_onnx_model(engine_model_name)
+        if model is None:
+            raise RuntimeError(f"No ONNX export configured for builtin model {engine_model_name!r}")
+        onnx_path = self._select_model_file(model, device)
+        if not onnx_path.exists():
+            raise RuntimeError(f"ONNX model file not found: {onnx_path}")
+        self.devices.validate(device)
+        session = self._get_session(str(onnx_path), device)
+        state = {"force_tiled": False}
+
+        def upscale_frame(frame_nhwc: np.ndarray) -> np.ndarray:
+            upscaled, state["force_tiled"] = self._upscale_one(
+                session, frame_nhwc, device, state["force_tiled"]
+            )
+            return upscaled
+
+        return upscale_frame
+
     def _run_streaming_blocking(
         self,
         frames_in: Path,

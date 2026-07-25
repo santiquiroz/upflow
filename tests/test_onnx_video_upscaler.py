@@ -470,6 +470,60 @@ def test_get_session_calls_coordinator_acquire_before_creating(
     assert calls == [("dml:0", engine)]
 
 
+def test_build_frame_upscaler_returns_working_closure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = make_engine(tmp_path)
+    touch_builtin_onnx(engine.settings, "realesr-animevideov3-x4-uint8.onnx")
+    monkeypatch.setattr(engine, "_create_session", lambda model_path, device: Double2xUint8Session())
+
+    upscale = engine.build_frame_upscaler("realesr-animevideov3-x4", "cpu")
+    frame = np.random.default_rng(3).integers(0, 256, (1, 4, 6, 3), dtype=np.uint8)
+    out = upscale(frame)
+
+    assert out.shape == (1, 8, 12, 3)
+    assert out.dtype == np.uint8
+
+
+def test_build_frame_upscaler_raises_for_unconfigured_model(tmp_path: Path) -> None:
+    engine = make_engine(tmp_path)
+    with pytest.raises(RuntimeError, match="No ONNX export configured"):
+        engine.build_frame_upscaler("does-not-exist", "cpu")
+
+
+def test_build_frame_upscaler_raises_when_model_file_missing(tmp_path: Path) -> None:
+    engine = make_engine(tmp_path)  # sin touch_builtin_onnx -> archivo ausente
+    with pytest.raises(RuntimeError, match="ONNX model file not found"):
+        engine.build_frame_upscaler("realesr-animevideov3-x4", "cpu")
+
+
+def test_build_frame_upscaler_sticks_to_tiling_after_oom(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Mismo contrato sticky que _infer_loop: un OOM whole-frame degrada el RESTO
+    # del run a tiling (el estado vive en el closure, un solo intento whole).
+    engine = make_engine(tmp_path)
+    touch_builtin_onnx(engine.settings, "realesr-animevideov3-x4-uint8.onnx")
+    monkeypatch.setattr(engine, "_create_session", lambda model_path, device: Double2xUint8Session())
+    calls = {"whole": 0, "tiled": 0}
+
+    def whole_frame_oom(s, f, d):
+        calls["whole"] += 1
+        raise RuntimeError("Failed to allocate memory: out of memory (D3D12)")
+
+    monkeypatch.setattr(engine, "_infer_frame", whole_frame_oom)
+    monkeypatch.setattr(
+        engine, "_infer_tiled", lambda s, f, d: (calls.__setitem__("tiled", calls["tiled"] + 1), f)[1]
+    )
+
+    upscale = engine.build_frame_upscaler("realesr-animevideov3-x4", "cpu")
+    frame = np.zeros((1, 4, 6, 3), dtype=np.uint8)
+    upscale(frame)
+    upscale(frame)
+
+    assert calls == {"whole": 1, "tiled": 2}  # el 2o frame va directo a tiling
+
+
 # ---------------------------------------------------------------------------
 # cancellation
 # ---------------------------------------------------------------------------
