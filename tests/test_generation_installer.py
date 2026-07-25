@@ -199,6 +199,58 @@ def test_install_pytorch_only_repo_without_converter_keeps_actionable_error(tmp_
     assert "conversión" in (job.error or "")
 
 
+def test_install_mixed_repo_with_torch_only_component_routes_to_conversion(
+    tmp_path: Path,
+) -> None:
+    files = [
+        HfFile(path="model_index.json", size=100),
+        HfFile(path="unet/model.onnx", size=1000),
+        HfFile(path="unet/diffusion_pytorch_model.safetensors", size=1000),
+        HfFile(path="vae/diffusion_pytorch_model.safetensors", size=500),
+    ]
+    installer, _registry, _settings, _hf = make_installer(tmp_path, files=files)
+    enqueued: list[str] = []
+
+    async def fake_enqueue(repo_id: str) -> str:
+        enqueued.append(repo_id)
+        return "conv-mixed"
+
+    installer.enqueue_conversion = fake_enqueue
+    job = install_and_drain(installer, "stabilityai/sdxl-turbo")
+
+    assert enqueued == ["stabilityai/sdxl-turbo"]
+    assert job.status == InstallStatus.converting
+    assert job.conversion_id == "conv-mixed"
+    assert job.error is None
+
+
+def test_install_complete_onnx_repo_with_duplicate_torch_weights_does_not_convert(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    files = PIPELINE_FILES + [
+        HfFile(path="unet/diffusion_pytorch_model.safetensors", size=1000),
+        HfFile(path="vae_decoder/diffusion_pytorch_model.bin", size=500),
+    ]
+    installer, _registry, _settings, _hf = make_installer(tmp_path, files=files)
+    monkeypatch.setattr(
+        installer,
+        "_create_validation_pipeline",
+        lambda pipeline_dir: FakeValidationPipeline(),
+    )
+    enqueued: list[str] = []
+
+    async def fake_enqueue(repo_id: str) -> str:
+        enqueued.append(repo_id)
+        return "should-not-convert"
+
+    installer.enqueue_conversion = fake_enqueue
+    job = install_and_drain(installer, "example/complete-onnx")
+
+    assert enqueued == []
+    assert job.status == InstallStatus.installed
+    assert job.conversion_id is None
+
+
 def test_install_repo_with_onnx_files_never_routes_to_conversion(
     tmp_path: Path, monkeypatch
 ) -> None:

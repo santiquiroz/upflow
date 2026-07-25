@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import app.main as main_module
+import app.services.generation_converter as generation_converter_module
 from app.api.routes import (
     cancel_generation_job,
     create_generation_job,
@@ -537,6 +538,26 @@ def test_convert_endpoint_returns_400_for_invalid_repo_id(client, monkeypatch) -
     assert response.status_code == 400
     assert response.json() == {"detail": "repo inválido"}
     assert converter.convert_calls == ["amd/sdxl-torch"]
+
+
+def test_convert_endpoint_returns_400_when_generation_dependencies_are_missing(
+    client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        generation_converter_module,
+        "generation_dependencies_available",
+        lambda: (False, "optimum y torch no están disponibles"),
+    )
+
+    response = client.post(
+        "/api/v1/generation/models/convert",
+        json={"repoId": "amd/sdxl-torch"},
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "detail": "optimum y torch no están disponibles"
+    }
 
 
 def test_conversion_status_endpoint_returns_job(client, monkeypatch) -> None:

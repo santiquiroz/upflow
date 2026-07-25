@@ -4,6 +4,9 @@ import asyncio
 import json
 from pathlib import Path
 
+import pytest
+
+import app.services.generation_converter as generation_converter_module
 from app.models import JobStatus
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.generation_converter import (
@@ -77,6 +80,26 @@ def convert_and_drain(converter: GenerationModelConverter, repo_id: str) -> str:
         return conversion_id
 
     return asyncio.run(_run())
+
+
+async def test_convert_from_hf_rejects_missing_generation_dependencies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    converter, _installer, _settings, _registry = make_converter(
+        tmp_path, export_fn=fake_export_ok
+    )
+    monkeypatch.setattr(
+        generation_converter_module,
+        "generation_dependencies_available",
+        lambda: (False, "optimum y torch no están disponibles"),
+    )
+
+    with pytest.raises(
+        ValueError, match="optimum y torch no están disponibles"
+    ):
+        await converter.convert_from_hf("amd/sdxl-torch")
+
+    assert converter._queue.empty()
 
 
 def test_parse_submodel_line_uses_index_to_keep_duplicate_classes_unique() -> None:

@@ -73,6 +73,26 @@ def test_scan_onnx_diagnostic_requires_settings_write_permission(bob_client: Tes
     assert response.status_code == 403
 
 
+def test_get_settings_requires_settings_read_permission(
+    bob_client: TestClient,
+) -> None:
+    assert bob_client.get("/api/v1/settings").status_code == 200
+
+    bob_client.post("/api/v1/auth/logout")
+
+    assert bob_client.get("/api/v1/settings").status_code in (401, 403)
+
+
+def test_patch_settings_requires_settings_write_permission(
+    bob_client: TestClient,
+) -> None:
+    response = bob_client.patch(
+        "/api/v1/settings",
+        json={"key": "hf_token", "value": "hf_test"},
+    )
+    assert response.status_code == 403
+
+
 def test_video_analyze_requires_login_in_multi_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RUNTIME_DIR", str(tmp_path / "runtime"))
     monkeypatch.setenv("AUTH_MODE", "multi")

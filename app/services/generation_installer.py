@@ -78,12 +78,29 @@ def _select_files(files: list[HfFile]) -> list[HfFile]:
     return [f for f in files if not f.path.lower().endswith(SKIP_WEIGHT_SUFFIXES)]
 
 
-def _has_onnx_payload(files: list[HfFile]) -> bool:
-    return any(f.path.lower().endswith(".onnx") for f in files)
+def _top_level_dirs(files: list[HfFile]) -> set[str]:
+    return {f.path.split("/", 1)[0] for f in files if "/" in f.path}
 
 
-def _has_torch_weights(files: list[HfFile]) -> bool:
-    return any(f.path.lower().endswith((".safetensors", ".bin")) for f in files)
+def _dirs_with_suffix(
+    files: list[HfFile], suffixes: tuple[str, ...]
+) -> set[str]:
+    return _top_level_dirs(
+        [f for f in files if f.path.lower().endswith(suffixes)]
+    )
+
+
+def _needs_conversion(files: list[HfFile]) -> bool:
+    # La decisión es por componente, no global: repos mixtos reales como
+    # stabilityai/sdxl-turbo publican ONNX para unet pero sólo pesos PyTorch
+    # para vae (findings doc sección (a):
+    # docs/superpowers/specs/2026-07-25-third-party-spike-findings.md).
+    # Descargar sólo el payload ONNX deja un pipeline parcial; convertir desde
+    # los pesos torch produce todos los componentes. En un repo ONNX completo,
+    # cada directorio que contiene pesos torch también tiene su propio ONNX.
+    torch_dirs = _dirs_with_suffix(files, (".safetensors", ".bin"))
+    onnx_dirs = _dirs_with_suffix(files, (".onnx",))
+    return bool(torch_dirs - onnx_dirs)
 
 
 def _read_declared_components(staging_root: Path) -> list[str]:
@@ -263,13 +280,14 @@ class GenerationModelInstaller:
     async def _download_and_register(self, job: InstallJob) -> None:
         files = await self.hf_client.repo_files(job.repo_id)
         _ensure_model_index_listed(files, job.repo_id)
-        if not _has_onnx_payload(files) and _has_torch_weights(files):
-            # Layout diffusers PyTorch (pesos sin export ONNX): se auto-rutea
-            # a un job de conversión separado y visible.
+        if _needs_conversion(files):
+            # Pipeline con al menos un componente publicado sólo en PyTorch:
+            # se auto-rutea a un job de conversión separado y visible.
             if self.enqueue_conversion is None:
                 raise ValueError(
-                    f"El repo {job.repo_id!r} publica pesos PyTorch sin ONNX "
-                    "y la conversión no está disponible."
+                    f"El repo {job.repo_id!r} publica al menos un componente "
+                    "con pesos PyTorch pero sin ONNX propio y la conversión "
+                    "no está disponible."
                 )
             job.conversion_id = await self.enqueue_conversion(job.repo_id)
             # Estado terminal del install job: el progreso real vive en el

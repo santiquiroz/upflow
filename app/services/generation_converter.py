@@ -11,6 +11,7 @@ from unittest.mock import patch as _patch
 
 from app.config import Settings
 from app.models import ConversionJob, JobStatus, utc_now
+from app.services.engines.generation_onnx import generation_dependencies_available
 from app.services.generation_installer import (
     MODEL_INDEX_FILENAME,
     GenerationModelInstaller,
@@ -191,6 +192,9 @@ class GenerationModelConverter:
             self._worker_task = None
 
     async def convert_from_hf(self, repo_id: str) -> str:
+        available, reason = generation_dependencies_available()
+        if not available:
+            raise ValueError(reason or "Generation dependencies missing")
         validated = _validate_repo_id(repo_id)
         job = ConversionJob(repo_id=validated)
         self._jobs[job.id] = job
