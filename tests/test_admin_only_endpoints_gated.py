@@ -65,6 +65,22 @@ def test_scan_onnx_diagnostic_requires_settings_write_permission(bob_client: Tes
     assert response.status_code == 403
 
 
+def test_video_analyze_requires_login_in_multi_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RUNTIME_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setenv("AUTH_MODE", "multi")
+    monkeypatch.setenv("AUTH_SECRET", "s" * 32)
+    get_settings.cache_clear()
+    try:
+        with TestClient(app, client=("127.0.0.1", 12345)) as client:
+            client.post("/api/v1/auth/setup", json={"username": "admin", "password": "adminpass1"})
+            response = client.post(
+                "/api/v1/video/analyze", files={"file": ("a.mp4", b"not-a-real-video", "video/mp4")}
+            )
+            assert response.status_code == 401
+    finally:
+        get_settings.cache_clear()
+
+
 def test_off_mode_admin_only_endpoints_still_reachable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RUNTIME_DIR", str(tmp_path / "runtime"))
     monkeypatch.delenv("AUTH_MODE", raising=False)

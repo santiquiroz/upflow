@@ -642,7 +642,10 @@ async def create_video_job(
     )
 
 
-@router.post("/video/analyze", response_model=AnalyzeVideoResponse)
+@router.post(
+    "/video/analyze", response_model=AnalyzeVideoResponse,
+    dependencies=[Depends(require(Permission.jobs_create))],
+)
 async def analyze_video(
     file: UploadFile = File(...),
     storage: StorageService = Depends(get_storage),
