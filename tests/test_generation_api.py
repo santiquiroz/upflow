@@ -19,9 +19,10 @@ from app.api.routes import (
 )
 from app.config import Settings
 from app.main import app
-from app.models import GenerationJob, JobStatus
+from app.models import ConversionJob, GenerationJob, JobStatus
 from app.schemas import CreateGenerationJobRequest, InstallModelRequest
 from app.services.device_semaphores import DeviceSemaphores
+from app.services.generation_converter import GenerationModelConverter
 from app.services.generation_installer import GenerationModelInstaller
 from app.services.generation_job_manager import GenerationJobManager
 from app.services.model_installer import InstallJob, InstallStatus
@@ -374,6 +375,26 @@ class FakeGenerationInstaller:
         return self._jobs.get(install_id)
 
 
+class FakeGenerationConverter:
+    def __init__(self) -> None:
+        self.convert_calls: list[str] = []
+        self.conversion_id = "conv123"
+        self.convert_error: Exception | None = None
+        self._jobs: dict[str, ConversionJob] = {}
+
+    def seed_job(self, job: ConversionJob) -> None:
+        self._jobs[job.id] = job
+
+    async def convert_from_hf(self, repo_id: str) -> str:
+        self.convert_calls.append(repo_id)
+        if self.convert_error:
+            raise self.convert_error
+        return self.conversion_id
+
+    def status(self, conversion_id: str) -> ConversionJob | None:
+        return self._jobs.get(conversion_id)
+
+
 async def test_install_generation_model_returns_install_id_and_status_url() -> None:
     from app.api.routes import install_generation_model
 
@@ -468,6 +489,81 @@ def test_generation_search_endpoint_uses_generation_tags(client, monkeypatch) ->
     assert calls["task_tags"] == ("text-to-image",)
 
 
+def test_convert_endpoint_enqueues_conversion(client, monkeypatch) -> None:
+    converter = FakeGenerationConverter()
+    monkeypatch.setattr(app.state, "generation_converter", converter, raising=False)
+
+    response = client.post(
+        "/api/v1/generation/models/convert",
+        json={"repoId": "amd/sdxl-torch"},
+    )
+
+    assert response.status_code == 202
+    assert response.json() == {
+        "conversionId": "conv123",
+        "statusUrl": "/api/v1/generation/models/convert/conv123",
+    }
+    assert converter.convert_calls == ["amd/sdxl-torch"]
+
+
+def test_conversion_status_endpoint_returns_job(client, monkeypatch) -> None:
+    job = ConversionJob(repo_id="amd/sdxl-torch")
+    job.status = JobStatus.running
+    job.model_id = "gen--amd--sdxl-torch"
+    job.metadata["progress"] = 0.4
+    job.metadata["stage"] = "exporting:unet"
+    job.metadata["stages"] = [
+        {
+            "key": "downloading",
+            "label": "Downloading weights",
+            "weight": 0.15,
+            "status": "done",
+        }
+    ]
+    converter = FakeGenerationConverter()
+    converter.seed_job(job)
+    monkeypatch.setattr(app.state, "generation_converter", converter, raising=False)
+
+    response = client.get(f"/api/v1/generation/models/convert/{job.id}")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "conversionId": job.id,
+        "repoId": "amd/sdxl-torch",
+        "status": "running",
+        "progressPct": 40.0,
+        "stage": "exporting:unet",
+        "stages": job.metadata["stages"],
+        "modelId": "gen--amd--sdxl-torch",
+        "error": None,
+    }
+
+
+def test_conversion_status_without_progress_returns_null(client, monkeypatch) -> None:
+    job = ConversionJob(repo_id="amd/sdxl-torch")
+    converter = FakeGenerationConverter()
+    converter.seed_job(job)
+    monkeypatch.setattr(app.state, "generation_converter", converter, raising=False)
+
+    response = client.get(f"/api/v1/generation/models/convert/{job.id}")
+
+    assert response.status_code == 200
+    assert response.json()["progressPct"] is None
+
+
+def test_conversion_status_unknown_id_is_404(client, monkeypatch) -> None:
+    monkeypatch.setattr(
+        app.state,
+        "generation_converter",
+        FakeGenerationConverter(),
+        raising=False,
+    )
+
+    response = client.get("/api/v1/generation/models/convert/nope")
+
+    assert response.status_code == 404
+
+
 @pytest.fixture
 def client_with_model(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
@@ -546,4 +642,5 @@ def test_lifespan_wires_generation_managers_into_app_state() -> None:
     with TestClient(app):
         assert isinstance(app.state.generation_job_manager, GenerationJobManager)
         assert isinstance(app.state.generation_installer, GenerationModelInstaller)
+        assert isinstance(app.state.generation_converter, GenerationModelConverter)
         assert app.state.retention_sweeper.generation_job_manager is app.state.generation_job_manager

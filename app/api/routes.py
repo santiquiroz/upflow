@@ -28,6 +28,8 @@ from app.schemas import (
     AudioJobResponse,
     AudioJobsListResponse,
     AudioTrackResponse,
+    ConversionStatusResponse,
+    CreateConversionResponse,
     CreateGenerationJobRequest,
     CreateInstallResponse,
     CreateJobResponse,
@@ -64,6 +66,7 @@ from app.services.auth.identity import AuthenticatedUser
 from app.services.auth.permissions import Permission
 from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
 from app.services.engines.generation_onnx import generation_dependencies_available
+from app.services.generation_converter import GenerationModelConverter
 from app.services.generation_installer import GenerationModelInstaller
 from app.services.generation_job_manager import GenerationJobManager
 from app.services.hf_client import GENERATION_SEARCH_TASK_TAGS, HfClient
@@ -188,6 +191,10 @@ def get_generation_job_manager(request: Request) -> GenerationJobManager:
 
 def get_generation_installer(request: Request) -> GenerationModelInstaller:
     return request.app.state.generation_installer
+
+
+def get_generation_converter(request: Request) -> GenerationModelConverter:
+    return request.app.state.generation_converter
 
 
 def get_storage(request: Request) -> StorageService:
@@ -1214,6 +1221,45 @@ async def get_generation_install_status(
         repo_id=job.repo_id,
         status=job.status.value,
         progress_pct=job.progress_pct,
+        model_id=job.model_id,
+        error=job.error,
+    )
+
+
+@router.post(
+    "/generation/models/convert", response_model=CreateConversionResponse, status_code=202,
+    dependencies=[Depends(require(Permission.models_install))],
+)
+async def convert_generation_model(
+    payload: InstallModelRequest,
+    converter: GenerationModelConverter = Depends(get_generation_converter),
+) -> CreateConversionResponse:
+    try:
+        conversion_id = await converter.convert_from_hf(payload.repo_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return CreateConversionResponse(
+        conversion_id=conversion_id,
+        status_url=f"/api/v1/generation/models/convert/{conversion_id}",
+    )
+
+
+@router.get("/generation/models/convert/{conversion_id}", response_model=ConversionStatusResponse)
+async def get_conversion_status(
+    conversion_id: str,
+    converter: GenerationModelConverter = Depends(get_generation_converter),
+) -> ConversionStatusResponse:
+    job = converter.status(conversion_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Conversion job not found")
+    progress = job.metadata.get("progress")
+    return ConversionStatusResponse(
+        conversion_id=job.id,
+        repo_id=job.repo_id,
+        status=job.status,
+        progress_pct=round(progress * 100, 1) if progress is not None else None,
+        stage=job.metadata.get("stage"),
+        stages=job.metadata.get("stages"),
         model_id=job.model_id,
         error=job.error,
     )

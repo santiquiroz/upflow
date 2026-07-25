@@ -225,6 +225,11 @@ class CreateInstallResponse(BaseModel):
     status_url: str = Field(serialization_alias="statusUrl")
 
 
+class CreateConversionResponse(BaseModel):
+    conversion_id: str = Field(serialization_alias="conversionId")
+    status_url: str = Field(serialization_alias="statusUrl")
+
+
 class UpdateCheckResponse(BaseModel):
     current_version: str = Field(serialization_alias="currentVersion")
     latest_version: str | None = Field(default=None, serialization_alias="latestVersion")
@@ -240,6 +245,17 @@ class InstallStatusResponse(BaseModel):
     repo_id: str = Field(serialization_alias="repoId")
     status: str
     progress_pct: float | None = Field(default=None, serialization_alias="progressPct")
+    model_id: str | None = Field(default=None, serialization_alias="modelId")
+    error: str | None = None
+
+
+class ConversionStatusResponse(BaseModel):
+    conversion_id: str = Field(serialization_alias="conversionId")
+    repo_id: str = Field(serialization_alias="repoId")
+    status: JobStatus
+    progress_pct: float | None = Field(default=None, serialization_alias="progressPct")
+    stage: str | None = None
+    stages: list[dict[str, Any]] | None = None
     model_id: str | None = Field(default=None, serialization_alias="modelId")
     error: str | None = None
 
