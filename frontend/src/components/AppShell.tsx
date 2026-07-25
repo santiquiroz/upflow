@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
 import { NavLink } from "react-router-dom";
+import { useAuth } from "../hooks/useAuth";
 import { NAV_ENTRIES } from "../lib/navigation";
+import { Header } from "./Header";
 import { JobQueue } from "./JobQueue";
 import { UpdateBanner } from "./UpdateBanner";
 
@@ -20,16 +22,21 @@ function navLinkClassName({ isActive }: { isActive: boolean }): string {
 }
 
 export function AppShell({ children }: AppShellProps) {
+  const { hasPermission } = useAuth();
+  const visibleEntries = NAV_ENTRIES.filter(
+    (entry) => !entry.requiredPermission || hasPermission(entry.requiredPermission),
+  );
   return (
     <div className="flex h-screen flex-col">
       <UpdateBanner />
       <div className="grid min-h-0 flex-1 grid-cols-[240px_1fr_320px] max-[900px]:grid-cols-[72px_1fr_320px]">
         <aside aria-label="Main navigation" className="flex flex-col gap-1 border-r border-border bg-surface p-2">
-          <div className="px-2 py-4 font-heading text-lg font-semibold tracking-tight text-text max-[900px]:hidden">
-            Upflow
+          <div className="flex items-center justify-between px-2 py-4 max-[900px]:hidden">
+            <span className="font-heading text-lg font-semibold tracking-tight text-text">Upflow</span>
+            <Header />
           </div>
           <nav className="flex flex-col gap-1">
-            {NAV_ENTRIES.map((entry) => {
+            {visibleEntries.map((entry) => {
               const Icon = entry.icon;
               return (
                 <NavLink key={entry.path} to={entry.path} end={entry.path === "/"} className={navLinkClassName}>

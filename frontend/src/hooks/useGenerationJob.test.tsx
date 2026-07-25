@@ -15,6 +15,7 @@ vi.mock("../services/generation", async (importOriginal) => {
 const POLL_INTERVAL_MS = 10;
 
 const BASE_JOB: GenerationJob = {
+  ownerId: null,
   id: "gen-1",
   status: "queued",
   prompt: "a red fox in the snow",

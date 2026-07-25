@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from app.api.auth_deps import get_user_store
 from app.api.capability_routes import get_capability_probe, router
 from app.services.capability_probe import CapabilityProbe, Lever, LeverStatus
 from app.config import Settings
@@ -29,6 +30,10 @@ def make_client(fake: FakeCapabilityProbe) -> TestClient:
     app = FastAPI()
     app.include_router(router)
     app.dependency_overrides[get_capability_probe] = lambda: fake
+    # require()'s dependency graph resolves get_user_store eagerly even
+    # though the AUTH_MODE=off branch it feeds never reads it -- this
+    # minimal router-only app has no app.state.user_store like the real app.
+    app.dependency_overrides[get_user_store] = lambda: None
     return TestClient(app)
 
 
@@ -118,6 +123,9 @@ def make_diagnostics_client(fake_probe, fake_onnx_probe) -> TestClient:
     app.include_router(router)
     app.dependency_overrides[get_capability_probe] = lambda: fake_probe
     app.dependency_overrides[get_onnx_cpu_fallback_probe] = lambda: fake_onnx_probe
+    # See make_client's comment: require()'s dependency graph needs this
+    # even for the off-mode branch that never actually reads it.
+    app.dependency_overrides[get_user_store] = lambda: None
     return TestClient(app)
 
 

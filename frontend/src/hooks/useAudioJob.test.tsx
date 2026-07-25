@@ -15,6 +15,7 @@ vi.mock("../services/audio", async (importOriginal) => {
 const POLL_INTERVAL_MS = 10;
 
 const BASE_JOB: AudioJob = {
+  ownerId: null,
   id: "aud-1",
   status: "queued",
   originalFilename: "voice.wav",

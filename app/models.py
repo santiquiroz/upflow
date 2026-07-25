@@ -40,6 +40,7 @@ class UpscaleJob:
     error: str | None = None
     output_path: Path | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    owner_id: str | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -109,6 +110,7 @@ class VideoUpscaleJob:
     error: str | None = None
     output_path: Path | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    owner_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -131,6 +133,7 @@ class AudioJob:
     error: str | None = None
     output_path: Path | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    owner_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -156,3 +159,4 @@ class GenerationJob:
     error: str | None = None
     output_path: Path | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    owner_id: str | None = None

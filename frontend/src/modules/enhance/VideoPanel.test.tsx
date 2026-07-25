@@ -295,6 +295,7 @@ describe("VideoPanel", () => {
       downloadUrl: null,
     };
     const completedJob: VideoJobResponse = {
+      ownerId: null,
       jobId: "vid-1",
       status: "completed",
       originalFilename: "clip.mp4",
@@ -354,6 +355,7 @@ describe("VideoPanel", () => {
     };
     vi.mocked(api.createVideoJob).mockResolvedValue(createResponse);
     vi.mocked(api.getVideoJob).mockResolvedValue({
+      ownerId: null,
       jobId: "vid-2",
       status: "queued",
       originalFilename: "clip.mp4",
@@ -417,6 +419,7 @@ describe("VideoPanel", () => {
     };
     vi.mocked(api.createVideoJob).mockResolvedValue(createResponse);
     vi.mocked(api.getVideoJob).mockResolvedValue({
+      ownerId: null,
       jobId: "vid-3",
       status: "queued",
       originalFilename: "clip.mp4",
@@ -495,6 +498,7 @@ describe("VideoPanel", () => {
     };
     vi.mocked(api.createVideoJob).mockResolvedValue(createResponse);
     vi.mocked(api.getVideoJob).mockResolvedValue({
+      ownerId: null,
       jobId: "vid-fmt",
       status: "queued",
       originalFilename: "clip.mp4",
@@ -548,6 +552,7 @@ describe("VideoPanel", () => {
     };
     vi.mocked(api.createVideoJob).mockResolvedValue(createResponse);
     vi.mocked(api.getVideoJob).mockResolvedValue({
+      ownerId: null,
       jobId: "vid-noformat",
       status: "queued",
       originalFilename: "clip.mp4",
@@ -608,6 +613,7 @@ describe("VideoPanel", () => {
     };
     vi.mocked(api.createVideoJob).mockResolvedValue(createResponse);
     vi.mocked(api.getVideoJob).mockResolvedValue({
+      ownerId: null,
       jobId: "vid-rt",
       status: "queued",
       originalFilename: "clip.mp4",
@@ -683,6 +689,7 @@ describe("VideoPanel", () => {
     };
     vi.mocked(api.createVideoJob).mockResolvedValue(createResponse);
     vi.mocked(api.getVideoJob).mockResolvedValue({
+      ownerId: null,
       jobId: "vid-gmfss-only",
       status: "queued",
       originalFilename: "clip.mp4",
@@ -747,6 +754,7 @@ describe("VideoPanel", () => {
     };
     vi.mocked(api.createVideoJob).mockResolvedValue(createResponse);
     vi.mocked(api.getVideoJob).mockResolvedValue({
+      ownerId: null,
       jobId: "vid-gmfss",
       status: "queued",
       originalFilename: "clip.mp4",
@@ -801,6 +809,7 @@ describe("VideoPanel", () => {
     };
     vi.mocked(api.createVideoJob).mockResolvedValue(createResponse);
     vi.mocked(api.getVideoJob).mockResolvedValue({
+      ownerId: null,
       jobId: "vid-off",
       status: "queued",
       originalFilename: "clip.mp4",
@@ -884,6 +893,7 @@ describe("VideoPanel", () => {
       downloadUrl: null,
     });
     vi.mocked(api.getVideoJob).mockResolvedValue({
+      ownerId: null,
       jobId: "job1",
       status: "queued",
       originalFilename: "clip.mp4",

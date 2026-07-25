@@ -161,6 +161,7 @@ describe("createImageJob", () => {
 describe("getJob", () => {
   it("issues a GET to /api/v1/jobs/{id} and returns the typed payload", async () => {
     const payload: JobResponse = {
+      ownerId: null,
       jobId: "job-1",
       status: "running",
       originalFilename: "photo.png",
@@ -189,6 +190,7 @@ describe("getJob", () => {
 describe("cancelJob", () => {
   it("issues a POST to /api/v1/jobs/{id}/cancel and returns the updated job", async () => {
     const payload: JobResponse = {
+      ownerId: null,
       jobId: "job-1",
       status: "cancelled",
       originalFilename: "photo.png",
@@ -223,6 +225,7 @@ describe("cancelJob", () => {
 describe("cancelVideoJob", () => {
   it("issues a POST to /api/v1/video/jobs/{id}/cancel and returns the updated job", async () => {
     const payload: VideoJobResponse = {
+      ownerId: null,
       jobId: "vid-1",
       status: "cancelled",
       originalFilename: "clip.mp4",
@@ -487,6 +490,7 @@ describe("analyzeVideo", () => {
 describe("getVideoJob", () => {
   it("issues a GET to /api/v1/video/jobs/{id} and returns the typed payload", async () => {
     const payload: VideoJobResponse = {
+      ownerId: null,
       jobId: "vid-1",
       status: "running",
       originalFilename: "clip.mp4",

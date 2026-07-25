@@ -8,6 +8,8 @@ from typing import Any
 from app.config import Settings
 from app.exceptions import QueueFullError
 from app.models import TERMINAL_JOB_STATUSES, GenerationJob, JobStatus, UpscaleJob, utc_now
+from app.services.auth.identity import AuthenticatedUser
+from app.services.auth.quotas import QuotaService
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
 from app.services.engines.generation_onnx import GenerationEngine, GenerationRequest
@@ -51,6 +53,7 @@ class GenerationJobManager:
         upscale_engine: Any,
         onnx_upscale_engine: Any | None = None,
         devices: DevicesService | None = None,
+        quota_service: QuotaService | None = None,
     ) -> None:
         self.settings = settings
         self.engine = engine
@@ -59,6 +62,7 @@ class GenerationJobManager:
         self.upscale_engine = upscale_engine
         self.onnx_upscale_engine = onnx_upscale_engine
         self.devices = devices
+        self.quota_service = quota_service
         self.jobs: dict[str, GenerationJob] = {}
         self.queue: asyncio.Queue[GenerationJob] = asyncio.Queue(maxsize=settings.max_queue_size)
         self.worker_tasks: list[asyncio.Task] = []
@@ -102,17 +106,21 @@ class GenerationJobManager:
         upscale_scale: int | None = None,
         upscale_model_id: str | None = None,
         job_id: str | None = None,
+        owner: AuthenticatedUser | None = None,
     ) -> GenerationJob:
         self._validate_generation_model(model_id)
         self._validate_params(prompt, steps, width, height)
         await self._validate_device(device)
         if auto_upscale:
             self._validate_upscale_params(upscale_model_name, upscale_scale, upscale_model_id)
+        if owner is not None and self.quota_service is not None:
+            self.quota_service.check_admission(owner)
         job = GenerationJob(
             prompt=prompt, model_id=model_id, negative_prompt=negative_prompt, steps=steps,
             guidance=guidance, width=width, height=height, seed=seed, device=device,
             auto_upscale=auto_upscale, upscale_model_name=upscale_model_name,
             upscale_scale=upscale_scale, upscale_model_id=upscale_model_id,
+            owner_id=owner.id if owner is not None else None,
         )
         if job_id is not None:
             job.id = job_id
@@ -219,6 +227,13 @@ class GenerationJobManager:
             self._active.pop(job.id, None)
             job.finished_at = utc_now()
             self.queue.task_done()
+            self._record_quota_usage(job)
+
+    def _record_quota_usage(self, job: GenerationJob) -> None:
+        if self.quota_service is None or job.started_at is None:
+            return
+        duration = (job.finished_at - job.started_at).total_seconds()
+        self.quota_service.record_usage(job.owner_id, duration)
 
     async def _run_engine(self, job: GenerationJob) -> None:
         entry = self.registry.get(job.model_id)
@@ -276,6 +291,7 @@ class GenerationJobManager:
             output_format="png",
             model_id=job.upscale_model_id,
             device=device,
+            owner_id=job.owner_id,
         )
         upscale = select_upscale_engine(
             upscale_job, self.registry, self.upscale_engine, self.onnx_upscale_engine

@@ -4,6 +4,7 @@ import type { GenerationJob, JobResponse, VideoJobResponse } from "../lib/apiTyp
 import { JobCard } from "./JobCard";
 
 const BASE_JOB: JobResponse = {
+  ownerId: null,
   jobId: "job-1",
   status: "queued",
   originalFilename: "photo.png",
@@ -22,6 +23,7 @@ const BASE_JOB: JobResponse = {
 };
 
 const BASE_VIDEO_JOB: VideoJobResponse = {
+  ownerId: null,
   jobId: "vid-1",
   status: "queued",
   originalFilename: "clip.mp4",
@@ -49,6 +51,7 @@ const BASE_VIDEO_JOB: VideoJobResponse = {
 };
 
 const BASE_GENERATION_JOB: GenerationJob = {
+  ownerId: null,
   id: "gen-1",
   status: "queued",
   prompt: "a red apple",

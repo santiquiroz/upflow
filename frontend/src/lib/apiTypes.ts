@@ -59,6 +59,7 @@ export interface JobResponse {
   startedAt: string | null;
   finishedAt: string | null;
   error: string | null;
+  ownerId: string | null;
   metadata: JobMetadata;
   progressPct: number | null;
   downloadUrl: string | null;
@@ -94,6 +95,7 @@ export interface VideoJobResponse {
   startedAt: string | null;
   finishedAt: string | null;
   error: string | null;
+  ownerId: string | null;
   metadata: JobMetadata;
   progressPct: number | null;
   downloadUrl: string | null;
@@ -141,6 +143,7 @@ export interface AudioJob {
   progressPct: number | null;
   stages: JobStage[] | null;
   error: string | null;
+  ownerId: string | null;
   downloadUrl: string | null;
 }
 
@@ -330,6 +333,7 @@ export interface GenerationJob {
   progressPct: number | null;
   stages: JobStage[] | null;
   error: string | null;
+  ownerId: string | null;
   downloadUrl: string | null;
 }
 
@@ -344,4 +348,62 @@ export interface GenerationCapabilities {
   models: GenerationModelSummary[];
   devices: string[];
   cpuOnly: boolean;
+}
+
+export interface QuotaStatus {
+  maxConcurrent: number;
+  maxQueued: number;
+  maxJobsPerDay: number;
+  maxGpuSecondsPerDay: number;
+  usedJobsToday: number;
+  usedGpuSecondsToday: number;
+}
+
+export interface MeResponse {
+  userId: string | null;
+  username: string;
+  role: string;
+  permissions: string[];
+  mustChangePassword: boolean;
+  authMode: "off" | "multi";
+  quota: QuotaStatus;
+}
+
+export interface UserSummary {
+  id: string;
+  username: string;
+  role: string;
+  disabled: boolean;
+  mustChangePassword: boolean;
+  quotaOverrides: Record<string, number>;
+  createdAt: string;
+  usedJobsToday: number;
+  usedGpuSecondsToday: number;
+}
+
+export interface UsersListResponse {
+  users: UserSummary[];
+}
+
+export interface CreateUserResponse {
+  user: UserSummary;
+  temporaryPassword: string;
+}
+
+export interface UpdateUserResponse {
+  user: UserSummary;
+  temporaryPassword: string | null;
+}
+
+export interface OwnedJobSummary {
+  id: string;
+  kind: string;
+  status: JobStatus;
+  originalFilename: string | null;
+  createdAt: string;
+  finishedAt: string | null;
+}
+
+export interface UserJobsResponse {
+  jobs: OwnedJobSummary[];
 }

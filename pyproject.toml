@@ -17,6 +17,11 @@ dependencies = [
   # fresh embedded-Python install can't be relied on to reproduce.
   "packaging>=23.0",
   "aiofiles>=24.1.0,<25.0.0",
+  # Task 3 amendment (2026-07-24) - password hashing switched from
+  # hashlib.scrypt (N=2^14) to argon2id after an automated security review
+  # flagged the scrypt cost parameter as weak by current OWASP standards.
+  # Approved exception to this project's zero-new-dependencies default.
+  "argon2-cffi>=23.1.0,<24.0.0",
   "httpx>=0.27.0,<1.0.0",
   "numpy>=1.26.0,<3.0.0",
   "onnxruntime-directml>=1.19.0,<2.0.0; sys_platform == 'win32'",

@@ -54,3 +54,37 @@ class OriginGuardMiddleware(BaseHTTPMiddleware):
         if not allowed:
             return JSONResponse({"detail": "Cross-origin request rejected"}, status_code=403)
         return await call_next(request)
+
+
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost", "testclient"})
+
+
+def is_loopback_host(client_host: str | None) -> bool:
+    return client_host in LOOPBACK_HOSTS
+
+
+class LoopbackGuardMiddleware(BaseHTTPMiddleware):
+    """When AUTH_MODE=off, rejects any request whose peer isn't loopback --
+    the guardrail from the approved spec that makes it impossible to expose
+    the single-user desktop app to the network by accident (Jupyter/
+    code-server pattern). No-op entirely when AUTH_MODE=multi."""
+
+    def __init__(self, app: ASGIApp, auth_mode: str) -> None:
+        super().__init__(app)
+        self.auth_mode = auth_mode
+
+    async def dispatch(self, request: Request, call_next):
+        if self.auth_mode != "off":
+            return await call_next(request)
+        client = request.client
+        if client is not None and not is_loopback_host(client.host):
+            return JSONResponse(
+                {
+                    "detail": (
+                        "Upflow está en modo single-user. "
+                        "Activá AUTH_MODE=multi para acceso remoto."
+                    )
+                },
+                status_code=403,
+            )
+        return await call_next(request)

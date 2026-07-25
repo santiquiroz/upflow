@@ -10,6 +10,8 @@ from pathlib import Path
 from app.config import AUDIO_ENHANCE_MODES, AUDIO_RESTORE_MODES, GMFSS_ENGINE, INTERP_ENGINES, RIFE_ENGINE, Settings
 from app.exceptions import QueueFullError
 from app.models import JobStatus, TERMINAL_JOB_STATUSES, VideoUpscaleJob, utc_now
+from app.services.auth.identity import AuthenticatedUser
+from app.services.auth.quotas import QuotaService
 from app.services.backend_registry import validate_backend_choice
 from app.services.video_encoders import VIDEO_ENCODERS
 from app.services.device_router import DeviceRouter, has_compatible_device
@@ -44,6 +46,7 @@ class VideoJobManager:
         registry: ModelRegistry | None = None,
         devices: DevicesService | None = None,
         device_router: DeviceRouter | None = None,
+        quota_service: QuotaService | None = None,
     ) -> None:
         self.settings = settings
         self.upscaler = upscaler
@@ -56,6 +59,7 @@ class VideoJobManager:
         self.device_router = device_router or DeviceRouter(device_semaphores)
         self.worker_tasks: list[asyncio.Task] = []
         self._active: dict[str, asyncio.Task] = {}
+        self.quota_service = quota_service
 
     async def start(self) -> None:
         if self.worker_tasks:
@@ -104,6 +108,7 @@ class VideoJobManager:
         backend: str | None = None,
         video_encoder: str = "auto",
         job_id: str | None = None,
+        owner: AuthenticatedUser | None = None,
     ) -> VideoUpscaleJob:
         resolved_source_path = self._resolve_source_path(source_path, upload_token)
         source_fps, probe = await self._validate_video(resolved_source_path)
@@ -131,6 +136,8 @@ class VideoJobManager:
         resolved_container, container_upgrade_reason = self._resolve_output_container(
             output_container, keep_subtitles, audio_restore, audio_output_format
         )
+        if owner is not None and self.quota_service is not None:
+            self.quota_service.check_admission(owner)
 
         job = VideoUpscaleJob(
             source_path=resolved_source_path,
@@ -155,6 +162,7 @@ class VideoJobManager:
             backend=backend,
             video_encoder=video_encoder,
             probe=probe,
+            owner_id=owner.id if owner is not None else None,
         )
         if container_upgrade_reason is not None:
             job.metadata["containerUpgradedReason"] = container_upgrade_reason
@@ -473,6 +481,7 @@ class VideoJobManager:
             job.finished_at = utc_now()
             self._unlink_source_if_unused(job)
             self.queue.task_done()
+            self._record_quota_usage(job)
 
     async def _run_engine(self, job: VideoUpscaleJob) -> None:
         job.output_path = await self.upscaler.run(job, fps_multiplier=job.fps_multiplier)
@@ -514,3 +523,9 @@ class VideoJobManager:
             source_path.unlink(missing_ok=True)
         except OSError:
             logger.exception("Failed to delete source upload %s", source_path)
+
+    def _record_quota_usage(self, job: VideoUpscaleJob) -> None:
+        if self.quota_service is None or job.started_at is None:
+            return
+        duration = (job.finished_at - job.started_at).total_seconds()
+        self.quota_service.record_usage(job.owner_id, duration)

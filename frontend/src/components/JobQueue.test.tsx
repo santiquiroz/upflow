@@ -2,23 +2,50 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { AuthProvider } from "../hooks/useAuth";
 import * as api from "../lib/api";
-import type { AudioJob, JobResponse, VideoJobResponse } from "../lib/apiTypes";
+import type { AudioJob, JobResponse, MeResponse, VideoJobResponse } from "../lib/apiTypes";
 import { createJobQueueStore, jobQueueStore } from "../lib/jobQueueStore";
 import * as audioService from "../services/audio";
+import * as authService from "../services/auth";
+import * as generationService from "../services/generation";
 import { JobQueue } from "./JobQueue";
 
 vi.mock("../lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/api")>();
-  return { ...actual, getJob: vi.fn(), getVideoJob: vi.fn(), cancelJob: vi.fn(), cancelVideoJob: vi.fn() };
+  return {
+    ...actual,
+    getJob: vi.fn(),
+    getVideoJob: vi.fn(),
+    cancelJob: vi.fn(),
+    cancelVideoJob: vi.fn(),
+    listJobs: vi.fn(),
+    listVideoJobs: vi.fn(),
+  };
 });
 
 vi.mock("../services/audio", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../services/audio")>();
-  return { ...actual, getAudioJob: vi.fn(), cancelAudioJob: vi.fn() };
+  return { ...actual, getAudioJob: vi.fn(), cancelAudioJob: vi.fn(), listAudioJobs: vi.fn() };
 });
 
+vi.mock("../services/generation", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/generation")>();
+  return { ...actual, listGenerationJobs: vi.fn() };
+});
+
+vi.mock("../services/auth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/auth")>();
+  return { ...actual, getMe: vi.fn() };
+});
+
+const DEFAULT_ME: MeResponse = {
+  userId: null, username: "local", role: "admin", permissions: [], mustChangePassword: false,
+  authMode: "off", quota: { maxConcurrent: 0, maxQueued: 0, maxJobsPerDay: 0, maxGpuSecondsPerDay: 0, usedJobsToday: 0, usedGpuSecondsToday: 0 },
+};
+
 const BASE_AUDIO_JOB: AudioJob = {
+  ownerId: null,
   id: "aud-1",
   status: "running",
   originalFilename: "voice.wav",
@@ -35,6 +62,7 @@ const BASE_AUDIO_JOB: AudioJob = {
 };
 
 const BASE_IMAGE_JOB: JobResponse = {
+  ownerId: null,
   jobId: "img-1",
   status: "queued",
   originalFilename: "photo.png",
@@ -53,6 +81,7 @@ const BASE_IMAGE_JOB: JobResponse = {
 };
 
 const BASE_VIDEO_JOB: VideoJobResponse = {
+  ownerId: null,
   jobId: "vid-1",
   status: "running",
   originalFilename: "clip.mp4",
@@ -79,10 +108,16 @@ const BASE_VIDEO_JOB: VideoJobResponse = {
   downloadUrl: null,
 };
 
+vi.mocked(authService.getMe).mockResolvedValue(DEFAULT_ME);
+
 function renderQueue() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   function Wrapper({ children }: { children: ReactNode }) {
-    return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+    return (
+      <QueryClientProvider client={queryClient}>
+        <AuthProvider>{children}</AuthProvider>
+      </QueryClientProvider>
+    );
   }
   return render(<JobQueue />, { wrapper: Wrapper });
 }
@@ -92,8 +127,13 @@ afterEach(() => {
   vi.mocked(api.getVideoJob).mockReset();
   vi.mocked(api.cancelJob).mockReset();
   vi.mocked(api.cancelVideoJob).mockReset();
+  vi.mocked(api.listJobs).mockReset();
+  vi.mocked(api.listVideoJobs).mockReset();
   vi.mocked(audioService.getAudioJob).mockReset();
   vi.mocked(audioService.cancelAudioJob).mockReset();
+  vi.mocked(audioService.listAudioJobs).mockReset();
+  vi.mocked(generationService.listGenerationJobs).mockReset();
+  vi.mocked(authService.getMe).mockResolvedValue(DEFAULT_ME);
   // JobQueue always reads the singleton jobQueueStore, so each test must
   // clear it -- otherwise jobs tracked by an earlier test would still show
   // up here since the store is a module-level singleton shared across tests
@@ -281,5 +321,22 @@ describe("JobQueue", () => {
     expect(await screen.findByText("Cancelled")).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByRole("button", { name: /cancel photo\.png/i })).not.toBeInTheDocument());
     expect(screen.getByRole("button", { name: /dismiss photo\.png/i })).toBeInTheDocument();
+  });
+
+  it("shows a view-all toggle only with jobs:read_all, and an owner label when enabled", async () => {
+    vi.mocked(authService.getMe).mockResolvedValue({
+      userId: "u1", username: "admin", role: "admin", permissions: ["jobs:read_all"], mustChangePassword: false,
+      authMode: "multi", quota: { maxConcurrent: 0, maxQueued: 0, maxJobsPerDay: 0, maxGpuSecondsPerDay: 0, usedJobsToday: 0, usedGpuSecondsToday: 0 },
+    });
+    vi.mocked(api.listJobs).mockResolvedValue({
+      jobs: [{ jobId: "i1", status: "queued", originalFilename: "a.png", createdAt: "2026-01-01T00:00:01Z", ownerId: "bob", error: null, downloadUrl: null }],
+    } as never);
+    vi.mocked(api.listVideoJobs).mockResolvedValue({ jobs: [] } as never);
+
+    renderQueue();
+    const toggle = await screen.findByRole("checkbox", { name: /ver todos/i });
+    fireEvent.click(toggle);
+
+    expect(await screen.findByText(/bob/)).toBeInTheDocument();
   });
 });

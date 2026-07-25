@@ -71,6 +71,18 @@ export async function apiPostJson<T>(path: string, body: unknown): Promise<T> {
   return (await response.json()) as T;
 }
 
+export async function apiPatchJson<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, await extractErrorMessage(response));
+  }
+  return (await response.json()) as T;
+}
+
 export async function apiPost<T>(path: string): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, { method: "POST" });
   if (!response.ok) {
@@ -129,6 +141,10 @@ export function createImageJob(params: CreateImageJobParams): Promise<CreateJobR
 
 export function getJob(jobId: string): Promise<JobResponse> {
   return apiGet<JobResponse>(`/jobs/${jobId}`);
+}
+
+export function listJobs(all: boolean): Promise<{ jobs: JobResponse[] }> {
+  return apiGet<{ jobs: JobResponse[] }>(`/jobs?all=${all}`);
 }
 
 export function cancelJob(jobId: string): Promise<JobResponse> {
@@ -235,6 +251,10 @@ export function analyzeVideo(file: File): Promise<AnalyzeVideoResponse> {
 
 export function getVideoJob(jobId: string): Promise<VideoJobResponse> {
   return apiGet<VideoJobResponse>(`/video/jobs/${jobId}`);
+}
+
+export function listVideoJobs(all: boolean): Promise<{ jobs: VideoJobResponse[] }> {
+  return apiGet<{ jobs: VideoJobResponse[] }>(`/video/jobs?all=${all}`);
 }
 
 export function cancelVideoJob(jobId: string): Promise<VideoJobResponse> {

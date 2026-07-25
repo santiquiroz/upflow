@@ -23,3 +23,7 @@ class ModelNotFoundError(Exception):
 
 class ModelProtectedError(Exception):
     """Raised when attempting to delete a builtin (non-removable) model."""
+
+
+class QuotaExceededError(Exception):
+    """Raised when a user's concurrency/queue/daily quota would be exceeded by a new job."""

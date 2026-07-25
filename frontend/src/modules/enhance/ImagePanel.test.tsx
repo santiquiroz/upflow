@@ -171,6 +171,7 @@ describe("ImagePanel", () => {
       downloadUrl: null,
     };
     const completedJob: JobResponse = {
+      ownerId: null,
       jobId: "job-1",
       status: "completed",
       originalFilename: "photo.png",
@@ -215,6 +216,7 @@ describe("ImagePanel", () => {
     };
     vi.mocked(api.createImageJob).mockResolvedValue(createResponse);
     vi.mocked(api.getJob).mockResolvedValue({
+      ownerId: null,
       jobId: "job-1",
       status: "queued",
       originalFilename: "photo.png",
