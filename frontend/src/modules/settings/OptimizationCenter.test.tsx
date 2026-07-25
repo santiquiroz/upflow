@@ -4,11 +4,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OptimizationCenter } from "./OptimizationCenter";
 import * as api from "../../lib/api";
 import type { FixLeverResponse } from "../../lib/apiTypes";
+import * as settingsService from "../../services/settings";
 
 const RESIZABLE_BAR_STORAGE_KEY = "upflow.resizableBarConfirmed";
 
+vi.mock("../../services/settings", () => ({ fetchEditableSettings: vi.fn(), patchSetting: vi.fn() }));
+
 function renderWithClient() {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
   return render(
     <QueryClientProvider client={queryClient}>
       <OptimizationCenter />
@@ -18,10 +23,16 @@ function renderWithClient() {
 
 beforeEach(() => {
   localStorage.clear();
+  vi.mocked(settingsService.fetchEditableSettings).mockResolvedValue({
+    settings: [{ key: "rebar_confirmed", configured: false }],
+  });
+  vi.mocked(settingsService.patchSetting).mockResolvedValue({ key: "rebar_confirmed" });
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.mocked(settingsService.fetchEditableSettings).mockReset();
+  vi.mocked(settingsService.patchSetting).mockReset();
   localStorage.clear();
 });
 
@@ -90,23 +101,56 @@ describe("OptimizationCenter", () => {
     expect(await screen.findByRole("heading", { name: /Resizable BAR/i })).toBeInTheDocument();
   });
 
-  it("persists the Resizable BAR confirmation to localStorage and restores it on remount", async () => {
+  it("restores the Resizable BAR confirmation from server settings", async () => {
     vi.spyOn(api, "getCapabilities").mockResolvedValue({ levers: [] });
     vi.spyOn(api, "getOnnxDiagnostics").mockResolvedValue({ entries: [] });
+    vi.mocked(settingsService.fetchEditableSettings).mockResolvedValue({
+      settings: [{ key: "rebar_confirmed", configured: true }],
+    });
 
-    const { unmount } = renderWithClient();
+    renderWithClient();
     const checkbox = await screen.findByRole("checkbox", { name: /confirmed resizable bar/i });
-    expect(checkbox).not.toBeChecked();
+
+    await waitFor(() => expect(checkbox).toBeChecked());
+  });
+
+  it("patches the server while keeping the Resizable BAR toggle optimistic", async () => {
+    vi.spyOn(api, "getCapabilities").mockResolvedValue({ levers: [] });
+    vi.spyOn(api, "getOnnxDiagnostics").mockResolvedValue({ entries: [] });
+    let resolvePatch!: (value: { key: string }) => void;
+    vi.mocked(settingsService.patchSetting).mockReturnValue(
+      new Promise((resolve) => {
+        resolvePatch = resolve;
+      }),
+    );
+
+    renderWithClient();
+    const checkbox = await screen.findByRole("checkbox", { name: /confirmed resizable bar/i });
+    await waitFor(() => expect(settingsService.fetchEditableSettings).toHaveBeenCalled());
 
     fireEvent.click(checkbox);
 
     expect(checkbox).toBeChecked();
-    expect(localStorage.getItem(RESIZABLE_BAR_STORAGE_KEY)).toBe("true");
+    await waitFor(() =>
+      expect(settingsService.patchSetting).toHaveBeenCalledWith("rebar_confirmed", "true"),
+    );
 
-    unmount();
+    resolvePatch({ key: "rebar_confirmed" });
+  });
+
+  it("migrates a legacy localStorage confirmation to the server once", async () => {
+    vi.spyOn(api, "getCapabilities").mockResolvedValue({ levers: [] });
+    vi.spyOn(api, "getOnnxDiagnostics").mockResolvedValue({ entries: [] });
+    localStorage.setItem(RESIZABLE_BAR_STORAGE_KEY, "true");
+
     renderWithClient();
 
-    const restoredCheckbox = await screen.findByRole("checkbox", { name: /confirmed resizable bar/i });
-    expect(restoredCheckbox).toBeChecked();
+    const checkbox = await screen.findByRole("checkbox", { name: /confirmed resizable bar/i });
+    await waitFor(() => {
+      expect(settingsService.patchSetting).toHaveBeenCalledTimes(1);
+      expect(settingsService.patchSetting).toHaveBeenCalledWith("rebar_confirmed", "true");
+    });
+    expect(checkbox).toBeChecked();
+    await waitFor(() => expect(localStorage.getItem(RESIZABLE_BAR_STORAGE_KEY)).toBeNull());
   });
 });

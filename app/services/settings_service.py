@@ -10,7 +10,7 @@ from app.services.json_store import write_text_atomically
 
 # Primer campo real de la whitelist. Crece en subproyectos futuros sin tocar
 # el mecanismo (spec 2026-07-25-generation-third-party-models-design.md §5).
-EDITABLE_SETTINGS_WHITELIST = frozenset({"hf_token"})
+EDITABLE_SETTINGS_WHITELIST = frozenset({"hf_token", "rebar_confirmed"})
 
 # Serializa read-modify-write del .env entre requests concurrentes.
 _ENV_WRITE_LOCK = threading.Lock()

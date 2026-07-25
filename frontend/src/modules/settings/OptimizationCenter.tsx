@@ -1,11 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Ban, CheckCircle2, Loader2, Lock, type LucideIcon } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useCapabilities } from "../../hooks/useCapabilities";
 import { getOnnxDiagnostics, scanOnnxDiagnostic } from "../../lib/api";
 import type { LeverResponse, LeverStatus, OnnxDiagnosticEntryResponse } from "../../lib/apiTypes";
+import { fetchEditableSettings, patchSetting } from "../../services/settings";
 
 const RESIZABLE_BAR_STORAGE_KEY = "upflow.resizableBarConfirmed";
+const EDITABLE_SETTINGS_QUERY_KEY = ["editable-settings"] as const;
 const ONNX_DIAGNOSTICS_QUERY_KEY = ["onnx-diagnostics"] as const;
 
 const STATUS_ICON: Record<LeverStatus, LucideIcon> = {
@@ -234,7 +236,7 @@ function DiagnosticsSection() {
   );
 }
 
-function readResizableBarConfirmed(): boolean {
+function readLegacyResizableBarConfirmed(): boolean {
   try {
     return localStorage.getItem(RESIZABLE_BAR_STORAGE_KEY) === "true";
   } catch {
@@ -242,21 +244,47 @@ function readResizableBarConfirmed(): boolean {
   }
 }
 
-function persistResizableBarConfirmed(confirmed: boolean): void {
+function clearLegacyResizableBarConfirmed(): void {
   try {
-    localStorage.setItem(RESIZABLE_BAR_STORAGE_KEY, String(confirmed));
+    localStorage.removeItem(RESIZABLE_BAR_STORAGE_KEY);
   } catch {
-    // localStorage may be unavailable (private mode / quota); the session-local
-    // state below still reflects the checkbox even when it cannot be persisted.
+    // localStorage may be unavailable; the server remains the source of truth.
   }
 }
 
 function ResizableBarChecklist() {
-  const [confirmed, setConfirmed] = useState<boolean>(readResizableBarConfirmed);
+  const [confirmed, setConfirmed] = useState(false);
+  const initializedFromServer = useRef(false);
+  const settingsQuery = useQuery({
+    queryKey: EDITABLE_SETTINGS_QUERY_KEY,
+    queryFn: fetchEditableSettings,
+  });
+  const patchMutation = useMutation({
+    mutationFn: (checked: boolean) => patchSetting("rebar_confirmed", String(checked)),
+  });
+
+  useEffect(() => {
+    if (!settingsQuery.data || initializedFromServer.current) {
+      return;
+    }
+    initializedFromServer.current = true;
+    const serverConfirmed =
+      settingsQuery.data.settings.find((setting) => setting.key === "rebar_confirmed")?.configured ?? false;
+    if (!serverConfirmed && readLegacyResizableBarConfirmed()) {
+      setConfirmed(true);
+      void patchSetting("rebar_confirmed", "true")
+        .then(clearLegacyResizableBarConfirmed)
+        .catch(() => {
+          // Keep the legacy value so a later mount can retry the migration.
+        });
+      return;
+    }
+    setConfirmed(serverConfirmed);
+  }, [settingsQuery.data]);
 
   function handleToggle(checked: boolean): void {
     setConfirmed(checked);
-    persistResizableBarConfirmed(checked);
+    patchMutation.mutate(checked);
   }
 
   return (
