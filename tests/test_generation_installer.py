@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any
@@ -230,6 +231,43 @@ class FakeValidationPipeline:
             images = [object()]
 
         return _R()
+
+
+def test_validate_and_promote_registers_from_arbitrary_staging(
+    tmp_path: Path, monkeypatch
+) -> None:
+    installer, registry, settings, _hf = make_installer(tmp_path, files=[])
+    monkeypatch.setattr(
+        installer,
+        "_create_validation_pipeline",
+        lambda pipeline_dir: FakeValidationPipeline(),
+    )
+    staging = settings.temp_path / "conv-staging"
+    (staging / "unet").mkdir(parents=True)
+    (staging / "model_index.json").write_text(
+        json.dumps(
+            {
+                "_class_name": "StableDiffusionXLPipeline",
+                "unet": ["diffusers", "x"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    model_id = asyncio.run(
+        installer.validate_and_promote(staging, "amd/conv-model", 123)
+    )
+
+    entry = registry.get(model_id)
+    assert entry is not None
+    assert entry.kind == ModelKind.diffusion_onnx
+    assert entry.size_bytes == 123
+    assert (
+        settings.models_path
+        / "generation"
+        / model_id
+        / "model_index.json"
+    ).exists()
 
 
 # ---------------------------------------------------------------------------

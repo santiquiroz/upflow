@@ -286,33 +286,41 @@ class GenerationModelInstaller:
                 downloaded_bytes += hf_file.size
                 job.progress_pct = round(downloaded_bytes / total_bytes * 100, 1)
 
-            _validate_structure(staging_root)
-            _patch_legacy_component_configs(staging_root)
             job.status = InstallStatus.validating
-            async with self.device_semaphores.acquire(self.settings.default_device):
-                await asyncio.to_thread(self._validate_pipeline, staging_root)
-
-            final_dir = (
-                self.settings.models_path / GENERATION_MODELS_SUBDIR / model_id
+            job.model_id = await self.validate_and_promote(
+                staging_root,
+                job.repo_id,
+                sum(f.size for f in selected),
             )
-            async with self._lock_for(model_id):
-                await self._promote_staging_dir(staging_root, final_dir)
-                entry = ModelEntry(
-                    id=model_id,
-                    name=job.repo_id,
-                    kind=ModelKind.diffusion_onnx,
-                    source=f"hf:{job.repo_id}",
-                    size_bytes=sum(f.size for f in selected),
-                    scale=None,
-                    file_path=f"{GENERATION_MODELS_SUBDIR}/{model_id}",
-                    status=ModelStatus.installed,
-                )
-                self.registry.register(entry)
-            job.model_id = model_id
             job.status = InstallStatus.installed
         finally:
             if staging_root.exists():
                 shutil.rmtree(staging_root, ignore_errors=True)
+
+    async def validate_and_promote(
+        self, staging_root: Path, repo_id: str, size_bytes: int
+    ) -> str:
+        _validate_structure(staging_root)
+        _patch_legacy_component_configs(staging_root)
+        async with self.device_semaphores.acquire(self.settings.default_device):
+            await asyncio.to_thread(self._validate_pipeline, staging_root)
+
+        model_id = _generation_model_id(repo_id)
+        final_dir = self.settings.models_path / GENERATION_MODELS_SUBDIR / model_id
+        async with self._lock_for(model_id):
+            await self._promote_staging_dir(staging_root, final_dir)
+            entry = ModelEntry(
+                id=model_id,
+                name=repo_id,
+                kind=ModelKind.diffusion_onnx,
+                source=f"hf:{repo_id}",
+                size_bytes=size_bytes,
+                scale=None,
+                file_path=f"{GENERATION_MODELS_SUBDIR}/{model_id}",
+                status=ModelStatus.installed,
+            )
+            self.registry.register(entry)
+        return model_id
 
     async def _promote_staging_dir(self, staging_root: Path, final_dir: Path) -> None:
         # Move-aside + rollback, not delete-then-replace: deleting final_dir
