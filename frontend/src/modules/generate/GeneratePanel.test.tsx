@@ -74,6 +74,7 @@ const CPU_ONLY_CAPABILITIES: GenerationCapabilities = {
 };
 
 const BASE_JOB: GenerationJob = {
+  ownerId: null,
   id: "gen-1",
   status: "completed",
   prompt: "a red fox in the snow",

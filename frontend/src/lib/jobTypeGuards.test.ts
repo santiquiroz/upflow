@@ -3,6 +3,7 @@ import type { AudioJob, GenerationJob, JobResponse, VideoJobResponse } from "./a
 import { isGenerationJob } from "./jobTypeGuards";
 
 const IMAGE_JOB: JobResponse = {
+  ownerId: null,
   jobId: "job-1",
   status: "queued",
   originalFilename: "photo.png",
@@ -21,6 +22,7 @@ const IMAGE_JOB: JobResponse = {
 };
 
 const VIDEO_JOB: VideoJobResponse = {
+  ownerId: null,
   jobId: "vid-1",
   status: "queued",
   originalFilename: "clip.mp4",
@@ -48,6 +50,7 @@ const VIDEO_JOB: VideoJobResponse = {
 };
 
 const AUDIO_JOB: AudioJob = {
+  ownerId: null,
   id: "audio-1",
   status: "queued",
   originalFilename: "clip.wav",
@@ -64,6 +67,7 @@ const AUDIO_JOB: AudioJob = {
 };
 
 const GENERATION_JOB: GenerationJob = {
+  ownerId: null,
   id: "gen-1",
   status: "queued",
   prompt: "a red apple",

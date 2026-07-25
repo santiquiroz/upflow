@@ -9,6 +9,7 @@ function stage(key: string, label: string, status: JobStage["status"]): JobStage
 }
 
 const BASE_VIDEO_JOB: VideoJobResponse = {
+  ownerId: null,
   jobId: "vid-1",
   status: "running",
   originalFilename: "clip.mp4",

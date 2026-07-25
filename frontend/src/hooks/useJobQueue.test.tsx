@@ -21,6 +21,7 @@ vi.mock("../services/generation", async (importOriginal) => {
 const POLL_INTERVAL_MS = 10;
 
 const BASE_IMAGE_JOB: JobResponse = {
+  ownerId: null,
   jobId: "img-1",
   status: "queued",
   originalFilename: "photo.png",
@@ -39,6 +40,7 @@ const BASE_IMAGE_JOB: JobResponse = {
 };
 
 const BASE_VIDEO_JOB: VideoJobResponse = {
+  ownerId: null,
   jobId: "vid-1",
   status: "queued",
   originalFilename: "clip.mp4",
@@ -66,6 +68,7 @@ const BASE_VIDEO_JOB: VideoJobResponse = {
 };
 
 const BASE_GENERATION_JOB: GenerationJob = {
+  ownerId: null,
   id: "g1",
   status: "completed",
   prompt: "a red apple",

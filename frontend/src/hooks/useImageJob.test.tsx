@@ -19,6 +19,7 @@ vi.mock("../lib/api", async (importOriginal) => {
 const POLL_INTERVAL_MS = 10;
 
 const BASE_JOB: JobResponse = {
+  ownerId: null,
   jobId: "job-1",
   status: "queued",
   originalFilename: "photo.png",

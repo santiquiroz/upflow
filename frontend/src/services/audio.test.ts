@@ -75,6 +75,7 @@ describe("createAudioJob", () => {
 describe("getAudioJob", () => {
   it("issues a GET to /api/v1/audio/jobs/{id} and returns the typed payload", async () => {
     const payload: AudioJob = {
+      ownerId: null,
       id: "aud-1",
       status: "running",
       originalFilename: "voice.wav",
@@ -101,6 +102,7 @@ describe("getAudioJob", () => {
 describe("cancelAudioJob", () => {
   it("issues a POST to /api/v1/audio/jobs/{id}/cancel and returns the updated job", async () => {
     const payload: AudioJob = {
+      ownerId: null,
       id: "aud-1",
       status: "cancelled",
       originalFilename: "voice.wav",

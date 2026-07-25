@@ -114,6 +114,7 @@ describe("AudioPanel", () => {
       downloadUrl: null,
     };
     const completedJob: AudioJob = {
+      ownerId: null,
       id: "aud-1",
       status: "completed",
       originalFilename: "voice.wav",
@@ -168,6 +169,7 @@ describe("AudioPanel", () => {
     };
     vi.mocked(audioService.createAudioJob).mockResolvedValueOnce(createResponse);
     vi.mocked(audioService.getAudioJob).mockResolvedValue({
+      ownerId: null,
       id: "aud-2",
       status: "queued",
       originalFilename: "voice.wav",

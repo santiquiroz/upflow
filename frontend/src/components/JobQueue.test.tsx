@@ -19,6 +19,7 @@ vi.mock("../services/audio", async (importOriginal) => {
 });
 
 const BASE_AUDIO_JOB: AudioJob = {
+  ownerId: null,
   id: "aud-1",
   status: "running",
   originalFilename: "voice.wav",
@@ -35,6 +36,7 @@ const BASE_AUDIO_JOB: AudioJob = {
 };
 
 const BASE_IMAGE_JOB: JobResponse = {
+  ownerId: null,
   jobId: "img-1",
   status: "queued",
   originalFilename: "photo.png",
@@ -53,6 +55,7 @@ const BASE_IMAGE_JOB: JobResponse = {
 };
 
 const BASE_VIDEO_JOB: VideoJobResponse = {
+  ownerId: null,
   jobId: "vid-1",
   status: "running",
   originalFilename: "clip.mp4",
