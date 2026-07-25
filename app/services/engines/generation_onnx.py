@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -36,6 +37,22 @@ CPU_ONLY_WARNING = (
 _MEMORY_TOKENS = ("memory", "alloc", "oom")
 _CUDA_TOKENS = ("cudaexecutionprovider", "cuda", "tensorrt")
 
+# _class_name declarados verificados contra repos reales en
+# docs/superpowers/specs/2026-07-25-third-party-spike-findings.md. El repo
+# amd/ de SDXL ya declara ORTStableDiffusionXLPipeline; esos nombres ORT pasan
+# directo. SDXL Turbo usa la misma clase SDXL (con menos steps y otro
+# scheduler), no una clase aparte.
+PIPELINE_CLASS_NAMES: dict[str, str] = {
+    "OnnxStableDiffusionPipeline": "ORTStableDiffusionPipeline",
+    "StableDiffusionXLPipeline": "ORTStableDiffusionXLPipeline",
+    "StableDiffusion3Pipeline": "ORTStableDiffusion3Pipeline",
+}
+_KNOWN_ORT_CLASS_NAMES = frozenset(PIPELINE_CLASS_NAMES.values())
+
+# Duplicado deliberado de generation_installer.MODEL_INDEX_FILENAME: ese módulo
+# ya importa de este; importarlo acá sería un import circular.
+_MODEL_INDEX_FILENAME = "model_index.json"
+
 
 class GenerationCancelled(Exception):
     pass
@@ -49,11 +66,39 @@ def generation_dependencies_available() -> tuple[bool, str | None]:
     return True, None
 
 
-def _load_pipeline_class() -> Any:
-    # Nombre confirmado por el spike (Task 1). Si el findings doc dice otro, cambiarlo SOLO acá.
-    from optimum.onnxruntime import ORTStableDiffusionPipeline
+def _read_declared_class_name(pipeline_dir: Path) -> str:
+    index_path = pipeline_dir / _MODEL_INDEX_FILENAME
+    try:
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            f"No se pudo leer {_MODEL_INDEX_FILENAME} del pipeline en {pipeline_dir.name}: {exc}"
+        ) from exc
+    declared = index.get("_class_name")
+    if not isinstance(declared, str) or not declared:
+        raise RuntimeError(
+            f"El {_MODEL_INDEX_FILENAME} del pipeline no declara _class_name -- "
+            "no se puede elegir la clase de carga."
+        )
+    return declared
 
-    return ORTStableDiffusionPipeline
+
+def _load_pipeline_class(declared_class_name: str) -> Any:
+    if declared_class_name in _KNOWN_ORT_CLASS_NAMES:
+        ort_class_name = declared_class_name
+    else:
+        ort_class_name = PIPELINE_CLASS_NAMES.get(declared_class_name)
+    if ort_class_name is None:
+        supported = ", ".join(
+            sorted(set(PIPELINE_CLASS_NAMES) | _KNOWN_ORT_CLASS_NAMES)
+        )
+        raise RuntimeError(
+            f"Clase de pipeline no soportada: {declared_class_name!r}. "
+            f"Clases soportadas: {supported}."
+        )
+    import optimum.onnxruntime as ort_module
+
+    return getattr(ort_module, ort_class_name)
 
 
 def _wrap_generation_error(exc: Exception) -> RuntimeError:
@@ -204,7 +249,7 @@ class GenerationEngine:
     def _create_pipeline(self, pipeline_dir: Path, device: str) -> Any:
         import onnxruntime as ort
 
-        pipeline_cls = _load_pipeline_class()
+        pipeline_cls = _load_pipeline_class(_read_declared_class_name(pipeline_dir))
         providers = _build_providers(device)
         sess_options = ort.SessionOptions()
         _tune_session_options_for_device(sess_options, device)

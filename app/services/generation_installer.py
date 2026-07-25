@@ -14,6 +14,7 @@ from app.services.device_semaphores import DeviceSemaphores
 from app.services.engines.generation_onnx import (
     _build_providers_for_validation,
     _load_pipeline_class,
+    _read_declared_class_name,
     _wrap_generation_error,
     generation_dependencies_available,
 )
@@ -366,6 +367,6 @@ class GenerationModelInstaller:
             gc.collect()
 
     def _create_validation_pipeline(self, pipeline_dir: Path) -> Any:
-        pipeline_cls = _load_pipeline_class()
+        pipeline_cls = _load_pipeline_class(_read_declared_class_name(pipeline_dir))
         kwargs = _build_providers_for_validation(self.settings.default_device)
         return pipeline_cls.from_pretrained(str(pipeline_dir), **kwargs)

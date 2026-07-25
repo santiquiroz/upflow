@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +12,10 @@ from app.services.engines.generation_onnx import (
     CUDA_ONLY_MESSAGE,
     GenerationEngine,
     GenerationRequest,
+    PIPELINE_CLASS_NAMES,
     VRAM_MESSAGE,
+    _load_pipeline_class,
+    _read_declared_class_name,
     _wrap_generation_error,
 )
 
@@ -32,6 +36,62 @@ def make_request(**overrides: Any) -> GenerationRequest:
     }
     defaults.update(overrides)
     return GenerationRequest(**defaults)
+
+
+@pytest.mark.parametrize(
+    ("declared", "expected_ort_name"),
+    [
+        ("OnnxStableDiffusionPipeline", "ORTStableDiffusionPipeline"),
+        ("StableDiffusionXLPipeline", "ORTStableDiffusionXLPipeline"),
+        ("StableDiffusion3Pipeline", "ORTStableDiffusion3Pipeline"),
+    ],
+)
+def test_pipeline_class_map_covers_known_variants(
+    declared: str, expected_ort_name: str
+) -> None:
+    # Turbo NO tiene entrada propia: es un checkpoint de la MISMA clase SDXL.
+    assert PIPELINE_CLASS_NAMES[declared] == expected_ort_name
+
+
+@pytest.mark.parametrize(
+    ("declared", "expected_ort_name"),
+    [
+        ("ORTStableDiffusionXLPipeline", "ORTStableDiffusionXLPipeline"),
+        ("ORTStableDiffusion3Pipeline", "ORTStableDiffusion3Pipeline"),
+    ],
+)
+def test_load_pipeline_class_passthrough_for_ort_names(
+    declared: str, expected_ort_name: str
+) -> None:
+    assert _load_pipeline_class(declared).__name__ == expected_ort_name
+
+
+@pytest.mark.parametrize(
+    "unknown_class_name",
+    ["KandinskyV22Pipeline", "ORTKandinskyPipeline"],
+)
+def test_load_pipeline_class_unknown_class_lists_supported(
+    unknown_class_name: str,
+) -> None:
+    with pytest.raises(RuntimeError) as excinfo:
+        _load_pipeline_class(unknown_class_name)
+    message = str(excinfo.value)
+    assert unknown_class_name in message
+    for supported in set(PIPELINE_CLASS_NAMES) | set(PIPELINE_CLASS_NAMES.values()):
+        assert supported in message
+
+
+def test_read_declared_class_name_reads_model_index(tmp_path: Path) -> None:
+    (tmp_path / "model_index.json").write_text(
+        json.dumps({"_class_name": "StableDiffusionXLPipeline"}), encoding="utf-8"
+    )
+    assert _read_declared_class_name(tmp_path) == "StableDiffusionXLPipeline"
+
+
+def test_read_declared_class_name_missing_class_is_actionable(tmp_path: Path) -> None:
+    (tmp_path / "model_index.json").write_text(json.dumps({}), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="_class_name"):
+        _read_declared_class_name(tmp_path)
 
 
 class FakeImage:
@@ -163,6 +223,7 @@ def test_create_pipeline_builds_expected_from_pretrained_kwargs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls: list[tuple[Any, dict[str, Any]]] = []
+    declared_names: list[str] = []
     tuned: list[tuple[Any, str]] = []
 
     class FakePipelineClass:
@@ -174,7 +235,17 @@ def test_create_pipeline_builds_expected_from_pretrained_kwargs(
     def fake_tune(sess_options: Any, device: str) -> None:
         tuned.append((sess_options, device))
 
-    monkeypatch.setattr(generation_onnx_module, "_load_pipeline_class", lambda: FakePipelineClass)
+    (tmp_path / "model_index.json").write_text(
+        json.dumps({"_class_name": "StableDiffusionXLPipeline"}), encoding="utf-8"
+    )
+
+    def fake_load_pipeline_class(declared_class_name: str) -> type[FakePipelineClass]:
+        declared_names.append(declared_class_name)
+        return FakePipelineClass
+
+    monkeypatch.setattr(
+        generation_onnx_module, "_load_pipeline_class", fake_load_pipeline_class
+    )
     monkeypatch.setattr(generation_onnx_module, "_tune_session_options_for_device", fake_tune)
 
     engine = GenerationEngine(make_settings(tmp_path), RecordingCoordinator())  # type: ignore[arg-type]
@@ -192,6 +263,10 @@ def test_create_pipeline_builds_expected_from_pretrained_kwargs(
     _path_cpu, kwargs_cpu = calls[1]
     assert kwargs_cpu["provider"] == "CPUExecutionProvider"
     assert "provider_options" not in kwargs_cpu
+    assert declared_names == [
+        "StableDiffusionXLPipeline",
+        "StableDiffusionXLPipeline",
+    ]
 
 
 @pytest.mark.anyio
