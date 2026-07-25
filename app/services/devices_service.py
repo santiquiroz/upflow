@@ -287,7 +287,7 @@ def _query_adapter_free_vram_mb(adapter_index: int) -> int | None:
         return None
     try:
         return _query_adapter_free_vram_mb_dxgi(adapter_index)
-    except OSError:
+    except Exception:  # noqa: BLE001 -- this is now on the job-admission hot path; a native-call failure must fail open, never raise
         return None
 
 

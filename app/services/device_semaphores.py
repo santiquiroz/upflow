@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from app.config import Settings
 from app.services.devices_service import CPU_DEVICE_ID
 from app.services.resource_probes import ResourceProbe
+
+logger = logging.getLogger(__name__)
 
 _GPU_DEVICE_PREFIX = "dml:"
 _NPU_DEVICE_PREFIX = "npu:"
@@ -82,15 +85,24 @@ class DeviceSemaphores:
         """The shared condition the auto-router waits on for a freed permit.
 
         A caller reserving through it MUST hold it while checking
-        `free_capacity` and calling `reserve`, so the check-and-take is
+        `has_capacity` and calling `reserve`, so the check-and-take is
         atomic against every other acquirer under asyncio's cooperative
         scheduling.
         """
         return self._condition
 
+    @property
+    def resource_poll_interval_seconds(self) -> float:
+        """How often a waiter should re-check admission when nothing calls
+        notify_all() -- needed because resource pressure (VRAM/RAM freed by a
+        process outside this app) never triggers our own release(). Shared by
+        `acquire()` and DeviceRouter._reserve_least_loaded so both wait loops
+        poll at the same cadence."""
+        return self._settings.resource_poll_interval_seconds
+
     def reserve(self, device_id: str | None) -> None:
         """Take one permit unconditionally. Caller MUST hold release_condition
-        AND have already confirmed `free_capacity(device_id) > 0` under it."""
+        AND have already confirmed `has_capacity(device_id)` under it."""
         self._in_flight[device_id] = self.in_flight(device_id) + 1
 
     def _has_enough_resources(self, device_id: str | None) -> bool:
@@ -108,10 +120,16 @@ class DeviceSemaphores:
             return True
         return free_mb >= threshold
 
+    def has_capacity(self, device_id: str | None) -> bool:
+        """Non-reserving half of the admission predicate: would a reserve for
+        `device_id` succeed right now (job-count slot free AND, if a probe
+        applies, enough free VRAM/RAM)? Single source of truth shared by
+        `_reserve_if_free` (pinned-device acquire) and DeviceRouter's
+        auto-route selection, so the two admission paths can never diverge."""
+        return self.free_capacity(device_id) > 0 and self._has_enough_resources(device_id)
+
     def _reserve_if_free(self, device_id: str | None) -> bool:
-        if self.free_capacity(device_id) <= 0:
-            return False
-        if not self._has_enough_resources(device_id):
+        if not self.has_capacity(device_id):
             return False
         self.reserve(device_id)
         return True
@@ -139,7 +157,11 @@ class DeviceSemaphores:
         # re-acquiring its lock even when cancelled by the outer timeout,
         # guaranteed since Python 3.11 (this project's floor).
         async with self._condition:
+            logged_wait = False
             while not self._reserve_if_free(device_id):
+                if not logged_wait:
+                    logger.info("device %s: waiting for capacity (job-count or resource threshold)", device_id)
+                    logged_wait = True
                 try:
                     await asyncio.wait_for(
                         self._condition.wait(), timeout=self._settings.resource_poll_interval_seconds

@@ -291,6 +291,8 @@ Además del conteo de jobs, cada permiso también puede exigir recursos libres r
 
 Un job nunca falla por esto — si no hay recursos suficientes, espera en cola (igual que por conteo de jobs) hasta que se liberen, propios o ajenos.
 
+Este gateo por recursos está **activo por defecto** (los valores de arriba no son `0`): un despliegue existente que actualice a esta versión sin tocar su `.env` empieza a admitir jobs según VRAM/RAM libre real de inmediato, aunque el umbral por defecto es generoso y no debería notarse en hardware típico. Para restaurar el comportamiento previo (solo conteo de jobs, sin piso de recursos), poné `MIN_FREE_VRAM_MB=0` y `MIN_FREE_RAM_MB=0`.
+
 **Auto-router opcional** (`ENABLE_AUTO_ROUTE`, default `False`): con el toggle activado, los jobs sin dispositivo fijo (o con `device="auto"`) se reparten al **primer dispositivo compatible libre** en vez de encolarse todos en `dml:0`. La compatibilidad depende del modelo:
 
 | Tipo de modelo | Dispositivos compatibles |
