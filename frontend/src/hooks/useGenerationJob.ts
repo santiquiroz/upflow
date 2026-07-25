@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import type { GenerationCapabilities, GenerationJob, JobStatus } from "../lib/apiTypes";
+import type { GenerationCapabilities, GenerationJob, JobStatus, ModelSearchResponse } from "../lib/apiTypes";
 import { isTerminalInstallStatus } from "../lib/installStatus";
 import { isTerminalJobStatus } from "../lib/jobStatus";
 import { jobQueueStore, type JobQueueStore } from "../lib/jobQueueStore";
@@ -11,6 +11,7 @@ import {
   getGenerationInstallStatus,
   getGenerationJob,
   installGenerationModel,
+  searchGenerationModels,
   type CreateGenerationJobParams,
 } from "../services/generation";
 import {
@@ -137,6 +138,15 @@ export function useGenerationCapabilities() {
   return useQuery<GenerationCapabilities>({
     queryKey: ["generationCapabilities"],
     queryFn: fetchGenerationCapabilities,
+  });
+}
+
+export function useGenerationHfSearchResults(query: string) {
+  const trimmed = query.trim();
+  return useQuery<ModelSearchResponse>({
+    queryKey: ["generation-hf-search", trimmed],
+    queryFn: () => searchGenerationModels(trimmed),
+    enabled: trimmed.length > 0,
   });
 }
 

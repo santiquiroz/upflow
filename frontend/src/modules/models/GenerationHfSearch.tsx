@@ -1,7 +1,11 @@
 import { useState } from "react";
+import {
+  useGenerationHfSearchResults,
+  useGenerationModelInstall,
+} from "../../hooks/useGenerationJob";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
-import { useHfSearchResults } from "../../hooks/useModels";
-import { HfResultCard } from "./HfResultCard";
+import type { HfModelSearchResultResponse } from "../../lib/apiTypes";
+import { ResultCardLayout } from "./HfResultCard";
 import {
   DEFAULT_SEARCH_DEBOUNCE_MS,
   NoResultsState,
@@ -11,12 +15,27 @@ import {
   SearchLoadingState,
 } from "./hfSearchUi";
 
-interface HfSearchProps {
+interface GenerationHfSearchProps {
   debounceMs?: number;
 }
 
+function GenerationResultCard({ result }: { result: HfModelSearchResultResponse }) {
+  const { phase, progressPct, errorMessage, install, reset } = useGenerationModelInstall();
+
+  return (
+    <ResultCardLayout
+      result={result}
+      phase={phase}
+      progressPct={progressPct}
+      errorMessage={errorMessage}
+      onInstall={() => install(result.id)}
+      onReset={reset}
+    />
+  );
+}
+
 function SearchResults({ query }: { query: string }) {
-  const searchQuery = useHfSearchResults(query);
+  const searchQuery = useGenerationHfSearchResults(query);
 
   if (searchQuery.isLoading) {
     return <SearchLoadingState />;
@@ -36,14 +55,16 @@ function SearchResults({ query }: { query: string }) {
     <ul className="flex flex-col gap-3">
       {results.map((result) => (
         <li key={result.id}>
-          <HfResultCard result={result} />
+          <GenerationResultCard result={result} />
         </li>
       ))}
     </ul>
   );
 }
 
-export function HfSearch({ debounceMs = DEFAULT_SEARCH_DEBOUNCE_MS }: HfSearchProps) {
+export function GenerationHfSearch({
+  debounceMs = DEFAULT_SEARCH_DEBOUNCE_MS,
+}: GenerationHfSearchProps) {
   const [query, setQuery] = useState("");
   const debouncedQuery = useDebouncedValue(query, debounceMs);
   const trimmedQuery = debouncedQuery.trim();
@@ -52,7 +73,7 @@ export function HfSearch({ debounceMs = DEFAULT_SEARCH_DEBOUNCE_MS }: HfSearchPr
     <div className="flex flex-col gap-4">
       <SearchInput value={query} onChange={setQuery} />
       {trimmedQuery.length === 0 ? (
-        <SearchEmptyState message="Search Hugging Face for an ONNX upscaling model to install." />
+        <SearchEmptyState message="Search Hugging Face for a Stable Diffusion (text-to-image) pipeline to install." />
       ) : (
         <SearchResults query={trimmedQuery} />
       )}

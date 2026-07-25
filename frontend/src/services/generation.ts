@@ -4,6 +4,7 @@ import type {
   GenerationCapabilities,
   GenerationJob,
   InstallStatusResponse,
+  ModelSearchResponse,
 } from "../lib/apiTypes";
 
 export interface CreateGenerationJobParams {
@@ -65,6 +66,10 @@ export function listGenerationJobs(all: boolean): Promise<{ jobs: GenerationJob[
 
 export function fetchGenerationCapabilities(): Promise<GenerationCapabilities> {
   return apiGet<GenerationCapabilities>("/generation/capabilities");
+}
+
+export function searchGenerationModels(query: string): Promise<ModelSearchResponse> {
+  return apiGet<ModelSearchResponse>(`/generation/models/search?q=${encodeURIComponent(query)}`);
 }
 
 export function installGenerationModel(repoId: string): Promise<CreateInstallResponse> {

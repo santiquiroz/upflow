@@ -5,6 +5,7 @@ import { DEFAULT_INSTALL_POLL_INTERVAL_MS, useDeleteModel, useInstalledModels } 
 import type { ModelResponse } from "../../lib/apiTypes";
 import { formatModelSize } from "../../lib/sizeFormat";
 import { DeleteConfirmDialog } from "./DeleteConfirmDialog";
+import { GenerationHfSearch } from "./GenerationHfSearch";
 import { InstallError, InstallProgress, isInstallInFlight } from "./installUi";
 
 export const GENERATION_MODEL_REPO_PLACEHOLDER = "amd/stable-diffusion-1.5_io16_amdgpu";
@@ -141,6 +142,7 @@ export function GenerationModelsSection({ pollIntervalMs = DEFAULT_INSTALL_POLL_
   return (
     <div className="flex flex-col gap-4 rounded border border-border bg-surface p-4">
       <h2 className="font-heading text-sm font-semibold text-text">Generation models (Stable Diffusion)</h2>
+      <GenerationHfSearch />
       <RepoIdForm repoId={repoId} onRepoIdChange={setRepoId} onSubmit={handleSubmit} disabled={installInFlight} />
       {installInFlight && <InstallProgress phase={phase} progressPct={progressPct} />}
       {phase === "error" && errorMessage && <InstallError message={errorMessage} onRetry={reset} />}
