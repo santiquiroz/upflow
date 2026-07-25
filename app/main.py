@@ -34,6 +34,7 @@ from app.services.media_tools import MediaTools
 from app.services.model_installer import ModelInstaller
 from app.services.model_registry import ModelRegistry
 from app.services.onnx_cpu_fallback_probe import OnnxCpuFallbackProbe
+from app.services.resource_probes import DxgiVramProbe, SystemRamProbe
 from app.services.retention_sweeper import RetentionSweeper
 from app.services.storage import StorageService
 from app.services.update_service import UpdateService
@@ -64,7 +65,12 @@ async def lifespan(app: FastAPI):
     model_registry = ModelRegistry(settings)
     onnx_engine = OnnxUpscaler(settings, model_registry, devices_service, gpu_coordinator)
     onnx_video_engine = OnnxVideoUpscaler(settings, model_registry, devices_service, gpu_coordinator)
-    device_semaphores = DeviceSemaphores(settings)
+    # Subproyecto B: real VRAM/RAM admission on top of the existing
+    # job-count gate. "npu" has no real probe yet (no NPU enumeration story
+    # in devices_service.py) -- omitting it from this dict is equivalent to
+    # registering a NullProbe, both fail-open.
+    resource_probes = {"gpu": DxgiVramProbe(), "cpu": SystemRamProbe()}
+    device_semaphores = DeviceSemaphores(settings, resource_probes=resource_probes)
     generation_engine = GenerationEngine(settings, gpu_coordinator)
     generation_job_manager = GenerationJobManager(
         settings,
