@@ -6,6 +6,7 @@ import gc
 import json
 import shutil
 import uuid
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -75,6 +76,14 @@ def _generation_model_id(repo_id: str) -> str:
 
 def _select_files(files: list[HfFile]) -> list[HfFile]:
     return [f for f in files if not f.path.lower().endswith(SKIP_WEIGHT_SUFFIXES)]
+
+
+def _has_onnx_payload(files: list[HfFile]) -> bool:
+    return any(f.path.lower().endswith(".onnx") for f in files)
+
+
+def _has_torch_weights(files: list[HfFile]) -> bool:
+    return any(f.path.lower().endswith((".safetensors", ".bin")) for f in files)
 
 
 def _read_declared_components(staging_root: Path) -> list[str]:
@@ -190,6 +199,7 @@ class GenerationModelInstaller:
         self.hf_client = hf_client
         self.gpu_coordinator = gpu_coordinator
         self.device_semaphores = device_semaphores
+        self.enqueue_conversion: Callable[[str], Awaitable[str]] | None = None
         self._queue: asyncio.Queue[InstallJob] = asyncio.Queue()
         self._jobs: dict[str, InstallJob] = {}
         self._worker_task: asyncio.Task | None = None
@@ -253,6 +263,19 @@ class GenerationModelInstaller:
     async def _download_and_register(self, job: InstallJob) -> None:
         files = await self.hf_client.repo_files(job.repo_id)
         _ensure_model_index_listed(files, job.repo_id)
+        if not _has_onnx_payload(files) and _has_torch_weights(files):
+            # Layout diffusers PyTorch (pesos sin export ONNX): se auto-rutea
+            # a un job de conversión separado y visible.
+            if self.enqueue_conversion is None:
+                raise ValueError(
+                    f"El repo {job.repo_id!r} publica pesos PyTorch sin ONNX "
+                    "y la conversión no está disponible."
+                )
+            job.conversion_id = await self.enqueue_conversion(job.repo_id)
+            # Estado terminal del install job: el progreso real vive en el
+            # conversion job y el frontend hace el hand-off con conversion_id.
+            job.status = InstallStatus.converting
+            return
 
         model_id = _generation_model_id(job.repo_id)
         staging_root = self.settings.temp_path / f"gen-staging-{model_id}"

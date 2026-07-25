@@ -146,6 +146,7 @@ async def lifespan(app: FastAPI):
         settings, model_registry, hf_client, gpu_coordinator, device_semaphores
     )
     generation_converter = GenerationModelConverter(settings, generation_installer, hf_client)
+    generation_installer.enqueue_conversion = generation_converter.convert_from_hf
     await job_manager.start()
     await video_job_manager.start()
     await audio_job_manager.start()

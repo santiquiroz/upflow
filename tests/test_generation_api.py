@@ -445,6 +445,24 @@ async def test_get_generation_install_status_maps_job_fields() -> None:
     assert response.progress_pct == 12.5
 
 
+def test_generation_install_status_exposes_conversion_id(client, monkeypatch) -> None:
+    job = InstallJob(
+        id="i1",
+        repo_id="amd/x",
+        status=InstallStatus.converting,
+        conversion_id="conv456",
+    )
+    installer = FakeGenerationInstaller()
+    installer.seed_job(job)
+    monkeypatch.setattr(app.state, "generation_installer", installer)
+
+    response = client.get("/api/v1/generation/models/install/i1")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "converting"
+    assert response.json()["conversionId"] == "conv456"
+
+
 # ---------------------------------------------------------------------------
 # Schema validation (pydantic-level, no manager involved)
 # ---------------------------------------------------------------------------
@@ -658,4 +676,8 @@ def test_lifespan_wires_generation_managers_into_app_state() -> None:
         assert isinstance(app.state.generation_job_manager, GenerationJobManager)
         assert isinstance(app.state.generation_installer, GenerationModelInstaller)
         assert isinstance(app.state.generation_converter, GenerationModelConverter)
+        assert (
+            app.state.generation_installer.enqueue_conversion
+            == app.state.generation_converter.convert_from_hf
+        )
         assert app.state.retention_sweeper.generation_job_manager is app.state.generation_job_manager

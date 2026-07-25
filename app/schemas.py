@@ -247,6 +247,7 @@ class InstallStatusResponse(BaseModel):
     progress_pct: float | None = Field(default=None, serialization_alias="progressPct")
     model_id: str | None = Field(default=None, serialization_alias="modelId")
     error: str | None = None
+    conversion_id: str | None = Field(default=None, serialization_alias="conversionId")
 
 
 class ConversionStatusResponse(BaseModel):

@@ -1052,6 +1052,7 @@ async def get_install_status(
         progress_pct=job.progress_pct,
         model_id=job.model_id,
         error=job.error,
+        conversion_id=job.conversion_id,
     )
 
 
@@ -1223,6 +1224,7 @@ async def get_generation_install_status(
         progress_pct=job.progress_pct,
         model_id=job.model_id,
         error=job.error,
+        conversion_id=job.conversion_id,
     )
 
 
