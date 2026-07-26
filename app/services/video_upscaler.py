@@ -61,6 +61,44 @@ logger = logging.getLogger(__name__)
 
 FRAME_POLL_INTERVAL_SECONDS = 1.0
 
+# Cuántos renglones con señal de error se conservan al resumir un fallo de
+# subproceso (ffmpeg reparte el diagnóstico en 2-3 líneas consecutivas).
+_MAX_ERROR_CONTEXT_LINES = 3
+
+# Bytes por píxel de un PNG ya comprimido. Estimación deliberadamente
+# conservadora (contenido real de animación/video ronda 1.0-1.5 B/px a 8 bits
+# RGB); sirve para decidir "esto no entra ni cerca", no para predecir tamaños.
+_PNG_BYTES_PER_PIXEL = 1.2
+
+# Margen sobre el espacio libre: nunca se planifica llenar el disco al ras.
+_DISK_HEADROOM_FRACTION = 0.90
+
+
+def estimate_png_workdir_bytes(
+    *,
+    source_width: int,
+    source_height: int,
+    scale: int,
+    source_frame_count: int,
+    output_frame_count: int,
+    writes_upscaled_frames: bool,
+    writes_interpolated_frames: bool,
+) -> int:
+    """Pico de disco del camino PNG clásico, en bytes.
+
+    El work-dir llega a sostener tres sets a la vez: frames-in (resolución
+    fuente), frames-interp (resolución fuente, más frames) y frames-out
+    (upscaleado). El set upscaleado domina por scale² — a 4x son 16x los
+    píxeles de la fuente — y es el que vuelve inviables los jobs largos.
+    """
+    source_pixels = max(0, source_width) * max(0, source_height)
+    total = source_pixels * max(0, source_frame_count)
+    if writes_interpolated_frames:
+        total += source_pixels * max(0, output_frame_count)
+    if writes_upscaled_frames:
+        total += source_pixels * (max(1, scale) ** 2) * max(0, output_frame_count)
+    return int(total * _PNG_BYTES_PER_PIXEL)
+
 # Modos del stream pipeline (spec 2026-07-25-stream-frame-pipeline-design.md):
 # "full" = decode→(GMFSS)→upscale→encode sin ningún PNG; "hybrid" = RIFE
 # conserva su tramo PNG y solo upscale→encode va en streaming; None = clásico.
@@ -189,6 +227,11 @@ class VideoUpscaler:
                 self._finalize_output(job, output_path)
                 return output_path
             stream_mode = None  # fallback: camino clásico desde cero
+
+        # Antes de escribir el primer PNG: si el camino clásico no entra en el
+        # disco, fallar acá con un mensaje accionable en vez de a mitad del
+        # upscale con frames truncados.
+        self._ensure_disk_room_for_png_path(job, frames_in.parent, fps_multiplier, stream_mode)
 
         advance_video_stage(job, "extracting_frames")
         async with self._track_frame_progress(job, frames_in, "extracting_frames"):
@@ -855,6 +898,47 @@ class VideoUpscaler:
         primary = job.audio_track_indices[0]
         return [index for index in job.audio_track_indices[1:] if index != primary]
 
+    def _ensure_disk_room_for_png_path(
+        self, job: VideoUpscaleJob, work_dir: Path, fps_multiplier: int, stream_mode: str | None
+    ) -> None:
+        """Falla ANTES de extraer si el camino PNG no entra en el disco.
+
+        Sin esto un 4x de dos horas descubre que le faltan terabytes recién a
+        mitad del upscale, y el síntoma que ve el usuario es un error de ffmpeg
+        sin relación aparente (frames truncados) horas después de arrancar.
+        """
+        frames_total = job.metadata.get("framesTotal")
+        width = int(job.metadata.get("sourceWidth") or 0)
+        height = int(job.metadata.get("sourceHeight") or 0)
+        # Sin conteo honesto (VFR) o sin dimensiones no hay estimación honesta.
+        if not isinstance(frames_total, int) or isinstance(frames_total, bool) or frames_total <= 0:
+            return
+        if width <= 0 or height <= 0:
+            return
+
+        interpolating = self._interpolation_requested(fps_multiplier, job.target_fps)
+        output_frame_count = frames_total * fps_multiplier if interpolating else frames_total
+        needed = estimate_png_workdir_bytes(
+            source_width=width,
+            source_height=height,
+            scale=job.scale,
+            source_frame_count=frames_total,
+            output_frame_count=output_frame_count,
+            # El híbrido streamea el upscale: nunca materializa el set grande.
+            writes_upscaled_frames=stream_mode is None,
+            writes_interpolated_frames=interpolating,
+        )
+        usable = int(shutil.disk_usage(work_dir).free * _DISK_HEADROOM_FRACTION)
+        if needed <= usable:
+            return
+        needed_gb = needed / 1024**3
+        usable_gb = usable / 1024**3
+        raise RuntimeError(
+            f"No hay espacio suficiente para procesar este video: el camino con frames PNG "
+            f"necesita ~{needed_gb:,.0f} GB y hay ~{usable_gb:,.0f} GB utilizables. "
+            f"Probá con una escala menor, un recorte más corto, o liberá espacio en disco."
+        )
+
     def _needs_source_input(self, job: VideoUpscaleJob) -> bool:
         return bool(self._extra_audio_track_indices(job)) or job.keep_subtitles
 
@@ -1432,4 +1516,15 @@ class VideoUpscaler:
             return "FFmpeg could not write the output video file. Check codec/container compatibility and selected options."
 
         lines = [line.strip() for line in text.splitlines() if line.strip()]
-        return lines[-1] if lines else "External process failed"
+        if not lines:
+            return "External process failed"
+        # El último renglón de ffmpeg suele NO ser el diagnóstico: en un fallo de
+        # input imprime "Error opening input file <RUTA>." y recién después el
+        # resumen sin ruta, y en un fallo de encode las estadísticas del codec
+        # van DESPUÉS del error (lines[-1] devolvía cosas como "kb/s:52.80").
+        # Se conservan los últimos renglones que sí traen señal de error.
+        error_lines = [line for line in lines if "error" in line.lower()]
+        if not error_lines:
+            return lines[-1]
+        deduped = list(dict.fromkeys(error_lines[-_MAX_ERROR_CONTEXT_LINES:]))
+        return " | ".join(deduped)

@@ -822,3 +822,137 @@ async def test_stream_pipeline_from_dir_falls_back_on_encoder_failure(
     assert ok is False
     assert "streamPipelineFallback" in job.metadata
     assert not output_path.exists()  # el output parcial se borra antes del fallback
+
+
+# ---------------------------------------------------------------------------
+# Diagnóstico de fallos de ffmpeg: el resumen de error debe conservar la línea
+# que NOMBRA el input/output culpable, no quedarse con el último renglón (que
+# en un fallo de encode real es una estadística del codec, no un error).
+# ---------------------------------------------------------------------------
+
+
+def test_summarize_keeps_the_line_naming_the_failing_input(tmp_path: Path) -> None:
+    upscaler = make_stream_upscaler(tmp_path)
+    stderr = (
+        b"[in#0 @ 000001] Error opening input: Invalid argument\n"
+        b"Error opening input file C:/work/job/frames-interp/%08d.png.\n"
+        b"Error opening input files: Invalid argument\n"
+    )
+
+    summary = upscaler._summarize_process_error(stderr, b"")
+
+    assert "frames-interp" in summary, "se perdió la ruta del input que falló"
+    assert "Invalid argument" in summary
+
+
+def test_summarize_prefers_error_lines_over_trailing_codec_stats(tmp_path: Path) -> None:
+    # Caso real: a verbosidad por defecto libx264 escupe estadísticas DESPUÉS
+    # del error, así que lines[-1] devolvía "kb/s:52.80" como mensaje de error.
+    upscaler = make_stream_upscaler(tmp_path)
+    stderr = (
+        b"[libx264 @ 0001] Error: invalid parameter\n"
+        b"[libx264 @ 0001] i16 v,h,dc,p: 100%  0%  0%  0%\n"
+        b"[libx264 @ 0001] kb/s:52.80\n"
+    )
+
+    summary = upscaler._summarize_process_error(stderr, b"")
+
+    assert "invalid parameter" in summary
+    assert "kb/s" not in summary
+
+
+def test_summarize_falls_back_to_last_line_without_error_markers(tmp_path: Path) -> None:
+    upscaler = make_stream_upscaler(tmp_path)
+    assert upscaler._summarize_process_error(b"algo raro\nultima linea\n", b"") == "ultima linea"
+
+
+def test_summarize_keeps_the_curated_x265_message(tmp_path: Path) -> None:
+    upscaler = make_stream_upscaler(tmp_path)
+    stderr = b"[libx265 @ 0001] cannot open libx265\nError opening output files: Invalid argument\n"
+    assert "H.265/libx265" in upscaler._summarize_process_error(stderr, b"")
+
+
+# ---------------------------------------------------------------------------
+# Guard de espacio en disco: el camino clásico materializa TODOS los frames
+# upscaleados en PNG. Un 4x de 2h llega a terabytes; hay que fallar en 1s con
+# un mensaje claro, no a las 6h con un error críptico de ffmpeg.
+# ---------------------------------------------------------------------------
+
+
+def test_estimate_png_workdir_bytes_dominated_by_upscaled_frames() -> None:
+    from app.services.video_upscaler import estimate_png_workdir_bytes
+
+    # 100 frames fuente 100x100, x4 => 400x400, sin interpolación.
+    estimate = estimate_png_workdir_bytes(
+        source_width=100,
+        source_height=100,
+        scale=4,
+        source_frame_count=100,
+        output_frame_count=100,
+        writes_upscaled_frames=True,
+        writes_interpolated_frames=False,
+    )
+    # Los upscaleados (16x los píxeles) dominan sobre los de entrada.
+    assert estimate > 100 * 400 * 400
+    assert estimate < 100 * 400 * 400 * 3
+
+
+def test_estimate_png_workdir_bytes_zero_when_no_png_is_written() -> None:
+    from app.services.video_upscaler import estimate_png_workdir_bytes
+
+    estimate = estimate_png_workdir_bytes(
+        source_width=1920,
+        source_height=1080,
+        scale=4,
+        source_frame_count=1000,
+        output_frame_count=1000,
+        writes_upscaled_frames=False,
+        writes_interpolated_frames=False,
+    )
+    # Solo frames-in a resolución fuente: mucho menos que el set upscaleado.
+    assert 0 < estimate < 1000 * 1920 * 1080 * 4
+
+
+@pytest.mark.asyncio
+async def test_run_fails_fast_when_the_png_path_does_not_fit_on_disk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import shutil as shutil_module
+
+    upscaler = make_stream_upscaler(tmp_path)
+    job = make_stream_job(tmp_path, device="cpu")
+    job.metadata["framesTotal"] = 400_000
+    job.metadata["sourceWidth"] = 1920
+    job.metadata["sourceHeight"] = 1080
+
+    monkeypatch.setattr(shutil_module, "disk_usage", lambda path: _FakeDiskUsage())
+
+    with pytest.raises(RuntimeError, match="espacio"):
+        upscaler._ensure_disk_room_for_png_path(job, tmp_path, fps_multiplier=1, stream_mode=None)
+
+
+def test_disk_guard_passes_when_there_is_room(tmp_path: Path) -> None:
+    upscaler = make_stream_upscaler(tmp_path)
+    job = make_stream_job(tmp_path, device="cpu")
+    job.metadata["framesTotal"] = 10
+    job.metadata["sourceWidth"] = 64
+    job.metadata["sourceHeight"] = 64
+
+    upscaler._ensure_disk_room_for_png_path(job, tmp_path, fps_multiplier=1, stream_mode=None)
+
+
+def test_disk_guard_skips_when_frame_count_is_unknown(tmp_path: Path) -> None:
+    # framesTotal None (VFR) es honesto: sin conteo no hay estimación honesta.
+    upscaler = make_stream_upscaler(tmp_path)
+    job = make_stream_job(tmp_path, device="cpu")
+    job.metadata["framesTotal"] = None
+    job.metadata["sourceWidth"] = 1920
+    job.metadata["sourceHeight"] = 1080
+
+    upscaler._ensure_disk_room_for_png_path(job, tmp_path, fps_multiplier=1, stream_mode=None)
+
+
+class _FakeDiskUsage:
+    total = 4_000_000_000_000
+    used = 3_900_000_000_000
+    free = 100_000_000_000  # 100 GB libres
