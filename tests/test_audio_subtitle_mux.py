@@ -527,8 +527,15 @@ def test_keep_audio_false_with_keep_subtitles_still_maps_subs_and_video(tmp_path
 
 def test_audio_present_with_source_maps_video_exactly_once_byte_identical(tmp_path: Path) -> None:
     # Regression guard: audio_mux_path present AND source input needed. The
-    # video map is emitted exactly once (with the audio input), never doubled by
-    # the source-input branch. Full byte-for-byte assertion.
+    # video map is emitted exactly once, never doubled by the source-input
+    # branch. Full byte-for-byte assertion.
+    #
+    # Este es EXACTAMENTE el caso que rompia ffmpeg: la version anterior de esta
+    # lista congelaba los -map ENTRE los dos ultimos -i, y ffmpeg los lee como
+    # opciones del input siguiente ("Option map cannot be applied to input
+    # url ..." -> "Error opening input files: Invalid argument"). El test
+    # afirmaba que el comando roto era el correcto. Ahora todos los -i van
+    # primero y los -map despues.
     upscaler = make_upscaler(tmp_path)
     source_path = tmp_path / "source.mkv"
     job = make_video_job(source_path, audio_track_indices=[1, 3], keep_subtitles=True)
@@ -548,12 +555,12 @@ def test_audio_present_with_source_maps_video_exactly_once_byte_identical(tmp_pa
         str(tmp_path / "frames-out" / "%08d.png"),
         "-i",
         str(audio_mux_path),
+        "-i",
+        str(source_path),
         "-map",
         "0:v:0",
         "-map",
         "1:a:0",
-        "-i",
-        str(source_path),
         "-map",
         "2:3",
         "-map",

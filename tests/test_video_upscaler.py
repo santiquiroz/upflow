@@ -882,19 +882,18 @@ def test_summarize_keeps_the_curated_x265_message(tmp_path: Path) -> None:
 def test_estimate_png_workdir_bytes_dominated_by_upscaled_frames() -> None:
     from app.services.video_upscaler import estimate_png_workdir_bytes
 
-    # 100 frames fuente 100x100, x4 => 400x400, sin interpolación.
-    estimate = estimate_png_workdir_bytes(
-        source_width=100,
-        source_height=100,
-        scale=4,
-        source_frame_count=100,
-        output_frame_count=100,
-        writes_upscaled_frames=True,
+    # 100 frames fuente 100x100, x4 => 400x400 (16x los píxeles), sin interp.
+    kwargs = dict(
+        source_width=100, source_height=100, scale=4,
+        source_frame_count=100, output_frame_count=100,
         writes_interpolated_frames=False,
     )
-    # Los upscaleados (16x los píxeles) dominan sobre los de entrada.
-    assert estimate > 100 * 400 * 400
-    assert estimate < 100 * 400 * 400 * 3
+    with_upscaled = estimate_png_workdir_bytes(**kwargs, writes_upscaled_frames=True)
+    only_source = estimate_png_workdir_bytes(**kwargs, writes_upscaled_frames=False)
+
+    # El set upscaleado es el que vuelve inviables los jobs largos: tiene que
+    # dominar el total, no ser un detalle sobre los frames de entrada.
+    assert with_upscaled > only_source * 2
 
 
 def test_estimate_png_workdir_bytes_zero_when_no_png_is_written() -> None:
@@ -909,8 +908,8 @@ def test_estimate_png_workdir_bytes_zero_when_no_png_is_written() -> None:
         writes_upscaled_frames=False,
         writes_interpolated_frames=False,
     )
-    # Solo frames-in a resolución fuente: mucho menos que el set upscaleado.
-    assert 0 < estimate < 1000 * 1920 * 1080 * 4
+    # Solo frames-in a resolución fuente: nunca puede superar el crudo RGB8.
+    assert 0 < estimate < 1000 * 1920 * 1080 * 3
 
 
 @pytest.mark.asyncio
@@ -956,3 +955,73 @@ class _FakeDiskUsage:
     total = 4_000_000_000_000
     used = 3_900_000_000_000
     free = 100_000_000_000  # 100 GB libres
+
+
+# ---------------------------------------------------------------------------
+# Orden de argumentos del encode: en ffmpeg -map es opcion de SALIDA. Emitir
+# -map entre dos -i hace que ffmpeg las lea como opciones del input siguiente y
+# rechace el comando entero ("Option map cannot be applied to input url ...").
+# Se dispara solo con audio preparado + fuente extra (subtitulos o pistas
+# adicionales), que es justo el caso que ningun test ejecutaba contra ffmpeg.
+# ---------------------------------------------------------------------------
+
+
+def _map_flags_come_after_every_input(cmd: list[str]) -> bool:
+    last_input = max(i for i, token in enumerate(cmd) if token == "-i")
+    first_map = next((i for i, token in enumerate(cmd) if token == "-map"), None)
+    return first_map is None or first_map > last_input
+
+
+def test_encode_command_emits_every_input_before_any_map_with_subtitles(tmp_path: Path) -> None:
+    upscaler = make_stream_upscaler(tmp_path)
+    job = make_stream_job(tmp_path, keep_subtitles=True)
+
+    cmd = upscaler._build_encode_command(
+        job, tmp_path / "frames", "24/1", tmp_path / "audio.m4a", ["-c:a", "aac"],
+        tmp_path / "out.mkv", "libx264",
+    )
+
+    assert _map_flags_come_after_every_input(cmd), f"-map antes de un -i: {cmd}"
+    assert "-map" in cmd and str(job.source_path) in cmd
+
+
+def test_encode_command_emits_every_input_before_any_map_with_extra_audio(tmp_path: Path) -> None:
+    upscaler = make_stream_upscaler(tmp_path)
+    job = make_stream_job(tmp_path, keep_audio=True, audio_track_indices=[1, 2, 3])
+
+    cmd = upscaler._build_encode_command(
+        job, tmp_path / "frames", "24/1", tmp_path / "audio.m4a", ["-c:a", "aac"],
+        tmp_path / "out.mkv", "libx264",
+    )
+
+    assert _map_flags_come_after_every_input(cmd), f"-map antes de un -i: {cmd}"
+
+
+def test_encode_command_keeps_map_order_video_then_primary_audio_then_extras(tmp_path: Path) -> None:
+    upscaler = make_stream_upscaler(tmp_path)
+    job = make_stream_job(tmp_path, keep_audio=True, audio_track_indices=[1, 2], keep_subtitles=True)
+
+    cmd = upscaler._build_encode_command(
+        job, tmp_path / "frames", "24/1", tmp_path / "audio.m4a", ["-c:a", "aac"],
+        tmp_path / "out.mkv", "libx264",
+    )
+
+    maps = [cmd[i + 1] for i, token in enumerate(cmd) if token == "-map"]
+    assert maps[0] == "0:v:0"
+    assert maps[1] == "1:a:0"       # audio primario ya procesado
+    assert maps[-1].endswith(":s?")  # subtitulos al final
+    assert "2:2" in maps             # pista extra por indice absoluto de la fuente
+
+
+def test_encode_command_without_source_input_is_unchanged(tmp_path: Path) -> None:
+    upscaler = make_stream_upscaler(tmp_path)
+    job = make_stream_job(tmp_path)
+
+    cmd = upscaler._build_encode_command(
+        job, tmp_path / "frames", "24/1", tmp_path / "audio.m4a", ["-c:a", "aac"],
+        tmp_path / "out.mkv", "libx264",
+    )
+
+    assert _map_flags_come_after_every_input(cmd)
+    assert str(job.source_path) not in cmd
+    assert [cmd[i + 1] for i, t in enumerate(cmd) if t == "-map"] == ["0:v:0", "1:a:0"]
