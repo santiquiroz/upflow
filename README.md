@@ -421,6 +421,19 @@ Con ambos motores disponibles, el selector RIFE/GMFSS aparece en el dropdown de 
 
 La fusión GMFSS+upscale en una pasada (`ENABLE_INTERP_UPSCALE_FUSION`, Fase 2) midió ~1.7x MÁS LENTA que las dos pasadas a 4x/8K en una RX 7800 XT: era un generador secuencial de un solo hilo sin overlap load/compute/save. Fue eliminada y reemplazada por el pipeline de frames en streaming (ver `docs/superpowers/specs/2026-07-25-stream-frame-pipeline-design.md`), que conecta las etapas por colas con un thread por etapa.
 
+### Pipeline de frames en streaming (`ENABLE_STREAM_PIPELINE`)
+
+Activo por defecto. Conecta decode→(interpolación)→upscale→encode por colas acotadas en memoria (frames rgb24 crudos), con cada etapa en su propio thread — sin materializar PNGs intermedios. El presupuesto de RAM es el mismo `ONNX_VIDEO_MAX_PIPELINE_MB` del pipeline ONNX, repartido globalmente entre todas las colas.
+
+| Camino | Con el pipeline | PNGs eliminados |
+|---|---|---|
+| Sin interpolación + upscale ONNX builtin | decode→stream→upscale→stream→encode | todos |
+| GMFSS + upscale ONNX builtin | decode→stream→GMFSS→stream→upscale→stream→encode | todos |
+| RIFE + upscale ONNX builtin | decode→PNG→RIFE→(lee sus PNGs)→upscale→**stream**→encode | los de salida (los más pesados) |
+| Upscale NCNN (binario) / modelos HF-ONNX | camino clásico completo | ninguno |
+
+Ante CUALQUIER excepción del pipeline, el job cae automáticamente al camino clásico desde cero (se registra en el log y en `job.metadata.streamPipelineFallback`) — el job nunca falla por culpa del camino nuevo. `ENABLE_STREAM_PIPELINE=false` restaura el comportamiento anterior completo (incluido el raw-pipe clásico). Diseño: `docs/superpowers/specs/2026-07-25-stream-frame-pipeline-design.md`.
+
 ## Cómo activar la mejora de audio (DeepFilterNet / RNNoise)
 
 La mejora de audio está deshabilitada por defecto. Para activarla:
