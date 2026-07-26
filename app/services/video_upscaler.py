@@ -170,11 +170,7 @@ class VideoUpscaler:
         audio_mux_path: Path | None = None
         audio_codec_args: list[str] = []
         audio_prepared = False
-        # Task 11 quita la condición de no-interpolación al habilitar GMFSS en
-        # el modo full; mientras tanto los jobs GMFSS siguen el camino clásico.
-        if stream_mode == STREAM_MODE_FULL and not self._interpolation_requested(
-            fps_multiplier, job.target_fps
-        ):
+        if stream_mode == STREAM_MODE_FULL:
             audio_mux_path, audio_codec_args = await self._prepare_audio_mux(job, has_audio, audio_path)
             audio_prepared = True
             if await self._try_stream_pipeline_full(
@@ -305,6 +301,16 @@ class VideoUpscaler:
         complete_video_stages(job)
         job.metadata["outputWidth"] = job.metadata["sourceWidth"] * job.scale
         job.metadata["outputHeight"] = job.metadata["sourceHeight"] * job.scale
+
+    @staticmethod
+    def _interpolated_encode_fps(fps: str, fps_multiplier: int, target_fps: str | None) -> str:
+        # Mismos valores de encode-fps que devuelven _interpolate_to_target_fps /
+        # _interpolate_by_multiplier, para que el pipeline encodee exactamente a
+        # la misma tasa que el camino de dos pasadas.
+        if target_fps is not None:
+            return format_fps_fraction(target_fps)
+        new_rate = compute_interpolated_fps(fps, fps_multiplier)
+        return f"{new_rate.numerator}/{new_rate.denominator}"
 
     async def _upscale_frames(self, job: VideoUpscaleJob, frames_in: Path, frames_out: Path) -> None:
         # HF-installed ONNX models are onnx-only (arbitrary fp32 NCHW graphs) --
@@ -1078,6 +1084,21 @@ class VideoUpscaler:
             expected_output_count = job.metadata.get("framesTotal")
             encode_fps = fps
             gmfss_stage_factory = None
+            if self._interpolation_requested(fps_multiplier, job.target_fps):
+                # El gate garantiza framesTotal conocido y gmfss_engine presente
+                # para este camino (RIFE nunca llega acá: es modo híbrido).
+                source_count = int(job.metadata["framesTotal"])
+                expected_output_count = (
+                    compute_target_frame_count(source_count, fps, job.target_fps)
+                    if job.target_fps is not None
+                    else source_count * fps_multiplier
+                )
+                encode_fps = self._interpolated_encode_fps(fps, fps_multiplier, job.target_fps)
+                # Denominador honesto del stepper colapsado: la salida interpolada.
+                job.metadata["framesTotal"] = expected_output_count
+                gmfss_stage_factory = lambda device: self.gmfss_engine.build_stream_stage(  # noqa: E731
+                    source_count, expected_output_count, device
+                )
             # Etapa colapsada (decisión de stepper del plan): extract/interp
             # quedan "done" al avanzar; framesDone lo cuenta el sink de encode.
             advance_video_stage(job, "upscaling_frames")

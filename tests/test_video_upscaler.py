@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import threading
 import time
 from pathlib import Path
@@ -15,6 +16,8 @@ from app.models import VideoUpscaleJob
 from app.services.devices_service import DevicesService
 from app.services.engines.ffmpeg_frame_source import FfmpegFrameSource
 from app.services.engines.ffmpeg_frame_sink import RawPipeEncoder
+from app.services.engines.gmfss.assets import GRAPH_NAMES
+from app.services.engines.gmfss_engine import GmfssEngine
 from app.services.engines.onnx_video_upscaler import OnnxVideoUpscaler
 from app.services.gpu_session_coordinator import GpuSessionCoordinator
 from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry, ModelStatus
@@ -244,6 +247,75 @@ async def test_mode_none_for_gmfss_without_engine(tmp_path: Path) -> None:
 
 
 SOURCE_H, SOURCE_W = 8, 12
+FULL_H, FULL_W = 16, 24  # resolución "padded" GMFSS de juguete (no cuadrada a propósito)
+
+
+def make_combined_settings(tmp_path: Path) -> Settings:
+    """Settings que satisfacen al GMFSS engine (model dir + ENABLE_GMFSS) y al
+    motor ONNX de video (builtin dir aislado) — patrón del viejo test de fusión."""
+    gmfss_dir = tmp_path / "gmfss"
+    gmfss_dir.mkdir(parents=True, exist_ok=True)
+    manifest = {
+        "resolution": {"fixed_padded_hw": [FULL_H, FULL_W]},
+        "required_files": ["manifest.json"] + [f"{name}.onnx" for name in GRAPH_NAMES],
+    }
+    (gmfss_dir / "manifest.json").write_text(json.dumps(manifest))
+    for name in GRAPH_NAMES:
+        (gmfss_dir / f"{name}.onnx").write_bytes(b"fake")
+    return make_stream_settings(tmp_path, ENABLE_GMFSS=True, GMFSS_MODEL_DIR=str(gmfss_dir))
+
+
+class FakeGmfssSession:
+    """Sesión fake determinista de los 4 grafos GMFSS — copiada de
+    tests/test_gmfss_engine.py (FakeSession)."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    def run(self, _outputs, feeds):
+        if self.name == "featurenet":
+            n, _c, h, w = feeds["img"].shape
+            return [
+                np.full((n, ch, h // div, w // div), 1.0, dtype=np.float32)
+                for ch, div in zip((4, 6, 8), (2, 4, 8))
+            ]
+        if self.name == "gmflow":
+            n, _c, h, w = feeds["img0_half"].shape
+            return [np.full((n, 2, h, w), 2.0, dtype=np.float32)]
+        if self.name == "metricnet":
+            n, _c, h, w = feeds["img0_half"].shape
+            metric = np.zeros((n, 1, h, w), dtype=np.float32)
+            return [metric.copy(), metric.copy()]
+        if self.name == "fusionnet":
+            n = feeds["fusion_rgb"].shape[0]
+            h_half, w_half = feeds["fusion_rgb"].shape[2], feeds["fusion_rgb"].shape[3]
+            return [np.full((n, 3, h_half * 2, w_half * 2), 0.5, dtype=np.float32)]
+        raise AssertionError(self.name)
+
+
+def fake_gmfss_sessions(_device: str):
+    return {name: FakeGmfssSession(name) for name in GRAPH_NAMES}
+
+
+def make_gmfss_streaming_upscaler(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> VideoUpscaler:
+    settings = make_combined_settings(tmp_path)
+    settings.builtin_onnx_path.mkdir(parents=True, exist_ok=True)
+    (settings.builtin_onnx_path / "realesr-animevideov3-x4-uint8.onnx").write_bytes(b"fake")
+    gmfss = GmfssEngine(settings, GpuSessionCoordinator())
+    monkeypatch.setattr(gmfss, "_create_sessions", fake_gmfss_sessions)
+    onnx_video = OnnxVideoUpscaler(
+        settings, ModelRegistry(settings), DevicesService(settings), GpuSessionCoordinator()
+    )
+    monkeypatch.setattr(onnx_video, "_create_session", lambda model_path, device: Double2xUint8Session())
+    return VideoUpscaler(
+        settings,
+        FakeNcnnEngine(),  # type: ignore[arg-type]
+        FakeMediaTools(),  # type: ignore[arg-type]
+        gmfss_engine=gmfss,
+        onnx_video_engine=onnx_video,
+        model_registry=ModelRegistry(settings),
+        devices=DevicesService(settings),
+    )
 
 
 def write_source_frames(directory: Path, count: int) -> None:
@@ -474,6 +546,83 @@ async def test_stream_pipeline_full_integration_no_interp(
     frame_bytes = (SOURCE_H * 2) * (SOURCE_W * 2) * 3  # la sesión fake dobla
     assert len(data) == 3 * frame_bytes
     assert [data[i * frame_bytes] for i in range(3)] == [0, 17, 34]  # orden fuente
+
+
+# ---------------------------------------------------------------------------
+# GMFSS dentro del pipeline completo: conteo 1→2x, orden y fallback
+# ---------------------------------------------------------------------------
+
+
+async def test_stream_pipeline_full_with_gmfss_doubles_frame_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    upscaler = make_gmfss_streaming_upscaler(tmp_path, monkeypatch)
+    job = make_stream_job(tmp_path, interp_engine="gmfss", fps_multiplier=2, device="cpu")
+    job.metadata.update({"sourceWidth": SOURCE_W, "sourceHeight": SOURCE_H, "framesTotal": 3})
+    decode_proc = FakeDecodeProc(raw_source_frames(3))
+    sink_proc = FakeEncodeProc()
+    monkeypatch.setattr(FfmpegFrameSource, "_spawn", lambda self, command: decode_proc)
+    monkeypatch.setattr(RawPipeEncoder, "_spawn", lambda self, command: sink_proc)
+
+    ok = await upscaler._try_stream_pipeline_full(job, 2, tmp_path / "out.mp4", "24/1", None, [])
+
+    assert ok is True
+    assert job.metadata["streamPipeline"] is True
+    assert job.metadata["framesTotal"] == 6  # denominador honesto: salida interpolada
+    assert job.metadata["outputFps"] == "48/1"
+    data = sink_proc.stdin.getvalue()
+    frame_bytes = (SOURCE_H * 2) * (SOURCE_W * 2) * 3  # la sesión fake dobla
+    assert len(data) == 6 * frame_bytes  # conteo 1→2x (3 fuente -> 6 salida)
+    # Orden: s0, interp, s1, interp, interp, s2 (plan(3→6) = [1, 2]); los frames
+    # fuente pasan verbatim y doblados conservan su primer byte uniforme.
+    assert data[0 * frame_bytes] == 0
+    assert data[2 * frame_bytes] == 17
+    assert data[5 * frame_bytes] == 34
+
+
+async def test_stream_pipeline_full_gmfss_falls_back_on_source_count_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # El decode entrega 2 frames pero el probe prometió 3: el plan GMFSS no
+    # cierra, la etapa revienta en flush() y el job cae al clásico (no falla).
+    upscaler = make_gmfss_streaming_upscaler(tmp_path, monkeypatch)
+    job = make_stream_job(tmp_path, interp_engine="gmfss", fps_multiplier=2, device="cpu")
+    job.metadata.update({"sourceWidth": SOURCE_W, "sourceHeight": SOURCE_H, "framesTotal": 3})
+    decode_proc = FakeDecodeProc(raw_source_frames(2))
+    sink_proc = FakeEncodeProc()
+    monkeypatch.setattr(FfmpegFrameSource, "_spawn", lambda self, command: decode_proc)
+    monkeypatch.setattr(RawPipeEncoder, "_spawn", lambda self, command: sink_proc)
+    output_path = tmp_path / "out.mp4"
+
+    ok = await upscaler._try_stream_pipeline_full(job, 2, output_path, "24/1", None, [])
+
+    assert ok is False
+    assert "streamPipelineFallback" in job.metadata
+    assert not output_path.exists()
+
+
+async def test_run_routes_gmfss_job_through_full_pipeline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    upscaler = make_recording_upscaler(tmp_path)
+    source_path = upscaler.settings.uploads_path / "clip.mp4"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_bytes(b"fake-video-bytes")
+    job = make_stream_job(tmp_path, source_path=source_path, interp_engine="gmfss", fps_multiplier=2)
+    seen: dict = {}
+
+    async def fake_full(job_arg, fps_multiplier, output_path, fps, mux, codec_args):
+        seen["fps_multiplier"] = fps_multiplier
+        output_path.write_bytes(b"fake-video")
+        return True
+
+    monkeypatch.setattr(upscaler, "_try_stream_pipeline_full", fake_full)
+
+    output = await upscaler.run(job, fps_multiplier=2)
+
+    assert output.exists()
+    assert seen["fps_multiplier"] == 2
+    assert all("-fps_mode" not in command for command in upscaler.commands), "GMFSS full no debe extraer PNGs"
 
 
 async def test_full_pipeline_cancel_waits_for_worker_before_reraising(
