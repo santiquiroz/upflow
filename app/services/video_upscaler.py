@@ -50,6 +50,12 @@ logger = logging.getLogger(__name__)
 
 FRAME_POLL_INTERVAL_SECONDS = 1.0
 
+# Modos del stream pipeline (spec 2026-07-25-stream-frame-pipeline-design.md):
+# "full" = decode→(GMFSS)→upscale→encode sin ningún PNG; "hybrid" = RIFE
+# conserva su tramo PNG y solo upscale→encode va en streaming; None = clásico.
+STREAM_MODE_FULL = "full"
+STREAM_MODE_HYBRID = "hybrid"
+
 
 # Not a SubprocessTimeoutError: a stall is "hung, no new output", not
 # "hit the absolute 24h backstop" -- callers need to tell those apart.
@@ -838,6 +844,48 @@ class VideoUpscaler:
         await self._run_process(software_cmd)
 
     # --- raw-pipe streaming (upscale + encode fused, no PNG round-trip) -----
+
+    async def _resolve_stream_pipeline_mode(
+        self, job: VideoUpscaleJob, fps_multiplier: int
+    ) -> str | None:
+        """Elige el camino del stream pipeline. Requiere metadata del probe ya
+        estampada (sourceWidth/sourceHeight/framesTotal). None = camino clásico.
+        """
+        if not self.settings.enable_stream_pipeline or self.onnx_video_engine is None:
+            return None
+        # Modelos HF-ONNX van por OnnxUpscaler (grafos fp32 arbitrarios), no por
+        # el motor builtin de streaming — misma exclusión que el raw-pipe.
+        if self._is_onnx_model(job.model_id):
+            return None
+        # Solo _build_encode_command (camino PNG) sabe mapear pistas de audio
+        # extra / subtítulos desde el source original.
+        if self._needs_source_input(job):
+            return None
+        out_pixels = (
+            int(job.metadata.get("sourceWidth") or 0)
+            * int(job.metadata.get("sourceHeight") or 0)
+            * job.scale
+            * job.scale
+        )
+        # Bajo el umbral el encode PNG es barato y el overhead no compensa —
+        # mismo criterio (y mismo setting) que el raw-pipe.
+        if out_pixels < self.settings.raw_pipe_min_output_pixels:
+            return None
+        # Off the loop: el primer resolve puede hacer un import frío de
+        # onnxruntime + get_available_providers (mismo motivo que _should_stream).
+        if await asyncio.to_thread(self._resolve_builtin_backend, job) != UpscaleBackend.onnx:
+            return None
+        if not self._interpolation_requested(fps_multiplier, job.target_fps):
+            return STREAM_MODE_FULL
+        if job.interp_engine == GMFSS_ENGINE:
+            # El plan GMFSS necesita el conteo fuente exacto: sin framesTotal
+            # honesto (VFR) no hay plan — clásico.
+            if self.gmfss_engine is None or job.metadata.get("framesTotal") is None:
+                return None
+            return STREAM_MODE_FULL
+        # RIFE: el binario exige el directorio PNG entero — híbrido (su tramo
+        # queda en PNG; upscale→encode va en streaming).
+        return STREAM_MODE_HYBRID
 
     async def _should_stream(self, job: VideoUpscaleJob) -> bool:
         if not self.settings.enable_raw_pipe or self.onnx_video_engine is None:

@@ -405,6 +405,11 @@ class Settings(BaseSettings):
     # no compensa (medido: 256x256 mas lento, 7680x4320 1.24x mas rapido). Default
     # ~= 2560x1440 (720p->2x y para arriba usan raw-pipe; salidas chicas usan PNG).
     raw_pipe_min_output_pixels: int = Field(default=3_686_400, alias="RAW_PIPE_MIN_OUTPUT_PIXELS")
+    # Pipeline de frames en streaming (spec 2026-07-25): conecta decode→
+    # (interpolación)→upscale→encode por colas acotadas en memoria, sin PNGs
+    # intermedios, una etapa por thread. Fallback automático al camino clásico
+    # ante cualquier excepción (patrón raw-pipe). False = camino clásico siempre.
+    enable_stream_pipeline: bool = Field(default=True, alias="ENABLE_STREAM_PIPELINE")
 
     update_repo: str = Field(default="santiquiroz/upflow", alias="UPDATE_REPO")
     # Package whose installed metadata gives the running version to compare
