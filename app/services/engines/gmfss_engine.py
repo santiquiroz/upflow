@@ -7,6 +7,7 @@ import queue
 import shutil
 import threading
 from collections import OrderedDict
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -421,7 +422,7 @@ class GmfssStreamStage:
         self._prev_chw: np.ndarray | None = None
         self._prev_hw: tuple[int, int] | None = None
 
-    def process(self, frame: np.ndarray) -> list[np.ndarray]:
+    def process(self, frame: np.ndarray) -> Iterable[np.ndarray]:
         chw = _nhwc_uint8_to_padded_chw(frame, self._padded_hw)
         original_hw = (frame.shape[1], frame.shape[2])
         if self._prev_chw is None:
@@ -432,14 +433,29 @@ class GmfssStreamStage:
                 f"GMFSS recibió más frames fuente que los {len(self._plan) + 1} planificados"
             )
         timesteps = self._plan[self._pair_index]
-        outputs: list[np.ndarray] = []
-        if timesteps:  # un par con 0 extras se saltea reuse()+forward por completo
-            for output_chw in self._driver.interpolate_pair(self._prev_chw, chw, timesteps):
-                outputs.append(_chw_float_to_nhwc_uint8(output_chw, self._prev_hw))
-        outputs.append(frame)  # source[i+1] verbatim (t=1)
+        # El guard y el avance de la ventana son EAGER (se ven apenas se llama a
+        # process); solo la PRODUCCIÓN de frames es perezosa. Hay que capturar el
+        # par antes de correr la ventana porque el generador se consume después.
+        pair_prev_chw, pair_prev_hw = self._prev_chw, self._prev_hw
         self._pair_index += 1
         self._prev_chw, self._prev_hw = chw, original_hw
-        return outputs
+        return self._iter_pair_outputs(pair_prev_chw, chw, pair_prev_hw, timesteps, frame)
+
+    def _iter_pair_outputs(
+        self,
+        prev_chw: np.ndarray,
+        chw: np.ndarray,
+        prev_hw: tuple[int, int],
+        timesteps: list[float],
+        source_frame: np.ndarray,
+    ) -> Iterator[np.ndarray]:
+        # Perezoso a propósito: con target_fps alto sobre una fuente de pocos FPS
+        # un solo par puede pedir decenas de timesteps, y materializarlos todos
+        # antes de tocar la cola esquivaría el presupuesto acotado del pipeline.
+        if timesteps:  # un par con 0 extras se saltea reuse()+forward por completo
+            for output_chw in self._driver.iter_interpolated_pair(prev_chw, chw, timesteps):
+                yield _chw_float_to_nhwc_uint8(output_chw, prev_hw)
+        yield source_frame  # source[i+1] verbatim (t=1)
 
     def flush(self) -> list[np.ndarray]:
         if self._pair_index != len(self._plan):

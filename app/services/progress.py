@@ -186,6 +186,17 @@ def resolve_frames_total(probe: dict[str, Any], video_stream: dict[str, Any], fp
     return round(duration * float(fps_fraction))
 
 
+def frames_total_is_exact(video_stream: dict[str, Any]) -> bool:
+    """True solo si el conteo salió de nb_frames del contenedor.
+
+    resolve_frames_total cae a round(duration * fps) cuando nb_frames falta, y
+    ese estimado difiere fácil +-1 del conteo real decodificado (el ffprobe del
+    repo corre sin -count_frames). Sirve para progreso, pero NO para validar por
+    igualdad estricta ni para armar el plan de interpolación.
+    """
+    return _parse_positive_int(video_stream.get("nb_frames")) is not None
+
+
 def frame_stage_fraction(frames_done: int, frames_total: int | None) -> float:
     # framesTotal is None on VFR/unknown sources -- no honest fraction to report,
     # compute_progress then keeps the active stage at its floor (no faked ETA).

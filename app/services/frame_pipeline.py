@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import queue
 import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 from typing import Protocol
 
@@ -30,11 +30,17 @@ STREAM_QUEUE_CEILING = 16
 class FrameStage(Protocol):
     """Etapa del pipeline: recibe un frame NHWC uint8 RGB [1,H,W,3] y emite
     0..N frames en orden (upscaler 1→1; interpolador 1→1+extras con ventana de
-    2). flush() emite lo retenido al agotarse la fuente."""
+    2). flush() emite lo retenido al agotarse la fuente.
 
-    def process(self, frame: np.ndarray) -> list[np.ndarray]: ...
+    El retorno es un ITERABLE, no necesariamente una lista: una etapa 1→N puede
+    devolver un generador para que sus frames lleguen a la cola de a uno y el
+    presupuesto acotado siga valiendo (una lista completa esquivaría el
+    backpressure). Las listas siguen siendo válidas — son iterables.
+    """
 
-    def flush(self) -> list[np.ndarray]: ...
+    def process(self, frame: np.ndarray) -> Iterable[np.ndarray]: ...
+
+    def flush(self) -> Iterable[np.ndarray]: ...
 
 
 class MapStage:

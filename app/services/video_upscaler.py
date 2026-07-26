@@ -51,6 +51,7 @@ from app.services.progress import (
     complete_video_stages,
     compute_progress,
     frame_stage_fraction,
+    frames_total_is_exact,
     resolve_frames_total,
 )
 from app.services.restorer_registry import AudioRestorer
@@ -162,11 +163,14 @@ class VideoUpscaler:
         job.metadata["sourceHeight"] = int(video_stream.get("height") or 0)
         job.metadata["duration"] = float(probe.get("format", {}).get("duration") or 0)
         job.metadata["framesTotal"] = resolve_frames_total(probe, video_stream, fps)
+        # nb_frames del contenedor vs round(duration*fps): solo el primero es
+        # exacto y sirve para validar por igualdad o para el plan de GMFSS.
+        frames_total_exact = frames_total_is_exact(video_stream)
 
         output_path = self.settings.outputs_path / f"{job.id}.{job.output_container}"
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        stream_mode = await self._resolve_stream_pipeline_mode(job, fps_multiplier)
+        stream_mode = await self._resolve_stream_pipeline_mode(job, fps_multiplier, frames_total_exact)
         audio_mux_path: Path | None = None
         audio_codec_args: list[str] = []
         audio_prepared = False
@@ -180,6 +184,7 @@ class VideoUpscaler:
                 format_fps_fraction(fps),
                 audio_mux_path,
                 audio_codec_args,
+                frames_total_exact,
             ):
                 self._finalize_output(job, output_path)
                 return output_path
@@ -905,7 +910,7 @@ class VideoUpscaler:
     # --- raw-pipe streaming (upscale + encode fused, no PNG round-trip) -----
 
     async def _resolve_stream_pipeline_mode(
-        self, job: VideoUpscaleJob, fps_multiplier: int
+        self, job: VideoUpscaleJob, fps_multiplier: int, frames_total_exact: bool = False
     ) -> str | None:
         """Elige el camino del stream pipeline. Requiere metadata del probe ya
         estampada (sourceWidth/sourceHeight/framesTotal). None = camino clásico.
@@ -939,6 +944,14 @@ class VideoUpscaler:
         if job.interp_engine == GMFSS_ENGINE:
             # El plan GMFSS necesita el conteo fuente exacto: sin framesTotal
             # honesto (VFR) no hay plan — clásico.
+            #
+            # PENDIENTE (decisión de producto, ver review final de la rama): con
+            # un framesTotal ESTIMADO (round(duration*fps), cuando el contenedor
+            # no trae nb_frames) el plan puede quedar corrido y el desajuste solo
+            # se detecta en el flush() de la etapa, con todo el trabajo ya hecho.
+            # Exigir `frames_total_exact` acá lo evitaría, a costa de mandar al
+            # camino clásico a toda fuente sin nb_frames. No se aplica todavía
+            # porque angosta el ruteo de forma visible para el usuario.
             frames_total = job.metadata.get("framesTotal")
             if (
                 self.gmfss_engine is None
@@ -1001,6 +1014,16 @@ class VideoUpscaler:
             with contextlib.suppress(BaseException):
                 await worker
             raise
+        # Un exit 0 de ffmpeg no garantiza un archivo utilizable. Validarlo acá
+        # (y no recién en _finalize_output, que corre FUERA del try del caller)
+        # es lo que hace que ese caso caiga al camino clásico en vez de fallar
+        # el job con streamPipeline=true ya estampado.
+        if not self._is_non_empty_file(output_path):
+            raise RuntimeError("el stream pipeline terminó sin dejar un archivo de salida utilizable")
+        if expected_output_count is None:
+            # El denominador era un estimado (o no había): publicar lo realmente
+            # entregado para que el stepper cierre en N/N y no en N/estimado.
+            job.metadata["framesTotal"] = counter["n"]
 
     def _run_stream_pipeline_blocking(
         self,
@@ -1067,6 +1090,7 @@ class VideoUpscaler:
         fps: str,
         audio_mux_path: Path | None,
         audio_codec_args: list[str],
+        frames_total_exact: bool = False,
     ) -> bool:
         """Pipeline completo decode→(GMFSS)→upscale→encode, sin ningún PNG.
         True = output_path finalizado; False = fallback clásico DESDE CERO
@@ -1081,9 +1105,14 @@ class VideoUpscaler:
         try:
             encoder_name = await asyncio.to_thread(self._resolve_video_encoder, job)
             job.metadata["videoEncoder"] = encoder_name
-            # Sin interp la salida iguala a la fuente; framesTotal None (VFR) es
-            # honesto: sin validación estricta de conteo en ese caso.
-            expected_output_count = job.metadata.get("framesTotal")
+            # Sin interp la salida iguala a la fuente, pero solo se valida por
+            # igualdad si el conteo es EXACTO (nb_frames). Un estimado
+            # round(duration*fps) difiere +-1 seguido, y rechazar por eso
+            # tiraría a la basura un decode+upscale+encode ya completo para
+            # rehacerlo por el clásico: se deja pasar y se publica lo entregado.
+            expected_output_count = (
+                job.metadata.get("framesTotal") if frames_total_exact else None
+            )
             encode_fps = fps
             gmfss_stage_factory = None
             if self._interpolation_requested(fps_multiplier, job.target_fps):
@@ -1362,6 +1391,10 @@ class VideoUpscaler:
             raise VideoStallError(_stall_message("frames nuevos", self.frame_stall_timeout_seconds)) from None
         finally:
             await self._stop_poller(poller)
+            # Publicar el contador final: un clip que termina antes del primer
+            # tick del poller quedaba en framesDone=0 pese a haber entregado
+            # todos sus frames (mismo cierre que hace _track_frame_progress).
+            self._apply_frame_progress(job, "upscaling_frames", counter["n"], frames_total)
 
     async def _poll_streaming_progress(
         self,

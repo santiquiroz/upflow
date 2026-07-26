@@ -33,12 +33,14 @@ class FfmpegFrameSource:
         # Solo flags no-deprecados: -fps_mode passthrough (nunca -vsync), el
         # mismo passthrough que usa la extracción PNG actual para no
         # re-muestrear fuentes VFR.
+        # -threads va ANTES de -i: después de -i configuraría el encoder rawvideo
+        # de salida en vez del decoder, dejando decode_threads sin efecto real.
         return [
             str(self._ffmpeg_binary),
             "-v", "error",
+            "-threads", str(self._decode_threads),
             "-i", str(self._source_path),
             "-fps_mode", "passthrough",
-            "-threads", str(self._decode_threads),
             "-f", "rawvideo",
             "-pix_fmt", "rgb24",
             "pipe:1",
@@ -61,6 +63,9 @@ class FfmpegFrameSource:
                 return
             returncode = proc.wait()
             if returncode != 0:
+                # join antes de leer el buffer: si se arma el mensaje mientras el
+                # drenaje sigue corriendo, el tail sale vacío o cortado.
+                stderr_thread.join(timeout=5)
                 tail = b"".join(stderr_buf).decode("utf-8", errors="ignore").strip()
                 raise RuntimeError(
                     f"ffmpeg falló al decodificar (código de salida {returncode}): "

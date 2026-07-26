@@ -34,6 +34,7 @@ it can be vendored standalone into other projects (e.g. Upflow) as-is.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -125,8 +126,18 @@ class GmfssDriver:
         """Runs reuse() exactly once regardless of len(timesteps); GMFSS's flow/feature
         extraction is the expensive part (10-15x slower than RIFE), so amortizing it
         across every requested intermediate frame is the point of this split."""
+        return list(self.iter_interpolated_pair(img0, img1, timesteps))
+
+    def iter_interpolated_pair(
+        self, img0: np.ndarray, img1: np.ndarray, timesteps: list[float]
+    ) -> Iterator[np.ndarray]:
+        """Variante perezosa de interpolate_pair: reuse() una sola vez y un frame
+        por vez. El stream pipeline la usa para que un par con muchos timesteps
+        (target_fps alto sobre fuente de pocos FPS) no materialice decenas de
+        frames en RAM antes de que la cola pueda aplicar backpressure."""
         cache = self.reuse(img0, img1)
-        return [self._forward_at_timestep(cache, timestep) for timestep in timesteps]
+        for timestep in timesteps:
+            yield self._forward_at_timestep(cache, timestep)
 
     def reuse(self, img0: np.ndarray, img1: np.ndarray) -> ReuseCache:
         """Per-pair-independent-of-timestep computation: FeatureNet on both images,

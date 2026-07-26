@@ -369,9 +369,15 @@ class FakeEncodeProc:
         self.returncode: int | None = None
         self._final_returncode = returncode
         self.killed = False
+        self.command: list[str] | None = None
 
     def wait(self, timeout=None) -> int:
         self.returncode = self._final_returncode
+        # Un ffmpeg real deja el archivo de salida al terminar bien; el fake
+        # tambien, para que la validacion de output del pipeline vea lo mismo
+        # que en produccion (un exit 0 sin archivo debe caer al clasico).
+        if self.returncode == 0 and self.command:
+            Path(self.command[-1]).write_bytes(b"fake-mp4-bytes")
         return self.returncode
 
     def poll(self):
@@ -380,6 +386,17 @@ class FakeEncodeProc:
     def kill(self) -> None:
         self.killed = True
         self._final_returncode = -9
+
+
+def fake_encoder_spawn(fake: FakeEncodeProc):
+    """_spawn monkeypatcheado que le pasa el comando al fake, para que sepa
+    donde "escribir" el archivo de salida (ultimo argumento del comando)."""
+
+    def _spawn(self, command: list[str]) -> FakeEncodeProc:
+        fake.command = command
+        return fake
+
+    return _spawn
 
 
 class FakeDecodeProc:
@@ -480,7 +497,7 @@ async def test_full_mode_skips_png_extraction(tmp_path: Path, monkeypatch: pytes
     job = make_stream_job(tmp_path, source_path=source_path)
     full_calls: dict = {}
 
-    async def fake_full(job_arg, fps_multiplier, output_path, fps, mux, codec_args):
+    async def fake_full(job_arg, fps_multiplier, output_path, fps, mux, codec_args, frames_exact=False):
         full_calls["fps"] = fps
         output_path.write_bytes(b"fake-video")
         return True
@@ -504,7 +521,7 @@ async def test_full_mode_falls_back_to_classic_from_scratch(
     source_path.write_bytes(b"fake-video-bytes")
     job = make_stream_job(tmp_path, source_path=source_path)
 
-    async def failing_full(job_arg, fps_multiplier, output_path, fps, mux, codec_args):
+    async def failing_full(job_arg, fps_multiplier, output_path, fps, mux, codec_args, frames_exact=False):
         job_arg.metadata["streamPipelineFallback"] = "boom"
         return False
 
@@ -573,7 +590,7 @@ async def test_stream_pipeline_full_integration_no_interp(
     decode_proc = FakeDecodeProc(raw_source_frames(3))
     sink_proc = FakeEncodeProc()
     monkeypatch.setattr(FfmpegFrameSource, "_spawn", lambda self, command: decode_proc)
-    monkeypatch.setattr(RawPipeEncoder, "_spawn", lambda self, command: sink_proc)
+    monkeypatch.setattr(RawPipeEncoder, "_spawn", fake_encoder_spawn(sink_proc))
 
     ok = await upscaler._try_stream_pipeline_full(job, 1, tmp_path / "out.mp4", "24/1", None, [])
 
@@ -599,7 +616,7 @@ async def test_stream_pipeline_full_with_gmfss_doubles_frame_count(
     decode_proc = FakeDecodeProc(raw_source_frames(3))
     sink_proc = FakeEncodeProc()
     monkeypatch.setattr(FfmpegFrameSource, "_spawn", lambda self, command: decode_proc)
-    monkeypatch.setattr(RawPipeEncoder, "_spawn", lambda self, command: sink_proc)
+    monkeypatch.setattr(RawPipeEncoder, "_spawn", fake_encoder_spawn(sink_proc))
 
     ok = await upscaler._try_stream_pipeline_full(job, 2, tmp_path / "out.mp4", "24/1", None, [])
 
@@ -628,7 +645,7 @@ async def test_stream_pipeline_full_gmfss_falls_back_on_source_count_mismatch(
     decode_proc = FakeDecodeProc(raw_source_frames(2))
     sink_proc = FakeEncodeProc()
     monkeypatch.setattr(FfmpegFrameSource, "_spawn", lambda self, command: decode_proc)
-    monkeypatch.setattr(RawPipeEncoder, "_spawn", lambda self, command: sink_proc)
+    monkeypatch.setattr(RawPipeEncoder, "_spawn", fake_encoder_spawn(sink_proc))
     output_path = tmp_path / "out.mp4"
 
     ok = await upscaler._try_stream_pipeline_full(job, 2, output_path, "24/1", None, [])
@@ -648,7 +665,7 @@ async def test_run_routes_gmfss_job_through_full_pipeline(
     job = make_stream_job(tmp_path, source_path=source_path, interp_engine="gmfss", fps_multiplier=2)
     seen: dict = {}
 
-    async def fake_full(job_arg, fps_multiplier, output_path, fps, mux, codec_args):
+    async def fake_full(job_arg, fps_multiplier, output_path, fps, mux, codec_args, frames_exact=False):
         seen["fps_multiplier"] = fps_multiplier
         output_path.write_bytes(b"fake-video")
         return True
@@ -770,7 +787,7 @@ async def test_stream_pipeline_from_dir_streams_all_frames_in_order(
     frames_dir = tmp_path / "frames-interp"
     write_source_frames(frames_dir, 5)
     fake_proc = FakeEncodeProc()
-    monkeypatch.setattr(RawPipeEncoder, "_spawn", lambda self, command: fake_proc)
+    monkeypatch.setattr(RawPipeEncoder, "_spawn", fake_encoder_spawn(fake_proc))
     job = make_stream_job(tmp_path, device="cpu")
 
     ok = await upscaler._try_stream_pipeline_from_dir(
@@ -795,7 +812,7 @@ async def test_stream_pipeline_from_dir_falls_back_on_encoder_failure(
     frames_dir = tmp_path / "frames-interp"
     write_source_frames(frames_dir, 2)
     fake_proc = FakeEncodeProc(returncode=1)  # ffmpeg "falla" al cerrar
-    monkeypatch.setattr(RawPipeEncoder, "_spawn", lambda self, command: fake_proc)
+    monkeypatch.setattr(RawPipeEncoder, "_spawn", fake_encoder_spawn(fake_proc))
     job = make_stream_job(tmp_path, device="cpu")
     output_path = tmp_path / "out.mp4"
     output_path.write_bytes(b"parcial")

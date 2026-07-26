@@ -787,6 +787,38 @@ def test_stream_stage_raises_on_extra_source_frames(
         stage.process(frames[2])
 
 
+def test_stream_stage_produces_interpolated_frames_lazily(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # El presupuesto acotado del pipeline solo vale si la etapa 1->N entrega los
+    # frames de a uno: materializar el par entero antes de tocar la cola esquiva
+    # el backpressure (con target_fps alto son decenas de frames por par).
+    engine = make_stream_engine(tmp_path, monkeypatch)
+    stage = engine.build_stream_stage(source_frame_count=2, target_frame_count=10, device="cpu")
+    timesteps = stage._plan[0]
+    assert len(timesteps) == 8, "el plan debe pedir varios timesteps para que la prueba tenga sentido"
+
+    produced = 0
+    original_forward = stage._driver._forward_at_timestep
+
+    def counting_forward(cache, timestep):
+        nonlocal produced
+        produced += 1
+        return original_forward(cache, timestep)
+
+    monkeypatch.setattr(stage._driver, "_forward_at_timestep", counting_forward)
+
+    source = make_stream_source_frames(2)
+    stage.process(source[0])
+    outputs = iter(stage.process(source[1]))
+
+    next(outputs)
+    assert produced == 1, f"se materializaron {produced} frames antes de consumir el primero"
+
+    assert len(list(outputs)) == len(timesteps)  # 7 interpolados restantes + el frame fuente
+    assert produced == len(timesteps)
+
+
 def test_build_stream_stage_when_unavailable_raises_actionable_error(tmp_path: Path) -> None:
     engine = GmfssEngine(make_settings(tmp_path, enabled=False), GpuSessionCoordinator())
     with pytest.raises(RuntimeError, match="ENABLE_GMFSS"):
