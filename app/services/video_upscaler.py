@@ -65,10 +65,17 @@ FRAME_POLL_INTERVAL_SECONDS = 1.0
 # subproceso (ffmpeg reparte el diagnóstico en 2-3 líneas consecutivas).
 _MAX_ERROR_CONTEXT_LINES = 3
 
-# Bytes por píxel de un PNG ya comprimido. Estimación deliberadamente
-# conservadora (contenido real de animación/video ronda 1.0-1.5 B/px a 8 bits
-# RGB); sirve para decidir "esto no entra ni cerca", no para predecir tamaños.
-_PNG_BYTES_PER_PIXEL = 1.2
+# Bytes por píxel de los PNG intermedios. Son PISOS, no promedios: el guard
+# responde "¿entra aunque el contenido comprima lo mejor posible?", así que
+# subestimar a propósito evita bloquear jobs que sí entrarían. Medidos sobre
+# material real (BDrip de animación 960x720, los flags que usa el pipeline):
+#   frames-in/interp  ffmpeg -compression_level 1  ->  4.21 B/px (escribe PNG
+#                     de 16 bits, por eso supera los 3 B/px de RGB8 crudo)
+#   frames-out        cv2.imwrite 8 bits, compresión 1  ->  0.54 B/px (la
+#                     animación upscaleada queda muy plana y comprime mucho;
+#                     material fotográfico con grano sube bastante)
+_PNG_SOURCE_BYTES_PER_PIXEL_FLOOR = 2.5
+_PNG_UPSCALED_BYTES_PER_PIXEL_FLOOR = 0.4
 
 # Margen sobre el espacio libre: nunca se planifica llenar el disco al ras.
 _DISK_HEADROOM_FRACTION = 0.90
@@ -92,12 +99,14 @@ def estimate_png_workdir_bytes(
     píxeles de la fuente — y es el que vuelve inviables los jobs largos.
     """
     source_pixels = max(0, source_width) * max(0, source_height)
-    total = source_pixels * max(0, source_frame_count)
+    at_source_res = max(0, source_frame_count)
     if writes_interpolated_frames:
-        total += source_pixels * max(0, output_frame_count)
+        at_source_res += max(0, output_frame_count)
+    total = source_pixels * at_source_res * _PNG_SOURCE_BYTES_PER_PIXEL_FLOOR
     if writes_upscaled_frames:
-        total += source_pixels * (max(1, scale) ** 2) * max(0, output_frame_count)
-    return int(total * _PNG_BYTES_PER_PIXEL)
+        upscaled_pixels = source_pixels * (max(1, scale) ** 2)
+        total += upscaled_pixels * max(0, output_frame_count) * _PNG_UPSCALED_BYTES_PER_PIXEL_FLOOR
+    return int(total)
 
 # Modos del stream pipeline (spec 2026-07-25-stream-frame-pipeline-design.md):
 # "full" = decode→(GMFSS)→upscale→encode sin ningún PNG; "hybrid" = RIFE
@@ -827,21 +836,33 @@ class VideoUpscaler:
             "-i",
             str(encode_frames_dir / "%08d.png"),
         ]
+        # TODOS los -i van primero y los -map DESPUÉS. En ffmpeg -map es opción
+        # de salida: intercalada entre dos inputs se aplica al -i siguiente y el
+        # comando entero se rechaza con "Option map cannot be applied to input
+        # url ...". Solo se disparaba con audio preparado + fuente extra
+        # (subtítulos o pistas adicionales), y el fallo llegaba al final del job.
         next_input_index = 1
+        audio_input_index: int | None = None
         if audio_mux_path is not None:
-            cmd += ["-i", str(audio_mux_path), "-map", "0:v:0", "-map", f"{next_input_index}:a:0"]
+            cmd += ["-i", str(audio_mux_path)]
+            audio_input_index = next_input_index
             next_input_index += 1
         source_input_index = self._maybe_add_source_input(cmd, job, next_input_index)
+
+        maps: list[str] = []
+        if audio_input_index is not None:
+            maps += ["-map", "0:v:0", "-map", f"{audio_input_index}:a:0"]
         if source_input_index is not None:
             # Any -map switches ffmpeg to explicit-map mode and drops every
             # unmapped stream -- including the frames video. When audio_mux_path
             # was present the video map was already emitted above; when it was
             # not (keep_audio=False + keep_subtitles, or no usable source audio)
             # it must be emitted here or the output loses its video track.
-            if audio_mux_path is None:
-                cmd += ["-map", "0:v:0"]
-            self._map_extra_audio_tracks(cmd, job, source_input_index)
-            self._map_subtitles(cmd, job, source_input_index)
+            if audio_input_index is None:
+                maps += ["-map", "0:v:0"]
+            self._map_extra_audio_tracks(maps, job, source_input_index)
+            self._map_subtitles(maps, job, source_input_index)
+        cmd += maps
         cmd += self._build_video_encode_options(job, encoder)
         if audio_mux_path is not None:
             cmd += audio_codec_args
