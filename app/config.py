@@ -344,17 +344,6 @@ class Settings(BaseSettings):
     enable_gmfss: bool = Field(default=False, alias="ENABLE_GMFSS")
     gmfss_model_dir: str = Field(default="vendor/gmfss", alias="GMFSS_MODEL_DIR")
 
-    # Fase 2 (Tasks 7-8): fusiona GMFSS interpolar + el escalador ONNX in-process
-    # en una sola pasada, sin escribir el PNG intermedio a resolucion fuente.
-    # Task 9 lo midio en hardware real (RX 7800 XT, 1080p->4x/8K,
-    # general-balanced-4x): ~1.7x MAS LENTO que las dos pasadas, no mas rapido
-    # (ver README "Benchmark real: fusion interpolar+escalar"). Causa probable:
-    # el loop fusionado es un generador secuencial de un solo hilo, sin el
-    # overlap load/compute/save en threads que SI tienen las dos pasadas. Opt-in
-    # y apagado por defecto hasta entender/arreglar la regresion -- el codigo
-    # fusionado sigue completo, probado y disponible, solo no se activa solo.
-    enable_interp_upscale_fusion: bool = Field(default=False, alias="ENABLE_INTERP_UPSCALE_FUSION")
-
     default_device: str = Field(default="dml:0", alias="DEFAULT_DEVICE")
     # When on and a job request doesn't pin a device, routes.py hands the job
     # the "auto" sentinel instead of DEFAULT_DEVICE -- see
@@ -416,6 +405,11 @@ class Settings(BaseSettings):
     # no compensa (medido: 256x256 mas lento, 7680x4320 1.24x mas rapido). Default
     # ~= 2560x1440 (720p->2x y para arriba usan raw-pipe; salidas chicas usan PNG).
     raw_pipe_min_output_pixels: int = Field(default=3_686_400, alias="RAW_PIPE_MIN_OUTPUT_PIXELS")
+    # Pipeline de frames en streaming (spec 2026-07-25): conecta decode→
+    # (interpolación)→upscale→encode por colas acotadas en memoria, sin PNGs
+    # intermedios, una etapa por thread. Fallback automático al camino clásico
+    # ante cualquier excepción (patrón raw-pipe). False = camino clásico siempre.
+    enable_stream_pipeline: bool = Field(default=True, alias="ENABLE_STREAM_PIPELINE")
 
     update_repo: str = Field(default="santiquiroz/upflow", alias="UPDATE_REPO")
     # Package whose installed metadata gives the running version to compare

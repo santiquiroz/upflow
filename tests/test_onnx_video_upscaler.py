@@ -352,6 +352,26 @@ def test_upscale_one_reraises_non_oom_error(tmp_path: Path, monkeypatch: pytest.
         engine._upscale_one(None, frame, "dml:0")
 
 
+from app.services.engines.onnx_video_upscaler import derive_queue_maxsize
+
+
+def test_derive_queue_maxsize_budget_decides_between_floor_and_ceiling() -> None:
+    # 48MB/frame, presupuesto 150MB -> 150//48 = 3, estrictamente entre piso 2 y techo 4.
+    assert derive_queue_maxsize(48 * 1024 * 1024, 150 * 1024 * 1024, 2, 4) == 3
+
+
+def test_derive_queue_maxsize_floors_and_ceils() -> None:
+    assert derive_queue_maxsize(48 * 1024 * 1024, 1 * 1024 * 1024, 5, 10) == 5  # piso
+    assert derive_queue_maxsize(1024, 1024 * 1024 * 1024, 2, 16) == 16  # techo
+
+
+def test_derive_queue_maxsize_nonpositive_frame_bytes_returns_ceiling() -> None:
+    # Sin tamaño de frame conocido no hay presupuesto que aplicar: techo (el
+    # caso "sin frames" que _save_queue_maxsize ya resolvía con el default).
+    assert derive_queue_maxsize(0, 100, 2, 8) == 8
+    assert derive_queue_maxsize(-1, 100, 2, 8) == 8
+
+
 def test_save_queue_maxsize_capped_by_byte_budget(tmp_path: Path) -> None:
     # 1024x1024 input x4 = 4096x4096x3 = 48.0 MB/frame. Budget 150MB // 48 = 3,
     # which sits strictly between the floor (n_save=2) and ceiling (n_save*2=4),
@@ -448,6 +468,60 @@ def test_get_session_calls_coordinator_acquire_before_creating(
     engine._get_session("/models/x4.onnx", "dml:0")
 
     assert calls == [("dml:0", engine)]
+
+
+def test_build_frame_upscaler_returns_working_closure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = make_engine(tmp_path)
+    touch_builtin_onnx(engine.settings, "realesr-animevideov3-x4-uint8.onnx")
+    monkeypatch.setattr(engine, "_create_session", lambda model_path, device: Double2xUint8Session())
+
+    upscale = engine.build_frame_upscaler("realesr-animevideov3-x4", "cpu")
+    frame = np.random.default_rng(3).integers(0, 256, (1, 4, 6, 3), dtype=np.uint8)
+    out = upscale(frame)
+
+    assert out.shape == (1, 8, 12, 3)
+    assert out.dtype == np.uint8
+
+
+def test_build_frame_upscaler_raises_for_unconfigured_model(tmp_path: Path) -> None:
+    engine = make_engine(tmp_path)
+    with pytest.raises(RuntimeError, match="No ONNX export configured"):
+        engine.build_frame_upscaler("does-not-exist", "cpu")
+
+
+def test_build_frame_upscaler_raises_when_model_file_missing(tmp_path: Path) -> None:
+    engine = make_engine(tmp_path)  # sin touch_builtin_onnx -> archivo ausente
+    with pytest.raises(RuntimeError, match="ONNX model file not found"):
+        engine.build_frame_upscaler("realesr-animevideov3-x4", "cpu")
+
+
+def test_build_frame_upscaler_sticks_to_tiling_after_oom(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Mismo contrato sticky que _infer_loop: un OOM whole-frame degrada el RESTO
+    # del run a tiling (el estado vive en el closure, un solo intento whole).
+    engine = make_engine(tmp_path)
+    touch_builtin_onnx(engine.settings, "realesr-animevideov3-x4-uint8.onnx")
+    monkeypatch.setattr(engine, "_create_session", lambda model_path, device: Double2xUint8Session())
+    calls = {"whole": 0, "tiled": 0}
+
+    def whole_frame_oom(s, f, d):
+        calls["whole"] += 1
+        raise RuntimeError("Failed to allocate memory: out of memory (D3D12)")
+
+    monkeypatch.setattr(engine, "_infer_frame", whole_frame_oom)
+    monkeypatch.setattr(
+        engine, "_infer_tiled", lambda s, f, d: (calls.__setitem__("tiled", calls["tiled"] + 1), f)[1]
+    )
+
+    upscale = engine.build_frame_upscaler("realesr-animevideov3-x4", "cpu")
+    frame = np.zeros((1, 4, 6, 3), dtype=np.uint8)
+    upscale(frame)
+    upscale(frame)
+
+    assert calls == {"whole": 1, "tiled": 2}  # el 2o frame va directo a tiling
 
 
 # ---------------------------------------------------------------------------

@@ -5,9 +5,8 @@ import contextlib
 import logging
 import os
 import shutil
-import subprocess
 import threading
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Iterator
 from pathlib import Path
 
 import cv2
@@ -18,20 +17,24 @@ from app.models import VideoUpscaleJob
 from app.services import video_encoders
 from app.services.backend_registry import (
     UpscaleBackend,
-    get_builtin_onnx_model,
     resolve_upscale_backend,
 )
 from app.services.devices_service import DevicesService
-from app.services.restorer_registry import AudioRestorer
 from app.services.engines.audio_enhance import AudioEnhancer
+from app.services.engines.ffmpeg_frame_source import FfmpegFrameSource
+from app.services.engines.ffmpeg_frame_sink import RawPipeEncoder
 from app.services.engines.gmfss_engine import GmfssEngine
 from app.services.engines.onnx_upscaler import OnnxUpscaler
-from app.services.engines.onnx_video_upscaler import (
-    OnnxVideoUpscaler,
-    _save_frame as _onnx_video_save_frame,
-)
+from app.services.engines.onnx_video_upscaler import OnnxVideoUpscaler, _load_frame
 from app.services.engines.realesrgan_ncnn import RealEsrganNcnnEngine, gpu_index_for_device
 from app.services.engines.rife_ncnn import RifeNcnnEngine
+from app.services.frame_pipeline import (
+    FramePipeline,
+    FrameStage,
+    MapStage,
+    derive_stream_queue_maxsizes,
+    iter_png_frames,
+)
 from app.services.media_tools import (
     MediaTools,
     compute_interpolated_fps,
@@ -48,13 +51,21 @@ from app.services.progress import (
     complete_video_stages,
     compute_progress,
     frame_stage_fraction,
+    frames_total_is_exact,
     resolve_frames_total,
 )
+from app.services.restorer_registry import AudioRestorer
 from app.services.stall_watchdog import StallWatchdog
 
 logger = logging.getLogger(__name__)
 
 FRAME_POLL_INTERVAL_SECONDS = 1.0
+
+# Modos del stream pipeline (spec 2026-07-25-stream-frame-pipeline-design.md):
+# "full" = decode→(GMFSS)→upscale→encode sin ningún PNG; "hybrid" = RIFE
+# conserva su tramo PNG y solo upscale→encode va en streaming; None = clásico.
+STREAM_MODE_FULL = "full"
+STREAM_MODE_HYBRID = "hybrid"
 
 
 # Not a SubprocessTimeoutError: a stall is "hung, no new output", not
@@ -152,6 +163,32 @@ class VideoUpscaler:
         job.metadata["sourceHeight"] = int(video_stream.get("height") or 0)
         job.metadata["duration"] = float(probe.get("format", {}).get("duration") or 0)
         job.metadata["framesTotal"] = resolve_frames_total(probe, video_stream, fps)
+        # nb_frames del contenedor vs round(duration*fps): solo el primero es
+        # exacto y sirve para validar por igualdad o para el plan de GMFSS.
+        frames_total_exact = frames_total_is_exact(video_stream)
+
+        output_path = self.settings.outputs_path / f"{job.id}.{job.output_container}"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        stream_mode = await self._resolve_stream_pipeline_mode(job, fps_multiplier, frames_total_exact)
+        audio_mux_path: Path | None = None
+        audio_codec_args: list[str] = []
+        audio_prepared = False
+        if stream_mode == STREAM_MODE_FULL:
+            audio_mux_path, audio_codec_args = await self._prepare_audio_mux(job, has_audio, audio_path)
+            audio_prepared = True
+            if await self._try_stream_pipeline_full(
+                job,
+                fps_multiplier,
+                output_path,
+                format_fps_fraction(fps),
+                audio_mux_path,
+                audio_codec_args,
+                frames_total_exact,
+            ):
+                self._finalize_output(job, output_path)
+                return output_path
+            stream_mode = None  # fallback: camino clásico desde cero
 
         advance_video_stage(job, "extracting_frames")
         async with self._track_frame_progress(job, frames_in, "extracting_frames"):
@@ -173,21 +210,12 @@ class VideoUpscaler:
                 ]
             )
 
-        audio_mux_path: Path | None = None
-        audio_codec_args: list[str] = []
-        if job.keep_audio and has_audio:
-            prepared_audio_path, audio_codec_args = await self._prepare_audio(job, audio_path)
-            audio_mux_path = self._usable_audio_or_none(prepared_audio_path)
-        elif job.keep_audio and job.audio_enhance:
-            job.metadata["audioEnhanced"] = "skipped_no_audio"
-        elif job.keep_audio and job.audio_restore:
-            job.metadata["audioRestored"] = "skipped_no_audio"
-
-        output_path = self.settings.outputs_path / f"{job.id}.{job.output_container}"
-        output_path.parent.mkdir(parents=True, exist_ok=True)
+        if not audio_prepared:
+            audio_mux_path, audio_codec_args = await self._prepare_audio_mux(job, has_audio, audio_path)
 
         encode_frames_dir, encode_fps = await self._interpolate_and_upscale(
-            job, frames_in, frames_out, fps, fps_multiplier, output_path, audio_mux_path, audio_codec_args
+            job, frames_in, frames_out, fps, fps_multiplier, output_path,
+            audio_mux_path, audio_codec_args, stream_mode
         )
         # The raw-pipe path already produced AND finalized output_path; there is
         # no PNG directory left to encode.
@@ -218,6 +246,7 @@ class VideoUpscaler:
         output_path: Path,
         audio_mux_path: Path | None,
         audio_codec_args: list[str],
+        stream_mode: str | None = None,
     ) -> tuple[Path | None, str]:
         """Interpolate (optional) then upscale into frames_out, returning
         (encode_frames_dir, encode_fps). encode_frames_dir is None when the
@@ -228,21 +257,7 @@ class VideoUpscaler:
         faster than at the upscaled 4K (measured on a 7800 XT), and with the
         interp done up front the raw-pipe (upscale+encode fused, no PNG
         round-trip) becomes eligible for interpolated jobs too.
-
-        Gate: when GMFSS interpolation is requested AND the resolved upscale
-        backend is the in-process ONNX one, fuse interpolate+upscale in a single
-        pass (no frames-interp PNG round-trip). Every other combination -- RIFE,
-        the NCNN upscaler, HF ONNX models -- takes the unchanged two-pass path.
         """
-        if await self._should_fuse_interpolate_upscale(job, fps_multiplier, job.target_fps):
-            encode_fps = await self._run_fused_interpolate_upscale(
-                job, frames_in, frames_out, fps, fps_multiplier, job.target_fps
-            )
-            job.metadata["outputFps"] = encode_fps
-            # Source frames are dead once fused into frames_out; free the disk early.
-            await asyncio.to_thread(self._safe_rmtree, frames_in)
-            return frames_out, encode_fps
-
         upscale_src, encode_fps = await self._maybe_interpolate(
             job, frames_in, fps, fps_multiplier, job.target_fps
         )
@@ -252,8 +267,19 @@ class VideoUpscaler:
             # (peak footprint on a long episode is tens-hundreds of GB).
             await asyncio.to_thread(self._safe_rmtree, frames_in)
 
-        # Raw-pipe fast path: any failure falls back to the file path.
-        if await self._should_stream(job):
+        # Tramo streaming: con el pipeline nuevo activo (modo híbrido) va por
+        # FramePipeline; si no (flag OFF / no elegible / fallback del modo
+        # full), el raw-pipe legacy queda intacto. Ambos caen al camino PNG
+        # ante cualquier fallo — el if/elif garantiza que un fallo del híbrido
+        # NO reintenta con el raw-pipe legacy (iría directo al PNG clásico).
+        if stream_mode == STREAM_MODE_HYBRID:
+            if await self._try_stream_pipeline_from_dir(
+                job, upscale_src, output_path, encode_fps, audio_mux_path, audio_codec_args
+            ):
+                self._finalize_output(job, output_path)
+                await asyncio.to_thread(self._safe_rmtree, upscale_src)
+                return None, encode_fps
+        elif await self._should_stream(job):
             streamed = await self._try_streaming(
                 job, upscale_src, output_path, encode_fps, audio_mux_path, audio_codec_args
             )
@@ -274,207 +300,22 @@ class VideoUpscaler:
         await asyncio.to_thread(self._safe_rmtree, upscale_src)
         return frames_out, encode_fps
 
-    async def _should_fuse_interpolate_upscale(
-        self, job: VideoUpscaleJob, fps_multiplier: int, target_fps: str | None
-    ) -> bool:
-        # Fuse ONLY GMFSS + the in-process ONNX upscaler: RIFE and the NCNN
-        # upscaler are external subprocesses (nothing to fuse in-process), and HF
-        # ONNX models run through OnnxUpscaler, not the builtin video engine.
-        # Both engines must be present, and interpolation must actually be
-        # requested (otherwise there is no interpolate step to fuse).
-        #
-        # Opt-in, off by default (Task 9 fix): measured ~1.7x SLOWER than the
-        # two-pass path at 4x/8K on a RX 7800 XT (see README "Benchmark real:
-        # fusion interpolar+escalar") -- the fused loop is a single-threaded
-        # sequential generator with no load/compute/save overlap. The fused
-        # code stays fully available and tested; it just isn't picked
-        # automatically until the regression is understood/fixed.
-        if not self.settings.enable_interp_upscale_fusion:
-            return False
-        if job.interp_engine != GMFSS_ENGINE:
-            return False
-        if not self._interpolation_requested(fps_multiplier, target_fps):
-            return False
-        if self.gmfss_engine is None or self.onnx_video_engine is None:
-            return False
-        if self._is_onnx_model(job.model_id):
-            return False
-        # Off the loop: the first resolve may do a cold `import onnxruntime` +
-        # get_available_providers (same reason _should_stream/_upscale_frames do).
-        backend = await asyncio.to_thread(self._resolve_builtin_backend, job)
-        return backend == UpscaleBackend.onnx
-
-    async def _run_fused_interpolate_upscale(
-        self,
-        job: VideoUpscaleJob,
-        frames_in: Path,
-        frames_out: Path,
-        fps: str,
-        fps_multiplier: int,
-        target_fps: str | None,
-    ) -> str:
-        """Fused GMFSS interpolate + ONNX upscale: drive GmfssEngine.run_frames_fused
-        from a worker thread, writing each already-upscaled frame straight to
-        frames_out as %08d.png (no frames-interp PNG round-trip). Returns the
-        encode fps -- the same value the two-pass _maybe_interpolate derives."""
-        device = job.device or self.settings.default_device
-        source_frame_count = await asyncio.to_thread(self._count_frames, frames_in)
-        target_frame_count = (
-            compute_target_frame_count(source_frame_count, fps, target_fps)
-            if target_fps is not None
-            else None
-        )
-        expected_output_count = (
-            target_frame_count if target_frame_count is not None else source_frame_count * fps_multiplier
-        )
-        frames_out.mkdir(parents=True, exist_ok=True)
-        # The fused pass does BOTH interpolate and upscale, so it reports under
-        # the upscaling stage; advancing to it marks the (collapsed) interpolating
-        # stage done. The denominator is the interpolated (== output) frame count.
-        advance_video_stage(job, "upscaling_frames")
-        async with self._track_frame_progress(
-            job, frames_out, "upscaling_frames", frames_total=expected_output_count
-        ):
-            await self._run_fused_frames_shielded(
-                job, frames_in, frames_out, source_frame_count, fps_multiplier, target_frame_count, device
-            )
-        self._validate_fused_output_count(frames_out, expected_output_count)
-        return self._interpolated_encode_fps(fps, fps_multiplier, target_fps)
-
-    async def _run_fused_frames_shielded(
-        self,
-        job: VideoUpscaleJob,
-        frames_in: Path,
-        frames_out: Path,
-        source_frame_count: int,
-        fps_multiplier: int,
-        target_frame_count: int | None,
-        device: str,
-    ) -> None:
-        # Same shield+await+cancel_event contract as OnnxVideoUpscaler.run_frames_*
-        # / GmfssEngine.run: run_frames_fused is a blocking generator with no
-        # cancel hook of its own, so a threading.Event is the only way to stop it,
-        # and we MUST wait for the worker to fully unwind before propagating so the
-        # caller's work-dir cleanup can't race a straggler PNG write.
-        cancel_event = threading.Event()
-        worker = asyncio.ensure_future(
-            asyncio.to_thread(
-                self._run_fused_frames_blocking,
-                job,
-                frames_in,
-                frames_out,
-                source_frame_count,
-                fps_multiplier,
-                target_frame_count,
-                device,
-                cancel_event,
-            )
-        )
-        try:
-            await asyncio.shield(worker)
-        except asyncio.CancelledError:
-            cancel_event.set()
-            with contextlib.suppress(BaseException):
-                await worker
-            raise
-
-    def _run_fused_frames_blocking(
-        self,
-        job: VideoUpscaleJob,
-        frames_in: Path,
-        frames_out: Path,
-        source_frame_count: int,
-        fps_multiplier: int,
-        target_frame_count: int | None,
-        device: str,
-        cancel_event: threading.Event,
-    ) -> None:
-        # Runs in a worker thread: run_frames_fused blocks on ONNX inference per
-        # frame, so it must NEVER be iterated on the event loop. cancel_event is
-        # checked between frames -- the generator's natural checkpoint boundary,
-        # the same granularity the two-pass GMFSS/ONNX compute loops use. Closing
-        # the generator unwinds it (GeneratorExit) with no background thread to
-        # leak (it is pull-based; nothing outlives this call).
-        upscale_frame = self._build_builtin_onnx_upscale_callback(job, device)
-        png_level = self.settings.onnx_video_png_compression
-        frames = self.gmfss_engine.run_frames_fused(
-            frames_in,
-            source_frame_count,
-            fps_multiplier,
-            target_frame_count=target_frame_count,
-            device=device,
-            upscale_frame=upscale_frame,
-        )
-        index = 1
-        try:
-            for frame_nhwc in frames:
-                if cancel_event.is_set():
-                    return
-                _onnx_video_save_frame(frame_nhwc, frames_out / f"{index:08d}.png", png_level)
-                index += 1
-        finally:
-            frames.close()
-
-    def _build_builtin_onnx_upscale_callback(
-        self, job: VideoUpscaleJob, device: str
-    ) -> Callable[[np.ndarray], np.ndarray]:
-        # Build the per-frame upscale closure from the SAME resolved builtin ONNX
-        # session + _upscale_one path the two-pass builtin engine uses, so a fused
-        # frame is upscaled byte-for-byte identically to a two-pass frame. The
-        # sticky force_tiled flag mirrors OnnxVideoUpscaler._infer_loop (a
-        # whole-frame OOM downgrades the rest of the run to tiling).
-        engine = self.onnx_video_engine
-        if engine is None:
-            raise RuntimeError("Fused GMFSS path requires the ONNX video engine, which is not configured")
-        model = get_builtin_onnx_model(job.model_name)
-        if model is None:
-            raise RuntimeError(f"No ONNX export configured for builtin model {job.model_name!r}")
-        onnx_path = engine._select_model_file(model, device)
-        # Captured here, BEFORE gmfss_engine.run_frames_fused's first next() runs
-        # GmfssEngine._get_sessions -> gpu_coordinator.acquire for this same device:
-        # that acquire only evicts the ONNX engine's cache ENTRY, not this already
-        # -captured session object, which the closure below keeps alive for the
-        # whole fused loop. So during the fused pass BOTH the GMFSS sessions and
-        # this ONNX session are resident on the GPU at once -- the coordinator's
-        # one-owner-per-device eviction does not reduce VRAM pressure here the way
-        # it does on the two-pass path. Intentional/unavoidable for fusion, not a
-        # bug -- watch VRAM headroom when benchmarking this path (Task 9).
-        session = engine._get_session(str(onnx_path), device)
-        state = {"force_tiled": False}
-
-        def upscale_frame(frame_nhwc: np.ndarray) -> np.ndarray:
-            upscaled, state["force_tiled"] = engine._upscale_one(
-                session, frame_nhwc, device, state["force_tiled"]
-            )
-            return upscaled
-
-        return upscale_frame
-
-    def _validate_fused_output_count(self, frames_out: Path, expected_count: int) -> None:
-        actual_count = self._count_frames(frames_out)
-        if actual_count == 0:
-            raise RuntimeError("Fused GMFSS+ONNX pass completed but no output frames were produced")
-        if actual_count != expected_count:
-            raise RuntimeError(
-                f"Fused GMFSS+ONNX pass completed with {actual_count} frames, expected {expected_count}"
-            )
-
-    @staticmethod
-    def _interpolated_encode_fps(fps: str, fps_multiplier: int, target_fps: str | None) -> str:
-        # Mirrors the encode-fps values _interpolate_to_target_fps /
-        # _interpolate_by_multiplier return, so the fused path encodes at the
-        # exact same rate the two-pass path would.
-        if target_fps is not None:
-            return format_fps_fraction(target_fps)
-        new_rate = compute_interpolated_fps(fps, fps_multiplier)
-        return f"{new_rate.numerator}/{new_rate.denominator}"
-
     def _finalize_output(self, job: VideoUpscaleJob, output_path: Path) -> None:
         if not self._is_non_empty_file(output_path):
             raise RuntimeError("Video processing finished but no output file was produced")
         complete_video_stages(job)
         job.metadata["outputWidth"] = job.metadata["sourceWidth"] * job.scale
         job.metadata["outputHeight"] = job.metadata["sourceHeight"] * job.scale
+
+    @staticmethod
+    def _interpolated_encode_fps(fps: str, fps_multiplier: int, target_fps: str | None) -> str:
+        # Mismos valores de encode-fps que devuelven _interpolate_to_target_fps /
+        # _interpolate_by_multiplier, para que el pipeline encodee exactamente a
+        # la misma tasa que el camino de dos pasadas.
+        if target_fps is not None:
+            return format_fps_fraction(target_fps)
+        new_rate = compute_interpolated_fps(fps, fps_multiplier)
+        return f"{new_rate.numerator}/{new_rate.denominator}"
 
     async def _upscale_frames(self, job: VideoUpscaleJob, frames_in: Path, frames_out: Path) -> None:
         # HF-installed ONNX models are onnx-only (arbitrary fp32 NCHW graphs) --
@@ -549,6 +390,20 @@ class VideoUpscaler:
             raise RuntimeError("ONNX backend selected but the ONNX video engine is not configured")
         device = job.device or self.settings.default_device
         await self.onnx_video_engine.run_frames_builtin(frames_in, frames_out, job.model_name, device)
+
+    async def _prepare_audio_mux(
+        self, job: VideoUpscaleJob, has_audio: bool, audio_path: Path
+    ) -> tuple[Path | None, list[str]]:
+        # Extraído del cuerpo de _run_pipeline para poder prepararlo ANTES del
+        # stream pipeline completo (que encodea sin pasar por el camino PNG).
+        if job.keep_audio and has_audio:
+            prepared_audio_path, audio_codec_args = await self._prepare_audio(job, audio_path)
+            return self._usable_audio_or_none(prepared_audio_path), audio_codec_args
+        if job.keep_audio and job.audio_enhance:
+            job.metadata["audioEnhanced"] = "skipped_no_audio"
+        elif job.keep_audio and job.audio_restore:
+            job.metadata["audioRestored"] = "skipped_no_audio"
+        return None, []
 
     async def _prepare_audio(self, job: VideoUpscaleJob, audio_path: Path) -> tuple[Path, list[str]]:
         if job.audio_enhance or job.audio_restore:
@@ -1054,6 +909,326 @@ class VideoUpscaler:
 
     # --- raw-pipe streaming (upscale + encode fused, no PNG round-trip) -----
 
+    async def _resolve_stream_pipeline_mode(
+        self, job: VideoUpscaleJob, fps_multiplier: int, frames_total_exact: bool = False
+    ) -> str | None:
+        """Elige el camino del stream pipeline. Requiere metadata del probe ya
+        estampada (sourceWidth/sourceHeight/framesTotal). None = camino clásico.
+        """
+        if not self.settings.enable_stream_pipeline or self.onnx_video_engine is None:
+            return None
+        # Modelos HF-ONNX van por OnnxUpscaler (grafos fp32 arbitrarios), no por
+        # el motor builtin de streaming — misma exclusión que el raw-pipe.
+        if self._is_onnx_model(job.model_id):
+            return None
+        # Solo _build_encode_command (camino PNG) sabe mapear pistas de audio
+        # extra / subtítulos desde el source original.
+        if self._needs_source_input(job):
+            return None
+        out_pixels = (
+            int(job.metadata.get("sourceWidth") or 0)
+            * int(job.metadata.get("sourceHeight") or 0)
+            * job.scale
+            * job.scale
+        )
+        # Bajo el umbral el encode PNG es barato y el overhead no compensa —
+        # mismo criterio (y mismo setting) que el raw-pipe.
+        if out_pixels < self.settings.raw_pipe_min_output_pixels:
+            return None
+        # Off the loop: el primer resolve puede hacer un import frío de
+        # onnxruntime + get_available_providers (mismo motivo que _should_stream).
+        if await asyncio.to_thread(self._resolve_builtin_backend, job) != UpscaleBackend.onnx:
+            return None
+        if not self._interpolation_requested(fps_multiplier, job.target_fps):
+            return STREAM_MODE_FULL
+        if job.interp_engine == GMFSS_ENGINE:
+            # El plan GMFSS necesita el conteo fuente exacto: sin framesTotal
+            # honesto (VFR) no hay plan — clásico.
+            #
+            # PENDIENTE (decisión de producto, ver review final de la rama): con
+            # un framesTotal ESTIMADO (round(duration*fps), cuando el contenedor
+            # no trae nb_frames) el plan puede quedar corrido y el desajuste solo
+            # se detecta en el flush() de la etapa, con todo el trabajo ya hecho.
+            # Exigir `frames_total_exact` acá lo evitaría, a costa de mandar al
+            # camino clásico a toda fuente sin nb_frames. No se aplica todavía
+            # porque angosta el ruteo de forma visible para el usuario.
+            frames_total = job.metadata.get("framesTotal")
+            if (
+                self.gmfss_engine is None
+                or not isinstance(frames_total, int)
+                or isinstance(frames_total, bool)
+                or frames_total <= 0
+            ):
+                return None
+            return STREAM_MODE_FULL
+        # RIFE: el binario exige el directorio PNG entero — híbrido (su tramo
+        # queda en PNG; upscale→encode va en streaming).
+        return STREAM_MODE_HYBRID
+
+    async def _run_stream_pipeline(
+        self,
+        job: VideoUpscaleJob,
+        *,
+        source_factory: "Callable[[threading.Event], Iterator[np.ndarray]]",
+        gmfss_stage_factory: "Callable[[str], FrameStage] | None",
+        width: int,
+        height: int,
+        expected_output_count: int | None,
+        output_path: Path,
+        encode_fps: str,
+        audio_mux_path: Path | None,
+        audio_codec_args: list[str],
+        encoder_name: str,
+    ) -> None:
+        """Corre el FramePipeline completo en un worker thread con el patrón
+        shield+cancel_event+watchdog del raw-pipe: el cancel señala y ESPERA a
+        que el worker desenrolle (threads joineados, procesos ffmpeg muertos)
+        antes de propagar, para que la limpieza del work-dir no corra contra
+        escrituras vivas."""
+        out_w, out_h = width * job.scale, height * job.scale
+        command = self._build_rawpipe_command(
+            out_w, out_h, encode_fps, audio_mux_path, audio_codec_args, output_path, job, encoder_name
+        )
+        counter = {"n": 0}
+        cancel_event = threading.Event()
+        worker = asyncio.ensure_future(
+            asyncio.to_thread(
+                self._run_stream_pipeline_blocking,
+                job,
+                source_factory,
+                gmfss_stage_factory,
+                job.device or self.settings.default_device,
+                width,
+                height,
+                expected_output_count,
+                command,
+                counter,
+                cancel_event,
+            )
+        )
+        try:
+            async with self._track_streaming_progress(job, counter):
+                await asyncio.shield(worker)
+        except BaseException:
+            cancel_event.set()
+            with contextlib.suppress(BaseException):
+                await worker
+            raise
+        # Un exit 0 de ffmpeg no garantiza un archivo utilizable. Validarlo acá
+        # (y no recién en _finalize_output, que corre FUERA del try del caller)
+        # es lo que hace que ese caso caiga al camino clásico en vez de fallar
+        # el job con streamPipeline=true ya estampado.
+        if not self._is_non_empty_file(output_path):
+            raise RuntimeError("el stream pipeline terminó sin dejar un archivo de salida utilizable")
+        if expected_output_count is None:
+            # El denominador era un estimado (o no había): publicar lo realmente
+            # entregado para que el stepper cierre en N/N y no en N/estimado.
+            job.metadata["framesTotal"] = counter["n"]
+
+    def _run_stream_pipeline_blocking(
+        self,
+        job: VideoUpscaleJob,
+        source_factory: "Callable[[threading.Event], Iterator[np.ndarray]]",
+        gmfss_stage_factory: "Callable[[str], FrameStage] | None",
+        device: str,
+        width: int,
+        height: int,
+        expected_output_count: int | None,
+        command: list[str],
+        counter: dict[str, int],
+        cancel_event: threading.Event,
+    ) -> None:
+        stages: list[FrameStage] = []
+        if gmfss_stage_factory is not None:
+            # GMFSS primero, upscale después: el acquire del upscaler evicta la
+            # ENTRADA de cache de GMFSS pero el driver ya retiene sus sesiones.
+            # Ambos sets quedan residentes en VRAM durante el run — mismo
+            # trade-off que documentaba la fusión eliminada; vigilarlo en el
+            # smoke real. La serialización sigue en el coordinator/semáforos.
+            stages.append(gmfss_stage_factory(device))
+        upscale_frame = self.onnx_video_engine.build_frame_upscaler(job.model_name, device)
+        stages.append(MapStage(upscale_frame))
+
+        input_bytes = width * height * 3
+        output_bytes = input_bytes * job.scale * job.scale
+        budget_bytes = max(1, self.settings.onnx_video_max_pipeline_mb) * 1024 * 1024
+        maxsizes = derive_stream_queue_maxsizes(input_bytes, output_bytes, len(stages), budget_bytes)
+
+        encoder = RawPipeEncoder(
+            command, summarize_error=lambda stderr: self._summarize_process_error(stderr, b"")
+        )
+        encoder.start()
+
+        def sink(frame_nhwc: np.ndarray) -> None:
+            encoder.write_frame(frame_nhwc[0])  # NHWC -> HWC; bloquea con backpressure del pipe
+            counter["n"] = encoder.frames_written
+
+        pipeline = FramePipeline(source_factory(cancel_event), stages, sink, maxsizes)
+        try:
+            delivered = pipeline.run(cancel_event)
+        except BaseException:
+            encoder.kill()
+            raise
+        if cancel_event.is_set():
+            encoder.kill()
+            return
+        if delivered == 0:
+            encoder.kill()
+            raise RuntimeError("el stream pipeline no entregó ningún frame")
+        if expected_output_count is not None and delivered != expected_output_count:
+            encoder.kill()
+            raise RuntimeError(
+                f"el stream pipeline entregó {delivered}/{expected_output_count} frames"
+            )
+        encoder.finish()
+
+    async def _try_stream_pipeline_full(
+        self,
+        job: VideoUpscaleJob,
+        fps_multiplier: int,
+        output_path: Path,
+        fps: str,
+        audio_mux_path: Path | None,
+        audio_codec_args: list[str],
+        frames_total_exact: bool = False,
+    ) -> bool:
+        """Pipeline completo decode→(GMFSS)→upscale→encode, sin ningún PNG.
+        True = output_path finalizado; False = fallback clásico DESDE CERO
+        (cancel/stall SÍ propagan). fps_multiplier lo consume la rama de
+        interpolación (Task 11)."""
+        width = int(job.metadata.get("sourceWidth") or 0)
+        height = int(job.metadata.get("sourceHeight") or 0)
+        if width <= 0 or height <= 0:
+            return False
+        had_frames_total = "framesTotal" in job.metadata
+        original_frames_total = job.metadata.get("framesTotal")
+        try:
+            encoder_name = await asyncio.to_thread(self._resolve_video_encoder, job)
+            job.metadata["videoEncoder"] = encoder_name
+            # Sin interp la salida iguala a la fuente, pero solo se valida por
+            # igualdad si el conteo es EXACTO (nb_frames). Un estimado
+            # round(duration*fps) difiere +-1 seguido, y rechazar por eso
+            # tiraría a la basura un decode+upscale+encode ya completo para
+            # rehacerlo por el clásico: se deja pasar y se publica lo entregado.
+            expected_output_count = (
+                job.metadata.get("framesTotal") if frames_total_exact else None
+            )
+            encode_fps = fps
+            gmfss_stage_factory = None
+            if self._interpolation_requested(fps_multiplier, job.target_fps):
+                # El gate garantiza framesTotal conocido y gmfss_engine presente
+                # para este camino (RIFE nunca llega acá: es modo híbrido).
+                source_count = int(job.metadata["framesTotal"])
+                expected_output_count = (
+                    compute_target_frame_count(source_count, fps, job.target_fps)
+                    if job.target_fps is not None
+                    else source_count * fps_multiplier
+                )
+                encode_fps = self._interpolated_encode_fps(fps, fps_multiplier, job.target_fps)
+                # Denominador honesto del stepper colapsado: la salida interpolada.
+                job.metadata["framesTotal"] = expected_output_count
+                gmfss_stage_factory = lambda device: self.gmfss_engine.build_stream_stage(  # noqa: E731
+                    source_count, expected_output_count, device
+                )
+            # Etapa colapsada (decisión de stepper del plan): extract/interp
+            # quedan "done" al avanzar; framesDone lo cuenta el sink de encode.
+            advance_video_stage(job, "upscaling_frames")
+            source = FfmpegFrameSource(
+                self.settings.ffmpeg_binary_path,
+                job.source_path,
+                width,
+                height,
+                self.settings.ffmpeg_decode_threads,
+            )
+            await self._run_stream_pipeline(
+                job,
+                source_factory=source.frames,
+                gmfss_stage_factory=gmfss_stage_factory,
+                width=width,
+                height=height,
+                expected_output_count=expected_output_count,
+                output_path=output_path,
+                encode_fps=encode_fps,
+                audio_mux_path=audio_mux_path,
+                audio_codec_args=audio_codec_args,
+                encoder_name=encoder_name,
+            )
+        except (asyncio.CancelledError, VideoStallError):
+            raise
+        except Exception as exc:  # noqa: BLE001 - CUALQUIER fallo -> clásico desde cero
+            logger.warning(
+                "stream pipeline (completo) falló (%s); se usa el camino clásico desde cero", exc
+            )
+            if had_frames_total:
+                job.metadata["framesTotal"] = original_frames_total
+            else:
+                job.metadata.pop("framesTotal", None)
+            job.metadata["streamPipelineFallback"] = str(exc)
+            output_path.unlink(missing_ok=True)
+            return False
+        job.metadata["streamPipeline"] = True
+        job.metadata["outputFps"] = encode_fps
+        return True
+
+    @staticmethod
+    def _probe_png_dir(frames_dir: Path) -> tuple[int, int, int]:
+        paths = sorted(frames_dir.glob("*.png"))
+        if not paths:
+            raise RuntimeError("no hay frames para streamear")
+        first = _load_frame(paths[0])
+        _, height, width, _ = first.shape
+        return len(paths), width, height
+
+    async def _try_stream_pipeline_from_dir(
+        self,
+        job: VideoUpscaleJob,
+        frames_dir: Path,
+        output_path: Path,
+        encode_fps: str,
+        audio_mux_path: Path | None,
+        audio_codec_args: list[str],
+    ) -> bool:
+        """Tramo streaming del modo híbrido (RIFE): lee los PNGs interpolados y
+        streamea upscale→encode. True = output_path finalizado por el pipeline;
+        False = fallback al camino PNG clásico (cancel/stall SÍ propagan)."""
+        had_frames_total = "framesTotal" in job.metadata
+        original_frames_total = job.metadata.get("framesTotal")
+        try:
+            frame_count, width, height = await asyncio.to_thread(self._probe_png_dir, frames_dir)
+            encoder_name = await asyncio.to_thread(self._resolve_video_encoder, job)
+            job.metadata["videoEncoder"] = encoder_name
+            # Etapa colapsada (decisión de stepper del plan): denominador
+            # honesto = frames reales del tramo (ya interpolados).
+            job.metadata["framesTotal"] = frame_count
+            advance_video_stage(job, "upscaling_frames")
+            await self._run_stream_pipeline(
+                job,
+                source_factory=lambda cancel_event: iter_png_frames(frames_dir, cancel_event),
+                gmfss_stage_factory=None,
+                width=width,
+                height=height,
+                expected_output_count=frame_count,
+                output_path=output_path,
+                encode_fps=encode_fps,
+                audio_mux_path=audio_mux_path,
+                audio_codec_args=audio_codec_args,
+                encoder_name=encoder_name,
+            )
+        except (asyncio.CancelledError, VideoStallError):
+            raise
+        except Exception as exc:  # noqa: BLE001 - CUALQUIER fallo -> camino clásico
+            logger.warning("stream pipeline (híbrido) falló (%s); se usa el camino PNG clásico", exc)
+            if had_frames_total:
+                job.metadata["framesTotal"] = original_frames_total
+            else:
+                job.metadata.pop("framesTotal", None)
+            job.metadata["streamPipelineFallback"] = str(exc)
+            output_path.unlink(missing_ok=True)
+            return False
+        job.metadata["streamPipeline"] = True
+        job.metadata["outputFps"] = encode_fps
+        return True
+
     async def _should_stream(self, job: VideoUpscaleJob) -> bool:
         if not self.settings.enable_raw_pipe or self.onnx_video_engine is None:
             return False
@@ -1167,18 +1342,15 @@ class VideoUpscaler:
         cmd = self._build_rawpipe_command(
             out_w, out_h, fps, audio_mux_path, audio_codec_args, output_path, job, encoder
         )
-        proc = subprocess.Popen(
-            cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE, stdout=subprocess.DEVNULL
-        )
-        stderr_buf: list[bytes] = []
-        stderr_thread = threading.Thread(target=self._drain_stream, args=(proc.stderr, stderr_buf), daemon=True)
-        stderr_thread.start()
+        # Mismo resumen de errores que el encode PNG (mensajes x265 amigables, etc.).
+        pipe_encoder = RawPipeEncoder(cmd, summarize_error=lambda stderr: self._summarize_process_error(stderr, b""))
+        pipe_encoder.start()
 
         counter = {"n": 0}
 
         def write_frame(frame_hwc_rgb) -> None:
-            proc.stdin.write(frame_hwc_rgb.tobytes())  # blocks on pipe backpressure (in a worker thread)
-            counter["n"] += 1
+            pipe_encoder.write_frame(frame_hwc_rgb)  # blocks on pipe backpressure (worker thread)
+            counter["n"] = pipe_encoder.frames_written
 
         device = job.device or self.settings.default_device
         # Shield the engine task so a job cancel doesn't tear it down while a worker
@@ -1190,36 +1362,14 @@ class VideoUpscaler:
         try:
             async with self._track_streaming_progress(job, counter):
                 expected = await asyncio.shield(stream_task)
-            # Guard against a silent frame drop (mirrors _validate_frame_output_count
-            # on the PNG path): fewer frames written than the engine reported means a
-            # short video -- raise so _try_streaming falls back to the file path.
             if counter["n"] != expected:
                 raise RuntimeError(f"raw-pipe wrote {counter['n']}/{expected} frames")
-            proc.stdin.close()
-            returncode = await asyncio.to_thread(proc.wait)
-            if returncode != 0:
-                raise RuntimeError(self._summarize_process_error(b"".join(stderr_buf), b""))
+            await asyncio.to_thread(pipe_encoder.finish)
         except BaseException:
-            proc.kill()
+            pipe_encoder.kill()
             with contextlib.suppress(BaseException):
                 await stream_task
-            with contextlib.suppress(Exception):
-                await asyncio.to_thread(proc.wait)
             raise
-        finally:
-            stderr_thread.join(timeout=5)
-
-    @staticmethod
-    def _drain_stream(stream, sink: list[bytes]) -> None:
-        # ffmpeg fills its stderr pipe; if nobody drains it, the raw stdin writer
-        # deadlocks once that pipe buffer is full. Keep only the tail for errors.
-        try:
-            for chunk in iter(lambda: stream.read(8192), b""):
-                sink.append(chunk)
-                if len(sink) > 64:
-                    del sink[:-64]
-        except Exception:  # noqa: BLE001 - stream closed on kill
-            pass
 
     @contextlib.asynccontextmanager
     async def _track_streaming_progress(
@@ -1241,6 +1391,10 @@ class VideoUpscaler:
             raise VideoStallError(_stall_message("frames nuevos", self.frame_stall_timeout_seconds)) from None
         finally:
             await self._stop_poller(poller)
+            # Publicar el contador final: un clip que termina antes del primer
+            # tick del poller quedaba en framesDone=0 pese a haber entregado
+            # todos sus frames (mismo cierre que hace _track_frame_progress).
+            self._apply_frame_progress(job, "upscaling_frames", counter["n"], frames_total)
 
     async def _poll_streaming_progress(
         self,

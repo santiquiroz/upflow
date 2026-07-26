@@ -67,6 +67,19 @@ def _is_oom_error(exc: BaseException) -> bool:
     text = str(exc).lower()
     return any(sig in text for sig in _OOM_SIGNATURES)
 
+
+def derive_queue_maxsize(frame_bytes: int, budget_bytes: int, floor: int, ceiling: int) -> int:
+    """Cuántos frames caben en cola bajo un presupuesto de RAM en bytes.
+
+    Extraído de _save_queue_maxsize para compartirlo con las colas del stream
+    pipeline (spec 2026-07-25-stream-frame-pipeline-design.md): mismo criterio,
+    piso para no matar throughput y techo para no acumular de más.
+    """
+    if frame_bytes <= 0:
+        return ceiling
+    return max(floor, min(ceiling, budget_bytes // frame_bytes))
+
+
 from app.config import Settings
 from app.services.backend_registry import get_builtin_onnx_model
 from app.services.devices_service import DevicesService
@@ -294,6 +307,36 @@ class OnnxVideoUpscaler:
                 await worker
             raise
 
+    # --- per-frame closure for the stream pipeline ---------------------------
+
+    def build_frame_upscaler(self, engine_model_name: str, device: str) -> "Callable[[np.ndarray], np.ndarray]":
+        """Closure NHWC uint8 → NHWC uint8 sobre la MISMA sesión/tiling/fp16 que
+        run_frames_builtin: la etapa de upscale del stream pipeline (MapStage).
+
+        La sesión se resuelve UNA vez acá (cache + GpuSessionCoordinator.acquire
+        — la serialización GPU existente); el flag sticky de tiling replica el
+        contrato de _infer_loop para el resto del run.
+        """
+        if not self.available():
+            raise RuntimeError("ONNX video engine is not available: onnxruntime and opencv are required")
+        model = get_builtin_onnx_model(engine_model_name)
+        if model is None:
+            raise RuntimeError(f"No ONNX export configured for builtin model {engine_model_name!r}")
+        onnx_path = self._select_model_file(model, device)
+        if not onnx_path.exists():
+            raise RuntimeError(f"ONNX model file not found: {onnx_path}")
+        self.devices.validate(device)
+        session = self._get_session(str(onnx_path), device)
+        state = {"force_tiled": False}
+
+        def upscale_frame(frame_nhwc: np.ndarray) -> np.ndarray:
+            upscaled, state["force_tiled"] = self._upscale_one(
+                session, frame_nhwc, device, state["force_tiled"]
+            )
+            return upscaled
+
+        return upscale_frame
+
     def _run_streaming_blocking(
         self,
         frames_in: Path,
@@ -427,10 +470,8 @@ class OnnxVideoUpscaler:
         if not frame_paths or scale < 1:
             return default
         out_bytes = self._output_frame_bytes(frame_paths[0], scale)
-        if out_bytes <= 0:
-            return default
         budget_bytes = max(1, self.settings.onnx_video_max_pipeline_mb) * 1024 * 1024
-        return max(n_save, min(default, budget_bytes // out_bytes))
+        return derive_queue_maxsize(out_bytes, budget_bytes, floor=n_save, ceiling=default)
 
     @staticmethod
     def _output_frame_bytes(frame_path: Path, scale: int) -> int:
