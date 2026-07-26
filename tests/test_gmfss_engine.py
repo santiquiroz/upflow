@@ -573,3 +573,122 @@ def test_run_pair_pipeline_stops_immediately_when_cancel_event_preset(
 
     assert count_frames(frames_out) == 0
     assert threads_after <= threads_before, "pipeline left a thread running after a pre-set cancel"
+
+
+# ---------------------------------------------------------------------------
+# build_stream_stage (stream pipeline): GMFSS como FrameStage 1→N con ventana
+# de 2 frames — mismo orden de emisión y misma aritmética de plan que run().
+# ---------------------------------------------------------------------------
+
+
+def make_stream_source_frames(count: int) -> list[np.ndarray]:
+    frames = []
+    for index in range(count):
+        value = (index * 17) % 256
+        frames.append(np.full((1, SOURCE_H, SOURCE_W, 3), value, dtype=np.uint8))
+    return frames
+
+
+def collect_stage_outputs(stage, frames: list[np.ndarray]) -> list[np.ndarray]:
+    outputs: list[np.ndarray] = []
+    for source_frame in frames:
+        outputs.extend(stage.process(source_frame))
+    outputs.extend(stage.flush())
+    return outputs
+
+
+def make_stream_engine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> GmfssEngine:
+    engine = GmfssEngine(make_settings(tmp_path), GpuSessionCoordinator())
+    monkeypatch.setattr(engine, "_create_sessions", fake_sessions)
+    return engine
+
+
+def test_stream_stage_emits_exact_count_order_and_dtype_for_2x(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = make_stream_engine(tmp_path, monkeypatch)
+    stage = engine.build_stream_stage(source_frame_count=3, target_frame_count=6, device="cpu")
+    source = make_stream_source_frames(3)
+
+    outputs = collect_stage_outputs(stage, source)
+
+    # plan(3→6) = [1, 2] extras: source0, i(0.5), source1, i(1/3), i(2/3), source2
+    assert len(outputs) == 6
+    assert np.array_equal(outputs[0], source[0])  # fuente verbatim (t=0)
+    assert np.array_equal(outputs[2], source[1])
+    assert np.array_equal(outputs[5], source[2])  # fuente verbatim (t=1 del último par)
+    for out in outputs:
+        assert out.dtype == np.uint8
+        assert out.shape == (1, SOURCE_H, SOURCE_W, 3)  # NHWC RGB a resolución fuente
+
+
+def test_stream_stage_passes_through_when_no_extra_frames(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = make_stream_engine(tmp_path, monkeypatch)
+    stage = engine.build_stream_stage(source_frame_count=2, target_frame_count=2, device="cpu")
+    source = make_stream_source_frames(2)
+
+    outputs = collect_stage_outputs(stage, source)
+
+    assert len(outputs) == 2
+    assert all(np.array_equal(a, b) for a, b in zip(outputs, source))
+
+
+async def test_stream_stage_matches_run_output_byte_for_byte(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Gate de calidad: la etapa de streaming produce EXACTAMENTE los mismos
+    # píxeles que run() (misma sesión fake, mismo plan, mismas conversiones) —
+    # solo desaparece el hop por disco. PNG es lossless, así que la comparación
+    # decode-a-decode es byte-exacta.
+    import cv2
+
+    engine = make_stream_engine(tmp_path, monkeypatch)
+    frames_in = tmp_path / "frames-in"
+    write_fake_source_frames(frames_in, 3)
+    frames_out = tmp_path / "frames-out"
+    await engine.run(frames_in, frames_out, 3, 2, device="cpu")
+
+    stage = engine.build_stream_stage(source_frame_count=3, target_frame_count=6, device="cpu")
+    source = []
+    for path in sorted(frames_in.glob("*.png")):
+        rgb = cv2.cvtColor(cv2.imread(str(path)), cv2.COLOR_BGR2RGB)
+        source.append(np.ascontiguousarray(rgb)[np.newaxis, ...])
+    outputs = collect_stage_outputs(stage, source)
+
+    expected_paths = sorted(frames_out.glob("*.png"))
+    assert len(outputs) == len(expected_paths) == 6
+    for index, path in enumerate(expected_paths):
+        expected = cv2.cvtColor(cv2.imread(str(path)), cv2.COLOR_BGR2RGB)
+        assert np.array_equal(outputs[index][0], expected), path.name
+
+
+def test_stream_stage_flush_raises_on_missing_source_frames(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = make_stream_engine(tmp_path, monkeypatch)
+    stage = engine.build_stream_stage(source_frame_count=3, target_frame_count=6, device="cpu")
+    stage.process(make_stream_source_frames(1)[0])
+
+    with pytest.raises(RuntimeError, match="esperaba"):
+        stage.flush()
+
+
+def test_stream_stage_raises_on_extra_source_frames(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = make_stream_engine(tmp_path, monkeypatch)
+    stage = engine.build_stream_stage(source_frame_count=2, target_frame_count=4, device="cpu")
+    frames = make_stream_source_frames(3)
+    stage.process(frames[0])
+    stage.process(frames[1])
+
+    with pytest.raises(RuntimeError, match="más frames"):
+        stage.process(frames[2])
+
+
+def test_build_stream_stage_when_unavailable_raises_actionable_error(tmp_path: Path) -> None:
+    engine = GmfssEngine(make_settings(tmp_path, enabled=False), GpuSessionCoordinator())
+    with pytest.raises(RuntimeError, match="ENABLE_GMFSS"):
+        engine.build_stream_stage(source_frame_count=2, target_frame_count=4, device="cpu")

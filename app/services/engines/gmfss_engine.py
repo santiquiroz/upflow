@@ -137,6 +137,22 @@ class GmfssEngine:
         self._validate_output_frame_count(frames_out, resolved_target_frame_count)
         return frames_out
 
+    def build_stream_stage(
+        self, source_frame_count: int, target_frame_count: int, device: str
+    ) -> "GmfssStreamStage":
+        """GMFSS como FrameStage del stream pipeline: mismo plan exacto
+        (_build_interpolation_plan) y mismo driver que run(), sin PNGs. El
+        caller conoce source_frame_count por el probe (el gate del pipeline
+        exige framesTotal conocido para elegir este camino)."""
+        if not self.available():
+            raise RuntimeError(
+                "GMFSS interpolation engine is not available. Enable ENABLE_GMFSS and install the "
+                "models (scripts/download-gmfss-onnx.ps1)."
+            )
+        plan = _build_interpolation_plan(source_frame_count, target_frame_count)
+        driver, padded_hw = self._build_driver(device)
+        return GmfssStreamStage(driver, padded_hw, plan)
+
     @staticmethod
     def _resolve_target_frame_count(
         source_frame_count: int, multiplier: int, target_frame_count: int | None
@@ -177,10 +193,14 @@ class GmfssEngine:
             )
         plan = _build_interpolation_plan(source_frame_count, target_frame_count)
 
+        driver, padded_hw = self._build_driver(device)
+        return driver, padded_hw, frame_paths, plan
+
+    def _build_driver(self, device: str) -> tuple[GmfssDriver, tuple[int, int]]:
         sessions = self._get_sessions(device)
         assets = GmfssAssets.load(self.settings.gmfss_model_dir_path)
         driver = GmfssDriver(assets, _graph_runner(sessions), splat_fn=softsplat_cl.splat_softmax)
-        return driver, assets.padded_hw, frame_paths, plan
+        return driver, assets.padded_hw
 
     # --- session cache -------------------------------------------------
 
@@ -384,6 +404,51 @@ class GmfssEngine:
         return sum(1 for _ in frames_out.glob("*.png"))
 
 
+class GmfssStreamStage:
+    """FrameStage 1→N con ventana de 2: emite source[0], interp(pair0)...,
+    source[1], ... — el MISMO orden que _compute_loop/run(). Los frames fuente
+    pasan verbatim (pixel-idénticos, sin round-trip por la resolución padded);
+    solo los interpolados atraviesan el driver. Corre en UN thread del
+    pipeline: no necesita locks propios."""
+
+    def __init__(
+        self, driver: GmfssDriver, padded_hw: tuple[int, int], plan: list[list[float]]
+    ) -> None:
+        self._driver = driver
+        self._padded_hw = padded_hw
+        self._plan = plan
+        self._pair_index = 0
+        self._prev_chw: np.ndarray | None = None
+        self._prev_hw: tuple[int, int] | None = None
+
+    def process(self, frame: np.ndarray) -> list[np.ndarray]:
+        chw = _nhwc_uint8_to_padded_chw(frame, self._padded_hw)
+        original_hw = (frame.shape[1], frame.shape[2])
+        if self._prev_chw is None:
+            self._prev_chw, self._prev_hw = chw, original_hw
+            return [frame]  # source[0] verbatim (t=0)
+        if self._pair_index >= len(self._plan):
+            raise RuntimeError(
+                f"GMFSS recibió más frames fuente que los {len(self._plan) + 1} planificados"
+            )
+        timesteps = self._plan[self._pair_index]
+        outputs: list[np.ndarray] = []
+        if timesteps:  # un par con 0 extras se saltea reuse()+forward por completo
+            for output_chw in self._driver.interpolate_pair(self._prev_chw, chw, timesteps):
+                outputs.append(_chw_float_to_nhwc_uint8(output_chw, self._prev_hw))
+        outputs.append(frame)  # source[i+1] verbatim (t=1)
+        self._pair_index += 1
+        self._prev_chw, self._prev_hw = chw, original_hw
+        return outputs
+
+    def flush(self) -> list[np.ndarray]:
+        if self._pair_index != len(self._plan):
+            raise RuntimeError(
+                f"GMFSS esperaba {len(self._plan) + 1} frames fuente y recibió {self._pair_index + 1}"
+            )
+        return []
+
+
 # ---------------------------------------------------------------------------
 # Frame-pair -> timestep -> output-frame arithmetic (pure, no I/O -- see
 # tests/test_gmfss_engine.py for exactness coverage across multiplier and
@@ -491,6 +556,15 @@ def _chw_float_to_hwc_uint8(frame_chw: np.ndarray, original_hw: tuple[int, int])
         frame_chw = resize_bilinear(frame_chw, original_hw[0], original_hw[1])
     hwc = np.transpose(np.clip(frame_chw[0], 0.0, 1.0), (1, 2, 0))
     return np.rint(hwc * 255.0).astype(np.uint8)
+
+
+def _nhwc_uint8_to_padded_chw(frame_nhwc: np.ndarray, padded_hw: tuple[int, int]) -> np.ndarray:
+    original_hw = (frame_nhwc.shape[1], frame_nhwc.shape[2])
+    return _rgb_to_padded_chw(frame_nhwc[0], original_hw, padded_hw)
+
+
+def _chw_float_to_nhwc_uint8(frame_chw: np.ndarray, original_hw: tuple[int, int]) -> np.ndarray:
+    return _chw_float_to_hwc_uint8(frame_chw, original_hw)[np.newaxis, ...]
 
 
 def _save_frame(frame_chw: np.ndarray, original_hw: tuple[int, int], path: Path, png_compression: int) -> None:
