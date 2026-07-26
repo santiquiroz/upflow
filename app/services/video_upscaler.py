@@ -21,6 +21,7 @@ from app.services.backend_registry import (
 )
 from app.services.devices_service import DevicesService
 from app.services.engines.audio_enhance import AudioEnhancer
+from app.services.engines.ffmpeg_frame_source import FfmpegFrameSource
 from app.services.engines.ffmpeg_frame_sink import RawPipeEncoder
 from app.services.engines.gmfss_engine import GmfssEngine
 from app.services.engines.onnx_upscaler import OnnxUpscaler
@@ -162,6 +163,32 @@ class VideoUpscaler:
         job.metadata["duration"] = float(probe.get("format", {}).get("duration") or 0)
         job.metadata["framesTotal"] = resolve_frames_total(probe, video_stream, fps)
 
+        output_path = self.settings.outputs_path / f"{job.id}.{job.output_container}"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        stream_mode = await self._resolve_stream_pipeline_mode(job, fps_multiplier)
+        audio_mux_path: Path | None = None
+        audio_codec_args: list[str] = []
+        audio_prepared = False
+        # Task 11 quita la condición de no-interpolación al habilitar GMFSS en
+        # el modo full; mientras tanto los jobs GMFSS siguen el camino clásico.
+        if stream_mode == STREAM_MODE_FULL and not self._interpolation_requested(
+            fps_multiplier, job.target_fps
+        ):
+            audio_mux_path, audio_codec_args = await self._prepare_audio_mux(job, has_audio, audio_path)
+            audio_prepared = True
+            if await self._try_stream_pipeline_full(
+                job,
+                fps_multiplier,
+                output_path,
+                format_fps_fraction(fps),
+                audio_mux_path,
+                audio_codec_args,
+            ):
+                self._finalize_output(job, output_path)
+                return output_path
+            stream_mode = None  # fallback: camino clásico desde cero
+
         advance_video_stage(job, "extracting_frames")
         async with self._track_frame_progress(job, frames_in, "extracting_frames"):
             await self._run_process(
@@ -182,20 +209,9 @@ class VideoUpscaler:
                 ]
             )
 
-        audio_mux_path: Path | None = None
-        audio_codec_args: list[str] = []
-        if job.keep_audio and has_audio:
-            prepared_audio_path, audio_codec_args = await self._prepare_audio(job, audio_path)
-            audio_mux_path = self._usable_audio_or_none(prepared_audio_path)
-        elif job.keep_audio and job.audio_enhance:
-            job.metadata["audioEnhanced"] = "skipped_no_audio"
-        elif job.keep_audio and job.audio_restore:
-            job.metadata["audioRestored"] = "skipped_no_audio"
+        if not audio_prepared:
+            audio_mux_path, audio_codec_args = await self._prepare_audio_mux(job, has_audio, audio_path)
 
-        output_path = self.settings.outputs_path / f"{job.id}.{job.output_container}"
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-
-        stream_mode = await self._resolve_stream_pipeline_mode(job, fps_multiplier)
         encode_frames_dir, encode_fps = await self._interpolate_and_upscale(
             job, frames_in, frames_out, fps, fps_multiplier, output_path,
             audio_mux_path, audio_codec_args, stream_mode
@@ -363,6 +379,20 @@ class VideoUpscaler:
             raise RuntimeError("ONNX backend selected but the ONNX video engine is not configured")
         device = job.device or self.settings.default_device
         await self.onnx_video_engine.run_frames_builtin(frames_in, frames_out, job.model_name, device)
+
+    async def _prepare_audio_mux(
+        self, job: VideoUpscaleJob, has_audio: bool, audio_path: Path
+    ) -> tuple[Path | None, list[str]]:
+        # Extraído del cuerpo de _run_pipeline para poder prepararlo ANTES del
+        # stream pipeline completo (que encodea sin pasar por el camino PNG).
+        if job.keep_audio and has_audio:
+            prepared_audio_path, audio_codec_args = await self._prepare_audio(job, audio_path)
+            return self._usable_audio_or_none(prepared_audio_path), audio_codec_args
+        if job.keep_audio and job.audio_enhance:
+            job.metadata["audioEnhanced"] = "skipped_no_audio"
+        elif job.keep_audio and job.audio_restore:
+            job.metadata["audioRestored"] = "skipped_no_audio"
+        return None, []
 
     async def _prepare_audio(self, job: VideoUpscaleJob, audio_path: Path) -> tuple[Path, list[str]]:
         if job.audio_enhance or job.audio_restore:
@@ -1022,6 +1052,67 @@ class VideoUpscaler:
                 f"el stream pipeline entregó {delivered}/{expected_output_count} frames"
             )
         encoder.finish()
+
+    async def _try_stream_pipeline_full(
+        self,
+        job: VideoUpscaleJob,
+        fps_multiplier: int,
+        output_path: Path,
+        fps: str,
+        audio_mux_path: Path | None,
+        audio_codec_args: list[str],
+    ) -> bool:
+        """Pipeline completo decode→(GMFSS)→upscale→encode, sin ningún PNG.
+        True = output_path finalizado; False = fallback clásico DESDE CERO
+        (cancel/stall SÍ propagan). fps_multiplier lo consume la rama de
+        interpolación (Task 11)."""
+        width = int(job.metadata.get("sourceWidth") or 0)
+        height = int(job.metadata.get("sourceHeight") or 0)
+        if width <= 0 or height <= 0:
+            return False
+        try:
+            encoder_name = await asyncio.to_thread(self._resolve_video_encoder, job)
+            job.metadata["videoEncoder"] = encoder_name
+            # Sin interp la salida iguala a la fuente; framesTotal None (VFR) es
+            # honesto: sin validación estricta de conteo en ese caso.
+            expected_output_count = job.metadata.get("framesTotal")
+            encode_fps = fps
+            gmfss_stage_factory = None
+            # Etapa colapsada (decisión de stepper del plan): extract/interp
+            # quedan "done" al avanzar; framesDone lo cuenta el sink de encode.
+            advance_video_stage(job, "upscaling_frames")
+            source = FfmpegFrameSource(
+                self.settings.ffmpeg_binary_path,
+                job.source_path,
+                width,
+                height,
+                self.settings.ffmpeg_decode_threads,
+            )
+            await self._run_stream_pipeline(
+                job,
+                source_factory=source.frames,
+                gmfss_stage_factory=gmfss_stage_factory,
+                width=width,
+                height=height,
+                expected_output_count=expected_output_count,
+                output_path=output_path,
+                encode_fps=encode_fps,
+                audio_mux_path=audio_mux_path,
+                audio_codec_args=audio_codec_args,
+                encoder_name=encoder_name,
+            )
+        except (asyncio.CancelledError, VideoStallError):
+            raise
+        except Exception as exc:  # noqa: BLE001 - CUALQUIER fallo -> clásico desde cero
+            logger.warning(
+                "stream pipeline (completo) falló (%s); se usa el camino clásico desde cero", exc
+            )
+            job.metadata["streamPipelineFallback"] = str(exc)
+            output_path.unlink(missing_ok=True)
+            return False
+        job.metadata["streamPipeline"] = True
+        job.metadata["outputFps"] = encode_fps
+        return True
 
     @staticmethod
     def _probe_png_dir(frames_dir: Path) -> tuple[int, int, int]:

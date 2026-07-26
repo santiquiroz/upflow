@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import io
+import threading
+import time
 from pathlib import Path
 
 import cv2
@@ -10,6 +13,7 @@ import pytest
 from app.config import Settings
 from app.models import VideoUpscaleJob
 from app.services.devices_service import DevicesService
+from app.services.engines.ffmpeg_frame_source import FfmpegFrameSource
 from app.services.engines.ffmpeg_frame_sink import RawPipeEncoder
 from app.services.engines.onnx_video_upscaler import OnnxVideoUpscaler
 from app.services.gpu_session_coordinator import GpuSessionCoordinator
@@ -306,6 +310,34 @@ class FakeEncodeProc:
         self._final_returncode = -9
 
 
+class FakeDecodeProc:
+    """Popen fake de decode: stdout con frames rgb24 crudos — copiado de
+    tests/test_ffmpeg_frame_source.py."""
+
+    def __init__(self, stdout_bytes: bytes, returncode: int = 0) -> None:
+        self.stdout = io.BytesIO(stdout_bytes)
+        self.stderr = io.BytesIO(b"")
+        self.returncode: int | None = None
+        self._final_returncode = returncode
+        self.killed = False
+
+    def wait(self, timeout=None) -> int:
+        self.returncode = self._final_returncode
+        return self.returncode
+
+    def poll(self):
+        return self.returncode
+
+    def kill(self) -> None:
+        self.killed = True
+        self._final_returncode = -9
+
+
+def raw_source_frames(count: int) -> bytes:
+    # Frame i uniforme en (i*17)%256 a resolución SOURCE_H x SOURCE_W.
+    return b"".join(bytes([(i * 17) % 256]) * (SOURCE_H * SOURCE_W * 3) for i in range(count))
+
+
 def make_streaming_upscaler_with_real_engines(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> VideoUpscaler:
@@ -327,6 +359,148 @@ def make_streaming_upscaler_with_real_engines(
         model_registry=ModelRegistry(settings),
         devices=DevicesService(settings),
     )
+
+
+class RecordingRunProcessUpscaler(VideoUpscaler):
+    """Registra los comandos de _run_process y fakea sus efectos (extract PNG /
+    encode escribe el output) — patrón de StageTrackingVideoUpscaler de
+    tests/test_pipeline_stage_order.py."""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)  # type: ignore[arg-type]
+        self.commands: list[list[str]] = []
+
+    async def _run_process(self, command: list[str]) -> None:
+        self.commands.append(command)
+        if "-fps_mode" in command:
+            frames_dir = Path(command[-1]).parent
+            frames_dir.mkdir(parents=True, exist_ok=True)
+            (frames_dir / "00000001.png").write_bytes(b"png")
+        elif "-framerate" in command:
+            output = Path(command[-1])
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_bytes(b"fake-output-video")
+
+
+def make_recording_upscaler(tmp_path: Path, **settings_overrides: object) -> RecordingRunProcessUpscaler:
+    settings = make_stream_settings(tmp_path, **settings_overrides)
+    return RecordingRunProcessUpscaler(
+        settings,
+        FakeNcnnEngine(),  # type: ignore[arg-type]
+        FakeMediaTools(),  # type: ignore[arg-type]
+        gmfss_engine=object(),  # type: ignore[arg-type]
+        onnx_video_engine=FakeOnnxVideoEngine(),  # type: ignore[arg-type]
+        model_registry=ModelRegistry(settings),
+        devices=FakeDevicesService(),  # type: ignore[arg-type]
+    )
+
+
+# ---------------------------------------------------------------------------
+# Pipeline completo (modo full): saltea la extracción PNG; fallback desde cero
+# ---------------------------------------------------------------------------
+
+
+async def test_full_mode_skips_png_extraction(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    upscaler = make_recording_upscaler(tmp_path)
+    source_path = upscaler.settings.uploads_path / "clip.mp4"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_bytes(b"fake-video-bytes")
+    job = make_stream_job(tmp_path, source_path=source_path)
+    full_calls: dict = {}
+
+    async def fake_full(job_arg, fps_multiplier, output_path, fps, mux, codec_args):
+        full_calls["fps"] = fps
+        output_path.write_bytes(b"fake-video")
+        return True
+
+    monkeypatch.setattr(upscaler, "_try_stream_pipeline_full", fake_full)
+
+    output = await upscaler.run(job)
+
+    assert output.exists()
+    assert full_calls["fps"] == "24/1"  # el fps del probe de FakeMediaTools
+    assert all("-fps_mode" not in command for command in upscaler.commands), "corrió extracción PNG en modo full"
+    assert job.metadata["progress"] == 1.0
+
+
+async def test_full_mode_falls_back_to_classic_from_scratch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    upscaler = make_recording_upscaler(tmp_path)
+    source_path = upscaler.settings.uploads_path / "clip.mp4"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_bytes(b"fake-video-bytes")
+    job = make_stream_job(tmp_path, source_path=source_path)
+
+    async def failing_full(job_arg, fps_multiplier, output_path, fps, mux, codec_args):
+        job_arg.metadata["streamPipelineFallback"] = "boom"
+        return False
+
+    async def fake_upscale(job_arg, src, dst):
+        dst.mkdir(parents=True, exist_ok=True)
+        (dst / "00000001.png").write_bytes(b"png")
+
+    monkeypatch.setattr(upscaler, "_try_stream_pipeline_full", failing_full)
+    monkeypatch.setattr(upscaler, "_upscale_frames", fake_upscale)
+
+    output = await upscaler.run(job)
+
+    assert output.exists()
+    assert job.metadata["streamPipelineFallback"] == "boom"
+    # El camino clásico corrió DESDE CERO: extracción PNG + encode PNG.
+    assert any("-fps_mode" in command for command in upscaler.commands)
+    assert any("-framerate" in command for command in upscaler.commands)
+
+
+async def test_stream_pipeline_full_integration_no_interp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Integración real (spec "Testing/Integración", conteo 1→1 y orden):
+    # FramePipeline + FfmpegFrameSource + etapa de upscale reales; sesión ONNX
+    # y ambos procesos ffmpeg son fakes.
+    upscaler = make_streaming_upscaler_with_real_engines(tmp_path, monkeypatch)
+    job = make_stream_job(tmp_path, device="cpu")
+    job.metadata.update({"sourceWidth": SOURCE_W, "sourceHeight": SOURCE_H, "framesTotal": 3})
+    decode_proc = FakeDecodeProc(raw_source_frames(3))
+    sink_proc = FakeEncodeProc()
+    monkeypatch.setattr(FfmpegFrameSource, "_spawn", lambda self, command: decode_proc)
+    monkeypatch.setattr(RawPipeEncoder, "_spawn", lambda self, command: sink_proc)
+
+    ok = await upscaler._try_stream_pipeline_full(job, 1, tmp_path / "out.mp4", "24/1", None, [])
+
+    assert ok is True
+    assert job.metadata["streamPipeline"] is True
+    data = sink_proc.stdin.getvalue()
+    frame_bytes = (SOURCE_H * 2) * (SOURCE_W * 2) * 3  # la sesión fake dobla
+    assert len(data) == 3 * frame_bytes
+    assert [data[i * frame_bytes] for i in range(3)] == [0, 17, 34]  # orden fuente
+
+
+async def test_full_pipeline_cancel_waits_for_worker_before_reraising(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Mismo contrato shield+await del raw-pipe/motores: al propagar el cancel,
+    # el worker YA terminó — la limpieza del work-dir no corre contra threads vivos.
+    upscaler = make_stream_upscaler(tmp_path)
+    job = make_stream_job(tmp_path)
+    finished = threading.Event()
+
+    def blocking(job_arg, source_factory, stage_factory, device, width, height, expected, command, counter, cancel_event):
+        cancel_event.wait(timeout=10)
+        time.sleep(0.2)  # simula un teardown no interrumpible en vuelo
+        finished.set()
+
+    monkeypatch.setattr(upscaler, "_run_stream_pipeline_blocking", blocking)
+
+    task = asyncio.create_task(
+        upscaler._try_stream_pipeline_full(job, 1, tmp_path / "out.mp4", "24/1", None, [])
+    )
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert finished.is_set(), "el cancel propagó antes de que el worker terminara"
 
 
 # ---------------------------------------------------------------------------
