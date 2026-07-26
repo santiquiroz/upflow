@@ -93,8 +93,40 @@ class FakeSession:
         raise AssertionError(self.name)
 
 
+class FeedSensitiveFakeSession(FakeSession):
+    """Fake fusionnet que preserva sensibilidad a contenido, orden y tiempo."""
+
+    def run(self, outputs: Any, feeds: dict[str, np.ndarray]) -> list[np.ndarray]:
+        if self.name != "fusionnet":
+            return super().run(outputs, feeds)
+
+        fusion_rgb = feeds["fusion_rgb"].astype(np.float32, copy=False)
+        n, channels, h_half, w_half = fusion_rgb.shape
+        channel_weights = np.arange(1, channels + 1, dtype=np.float32).reshape(
+            1, channels, 1, 1
+        )
+        weight_sum = float(channel_weights.sum())
+        forward = (fusion_rgb * channel_weights).sum(axis=1, keepdims=True) / weight_sum
+        reverse = (fusion_rgb * channel_weights[:, ::-1]).sum(axis=1, keepdims=True) / weight_sum
+
+        half_res = np.concatenate(
+            (
+                0.65 * forward + 0.10 * reverse,
+                0.25 * forward + 0.65 * reverse,
+                0.45 * forward + 0.35 * reverse,
+            ),
+            axis=1,
+        )
+        full_res = np.repeat(np.repeat(half_res, 2, axis=2), 2, axis=3)
+        return [np.clip(full_res, 0.0, 1.0).astype(np.float32)]
+
+
 def fake_sessions(_device: str) -> dict[str, Any]:
     return {name: FakeSession(name) for name in GRAPH_NAMES}
+
+
+def feed_sensitive_fake_sessions(_device: str) -> dict[str, Any]:
+    return {name: FeedSensitiveFakeSession(name) for name in GRAPH_NAMES}
 
 
 def write_fake_source_frames(
@@ -589,6 +621,24 @@ def make_stream_source_frames(count: int) -> list[np.ndarray]:
     return frames
 
 
+def write_patterned_source_frames(directory: Path, count: int) -> None:
+    import cv2
+
+    directory.mkdir(parents=True, exist_ok=True)
+    rows, columns = np.indices((SOURCE_H, SOURCE_W))
+    for index in range(count):
+        frame = np.stack(
+            (
+                (index * 31 + rows * 7 + columns * 3) % 256,
+                (index * 53 + rows * 5 + columns * 11) % 256,
+                (index * 79 + rows * 13 + columns * 2) % 256,
+            ),
+            axis=2,
+        ).astype(np.uint8)
+        ok = cv2.imwrite(str(directory / f"{index + 1:08d}.png"), frame)
+        assert ok
+
+
 def collect_stage_outputs(stage, frames: list[np.ndarray]) -> list[np.ndarray]:
     outputs: list[np.ndarray] = []
     for source_frame in frames:
@@ -662,6 +712,55 @@ async def test_stream_stage_matches_run_output_byte_for_byte(
     for index, path in enumerate(expected_paths):
         expected = cv2.cvtColor(cv2.imread(str(path)), cv2.COLOR_BGR2RGB)
         assert np.array_equal(outputs[index][0], expected), path.name
+
+
+async def test_stream_stage_matches_run_content_sensitive_byte_for_byte(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A diferencia del fake constante, fusionnet pondera sus feeds por canal y
+    # estos ya incorporan el timestep. Los patrones varían por
+    # frame/fila/columna/canal: invertir prev/next, alterar t o romper NHWC→CHW
+    # cambia los bytes interpolados.
+    import cv2
+
+    engine = GmfssEngine(make_settings(tmp_path), GpuSessionCoordinator())
+    monkeypatch.setattr(engine, "_create_sessions", feed_sensitive_fake_sessions)
+    frames_in = tmp_path / "frames-in"
+    write_patterned_source_frames(frames_in, 3)
+    frames_out = tmp_path / "frames-out"
+    await engine.run(frames_in, frames_out, 3, 2, device="cpu")
+
+    stage = engine.build_stream_stage(source_frame_count=3, target_frame_count=6, device="cpu")
+    source = []
+    for path in sorted(frames_in.glob("*.png")):
+        rgb = cv2.cvtColor(cv2.imread(str(path)), cv2.COLOR_BGR2RGB)
+        source.append(np.ascontiguousarray(rgb)[np.newaxis, ...])
+    outputs = collect_stage_outputs(stage, source)
+
+    expected_paths = sorted(frames_out.glob("*.png"))
+    assert len(outputs) == len(expected_paths) == 6
+    for index, path in enumerate(expected_paths):
+        expected = cv2.cvtColor(cv2.imread(str(path)), cv2.COLOR_BGR2RGB)
+        actual = outputs[index][0]
+        assert actual.shape == expected.shape
+        assert actual.dtype == expected.dtype
+        assert actual.tobytes() == expected.tobytes(), path.name
+
+
+def test_stream_stage_flush_releases_previous_frame_buffers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = make_stream_engine(tmp_path, monkeypatch)
+    stage = engine.build_stream_stage(source_frame_count=2, target_frame_count=2, device="cpu")
+    source = make_stream_source_frames(2)
+    stage.process(source[0])
+    stage.process(source[1])
+
+    assert stage._prev_chw is not None
+    assert stage._prev_hw is not None
+    assert stage.flush() == []
+    assert stage._prev_chw is None
+    assert stage._prev_hw is None
 
 
 def test_stream_stage_flush_raises_on_missing_source_frames(

@@ -446,6 +446,8 @@ class GmfssStreamStage:
             raise RuntimeError(
                 f"GMFSS esperaba {len(self._plan) + 1} frames fuente y recibió {self._pair_index + 1}"
             )
+        self._prev_chw = None
+        self._prev_hw = None
         return []
 
 
