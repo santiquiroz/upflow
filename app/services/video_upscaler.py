@@ -1076,6 +1076,8 @@ class VideoUpscaler:
         height = int(job.metadata.get("sourceHeight") or 0)
         if width <= 0 or height <= 0:
             return False
+        had_frames_total = "framesTotal" in job.metadata
+        original_frames_total = job.metadata.get("framesTotal")
         try:
             encoder_name = await asyncio.to_thread(self._resolve_video_encoder, job)
             job.metadata["videoEncoder"] = encoder_name
@@ -1128,6 +1130,10 @@ class VideoUpscaler:
             logger.warning(
                 "stream pipeline (completo) falló (%s); se usa el camino clásico desde cero", exc
             )
+            if had_frames_total:
+                job.metadata["framesTotal"] = original_frames_total
+            else:
+                job.metadata.pop("framesTotal", None)
             job.metadata["streamPipelineFallback"] = str(exc)
             output_path.unlink(missing_ok=True)
             return False
@@ -1156,6 +1162,8 @@ class VideoUpscaler:
         """Tramo streaming del modo híbrido (RIFE): lee los PNGs interpolados y
         streamea upscale→encode. True = output_path finalizado por el pipeline;
         False = fallback al camino PNG clásico (cancel/stall SÍ propagan)."""
+        had_frames_total = "framesTotal" in job.metadata
+        original_frames_total = job.metadata.get("framesTotal")
         try:
             frame_count, width, height = await asyncio.to_thread(self._probe_png_dir, frames_dir)
             encoder_name = await asyncio.to_thread(self._resolve_video_encoder, job)
@@ -1181,6 +1189,10 @@ class VideoUpscaler:
             raise
         except Exception as exc:  # noqa: BLE001 - CUALQUIER fallo -> camino clásico
             logger.warning("stream pipeline (híbrido) falló (%s); se usa el camino PNG clásico", exc)
+            if had_frames_total:
+                job.metadata["framesTotal"] = original_frames_total
+            else:
+                job.metadata.pop("framesTotal", None)
             job.metadata["streamPipelineFallback"] = str(exc)
             output_path.unlink(missing_ok=True)
             return False

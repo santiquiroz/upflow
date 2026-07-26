@@ -524,6 +524,43 @@ async def test_full_mode_falls_back_to_classic_from_scratch(
     assert any("-framerate" in command for command in upscaler.commands)
 
 
+async def test_full_mode_gmfss_fallback_restores_source_frames_total(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    upscaler = make_recording_upscaler(tmp_path)
+    source_path = upscaler.settings.uploads_path / "clip.mp4"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_bytes(b"fake-video-bytes")
+    job = make_stream_job(
+        tmp_path,
+        source_path=source_path,
+        interp_engine="gmfss",
+        fps_multiplier=2,
+    )
+
+    async def failing_stream(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    async def fake_interp(job_arg, frames_dir, fps, mult, target_fps=None):
+        return frames_dir, fps
+
+    async def fake_upscale(job_arg, src, dst):
+        dst.mkdir(parents=True, exist_ok=True)
+        (dst / "00000001.png").write_bytes(b"png")
+
+    monkeypatch.setattr(upscaler, "_run_stream_pipeline", failing_stream)
+    monkeypatch.setattr(upscaler, "_maybe_interpolate", fake_interp)
+    monkeypatch.setattr(upscaler, "_upscale_frames", fake_upscale)
+
+    output = await upscaler.run(job, fps_multiplier=2)
+
+    assert output.exists()
+    assert job.metadata["streamPipelineFallback"] == "boom"
+    assert job.metadata["framesTotal"] == 48
+    assert any("-fps_mode" in command for command in upscaler.commands)
+    assert any("-framerate" in command for command in upscaler.commands)
+
+
 async def test_stream_pipeline_full_integration_no_interp(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
