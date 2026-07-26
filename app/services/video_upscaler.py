@@ -903,7 +903,13 @@ class VideoUpscaler:
         if job.interp_engine == GMFSS_ENGINE:
             # El plan GMFSS necesita el conteo fuente exacto: sin framesTotal
             # honesto (VFR) no hay plan — clásico.
-            if self.gmfss_engine is None or job.metadata.get("framesTotal") is None:
+            frames_total = job.metadata.get("framesTotal")
+            if (
+                self.gmfss_engine is None
+                or not isinstance(frames_total, int)
+                or isinstance(frames_total, bool)
+                or frames_total <= 0
+            ):
                 return None
             return STREAM_MODE_FULL
         # RIFE: el binario exige el directorio PNG entero — híbrido (su tramo

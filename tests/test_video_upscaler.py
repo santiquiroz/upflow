@@ -223,6 +223,16 @@ async def test_mode_none_for_gmfss_without_frames_total(tmp_path: Path) -> None:
     assert await upscaler._resolve_stream_pipeline_mode(job, 2) is None
 
 
+@pytest.mark.parametrize("frames_total", [0, -1])
+async def test_mode_none_for_gmfss_with_non_positive_frames_total(
+    tmp_path: Path, frames_total: int
+) -> None:
+    upscaler = make_stream_upscaler(tmp_path)
+    job = make_stream_job(tmp_path, interp_engine="gmfss", fps_multiplier=2)
+    job.metadata["framesTotal"] = frames_total
+    assert await upscaler._resolve_stream_pipeline_mode(job, 2) is None
+
+
 async def test_mode_none_for_gmfss_without_engine(tmp_path: Path) -> None:
     upscaler = make_stream_upscaler(tmp_path, gmfss_engine=None)
     job = make_stream_job(tmp_path, interp_engine="gmfss", fps_multiplier=2)
