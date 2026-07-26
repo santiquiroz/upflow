@@ -5,10 +5,12 @@ import contextlib
 import logging
 import os
 import shutil
-from collections.abc import AsyncIterator
+import threading
+from collections.abc import AsyncIterator, Callable, Iterator
 from pathlib import Path
 
 import cv2
+import numpy as np
 
 from app.config import GMFSS_ENGINE, Settings
 from app.models import VideoUpscaleJob
@@ -18,14 +20,20 @@ from app.services.backend_registry import (
     resolve_upscale_backend,
 )
 from app.services.devices_service import DevicesService
-from app.services.restorer_registry import AudioRestorer
 from app.services.engines.audio_enhance import AudioEnhancer
 from app.services.engines.ffmpeg_frame_sink import RawPipeEncoder
 from app.services.engines.gmfss_engine import GmfssEngine
 from app.services.engines.onnx_upscaler import OnnxUpscaler
-from app.services.engines.onnx_video_upscaler import OnnxVideoUpscaler
+from app.services.engines.onnx_video_upscaler import OnnxVideoUpscaler, _load_frame
 from app.services.engines.realesrgan_ncnn import RealEsrganNcnnEngine, gpu_index_for_device
 from app.services.engines.rife_ncnn import RifeNcnnEngine
+from app.services.frame_pipeline import (
+    FramePipeline,
+    FrameStage,
+    MapStage,
+    derive_stream_queue_maxsizes,
+    iter_png_frames,
+)
 from app.services.media_tools import (
     MediaTools,
     compute_interpolated_fps,
@@ -44,6 +52,7 @@ from app.services.progress import (
     frame_stage_fraction,
     resolve_frames_total,
 )
+from app.services.restorer_registry import AudioRestorer
 from app.services.stall_watchdog import StallWatchdog
 
 logger = logging.getLogger(__name__)
@@ -186,8 +195,10 @@ class VideoUpscaler:
         output_path = self.settings.outputs_path / f"{job.id}.{job.output_container}"
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
+        stream_mode = await self._resolve_stream_pipeline_mode(job, fps_multiplier)
         encode_frames_dir, encode_fps = await self._interpolate_and_upscale(
-            job, frames_in, frames_out, fps, fps_multiplier, output_path, audio_mux_path, audio_codec_args
+            job, frames_in, frames_out, fps, fps_multiplier, output_path,
+            audio_mux_path, audio_codec_args, stream_mode
         )
         # The raw-pipe path already produced AND finalized output_path; there is
         # no PNG directory left to encode.
@@ -218,6 +229,7 @@ class VideoUpscaler:
         output_path: Path,
         audio_mux_path: Path | None,
         audio_codec_args: list[str],
+        stream_mode: str | None = None,
     ) -> tuple[Path | None, str]:
         """Interpolate (optional) then upscale into frames_out, returning
         (encode_frames_dir, encode_fps). encode_frames_dir is None when the
@@ -238,8 +250,19 @@ class VideoUpscaler:
             # (peak footprint on a long episode is tens-hundreds of GB).
             await asyncio.to_thread(self._safe_rmtree, frames_in)
 
-        # Raw-pipe fast path: any failure falls back to the file path.
-        if await self._should_stream(job):
+        # Tramo streaming: con el pipeline nuevo activo (modo híbrido) va por
+        # FramePipeline; si no (flag OFF / no elegible / fallback del modo
+        # full), el raw-pipe legacy queda intacto. Ambos caen al camino PNG
+        # ante cualquier fallo — el if/elif garantiza que un fallo del híbrido
+        # NO reintenta con el raw-pipe legacy (iría directo al PNG clásico).
+        if stream_mode == STREAM_MODE_HYBRID:
+            if await self._try_stream_pipeline_from_dir(
+                job, upscale_src, output_path, encode_fps, audio_mux_path, audio_codec_args
+            ):
+                self._finalize_output(job, output_path)
+                await asyncio.to_thread(self._safe_rmtree, upscale_src)
+                return None, encode_fps
+        elif await self._should_stream(job):
             streamed = await self._try_streaming(
                 job, upscale_src, output_path, encode_fps, audio_mux_path, audio_codec_args
             )
@@ -886,6 +909,166 @@ class VideoUpscaler:
         # RIFE: el binario exige el directorio PNG entero — híbrido (su tramo
         # queda en PNG; upscale→encode va en streaming).
         return STREAM_MODE_HYBRID
+
+    async def _run_stream_pipeline(
+        self,
+        job: VideoUpscaleJob,
+        *,
+        source_factory: "Callable[[threading.Event], Iterator[np.ndarray]]",
+        gmfss_stage_factory: "Callable[[str], FrameStage] | None",
+        width: int,
+        height: int,
+        expected_output_count: int | None,
+        output_path: Path,
+        encode_fps: str,
+        audio_mux_path: Path | None,
+        audio_codec_args: list[str],
+        encoder_name: str,
+    ) -> None:
+        """Corre el FramePipeline completo en un worker thread con el patrón
+        shield+cancel_event+watchdog del raw-pipe: el cancel señala y ESPERA a
+        que el worker desenrolle (threads joineados, procesos ffmpeg muertos)
+        antes de propagar, para que la limpieza del work-dir no corra contra
+        escrituras vivas."""
+        out_w, out_h = width * job.scale, height * job.scale
+        command = self._build_rawpipe_command(
+            out_w, out_h, encode_fps, audio_mux_path, audio_codec_args, output_path, job, encoder_name
+        )
+        counter = {"n": 0}
+        cancel_event = threading.Event()
+        worker = asyncio.ensure_future(
+            asyncio.to_thread(
+                self._run_stream_pipeline_blocking,
+                job,
+                source_factory,
+                gmfss_stage_factory,
+                job.device or self.settings.default_device,
+                width,
+                height,
+                expected_output_count,
+                command,
+                counter,
+                cancel_event,
+            )
+        )
+        try:
+            async with self._track_streaming_progress(job, counter):
+                await asyncio.shield(worker)
+        except BaseException:
+            cancel_event.set()
+            with contextlib.suppress(BaseException):
+                await worker
+            raise
+
+    def _run_stream_pipeline_blocking(
+        self,
+        job: VideoUpscaleJob,
+        source_factory: "Callable[[threading.Event], Iterator[np.ndarray]]",
+        gmfss_stage_factory: "Callable[[str], FrameStage] | None",
+        device: str,
+        width: int,
+        height: int,
+        expected_output_count: int | None,
+        command: list[str],
+        counter: dict[str, int],
+        cancel_event: threading.Event,
+    ) -> None:
+        stages: list[FrameStage] = []
+        if gmfss_stage_factory is not None:
+            # GMFSS primero, upscale después: el acquire del upscaler evicta la
+            # ENTRADA de cache de GMFSS pero el driver ya retiene sus sesiones.
+            # Ambos sets quedan residentes en VRAM durante el run — mismo
+            # trade-off que documentaba la fusión eliminada; vigilarlo en el
+            # smoke real. La serialización sigue en el coordinator/semáforos.
+            stages.append(gmfss_stage_factory(device))
+        upscale_frame = self.onnx_video_engine.build_frame_upscaler(job.model_name, device)
+        stages.append(MapStage(upscale_frame))
+
+        input_bytes = width * height * 3
+        output_bytes = input_bytes * job.scale * job.scale
+        budget_bytes = max(1, self.settings.onnx_video_max_pipeline_mb) * 1024 * 1024
+        maxsizes = derive_stream_queue_maxsizes(input_bytes, output_bytes, len(stages), budget_bytes)
+
+        encoder = RawPipeEncoder(
+            command, summarize_error=lambda stderr: self._summarize_process_error(stderr, b"")
+        )
+        encoder.start()
+
+        def sink(frame_nhwc: np.ndarray) -> None:
+            encoder.write_frame(frame_nhwc[0])  # NHWC -> HWC; bloquea con backpressure del pipe
+            counter["n"] = encoder.frames_written
+
+        pipeline = FramePipeline(source_factory(cancel_event), stages, sink, maxsizes)
+        try:
+            delivered = pipeline.run(cancel_event)
+        except BaseException:
+            encoder.kill()
+            raise
+        if cancel_event.is_set():
+            encoder.kill()
+            return
+        if delivered == 0:
+            encoder.kill()
+            raise RuntimeError("el stream pipeline no entregó ningún frame")
+        if expected_output_count is not None and delivered != expected_output_count:
+            encoder.kill()
+            raise RuntimeError(
+                f"el stream pipeline entregó {delivered}/{expected_output_count} frames"
+            )
+        encoder.finish()
+
+    @staticmethod
+    def _probe_png_dir(frames_dir: Path) -> tuple[int, int, int]:
+        paths = sorted(frames_dir.glob("*.png"))
+        if not paths:
+            raise RuntimeError("no hay frames para streamear")
+        first = _load_frame(paths[0])
+        _, height, width, _ = first.shape
+        return len(paths), width, height
+
+    async def _try_stream_pipeline_from_dir(
+        self,
+        job: VideoUpscaleJob,
+        frames_dir: Path,
+        output_path: Path,
+        encode_fps: str,
+        audio_mux_path: Path | None,
+        audio_codec_args: list[str],
+    ) -> bool:
+        """Tramo streaming del modo híbrido (RIFE): lee los PNGs interpolados y
+        streamea upscale→encode. True = output_path finalizado por el pipeline;
+        False = fallback al camino PNG clásico (cancel/stall SÍ propagan)."""
+        try:
+            frame_count, width, height = await asyncio.to_thread(self._probe_png_dir, frames_dir)
+            encoder_name = await asyncio.to_thread(self._resolve_video_encoder, job)
+            job.metadata["videoEncoder"] = encoder_name
+            # Etapa colapsada (decisión de stepper del plan): denominador
+            # honesto = frames reales del tramo (ya interpolados).
+            job.metadata["framesTotal"] = frame_count
+            advance_video_stage(job, "upscaling_frames")
+            await self._run_stream_pipeline(
+                job,
+                source_factory=lambda cancel_event: iter_png_frames(frames_dir, cancel_event),
+                gmfss_stage_factory=None,
+                width=width,
+                height=height,
+                expected_output_count=frame_count,
+                output_path=output_path,
+                encode_fps=encode_fps,
+                audio_mux_path=audio_mux_path,
+                audio_codec_args=audio_codec_args,
+                encoder_name=encoder_name,
+            )
+        except (asyncio.CancelledError, VideoStallError):
+            raise
+        except Exception as exc:  # noqa: BLE001 - CUALQUIER fallo -> camino clásico
+            logger.warning("stream pipeline (híbrido) falló (%s); se usa el camino PNG clásico", exc)
+            job.metadata["streamPipelineFallback"] = str(exc)
+            output_path.unlink(missing_ok=True)
+            return False
+        job.metadata["streamPipeline"] = True
+        job.metadata["outputFps"] = encode_fps
+        return True
 
     async def _should_stream(self, job: VideoUpscaleJob) -> bool:
         if not self.settings.enable_raw_pipe or self.onnx_video_engine is None:

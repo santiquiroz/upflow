@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import io
 from pathlib import Path
 
+import cv2
+import numpy as np
 import pytest
 
 from app.config import Settings
 from app.models import VideoUpscaleJob
+from app.services.devices_service import DevicesService
+from app.services.engines.ffmpeg_frame_sink import RawPipeEncoder
+from app.services.engines.onnx_video_upscaler import OnnxVideoUpscaler
+from app.services.gpu_session_coordinator import GpuSessionCoordinator
 from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry, ModelStatus
 from app.services.video_upscaler import (
     STREAM_MODE_FULL,
@@ -220,3 +227,211 @@ async def test_mode_none_for_gmfss_without_engine(tmp_path: Path) -> None:
     upscaler = make_stream_upscaler(tmp_path, gmfss_engine=None)
     job = make_stream_job(tmp_path, interp_engine="gmfss", fps_multiplier=2)
     assert await upscaler._resolve_stream_pipeline_mode(job, 2) is None
+
+
+SOURCE_H, SOURCE_W = 8, 12
+
+
+def write_source_frames(directory: Path, count: int) -> None:
+    # Primer píxel R = offset del frame (i*17): el orden queda verificable en
+    # los bytes crudos que recibe el encoder fake.
+    directory.mkdir(parents=True, exist_ok=True)
+    row = np.arange(SOURCE_H, dtype=np.int32).reshape(SOURCE_H, 1)
+    col = np.arange(SOURCE_W, dtype=np.int32).reshape(1, SOURCE_W)
+    for index in range(count):
+        offset = (index * 17) % 256
+        frame = np.empty((SOURCE_H, SOURCE_W, 3), dtype=np.uint8)
+        frame[:, :, 2] = (row * 0 + offset) % 256  # canal R en BGR de cv2
+        frame[:, :, 1] = (col * 13 + offset * 2) % 256
+        frame[:, :, 0] = (row + col * 5 + offset * 3) % 256
+        assert cv2.imwrite(str(directory / f"{index + 1:08d}.png"), frame)
+
+
+class _IoInfo:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+class Double2xUint8Session:
+    """Fake de sesión ONNX uint8: dobla H/W — copiado de tests/test_onnx_video_upscaler.py."""
+
+    def __init__(self) -> None:
+        self._input = _IoInfo("image")
+        self._output = _IoInfo("upscaled")
+
+    def get_inputs(self) -> list[_IoInfo]:
+        return [self._input]
+
+    def get_outputs(self) -> list[_IoInfo]:
+        return [self._output]
+
+    def run(self, output_names, input_feed):
+        array = input_feed[self._input.name]
+        assert array.dtype == np.uint8
+        return [np.repeat(np.repeat(array, 2, axis=1), 2, axis=2)]
+
+
+class FakeStdin(io.BytesIO):
+    def close(self) -> None:  # type: ignore[override]
+        pass  # el buffer sigue legible para inspeccionar los bytes escritos
+
+
+class FakeEncodeProc:
+    def __init__(self, returncode: int = 0) -> None:
+        self.stdin = FakeStdin()
+        self.stderr = io.BytesIO(b"")
+        self.returncode: int | None = None
+        self._final_returncode = returncode
+        self.killed = False
+
+    def wait(self, timeout=None) -> int:
+        self.returncode = self._final_returncode
+        return self.returncode
+
+    def poll(self):
+        return self.returncode
+
+    def kill(self) -> None:
+        self.killed = True
+        self._final_returncode = -9
+
+
+def make_streaming_upscaler_with_real_engines(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> VideoUpscaler:
+    """VideoUpscaler con un OnnxVideoUpscaler REAL (sesión fake Double2x) — el
+    FramePipeline y las etapas corren de verdad; solo sesión y procesos son fake."""
+    settings = make_stream_settings(tmp_path)
+    settings.builtin_onnx_path.mkdir(parents=True, exist_ok=True)
+    (settings.builtin_onnx_path / "realesr-animevideov3-x4-uint8.onnx").write_bytes(b"fake")
+    onnx_video = OnnxVideoUpscaler(
+        settings, ModelRegistry(settings), DevicesService(settings), GpuSessionCoordinator()
+    )
+    monkeypatch.setattr(onnx_video, "_create_session", lambda model_path, device: Double2xUint8Session())
+    return VideoUpscaler(
+        settings,
+        FakeNcnnEngine(),  # type: ignore[arg-type]
+        FakeMediaTools(),  # type: ignore[arg-type]
+        gmfss_engine=None,
+        onnx_video_engine=onnx_video,
+        model_registry=ModelRegistry(settings),
+        devices=DevicesService(settings),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tramo híbrido: ruteo + fallback + integración con FramePipeline real
+# ---------------------------------------------------------------------------
+
+
+async def test_hybrid_mode_streams_from_interp_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    upscaler = make_stream_upscaler(tmp_path)
+    job = make_stream_job(tmp_path, fps_multiplier=2)
+    frames_in = tmp_path / "frames-in"
+    frames_in.mkdir(parents=True)
+    interp_dir = tmp_path / "frames-interp"
+    calls: dict = {}
+
+    async def fake_interp(job_arg, frames_dir, fps, mult, target_fps=None):
+        interp_dir.mkdir(parents=True, exist_ok=True)
+        return interp_dir, "48/1"
+
+    async def fake_from_dir(job_arg, frames_dir, output_path, encode_fps, mux, codec_args):
+        calls["dir"] = frames_dir
+        calls["fps"] = encode_fps
+        output_path.write_bytes(b"fake-video")
+        return True
+
+    monkeypatch.setattr(upscaler, "_maybe_interpolate", fake_interp)
+    monkeypatch.setattr(upscaler, "_try_stream_pipeline_from_dir", fake_from_dir)
+
+    encode_dir, encode_fps = await upscaler._interpolate_and_upscale(
+        job, frames_in, tmp_path / "frames-out", "24/1", 2, tmp_path / "out.mp4", None, [], STREAM_MODE_HYBRID
+    )
+
+    assert encode_dir is None  # el caller NO encodea: el tramo ya produjo el output
+    assert encode_fps == "48/1"
+    assert calls["dir"] == interp_dir
+
+
+async def test_hybrid_fallback_uses_classic_png_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    upscaler = make_stream_upscaler(tmp_path)
+    job = make_stream_job(tmp_path, fps_multiplier=2)
+    frames_in = tmp_path / "frames-in"
+    frames_in.mkdir(parents=True)
+    frames_out = tmp_path / "frames-out"
+    interp_dir = tmp_path / "frames-interp"
+
+    async def fake_interp(job_arg, frames_dir, fps, mult, target_fps=None):
+        interp_dir.mkdir(parents=True, exist_ok=True)
+        (interp_dir / "00000001.png").write_bytes(b"png")
+        return interp_dir, "48/1"
+
+    async def failing_from_dir(job_arg, frames_dir, output_path, encode_fps, mux, codec_args):
+        job_arg.metadata["streamPipelineFallback"] = "boom"
+        return False
+
+    upscaled = {"n": 0}
+
+    async def fake_upscale(job_arg, src, dst):
+        upscaled["n"] += 1
+        dst.mkdir(parents=True, exist_ok=True)
+        (dst / "00000001.png").write_bytes(b"png")
+
+    monkeypatch.setattr(upscaler, "_maybe_interpolate", fake_interp)
+    monkeypatch.setattr(upscaler, "_try_stream_pipeline_from_dir", failing_from_dir)
+    monkeypatch.setattr(upscaler, "_upscale_frames", fake_upscale)
+
+    encode_dir, encode_fps = await upscaler._interpolate_and_upscale(
+        job, frames_in, frames_out, "24/1", 2, tmp_path / "out.mp4", None, [], STREAM_MODE_HYBRID
+    )
+
+    assert encode_dir == frames_out  # el caller encodea por el camino PNG clásico
+    assert upscaled["n"] == 1
+    assert job.metadata["streamPipelineFallback"] == "boom"
+
+
+async def test_stream_pipeline_from_dir_streams_all_frames_in_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Integración real (spec "Testing/Integración", conteo 1→1): FramePipeline +
+    # etapa de upscale reales; solo la sesión ONNX y el proceso ffmpeg son fake.
+    upscaler = make_streaming_upscaler_with_real_engines(tmp_path, monkeypatch)
+    frames_dir = tmp_path / "frames-interp"
+    write_source_frames(frames_dir, 5)
+    fake_proc = FakeEncodeProc()
+    monkeypatch.setattr(RawPipeEncoder, "_spawn", lambda self, command: fake_proc)
+    job = make_stream_job(tmp_path, device="cpu")
+
+    ok = await upscaler._try_stream_pipeline_from_dir(
+        job, frames_dir, tmp_path / "out.mp4", "24/1", None, []
+    )
+
+    assert ok is True
+    assert job.metadata["streamPipeline"] is True
+    assert job.metadata["framesTotal"] == 5  # denominador honesto del tramo
+    data = fake_proc.stdin.getvalue()
+    # La sesión fake dobla (no 4x como job.scale): el tamaño real escrito manda.
+    frame_bytes = (SOURCE_H * 2) * (SOURCE_W * 2) * 3
+    assert len(data) == 5 * frame_bytes
+    # Orden 1..5 por el primer byte de cada frame (R de (0,0) = offset i*17).
+    assert [data[i * frame_bytes] for i in range(5)] == [(i * 17) % 256 for i in range(5)]
+
+
+async def test_stream_pipeline_from_dir_falls_back_on_encoder_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    upscaler = make_streaming_upscaler_with_real_engines(tmp_path, monkeypatch)
+    frames_dir = tmp_path / "frames-interp"
+    write_source_frames(frames_dir, 2)
+    fake_proc = FakeEncodeProc(returncode=1)  # ffmpeg "falla" al cerrar
+    monkeypatch.setattr(RawPipeEncoder, "_spawn", lambda self, command: fake_proc)
+    job = make_stream_job(tmp_path, device="cpu")
+    output_path = tmp_path / "out.mp4"
+    output_path.write_bytes(b"parcial")
+
+    ok = await upscaler._try_stream_pipeline_from_dir(job, frames_dir, output_path, "24/1", None, [])
+
+    assert ok is False
+    assert "streamPipelineFallback" in job.metadata
+    assert not output_path.exists()  # el output parcial se borra antes del fallback

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import threading
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -13,6 +14,7 @@ from app.services.frame_pipeline import (
     MapStage,
     derive_stream_queue_maxsizes,
     drain_stream,
+    iter_png_frames,
 )
 
 
@@ -301,3 +303,34 @@ def test_drain_stream_swallows_read_errors() -> None:
     drain_stream(BrokenStream(), sink)
 
     assert sink == [b"antes del error"]
+
+
+def write_png(path: Path, value: int) -> None:
+    import cv2
+
+    frame_bgr = np.full((2, 3, 3), value, dtype=np.uint8)
+    assert cv2.imwrite(str(path), frame_bgr)
+
+
+def test_iter_png_frames_yields_in_name_order(tmp_path: Path) -> None:
+    frames_dir = tmp_path / "frames"
+    frames_dir.mkdir()
+    for index in range(1, 4):
+        write_png(frames_dir / f"{index:08d}.png", index * 10)
+
+    frames = list(iter_png_frames(frames_dir, threading.Event()))
+
+    assert [f.shape for f in frames] == [(1, 2, 3, 3)] * 3
+    assert [f.dtype for f in frames] == [np.uint8] * 3
+    # Valor uniforme por canal: BGR->RGB no cambia el primer píxel.
+    assert [int(f[0, 0, 0, 0]) for f in frames] == [10, 20, 30]
+
+
+def test_iter_png_frames_stops_on_preset_cancel(tmp_path: Path) -> None:
+    frames_dir = tmp_path / "frames"
+    frames_dir.mkdir()
+    write_png(frames_dir / "00000001.png", 10)
+    cancel = threading.Event()
+    cancel.set()
+
+    assert list(iter_png_frames(frames_dir, cancel)) == []

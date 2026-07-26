@@ -4,6 +4,7 @@ import logging
 import queue
 import threading
 from collections.abc import Callable, Iterator
+from pathlib import Path
 from typing import Protocol
 
 import numpy as np
@@ -12,6 +13,7 @@ from app.services.engines.onnx_video_upscaler import (
     _QUEUE_POLL_SECONDS,
     _THREAD_JOIN_TIMEOUT_SECONDS,
     _drain_queue,
+    _load_frame,
     _put_until_cancelled,
     derive_queue_maxsize,
 )
@@ -79,6 +81,16 @@ def drain_stream(stream, sink: list[bytes]) -> None:
                 del sink[:-64]
     except Exception:  # noqa: BLE001 - stream cerrado en un kill
         pass
+
+
+def iter_png_frames(frames_dir: Path, cancel_event: threading.Event) -> Iterator[np.ndarray]:
+    """Source del tramo híbrido: los PNGs %08d.png del directorio, en orden,
+    como frames NHWC uint8. UN solo hilo los decodea (~30ms/frame vs ~116ms de
+    infer: no es cuello — mismo racional que el loader único del raw-pipe)."""
+    for path in sorted(frames_dir.glob("*.png")):
+        if cancel_event.is_set():
+            return
+        yield _load_frame(path)
 
 
 class FramePipeline:
