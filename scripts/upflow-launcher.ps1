@@ -26,6 +26,19 @@ $installedSentinel = if ($usingBundledPython) {
     Join-Path $venvPath '.upflow-installed'
 }
 
+# La version del pyproject que viaja con el codigo es la del codigo que se va a
+# correr. El sentinel guarda la version con la que se hizo el ultimo
+# `pip install -e .`: si difieren, hubo una actualizacion y hay que reinstalar
+# para que la metadata del paquete no quede congelada en la version vieja.
+$declaredVersion = $null
+$pyprojectPath = Join-Path $root 'pyproject.toml'
+if (Test-Path $pyprojectPath) {
+    $versionLine = Select-String -Path $pyprojectPath -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1
+    if ($versionLine) {
+        $declaredVersion = $versionLine.Matches[0].Groups[1].Value
+    }
+}
+
 $envPath = Join-Path $root '.env'
 $envExamplePath = Join-Path $root '.env.example'
 $minPythonMajor = 3
@@ -81,6 +94,18 @@ function Assert-SystemPythonOk {
 
 function Test-UpflowAlreadyInstalled {
     if (Test-Path $installedSentinel) {
+        # Un sentinel de una version distinta significa que el instalador
+        # actualizo el codigo por debajo: reinstalar para regenerar la metadata
+        # del paquete. Sin esto, `pip install -e .` corria UNA sola vez en la
+        # vida de la instalacion y la version reportada quedaba clavada para
+        # siempre (visto en instalaciones reales: codigo 0.14.0, metadata
+        # 0.10.0, y el banner de "hay version nueva" que nunca se iba).
+        $stamped = (Get-Content -Path $installedSentinel -Raw -ErrorAction SilentlyContinue)
+        if ($stamped) { $stamped = $stamped.Trim() }
+        if ($declaredVersion -and $stamped -ne $declaredVersion) {
+            Write-Host "Actualizacion detectada ($stamped -> $declaredVersion): se reinstala el paquete."
+            return $false
+        }
         return $true
     }
     # Probe una dep de terceros (uvicorn), NO el paquete local `app`: con cwd en
@@ -105,7 +130,7 @@ function Install-PythonEnvironment {
 function Install-BundledPythonDependencies {
     if (Test-UpflowAlreadyInstalled) {
         Write-Host 'Upflow ya esta instalado en el Python embebido, se omite este paso.'
-        New-Item -ItemType File -Force -Path $installedSentinel | Out-Null
+        Write-InstalledSentinel
         return
     }
 
@@ -124,7 +149,28 @@ function Install-BundledPythonDependencies {
     if ($LASTEXITCODE -ne 0) {
         throw 'No se pudo instalar Upflow (pip install -e .). Revisa tu conexion a internet.'
     }
-    New-Item -ItemType File -Force -Path $installedSentinel | Out-Null
+    Remove-StaleEggInfo
+    Write-InstalledSentinel
+}
+
+function Remove-StaleEggInfo {
+    # setuptools viejo dejaba un upflow.egg-info en la RAIZ del proyecto. La app
+    # arranca con `python -m uvicorn` desde esa raiz, asi que el cwd entra en
+    # sys.path y ese egg-info le gana al dist-info bueno de site-packages: una
+    # instalacion real reportaba 0.10.0 (egg-info de la primera instalacion)
+    # teniendo 0.13.0 en site-packages y codigo 0.14.0.
+    $eggInfo = Join-Path $root 'upflow.egg-info'
+    if (Test-Path $eggInfo) {
+        Remove-Item -Recurse -Force $eggInfo -ErrorAction SilentlyContinue
+    }
+}
+
+function Write-InstalledSentinel {
+    if ($declaredVersion) {
+        Set-Content -Path $installedSentinel -Value $declaredVersion -NoNewline -Encoding ascii
+    } else {
+        New-Item -ItemType File -Force -Path $installedSentinel | Out-Null
+    }
 }
 
 function Install-VenvPythonDependencies {
@@ -138,7 +184,7 @@ function Install-VenvPythonDependencies {
 
     if (Test-UpflowAlreadyInstalled) {
         Write-Host 'Upflow ya esta instalado en el entorno virtual, se omite este paso.'
-        New-Item -ItemType File -Force -Path $installedSentinel | Out-Null
+        Write-InstalledSentinel
         return
     }
 
@@ -151,7 +197,8 @@ function Install-VenvPythonDependencies {
     if ($LASTEXITCODE -ne 0) {
         throw 'No se pudo instalar Upflow (pip install -e .). Revisa tu conexion a internet.'
     }
-    New-Item -ItemType File -Force -Path $installedSentinel | Out-Null
+    Remove-StaleEggInfo
+    Write-InstalledSentinel
 }
 
 function Test-RealesrganPresent {
