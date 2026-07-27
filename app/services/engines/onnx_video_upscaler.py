@@ -171,6 +171,10 @@ class OnnxVideoUpscaler:
         self._session_lock = threading.Lock()
         self._gpu_ep_cache: bool | None = None
         self._iobinding_warned = False
+        # Diagnostico expuesto al caller (llega a job.metadata): por que un job
+        # fue lento. fp32 en vez de fp16 son 7.26x; el tiling son 2.3x.
+        self.last_precision: str | None = None
+        self.last_tiled = False
 
     # --- capability probes -------------------------------------------------
 
@@ -224,12 +228,18 @@ class OnnxVideoUpscaler:
     def _select_model_file(self, model: Any, device: str) -> Path:
         """Prefer the fp16 export on GPU when enabled and present; the fp32 file is
         the fallback (and the only sane choice on the CPU EP, where fp16 is
-        emulated). A missing fp16 sibling silently uses fp32."""
+        emulated). A missing fp16 sibling silently uses fp32.
+
+        Registra la eleccion en last_precision: correr fp32 sin querer se midio
+        7.26x mas lento y hasta ahora nada lo delataba desde afuera.
+        """
         onnx_dir = self.settings.builtin_onnx_path
         if self.settings.onnx_prefer_fp16 and not device.startswith("cpu"):
             fp16_path = onnx_dir / model.fp16_filename
             if fp16_path.exists():
+                self.last_precision = "fp16"
                 return fp16_path
+        self.last_precision = "fp32"
         return onnx_dir / model.filename
 
     # --- public video entry point ------------------------------------------
@@ -626,6 +636,7 @@ class OnnxVideoUpscaler:
         """
         _, height, width, _ = frame_nhwc.shape
         if force_tiled or should_tile_frame(height * width, self.settings.onnx_whole_frame_max_pixels):
+            self.last_tiled = True
             return self._infer_tiled(session, frame_nhwc, device), force_tiled
         try:
             return self._infer_frame(session, frame_nhwc, device), False
@@ -638,6 +649,7 @@ class OnnxVideoUpscaler:
                 device,
                 exc_info=True,
             )
+            self.last_tiled = True
             return self._infer_tiled(session, frame_nhwc, device), True
 
     def _infer_frame(self, session: Any, frame_nhwc: np.ndarray, device: str) -> np.ndarray:

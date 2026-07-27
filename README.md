@@ -359,6 +359,8 @@ Todas las variables leen de `.env` (ver [`.env.example`](.env.example) con los d
 | `ONNX_TILE_SIZE` | `256` | Tamaño de tile (px) para inferencia ONNX por partes, con blend de 16px de solape; `0` desactiva el tiling (imagen completa de una pasada) |
 | `ENABLE_STREAM_PIPELINE` | `True` | Pipeline de frames en streaming (decode→interp→upscale→encode por colas en memoria, sin PNGs intermedios). Cae al camino clásico ante cualquier fallo. `False` fuerza siempre el camino clásico. Ver [Pipeline de frames en streaming](#pipeline-de-frames-en-streaming-enable_stream_pipeline) |
 | `ONNX_VIDEO_MAX_PIPELINE_MB` | `1024` | Presupuesto de RAM para las colas de frames en vuelo. Es **global**: se reparte entre todas las colas del pipeline, no es por cola |
+| `ENABLE_FILE_LOGGING` | `False` | Escribe los logs a `runtime/logs/upflow.log` (rotado). Apagado por defecto: en uso normal es ruido y disco. Se enciende desde **Settings** sin reiniciar, para que quien reporta un problema pueda reproducirlo y mandar el archivo |
+| `LOG_FILE_MAX_MB` / `LOG_FILE_BACKUPS` | `10` / `3` | Techo por archivo antes de rotar y cuántos rotados se conservan |
 
 ## Optimization Center
 
