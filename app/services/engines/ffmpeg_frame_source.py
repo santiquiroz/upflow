@@ -20,19 +20,30 @@ class FfmpegFrameSource:
     error el proceso ffmpeg se mata SIEMPRE (nunca queda huérfano)."""
 
     def __init__(
-        self, ffmpeg_binary: Path, source_path: Path, width: int, height: int, decode_threads: int
+        self,
+        ffmpeg_binary: Path,
+        source_path: Path,
+        width: int,
+        height: int,
+        decode_threads: int,
+        fps: str,
     ) -> None:
         self._ffmpeg_binary = ffmpeg_binary
         self._source_path = source_path
         self._width = width
         self._height = height
         self._decode_threads = decode_threads
+        self._fps = fps
         self._frame_bytes = width * height * _RGB24_BYTES_PER_PIXEL
 
     def build_command(self) -> list[str]:
-        # Solo flags no-deprecados: -fps_mode passthrough (nunca -vsync), el
-        # mismo passthrough que usa la extracción PNG actual para no
-        # re-muestrear fuentes VFR.
+        # -fps_mode cfr (nunca -vsync, deprecado) normaliza la cadencia a tasa
+        # CONSTANTE. Con passthrough se conservaban los timestamps VFR de la
+        # fuente pero el encode los ignoraba y asumía fps fijo, así que el video
+        # salía más corto que el audio y los subtítulos: en un BDrip real con
+        # cadencia mixta 23.976/29.97 eran 177 s de deriva en 25 minutos.
+        # Normalizando acá, frames == duración × fps por construcción y todo lo
+        # de aguas abajo (conteo esperado, fps de encode) deja de mentir.
         # -threads va ANTES de -i: después de -i configuraría el encoder rawvideo
         # de salida en vez del decoder, dejando decode_threads sin efecto real.
         return [
@@ -40,7 +51,8 @@ class FfmpegFrameSource:
             "-v", "error",
             "-threads", str(self._decode_threads),
             "-i", str(self._source_path),
-            "-fps_mode", "passthrough",
+            "-fps_mode", "cfr",
+            "-r", self._fps,
             "-f", "rawvideo",
             "-pix_fmt", "rgb24",
             "pipe:1",
