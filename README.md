@@ -58,7 +58,9 @@ La mayoría de buenos upscalers son CUDA-only, de código cerrado, o una pila de
 ## Características
 
 - 🖼️ **Upscaling de imagen** — arrastrás el archivo, elegís modelo, dispositivo y escala (2×/3×/4× según el modelo), listo. Fotos y anime/line-art por igual, con job en vivo y descarga directa desde la UI.
-- 🎬 **Upscaling de video** — pipeline completo con FFmpeg: extraer frames → upscale por lote → re-encodear preservando el audio. Perfiles listos para anime y contenido general, con opciones avanzadas (modelo, escala, códec, preset, CRF, FPS boost, mejora de audio, formato de audio de salida).
+- 🎬 **Upscaling de video** — pipeline completo con FFmpeg, preservando el audio. Perfiles listos para anime y contenido general, con opciones avanzadas (modelo, escala, códec, preset, CRF, FPS boost, mejora de audio, formato de audio de salida).
+- 🚿 **Pipeline de frames en streaming** (`ENABLE_STREAM_PIPELINE`, activo por defecto) — decode→(interpolación)→upscale→encode conectados por colas acotadas en memoria, con **una etapa por thread**, sin escribir PNGs intermedios. En un BDrip de 25 min a 960×720 escalado 4x con interpolación x2, el camino clásico materializaba **869 GB** de frames en disco para producir unos pocos GB de salida; el pipeline no escribe ninguno. Ante cualquier excepción cae al camino clásico desde cero (`job.metadata.streamPipelineFallback`), así que el job nunca falla por culpa del camino nuevo. Ver [Pipeline de frames en streaming](#pipeline-de-frames-en-streaming-enable_stream_pipeline).
+- 🎛️ **Selección de encoder por capacidad real** — para `video_encoder=auto` se prueba el encoder de hardware con un frame sintético a la resolución de salida y se cachea el resultado, en vez de deducir el fabricante del nombre de la GPU y asumir que funciona. Detecta drivers ausentes y techos de resolución que una tabla fija no puede seguir (medido: `h264_amf` no puede con 7680×4320 — exactamente un 4x desde 1080p — mientras `hevc_amf` y `av1_amf` sí). AV1 por hardware mapeado para NVIDIA, AMD e Intel (`av1_nvenc`/`av1_qsv`/`av1_amf`) más `libsvtav1` por software.
 - 🎞️ **Selección de pistas de audio y subtítulos** — `POST /api/v1/video/analyze` inspecciona el video subido (pistas de audio con idioma/codec/canales, pistas de subtítulos) antes de crear el job; elegís qué pista(s) de audio conservar (la primera de la lista es la primaria, la única que pasa por enhance/restore) y si querés preservar subtítulos, que sube el contenedor a `.mkv` automáticamente si hacía falta (con aviso en `job.metadata`, nunca en silencio).
 - 🌊 **FPS boost con RIFE NCNN Vulkan** — interpolación de fotogramas 2×/3×/4× sobre el video ya reescalado, mismo backend Vulkan (sin CUDA). Se activa por config y aparece como dropdown en el módulo Enhance.
 - 🎨 **GMFSS — interpolación de máxima calidad (experimental, opt-in)** — segundo motor de FPS boost, port ONNX propio de [GMFSS_Fortuna](https://github.com/santiquiroz/port-gmfss-onnx) (el mejor modelo de interpolación para anime, corriendo en cualquier GPU DirectX12 sin CUDA). Mucho más lento que RIFE (~10x o más — máxima calidad, no para uso cotidiano), se activa con `ENABLE_GMFSS=true` + `scripts/download-gmfss-onnx.ps1` y se elige por job (`interp_engine=rife|gmfss`, RIFE sigue siendo el default).
@@ -355,6 +357,8 @@ Todas las variables leen de `.env` (ver [`.env.example`](.env.example) con los d
 | `HF_TOKEN` | *(vacío)* | Token de Hugging Face opcional, para buscar/descargar modelos privados o evitar rate limiting anónimo |
 | `MAX_MODEL_DOWNLOAD_MB` | `2048` | Tamaño máximo permitido para un archivo de modelo descargado desde HF (MB) |
 | `ONNX_TILE_SIZE` | `256` | Tamaño de tile (px) para inferencia ONNX por partes, con blend de 16px de solape; `0` desactiva el tiling (imagen completa de una pasada) |
+| `ENABLE_STREAM_PIPELINE` | `True` | Pipeline de frames en streaming (decode→interp→upscale→encode por colas en memoria, sin PNGs intermedios). Cae al camino clásico ante cualquier fallo. `False` fuerza siempre el camino clásico. Ver [Pipeline de frames en streaming](#pipeline-de-frames-en-streaming-enable_stream_pipeline) |
+| `ONNX_VIDEO_MAX_PIPELINE_MB` | `1024` | Presupuesto de RAM para las colas de frames en vuelo. Es **global**: se reparte entre todas las colas del pipeline, no es por cola |
 
 ## Optimization Center
 
@@ -363,7 +367,7 @@ El **Optimization Center** (en el módulo Settings) detecta cinco configuracione
 | Detección | Qué es | Fija automáticamente | Requiere reboot |
 |---|---|---|---|
 | **HAGS** (Hardware Accelerated GPU Scheduling) | Necesario para DirectML moderno en AMD; activa el scheduler de GPU del OS | Sí, un click | Sí |
-| **Disk write-cache** | Caché de escritura en disco — cuando está apagado, cada PNG intermedio se sincroniza a disco antes de continuar (penalidad de latencia grave en video) | Sí, un click | Sí |
+| **Disk write-cache** | Caché de escritura en disco — cuando está apagado, cada PNG intermedio se sincroniza a disco antes de continuar. Su peso bajó bastante desde el pipeline de streaming (los caminos que no escriben PNGs no lo sufren), pero sigue importando en el camino clásico: NCNN, modelos HF-ONNX y cualquier job que caiga al fallback | Sí, un click | Sí |
 | **Defender en runtime/** | Exclusión del antivirus para `runtime/` — si está activado, el scanner de Windows ralentiza I/O de frames | Sí, un click | No |
 | **PCIe link** | Velocidad y ancho del enlace PCIe entre la GPU y la CPU | Diagnóstico: solo lectura (no hay fix de software) | — |
 | **ONNX CPU fallback** | Detecta qué operaciones de los modelos reales corren en CPU en vez de GPU — herramienta de diagnóstico para identificar cuellos de botella | Manual: ejecutar diagnóstico desde el panel | — |
@@ -374,10 +378,30 @@ Todos los fixes ejecutan vía **elevated PowerShell** (pide UAC una sola vez). E
 
 La interfaz también incluye un **checklist informativo** para Resizable BAR y Above 4G Decoding (configuraciones BIOS):
 
-- **Resizable BAR** — permite que la CPU acceda a toda la VRAM de la GPU en una sola pasada (vs. el default de 256 MB por ventana). Típicamente activa en BIOS como "Resizable BAR" o "Smart Access Memory (SAM)" según el fabricante. Una lista de pasos está disponible en la UI de Settings; hay un checkbox para confirmar manualmente que ya lo activaste en BIOS (se persiste en localStorage con la clave `upflow.resizableBarConfirmed`) — nunca bloquea lógica ni hace llamadas al backend, es solo orientativo.
-- **Above 4G Decoding** — permite direccionar framebuffers >4GB (relevante solo si tienes >8GB de VRAM en la GPU + resolutions extremas). Misma mecánica: checklist informativa, sin enforce automático.
+- **Resizable BAR** — permite que la CPU acceda a toda la VRAM de la GPU en una sola pasada (vs. el default de 256 MB por ventana). Típicamente aparece en BIOS como "Resizable BAR" o "Smart Access Memory (SAM)" según el fabricante. Hay un checkbox para confirmar manualmente que ya lo activaste (se persiste server-side en `REBAR_CONFIRMED`, con migración automática del valor que versiones viejas guardaban en el localStorage del navegador) — nunca bloquea lógica, es orientativo.
+- **Above 4G Decoding** — permite direccionar framebuffers >4GB (relevante solo si tienes >8GB de VRAM en la GPU + resoluciones extremas). Misma mecánica: checklist informativa, sin enforce automático.
 
-Ambas están **fuera del alcance de fix automatizado** en esta iteración (requieren cambios en BIOS/firmware, no en software).
+Ambas están **fuera del alcance de fix automatizado** (requieren cambios en BIOS/firmware, no en software).
+
+#### ¿Cuánto ayuda realmente Resizable BAR acá? (medido)
+
+Poco, y conviene ser honestos al respecto: **ReBAR acelera las escrituras CPU→GPU**, y en un upscaler esa es justamente la dirección barata. La transferencia grande va al revés.
+
+Medido en una RX 7800 XT con `realesr-animevideov3-x4` sobre DirectML, desglosando un frame completo (subida del input, cómputo, readback del resultado):
+
+| Entrada | Input subido | Output bajado | Subida | Total/frame | % que ReBAR podría tocar |
+|---|---|---|---|---|---|
+| 640×480 | 0.9 MB | 14.1 MB | 0.06 ms | 22.9 ms | **0.26%** |
+| 960×720 | 2.0 MB | 31.6 MB | 0.08 ms | 55.2 ms | **0.15%** |
+| 1280×720 | 2.6 MB | 42.2 MB | 0.12 ms | 73.1 ms | **0.16%** |
+
+El desglose a 960×720: subida 0.2%, cómputo 90%, readback 10%. El output pesa **16x más que el input** (es un 4x: scale² en píxeles) y viaja GPU→CPU, que es un camino distinto que ReBAR no acelera.
+
+El argumento cierra por los dos lados: si ReBAR ya está activo, la subida *ya* mide 0.2% del tiempo; si está inactivo, activarlo puede ganar como mucho ese 0.2%. En ambos casos es ruido frente al 90% de cómputo.
+
+Donde sí podría notarse es en la **carga inicial de modelos grandes** a VRAM (los pipelines de generación pesan GB, no los 2.5 MB del upscaler de video), pero es un costo de una sola vez por sesión, no de throughput.
+
+Conclusión: dejarlo activado no hace daño y es buena higiene general del sistema, pero **no esperes ganancia medible en upscaling de video por activarlo**. El checklist se mantiene como orientación, no como promesa de rendimiento.
 
 ### AudioSR e IOBinding de GMFSS (deferred)
 
