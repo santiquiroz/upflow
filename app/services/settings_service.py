@@ -6,11 +6,12 @@ from typing import TypedDict
 from pydantic import ValidationError
 
 from app.config import ENV_FILE_PATH, Settings, get_settings
+from app.core.log_file import configure_file_logging
 from app.services.json_store import write_text_atomically
 
 # Primer campo real de la whitelist. Crece en subproyectos futuros sin tocar
 # el mecanismo (spec 2026-07-25-generation-third-party-models-design.md §5).
-EDITABLE_SETTINGS_WHITELIST = frozenset({"hf_token", "rebar_confirmed"})
+EDITABLE_SETTINGS_WHITELIST = frozenset({"hf_token", "rebar_confirmed", "enable_file_logging"})
 
 # Serializa read-modify-write del .env entre requests concurrentes.
 _ENV_WRITE_LOCK = threading.Lock()
@@ -91,6 +92,10 @@ def update_setting(key: str, value: str) -> None:
             setattr(live, key, value)
         setattr(get_settings(), key, value)
         get_settings.cache_clear()
+    # Fuera del lock: el log a archivo se engancha/desengancha en el acto para
+    # que un tester pueda encenderlo y reproducir sin reiniciar el servidor.
+    if key == "enable_file_logging":
+        configure_file_logging(get_settings())
 
 
 def editable_settings_status(settings: Settings) -> list[EditableSettingStatus]:

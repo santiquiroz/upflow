@@ -268,6 +268,7 @@ class VideoUpscaler:
         out_w, out_h = self._expected_output_dims(job)
         encoder = await asyncio.to_thread(self._resolve_video_encoder, job, out_w, out_h)
         job.metadata["videoEncoder"] = encoder
+        self._stamp_upscale_diagnostics(job)
 
         advance_video_stage(job, "encoding_video")
         async with self._track_encode_progress(output_path):
@@ -830,6 +831,22 @@ class VideoUpscaler:
             software_threads=self.settings.ffmpeg_encode_threads,
         )
 
+    def _stamp_upscale_diagnostics(self, job: VideoUpscaleJob) -> None:
+        """Deja en job.metadata POR QUE este job corrio rapido o lento.
+
+        Claves informativas, como streamPipeline / videoEncoder: no son de
+        progreso y el frontend no cambia. Sin esto, un reporte de "va lentisimo
+        en otra maquina" es adivinar: correr fp32 en vez de fp16 se midio 7.26x
+        mas lento y caer a tiling 2.3x, y ninguna de las dos cosas se veia.
+        """
+        engine = self.onnx_video_engine
+        if engine is None:
+            return
+        precision = getattr(engine, "last_precision", None)
+        if precision is not None:
+            job.metadata["upscalePrecision"] = precision
+        job.metadata["upscaleTiled"] = bool(getattr(engine, "last_tiled", False))
+
     def _build_extract_frames_command(
         self, source_path: Path, frames_in: Path, fps: str
     ) -> list[str]:
@@ -1259,6 +1276,7 @@ class VideoUpscaler:
                 self._resolve_video_encoder, job, probe_w, probe_h
             )
             job.metadata["videoEncoder"] = encoder_name
+            self._stamp_upscale_diagnostics(job)
             # Sin interp la salida iguala a la fuente, pero solo se valida por
             # igualdad si el conteo es EXACTO (nb_frames). Un estimado
             # round(duration*fps) difiere +-1 seguido, y rechazar por eso
@@ -1355,6 +1373,7 @@ class VideoUpscaler:
                 self._resolve_video_encoder, job, probe_w, probe_h
             )
             job.metadata["videoEncoder"] = encoder_name
+            self._stamp_upscale_diagnostics(job)
             # Etapa colapsada (decisión de stepper del plan): denominador
             # honesto = frames reales del tramo (ya interpolados).
             job.metadata["framesTotal"] = frame_count

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -11,6 +13,7 @@ from app.api.auth_routes import router as auth_router
 from app.api.capability_routes import router as capability_router
 from app.api.routes import router as api_router
 from app.api.users_routes import router as users_router
+from app.core.log_file import configure_file_logging
 from app.config import AUDIO_ENHANCE_MODES, ensure_auth_secret, get_settings
 from app.security import LoopbackGuardMiddleware, OriginGuardMiddleware
 from app.services.audio_job_manager import AudioJobManager
@@ -55,6 +58,9 @@ FRONTEND_DIST_DIR = APP_DIR.parent / "frontend" / "dist"
 async def lifespan(app: FastAPI):
     settings = get_settings()
     register_live_settings(settings)
+    log_file = configure_file_logging(settings)
+    if log_file is not None:
+        logging.getLogger(__name__).info("log a archivo activo en %s", log_file)
     if settings.auth_mode == "multi":
         ensure_auth_secret(settings)
     user_store = UserStore(settings)

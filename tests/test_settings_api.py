@@ -14,8 +14,10 @@ def test_get_settings_lists_editable_keys(client) -> None:
     response = client.get("/api/v1/settings")
     assert response.status_code == 200
     payload = response.json()
-    assert payload["settings"][0]["key"] == "hf_token"
-    assert isinstance(payload["settings"][0]["configured"], bool)
+    keys = [item["key"] for item in payload["settings"]]
+    assert "hf_token" in keys
+    assert "enable_file_logging" in keys  # switch de logs para diagnosticar
+    assert all(isinstance(item["configured"], bool) for item in payload["settings"])
 
 
 def test_patch_setting_outside_whitelist_is_400(client) -> None:

@@ -411,6 +411,13 @@ class Settings(BaseSettings):
     # ante cualquier excepción (patrón raw-pipe). False = camino clásico siempre.
     enable_stream_pipeline: bool = Field(default=True, alias="ENABLE_STREAM_PIPELINE")
 
+    # Log a archivo, opt-in para diagnosticar reportes de otras maquinas. En uso
+    # normal es ruido y disco, asi que arranca apagado; se enciende desde
+    # Settings sin reiniciar y rota con techo duro.
+    enable_file_logging: bool = Field(default=False, alias="ENABLE_FILE_LOGGING")
+    log_file_max_mb: int = Field(default=10, alias="LOG_FILE_MAX_MB")
+    log_file_backups: int = Field(default=3, alias="LOG_FILE_BACKUPS")
+
     update_repo: str = Field(default="santiquiroz/upflow", alias="UPDATE_REPO")
     # Package whose installed metadata gives the running version to compare
     # against the latest release. Reuse in another project = change UPDATE_REPO
