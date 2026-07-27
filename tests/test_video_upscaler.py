@@ -202,12 +202,12 @@ async def test_mode_none_below_min_output_pixels(tmp_path: Path) -> None:
     assert await upscaler._resolve_stream_pipeline_mode(job, 1) is None
 
 
-async def test_mode_none_when_job_needs_source_input(tmp_path: Path) -> None:
-    # Pistas de audio extra / subtítulos: solo _build_encode_command (camino PNG)
-    # sabe mapearlos desde el source original — misma restricción que el raw-pipe.
+async def test_mode_full_when_job_needs_source_input(tmp_path: Path) -> None:
+    # Pistas de audio extra / subtítulos ya NO excluyen del streaming: el
+    # comando raw-pipe mapea el source como input adicional.
     upscaler = make_stream_upscaler(tmp_path)
     job = make_stream_job(tmp_path, keep_subtitles=True)
-    assert await upscaler._resolve_stream_pipeline_mode(job, 1) is None
+    assert await upscaler._resolve_stream_pipeline_mode(job, 1) == STREAM_MODE_FULL
 
 
 async def test_mode_hybrid_for_rife_interpolation(tmp_path: Path) -> None:
@@ -1025,3 +1025,73 @@ def test_encode_command_without_source_input_is_unchanged(tmp_path: Path) -> Non
     assert _map_flags_come_after_every_input(cmd)
     assert str(job.source_path) not in cmd
     assert [cmd[i + 1] for i, t in enumerate(cmd) if t == "-map"] == ["0:v:0", "1:a:0"]
+
+
+# ---------------------------------------------------------------------------
+# Pistas extra / subtítulos EN EL STREAM PIPELINE. Antes obligaban al camino
+# PNG clásico, que a 4x materializa cientos de GB de frames intermedios. El
+# comando raw-pipe puede tomar el archivo fuente como input adicional igual que
+# el camino PNG (verificado contra ffmpeg real), así que ya no hay motivo para
+# excluirlos del streaming.
+# ---------------------------------------------------------------------------
+
+
+def test_rawpipe_command_maps_extra_audio_and_subtitles_from_source(tmp_path: Path) -> None:
+    upscaler = make_stream_upscaler(tmp_path)
+    job = make_stream_job(tmp_path, keep_audio=True, audio_track_indices=[1, 2], keep_subtitles=True)
+
+    cmd = upscaler._build_rawpipe_command(
+        3840, 2880, "24/1", tmp_path / "audio.m4a", ["-c:a", "aac"],
+        tmp_path / "out.mkv", job, "libx264",
+    )
+
+    assert str(job.source_path) in cmd, "la fuente no se agregó como input"
+    maps = [cmd[i + 1] for i, token in enumerate(cmd) if token == "-map"]
+    assert maps[0] == "0:v:0"      # el pipe de frames crudos
+    assert maps[1] == "1:a:0"      # audio primario ya procesado
+    assert "2:2" in maps           # pista extra por índice absoluto
+    assert maps[-1].endswith(":s?")
+    assert "-c:s" in cmd
+
+
+def test_rawpipe_command_emits_every_input_before_any_map(tmp_path: Path) -> None:
+    # Mismo invariante que el camino PNG: -map es opción de salida.
+    upscaler = make_stream_upscaler(tmp_path)
+    job = make_stream_job(tmp_path, keep_audio=True, audio_track_indices=[1, 2], keep_subtitles=True)
+
+    cmd = upscaler._build_rawpipe_command(
+        3840, 2880, "24/1", tmp_path / "audio.m4a", ["-c:a", "aac"],
+        tmp_path / "out.mkv", job, "libx264",
+    )
+
+    assert _map_flags_come_after_every_input(cmd), f"-map antes de un -i: {cmd}"
+
+
+def test_rawpipe_command_without_extras_is_unchanged(tmp_path: Path) -> None:
+    upscaler = make_stream_upscaler(tmp_path)
+    job = make_stream_job(tmp_path)
+
+    cmd = upscaler._build_rawpipe_command(
+        3840, 2880, "24/1", tmp_path / "audio.m4a", ["-c:a", "aac"],
+        tmp_path / "out.mkv", job, "libx264",
+    )
+
+    assert str(job.source_path) not in cmd
+    assert [cmd[i + 1] for i, t in enumerate(cmd) if t == "-map"] == ["0:v:0", "1:a:0"]
+
+
+@pytest.mark.asyncio
+async def test_gate_routes_subtitle_job_through_the_stream_pipeline(tmp_path: Path) -> None:
+    # El caso que antes caía al clásico y quemaba cientos de GB de PNG.
+    upscaler = make_stream_upscaler(tmp_path)
+    job = make_stream_job(tmp_path, keep_subtitles=True)
+
+    assert await upscaler._resolve_stream_pipeline_mode(job, 1) == STREAM_MODE_FULL
+
+
+@pytest.mark.asyncio
+async def test_gate_routes_multi_audio_job_through_the_stream_pipeline(tmp_path: Path) -> None:
+    upscaler = make_stream_upscaler(tmp_path)
+    job = make_stream_job(tmp_path, keep_audio=True, audio_track_indices=[1, 2, 3])
+
+    assert await upscaler._resolve_stream_pipeline_mode(job, 1) == STREAM_MODE_FULL

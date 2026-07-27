@@ -177,16 +177,17 @@ async def test_should_stream_true_baseline_for_otherwise_eligible_job(tmp_path: 
     assert await vu._should_stream(job) is True
 
 
-async def test_should_stream_false_when_extra_audio_tracks_requested(tmp_path: Path) -> None:
+async def test_should_stream_true_when_extra_audio_tracks_requested(tmp_path: Path) -> None:
+    # Antes esto forzaba el camino PNG porque solo _build_encode_command sabia
+    # mapear pistas extra. Ahora _build_rawpipe_command agrega el source como
+    # input adicional, asi que estos jobs -- los que mas se benefician -- se
+    # quedan en el streaming en vez de materializar cientos de GB de frames.
     vu = make_streaming_upscaler(tmp_path)
     job = make_job("software", device="dml:0")
     job.backend = UPSCALE_BACKEND_ONNX
-    # keep_audio=True: extra tracks are only "extra to preserve" when audio is
-    # actually being kept -- with keep_audio=False there is nothing to preserve
-    # and the raw-pipe path stays eligible (see keep_audio-gate tests below).
     job.keep_audio = True
     job.audio_track_indices = [1, 2]
-    assert await vu._should_stream(job) is False
+    assert await vu._should_stream(job) is True
 
 
 async def test_should_stream_true_when_keep_audio_false_even_with_multiple_indices(tmp_path: Path) -> None:
@@ -210,12 +211,12 @@ async def test_should_stream_true_with_single_audio_track_index(tmp_path: Path) 
     assert await vu._should_stream(job) is True
 
 
-async def test_should_stream_false_when_keep_subtitles_requested(tmp_path: Path) -> None:
+async def test_should_stream_true_when_keep_subtitles_requested(tmp_path: Path) -> None:
     vu = make_streaming_upscaler(tmp_path)
     job = make_job("software", device="dml:0")
     job.backend = UPSCALE_BACKEND_ONNX
     job.keep_subtitles = True
-    assert await vu._should_stream(job) is False
+    assert await vu._should_stream(job) is True
 
 
 def test_output_dims_multiplies_by_scale(tmp_path: Path) -> None:
