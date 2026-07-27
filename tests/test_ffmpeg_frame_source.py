@@ -32,8 +32,12 @@ class FakeDecodeProc:
         self._final_returncode = -9
 
 
-def make_source(tmp_path: Path, width: int = 4, height: int = 2) -> FfmpegFrameSource:
-    return FfmpegFrameSource(Path("ffmpeg.exe"), tmp_path / "clip.mp4", width, height, decode_threads=2)
+def make_source(
+    tmp_path: Path, width: int = 4, height: int = 2, fps: str = "24/1"
+) -> FfmpegFrameSource:
+    return FfmpegFrameSource(
+        Path("ffmpeg.exe"), tmp_path / "clip.mp4", width, height, decode_threads=2, fps=fps
+    )
 
 
 def raw_frames(count: int, width: int, height: int) -> bytes:
@@ -41,10 +45,14 @@ def raw_frames(count: int, width: int, height: int) -> bytes:
     return b"".join(bytes([i % 256]) * (width * height * 3) for i in range(count))
 
 
-def test_build_command_uses_fps_mode_passthrough_never_vsync(tmp_path: Path) -> None:
-    command = make_source(tmp_path).build_command()
+def test_build_command_normalises_to_cfr_never_vsync(tmp_path: Path) -> None:
+    # Antes era passthrough, que conservaba la cadencia VFR de la fuente
+    # mientras el encode asumia fps fijo: el video salia mas corto que el audio
+    # y los subtitulos (177 s de deriva en 25 min sobre material real).
+    command = make_source(tmp_path, fps="30000/1001").build_command()
     assert "-vsync" not in command  # flag deprecado, prohibido por el spec
-    assert command[command.index("-fps_mode") + 1] == "passthrough"
+    assert command[command.index("-fps_mode") + 1] == "cfr"
+    assert command[command.index("-r") + 1] == "30000/1001"
     assert command[command.index("-pix_fmt") + 1] == "rgb24"
     assert command[command.index("-f") + 1] == "rawvideo"
     assert command[-1] == "pipe:1"

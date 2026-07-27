@@ -247,21 +247,7 @@ class VideoUpscaler:
         advance_video_stage(job, "extracting_frames")
         async with self._track_frame_progress(job, frames_in, "extracting_frames"):
             await self._run_process(
-                [
-                    str(self.settings.ffmpeg_binary_path),
-                    "-y",
-                    "-i",
-                    str(job.source_path),
-                    "-fps_mode",
-                    "passthrough",
-                    "-threads",
-                    str(self.settings.ffmpeg_decode_threads),
-                    # Extracted frames are throwaway input for the upscaler, so pay
-                    # the cheapest zlib level instead of ffmpeg's default.
-                    "-compression_level",
-                    "1",
-                    str(frames_in / "%08d.png"),
-                ]
+                self._build_extract_frames_command(job.source_path, frames_in, fps)
             )
 
         if not audio_prepared:
@@ -844,6 +830,39 @@ class VideoUpscaler:
             software_threads=self.settings.ffmpeg_encode_threads,
         )
 
+    def _build_extract_frames_command(
+        self, source_path: Path, frames_in: Path, fps: str
+    ) -> list[str]:
+        """Extrae los frames NORMALIZANDO a tasa constante.
+
+        Con -fps_mode passthrough se conservaban los timestamps VFR de la fuente,
+        pero el encode posterior los ignora y asume fps fijo: el video salía más
+        corto que el audio y los subtítulos. En un BDrip real de cadencia mixta
+        (23.976 + 29.97 declarando 29.97) eran 39.925 frames donde la tasa
+        declarada implica 45.195, o sea 177 s de deriva en 25 minutos.
+
+        Con -fps_mode cfr ffmpeg duplica/descarta según los timestamps reales, y
+        a partir de ahí frames == duración × fps por construcción. Para una
+        fuente que YA es CFR esto no cambia nada.
+        """
+        return [
+            str(self.settings.ffmpeg_binary_path),
+            "-y",
+            "-i",
+            str(source_path),
+            "-fps_mode",
+            "cfr",
+            "-r",
+            fps,
+            "-threads",
+            str(self.settings.ffmpeg_decode_threads),
+            # Extracted frames are throwaway input for the upscaler, so pay
+            # the cheapest zlib level instead of ffmpeg's default.
+            "-compression_level",
+            "1",
+            str(frames_in / "%08d.png"),
+        ]
+
     def _build_encode_command(
         self,
         job: VideoUpscaleJob,
@@ -1274,6 +1293,7 @@ class VideoUpscaler:
                 width,
                 height,
                 self.settings.ffmpeg_decode_threads,
+                fps,
             )
             await self._run_stream_pipeline(
                 job,
