@@ -1026,10 +1026,11 @@ class VideoUpscaler:
         # el motor builtin de streaming — misma exclusión que el raw-pipe.
         if self._is_onnx_model(job.model_id):
             return None
-        # Solo _build_encode_command (camino PNG) sabe mapear pistas de audio
-        # extra / subtítulos desde el source original.
-        if self._needs_source_input(job):
-            return None
+        # Las pistas de audio extra y los subtítulos YA NO excluyen del
+        # streaming: _build_rawpipe_command agrega el source como input
+        # adicional y los mapea igual que el camino PNG. Antes esos jobs
+        # (justamente los que más se benefician) quedaban condenados a
+        # materializar cientos de GB de frames intermedios.
         out_pixels = (
             int(job.metadata.get("sourceWidth") or 0)
             * int(job.metadata.get("sourceHeight") or 0)
@@ -1341,12 +1342,9 @@ class VideoUpscaler:
         # builtin streaming engine, so they stay on the file path.
         if self._is_onnx_model(job.model_id):
             return False
-        # Only _build_encode_command (the PNG-based file path) knows how to map
-        # extra audio tracks / subtitles from the original source (Fase A Task
-        # 3) -- _build_rawpipe_command doesn't, so a job that needs to preserve
-        # them must not take the raw-pipe fast path.
-        if self._needs_source_input(job):
-            return False
+        # Extra audio tracks / subtitles no longer force the PNG path:
+        # _build_rawpipe_command adds the source as an extra input and maps them
+        # the same way _build_encode_command does.
         backend = await asyncio.to_thread(self._resolve_builtin_backend, job)
         return backend == UpscaleBackend.onnx
 
@@ -1424,11 +1422,35 @@ class VideoUpscaler:
             "-framerate", fps,
             "-i", "-",
         ]
+        # Mismo esquema que _build_encode_command: TODOS los -i primero y los
+        # -map después (en ffmpeg -map es opción de salida). El archivo fuente
+        # entra como input adicional para conservar pistas de audio extra y
+        # subtítulos SIN caer al camino PNG, que a 4x materializa cientos de GB
+        # de frames intermedios solo para poder mapearlos.
+        next_input_index = 1
+        audio_input_index: int | None = None
         if audio_mux_path is not None:
-            cmd += ["-i", str(audio_mux_path), "-map", "0:v:0", "-map", "1:a:0"]
+            cmd += ["-i", str(audio_mux_path)]
+            audio_input_index = next_input_index
+            next_input_index += 1
+        source_input_index = self._maybe_add_source_input(cmd, job, next_input_index)
+
+        maps: list[str] = []
+        if audio_input_index is not None:
+            maps += ["-map", "0:v:0", "-map", f"{audio_input_index}:a:0"]
+        if source_input_index is not None:
+            if audio_input_index is None:
+                maps += ["-map", "0:v:0"]
+            self._map_extra_audio_tracks(maps, job, source_input_index)
+            self._map_subtitles(maps, job, source_input_index)
+        cmd += maps
+
         cmd += self._build_video_encode_options(job, encoder)
         if audio_mux_path is not None:
             cmd += audio_codec_args
+            cmd += self._extra_audio_copy_args(job)
+        if job.keep_subtitles:
+            cmd += ["-c:s", "copy"]
         cmd.append(str(output_path))
         return cmd
 
