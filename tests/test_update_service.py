@@ -348,8 +348,19 @@ async def test_user_agent_carries_configured_package_name() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_get_app_version_returns_installed_version() -> None:
-    assert version_module.get_app_version() == importlib.metadata.version("upflow")
+def test_get_app_version_returns_the_version_of_the_code_that_is_running() -> None:
+    # Antes este test afirmaba get_app_version() == metadata.version("upflow"),
+    # o sea comparaba el valor con su propia fuente: pasaba igual cuando la
+    # metadata estaba vieja, que es exactamente el bug que tenia que detectar
+    # (instalaciones reales con codigo 0.14.0 reportando 0.10.0). Ahora se
+    # contrasta contra el pyproject, que es la version del codigo ejecutandose.
+    import tomllib
+    from pathlib import Path
+
+    repo_pyproject = Path(version_module.__file__).resolve().parent.parent.parent / "pyproject.toml"
+    declared = tomllib.loads(repo_pyproject.read_text(encoding="utf-8"))["project"]["version"]
+
+    assert version_module.get_app_version() == declared
 
 
 def test_get_app_version_falls_back_to_pyproject(

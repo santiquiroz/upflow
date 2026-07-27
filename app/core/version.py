@@ -12,12 +12,19 @@ PYPROJECT_PATH = Path(__file__).resolve().parent.parent.parent / "pyproject.toml
 def get_app_version(package_name: str = DEFAULT_PACKAGE_NAME) -> str:
     """Resolves the running app version without ever raising.
 
-    Prefers the installed package metadata (works after `pip install -e .`);
-    falls back to parsing pyproject.toml for a plain source checkout; final
-    fallback keeps every caller total even if both sources are missing.
-    `package_name` is injectable so the mechanism is reusable across projects.
+    Prefiere el pyproject.toml que viaja JUNTO al código: es, por definición,
+    la versión del código que se está ejecutando. La metadata del paquete es un
+    caché que se desincroniza — `pip install -e .` corre una sola vez y después
+    el código se actualiza sin que nadie la regenere (visto en instalaciones
+    reales reportando 0.10.0 con código 0.14.0), y en esta app la raíz de
+    instalación entra en sys.path, así que un `upflow.egg-info` viejo ahí puede
+    tapar hasta el dist-info bueno de site-packages.
+
+    La metadata queda como fallback para instalaciones normales desde wheel,
+    donde no hay pyproject al lado del código. `package_name` es inyectable
+    para reusar el mecanismo en otros proyectos.
     """
-    return _version_from_metadata(package_name) or _version_from_pyproject() or FALLBACK_VERSION
+    return _version_from_pyproject() or _version_from_metadata(package_name) or FALLBACK_VERSION
 
 
 def _version_from_metadata(package_name: str) -> str | None:
