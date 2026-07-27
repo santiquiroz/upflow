@@ -20,6 +20,7 @@ from app.services.backend_registry import (
     resolve_upscale_backend,
 )
 from app.services.devices_service import DevicesService
+from app.services.encoder_capability_probe import EncoderCapabilityProbe
 from app.services.engines.audio_enhance import AudioEnhancer
 from app.services.engines.ffmpeg_frame_source import FfmpegFrameSource
 from app.services.engines.ffmpeg_frame_sink import RawPipeEncoder
@@ -157,6 +158,7 @@ class VideoUpscaler:
         self.onnx_video_engine = onnx_video_engine
         self.model_registry = model_registry
         self.devices = devices
+        self.encoder_probe = EncoderCapabilityProbe(settings.ffmpeg_binary_path)
         self.frame_poll_interval_seconds = frame_poll_interval_seconds
         self.frame_stall_timeout_seconds = (
             settings.frame_stall_timeout_seconds
@@ -275,8 +277,10 @@ class VideoUpscaler:
             return output_path
 
         # Resolve off the loop: for "auto" this enumerates devices (DXGI) to map
-        # the job's GPU to a hardware encoder.
-        encoder = await asyncio.to_thread(self._resolve_video_encoder, job)
+        # the job's GPU to a hardware encoder, and probes that it can do the
+        # output resolution before committing to it.
+        out_w, out_h = self._expected_output_dims(job)
+        encoder = await asyncio.to_thread(self._resolve_video_encoder, job, out_w, out_h)
         job.metadata["videoEncoder"] = encoder
 
         advance_video_stage(job, "encoding_video")
@@ -794,15 +798,37 @@ class VideoUpscaler:
     def _safe_rmtree(path: Path) -> None:
         shutil.rmtree(path, ignore_errors=True)
 
-    def _resolve_video_encoder(self, job: VideoUpscaleJob) -> str:
+    def _resolve_video_encoder(self, job: VideoUpscaleJob, out_width: int = 0, out_height: int = 0) -> str:
         """Concrete ffmpeg encoder for this job. "software" (or any non-"auto")
-        keeps the picked codec (libx264/libx265). "auto" maps the job's GPU to a
-        hardware encoder, falling back to the software codec if the vendor can't
-        be resolved (cpu device, unknown GPU, no devices service)."""
+        keeps the picked codec. "auto" maps the job's GPU to a hardware encoder,
+        falling back to the software codec if the vendor can't be resolved (cpu
+        device, unknown GPU, no devices service) OR if that encoder can't handle
+        the output resolution on this machine.
+
+        El chequeo de resolución es un probe real, no una tabla: los techos
+        varían por familia y generación (h264_amf falla a 7680x4320 y hevc_amf
+        no, medido). Descubrirlo ANTES evita encodear en vano y que
+        _encode_with_fallback rehaga todo por software horas después."""
         if job.video_encoder != video_encoders.VIDEO_ENCODER_AUTO:
             return job.video_codec
         hw = video_encoders.resolve_hardware_encoder(self._device_name(job.device), job.video_codec)
-        return hw or job.video_codec
+        if hw is None:
+            return job.video_codec
+        if out_width > 0 and out_height > 0 and not self.encoder_probe.supports(hw, out_width, out_height):
+            logger.info(
+                "hardware encoder %s no soporta %dx%d; se usa %s",
+                hw, out_width, out_height, job.video_codec,
+            )
+            return job.video_codec
+        return hw
+
+    def _expected_output_dims(self, job: VideoUpscaleJob) -> tuple[int, int]:
+        """Resolución de salida según el probe (0,0 si no se conoce todavía)."""
+        width = int(job.metadata.get("sourceWidth") or 0)
+        height = int(job.metadata.get("sourceHeight") or 0)
+        if width <= 0 or height <= 0:
+            return 0, 0
+        return width * job.scale, height * job.scale
 
     def _device_name(self, device_id: str | None) -> str | None:
         if self.devices is None or not device_id:
@@ -1209,7 +1235,10 @@ class VideoUpscaler:
         had_frames_total = "framesTotal" in job.metadata
         original_frames_total = job.metadata.get("framesTotal")
         try:
-            encoder_name = await asyncio.to_thread(self._resolve_video_encoder, job)
+            probe_w, probe_h = self._expected_output_dims(job)
+            encoder_name = await asyncio.to_thread(
+                self._resolve_video_encoder, job, probe_w, probe_h
+            )
             job.metadata["videoEncoder"] = encoder_name
             # Sin interp la salida iguala a la fuente, pero solo se valida por
             # igualdad si el conteo es EXACTO (nb_frames). Un estimado
@@ -1301,7 +1330,10 @@ class VideoUpscaler:
         original_frames_total = job.metadata.get("framesTotal")
         try:
             frame_count, width, height = await asyncio.to_thread(self._probe_png_dir, frames_dir)
-            encoder_name = await asyncio.to_thread(self._resolve_video_encoder, job)
+            probe_w, probe_h = self._expected_output_dims(job)
+            encoder_name = await asyncio.to_thread(
+                self._resolve_video_encoder, job, probe_w, probe_h
+            )
             job.metadata["videoEncoder"] = encoder_name
             # Etapa colapsada (decisión de stepper del plan): denominador
             # honesto = frames reales del tramo (ya interpolados).
@@ -1359,9 +1391,9 @@ class VideoUpscaler:
     ) -> bool:
         """Upscale + encode by piping raw frames to ffmpeg. Returns True on success,
         False to fall back to the PNG path (a cancel / stall still propagates)."""
-        encoder = await asyncio.to_thread(self._resolve_video_encoder, job)
         try:
             out_w, out_h = await asyncio.to_thread(self._output_dims, frames_in, job.scale)
+            encoder = await asyncio.to_thread(self._resolve_video_encoder, job, out_w, out_h)
         except Exception as exc:  # noqa: BLE001 - unreadable frame -> just use the file path
             logger.warning("raw-pipe: could not read input dims (%s); using PNG path", exc)
             return False

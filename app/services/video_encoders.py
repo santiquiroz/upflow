@@ -17,10 +17,10 @@ VIDEO_ENCODER_AUTO = "auto"
 VIDEO_ENCODERS = frozenset({VIDEO_ENCODER_SOFTWARE, VIDEO_ENCODER_AUTO})
 
 # Software encoders (the codec the user picked maps straight to these).
-_SOFTWARE_ENCODERS = frozenset({"libx264", "libx265"})
+_SOFTWARE_ENCODERS = frozenset({"libx264", "libx265", "libsvtav1"})
 
 # Codec family per software codec: HW encoders are named per family (h264/hevc).
-_CODEC_FAMILY = {"libx264": "h264", "libx265": "h265"}
+_CODEC_FAMILY = {"libx264": "h264", "libx265": "h265", "libsvtav1": "av1"}
 
 # GPU-name substring -> vendor key. Checked case-insensitively, first match wins.
 _NAME_VENDOR_SIGNATURES = (
@@ -30,11 +30,20 @@ _NAME_VENDOR_SIGNATURES = (
 )
 
 # vendor -> {family -> hardware encoder}
+# AV1 por hardware existe en las tres marcas desde RDNA2 / Ada / Arc y da
+# bastante menos bitrate a igual calidad, que en un 4x largo son decenas de GB.
+# Cuando la GPU es mas vieja el probe de capacidad lo descarta y se cae a
+# software, asi que listarlo no obliga a nada.
 _VENDOR_ENCODERS = {
-    "nvidia": {"h264": "h264_nvenc", "h265": "hevc_nvenc"},
-    "amd": {"h264": "h264_amf", "h265": "hevc_amf"},
-    "intel": {"h264": "h264_qsv", "h265": "hevc_qsv"},
+    "nvidia": {"h264": "h264_nvenc", "h265": "hevc_nvenc", "av1": "av1_nvenc"},
+    "amd": {"h264": "h264_amf", "h265": "hevc_amf", "av1": "av1_amf"},
+    "intel": {"h264": "h264_qsv", "h265": "hevc_qsv", "av1": "av1_qsv"},
 }
+
+
+# SVT-AV1 usa presets numericos 0-13 (menor = mas lento y mejor), no los nombres
+# de x264/x265. Se mapean los que expone la UI a su equivalente aproximado.
+_SVTAV1_PRESETS = {"veryslow": "2", "slower": "3", "slow": "4", "medium": "6", "fast": "8", "faster": "9", "veryfast": "10"}
 
 
 def codec_family(video_codec: str) -> str:
@@ -86,15 +95,20 @@ def encode_options(
             "-x265-params", f"frame-threads=4:pools={x265_pools}",
             "-threads", str(min(x265_pools, 8)),
         ]
-    if encoder in ("h264_nvenc", "hevc_nvenc"):
+    if encoder in ("h264_nvenc", "hevc_nvenc", "av1_nvenc"):
         # NVENC: constant-quality VBR; -cq is the quality target (lower = better).
         return ["-c:v", encoder, "-preset", "p5", "-rc", "vbr", "-cq", str(crf), "-pix_fmt", "yuv420p"]
-    if encoder in ("h264_amf", "hevc_amf"):
+    if encoder in ("h264_amf", "hevc_amf", "av1_amf"):
         # AMF: constant QP; qp_i/qp_p are the quality target.
         return [
             "-c:v", encoder, "-quality", "quality", "-rc", "cqp",
             "-qp_i", str(crf), "-qp_p", str(crf), "-pix_fmt", "yuv420p",
         ]
-    if encoder in ("h264_qsv", "hevc_qsv"):
+    if encoder in ("h264_qsv", "hevc_qsv", "av1_qsv"):
         return ["-c:v", encoder, "-global_quality", str(crf), "-pix_fmt", "yuv420p"]
+    if encoder == "libsvtav1":
+        return [
+            "-c:v", "libsvtav1", "-preset", _SVTAV1_PRESETS.get(preset, "6"),
+            "-crf", str(crf), "-pix_fmt", "yuv420p",
+        ]
     raise ValueError(f"unknown encoder {encoder!r}")
