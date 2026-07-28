@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import subprocess
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, NamedTuple
 from uuid import uuid4
@@ -50,6 +51,7 @@ from app.schemas import (
     JobsListResponse,
     ModelResponse,
     ModelSearchResponse,
+    PreflightResponse,
     ModelsResponse,
     SubtitleTrackResponse,
     SupportedModelResponse,
@@ -69,6 +71,9 @@ from app.services.engines.generation_onnx import generation_dependencies_availab
 from app.services.generation_converter import GenerationModelConverter
 from app.services.generation_installer import GenerationModelInstaller
 from app.services.generation_job_manager import GenerationJobManager
+from app.services.generation_compat import classify
+from app.services.generation_preflight import preflight
+from app.services.generation_variants import available_precisions_from_names
 from app.services.hf_client import GENERATION_SEARCH_TASK_TAGS, HfClient
 from app.services.job_manager import JobManager
 from app.services.media_tools import MediaTools
@@ -1267,17 +1272,69 @@ async def get_conversion_status(
     )
 
 
+def _generation_search_results_to_response(results: list) -> ModelSearchResponse:
+    enriched = []
+    for item in results:
+        verdict, reason = classify(item.filenames, item.gated)
+        # Un repo ready_onnx no tiene paso de export, asi que no hay dtype que
+        # elegir: no se ofrece picker (ver alcance de B en el spec de 2026-07-28).
+        precisions = (
+            available_precisions_from_names(item.filenames)
+            if verdict == "needs_conversion"
+            else []
+        )
+        enriched.append(
+            HfModelSearchResultResponse(
+                id=item.id,
+                author=item.author,
+                pipeline_tag=item.pipeline_tag,
+                downloads=item.downloads,
+                likes=item.likes,
+                tags=list(item.tags),
+                compat=verdict,
+                compat_reason=reason,
+                available_precisions=list(precisions),
+            )
+        )
+    return ModelSearchResponse(results=enriched)
+
+
 @router.get("/generation/models/search", response_model=ModelSearchResponse)
 async def search_generation_models(
-    q: str = Query(..., min_length=1),
+    q: str = Query("", max_length=200),
     hf_client: HfClient = Depends(get_hf_client),
 ) -> ModelSearchResponse:
+    # Query vacia = browse por descargas: el usuario ve modelos sin tener que
+    # saber el repo_id exacto de antemano.
     try:
-        results = await hf_client.search(q, task_tags=GENERATION_SEARCH_TASK_TAGS)
+        results = await hf_client.search(
+            q, task_tags=GENERATION_SEARCH_TASK_TAGS, sort=None if q else "downloads"
+        )
     except Exception as exc:
         logger.exception("Hugging Face generation search failed for query %r", q)
         raise HTTPException(status_code=502, detail="Hugging Face search failed") from exc
-    return _search_results_to_response(results)
+    return _generation_search_results_to_response(results)
+
+
+@router.get("/generation/models/preflight", response_model=PreflightResponse)
+async def preflight_generation_model(
+    request: Request,
+    repo_id: str = Query(..., alias="repoId"),
+    width: int = Query(512, ge=64, le=4096),
+    height: int = Query(512, ge=64, le=4096),
+    hf_client: HfClient = Depends(get_hf_client),
+    settings: Settings = Depends(get_settings),
+) -> PreflightResponse:
+    report = await preflight(
+        hf_client=hf_client,
+        devices_service=request.app.state.devices_service,
+        settings=settings,
+        probes=request.app.state.resource_probes,
+        repo_id=repo_id,
+        width=width,
+        height=height,
+    )
+    return PreflightResponse(**asdict(report))
 
 
 # Gates con los permisos que C ya define (mismo patrón que capability_routes):

@@ -494,9 +494,10 @@ def test_generation_search_endpoint_uses_generation_tags(client, monkeypatch) ->
     calls: dict = {}
 
     class FakeHf:
-        async def search(self, query, limit=20, task_tags=None):
+        async def search(self, query, limit=20, task_tags=None, sort=None):
             calls["query"] = query
             calls["task_tags"] = task_tags
+            calls["sort"] = sort
             return []
 
     monkeypatch.setattr(app.state, "hf_client", FakeHf())
@@ -702,3 +703,136 @@ def test_lifespan_wires_generation_managers_into_app_state() -> None:
             == app.state.generation_converter.convert_from_hf
         )
         assert app.state.retention_sweeper.generation_job_manager is app.state.generation_job_manager
+
+
+# ---------------------------------------------------------------------------
+# Spec 2026-07-28 (descarga sin techo): la busqueda acepta query vacia (browse
+# por descargas) y cada resultado lleva su compatibilidad DETECTADA de la
+# metadata que ya venia en la misma respuesta de HF. Se llama la corrutina de
+# ruta directo con un doble, igual que el resto de este archivo.
+# ---------------------------------------------------------------------------
+
+
+class FakeSearchHfClient:
+    def __init__(self, summaries: list[Any]) -> None:
+        self._summaries = summaries
+        self.calls: list[dict[str, Any]] = []
+
+    async def search(self, query, limit=20, task_tags=None, sort=None):
+        self.calls.append({"query": query, "task_tags": task_tags, "sort": sort})
+        return self._summaries
+
+
+def _summary(**overrides: Any):
+    from app.services.hf_client import HfModelSummary
+
+    base: dict[str, Any] = dict(
+        id="owner/name",
+        author="owner",
+        pipeline_tag="text-to-image",
+        downloads=10,
+        likes=2,
+        tags=("text-to-image",),
+        filenames=(
+            "model_index.json",
+            "unet/diffusion_pytorch_model.safetensors",
+            "unet/diffusion_pytorch_model.fp16.safetensors",
+        ),
+        gated=False,
+    )
+    base.update(overrides)
+    return HfModelSummary(**base)
+
+
+@pytest.mark.asyncio
+async def test_search_with_empty_query_browses_by_downloads() -> None:
+    from app.api.routes import search_generation_models
+
+    hf_client = FakeSearchHfClient([_summary()])
+    await search_generation_models(q="", hf_client=hf_client)
+    assert hf_client.calls[0]["query"] == ""
+    assert hf_client.calls[0]["sort"] == "downloads"
+
+
+@pytest.mark.asyncio
+async def test_search_with_query_does_not_force_a_sort() -> None:
+    from app.api.routes import search_generation_models
+
+    hf_client = FakeSearchHfClient([_summary()])
+    await search_generation_models(q="sdxl", hf_client=hf_client)
+    assert hf_client.calls[0]["query"] == "sdxl"
+    assert hf_client.calls[0]["sort"] is None
+
+
+@pytest.mark.asyncio
+async def test_search_results_carry_compat_and_precisions() -> None:
+    from app.api.routes import search_generation_models
+
+    response = await search_generation_models(
+        q="x", hf_client=FakeSearchHfClient([_summary()])
+    )
+    [result] = response.results
+    assert result.compat == "needs_conversion"
+    assert result.compat_reason
+    assert result.available_precisions == ["fp16", "fp32"]
+
+
+@pytest.mark.asyncio
+async def test_gated_result_reports_gated_compat() -> None:
+    from app.api.routes import search_generation_models
+
+    response = await search_generation_models(
+        q="x", hf_client=FakeSearchHfClient([_summary(gated="auto")])
+    )
+    assert response.results[0].compat == "gated"
+    assert response.results[0].available_precisions == []
+
+
+@pytest.mark.asyncio
+async def test_ready_onnx_result_offers_no_precision_choice() -> None:
+    from app.api.routes import search_generation_models
+
+    onnx_only = _summary(
+        filenames=(
+            "model_index.json",
+            "unet/model.onnx",
+            "unet/diffusion_pytorch_model.safetensors",
+        )
+    )
+    response = await search_generation_models(
+        q="x", hf_client=FakeSearchHfClient([onnx_only])
+    )
+    assert response.results[0].compat == "ready_onnx"
+    assert response.results[0].available_precisions == []
+
+
+@pytest.mark.asyncio
+async def test_incompatible_result_when_model_index_missing() -> None:
+    from app.api.routes import search_generation_models
+
+    response = await search_generation_models(
+        q="x", hf_client=FakeSearchHfClient([_summary(filenames=("config.json",))])
+    )
+    assert response.results[0].compat == "incompatible"
+
+
+@pytest.mark.asyncio
+async def test_search_response_serializes_camel_case() -> None:
+    from app.api.routes import search_generation_models
+
+    response = await search_generation_models(
+        q="x", hf_client=FakeSearchHfClient([_summary()])
+    )
+    dumped = response.model_dump(by_alias=True)["results"][0]
+    assert "availablePrecisions" in dumped
+    assert "compatReason" in dumped
+
+
+def test_lifespan_exposes_resource_probes_for_preflight() -> None:
+    # El pre-flight necesita medir VRAM libre por dispositivo, y reusa las
+    # MISMAS sondas que gatean la admision de jobs.
+    with TestClient(app):
+        probes = app.state.resource_probes
+        assert set(probes) == {"gpu", "cpu"}
+        for probe in probes.values():
+            assert hasattr(probe, "free_capacity_mb")

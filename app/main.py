@@ -178,6 +178,9 @@ async def lifespan(app: FastAPI):
     app.state.onnx_engine = onnx_engine
     app.state.onnx_video_engine = onnx_video_engine
     app.state.devices_service = devices_service
+    # Las MISMAS instancias que gatean la admision de jobs, reusadas por el
+    # pre-flight de modelos de generacion -- no se construyen sondas aparte.
+    app.state.resource_probes = resource_probes
     app.state.capability_probe = capability_probe
     app.state.onnx_cpu_fallback_probe = onnx_cpu_fallback_probe
     app.state.job_manager = job_manager

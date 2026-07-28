@@ -208,16 +208,57 @@ class HfModelSearchResultResponse(BaseModel):
     downloads: int
     likes: int
     tags: list[str]
+    # Compatibilidad DETECTADA de la metadata en vivo (siblings + gated, que ya
+    # vienen en la respuesta de busqueda con full=true): cero requests extra por
+    # resultado. Vacios en el camino de upscalers, que no los calcula.
+    compat: str | None = None
+    compat_reason: str | None = Field(default=None, serialization_alias="compatReason")
+    available_precisions: list[str] = Field(
+        default_factory=list, serialization_alias="availablePrecisions"
+    )
 
 
 class ModelSearchResponse(BaseModel):
     results: list[HfModelSearchResultResponse]
 
 
+class PrecisionCostResponse(BaseModel):
+    precision: str
+    download_bytes: int = Field(serialization_alias="downloadBytes")
+    estimated_peak_bytes: int = Field(serialization_alias="estimatedPeakBytes")
+
+
+class DeviceCapacityResponse(BaseModel):
+    id: str
+    name: str
+    kind: str
+    # null = no se pudo medir. Nunca 0: el frontend no avisa de lo que no sabe.
+    free_vram_bytes: int | None = Field(default=None, serialization_alias="freeVramBytes")
+
+
+class DiskCapacityResponse(BaseModel):
+    target_path: str = Field(serialization_alias="targetPath")
+    free_bytes: int = Field(serialization_alias="freeBytes")
+
+
+class PreflightResponse(BaseModel):
+    repo_id: str = Field(serialization_alias="repoId")
+    compat: str | None = None
+    compat_reason: str | None = Field(default=None, serialization_alias="compatReason")
+    degraded: bool
+    reference_width: int = Field(serialization_alias="referenceWidth")
+    reference_height: int = Field(serialization_alias="referenceHeight")
+    precisions: list[PrecisionCostResponse]
+    devices: list[DeviceCapacityResponse]
+    disk: DiskCapacityResponse | None = None
+
+
 class InstallModelRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     repo_id: str = Field(alias="repoId")
+    # Solo la usa el camino de generacion; el de upscalers la ignora.
+    precision: str | None = None
 
 
 class CreateInstallResponse(BaseModel):
