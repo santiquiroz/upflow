@@ -327,3 +327,19 @@ def test_devices_endpoint_wired_through_app_state(monkeypatch: pytest.MonkeyPatc
     assert data["defaultDeviceId"] == "dml:0"
     assert {device["id"] for device in data["devices"]} == {"cpu", "dml:0"}
     assert data["devices"][1]["backend"] == "directml"
+
+
+# ---------------------------------------------------------------------------
+# _query_adapter_free_vram_mb() - live VRAM via IDXGIAdapter3
+# ---------------------------------------------------------------------------
+
+
+def test_query_adapter_free_vram_mb_fails_open_when_dxgi_query_raises_oserror(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def raise_oserror(adapter_index: int) -> int | None:
+        raise OSError("simulated DXGI failure")
+
+    monkeypatch.setattr(devices_service, "_query_adapter_free_vram_mb_dxgi", raise_oserror)
+
+    assert devices_service._query_adapter_free_vram_mb(0) is None

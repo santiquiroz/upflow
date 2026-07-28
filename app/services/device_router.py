@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.devices_service import DeviceInfo
 from app.services.model_registry import ModelKind
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # SP7 Task 2 - the optional "auto" device router.
@@ -111,6 +115,13 @@ class DeviceRouter:
     real `condition.wait()`, woken by a permit release, not a spin. The
     reserved permit is always released in `acquire_auto`'s `finally` (and if
     cancelled while waiting, nothing was reserved, so nothing leaks).
+
+    Admission also consults `DeviceSemaphores.has_capacity` (job-count AND,
+    if a probe applies, real free VRAM/RAM -- see that class's docstring),
+    so the wait is bounded the same way `DeviceSemaphores.acquire()` bounds
+    its own wait: an external process freeing VRAM/RAM never calls this
+    app's notify_all(), so the loop re-checks on a timeout, not only on
+    `condition.notify_all()`.
     """
 
     def __init__(self, device_semaphores: DeviceSemaphores) -> None:
@@ -133,13 +144,28 @@ class DeviceRouter:
         semaphores = self._device_semaphores
         condition = semaphores.release_condition
         async with condition:
+            logged_wait = False
             while True:
-                free = [device for device in compatible if semaphores.free_capacity(device["id"]) > 0]
+                free = [device for device in compatible if semaphores.has_capacity(device["id"])]
                 if free:
                     device_id = pick_least_loaded_device(free, semaphores)
                     semaphores.reserve(device_id)
                     return device_id
-                # Every compatible device is saturated: release the lock and
-                # sleep until SOME permit frees, then re-select (the freed
-                # device might be any compatible one, not one we pre-chose).
-                await condition.wait()
+                if not logged_wait:
+                    logger.info(
+                        "auto-router: waiting for capacity across %d compatible device(s)", len(compatible)
+                    )
+                    logged_wait = True
+                # Every compatible device is saturated (by job-count or by
+                # resource threshold): release the lock and sleep until SOME
+                # permit frees, then re-select (the freed device might be any
+                # compatible one, not one we pre-chose). Bounded the same way
+                # DeviceSemaphores.acquire() bounds its wait: VRAM/RAM freed
+                # by a process outside this app never calls our notify_all(),
+                # so re-check on a timeout too, not only on notify.
+                try:
+                    await asyncio.wait_for(
+                        condition.wait(), timeout=semaphores.resource_poll_interval_seconds
+                    )
+                except TimeoutError:
+                    pass

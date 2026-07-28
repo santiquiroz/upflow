@@ -258,3 +258,107 @@ async def test_auto_pick_takes_the_device_that_frees_first_not_a_stale_pick(tmp_
 
     assert auto_device == "dml:1", "auto must take the device that freed first (dml:1), not a stale dml:0 pick"
     assert auto_acquired_at < dml0_released_at, "auto must not wait for the busy dml:0 to free"
+
+
+# ---------------------------------------------------------------------------
+# DeviceRouter.acquire_auto -- resource-gated admission (subproyecto B fix
+# wave: the auto-router used to filter on raw free_capacity() only, so it
+# could route to a device with a free job slot but not enough VRAM/RAM, and
+# its wait loop never re-checked resource state that clears externally).
+# ---------------------------------------------------------------------------
+
+
+class DeviceKeyedProbe:
+    """Returns a fixed value per device_id -- lets a test make ONE compatible
+    device resource-starved while a DIFFERENT compatible device has plenty.
+    A single constant probe (as in test_device_semaphores.py) can't express
+    that, since it starves every device of that kind identically."""
+
+    def __init__(self, values: dict[str, int | None]) -> None:
+        self._values = values
+
+    def free_capacity_mb(self, device_id: str) -> int | None:
+        return self._values.get(device_id)
+
+
+class SequenceProbe:
+    """Returns each value in `values` in order, repeating the last one once
+    exhausted -- simulates external VRAM pressure resolving over time
+    without any job of ours ever calling release(). Mirrors the identically
+    named helper in tests/test_device_semaphores.py; `calls` is public so
+    tests can assert the poll loop actually re-checked more than once."""
+
+    def __init__(self, values: list[int | None]) -> None:
+        self._values = values
+        self.calls = 0
+
+    def free_capacity_mb(self, device_id: str) -> int | None:
+        value = self._values[min(self.calls, len(self._values) - 1)]
+        self.calls += 1
+        return value
+
+
+async def test_auto_pick_skips_a_device_with_job_slots_but_insufficient_vram(tmp_path: Path) -> None:
+    """dml:0 has a free job slot but not enough VRAM; dml:1 has both. The old
+    free_capacity()-only filter would consider dml:0 "free" and the
+    lowest-id tie-break would route there anyway -- this is the regression
+    guard for gating the filter on has_capacity() instead.
+    """
+    settings = make_settings(tmp_path, PER_DEVICE_GPU_CONCURRENCY=1, MIN_FREE_VRAM_MB=1024)
+    probe = DeviceKeyedProbe({"dml:0": 256, "dml:1": 2048})
+    semaphores = DeviceSemaphores(settings, resource_probes={"gpu": probe})
+    router = DeviceRouter(semaphores)
+
+    async def auto_pick() -> str:
+        async with router.acquire_auto([GPU0, GPU1], ModelKind.builtin_ncnn) as device_id:
+            return device_id
+
+    picked = await asyncio.wait_for(auto_pick(), timeout=0.5)
+
+    assert picked == "dml:1", "dml:0 has a free job slot but insufficient VRAM; must route to dml:1 instead"
+
+
+async def test_auto_pick_waits_when_the_only_compatible_device_is_resource_starved(
+    tmp_path: Path,
+) -> None:
+    """No alternate device exists: the auto-router must block (not admit,
+    not raise) while the sole compatible device stays under the VRAM floor."""
+    settings = make_settings(
+        tmp_path, PER_DEVICE_GPU_CONCURRENCY=1, MIN_FREE_VRAM_MB=1024,
+        RESOURCE_POLL_INTERVAL_SECONDS=0.05,
+    )
+    semaphores = DeviceSemaphores(settings, resource_probes={"gpu": DeviceKeyedProbe({"dml:0": 256})})
+    router = DeviceRouter(semaphores)
+
+    async def auto_pick() -> None:
+        async with router.acquire_auto([GPU0], ModelKind.builtin_ncnn):
+            pass  # pragma: no cover - must never be admitted within the timeout
+
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(auto_pick(), timeout=0.3)
+
+
+async def test_auto_pick_admits_once_external_vram_pressure_clears_via_poll(tmp_path: Path) -> None:
+    """The periodic-poll path this fix adds to _reserve_least_loaded: dml:0
+    keeps a free job slot the whole time but starts under the VRAM floor and
+    only clears it a few probe calls later. No job of ours ever calls
+    release() here, so admission can only come from the bounded
+    condition.wait() timeout re-checking has_capacity() -- never from
+    notify_all(), which this test never triggers.
+    """
+    settings = make_settings(
+        tmp_path, PER_DEVICE_GPU_CONCURRENCY=1, MIN_FREE_VRAM_MB=1024,
+        RESOURCE_POLL_INTERVAL_SECONDS=0.05,
+    )
+    probe = SequenceProbe([256, 256, 256, 2048])
+    semaphores = DeviceSemaphores(settings, resource_probes={"gpu": probe})
+    router = DeviceRouter(semaphores)
+
+    async def acquire_and_check() -> None:
+        async with router.acquire_auto([GPU0], ModelKind.builtin_ncnn) as device_id:
+            assert device_id == "dml:0"
+            assert semaphores.in_flight("dml:0") == 1
+
+    await asyncio.wait_for(acquire_and_check(), timeout=1.0)
+
+    assert probe.calls >= 4, "admission must come from repeated polling, not a single lucky check"

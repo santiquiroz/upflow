@@ -155,3 +155,122 @@ async def test_cpu_device_id_constant_matches_devices_service(tmp_path: Path) ->
         async with semaphores.acquire(CPU_DEVICE_ID):
             async with semaphores.acquire(CPU_DEVICE_ID):
                 assert semaphores.in_flight(CPU_DEVICE_ID) == 3, "cpu concurrency must use CPU_CONCURRENCY, not GPU"
+
+
+@pytest.mark.parametrize("field_alias", ["MIN_FREE_VRAM_MB", "MIN_FREE_RAM_MB"])
+def test_min_free_mb_settings_reject_negative_values(tmp_path: Path, field_alias: str) -> None:
+    with pytest.raises(ValidationError):
+        make_settings(tmp_path, **{field_alias: -1})
+
+
+def test_min_free_mb_settings_accept_zero_as_no_floor(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path, MIN_FREE_VRAM_MB=0, MIN_FREE_RAM_MB=0)
+
+    assert settings.min_free_vram_mb == 0
+    assert settings.min_free_ram_mb == 0
+
+
+def test_min_free_mb_settings_have_documented_defaults(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+
+    assert settings.min_free_vram_mb == 768
+    assert settings.min_free_ram_mb == 1024
+
+
+def test_resource_poll_interval_rejects_non_positive_values(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError):
+        make_settings(tmp_path, RESOURCE_POLL_INTERVAL_SECONDS=0)
+
+
+def test_resource_poll_interval_default(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+
+    assert settings.resource_poll_interval_seconds == 5.0
+
+
+class ConstantProbe:
+    def __init__(self, value: int | None) -> None:
+        self._value = value
+
+    def free_capacity_mb(self, device_id: str) -> int | None:
+        return self._value
+
+
+class SequenceProbe:
+    """Returns each value in `values` in order, repeating the last one once
+    exhausted -- simulates external pressure resolving over time without any
+    job of ours ever calling release()."""
+
+    def __init__(self, values: list[int | None]) -> None:
+        self._values = values
+        self._calls = 0
+
+    def free_capacity_mb(self, device_id: str) -> int | None:
+        value = self._values[min(self._calls, len(self._values) - 1)]
+        self._calls += 1
+        return value
+
+
+async def test_acquire_waits_when_capacity_ok_but_vram_below_threshold(tmp_path: Path) -> None:
+    settings = make_settings(
+        tmp_path, PER_DEVICE_GPU_CONCURRENCY=2, MIN_FREE_VRAM_MB=1024,
+        RESOURCE_POLL_INTERVAL_SECONDS=0.05,
+    )
+    semaphores = DeviceSemaphores(settings, resource_probes={"gpu": ConstantProbe(512)})
+
+    async def try_acquire() -> None:
+        async with semaphores.acquire("dml:0"):
+            pass
+
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(try_acquire(), timeout=0.3)
+
+
+async def test_acquire_admits_once_external_vram_pressure_clears(tmp_path: Path) -> None:
+    settings = make_settings(
+        tmp_path, PER_DEVICE_GPU_CONCURRENCY=2, MIN_FREE_VRAM_MB=1024,
+        RESOURCE_POLL_INTERVAL_SECONDS=0.05,
+    )
+    probe = SequenceProbe([256, 256, 256, 2048])
+    semaphores = DeviceSemaphores(settings, resource_probes={"gpu": probe})
+
+    async def acquire_and_check() -> None:
+        async with semaphores.acquire("dml:0"):
+            assert semaphores.in_flight("dml:0") == 1
+
+    await asyncio.wait_for(acquire_and_check(), timeout=1.0)
+
+
+async def test_acquire_ignores_resource_probes_for_devices_outside_their_kind(
+    tmp_path: Path,
+) -> None:
+    settings = make_settings(tmp_path, PER_DEVICE_GPU_CONCURRENCY=1, MIN_FREE_VRAM_MB=999_999)
+    semaphores = DeviceSemaphores(settings, resource_probes={"gpu": ConstantProbe(0)})
+
+    async def acquire_and_check() -> None:
+        async with semaphores.acquire("cpu"):
+            assert semaphores.in_flight("cpu") == 1
+
+    await asyncio.wait_for(acquire_and_check(), timeout=0.5)
+
+
+async def test_acquire_behavior_unchanged_when_no_resource_probes_injected(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path, PER_DEVICE_GPU_CONCURRENCY=1)
+    semaphores = DeviceSemaphores(settings)
+
+    async def acquire_and_check() -> None:
+        async with semaphores.acquire("dml:0"):
+            assert semaphores.in_flight("dml:0") == 1
+
+    await asyncio.wait_for(acquire_and_check(), timeout=0.5)
+
+
+async def test_acquire_treats_probe_none_as_fail_open(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path, PER_DEVICE_GPU_CONCURRENCY=1, MIN_FREE_VRAM_MB=999_999)
+    semaphores = DeviceSemaphores(settings, resource_probes={"gpu": ConstantProbe(None)})
+
+    async def acquire_and_check() -> None:
+        async with semaphores.acquire("dml:0"):
+            assert semaphores.in_flight("dml:0") == 1
+
+    await asyncio.wait_for(acquire_and_check(), timeout=0.5)

@@ -178,6 +178,119 @@ def _enumerate_dxgi_adapter_names() -> list[str]:
         _release_com(factory_ptr, _IDXGIFACTORY1_VTABLE_SIZE)
 
 
+DXGI_MEMORY_SEGMENT_GROUP_LOCAL = 0
+_IID_IDXGI_ADAPTER3 = _Guid(
+    0x645967A4, 0x1392, 0x4310, (ctypes.c_ubyte * 8)(0xA7, 0x98, 0x80, 0x53, 0xCE, 0x3E, 0x93, 0xFD)
+)
+
+# IDXGIAdapter3 vtable = IUnknown(3) + IDXGIObject(4: SetPrivateData,
+# SetPrivateDataInterface, GetPrivateData, GetParent) + IDXGIAdapter(3:
+# EnumOutputs, GetDesc, CheckInterfaceSupport) + IDXGIAdapter1(1: GetDesc1)
+# + IDXGIAdapter2(1: GetDesc2) + IDXGIAdapter3-new(6: RegisterHardware...,
+# UnregisterHardware..., QueryVideoMemoryInfo, SetVideoMemoryReservation,
+# RegisterVideoMemoryBudgetChangeNotificationEvent,
+# UnregisterVideoMemoryBudgetChangeNotification) = 18 slots, 0-indexed.
+_IDXGIADAPTER3_VTABLE_SIZE = 18
+_QUERY_INTERFACE_VTABLE_INDEX = 0
+_QUERY_VIDEO_MEMORY_INFO_VTABLE_INDEX = 14
+
+
+class _DxgiQueryVideoMemoryInfo(ctypes.Structure):
+    _fields_ = [
+        ("Budget", ctypes.c_uint64),
+        ("CurrentUsage", ctypes.c_uint64),
+        ("AvailableForReservation", ctypes.c_uint64),
+        ("CurrentReservation", ctypes.c_uint64),
+    ]
+
+
+_QueryInterfaceProto = ctypes.WINFUNCTYPE(
+    ctypes.c_long, ctypes.c_void_p, ctypes.POINTER(_Guid), ctypes.POINTER(ctypes.c_void_p)
+)
+_QueryVideoMemoryInfoProto = ctypes.WINFUNCTYPE(
+    ctypes.c_long, ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32,
+    ctypes.POINTER(_DxgiQueryVideoMemoryInfo),
+)
+
+
+def _hardware_adapter_ptr_by_index(
+    factory_ptr: ctypes.c_void_p, enum_adapters1, target_index: int
+) -> ctypes.c_void_p | None:
+    """Same hardware-only, hybrid-not-deduped enumeration order as
+    _iter_hardware_adapter_names / _enumerate_gpu_devices (dml:N == the Nth
+    hardware adapter found, never renumbered). Caller owns (must Release)
+    the returned pointer; every skipped adapter is Released here."""
+    hardware_index = 0
+    index = 0
+    while True:
+        adapter_ptr = _next_adapter(factory_ptr, enum_adapters1, index)
+        if adapter_ptr is None:
+            return None
+        index += 1
+        name = _hardware_adapter_name(adapter_ptr)
+        if name is None:
+            _release_com(adapter_ptr, _IDXGIADAPTER1_VTABLE_SIZE)
+            continue
+        if hardware_index == target_index:
+            return adapter_ptr
+        hardware_index += 1
+        _release_com(adapter_ptr, _IDXGIADAPTER1_VTABLE_SIZE)
+
+
+def _query_video_memory_info_mb(adapter1_ptr: ctypes.c_void_p) -> int | None:
+    adapter1_vtable = _com_vtable(adapter1_ptr.value, _IDXGIADAPTER1_VTABLE_SIZE)
+    query_interface = _QueryInterfaceProto(adapter1_vtable[_QUERY_INTERFACE_VTABLE_INDEX])
+    adapter3_ptr = ctypes.c_void_p()
+    result = query_interface(adapter1_ptr, byref(_IID_IDXGI_ADAPTER3), byref(adapter3_ptr))
+    if result != 0 or not adapter3_ptr.value:
+        return None
+    try:
+        adapter3_vtable = _com_vtable(adapter3_ptr.value, _IDXGIADAPTER3_VTABLE_SIZE)
+        query_video_memory_info = _QueryVideoMemoryInfoProto(
+            adapter3_vtable[_QUERY_VIDEO_MEMORY_INFO_VTABLE_INDEX]
+        )
+        info = _DxgiQueryVideoMemoryInfo()
+        result = query_video_memory_info(adapter3_ptr, 0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, byref(info))
+        if result != 0:
+            return None
+        # Budget can transiently dip below CurrentUsage under real pressure
+        # (documented DXGI behavior) -- clamp instead of returning negative.
+        free_bytes = max(0, info.Budget - info.CurrentUsage)
+        return int(free_bytes // (1024 * 1024))
+    finally:
+        _release_com(adapter3_ptr, _IDXGIADAPTER3_VTABLE_SIZE)
+
+
+def _query_adapter_free_vram_mb_dxgi(adapter_index: int) -> int | None:
+    factory_ptr = _create_dxgi_factory1()
+    try:
+        factory_vtable = _com_vtable(factory_ptr.value, _IDXGIFACTORY1_VTABLE_SIZE)
+        enum_adapters1 = _EnumAdapters1Proto(factory_vtable[_ENUM_ADAPTERS1_VTABLE_INDEX])
+        adapter1_ptr = _hardware_adapter_ptr_by_index(factory_ptr, enum_adapters1, adapter_index)
+        if adapter1_ptr is None:
+            return None
+        try:
+            return _query_video_memory_info_mb(adapter1_ptr)
+        finally:
+            _release_com(adapter1_ptr, _IDXGIADAPTER1_VTABLE_SIZE)
+    finally:
+        _release_com(factory_ptr, _IDXGIFACTORY1_VTABLE_SIZE)
+
+
+def _query_adapter_free_vram_mb(adapter_index: int) -> int | None:
+    """Live free VRAM (Budget - CurrentUsage) in MB for the hardware adapter
+    at `adapter_index` (0-based, same order dml:N ids use). Never raises:
+    non-Windows, missing DXGI, unsupported IDXGIAdapter3, or any COM error
+    all fall back to None -- same never-raises contract as
+    _enumerate_gpu_adapter_names above."""
+    if sys.platform != "win32":
+        return None
+    try:
+        return _query_adapter_free_vram_mb_dxgi(adapter_index)
+    except Exception:  # noqa: BLE001 -- this is now on the job-admission hot path; a native-call failure must fail open, never raise
+        return None
+
+
 def _build_gpu_device(index: int, name: str) -> DeviceInfo:
     return {"id": f"dml:{index}", "kind": "gpu", "name": name or f"GPU {index}", "backend": "directml"}
 
