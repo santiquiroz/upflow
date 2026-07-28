@@ -183,6 +183,8 @@ Elegir precisión requiere **dos** cambios independientes, medidos por separado 
 
 Los dos mecanismos son necesarios y ninguno reemplaza al otro.
 
+**Alcance de la elección: solo el camino de conversión.** Un repo `ready_onnx` no tiene paso de export, así que no hay `dtype` que pasarle — su ONNX ya viene en la precisión que eligió quien lo publicó. Para esos repos el picker no se muestra y `availablePrecisions` viene vacío. Elegir entre variantes `.onnx` fp16/fp32 publicadas en el mismo repo queda fuera de alcance: es un caso poco frecuente y su mecanismo es otro (selección de archivo, sin export).
+
 ### Frontend
 
 | Archivo | Cambio |
