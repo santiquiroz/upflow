@@ -200,3 +200,113 @@ async def test_reference_resolution_is_echoed_and_scales_the_estimate(tmp_path: 
         at_1024.precisions[0].estimated_peak_bytes
         > at_512.precisions[0].estimated_peak_bytes
     )
+
+
+# ---------------------------------------------------------------------------
+# Casos que el smoke real contra Hugging Face (2026-07-28) expuso: los dos
+# repos mas interesantes colapsaban en degraded=True, tapando un veredicto que
+# el sistema SI conocia.
+# ---------------------------------------------------------------------------
+
+NO_INDEX_FILES = [
+    HfFile(path="config.json", size=512),
+    HfFile(path="weights.safetensors", size=900 * MB),
+]
+
+
+class AuthFailingHf:
+    """repo_files levanta HfAuthError, como hace la HfClient real con 401/403.
+    Caso real: black-forest-labs/FLUX.1-dev."""
+
+    async def repo_files(self, repo_id):
+        from app.exceptions import HfAuthError
+
+        raise HfAuthError("El repo requiere aceptar su licencia en Hugging Face.")
+
+    async def download(self, *args, **kwargs):  # pragma: no cover - no se llega
+        raise AssertionError("no deberia descargar nada si repo_files fallo")
+
+
+class IndexMissingHf:
+    """repo_files anda pero el repo no tiene model_index.json, asi que bajarlo
+    daria 404. Caso real: wikeeyang/Flux2-Klein-9B-True-V2."""
+
+    def __init__(self, files):
+        self._files = files
+
+    async def repo_files(self, repo_id):
+        return self._files
+
+    async def download(self, repo_id, filename, dest, progress_cb=None,
+                       max_bytes=None, unlimited=False):
+        raise RuntimeError("404 Not Found")
+
+
+@pytest.mark.asyncio
+async def test_gated_repo_reports_gated_not_degraded(tmp_path: Path) -> None:
+    # Un 401/403 es un VEREDICTO, no una falla de medicion: se sabe que el repo
+    # es gated y eso es lo accionable ("configurá tu token"), no "no se pudo
+    # evaluar".
+    report = await preflight(
+        hf_client=AuthFailingHf(),
+        devices_service=FakeDevices(DEVICES),
+        settings=make_settings(tmp_path),
+        probes={},
+        repo_id="black-forest-labs/FLUX.1-dev",
+    )
+    assert report.compat == "gated"
+    assert report.degraded is False
+    assert report.compat_reason
+    assert report.precisions == []
+
+
+@pytest.mark.asyncio
+async def test_repo_without_model_index_reports_incompatible_not_degraded(
+    tmp_path: Path,
+) -> None:
+    # Se clasifica ANTES de pedir model_index.json, justamente porque el repo
+    # incompatible es el que no lo tiene: pedirlo daria 404 y el reporte
+    # degradado taparia el veredicto.
+    report = await preflight(
+        hf_client=IndexMissingHf(NO_INDEX_FILES),
+        devices_service=FakeDevices(DEVICES),
+        settings=make_settings(tmp_path),
+        probes={},
+        repo_id="wikeeyang/Flux2-Klein-9B-True-V2",
+    )
+    assert report.compat == "incompatible"
+    assert report.degraded is False
+    assert report.precisions == []
+
+
+@pytest.mark.asyncio
+async def test_ready_onnx_repo_never_fetches_model_index(tmp_path: Path) -> None:
+    # No necesita `declared` porque no ofrece eleccion de precision. Si lo
+    # pidiera, el download del doble reventaria.
+    report = await preflight(
+        hf_client=IndexMissingHf(ONNX_FILES),
+        devices_service=FakeDevices(DEVICES),
+        settings=make_settings(tmp_path),
+        probes={},
+        repo_id="owner/name",
+    )
+    assert report.compat == "ready_onnx"
+    assert report.degraded is False
+
+
+@pytest.mark.asyncio
+async def test_index_read_failure_keeps_the_verdict_and_degrades_only_pricing(
+    tmp_path: Path,
+) -> None:
+    # Repo con model_index en el listado pero cuya descarga falla: el veredicto
+    # needs_conversion se conserva, solo se pierde el precio por precision.
+    report = await preflight(
+        hf_client=IndexMissingHf(FILES),
+        devices_service=FakeDevices(DEVICES),
+        settings=make_settings(tmp_path),
+        probes={},
+        repo_id="owner/name",
+    )
+    assert report.compat == "needs_conversion"
+    assert report.degraded is True
+    assert report.precisions == []

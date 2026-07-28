@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from app.exceptions import HfAuthError
 from app.services.generation_compat import CompatVerdict, classify
 from app.services.generation_variants import (
     MODEL_INDEX_FILENAME,
@@ -110,44 +111,59 @@ async def preflight(
     devices = _measure_devices(devices_service, probes)
     disk = _measure_disk(Path(settings.temp_path))
 
-    try:
-        files = await hf_client.repo_files(repo_id)
-        declared = await _read_declared(hf_client, repo_id)
-    except Exception:  # noqa: BLE001 - el pre-flight es diagnostico: nunca propaga
+    def build(
+        compat: CompatVerdict | None,
+        reason: str | None,
+        degraded: bool,
+        precisions: list[PrecisionCost] | None = None,
+    ) -> PreflightReport:
         return PreflightReport(
             repo_id=repo_id,
-            compat=None,
-            compat_reason=None,
-            degraded=True,
+            compat=compat,
+            compat_reason=reason,
+            degraded=degraded,
             reference_width=width,
             reference_height=height,
+            precisions=precisions or [],
             devices=devices,
             disk=disk,
         )
 
-    verdict, reason = classify(tuple(f.path for f in files), None)
-    costs: list[PrecisionCost] = []
-    # Un repo ready_onnx no tiene paso de export: su precision la fijo quien lo
-    # publico, asi que no se ofrece eleccion (ver el spec, alcance de B).
-    if verdict == "needs_conversion":
-        for precision in available_precisions(files):
-            total = sum(f.size for f in select_for_precision(files, declared, precision))
-            costs.append(
-                PrecisionCost(
-                    precision=precision,
-                    download_bytes=total,
-                    estimated_peak_bytes=estimate_peak_bytes(total, width, height),
-                )
-            )
+    try:
+        files = await hf_client.repo_files(repo_id)
+    except HfAuthError as exc:
+        # 401/403 es un VEREDICTO, no una falla de medicion: el repo es gated y
+        # eso es exactamente lo que hay que decirle al usuario. `classify` no
+        # puede detectarlo desde aca porque repo_files no devuelve el flag
+        # `gated` -- el error de auth ES la senal. Si el usuario tiene un token
+        # valido, repo_files funciona y el repo se clasifica por su contenido.
+        return build("gated", str(exc), False)
+    except Exception:  # noqa: BLE001 - el pre-flight es diagnostico: nunca propaga
+        return build(None, None, True)
 
-    return PreflightReport(
-        repo_id=repo_id,
-        compat=verdict,
-        compat_reason=reason,
-        degraded=False,
-        reference_width=width,
-        reference_height=height,
-        precisions=costs,
-        devices=devices,
-        disk=disk,
-    )
+    verdict, reason = classify(tuple(f.path for f in files), None)
+    # Clasificar ANTES de leer model_index.json: un repo `incompatible` es
+    # justamente el que no lo tiene, y pedirlo daria un 404 que degradaria el
+    # reporte y taparia el veredicto que ya conocemos. `ready_onnx` tampoco lo
+    # necesita: no ofrece eleccion de precision (ver el spec, alcance de B).
+    if verdict != "needs_conversion":
+        return build(verdict, reason, False)
+
+    try:
+        declared = await _read_declared(hf_client, repo_id)
+    except HfAuthError as exc:
+        return build("gated", str(exc), False)
+    except Exception:  # noqa: BLE001
+        # El veredicto se conserva: se sabe que necesita conversion, solo no se
+        # pudo poner precio a cada precision.
+        return build(verdict, reason, True)
+
+    costs = [
+        PrecisionCost(
+            precision=precision,
+            download_bytes=(total := sum(f.size for f in select_for_precision(files, declared, precision))),
+            estimated_peak_bytes=estimate_peak_bytes(total, width, height),
+        )
+        for precision in available_precisions(files)
+    ]
+    return build(verdict, reason, False, costs)
