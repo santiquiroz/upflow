@@ -20,6 +20,9 @@ const RESULT: HfModelSearchResultResponse = {
   downloads: 12000,
   likes: 42,
   tags: ["onnx"],
+  compat: null,
+  compatReason: null,
+  availablePrecisions: [],
 };
 
 function renderCard(result: HfModelSearchResultResponse = RESULT) {

@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.models import JobStatus
 from app.services.capability_probe import LeverStatus
+from app.services.generation_variants import Precision
 
 
 class CreateJobResponse(BaseModel):
@@ -258,7 +259,7 @@ class InstallModelRequest(BaseModel):
 
     repo_id: str = Field(alias="repoId")
     # Solo la usa el camino de generacion; el de upscalers la ignora.
-    precision: str | None = None
+    precision: Precision | None = None
 
 
 class CreateInstallResponse(BaseModel):

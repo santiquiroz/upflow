@@ -1,15 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import * as api from "../lib/api";
 import { apiGet, apiPostJson } from "../lib/api";
 import {
   convertGenerationModel,
   createGenerationJob,
   getConversionStatus,
   getGenerationJob,
+  installGenerationModel,
+  preflightGenerationModel,
+  searchGenerationModels,
 } from "./generation";
 
 vi.mock("../lib/api", () => ({
   apiGet: vi.fn(),
+  apiPost: vi.fn(),
   apiPostJson: vi.fn(),
 }));
 
@@ -116,5 +121,34 @@ describe("generation service", () => {
     await getConversionStatus("c1");
 
     expect(apiGet).toHaveBeenCalledWith("/generation/models/convert/c1");
+  });
+
+  it("searches with an empty query for the browse view", async () => {
+    const spy = vi.spyOn(api, "apiGet").mockResolvedValue({ results: [] });
+    await searchGenerationModels("");
+    expect(spy).toHaveBeenCalledWith("/generation/models/search?q=");
+  });
+
+  it("requests preflight with the reference resolution", async () => {
+    const spy = vi.spyOn(api, "apiGet").mockResolvedValue({});
+    await preflightGenerationModel("owner/name", 512, 512);
+    expect(spy).toHaveBeenCalledWith(
+      "/generation/models/preflight?repoId=owner%2Fname&width=512&height=512",
+    );
+  });
+
+  it("sends the chosen precision when installing", async () => {
+    const spy = vi.spyOn(api, "apiPostJson").mockResolvedValue({ installId: "1", statusUrl: "/x" });
+    await installGenerationModel("owner/name", "fp16");
+    expect(spy).toHaveBeenCalledWith("/generation/models", {
+      repoId: "owner/name",
+      precision: "fp16",
+    });
+  });
+
+  it("omits precision when none is chosen", async () => {
+    const spy = vi.spyOn(api, "apiPostJson").mockResolvedValue({ installId: "1", statusUrl: "/x" });
+    await installGenerationModel("owner/name");
+    expect(spy).toHaveBeenCalledWith("/generation/models", { repoId: "owner/name" });
   });
 });

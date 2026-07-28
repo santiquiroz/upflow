@@ -51,8 +51,8 @@ from app.schemas import (
     JobsListResponse,
     ModelResponse,
     ModelSearchResponse,
-    PreflightResponse,
     ModelsResponse,
+    PreflightResponse,
     SubtitleTrackResponse,
     SupportedModelResponse,
     UpdateCheckResponse,
@@ -70,8 +70,8 @@ from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
 from app.services.engines.generation_onnx import generation_dependencies_available
 from app.services.generation_converter import GenerationModelConverter
 from app.services.generation_installer import GenerationModelInstaller
-from app.services.generation_job_manager import GenerationJobManager
 from app.services.generation_compat import classify
+from app.services.generation_job_manager import GenerationJobManager
 from app.services.generation_preflight import preflight
 from app.services.generation_variants import available_precisions_from_names
 from app.services.hf_client import GENERATION_SEARCH_TASK_TAGS, HfClient
@@ -1207,7 +1207,10 @@ async def install_generation_model(
     installer: GenerationModelInstaller = Depends(get_generation_installer),
 ) -> CreateInstallResponse:
     try:
-        install_id = await installer.install_from_hf(payload.repo_id)
+        install_id = await installer.install_from_hf(
+            payload.repo_id,
+            precision=payload.precision or "fp16",
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return CreateInstallResponse(
@@ -1242,7 +1245,10 @@ async def convert_generation_model(
     converter: GenerationModelConverter = Depends(get_generation_converter),
 ) -> CreateConversionResponse:
     try:
-        conversion_id = await converter.convert_from_hf(payload.repo_id)
+        conversion_id = await converter.convert_from_hf(
+            payload.repo_id,
+            precision=payload.precision or "fp16",
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return CreateConversionResponse(

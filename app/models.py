@@ -4,8 +4,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
+
+if TYPE_CHECKING:
+    from app.services.generation_variants import Precision
 
 
 def utc_now() -> datetime:
@@ -165,6 +168,7 @@ class GenerationJob:
 @dataclass(slots=True)
 class ConversionJob:
     repo_id: str
+    precision: Precision = "fp16"
     id: str = field(default_factory=lambda: uuid4().hex)
     status: JobStatus = JobStatus.queued
     created_at: datetime = field(default_factory=utc_now)

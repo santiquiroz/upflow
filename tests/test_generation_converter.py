@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 from pathlib import Path
 
@@ -12,7 +13,6 @@ from app.services.device_semaphores import DeviceSemaphores
 from app.services.generation_converter import (
     GenerationModelConverter,
     _parse_submodel_line,
-    _select_conversion_files,
 )
 from app.services.generation_installer import (
     GenerationModelInstaller,
@@ -44,6 +44,19 @@ def _pytorch_repo_files() -> list[HfFile]:
         HfFile(path="unet/config.json", size=10),
         HfFile(path="vae/diffusion_pytorch_model.safetensors", size=500),
         HfFile(path="vae/config.json", size=10),
+    ]
+
+
+def _pytorch_repo_files_with_fp16() -> list[HfFile]:
+    return _pytorch_repo_files() + [
+        HfFile(
+            path="unet/diffusion_pytorch_model.fp16.safetensors",
+            size=500,
+        ),
+        HfFile(
+            path="vae/diffusion_pytorch_model.fp16.safetensors",
+            size=250,
+        ),
     ]
 
 
@@ -115,35 +128,16 @@ def test_parse_submodel_line_ignores_unrelated_output() -> None:
     assert _parse_submodel_line("Validating ONNX model unet/model.onnx") is None
 
 
-def test_select_conversion_files_keeps_torch_weights_in_declared_dirs() -> None:
-    files = _pytorch_repo_files() + [
-        HfFile(path="unet/duplicate.ckpt", size=999),
-        HfFile(path="undeclared/x.safetensors", size=999),
-    ]
-    kept = _select_conversion_files(files, ["unet", "vae"])
-    paths = {f.path for f in kept}
-    assert "unet/diffusion_pytorch_model.safetensors" in paths
-    assert "vae/config.json" in paths
-    assert "unet/duplicate.ckpt" not in paths
-    assert "undeclared/x.safetensors" not in paths
-    assert "model_index.json" not in paths
-
-
-def test_select_conversion_files_prefers_safetensors_over_bin_in_same_dir() -> None:
-    files = [
-        HfFile(path="unet/diffusion_pytorch_model.safetensors", size=1000),
-        HfFile(path="unet/diffusion_pytorch_model.bin", size=1000),
-    ]
-    kept = _select_conversion_files(files, ["unet"])
-    assert [f.path for f in kept] == [
-        "unet/diffusion_pytorch_model.safetensors"
-    ]
-
-
 EXPORTED_LOG: list[str] = []
 
 
-def fake_export_ok(src_dir: Path, out_dir: Path, on_component) -> list[str]:
+def fake_export_ok(
+    src_dir: Path,
+    out_dir: Path,
+    on_component,
+    dtype=None,
+    atol=None,
+) -> list[str]:
     assert (src_dir / "model_index.json").exists()
     (out_dir / "unet").mkdir(parents=True)
     (out_dir / "model_index.json").write_text(
@@ -176,7 +170,13 @@ def test_convert_happy_path_exports_and_promotes(tmp_path, monkeypatch) -> None:
 
 
 def test_convert_export_failure_leaves_no_orphans(tmp_path) -> None:
-    def failing_export(src_dir, out_dir, on_component):
+    def failing_export(
+        src_dir,
+        out_dir,
+        on_component,
+        dtype=None,
+        atol=None,
+    ):
         raise RuntimeError("export reventó a mitad del unet")
 
     converter, installer, settings, registry = make_converter(
@@ -212,3 +212,155 @@ def test_converted_result_goes_through_real_validation(
     assert job is not None
     assert job.status == JobStatus.failed
     assert registry.get(_generation_model_id("amd/sdxl-torch")) is None
+
+
+def test_conversion_maps_disk_full_to_actionable_error(tmp_path: Path) -> None:
+    converter, _installer, _settings, _registry = make_converter(
+        tmp_path,
+        export_fn=fake_export_ok,
+    )
+    disk_full = OSError(errno.ENOSPC, "No space left on device")
+    disk_full.filename = str(tmp_path / "unet" / "model.safetensors.part")
+    converter.hf_client.download_error = disk_full
+
+    job_id = convert_and_drain(converter, "amd/sdxl-torch")
+    job = converter.status(job_id)
+
+    assert job is not None
+    assert job.status == JobStatus.failed
+    assert "espacio" in (job.error or "").lower()
+
+
+def test_conversion_downloads_without_a_generation_ceiling(
+    tmp_path: Path,
+) -> None:
+    converter, _installer, _settings, _registry = make_converter(
+        tmp_path,
+        export_fn=fake_export_ok,
+    )
+
+    job_id = convert_and_drain(converter, "amd/sdxl-torch")
+    job = converter.status(job_id)
+
+    assert job is not None
+    assert job.status == JobStatus.completed
+    assert all(converter.hf_client.download_unlimited)
+
+
+def _recording_export(captured: dict[str, object]):
+    def fake_export(
+        src_dir,
+        out_dir,
+        on_component,
+        dtype=None,
+        atol=None,
+    ):
+        captured["dtype"] = dtype
+        captured["atol"] = atol
+        (out_dir / "model_index.json").write_text(
+            SOURCE_MODEL_INDEX,
+            encoding="utf-8",
+        )
+        for component in ("unet", "vae"):
+            (out_dir / component).mkdir(parents=True, exist_ok=True)
+            (out_dir / component / "model.onnx").write_bytes(b"onnx")
+        return ["unet", "vae"]
+
+    return fake_export
+
+
+async def test_fp16_weights_are_staged_under_the_canonical_name(
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+    converter, _installer, _settings, _registry = make_converter(
+        tmp_path,
+        _recording_export(captured),
+    )
+    converter.hf_client.files = _pytorch_repo_files_with_fp16()
+    staged: list[str] = []
+    original_download = converter.hf_client.download
+
+    async def recording_download(
+        repo_id,
+        filename,
+        dest,
+        progress_cb=None,
+        max_bytes=None,
+        unlimited=False,
+    ):
+        staged.append(dest.name)
+        return await original_download(
+            repo_id,
+            filename,
+            dest,
+            progress_cb,
+            max_bytes,
+            unlimited,
+        )
+
+    converter.hf_client.download = recording_download  # type: ignore[method-assign]
+
+    conversion_id = await converter.convert_from_hf(
+        "owner/name",
+        precision="fp16",
+    )
+    await converter._process_next()
+
+    assert converter.status(conversion_id).status is JobStatus.completed
+    assert "diffusion_pytorch_model.safetensors" in staged
+    assert not any(".fp16." in name for name in staged)
+
+
+async def test_export_receives_fp16_dtype_and_relaxed_atol(
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+    converter, *_ = make_converter(
+        tmp_path,
+        _recording_export(captured),
+    )
+    converter.hf_client.files = _pytorch_repo_files_with_fp16()
+
+    await converter.convert_from_hf("owner/name", precision="fp16")
+    await converter._process_next()
+
+    assert captured["dtype"] == "fp16"
+    assert captured["atol"] == pytest.approx(1e-2)
+
+
+async def test_fp32_export_passes_no_dtype_and_no_atol_override(
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+    converter, *_ = make_converter(
+        tmp_path,
+        _recording_export(captured),
+    )
+    converter.hf_client.files = _pytorch_repo_files_with_fp16()
+
+    await converter.convert_from_hf("owner/name", precision="fp32")
+    await converter._process_next()
+
+    assert captured["dtype"] is None
+    assert captured["atol"] is None
+
+
+async def test_precision_falls_back_when_repo_lacks_requested_variant(
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+    converter, *_ = make_converter(
+        tmp_path,
+        _recording_export(captured),
+    )
+    converter.hf_client.files = _pytorch_repo_files()
+
+    conversion_id = await converter.convert_from_hf(
+        "owner/name",
+        precision="fp16",
+    )
+    await converter._process_next()
+
+    assert converter.status(conversion_id).status is JobStatus.completed
+    assert captured["dtype"] is None

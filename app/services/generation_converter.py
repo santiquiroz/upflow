@@ -7,6 +7,7 @@ import re
 import shutil
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch as _patch
 
 from app.config import Settings
@@ -16,70 +17,33 @@ from app.services.generation_installer import (
     MODEL_INDEX_FILENAME,
     GenerationModelInstaller,
     _ensure_model_index_listed,
-    _ensure_size_cap,
     _generation_model_id,
     _read_declared_components,
     _safe_staging_dest,
+    map_disk_full,
 )
-from app.services.hf_client import HfClient, HfFile
+from app.services.generation_variants import (
+    CONVERSION_SKIP_SUFFIXES,
+    Precision,
+    available_precisions,
+    canonical_weight_name,
+    select_for_precision,
+)
+from app.services.hf_client import HfClient
 from app.services.model_installer import _validate_repo_id
 from app.services.progress import (
     advance_conversion_stage,
     complete_conversion_stages,
 )
 
-# La conversión descarga los pesos PyTorch que el installer normal EXCLUYE
-# (.safetensors/.bin son la fuente del export). .ckpt/.msgpack/.h5 siguen
-# fuera: son duplicados legacy de los mismos pesos. .onnx fuera: si el repo
-# ya trae ONNX no debería estar en este camino.
-CONVERSION_SKIP_SUFFIXES = (
-    ".ckpt",
-    ".msgpack",
-    ".h5",
-    ".onnx",
-    ".onnx_data",
-    ".pb",
-)
-SAFETENSORS_SUFFIX = ".safetensors"
-TORCH_BIN_SUFFIX = ".bin"
 _SUBMODEL_LINE = re.compile(
     r"^\*{5}\s+Exporting submodel (?P<index>\d+)/\d+:\s+"
     r"(?P<class_name>\S+)\s+\*{5}$"
 )
 
-
-def _select_conversion_files(
-    files: list[HfFile], declared: list[str]
-) -> list[HfFile]:
-    dirs_with_safetensors = {
-        hf_file.path.rsplit("/", 1)[0]
-        for hf_file in files
-        if "/" in hf_file.path
-        and hf_file.path.lower().endswith(SAFETENSORS_SUFFIX)
-    }
-    kept: list[HfFile] = []
-    for hf_file in files:
-        lowered = hf_file.path.lower()
-        if (
-            hf_file.path == MODEL_INDEX_FILENAME
-            or lowered.endswith(CONVERSION_SKIP_SUFFIXES)
-        ):
-            continue
-        if "/" not in hf_file.path:
-            if lowered.endswith((".json", ".txt")):
-                kept.append(hf_file)
-            continue
-        top_segment = hf_file.path.split("/", 1)[0]
-        if top_segment not in declared:
-            continue
-        parent = hf_file.path.rsplit("/", 1)[0]
-        if (
-            lowered.endswith(TORCH_BIN_SUFFIX)
-            and parent in dirs_with_safetensors
-        ):
-            continue
-        kept.append(hf_file)
-    return kept
+# Medido en el smoke del 2026-07-28: fp16 necesita una tolerancia mayor por
+# redondeo esperado. La validacion sigue activa; solo se relaja su atol.
+FP16_EXPORT_ATOL = 1e-2
 
 
 def _parse_submodel_line(line: str) -> str | None:
@@ -111,6 +75,8 @@ def _export_with_optimum(
     src_dir: Path,
     out_dir: Path,
     on_component: Callable[[str], None],
+    dtype: str | None = None,
+    atol: float | None = None,
 ) -> list[str]:
     # Imports perezosos: optimum (y su dependencia torch) nunca se cargan al
     # importar app.services.
@@ -122,6 +88,11 @@ def _export_with_optimum(
     optimum_logger = logging.getLogger("optimum")
     previous_verbosity = optimum_logging.get_verbosity()
     optimum_logger.addHandler(handler)
+    extra: dict[str, Any] = {}
+    if dtype is not None:
+        extra["dtype"] = dtype
+    if atol is not None:
+        extra["atol"] = atol
     try:
         optimum_logging.set_verbosity_info()
         # onnxruntime-directml no es detectado como "onnxruntime" por Optimum.
@@ -136,6 +107,7 @@ def _export_with_optimum(
                 str(out_dir),
                 task="text-to-image",
                 device="cpu",
+                **extra,
             )
     finally:
         optimum_logger.removeHandler(handler)
@@ -144,7 +116,13 @@ def _export_with_optimum(
 
 
 ExportFn = Callable[
-    [Path, Path, Callable[[str], None]],
+    [
+        Path,
+        Path,
+        Callable[[str], None],
+        str | None,
+        float | None,
+    ],
     list[str],
 ]
 
@@ -191,12 +169,16 @@ class GenerationModelConverter:
                 await self._worker_task
             self._worker_task = None
 
-    async def convert_from_hf(self, repo_id: str) -> str:
+    async def convert_from_hf(
+        self,
+        repo_id: str,
+        precision: Precision = "fp16",
+    ) -> str:
         available, reason = generation_dependencies_available()
         if not available:
             raise ValueError(reason or "Generation dependencies missing")
         validated = _validate_repo_id(repo_id)
-        job = ConversionJob(repo_id=validated)
+        job = ConversionJob(repo_id=validated, precision=precision)
         self._jobs[job.id] = job
         await self._queue.put(job)
         return job.id
@@ -225,6 +207,9 @@ class GenerationModelConverter:
         try:
             await self._convert_and_register(job)
             job.status = JobStatus.completed
+        except OSError as exc:
+            job.status = JobStatus.failed
+            job.error = map_disk_full(exc) or str(exc)
         except Exception as exc:  # noqa: BLE001 - el job reporta cualquier fallo
             job.status = JobStatus.failed
             job.error = str(exc)
@@ -242,9 +227,6 @@ class GenerationModelConverter:
                 shutil.rmtree(root, ignore_errors=True)
             root.mkdir(parents=True, exist_ok=True)
 
-        max_file_bytes = (
-            self.settings.max_generation_model_download_mb * 1024 * 1024
-        )
         component_keys: list[str] = []
         try:
             advance_conversion_stage(job, component_keys, "downloading")
@@ -252,22 +234,27 @@ class GenerationModelConverter:
                 job.repo_id,
                 MODEL_INDEX_FILENAME,
                 _safe_staging_dest(src_root, MODEL_INDEX_FILENAME),
-                max_bytes=max_file_bytes,
+                unlimited=True,
             )
             declared = _read_declared_components(src_root)
-            selected = _select_conversion_files(files, declared)
-            _ensure_size_cap(
-                selected,
-                self.settings.max_generation_model_download_mb,
+            offered = available_precisions(files)
+            precision: Precision = (
+                job.precision
+                if job.precision in offered
+                else (offered[0] if offered else "fp32")
             )
+            selected = select_for_precision(files, declared, precision)
             for hf_file in selected:
-                dest = _safe_staging_dest(src_root, hf_file.path)
+                dest = _safe_staging_dest(
+                    src_root,
+                    canonical_weight_name(hf_file.path),
+                )
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 await self.hf_client.download(
                     job.repo_id,
                     hf_file.path,
                     dest,
-                    max_bytes=max_file_bytes,
+                    unlimited=True,
                 )
 
             def on_component(name: str) -> None:
@@ -284,6 +271,8 @@ class GenerationModelConverter:
                 src_root,
                 out_root,
                 on_component,
+                "fp16" if precision == "fp16" else None,
+                FP16_EXPORT_ATOL if precision == "fp16" else None,
             )
             advance_conversion_stage(job, exported, "validating")
             size_bytes = sum(hf_file.size for hf_file in selected)

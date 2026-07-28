@@ -11,6 +11,7 @@ vi.mock("../../services/generation", async (importOriginal) => {
   return {
     ...actual,
     searchGenerationModels: vi.fn(),
+    preflightGenerationModel: vi.fn(),
     installGenerationModel: vi.fn(),
     getGenerationInstallStatus: vi.fn(),
     getConversionStatus: vi.fn(),
@@ -26,6 +27,9 @@ const SEARCH_RESULT: ModelSearchResponse = {
       downloads: 10,
       likes: 2,
       tags: [],
+      compat: "ready_onnx",
+      compatReason: "Pipeline ONNX listo",
+      availablePrecisions: [],
     },
   ],
 };
@@ -42,12 +46,27 @@ function renderSearch() {
 
 afterEach(() => {
   vi.mocked(generationService.searchGenerationModels).mockReset();
+  vi.mocked(generationService.preflightGenerationModel).mockReset();
   vi.mocked(generationService.installGenerationModel).mockReset();
   vi.mocked(generationService.getGenerationInstallStatus).mockReset();
   vi.mocked(generationService.getConversionStatus).mockReset();
 });
 
 describe("GenerationHfSearch", () => {
+  it("renders browse results for an empty query instead of the search banner", async () => {
+    vi.mocked(generationService.searchGenerationModels).mockResolvedValue(SEARCH_RESULT);
+
+    renderSearch();
+
+    await waitFor(() => expect(generationService.searchGenerationModels).toHaveBeenCalledWith(""));
+    expect(await screen.findByText("amd/sdxl-onnx")).toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        "Search Hugging Face for a Stable Diffusion (text-to-image) pipeline to install.",
+      ),
+    ).not.toBeInTheDocument();
+  });
+
   it("searches with the generation endpoint and displays results", async () => {
     vi.mocked(generationService.searchGenerationModels).mockResolvedValue(SEARCH_RESULT);
 

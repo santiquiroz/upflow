@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,7 @@ from app.services.generation_installer import (
     _generation_model_id,
     _patch_legacy_component_configs,
     _select_files,
+    map_disk_full,
 )
 from app.services.gpu_session_coordinator import GpuSessionCoordinator
 from app.services.hf_client import HfFile
@@ -47,9 +49,19 @@ class FakeHfClient(_BaseFakeHfClient):
     def __init__(self, files: list[HfFile], **kwargs: Any) -> None:
         super().__init__(files, **kwargs)
         self.download_bytes_by_path: dict[str, bytes] = {}
+        self.download_unlimited: list[bool] = []
 
-    async def download(self, repo_id, filename, dest, progress_cb=None, max_bytes=None):
+    async def download(
+        self,
+        repo_id,
+        filename,
+        dest,
+        progress_cb=None,
+        max_bytes=None,
+        unlimited=False,
+    ):
         self.download_calls.append((repo_id, filename, dest))
+        self.download_unlimited.append(unlimited)
         if self.download_error:
             raise self.download_error
         content = self.download_bytes_by_path.get(filename, b"onnx")
@@ -172,7 +184,11 @@ def test_install_routes_pytorch_only_repo_to_conversion(tmp_path: Path) -> None:
     installer, _registry, _settings, _hf = make_installer(tmp_path, files=files)
     enqueued: list[str] = []
 
-    async def fake_enqueue(repo_id: str) -> str:
+    async def fake_enqueue(
+        repo_id: str,
+        precision: str = "fp16",
+    ) -> str:
+        assert precision == "fp16"
         enqueued.append(repo_id)
         return "conv456"
 
@@ -183,6 +199,40 @@ def test_install_routes_pytorch_only_repo_to_conversion(tmp_path: Path) -> None:
     assert job.status == InstallStatus.converting
     assert job.conversion_id == "conv456"
     assert job.error is None
+
+
+async def test_install_passes_selected_precision_to_conversion(
+    tmp_path: Path,
+) -> None:
+    files = [
+        HfFile(path="model_index.json", size=100),
+        HfFile(
+            path="unet/diffusion_pytorch_model.safetensors",
+            size=1000,
+        ),
+    ]
+    installer, _registry, _settings, _hf = make_installer(
+        tmp_path,
+        files=files,
+    )
+    enqueued: list[tuple[str, str]] = []
+
+    async def fake_enqueue(repo_id: str, precision: str) -> str:
+        enqueued.append((repo_id, precision))
+        return "conv-fp32"
+
+    installer.enqueue_conversion = fake_enqueue
+    install_id = await installer.install_from_hf(
+        "amd/sdxl-torch",
+        precision="fp32",
+    )
+    await installer._process_next()
+
+    job = installer.status(install_id)
+    assert job is not None
+    assert job.status == InstallStatus.converting
+    assert job.conversion_id == "conv-fp32"
+    assert enqueued == [("amd/sdxl-torch", "fp32")]
 
 
 def test_install_pytorch_only_repo_without_converter_keeps_actionable_error(tmp_path: Path) -> None:
@@ -211,7 +261,11 @@ def test_install_mixed_repo_with_torch_only_component_routes_to_conversion(
     installer, _registry, _settings, _hf = make_installer(tmp_path, files=files)
     enqueued: list[str] = []
 
-    async def fake_enqueue(repo_id: str) -> str:
+    async def fake_enqueue(
+        repo_id: str,
+        precision: str = "fp16",
+    ) -> str:
+        assert precision == "fp16"
         enqueued.append(repo_id)
         return "conv-mixed"
 
@@ -239,7 +293,11 @@ def test_install_complete_onnx_repo_with_duplicate_torch_weights_does_not_conver
     )
     enqueued: list[str] = []
 
-    async def fake_enqueue(repo_id: str) -> str:
+    async def fake_enqueue(
+        repo_id: str,
+        precision: str = "fp16",
+    ) -> str:
+        assert precision == "fp16"
         enqueued.append(repo_id)
         return "should-not-convert"
 
@@ -262,7 +320,11 @@ def test_install_repo_with_onnx_files_never_routes_to_conversion(
     )
     called: list[str] = []
 
-    async def fake_enqueue(repo_id: str) -> str:
+    async def fake_enqueue(
+        repo_id: str,
+        precision: str = "fp16",
+    ) -> str:
+        assert precision == "fp16"
         called.append(repo_id)
         return "nope"
 
@@ -305,19 +367,31 @@ def test_install_rejects_repo_without_model_index(tmp_path: Path) -> None:
     assert registry.get("gen--someone--upscaler") is None
 
 
-def test_install_rejects_when_total_size_exceeds_cap(tmp_path: Path) -> None:
+def test_install_large_repo_has_no_generation_download_cap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     big = [
         HfFile(path="model_index.json", size=len(MODEL_INDEX)),
         HfFile(path="unet/model.onnx", size=9 * 1024 * 1024 * 1024),
     ]
     installer, _registry, _settings, hf = make_installer(tmp_path, files=big)
+    hf.download_bytes_by_path["model_index.json"] = json.dumps(
+        {
+            "_class_name": "OnnxStableDiffusionPipeline",
+            "unet": ["diffusers", "OnnxRuntimeModel"],
+        }
+    ).encode("utf-8")
+    monkeypatch.setattr(
+        installer,
+        "_create_validation_pipeline",
+        lambda pipeline_dir: FakeValidationPipeline(),
+    )
 
     job = install_and_drain(installer, "amd/sdxl-huge")
 
-    assert job.status == InstallStatus.error
-    # el cap se chequea DESPUES de bajar model_index.json (fase 1, KBs) pero
-    # ANTES de bajar cualquier peso:
-    assert [str(c) for c in hf.download_calls if "model_index" not in str(c)] == []
+    assert job.status == InstallStatus.installed
+    assert all(hf.download_unlimited)
 
 
 def test_install_cuda_only_model_fails_with_friendly_message(tmp_path: Path, monkeypatch) -> None:
@@ -560,3 +634,50 @@ def test_vendored_vae_configs_carry_scaling_factor() -> None:
         assert payload.get("scaling_factor") == 0.18215, (
             f"{component}/config.json sin scaling_factor correcto: {payload.get('scaling_factor')!r}"
         )
+
+
+def test_map_disk_full_returns_actionable_message_for_enospc(
+    tmp_path: Path,
+) -> None:
+    exc = OSError(errno.ENOSPC, "No space left on device")
+    exc.filename = str(tmp_path / "unet" / "model.safetensors")
+
+    message = map_disk_full(exc)
+
+    assert message is not None
+    assert "espacio" in message.lower()
+
+
+def test_map_disk_full_ignores_other_oserrors() -> None:
+    assert map_disk_full(OSError(errno.EACCES, "Permission denied")) is None
+
+
+def test_generation_settings_no_longer_expose_a_download_cap(
+    tmp_path: Path,
+) -> None:
+    assert not hasattr(
+        make_settings(tmp_path),
+        "max_generation_model_download_mb",
+    )
+
+
+def test_no_size_cap_remains_in_the_generation_paths() -> None:
+    from app.services import generation_converter, generation_installer
+
+    assert not hasattr(generation_installer, "_ensure_size_cap")
+    assert not hasattr(generation_converter, "_ensure_size_cap")
+
+
+def test_install_maps_disk_full_to_actionable_error(tmp_path: Path) -> None:
+    disk_full = OSError(errno.ENOSPC, "No space left on device")
+    disk_full.filename = str(tmp_path / "model_index.json.part")
+    installer, _registry, _settings, _hf = make_installer(
+        tmp_path,
+        files=PIPELINE_FILES,
+        download_error=disk_full,
+    )
+
+    job = install_and_drain(installer, "amd/sd15")
+
+    assert job.status == InstallStatus.error
+    assert "espacio" in (job.error or "").lower()

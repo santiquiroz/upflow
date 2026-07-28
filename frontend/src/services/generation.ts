@@ -6,6 +6,8 @@ import type {
   GenerationJob,
   InstallStatusResponse,
   ModelSearchResponse,
+  Precision,
+  PreflightResponse,
 } from "../lib/apiTypes";
 
 export interface CreateGenerationJobParams {
@@ -73,8 +75,22 @@ export function searchGenerationModels(query: string): Promise<ModelSearchRespon
   return apiGet<ModelSearchResponse>(`/generation/models/search?q=${encodeURIComponent(query)}`);
 }
 
-export function installGenerationModel(repoId: string): Promise<CreateInstallResponse> {
-  return apiPostJson<CreateInstallResponse>("/generation/models", { repoId });
+export function preflightGenerationModel(
+  repoId: string,
+  width = 512,
+  height = 512,
+): Promise<PreflightResponse> {
+  const params = new URLSearchParams({ repoId, width: String(width), height: String(height) });
+  return apiGet<PreflightResponse>(`/generation/models/preflight?${params}`);
+}
+
+export function installGenerationModel(
+  repoId: string,
+  precision?: Precision,
+): Promise<CreateInstallResponse> {
+  const body: Record<string, unknown> = { repoId };
+  if (precision) body.precision = precision;
+  return apiPostJson<CreateInstallResponse>("/generation/models", body);
 }
 
 export function getGenerationInstallStatus(installId: string): Promise<InstallStatusResponse> {

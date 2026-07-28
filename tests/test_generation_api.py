@@ -359,6 +359,7 @@ async def test_generation_capabilities_cpu_only_false_when_gpu_present(tmp_path:
 class FakeGenerationInstaller:
     def __init__(self) -> None:
         self.install_calls: list[str] = []
+        self.install_precisions: list[str] = []
         self.install_id = "install-123"
         self.install_error: Exception | None = None
         self._jobs: dict[str, InstallJob] = {}
@@ -366,8 +367,13 @@ class FakeGenerationInstaller:
     def seed_job(self, job: InstallJob) -> None:
         self._jobs[job.id] = job
 
-    async def install_from_hf(self, repo_id: str) -> str:
+    async def install_from_hf(
+        self,
+        repo_id: str,
+        precision: str = "fp16",
+    ) -> str:
         self.install_calls.append(repo_id)
+        self.install_precisions.append(precision)
         if self.install_error:
             raise self.install_error
         return self.install_id
@@ -379,6 +385,7 @@ class FakeGenerationInstaller:
 class FakeGenerationConverter:
     def __init__(self) -> None:
         self.convert_calls: list[str] = []
+        self.convert_precisions: list[str] = []
         self.conversion_id = "conv123"
         self.convert_error: Exception | None = None
         self._jobs: dict[str, ConversionJob] = {}
@@ -386,8 +393,13 @@ class FakeGenerationConverter:
     def seed_job(self, job: ConversionJob) -> None:
         self._jobs[job.id] = job
 
-    async def convert_from_hf(self, repo_id: str) -> str:
+    async def convert_from_hf(
+        self,
+        repo_id: str,
+        precision: str = "fp16",
+    ) -> str:
         self.convert_calls.append(repo_id)
+        self.convert_precisions.append(precision)
         if self.convert_error:
             raise self.convert_error
         return self.conversion_id
@@ -406,6 +418,22 @@ async def test_install_generation_model_returns_install_id_and_status_url() -> N
     assert installer.install_calls == ["amd/sd15"]
     assert response.install_id == "install-123"
     assert response.status_url == "/api/v1/generation/models/install/install-123"
+
+
+async def test_install_generation_model_passes_selected_precision() -> None:
+    from app.api.routes import install_generation_model
+
+    installer = FakeGenerationInstaller()
+
+    await install_generation_model(
+        payload=InstallModelRequest(
+            repo_id="amd/sd15",
+            precision="fp32",
+        ),
+        installer=installer,
+    )
+
+    assert installer.install_precisions == ["fp32"]
 
 
 async def test_install_generation_model_returns_400_for_invalid_repo_id() -> None:
@@ -524,6 +552,24 @@ def test_convert_endpoint_enqueues_conversion(client, monkeypatch) -> None:
         "statusUrl": "/api/v1/generation/models/convert/conv123",
     }
     assert converter.convert_calls == ["amd/sdxl-torch"]
+
+
+def test_convert_endpoint_passes_selected_precision(client, monkeypatch) -> None:
+    converter = FakeGenerationConverter()
+    monkeypatch.setattr(
+        app.state,
+        "generation_converter",
+        converter,
+        raising=False,
+    )
+
+    response = client.post(
+        "/api/v1/generation/models/convert",
+        json={"repoId": "amd/sdxl-torch", "precision": "fp32"},
+    )
+
+    assert response.status_code == 202
+    assert converter.convert_precisions == ["fp32"]
 
 
 def test_convert_endpoint_returns_400_for_invalid_repo_id(client, monkeypatch) -> None:

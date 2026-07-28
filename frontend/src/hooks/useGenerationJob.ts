@@ -6,6 +6,8 @@ import type {
   GenerationJob,
   JobStatus,
   ModelSearchResponse,
+  Precision,
+  PreflightResponse,
 } from "../lib/apiTypes";
 import { isTerminalInstallStatus } from "../lib/installStatus";
 import { isTerminalJobStatus } from "../lib/jobStatus";
@@ -18,6 +20,7 @@ import {
   getGenerationInstallStatus,
   getGenerationJob,
   installGenerationModel,
+  preflightGenerationModel,
   searchGenerationModels,
   type CreateGenerationJobParams,
 } from "../services/generation";
@@ -153,7 +156,15 @@ export function useGenerationHfSearchResults(query: string) {
   return useQuery<ModelSearchResponse>({
     queryKey: ["generation-hf-search", trimmed],
     queryFn: () => searchGenerationModels(trimmed),
-    enabled: trimmed.length > 0,
+  });
+}
+
+export function useGenerationModelPreflight(repoId: string, enabled: boolean) {
+  return useQuery<PreflightResponse>({
+    queryKey: ["generation-model-preflight", repoId],
+    queryFn: () => preflightGenerationModel(repoId),
+    enabled,
+    staleTime: 5 * 60 * 1000,
   });
 }
 
@@ -163,7 +174,7 @@ export interface UseGenerationModelInstallResult {
   stageLabel: string | null;
   errorMessage: string | null;
   modelId: string | null;
-  install: (repoId: string) => void;
+  install: (repoId: string, precision?: Precision) => void;
   reset: () => void;
 }
 
@@ -211,7 +222,8 @@ export function useGenerationModelInstall(
   const queryClient = useQueryClient();
 
   const startMutation = useMutation({
-    mutationFn: installGenerationModel,
+    mutationFn: ({ repoId, precision }: { repoId: string; precision?: Precision }) =>
+      installGenerationModel(repoId, precision),
     onSuccess: (data) => setInstallId(data.installId),
   });
 
@@ -253,9 +265,9 @@ export function useGenerationModelInstall(
     }
   }, [installedModelId, queryClient]);
 
-  function install(repoId: string): void {
+  function install(repoId: string, precision?: Precision): void {
     setInstallId(null);
-    startMutation.mutate(repoId);
+    startMutation.mutate({ repoId, precision });
   }
 
   function reset(): void {

@@ -589,11 +589,6 @@ def test_download_accepts_https_huggingface_host() -> None:
     _validate_https_huggingface_host("https://huggingface.co/org/repo/resolve/main/model.onnx")
 
 
-def test_settings_generation_download_cap_defaults_to_8192(tmp_path: Path) -> None:
-    settings = make_settings(tmp_path)
-    assert settings.max_generation_model_download_mb == 8192
-
-
 @pytest.mark.anyio
 async def test_download_honors_max_bytes_override(tmp_path: Path) -> None:
     # max_model_download_mb is generous (10 MB), but max_bytes override is small (1 KB).
@@ -609,3 +604,125 @@ async def test_download_honors_max_bytes_override(tmp_path: Path) -> None:
 
     with pytest.raises(HfDownloadTooLargeError):
         await client.download("owner/name", "file.onnx", dest, max_bytes=1024)
+
+
+async def test_search_with_empty_query_omits_search_param_and_sorts_by_downloads(
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        return httpx.Response(200, json=[])
+
+    client = HfClient(make_settings(tmp_path), transport=transport_for(handler))
+    await client.search("", task_tags=("text-to-image",), sort="downloads")
+
+    url = str(captured["url"])
+    assert "search=" not in url
+    assert "sort=downloads" in url
+    assert "direction=-1" in url
+    assert "filter=text-to-image" in url
+
+
+async def test_search_with_query_still_sends_search_param(tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        return httpx.Response(200, json=[])
+
+    client = HfClient(make_settings(tmp_path), transport=transport_for(handler))
+    await client.search("sdxl", task_tags=("text-to-image",))
+
+    assert "search=sdxl" in str(captured["url"])
+
+
+async def test_search_summary_carries_filenames_and_gated(tmp_path: Path) -> None:
+    payload = [
+        {
+            "id": "owner/name",
+            "author": "owner",
+            "pipeline_tag": "text-to-image",
+            "downloads": 5,
+            "likes": 1,
+            "tags": ["text-to-image"],
+            "gated": "auto",
+            "siblings": [
+                {"rfilename": "model_index.json"},
+                {"rfilename": "unet/diffusion_pytorch_model.safetensors"},
+            ],
+        }
+    ]
+    client = HfClient(
+        make_settings(tmp_path),
+        transport=transport_for(
+            lambda request: httpx.Response(200, json=payload)
+        ),
+    )
+
+    [summary] = await client.search("x", task_tags=("text-to-image",))
+
+    assert summary.gated == "auto"
+    assert summary.filenames == (
+        "model_index.json",
+        "unet/diffusion_pytorch_model.safetensors",
+    )
+
+
+async def test_search_summary_defaults_when_siblings_and_gated_absent(
+    tmp_path: Path,
+) -> None:
+    payload = [{"id": "owner/name", "downloads": 0, "likes": 0, "tags": []}]
+    client = HfClient(
+        make_settings(tmp_path),
+        transport=transport_for(
+            lambda request: httpx.Response(200, json=payload)
+        ),
+    )
+
+    [summary] = await client.search("x")
+
+    assert summary.filenames == ()
+    assert summary.gated is None
+
+
+async def test_download_unlimited_does_not_abort_a_stream_over_the_cap(
+    tmp_path: Path,
+) -> None:
+    body = b"x" * (2 * 1024 * 1024)
+    settings = make_settings(tmp_path, MAX_MODEL_DOWNLOAD_MB=1)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=body,
+            headers={"Content-Length": str(3 * 1024 * 1024)},
+        )
+
+    client = HfClient(settings, transport=transport_for(handler))
+    dest = tmp_path / "weights.safetensors"
+
+    await client.download(
+        "owner/name",
+        "weights.safetensors",
+        dest,
+        unlimited=True,
+    )
+
+    assert dest.read_bytes() == body
+
+
+async def test_download_without_unlimited_still_enforces_the_upscaler_cap(
+    tmp_path: Path,
+) -> None:
+    settings = make_settings(tmp_path, MAX_MODEL_DOWNLOAD_MB=0)
+    client = HfClient(
+        settings,
+        transport=transport_for(
+            lambda request: httpx.Response(200, content=b"xx")
+        ),
+    )
+
+    with pytest.raises(HfDownloadTooLargeError):
+        await client.download("owner/name", "f.onnx", tmp_path / "f.onnx")

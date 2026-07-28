@@ -23,6 +23,7 @@ from app.services.engines.onnx_upscaler import (
     _from_nchw_float,
     _to_nchw_float,
 )
+from app.services.generation_variants import Precision
 from app.services.hf_client import HfClient, HfFile, ProgressCallback, pick_weight_file
 from app.services.model_converter import ConversionResult, convert_to_onnx
 from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry, ModelStatus
@@ -93,6 +94,7 @@ class InstallStatus(str, Enum):
 class InstallJob:
     id: str
     repo_id: str
+    precision: Precision = "fp16"
     status: InstallStatus = InstallStatus.downloading
     progress_pct: float | None = None
     model_id: str | None = None

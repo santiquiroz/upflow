@@ -264,6 +264,35 @@ Si el repo de HF no expone un archivo compatible, el estado del install job pasa
 
 Un modelo instalado puede borrarse con `DELETE /api/v1/models/{model_id}` (los 6 builtins están protegidos: devuelve `403`). El límite de tamaño de descarga es `MAX_MODEL_DOWNLOAD_MB` (default 2048 MB).
 
+### Instalar modelos de generación (text-to-image)
+
+Los modelos de generación tienen su propio buscador y su propio camino de instalación, con tres diferencias respecto del de upscalers.
+
+**No hace falta saber el `repo_id`.** Con el buscador vacío, la sección Modelos muestra los pipelines text-to-image más descargados de Hugging Face. Cada tarjeta trae un badge de compatibilidad calculado de la metadata real del repo, sin descargar nada:
+
+| Badge | Qué significa |
+|---|---|
+| **Listo** | Trae ONNX para todos sus componentes: se instala directo |
+| **Requiere conversión** | Solo pesos PyTorch: se exporta a ONNX localmente (necesita `torch`, tarda) |
+| **Gated** | Acceso restringido: hay que configurar `HF_TOKEN` y aceptar la licencia del repo |
+| **Incompatible** | No es un pipeline diffusers (le falta `model_index.json`) |
+
+**Precisión elegible.** En los repos que publican ambas variantes se puede elegir entre fp16 y fp32. La elección define **las dos cosas**: qué archivos se bajan y en qué precisión queda el ONNX exportado. fp16 pesa la mitad, usa menos VRAM y corre más rápido en DirectML; fp32 es más fiel y la única opción sensata en CPU. En un repo que ya viene en ONNX no hay elección: su precisión la fijó quien lo publicó.
+
+**No hay techo de descarga, solo avisos.** Al expandir una tarjeta, Upflow mide el espacio libre real del disco destino y la VRAM libre de **cada** dispositivo, y avisa si el modelo probablemente no funcione bien ahí:
+
+```
+Precisión   (•) fp16 · baja 2.6 GB    ( ) fp32 · baja 5.2 GB
+
+dml:0  RX 7900 XTX   libre 22.1 GB   ✓ entra
+dml:1  RX 6600        libre 7.4 GB   ✗ no entra (~8.4 GB estimados a 512×512)
+cpu    CPU                            ⚠ varios minutos por imagen
+```
+
+Son avisos, no bloqueos: el botón de instalar queda habilitado siempre. La decisión es de quien usa la app, que sabe de su máquina más que una constante en el código. El estimado de VRAM es eso — un estimado derivado del tamaño de los pesos, etiquetado con la resolución de referencia.
+
+Endpoints: `GET /api/v1/generation/models/search?q=` (vacío = browse por descargas), `GET /api/v1/generation/models/preflight?repoId=<id>` y `POST /api/v1/generation/models` con `{"repoId": "...", "precision": "fp16"}`.
+
 ## Dispositivos
 
 `GET /api/v1/devices` enumera los dispositivos de cómputo disponibles para el motor ONNX/DirectML:

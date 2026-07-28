@@ -61,8 +61,28 @@ describe("HfSearch", () => {
   it("renders a result card per hit once results arrive", async () => {
     const payload: ModelSearchResponse = {
       results: [
-        { id: "example/anime-2x", author: "example", pipelineTag: "image-to-image", downloads: 120, likes: 5, tags: ["onnx"] },
-        { id: "other/model-4x", author: null, pipelineTag: null, downloads: 3, likes: 0, tags: [] },
+        {
+          id: "example/anime-2x",
+          author: "example",
+          pipelineTag: "image-to-image",
+          downloads: 120,
+          likes: 5,
+          tags: ["onnx"],
+          compat: null,
+          compatReason: null,
+          availablePrecisions: [],
+        },
+        {
+          id: "other/model-4x",
+          author: null,
+          pipelineTag: null,
+          downloads: 3,
+          likes: 0,
+          tags: [],
+          compat: null,
+          compatReason: null,
+          availablePrecisions: [],
+        },
       ],
     };
     vi.mocked(api.searchHfModels).mockResolvedValue(payload);

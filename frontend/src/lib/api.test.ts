@@ -551,6 +551,9 @@ describe("searchHfModels", () => {
           downloads: 120,
           likes: 5,
           tags: ["onnx"],
+          compat: null,
+          compatReason: null,
+          availablePrecisions: [],
         },
       ],
     };

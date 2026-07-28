@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import errno
 import gc
 import json
 import shutil
@@ -20,6 +21,7 @@ from app.services.engines.generation_onnx import (
     generation_dependencies_available,
 )
 from app.services.gpu_session_coordinator import GpuSessionCoordinator
+from app.services.generation_variants import Precision
 from app.services.hf_client import HfClient, HfFile
 from app.services.model_installer import (
     InstallJob,
@@ -45,7 +47,7 @@ from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry, Mo
 # "which components does this pipeline actually declare" -- so it downloads
 # first, and only the files under its declared component directories (plus
 # small top-level metadata) are downloaded afterwards. This also lets the
-# size cap reject an oversized repo BEFORE any weight bytes move.
+# installer discover the exact pipeline layout before any weight bytes move.
 #
 # Legacy config patch, deliberate (same findings doc, blocking finding): repos
 # whose model_index.json declares `_class_name: OnnxStableDiffusionPipeline`
@@ -175,13 +177,15 @@ def _ensure_model_index_listed(files: list[HfFile], repo_id: str) -> None:
         )
 
 
-def _ensure_size_cap(files: list[HfFile], cap_mb: int) -> None:
-    total = sum(f.size for f in files)
-    if total > cap_mb * 1024 * 1024:
-        raise ValueError(
-            f"La descarga ({total // (1024 * 1024)} MB) supera el límite de {cap_mb} MB "
-            "(MAX_GENERATION_MODEL_DOWNLOAD_MB)."
-        )
+def map_disk_full(exc: OSError) -> str | None:
+    if exc.errno != errno.ENOSPC:
+        return None
+    target = getattr(exc, "filename", None)
+    where = f" en {target}" if target else ""
+    return (
+        f"No queda espacio en disco{where}. Liberá espacio y volvé a intentar; "
+        "la descarga parcial ya se limpió."
+    )
 
 
 def _validate_structure(staging_root: Path) -> None:
@@ -216,7 +220,9 @@ class GenerationModelInstaller:
         self.hf_client = hf_client
         self.gpu_coordinator = gpu_coordinator
         self.device_semaphores = device_semaphores
-        self.enqueue_conversion: Callable[[str], Awaitable[str]] | None = None
+        self.enqueue_conversion: (
+            Callable[[str, Precision], Awaitable[str]] | None
+        ) = None
         self._queue: asyncio.Queue[InstallJob] = asyncio.Queue()
         self._jobs: dict[str, InstallJob] = {}
         self._worker_task: asyncio.Task | None = None
@@ -235,12 +241,20 @@ class GenerationModelInstaller:
                 await self._worker_task
             self._worker_task = None
 
-    async def install_from_hf(self, repo_id: str) -> str:
+    async def install_from_hf(
+        self,
+        repo_id: str,
+        precision: Precision = "fp16",
+    ) -> str:
         available, reason = generation_dependencies_available()
         if not available:
             raise ValueError(reason or "Generation dependencies missing")
         validated = _validate_repo_id(repo_id)
-        job = InstallJob(id=uuid.uuid4().hex, repo_id=validated)
+        job = InstallJob(
+            id=uuid.uuid4().hex,
+            repo_id=validated,
+            precision=precision,
+        )
         self._jobs[job.id] = job
         await self._queue.put(job)
         return job.id
@@ -273,6 +287,9 @@ class GenerationModelInstaller:
     async def _run_install(self, job: InstallJob) -> None:
         try:
             await self._download_and_register(job)
+        except OSError as exc:
+            job.status = InstallStatus.error
+            job.error = map_disk_full(exc) or str(exc)
         except Exception as exc:  # noqa: BLE001 - el job reporta cualquier fallo
             job.status = InstallStatus.error
             job.error = str(exc)
@@ -289,7 +306,10 @@ class GenerationModelInstaller:
                     "con pesos PyTorch pero sin ONNX propio y la conversión "
                     "no está disponible."
                 )
-            job.conversion_id = await self.enqueue_conversion(job.repo_id)
+            job.conversion_id = await self.enqueue_conversion(
+                job.repo_id,
+                job.precision,
+            )
             # Estado terminal del install job: el progreso real vive en el
             # conversion job y el frontend hace el hand-off con conversion_id.
             job.status = InstallStatus.converting
@@ -301,7 +321,6 @@ class GenerationModelInstaller:
             shutil.rmtree(staging_root, ignore_errors=True)
         staging_root.mkdir(parents=True, exist_ok=True)
 
-        max_file_bytes = self.settings.max_generation_model_download_mb * 1024 * 1024
         job.status = InstallStatus.downloading
         try:
             # Fase 1: model_index.json primero (KBs) para conocer los componentes
@@ -310,11 +329,10 @@ class GenerationModelInstaller:
                 job.repo_id,
                 MODEL_INDEX_FILENAME,
                 _safe_staging_dest(staging_root, MODEL_INDEX_FILENAME),
-                max_bytes=max_file_bytes,
+                unlimited=True,
             )
             declared = _read_declared_components(staging_root)
             selected = _filter_to_declared(_select_files(files), declared)
-            _ensure_size_cap(selected, self.settings.max_generation_model_download_mb)
 
             total_bytes = sum(f.size for f in selected) or 1
             downloaded_bytes = 0
@@ -322,7 +340,10 @@ class GenerationModelInstaller:
                 dest = _safe_staging_dest(staging_root, hf_file.path)
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 await self.hf_client.download(
-                    job.repo_id, hf_file.path, dest, max_bytes=max_file_bytes
+                    job.repo_id,
+                    hf_file.path,
+                    dest,
+                    unlimited=True,
                 )
                 downloaded_bytes += hf_file.size
                 job.progress_pct = round(downloaded_bytes / total_bytes * 100, 1)

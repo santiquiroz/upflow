@@ -100,6 +100,10 @@ class HfModelSummary:
     downloads: int
     likes: int
     tags: tuple[str, ...]
+    # `full=true` trae estos datos en la misma respuesta de busqueda; no hace
+    # falta un request adicional por resultado para clasificar compatibilidad.
+    filenames: tuple[str, ...] = ()
+    gated: bool | str | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -109,6 +113,7 @@ class HfFile:
 
 
 def _parse_model_summary(item: dict) -> HfModelSummary:
+    siblings = item.get("siblings") or []
     return HfModelSummary(
         id=item["id"],
         author=item.get("author"),
@@ -116,6 +121,12 @@ def _parse_model_summary(item: dict) -> HfModelSummary:
         downloads=item.get("downloads", 0),
         likes=item.get("likes", 0),
         tags=tuple(item.get("tags", [])),
+        filenames=tuple(
+            sibling["rfilename"]
+            for sibling in siblings
+            if "rfilename" in sibling
+        ),
+        gated=item.get("gated"),
     )
 
 
@@ -159,8 +170,13 @@ def _parse_content_length(headers: httpx.Headers) -> int | None:
     return int(value) if value is not None else None
 
 
-def _reject_declared_size_over_limit(total: int | None, max_bytes: int) -> None:
-    if total is not None and total > max_bytes:
+def _reject_declared_size_over_limit(
+    total: int | None,
+    max_bytes: int | None,
+) -> None:
+    if max_bytes is None or total is None:
+        return
+    if total > max_bytes:
         raise HfDownloadTooLargeError(
             f"Declared size {total} bytes exceeds MAX_MODEL_DOWNLOAD_MB limit ({max_bytes} bytes)"
         )
@@ -169,7 +185,7 @@ def _reject_declared_size_over_limit(total: int | None, max_bytes: int) -> None:
 async def _write_response_to_file(
     response: httpx.Response,
     tmp_path: Path,
-    max_bytes: int,
+    max_bytes: int | None,
     total: int | None,
     progress_cb: ProgressCallback | None,
 ) -> None:
@@ -177,7 +193,7 @@ async def _write_response_to_file(
     async with aiofiles.open(tmp_path, "wb") as handle:
         async for chunk in response.aiter_bytes(DOWNLOAD_CHUNK_BYTES):
             downloaded += len(chunk)
-            if downloaded > max_bytes:
+            if max_bytes is not None and downloaded > max_bytes:
                 raise HfDownloadTooLargeError(
                     f"Download exceeds MAX_MODEL_DOWNLOAD_MB limit ({max_bytes} bytes)"
                 )
@@ -208,15 +224,24 @@ class HfClient:
         return {"Authorization": f"Bearer {self.settings.hf_token}"}
 
     async def search(
-        self, query: str, limit: int = 20, task_tags: tuple[str, ...] | None = None
+        self,
+        query: str,
+        limit: int = 20,
+        task_tags: tuple[str, ...] | None = None,
+        sort: str | None = None,
     ) -> list[HfModelSummary]:
         tags = SEARCH_TASK_TAGS if task_tags is None else task_tags
-        params = {
-            "search": query,
+        params: dict[str, object] = {
             "filter": list(tags),
             "limit": limit,
             "full": "true",
         }
+        # Query vacia es browse: omitir `search` permite ordenar todo el tag.
+        if query:
+            params["search"] = query
+        if sort:
+            params["sort"] = sort
+            params["direction"] = -1
         async with self._build_client() as client:
             response = await client.get(
                 f"{HF_API_BASE}/models", params=params, headers=self._auth_headers()
@@ -255,17 +280,28 @@ class HfClient:
         dest: Path,
         progress_cb: ProgressCallback | None = None,
         max_bytes: int | None = None,
+        unlimited: bool = False,
     ) -> Path:
         url = _download_url(repo_id, filename)
         _validate_https_huggingface_host(url)
-        if max_bytes is None:
-            max_bytes = self.settings.max_model_download_mb * 1024 * 1024
+        effective_max: int | None
+        if unlimited:
+            effective_max = None
+        elif max_bytes is None:
+            effective_max = self.settings.max_model_download_mb * 1024 * 1024
+        else:
+            effective_max = max_bytes
         dest.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = dest.with_name(f"{dest.name}{PARTIAL_DOWNLOAD_SUFFIX}")
 
         for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
             try:
-                await self._stream_to_file(url, tmp_path, max_bytes, progress_cb)
+                await self._stream_to_file(
+                    url,
+                    tmp_path,
+                    effective_max,
+                    progress_cb,
+                )
                 break
             except Exception as exc:  # noqa: BLE001 -- CancelledError is BaseException, so cancel still propagates
                 tmp_path.unlink(missing_ok=True)
@@ -286,7 +322,7 @@ class HfClient:
         self,
         url: str,
         tmp_path: Path,
-        max_bytes: int,
+        max_bytes: int | None,
         progress_cb: ProgressCallback | None,
     ) -> None:
         async with self._build_client() as client:

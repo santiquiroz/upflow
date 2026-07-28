@@ -235,6 +235,34 @@ export interface ModelsResponse {
   models: ModelResponse[];
 }
 
+export type Precision = "fp16" | "fp32";
+export type CompatVerdict = "ready_onnx" | "needs_conversion" | "gated" | "incompatible";
+
+export interface PrecisionCost {
+  precision: Precision;
+  downloadBytes: number;
+  estimatedPeakBytes: number;
+}
+
+export interface DeviceCapacity {
+  id: string;
+  name: string;
+  kind: string;
+  freeVramBytes: number | null;
+}
+
+export interface PreflightResponse {
+  repoId: string;
+  compat: CompatVerdict | null;
+  compatReason: string | null;
+  degraded: boolean;
+  referenceWidth: number;
+  referenceHeight: number;
+  precisions: PrecisionCost[];
+  devices: DeviceCapacity[];
+  disk: { targetPath: string; freeBytes: number } | null;
+}
+
 export interface HfModelSearchResultResponse {
   id: string;
   author: string | null;
@@ -242,6 +270,9 @@ export interface HfModelSearchResultResponse {
   downloads: number;
   likes: number;
   tags: string[];
+  compat: CompatVerdict | null;
+  compatReason: string | null;
+  availablePrecisions: Precision[];
 }
 
 export interface ModelSearchResponse {

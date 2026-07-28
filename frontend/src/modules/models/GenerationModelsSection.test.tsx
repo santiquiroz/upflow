@@ -16,6 +16,8 @@ vi.mock("../../services/generation", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../services/generation")>();
   return {
     ...actual,
+    searchGenerationModels: vi.fn(),
+    preflightGenerationModel: vi.fn(),
     installGenerationModel: vi.fn(),
     getGenerationInstallStatus: vi.fn(),
     getConversionStatus: vi.fn(),
@@ -51,6 +53,7 @@ const UPSCALE_MODEL: ModelResponse = {
 
 function renderSection(models: ModelResponse[] = [DIFFUSION_MODEL]) {
   vi.mocked(api.getModels).mockResolvedValue({ models } satisfies ModelsResponse);
+  vi.mocked(generationService.searchGenerationModels).mockResolvedValue({ results: [] });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   function Wrapper({ children }: { children: ReactNode }) {
     return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
@@ -65,6 +68,8 @@ function typeRepoId(repoId: string) {
 afterEach(() => {
   vi.mocked(api.getModels).mockReset();
   vi.mocked(api.deleteModel).mockReset();
+  vi.mocked(generationService.searchGenerationModels).mockReset();
+  vi.mocked(generationService.preflightGenerationModel).mockReset();
   vi.mocked(generationService.installGenerationModel).mockReset();
   vi.mocked(generationService.getGenerationInstallStatus).mockReset();
   vi.mocked(generationService.getConversionStatus).mockReset();
