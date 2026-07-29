@@ -34,6 +34,7 @@ from app.services.engines.onnx_upscaler import OnnxUpscaler
 from app.services.engines.onnx_video_upscaler import OnnxVideoUpscaler
 from app.services.engines.realesrgan_ncnn import RealEsrganNcnnEngine
 from app.services.engines.rife_ncnn import RifeNcnnEngine
+from app.services.engines.voice_enhance import VoiceEnhancer
 from app.services.generation_converter import GenerationModelConverter
 from app.services.generation_installer import GenerationModelInstaller
 from app.services.generation_job_manager import GenerationJobManager
@@ -138,7 +139,10 @@ async def lifespan(app: FastAPI):
         device_router=device_router,
         quota_service=quota_service,
     )
-    audio_pipeline = AudioPipeline(settings, audio_enhancers, restorers)
+    voice_enhancer = VoiceEnhancer(settings)
+    audio_pipeline = AudioPipeline(
+        settings, audio_enhancers, restorers, voice_enhancer=voice_enhancer
+    )
     audio_job_manager = AudioJobManager(
         settings,
         audio_pipeline,

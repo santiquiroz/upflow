@@ -75,7 +75,14 @@ class AudioPipeline:
             await self._restore(job.restore, current, restored, job.device)
             current = restored
 
-        if job.voice_steps and self.voice_enhancer is not None:
+        if job.voice_steps:
+            if self.voice_enhancer is None:
+                # Pedir la cadena y que se ignore en silencio seria peor que
+                # fallar: el usuario creeria que se aplico.
+                raise RuntimeError(
+                    "El job pide mejora de voz pero el pipeline se construyo sin "
+                    "motor de voz."
+                )
             advance_audio_stage(job, "voicing")
             voiced = work_dir / "voiced.wav"
             await self.voice_enhancer.run(

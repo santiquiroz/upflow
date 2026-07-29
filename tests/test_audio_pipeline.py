@@ -281,3 +281,36 @@ def test_audio_job_response_serializes_timestamps_camel_case(tmp_path: Path) -> 
     assert "createdAt" in serialized
     assert "startedAt" in serialized
     assert "finishedAt" in serialized
+
+
+def test_pipeline_fails_loudly_when_a_voice_chain_is_requested_without_an_engine(tmp_path):
+    """Pedir la cadena y que se ignore en silencio seria peor que fallar: el
+    usuario creeria que se aplico. Esta es la clase de bug donde la ausencia de
+    algo se lee como 'no hacer nada'."""
+    import asyncio
+
+    from app.models import AudioJob
+    from app.services.audio_pipeline import AudioPipeline
+
+    settings = Settings(RUNTIME_DIR=str(tmp_path), _env_file=None)
+    pipeline = AudioPipeline(settings, {}, {})  # sin voice_enhancer
+    job = AudioJob(
+        source_path=tmp_path / "x.wav",
+        original_filename="x.wav",
+        voice_steps=["deesser"],
+    )
+
+    async def _run():
+        work = tmp_path / "work"
+        work.mkdir()
+        # Se saltea el decode: solo interesa que la rama de voz no sea un no-op.
+        decoded = work / "decoded.wav"
+        decoded.write_bytes(b"wav")
+        pipeline._decode_to_wav = lambda *a, **k: _noop()
+        return await pipeline._run_chain(job, work)
+
+    async def _noop():
+        return None
+
+    with pytest.raises(RuntimeError, match="sin motor de voz"):
+        asyncio.run(_run())
