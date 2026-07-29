@@ -955,18 +955,20 @@ async def audio_capabilities(settings: Settings = Depends(get_settings)) -> Audi
 
 @router.get("/audio/voice-catalog", response_model=VoiceCatalogResponse)
 async def get_voice_catalog() -> VoiceCatalogResponse:
-    """Los pasos y destinos de la cadena de voz, con sus explicaciones.
+    """Los pasos y destinos de la cadena de voz.
 
-    Vienen del backend a proposito: una sola fuente de verdad para las
-    etiquetas, las descripciones y los numeros de loudness, en vez de que el
-    frontend los duplique y se desincronicen.
+    La ESTRUCTURA viene del backend a proposito: el orden de los pasos tiene
+    causalidad (ver build_filter_chain) y los numeros de loudness son
+    especificaciones publicadas, asi que hay una sola fuente de verdad. La COPIA
+    en cambio viaja como clave de traduccion y la arma el frontend, que es la
+    capa que conoce el idioma activo.
     """
     return VoiceCatalogResponse(
         steps=[
             {
                 "id": info.id,
-                "label": info.label,
-                "description": info.description,
+                "label_key": info.label_key,
+                "description_key": info.description_key,
                 "kind": info.kind,
                 "default_enabled": info.default_enabled,
             }
@@ -975,8 +977,8 @@ async def get_voice_catalog() -> VoiceCatalogResponse:
         deliveries=[
             {
                 "id": choice["id"],
-                "label": choice["label"],
-                "description": choice["description"],
+                "label_key": choice["labelKey"],
+                "description_key": choice["descriptionKey"],
                 "lufs": choice["lufs"],
                 "true_peak_db": choice["truePeakDb"],
             }

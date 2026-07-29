@@ -272,19 +272,19 @@ class PreflightResponse(BaseModel):
 
 class VoiceStepResponse(BaseModel):
     id: str
-    label: str
+    label_key: str = Field(serialization_alias="labelKey")
     # Descripcion en lenguaje llano. SIEMPRE visible en la UI, no solo en un
     # tooltip: usar hover como unico mecanismo para informacion critica es un
     # fallo de accesibilidad conocido.
-    description: str
+    description_key: str = Field(serialization_alias="descriptionKey")
     kind: str
     default_enabled: bool = Field(serialization_alias="defaultEnabled")
 
 
 class VoiceDeliveryResponse(BaseModel):
     id: str
-    label: str
-    description: str
+    label_key: str = Field(serialization_alias="labelKey")
+    description_key: str = Field(serialization_alias="descriptionKey")
     lufs: float
     true_peak_db: float = Field(serialization_alias="truePeakDb")
 
