@@ -127,3 +127,153 @@ async def test_every_capability_reports_its_strategies(tmp_path: Path):
     for item in flat(response).values():
         assert item.strategies
         assert set(item.strategies) <= {"dsp", "model"}
+
+
+# ---------------------------------------------------------------------------
+# Provision de paquetes
+# ---------------------------------------------------------------------------
+
+
+class FakeProvisioner:
+    def __init__(self) -> None:
+        self.requested: list[str] = []
+        self._jobs: dict[str, object] = {}
+
+    async def provision(self, pack: str) -> str:
+        from app.services.pack_provisioner import ProvisionJob
+
+        self.requested.append(pack)
+        job = ProvisionJob(id=f"job-{len(self.requested)}", pack=pack)
+        self._jobs[job.id] = job
+        return job.id
+
+    def status(self, job_id: str):
+        return self._jobs.get(job_id)
+
+
+class FakeApp:
+    def __init__(self, provisioner: FakeProvisioner) -> None:
+        self.state = type("S", (), {"pack_provisioner": provisioner})()
+
+
+class FakeRequest:
+    def __init__(self, provisioner: FakeProvisioner) -> None:
+        self.app = FakeApp(provisioner)
+
+
+@pytest.mark.asyncio
+async def test_provisioning_a_capability_starts_its_missing_pack(tmp_path: Path):
+    from app.api.routes import provision_capability
+
+    settings = make_settings(tmp_path, RIFE_BINARY=str(tmp_path / "nope.exe"))
+    provisioner = FakeProvisioner()
+
+    response = await provision_capability(
+        "video.interpolate", FakeRequest(provisioner), settings, FakeRegistry()
+    )
+
+    assert provisioner.requested == ["rife"]
+    assert response.pack == "rife"
+    assert response.status == "queued"
+    assert response.status_url.endswith(response.job_id)
+
+
+@pytest.mark.asyncio
+async def test_provisioning_an_unknown_capability_is_404(tmp_path: Path):
+    from fastapi import HTTPException
+
+    from app.api.routes import provision_capability
+
+    with pytest.raises(HTTPException) as exc_info:
+        await provision_capability(
+            "no.existe", FakeRequest(FakeProvisioner()), make_settings(tmp_path), FakeRegistry()
+        )
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_provisioning_a_capability_with_nothing_pending_is_400(tmp_path: Path):
+    from fastapi import HTTPException
+
+    from app.api.routes import provision_capability
+
+    binary = tmp_path / "rife.exe"
+    binary.write_bytes(b"x")
+    settings = make_settings(tmp_path, RIFE_BINARY=str(binary))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await provision_capability(
+            "video.interpolate", FakeRequest(FakeProvisioner()), settings, FakeRegistry()
+        )
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_a_capability_missing_only_a_model_cannot_be_provisioned(tmp_path: Path):
+    # No hay paquete que bajar: lo que falta es instalar un modelo, que es otro
+    # camino. Prometer una descarga aca seria un boton que no arregla nada.
+    from fastapi import HTTPException
+
+    from app.api.routes import provision_capability
+
+    with pytest.raises(HTTPException) as exc_info:
+        await provision_capability(
+            "generate.textToImage",
+            FakeRequest(FakeProvisioner()),
+            make_settings(tmp_path),
+            FakeRegistry(),
+        )
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_a_registry_capability_can_still_need_a_pack(tmp_path: Path):
+    # video.upscale es de provisioning "registry" y AUN ASI necesita el binario
+    # del motor: lo que decide es el paquete faltante, no la etiqueta.
+    from app.api.routes import provision_capability
+
+    settings = make_settings(tmp_path, ENGINE_BINARY=str(tmp_path / "nope.exe"))
+    provisioner = FakeProvisioner()
+
+    response = await provision_capability(
+        "video.upscale", FakeRequest(provisioner), settings, FakeRegistry()
+    )
+    assert response.pack == "realesrgan"
+
+
+@pytest.mark.asyncio
+async def test_provision_status_reports_the_job(tmp_path: Path):
+    from app.api.routes import provision_capability, provision_status
+
+    settings = make_settings(tmp_path, RIFE_BINARY=str(tmp_path / "nope.exe"))
+    provisioner = FakeProvisioner()
+    request = FakeRequest(provisioner)
+    started = await provision_capability("video.interpolate", request, settings, FakeRegistry())
+
+    reported = await provision_status(started.job_id, request)
+    assert reported.job_id == started.job_id
+    assert reported.pack == "rife"
+
+
+@pytest.mark.asyncio
+async def test_provision_status_of_an_unknown_job_is_404():
+    from fastapi import HTTPException
+
+    from app.api.routes import provision_status
+
+    with pytest.raises(HTTPException) as exc_info:
+        await provision_status("nope", FakeRequest(FakeProvisioner()))
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_the_provision_response_serializes_camel_case_aliases(tmp_path: Path):
+    from app.api.routes import provision_capability
+
+    settings = make_settings(tmp_path, RIFE_BINARY=str(tmp_path / "nope.exe"))
+    response = await provision_capability(
+        "video.interpolate", FakeRequest(FakeProvisioner()), settings, FakeRegistry()
+    )
+    dumped = response.model_dump(by_alias=True)
+    assert "jobId" in dumped
+    assert "statusUrl" in dumped

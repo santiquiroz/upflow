@@ -56,6 +56,7 @@ from app.schemas import (
     ModelSearchResponse,
     ModelsResponse,
     PreflightResponse,
+    ProvisionJobResponse,
     SubtitleTrackResponse,
     SupportedModelResponse,
     UpdateCheckResponse,
@@ -91,6 +92,7 @@ from app.services.job_manager import JobManager
 from app.services.media_tools import MediaTools
 from app.services.model_installer import ModelInstaller
 from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry
+from app.services.pack_provisioner import PackProvisioner, ProvisionJob, UnknownPackError
 from app.services.settings_service import editable_settings_status, update_setting
 from app.services.storage import StorageService
 from app.services.stream_analysis import parse_audio_tracks, parse_subtitle_tracks
@@ -1454,6 +1456,65 @@ def _capability_to_response(item: ResolvedCapability) -> CapabilityResponse:
         unavailable_reason_key=item.unavailable_reason_key,
         setup_reason_key=item.setup_reason_key,
     )
+
+def _resolved_by_id(settings: Settings, registry: ModelRegistry, capability_id: str) -> ResolvedCapability:
+    for item in resolve_capabilities(settings, registry):
+        if item.id == capability_id:
+            return item
+    raise HTTPException(status_code=404, detail=f"Capacidad desconocida: {capability_id!r}")
+
+
+def _pack_to_provision(item: ResolvedCapability) -> str:
+    # No se mira `provisioning`: video.upscale es de registro y aun asi necesita
+    # el binario del motor. Lo que decide es si falta un paquete concreto.
+    if not item.missing_packs:
+        raise HTTPException(
+            status_code=400,
+            detail=f"La capacidad {item.id!r} no tiene ningun paquete pendiente de descarga.",
+        )
+    return item.missing_packs[0]
+
+
+def _provision_job_to_response(job: ProvisionJob) -> ProvisionJobResponse:
+    return ProvisionJobResponse(
+        job_id=job.id,
+        pack=job.pack,
+        status=job.status.value,
+        error=job.error,
+        status_url=f"/api/v1/capabilities/provision/{job.id}",
+    )
+
+
+@router.post(
+    "/capabilities/{capability_id}/provision",
+    response_model=ProvisionJobResponse,
+    status_code=202,
+)
+async def provision_capability(
+    capability_id: str,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+    registry: ModelRegistry = Depends(get_model_registry),
+) -> ProvisionJobResponse:
+    item = _resolved_by_id(settings, registry, capability_id)
+    pack = _pack_to_provision(item)
+    provisioner: PackProvisioner = request.app.state.pack_provisioner
+    try:
+        job_id = await provisioner.provision(pack)
+    except UnknownPackError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    job = provisioner.status(job_id)
+    assert job is not None
+    return _provision_job_to_response(job)
+
+
+@router.get("/capabilities/provision/{job_id}", response_model=ProvisionJobResponse)
+async def provision_status(job_id: str, request: Request) -> ProvisionJobResponse:
+    provisioner: PackProvisioner = request.app.state.pack_provisioner
+    job = provisioner.status(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job de descarga desconocido")
+    return _provision_job_to_response(job)
 
 
 

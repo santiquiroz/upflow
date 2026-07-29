@@ -322,6 +322,14 @@ class CapabilityTreeResponse(BaseModel):
     domains: list[CapabilityDomainResponse] = Field(default_factory=list)
 
 
+class ProvisionJobResponse(BaseModel):
+    job_id: str = Field(serialization_alias="jobId")
+    pack: str
+    status: str
+    error: str | None = None
+    status_url: str = Field(serialization_alias="statusUrl")
+
+
 class InstallModelRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
