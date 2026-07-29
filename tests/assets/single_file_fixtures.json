@@ -3,6 +3,7 @@
   "detector_says": "flux-2-dev",
   "filename": "flux-2-klein-4b-fp8.safetensors",
   "has_lora_markers": false,
+  "lora_sample_keys": {},
   "repo": "black-forest-labs/FLUX.2-klein-4b-fp8",
   "role_sample_keys": {
    "double_blocks.0.img_attn.proj.input_scale": [],
@@ -23,6 +24,17 @@
   "detector_says": "v1",
   "filename": "ip-adapter-faceid-plusv2_sdxl_lora.safetensors",
   "has_lora_markers": true,
+  "lora_sample_keys": {
+   "lora_unet_down_blocks_1_attentions_0_transformer_blocks_0_attn1_to_k.alpha": [],
+   "lora_unet_down_blocks_1_attentions_0_transformer_blocks_0_attn1_to_k.lora_down.weight": [
+    128,
+    640
+   ],
+   "lora_unet_down_blocks_1_attentions_0_transformer_blocks_0_attn1_to_k.lora_up.weight": [
+    640,
+    128
+   ]
+  },
   "repo": "h94/IP-Adapter-FaceID",
   "role_sample_keys": {},
   "total_keys": 1680,
@@ -32,6 +44,7 @@
   "detector_says": "xl_base",
   "filename": "ponyDiffusionV6XL_v6StartWithThisOne.safetensors",
   "has_lora_markers": false,
+  "lora_sample_keys": {},
   "repo": "LyliaEngine/Pony_Diffusion_V6_XL",
   "role_sample_keys": {
    "conditioner.embedders.0.transformer.text_model.embeddings.position_embedding.weight": [
@@ -70,6 +83,7 @@
   "detector_says": "v1",
   "filename": "sdxl_vae.safetensors",
   "has_lora_markers": false,
+  "lora_sample_keys": {},
   "repo": "LyliaEngine/Pony_Diffusion_V6_XL",
   "role_sample_keys": {
    "decoder.conv_in.bias": [
@@ -86,6 +100,17 @@
   "detector_says": "v1",
   "filename": "ZI Ada Wong (vrtlAdaWong).safetensors",
   "has_lora_markers": true,
+  "lora_sample_keys": {
+   "diffusion_model.layers.0.attention.to_k.alpha": [],
+   "diffusion_model.layers.0.attention.to_k.lora_down.weight": [
+    16,
+    3840
+   ],
+   "diffusion_model.layers.0.attention.to_k.lora_up.weight": [
+    3840,
+    16
+   ]
+  },
   "repo": "nphSi/Z-Image-Lora",
   "role_sample_keys": {
    "diffusion_model.layers.0.attention.to_k.alpha": []
