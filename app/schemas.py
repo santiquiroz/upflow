@@ -211,7 +211,9 @@ class HfModelSearchResultResponse(BaseModel):
     tags: list[str]
     # Compatibilidad DETECTADA de la metadata en vivo (siblings + gated, que ya
     # vienen en la respuesta de busqueda con full=true): cero requests extra por
-    # resultado. Vacios en el camino de upscalers, que no los calcula.
+    # resultado. Los DOS caminos la calculan, cada uno con su CompatStrategy;
+    # available_precisions queda vacio en upscalers porque su instalador elige
+    # el archivo de pesos solo.
     compat: str | None = None
     compat_reason: str | None = Field(default=None, serialization_alias="compatReason")
     available_precisions: list[str] = Field(

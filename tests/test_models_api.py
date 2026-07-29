@@ -323,3 +323,79 @@ def test_delete_endpoint_wired_returns_409_for_builtin() -> None:
         app.dependency_overrides.pop(get_model_installer, None)
 
     assert response.status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# Compatibilidad detectada en la busqueda de upscalers
+#
+# Hasta ahora este camino no calculaba compat: los campos existian en la
+# respuesta y viajaban en null, asi que el usuario recien descubria si un repo
+# servia al apretar instalar. Los filenames y el gated ya venian gratis en la
+# metadata (full=true), asi que son cero requests extra por resultado.
+# ---------------------------------------------------------------------------
+
+
+def _summary(filenames: tuple[str, ...], gated: bool | str | None = False) -> HfModelSummary:
+    return HfModelSummary(
+        id="owner/model",
+        author="owner",
+        pipeline_tag="image-to-image",
+        downloads=1,
+        likes=1,
+        tags=(),
+        filenames=filenames,
+        gated=gated,
+    )
+
+
+async def test_an_onnx_upscaler_repo_is_reported_ready() -> None:
+    hf_client = FakeHfClient(results=[_summary(("2x-AnimeSharpV4.onnx",))])
+
+    response = await search_models(q="anime", hf_client=hf_client)
+
+    assert response.results[0].compat == "ready_onnx"
+    assert response.results[0].compat_reason
+
+
+async def test_a_torch_upscaler_repo_is_reported_as_needing_conversion() -> None:
+    hf_client = FakeHfClient(results=[_summary(("model.pth",))])
+
+    response = await search_models(q="anime", hf_client=hf_client)
+
+    assert response.results[0].compat == "needs_conversion"
+
+
+async def test_an_upscaler_repo_without_weights_is_reported_incompatible() -> None:
+    hf_client = FakeHfClient(results=[_summary(("README.md",))])
+
+    response = await search_models(q="anime", hf_client=hf_client)
+
+    assert response.results[0].compat == "incompatible"
+
+
+async def test_a_gated_upscaler_repo_is_reported_gated() -> None:
+    hf_client = FakeHfClient(results=[_summary(("model.onnx",), gated="auto")])
+
+    response = await search_models(q="anime", hf_client=hf_client)
+
+    assert response.results[0].compat == "gated"
+
+
+async def test_upscalers_offer_no_precision_picker() -> None:
+    # Su instalador elige el archivo de pesos solo con pick_weight_file: no hay
+    # dtype que preguntar.
+    hf_client = FakeHfClient(results=[_summary(("model.pth",))])
+
+    response = await search_models(q="anime", hf_client=hf_client)
+
+    assert response.results[0].available_precisions == []
+
+
+async def test_the_upscaler_search_still_serializes_camel_case() -> None:
+    hf_client = FakeHfClient(results=[_summary(("model.onnx",))])
+
+    response = await search_models(q="anime", hf_client=hf_client)
+    dumped = response.model_dump(by_alias=True)["results"][0]
+
+    assert "compatReason" in dumped
+    assert "availablePrecisions" in dumped

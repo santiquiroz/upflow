@@ -76,6 +76,7 @@ from app.services.capabilities import (
     group_by_domain,
     resolve_capabilities,
 )
+from app.services.compat_strategy import CompatStrategy, InstallOptions, strategy_for
 from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
 from app.services.engines.generation_onnx import generation_dependencies_available
 from app.services.generation_converter import GenerationModelConverter
@@ -1071,19 +1072,33 @@ async def list_models(registry: ModelRegistry = Depends(get_model_registry)) -> 
     return ModelsResponse(models=[model_entry_to_response(entry) for entry in registry.list()])
 
 
-def _search_results_to_response(results: list) -> ModelSearchResponse:
+def _result_to_response(item, strategy: CompatStrategy) -> HfModelSearchResultResponse:
+    verdict, reason = strategy.classify(item.filenames, item.gated)
+    # Un repo ready_onnx no tiene paso de export, asi que no hay nada que elegir:
+    # no se ofrecen opciones (ver alcance de B en el spec de 2026-07-28).
+    options = (
+        strategy.install_options(item.filenames)
+        if verdict == "needs_conversion"
+        else InstallOptions()
+    )
+    return HfModelSearchResultResponse(
+        id=item.id,
+        author=item.author,
+        pipeline_tag=item.pipeline_tag,
+        downloads=item.downloads,
+        likes=item.likes,
+        tags=list(item.tags),
+        compat=verdict,
+        compat_reason=reason,
+        available_precisions=list(options.precisions),
+    )
+
+
+def _search_results_to_response(
+    results: list, strategy: CompatStrategy
+) -> ModelSearchResponse:
     return ModelSearchResponse(
-        results=[
-            HfModelSearchResultResponse(
-                id=item.id,
-                author=item.author,
-                pipeline_tag=item.pipeline_tag,
-                downloads=item.downloads,
-                likes=item.likes,
-                tags=list(item.tags),
-            )
-            for item in results
-        ]
+        results=[_result_to_response(item, strategy) for item in results]
     )
 
 
@@ -1097,7 +1112,7 @@ async def search_models(
     except Exception as exc:
         logger.exception("Hugging Face search failed for query %r", q)
         raise HTTPException(status_code=502, detail="Hugging Face search failed") from exc
-    return _search_results_to_response(results)
+    return _search_results_to_response(results, strategy_for("image"))
 
 
 @router.post(
@@ -1355,33 +1370,6 @@ async def get_conversion_status(
     )
 
 
-def _generation_search_results_to_response(results: list) -> ModelSearchResponse:
-    enriched = []
-    for item in results:
-        verdict, reason = classify(item.filenames, item.gated)
-        # Un repo ready_onnx no tiene paso de export, asi que no hay dtype que
-        # elegir: no se ofrece picker (ver alcance de B en el spec de 2026-07-28).
-        precisions = (
-            available_precisions_from_names(item.filenames)
-            if verdict == "needs_conversion"
-            else []
-        )
-        enriched.append(
-            HfModelSearchResultResponse(
-                id=item.id,
-                author=item.author,
-                pipeline_tag=item.pipeline_tag,
-                downloads=item.downloads,
-                likes=item.likes,
-                tags=list(item.tags),
-                compat=verdict,
-                compat_reason=reason,
-                available_precisions=list(precisions),
-            )
-        )
-    return ModelSearchResponse(results=enriched)
-
-
 @router.get("/generation/models/search", response_model=ModelSearchResponse)
 async def search_generation_models(
     q: str = Query("", max_length=200),
@@ -1396,7 +1384,7 @@ async def search_generation_models(
     except Exception as exc:
         logger.exception("Hugging Face generation search failed for query %r", q)
         raise HTTPException(status_code=502, detail="Hugging Face search failed") from exc
-    return _generation_search_results_to_response(results)
+    return _search_results_to_response(results, strategy_for("generate"))
 
 
 @router.get("/generation/models/preflight", response_model=PreflightResponse)
