@@ -399,6 +399,35 @@ export interface ScanOnnxDiagnosticResponse {
   report: CpuFallbackReportResponse;
 }
 
+export type CapabilityDomainId = "video" | "image" | "audio" | "generate";
+export type CapabilityStatus = "available" | "needs_setup" | "not_implemented";
+export type CapabilityProvisioning = "registry" | "vendored_pack" | "none";
+export type CapabilityStrategy = "dsp" | "model";
+
+export interface CapabilityResponse {
+  id: string;
+  domain: CapabilityDomainId;
+  labelKey: string;
+  status: CapabilityStatus;
+  provisioning: CapabilityProvisioning;
+  jobKind: string | null;
+  strategies: CapabilityStrategy[];
+  missingPacks: string[];
+  unavailableReasonKey: string | null;
+  setupReasonKey: string | null;
+}
+
+export interface CapabilityDomainResponse {
+  domain: CapabilityDomainId;
+  labelKey: string;
+  capabilities: CapabilityResponse[];
+  roadmap: CapabilityResponse[];
+}
+
+export interface CapabilityTreeResponse {
+  domains: CapabilityDomainResponse[];
+}
+
 export interface GenerationJob {
   id: string;
   status: JobStatus;

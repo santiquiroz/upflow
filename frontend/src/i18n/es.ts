@@ -171,5 +171,9 @@ export const es = {
 
   "capability.setup.missingPack": "Falta descargar el paquete que necesita.",
   "capability.setup.missingModel": "Todavía no hay ningún modelo compatible instalado.",
+  "capability.tree.loading": "Cargando capacidades…",
+  "capability.tree.loadFailed": "No se pudieron cargar las capacidades. Probá de nuevo en un momento.",
+  "capability.tree.roadmap": "Mapa de ruta",
+  "capability.tree.download": "Descargar paquete",
 
 } as const;

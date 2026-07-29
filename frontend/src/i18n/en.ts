@@ -177,5 +177,9 @@ export const en = {
 
   "capability.setup.missingPack": "The package it needs is not downloaded yet.",
   "capability.setup.missingModel": "No compatible model is installed yet.",
+  "capability.tree.loading": "Loading capabilities…",
+  "capability.tree.loadFailed": "Could not load capabilities. Try again in a moment.",
+  "capability.tree.roadmap": "Roadmap",
+  "capability.tree.download": "Download package",
 
 } as const;
