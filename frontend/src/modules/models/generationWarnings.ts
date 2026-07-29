@@ -3,6 +3,7 @@ import type {
   PreflightResponse,
   Precision,
 } from "../../lib/apiTypes";
+import type { TranslationParams } from "../../i18n";
 
 export type WarningCode =
   | "degraded"
@@ -15,7 +16,8 @@ export type WarningCode =
 
 export interface Warning {
   code: WarningCode;
-  message: string;
+  key: string;
+  params?: TranslationParams;
 }
 
 function formatGb(bytes: number): string {
@@ -39,7 +41,7 @@ export function buildWarnings(
     return [
       {
         code: "degraded",
-        message: "No se pudo evaluar este modelo. Podés instalarlo igual.",
+        key: "generation.warning.degraded",
       },
     ];
   }
@@ -49,14 +51,22 @@ export function buildWarnings(
   if (preflight.compat === "gated") {
     warnings.push({
       code: "gated",
-      message: "Repo con acceso restringido: necesitás un token de Hugging Face y aceptar la licencia.",
+      key: "generation.warning.gated",
     });
   }
   if (preflight.compat === "incompatible") {
-    warnings.push({
-      code: "incompatible",
-      message: preflight.compatReason ?? "No parece un pipeline diffusers.",
-    });
+    warnings.push(
+      preflight.compatReason
+        ? {
+            code: "incompatible",
+            key: "generation.warning.incompatible.reason",
+            params: { reason: preflight.compatReason },
+          }
+        : {
+            code: "incompatible",
+            key: "generation.warning.incompatible.fallback",
+          },
+    );
   }
 
   const cost = preflight.precisions.find((p) => p.precision === precision);
@@ -64,9 +74,12 @@ export function buildWarnings(
   if (cost && preflight.disk && preflight.disk.freeBytes < cost.downloadBytes) {
     warnings.push({
       code: "disk_low",
-      message:
-        `Quedan ${formatGb(preflight.disk.freeBytes)} libres en ${preflight.disk.targetPath} ` +
-        `y hace falta ${formatGb(cost.downloadBytes)}.`,
+      key: "generation.warning.diskLow",
+      params: {
+        free: formatGb(preflight.disk.freeBytes),
+        path: preflight.disk.targetPath,
+        needed: formatGb(cost.downloadBytes),
+      },
     });
   }
 
@@ -81,10 +94,12 @@ export function buildWarnings(
     if (preflight.disk.freeBytes < peakBytes) {
       warnings.push({
         code: "disk_low",
-        message:
-          `Convertir este checkpoint necesita ~${formatGb(peakBytes)} de pico en ` +
-          `${preflight.disk.targetPath} (deja el checkpoint, el pipeline y el ONNX ` +
-          `en disco a la vez) y quedan ${formatGb(preflight.disk.freeBytes)} libres.`,
+        key: "generation.warning.diskLow.singleFile",
+        params: {
+          peak: formatGb(peakBytes),
+          path: preflight.disk.targetPath,
+          free: formatGb(preflight.disk.freeBytes),
+        },
       });
     }
   }
@@ -96,9 +111,11 @@ export function buildWarnings(
   ) {
     warnings.push({
       code: "ram_low",
-      message:
-        `La conversión carga el checkpoint completo en RAM: ${formatGb(checkpoint.sizeBytes)} ` +
-        `requeridos y ${formatGb(preflight.freeRamBytes)} libres.`,
+      key: "generation.warning.ramLow",
+      params: {
+        needed: formatGb(checkpoint.sizeBytes),
+        free: formatGb(preflight.freeRamBytes),
+      },
     });
   }
 
@@ -109,10 +126,14 @@ export function buildWarnings(
     for (const device of tooSmall) {
       warnings.push({
         code: "device_wont_fit",
-        message:
-          `${device.name}: no entra. Necesita ~${formatGb(cost.estimatedPeakBytes)} estimados ` +
-          `a ${preflight.referenceWidth}×${preflight.referenceHeight} y tiene ` +
-          `${formatGb(device.freeVramBytes as number)} libres.`,
+        key: "generation.warning.deviceWontFit",
+        params: {
+          device: device.name,
+          needed: formatGb(cost.estimatedPeakBytes),
+          width: preflight.referenceWidth,
+          height: preflight.referenceHeight,
+          free: formatGb(device.freeVramBytes as number),
+        },
       });
     }
   }
@@ -120,12 +141,12 @@ export function buildWarnings(
   if (preflight.devices.every((d) => d.kind !== "gpu")) {
     warnings.push({
       code: "cpu_slow",
-      message: "Sin GPU compatible: generar en CPU tarda varios minutos por imagen.",
+      key: "generation.warning.cpuOnly",
     });
   } else if (preflight.devices.some((d) => d.kind === "cpu")) {
     warnings.push({
       code: "cpu_slow",
-      message: "En CPU tarda varios minutos por imagen.",
+      key: "generation.warning.cpuSlow",
     });
   }
 

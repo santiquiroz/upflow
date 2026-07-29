@@ -8,24 +8,45 @@
 // espanol, asi que su entrada inglesa es traduccion y sus tests se pasaron a
 // ingles al extraerlas.
 export const en = {
-  // --- avisos de instalacion de modelos ---------------------------------
-  "warning.degraded": "Could not evaluate this model. You can install it anyway.",
-  "warning.gated":
+  // --- generation module -------------------------------------------------
+  "generation.compat.readyOnnx": "ONNX ready",
+  "generation.compat.needsConversion": "Requires conversion",
+  "generation.compat.singleFile": "Single-file",
+  "generation.compat.gated": "Restricted access",
+  "generation.compat.incompatible": "Incompatible",
+  "generation.compat.unknown": "Compatibility unknown",
+  "generation.precision.title": "Precision",
+  "generation.precision.download": "{{size}} download",
+  "generation.checkpoint.title": "Checkpoint",
+  "generation.details.hide": "Hide details",
+  "generation.details.show": "View details",
+  "generation.preflight.loading": "Evaluating download and capacity…",
+  "generation.capacity.vramUnknown": "Available VRAM unknown",
+  "generation.capacity.vramFree": "{{free}} VRAM available",
+  "generation.capacity.ramFree": "{{free}} available",
+  "generation.warnings.ariaLabel": "Installation warnings",
+  "generation.warning.degraded":
+    "Could not evaluate this model. You can install it anyway.",
+  "generation.warning.gated":
     "Restricted repo: you need a Hugging Face token and to accept the license.",
-  "warning.incompatible.fallback": "This does not look like a diffusers pipeline.",
-  "warning.diskLow":
-    "{{free}} free on {{path}} and {{needed}} required.",
-  "warning.diskLow.singleFile":
-    "Converting this checkpoint needs about {{peak}} peak on {{path}} " +
-    "(the checkpoint, the pipeline and the ONNX all sit on disk at once) " +
-    "and {{free}} are free.",
-  "warning.ramLow":
-    "Conversion loads the whole checkpoint into RAM: {{needed}} required and {{free}} free.",
-  "warning.deviceWontFit":
-    "{{device}}: does not fit. Needs about {{needed}} estimated at " +
-    "{{width}}x{{height}} and has {{free}} free.",
-  "warning.cpuOnly": "No compatible GPU: generating on CPU takes several minutes per image.",
-  "warning.cpuSlow": "On CPU this takes several minutes per image.",
+  "generation.warning.incompatible.reason": "{{reason}}",
+  "generation.warning.incompatible.fallback":
+    "This does not look like a diffusers pipeline.",
+  "generation.warning.diskLow":
+    "Only {{free}} free on {{path}}; {{needed}} is required.",
+  "generation.warning.diskLow.singleFile":
+    "Converting this checkpoint requires about {{peak}} of peak disk space on {{path}} " +
+    "(the checkpoint, the pipeline, and the ONNX are all stored on disk at once), " +
+    "with {{free}} available.",
+  "generation.warning.ramLow":
+    "Conversion loads the whole checkpoint into RAM: {{needed}} required and {{free}} available.",
+  "generation.warning.deviceWontFit":
+    "{{device}}: does not fit. It needs an estimated {{needed}} at " +
+    "{{width}}x{{height}} and has {{free}} available.",
+  "generation.warning.cpuOnly":
+    "No compatible GPU: generating on CPU takes several minutes per image.",
+  "generation.warning.cpuSlow":
+    "On CPU this takes several minutes per image.",
 
   // --- cadena de mejora de voz -----------------------------------------
   "voice.step.denoise.label": "Remove background noise",
@@ -53,6 +74,25 @@ export const en = {
     "Brings overall loudness to what the destination platform asks for. Always " +
     "last, because it measures the finished result: measuring earlier would " +
     "give a number that is no longer true.",
+
+  // --- panel de la cadena de voz ---------------------------------------
+  "voice.sectionTitle": "Voice",
+  "voice.activate": "Shape the voice",
+  "voice.summary.none": "Off",
+  "voice.summary.one": "1 step",
+  "voice.summary.many": "{{count}} steps",
+  "voice.chainHint":
+    "The steps run top to bottom. The order is fixed because each one works " +
+    "better on what the previous one left behind.",
+  "voice.loading": "Loading the voice chain…",
+  "voice.loadFailed": "Could not load the voice chain. Try again in a moment.",
+  "voice.deliveryRequired": "Pick a delivery target so there is a loudness to match.",
+  "voice.strategy.dsp": "Fast",
+  "voice.strategy.model": "AI model",
+  "voice.presence.label": "How much to lift",
+  "voice.presence.hint":
+    "A little goes a long way: past about 4 dB the voice starts sounding like a phone call.",
+  "voice.delivery.legend": "Where is this going?",
 
   // --- destinos de entrega ---------------------------------------------
   "voice.delivery.streaming.label": "Streaming (Spotify, YouTube, TIDAL, Amazon)",

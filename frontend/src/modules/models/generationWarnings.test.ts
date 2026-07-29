@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { translate } from "../../i18n";
 import { SINGLE_FILE_DISK_PEAK_FACTOR, buildWarnings } from "./generationWarnings";
 
 const GB = 1024 ** 3;
@@ -127,8 +128,11 @@ describe("aviso de disco para checkpoints single-file", () => {
   it("el mensaje nombra el pico, no el tamano del checkpoint", () => {
     const tight = { ...singleFile, disk: { targetPath: "D:\temp", freeBytes: 20 * GB } };
     const warning = buildWarnings(tight, "fp16", checkpoint).find((w) => w.code === "disk_low");
-    expect(warning?.message).toContain("24.0 GB");
-    expect(warning?.message).not.toContain("6.0 GB requeridos");
+    const message = warning
+      ? translate("en", warning.key, warning.params)
+      : undefined;
+    expect(message).toContain("about 24.0 GB of peak disk space");
+    expect(message).not.toContain("6.0 GB required");
   });
 
   it("el factor medido esta expuesto como constante revisable", () => {

@@ -2,23 +2,45 @@
 // entre v0.15.0 y v0.16.2) se conservan tal cual estaban: eran correctos, solo
 // estaban en el lugar equivocado.
 export const es = {
-  // --- avisos de instalacion de modelos ---------------------------------
-  "warning.degraded": "No se pudo evaluar este modelo. Podés instalarlo igual.",
-  "warning.gated":
+  // --- modulo de generacion ----------------------------------------------
+  "generation.compat.readyOnnx": "ONNX listo",
+  "generation.compat.needsConversion": "Requiere conversión",
+  "generation.compat.singleFile": "Archivo único",
+  "generation.compat.gated": "Acceso restringido",
+  "generation.compat.incompatible": "Incompatible",
+  "generation.compat.unknown": "Compatibilidad desconocida",
+  "generation.precision.title": "Precisión",
+  "generation.precision.download": "{{size}} de descarga",
+  "generation.checkpoint.title": "Checkpoint",
+  "generation.details.hide": "Ocultar detalles",
+  "generation.details.show": "Ver detalles",
+  "generation.preflight.loading": "Evaluando descarga y capacidad…",
+  "generation.capacity.vramUnknown": "VRAM libre desconocida",
+  "generation.capacity.vramFree": "{{free}} VRAM libre",
+  "generation.capacity.ramFree": "{{free}} libre",
+  "generation.warnings.ariaLabel": "Avisos de instalación",
+  "generation.warning.degraded":
+    "No se pudo evaluar este modelo. Podés instalarlo igual.",
+  "generation.warning.gated":
     "Repo con acceso restringido: necesitás un token de Hugging Face y aceptar la licencia.",
-  "warning.incompatible.fallback": "No parece un pipeline diffusers.",
-  "warning.diskLow": "Quedan {{free}} libres en {{path}} y hace falta {{needed}}.",
-  "warning.diskLow.singleFile":
+  "generation.warning.incompatible.reason": "{{reason}}",
+  "generation.warning.incompatible.fallback":
+    "No parece un pipeline diffusers.",
+  "generation.warning.diskLow":
+    "Quedan {{free}} libres en {{path}} y hace falta {{needed}}.",
+  "generation.warning.diskLow.singleFile":
     "Convertir este checkpoint necesita ~{{peak}} de pico en {{path}} " +
     "(deja el checkpoint, el pipeline y el ONNX en disco a la vez) y quedan " +
     "{{free}} libres.",
-  "warning.ramLow":
+  "generation.warning.ramLow":
     "La conversión carga el checkpoint completo en RAM: {{needed}} requeridos y {{free}} libres.",
-  "warning.deviceWontFit":
+  "generation.warning.deviceWontFit":
     "{{device}}: no entra. Necesita ~{{needed}} estimados a {{width}}×{{height}} " +
     "y tiene {{free}} libres.",
-  "warning.cpuOnly": "Sin GPU compatible: generar en CPU tarda varios minutos por imagen.",
-  "warning.cpuSlow": "En CPU tarda varios minutos por imagen.",
+  "generation.warning.cpuOnly":
+    "Sin GPU compatible: generar en CPU tarda varios minutos por imagen.",
+  "generation.warning.cpuSlow":
+    "En CPU tarda varios minutos por imagen.",
 
   // --- cadena de mejora de voz -----------------------------------------
   "voice.step.denoise.label": "Quitar ruido de fondo",
@@ -46,6 +68,25 @@ export const es = {
     "Lleva el volumen general al valor que pide la plataforma donde va a " +
     "publicarse. Va siempre último, porque mide el resultado final: medirlo " +
     "antes daría un número que ya no sería cierto.",
+
+  // --- panel de la cadena de voz ---------------------------------------
+  "voice.sectionTitle": "Voz",
+  "voice.activate": "Trabajar la voz",
+  "voice.summary.none": "Sin usar",
+  "voice.summary.one": "1 paso",
+  "voice.summary.many": "{{count}} pasos",
+  "voice.chainHint":
+    "Los pasos corren de arriba hacia abajo. El orden es fijo porque cada uno " +
+    "trabaja mejor sobre lo que dejó el anterior.",
+  "voice.loading": "Cargando la cadena de voz…",
+  "voice.loadFailed": "No se pudo cargar la cadena de voz. Probá de nuevo en un momento.",
+  "voice.deliveryRequired": "Elegí un destino para que haya un volumen al que ajustar.",
+  "voice.strategy.dsp": "Rápido",
+  "voice.strategy.model": "Modelo IA",
+  "voice.presence.label": "Cuánto realzar",
+  "voice.presence.hint":
+    "Poco alcanza: pasando los 4 dB la voz empieza a sonar a llamada telefónica.",
+  "voice.delivery.legend": "¿A dónde va esto?",
 
   // --- destinos de entrega ---------------------------------------------
   "voice.delivery.streaming.label": "Streaming (Spotify, YouTube, TIDAL, Amazon)",

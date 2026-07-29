@@ -25,12 +25,12 @@ interface GenerationModelCardProps {
   result: HfModelSearchResultResponse;
 }
 
-const COMPAT_LABELS: Record<CompatVerdict, string> = {
-  ready_onnx: "ONNX listo",
-  needs_conversion: "Requiere conversión",
-  single_file: "Single-file",
-  gated: "Acceso restringido",
-  incompatible: "Incompatible",
+const COMPAT_KEYS: Record<CompatVerdict, string> = {
+  ready_onnx: "generation.compat.readyOnnx",
+  needs_conversion: "generation.compat.needsConversion",
+  single_file: "generation.compat.singleFile",
+  gated: "generation.compat.gated",
+  incompatible: "generation.compat.incompatible",
 };
 
 function formatGb(bytes: number): string {
@@ -56,7 +56,8 @@ function checkpointReason(
 }
 
 function CompatBadge({ verdict }: { verdict: CompatVerdict | null }) {
-  const label = verdict ? COMPAT_LABELS[verdict] : "Compatibilidad desconocida";
+  const { t } = useTranslation();
+  const label = t(verdict ? COMPAT_KEYS[verdict] : "generation.compat.unknown");
   const tone =
     verdict === "ready_onnx"
       ? "border-ok text-ok"
@@ -84,6 +85,8 @@ function PrecisionPicker({
   selected: Precision | undefined;
   onChange: (precision: Precision) => void;
 }) {
+  const { t } = useTranslation();
+
   if (costs.length === 0) {
     return null;
   }
@@ -91,7 +94,7 @@ function PrecisionPicker({
   return (
     <fieldset className="flex flex-col gap-2">
       <legend className="font-heading text-xs font-semibold uppercase tracking-wide text-text-dim">
-        Precisión
+        {t("generation.precision.title")}
       </legend>
       <div className="grid gap-2 sm:grid-cols-2">
         {costs.map((cost) => (
@@ -115,7 +118,9 @@ function PrecisionPicker({
               <span className="font-medium text-text">{cost.precision}</span>
             </span>
             <span className="font-mono-tabular text-xs text-text-dim">
-              {formatGb(cost.downloadBytes)} download
+              {t("generation.precision.download", {
+                size: formatGb(cost.downloadBytes),
+              })}
             </span>
           </label>
         ))}
@@ -151,7 +156,7 @@ function CheckpointPicker({
   return (
     <fieldset className="flex flex-col gap-2">
       <legend className="font-heading text-xs font-semibold uppercase tracking-wide text-text-dim">
-        Checkpoint
+        {t("generation.checkpoint.title")}
       </legend>
       <div className="flex flex-col gap-2">
         {candidates.map((candidate) => {
@@ -203,6 +208,7 @@ function CheckpointPicker({
 }
 
 export function GenerationModelCard({ result }: GenerationModelCardProps) {
+  const { t } = useTranslation();
   const [detailsExpanded, setDetailsExpanded] = useState(false);
   const [selectedPrecision, setSelectedPrecision] = useState<Precision | undefined>(
     result.availablePrecisions[0],
@@ -256,20 +262,24 @@ export function GenerationModelCard({ result }: GenerationModelCardProps) {
         ) : (
           <ChevronDown aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.75} />
         )}
-        {detailsExpanded ? "Ocultar detalles" : "Ver detalles"}
+        {t(
+          detailsExpanded
+            ? "generation.details.hide"
+            : "generation.details.show",
+        )}
       </button>
 
       {detailsExpanded && (
         <div className="flex flex-col gap-3 border-t border-border pt-3">
           {preflightQuery.isLoading && (
             <p role="status" className="text-sm text-text-dim">
-              Evaluando descarga y capacidad…
+              {t("generation.preflight.loading")}
             </p>
           )}
 
           {preflightQuery.isError && (
             <p role="alert" className="rounded border border-warn bg-surface-2 px-3 py-2 text-sm text-warn">
-              No se pudo evaluar este modelo. Podés instalarlo igual.
+              {t("generation.warning.degraded")}
             </p>
           )}
 
@@ -300,8 +310,10 @@ export function GenerationModelCard({ result }: GenerationModelCardProps) {
                       <dt className="text-text">{device.name}</dt>
                       <dd className="font-mono-tabular text-xs text-text-dim">
                         {device.freeVramBytes === null
-                          ? "VRAM libre desconocida"
-                          : `${formatGb(device.freeVramBytes)} VRAM libre`}
+                          ? t("generation.capacity.vramUnknown")
+                          : t("generation.capacity.vramFree", {
+                              free: formatGb(device.freeVramBytes),
+                            })}
                       </dd>
                     </div>
                   ))}
@@ -309,7 +321,9 @@ export function GenerationModelCard({ result }: GenerationModelCardProps) {
                     <div className="flex items-center justify-between gap-3 rounded border border-border bg-surface-2 px-3 py-2 text-sm">
                       <dt className="text-text">RAM</dt>
                       <dd className="font-mono-tabular text-xs text-text-dim">
-                        {formatGb(preflightQuery.data.freeRamBytes)} libre
+                        {t("generation.capacity.ramFree", {
+                          free: formatGb(preflightQuery.data.freeRamBytes),
+                        })}
                       </dd>
                     </div>
                   )}
@@ -317,10 +331,13 @@ export function GenerationModelCard({ result }: GenerationModelCardProps) {
               )}
 
               {warnings.length > 0 && (
-                <ul className="flex flex-col gap-2" aria-label="Avisos de instalación">
-                  {warnings.map((warning) => (
+                <ul
+                  className="flex flex-col gap-2"
+                  aria-label={t("generation.warnings.ariaLabel")}
+                >
+                  {warnings.map((warning, index) => (
                     <li
-                      key={`${warning.code}-${warning.message}`}
+                      key={`${warning.code}-${warning.key}-${index}`}
                       className="flex items-start gap-2 rounded border border-warn bg-surface-2 px-3 py-2 text-sm text-warn"
                     >
                       <AlertTriangle
@@ -328,7 +345,7 @@ export function GenerationModelCard({ result }: GenerationModelCardProps) {
                         className="mt-0.5 h-4 w-4 shrink-0"
                         strokeWidth={1.75}
                       />
-                      <span>{warning.message}</span>
+                      <span>{t(warning.key, warning.params)}</span>
                     </li>
                   ))}
                 </ul>

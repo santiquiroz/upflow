@@ -42,7 +42,7 @@ describe("paridad de catálogos", () => {
 
 describe("translate", () => {
   it("interpola los parámetros que recibe", () => {
-    const message = translate("en", "warning.diskLow", {
+    const message = translate("en", "generation.warning.diskLow", {
       free: "6.2 GB",
       path: "D:\\temp",
       needed: "2.6 GB",
@@ -54,7 +54,7 @@ describe("translate", () => {
 
   it("deja el marcador intacto si falta un parámetro", () => {
     // Preferible a mostrar "undefined": el hueco es evidente al mirarlo.
-    const message = translate("en", "warning.diskLow", { free: "6.2 GB" });
+    const message = translate("en", "generation.warning.diskLow", { free: "6.2 GB" });
     expect(message).toContain("{{path}}");
   });
 
@@ -63,7 +63,7 @@ describe("translate", () => {
   });
 
   it("no toca un texto sin parámetros", () => {
-    expect(translate("es", "warning.cpuSlow")).toBe(
+    expect(translate("es", "generation.warning.cpuSlow")).toBe(
       "En CPU tarda varios minutos por imagen.",
     );
   });

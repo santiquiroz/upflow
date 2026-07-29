@@ -98,7 +98,7 @@ afterEach(() => {
 describe("GenerationModelCard", () => {
   it("shows the compat badge without expanding and without calling preflight", () => {
     renderCard();
-    expect(screen.getByText(/requiere conversión/i)).toBeInTheDocument();
+    expect(screen.getByText("Requires conversion")).toBeInTheDocument();
     expect(generationService.preflightGenerationModel).not.toHaveBeenCalled();
   });
 
@@ -106,10 +106,18 @@ describe("GenerationModelCard", () => {
     vi.mocked(generationService.preflightGenerationModel).mockResolvedValue(TIGHT_PREFLIGHT);
 
     renderCard();
-    fireEvent.click(screen.getByRole("button", { name: /detalles/i }));
+    fireEvent.click(screen.getByRole("button", { name: "View details" }));
 
-    await waitFor(() => expect(screen.getByText(/no entra/i)).toBeInTheDocument());
-    expect(screen.getByText(/libres en D:\\temp/i)).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          "RX 6600: does not fit. It needs an estimated 9.0 GB at 512x512 and has 7.0 GB available.",
+        ),
+      ).toBeInTheDocument(),
+    );
+    expect(
+      screen.getByText("Only 1.0 GB free on D:\\temp; 3.0 GB is required."),
+    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^install$/i })).toBeEnabled();
   });
 
@@ -120,7 +128,7 @@ describe("GenerationModelCard", () => {
     });
 
     renderCard({ ...RESULT, availablePrecisions: ["fp32"] });
-    fireEvent.click(screen.getByRole("button", { name: /detalles/i }));
+    fireEvent.click(screen.getByRole("button", { name: "View details" }));
 
     await waitFor(() => expect(screen.getByRole("radio", { name: /fp32/i })).toBeInTheDocument());
     expect(screen.queryByRole("radio", { name: /fp16/i })).not.toBeInTheDocument();
@@ -133,7 +141,7 @@ describe("GenerationModelCard", () => {
 
     renderCard(SINGLE_FILE_RESULT);
     expect(screen.getByText(/single-file/i)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /detalles/i }));
+    fireEvent.click(screen.getByRole("button", { name: "View details" }));
 
     const installable = await screen.findByRole("radio", {
       name: /ponyDiffusionV6XL_v6StartWithThisOne.*6\.5 GB/i,
@@ -171,7 +179,7 @@ describe("GenerationModelCard", () => {
     });
 
     renderCard(SINGLE_FILE_RESULT);
-    fireEvent.click(screen.getByRole("button", { name: /detalles/i }));
+    fireEvent.click(screen.getByRole("button", { name: "View details" }));
     const alternate = await screen.findByRole("radio", { name: /v6Alt/i });
     fireEvent.click(alternate);
     fireEvent.click(screen.getByRole("button", { name: /^install$/i }));
@@ -198,7 +206,7 @@ describe("GenerationModelCard", () => {
     });
 
     renderCard(SINGLE_FILE_RESULT);
-    fireEvent.click(screen.getByRole("button", { name: /detalles/i }));
+    fireEvent.click(screen.getByRole("button", { name: "View details" }));
 
     const checkpointRadios = (await screen.findAllByRole("radio")).filter((radio) =>
       radio.getAttribute("name")?.includes("checkpoint"),
@@ -215,9 +223,15 @@ describe("GenerationModelCard", () => {
     vi.mocked(generationService.preflightGenerationModel).mockResolvedValue(TIGHT_PREFLIGHT);
 
     renderCard();
-    const toggle = screen.getByRole("button", { name: /detalles/i });
+    const toggle = screen.getByRole("button", { name: "View details" });
     fireEvent.click(toggle);
-    await waitFor(() => expect(screen.getByText(/no entra/i)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          "RX 6600: does not fit. It needs an estimated 9.0 GB at 512x512 and has 7.0 GB available.",
+        ),
+      ).toBeInTheDocument(),
+    );
     fireEvent.click(toggle);
     fireEvent.click(toggle);
 
@@ -234,7 +248,7 @@ describe("GenerationModelCard", () => {
     });
 
     renderCard();
-    fireEvent.click(screen.getByRole("button", { name: /detalles/i }));
+    fireEvent.click(screen.getByRole("button", { name: "View details" }));
     await waitFor(() => expect(screen.getByRole("radio", { name: /fp32/i })).toBeInTheDocument());
     fireEvent.click(screen.getByRole("radio", { name: /fp32/i }));
     fireEvent.click(screen.getByRole("button", { name: /^install$/i }));
@@ -254,9 +268,13 @@ describe("GenerationModelCard", () => {
     });
 
     renderCard();
-    fireEvent.click(screen.getByRole("button", { name: /detalles/i }));
+    fireEvent.click(screen.getByRole("button", { name: "View details" }));
 
-    await waitFor(() => expect(screen.getByText(/no se pudo evaluar/i)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(
+        screen.getByText("Could not evaluate this model. You can install it anyway."),
+      ).toBeInTheDocument(),
+    );
     expect(screen.getByRole("button", { name: /^install$/i })).toBeEnabled();
   });
 });
