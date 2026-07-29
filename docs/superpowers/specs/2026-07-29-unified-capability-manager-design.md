@@ -32,7 +32,7 @@ La propuesta del usuario es organizar todo como un árbol por tarea: primero qu�
 | imágenes → reescalado | **implementado** | registro, mismo motor que video |
 | audio → reducción de ruido | **implementado** (DeepFilterNet, RNNoise) | vendorizado |
 | audio → restauración | **implementado** (Apollo, AudioSR) | vendorizado |
-| audio → mejora de voz | **se solapa** con reducción de ruido | — |
+| audio → mejora de voz | **resuelta y en marcha**: el usuario la definió como enfocar voces, de-esser, loudness y manipulación de voz, con productores de audio como público. Toda la parte DSP ya está implementada en `voice_chain.py` — el ffmpeg vendorizado trae `deesser`, `loudnorm` (EBU R128), `firequalizer`, `acompressor`, `agate`, `alimiter`, `adeclick`, `adeclip`, `afftdn` y `arnndn`, así que no necesitó ni un modelo ni una dependencia nueva. Falta el cableado a la UI y el paso por modelo (aislar voz de una mezcla) | DSP: implementado. Modelo: pendiente |
 | audio → separación de stems | **no implementado** | nada en el árbol de código |
 | generación → texto a imagen | **implementado** | registro |
 | generación → imagen a imagen | **no implementado** (las clases ORT img2img sí existen) | — |
@@ -50,6 +50,22 @@ Seis implementadas, nueve no, y una ambigua. El árbol tiene que tratar "no impl
 Rutas actuales: `/` (Enhance: imagen y video), `/audio`, `/generate`, `/models`, `/realtime`, `/settings`, `/users`. Cada superficie tiene su panel y su forma de elegir modelo. El usuario tiene que saber de antemano en qué pestaña vive lo que quiere.
 
 ## Decisiones de diseño propuestas
+
+### 0. Cada capacidad ofrece dos estrategias, y no son excluyentes
+
+Decisión del usuario, transversal a todos los módulos: una capacidad puede resolverse por **DSP** (rápido, determinista, sin descarga) o por **modelo** (mejor calidad, requiere instalarlo), y lo interesante es poder **combinarlas en la misma cadena**. La vía por modelo es el diferencial de la plataforma, así que es de primera clase, no un extra.
+
+El patrón ya existe en el código sin estar nombrado: DeepFilterNet, Apollo y AudioSR **son** trabajo por modelo, y viven al lado de filtros de ffmpeg que son DSP puro. Lo que falta es que se puedan encadenar.
+
+```python
+Strategy = Literal["dsp", "model"]
+```
+
+Una capacidad declara qué estrategias soporta. La UI las ofrece; el usuario elige una, la otra, o una cadena que use las dos.
+
+**La restricción real que esto impone** (implementada ya en `app/services/voice_chain.py`): un paso de modelo **no puede vivir dentro de un filtergraph** — ffmpeg no sabe invocar DeepFilterNet a mitad de camino. Así que un paso de modelo corta la cadena en pasadas separadas, y los filtros consecutivos tienen que fusionarse en una sola pasada, porque cada pasada extra es un ciclo completo de decode y encode sobre todo el medio.
+
+Eso da la abstracción que el resto de los módulos debería reusar: **pasos** (lo que el usuario ordena) contra **etapas** (lo que realmente se ejecuta), con un planificador entre los dos.
 
 ### 1. La hoja del árbol es una *capacidad*, no un modelo
 

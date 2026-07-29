@@ -12,10 +12,32 @@
 
 ---
 
-## Fase 0 — Resolver la ambigüedad y confirmar el orden
+## Fase 0 — Resuelto
 
-- [ ] **Preguntar al usuario qué es "mejora de voz"** y en qué se diferencia de "reducción de ruido". Hoy no hay nada que las distinga: DeepFilterNet y RNNoise hacen supresión de ruido, y Apollo/AudioSR restauran. Si "mejora de voz" es un nombre alternativo para lo mismo, la rama se colapsa; si es otra cosa (ecualización, de-esser, normalización de loudness), es una capacidad nueva sin implementar.
-- [ ] **Confirmar el orden de fases.** El plan propone unificar el backend antes de tocar la UI, porque un árbol sobre los regímenes actuales sería fachada. Si el usuario prefiere ver la UI primero para validar la idea, la Fase 3 puede ir antes con datos simulados, aceptando que se reescribe después.
+- [x] **"Mejora de voz" definida** (2026-07-29): enfocar voces de una película, de-esser, loudness y manipulación de voz, con productores de audio como público. Resultó ser la capacidad más barata de todo el árbol: el ffmpeg vendorizado trae todos los filtros necesarios. La parte DSP ya está implementada y commiteada en `app/services/voice_chain.py` con 27 tests.
+- [ ] **Confirmar el orden de fases.** El plan propone unificar el backend antes de tocar la UI, porque un árbol sobre los regímenes actuales sería fachada. Si se prefiere ver la UI primero para validar la idea, la Fase 3 puede ir antes con datos simulados, aceptando que se reescribe después.
+
+---
+
+## Niveles de viabilidad de las capacidades faltantes
+
+El pedido fue "implementemos todo". Estas son las nueve que faltan, agrupadas por **qué las bloquea**, no por deseo. Los niveles 1 a 3 son trabajo; el nivel 4 necesita una verificación previa que puede volver negativa.
+
+| Nivel | Qué significa | Capacidades |
+|---|---|---|
+| **1 — DSP, sin modelos nuevos** | El ffmpeg vendorizado alcanza. Es trabajo de cableado y UI. | **mejora de voz** (DSP ya hecho); varios "filtros" de video (contraste, denoise espacial, deinterlace) que hoy no se exponen |
+| **2 — Modelo con camino ONNX confirmado** | Las clases ORT existen, verificado. Reusa toda la maquinaria de instalación y conversión que ya está. | **imagen a imagen** (`ORTStableDiffusionXLImg2ImgPipeline` y sus hermanas existen) |
+| **3 — Modelo con motor nuevo, pero camino conocido** | Necesita un motor de inferencia que la app no tiene, pero es territorio recorrido y hay implementaciones de referencia. | **separación de stems** (Demucs); **subtítulos** (whisper.cpp, ya está en el roadmap del README) |
+| **4 — Sin camino confirmado** | No alcanza que el modelo exista: tiene que existir el camino a ONNX ejecutable. Es el mismo techo que ya se midió para FLUX.2, Z-Image y Qwen-Image, donde diffusers carga pero optimum no ejecuta. **Cada una necesita su propio spike de viabilidad antes de prometerse.** | **texto a video**, **texto a 3D**, **imagen a 3D**, **texto a sonido**, **sonido a sonido** |
+
+**Recomendación de orden:** nivel 1 primero (es casi gratis y ya empezó), después el gestor unificado de las Fases 1 a 4, después nivel 2 (que se apoya en el gestor), después nivel 3. El nivel 4 arranca con un spike por capacidad, no con implementación — y el resultado honesto de alguno de esos spikes puede ser "no hay camino todavía", igual que pasó con GGUF.
+
+### Task 0.1 — Terminar el nivel 1 de mejora de voz
+
+- [ ] Un motor `VoiceEnhanceEngine` que ejecute las etapas de `plan_stages` en orden: una pasada de ffmpeg por `FfmpegStage` y la invocación correspondiente por `ModelStage`. El archivo intermedio entre etapas va al temp del job y se limpia en el `finally`, como ya hace el resto del pipeline de audio.
+- [ ] Exponer los destinos de entrega en la API con `delivery_choices()`, para que la UI no duplique los números.
+- [ ] Cablearlo al `AudioJob` existente como un modo más, al lado de los de `AUDIO_ENHANCE_MODES`.
+- [ ] UI: la cadena con sus pasos activables, el selector de destino, y el orden por defecto ya correcto pero reordenable. Acá es donde tiene sentido invocar la skill `ui-ux-pro-max`, que el usuario autorizó — es la primera superficie nueva de verdad.
 
 ---
 
