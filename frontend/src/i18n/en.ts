@@ -93,4 +93,9 @@ export const en = {
   "component.backbone": "backbone (unet/transformer)",
   "component.textEncoder": "text encoder",
   "component.vae": "VAE",
+
+  // --- ajustes: idioma ---------------------------------------------------
+  "settings.language.title": "Language",
+  "settings.language.description":
+    "Applies right away and is remembered on this device.",
 } as const;

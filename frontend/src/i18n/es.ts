@@ -86,4 +86,9 @@ export const es = {
   "component.backbone": "backbone (unet/transformer)",
   "component.textEncoder": "text encoder",
   "component.vae": "VAE",
+
+  // --- ajustes: idioma ---------------------------------------------------
+  "settings.language.title": "Idioma",
+  "settings.language.description":
+    "Se aplica al instante y queda recordado en este equipo.",
 } as const;

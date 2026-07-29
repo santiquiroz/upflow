@@ -4,6 +4,7 @@ import { getEngineInfo, getHealth } from "../../lib/api";
 import type { EngineInfoResponse, HealthResponse } from "../../lib/apiTypes";
 import { DeviceDefault } from "../models/DeviceDefault";
 import { EditableSettingsSection } from "./EditableSettingsSection";
+import { LanguageSection } from "./LanguageSection";
 import { OptimizationCenter } from "./OptimizationCenter";
 
 function AvailabilityRow({ label, available }: { label: string; available: boolean }) {
@@ -122,6 +123,7 @@ export function SettingsPage() {
         <CapacitySectionStatus query={healthQuery} />
         <EditableSettingsSection />
         <DeviceDefault />
+        <LanguageSection />
       </div>
       <OptimizationCenter />
     </div>
