@@ -279,6 +279,61 @@ class ModelStage:
 Stage = FfmpegStage | ModelStage
 
 
+def steps_from_selection(
+    selected_ids: list[str],
+    delivery: str | None = None,
+    presence_db: float | None = None,
+    denoise: DenoiseMode = "fft",
+    highpass_hz: int = _DEFAULT_HIGHPASS_HZ,
+    rnnoise_model: str | None = None,
+) -> list[ChainStep]:
+    """Traduce lo que el usuario tildo en la UI a pasos ejecutables.
+
+    El ORDEN sale del catalogo, NO del orden en que llegaron los ids: la cadena
+    tiene causalidad documentada y un request no deberia poder invertirla por
+    accidente. Si en el futuro se quiere permitir reordenar, es una decision
+    explicita y no un efecto de como el frontend serializo una lista.
+    """
+    wanted = set(selected_ids)
+    options = VoiceChainOptions(
+        denoise=denoise if "denoise" in wanted else "none",
+        highpass_hz=highpass_hz if "highpass" in wanted else None,
+        compress="compress" in wanted,
+        presence_db=presence_db if "presence" in wanted else None,
+        deesser="deesser" in wanted,
+        delivery=delivery if ("loudness" in wanted and delivery) else "none",  # type: ignore[arg-type]
+    )
+    exprs = build_filter_chain(options, rnnoise_model)
+
+    # build_filter_chain ya devuelve las expresiones en el orden correcto; solo
+    # hay que emparejarlas con su entrada del catalogo para llevar la etiqueta.
+    marker_by_step = {
+        "denoise": ("afftdn", "arnndn"),
+        "highpass": ("highpass",),
+        "compress": ("acompressor",),
+        "presence": ("equalizer",),
+        "deesser": ("deesser",),
+        "loudness": ("loudnorm",),
+    }
+    info_by_id = {info.id: info for info in step_catalog()}
+
+    steps: list[ChainStep] = []
+    for expr in exprs:
+        for step_id, markers in marker_by_step.items():
+            if any(expr.startswith(marker) for marker in markers):
+                info = info_by_id[step_id]
+                steps.append(
+                    ChainStep(
+                        id=info.id,
+                        kind=info.kind,
+                        label=info.label,
+                        filter_expr=expr,
+                    )
+                )
+                break
+    return steps
+
+
 def plan_stages(steps: list[ChainStep]) -> list[Stage]:
     """Agrupa los pasos en las pasadas reales de ejecucion.
 

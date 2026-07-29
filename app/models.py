@@ -122,6 +122,12 @@ class AudioJob:
     original_filename: str
     denoise: str | None = None
     restore: str | None = None
+    # Cadena de mejora de voz. Los pasos activos vienen como lista de ids del
+    # step_catalog de voice_chain; el orden lo fija el catalogo, no el request,
+    # porque el orden de la cadena tiene causalidad documentada.
+    voice_steps: list[str] = field(default_factory=list)
+    voice_delivery: str | None = None
+    voice_presence_db: float | None = None
     # Standalone-module output format (Fase C Task 9): "wav" (lossless, no
     # re-encode -- current is already PCM from decode/denoise/restore),
     # "flac" (lossless, ~50% smaller, default), "mp3" (lossy, smallest). See

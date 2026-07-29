@@ -118,11 +118,22 @@ def _needs_conversion(files: list[HfFile]) -> bool:
 
 
 def _read_declared_components(staging_root: Path) -> list[str]:
+    """Componentes que el pipeline realmente trae.
+
+    Un slot declarado como [null, null] esta declarado A PROPOSITO VACIO: el
+    pipeline lo reconoce pero ese repo no lo incluye. Contarlo como presente
+    hacia que la validacion estructural exigiera una carpeta que nunca iba a
+    existir, y el install fallaba con "Faltan componentes del pipeline en el
+    repo: feature_extractor, image_encoder" sobre repos perfectamente validos
+    (reportado 2026-07-29 con UnfilteredAI/NSFW-GEN-ANIME, un SDXL normal).
+    """
     index = json.loads((staging_root / MODEL_INDEX_FILENAME).read_text(encoding="utf-8"))
     return [
         name
         for name, value in index.items()
-        if not name.startswith("_") and isinstance(value, list)
+        if not name.startswith("_")
+        and isinstance(value, list)
+        and any(entry is not None for entry in value)
     ]
 
 

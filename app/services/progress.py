@@ -40,11 +40,14 @@ IMAGE_STAGE_ORDER: tuple[str, ...] = ("validating", "upscaling")
 AUDIO_STAGE_WEIGHTS: dict[str, tuple[str, float]] = {
     "decoding": ("Decoding audio", 10),
     "denoising": ("Denoising", 40),
-    "restoring": ("Restoring", 45),
+    "restoring": ("Restoring", 40),
+    "voicing": ("Enhancing voice", 5),
     "finalizing": ("Writing output", 5),
 }
 
-AUDIO_STAGE_ORDER: tuple[str, ...] = ("decoding", "denoising", "restoring", "finalizing")
+AUDIO_STAGE_ORDER: tuple[str, ...] = (
+    "decoding", "denoising", "restoring", "voicing", "finalizing",
+)
 
 GENERATION_STAGE_DEFS: tuple[tuple[str, str, float], ...] = (
     ("generating", "Generating", 85.0),

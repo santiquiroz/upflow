@@ -62,6 +62,7 @@ from app.schemas import (
     VideoJobResponse,
     VideoJobsListResponse,
     VideoProfileResponse,
+    VoiceCatalogResponse,
 )
 from app.services.audio_job_manager import AudioJobManager
 from app.services.auth.identity import AuthenticatedUser
@@ -87,6 +88,7 @@ from app.services.storage import StorageService
 from app.services.stream_analysis import parse_audio_tracks, parse_subtitle_tracks
 from app.services.update_service import UpdateService
 from app.services.video_job_manager import VideoJobManager
+from app.services.voice_chain import delivery_choices, step_catalog
 
 router = APIRouter(prefix="/api/v1", tags=["api"])
 
@@ -132,6 +134,23 @@ def sanitize_filename(filename: str | None, default: str) -> str:
     if not stripped:
         stripped = default
     return _escape_reserved_stem(stripped)
+
+
+def _parse_voice_steps(raw: object) -> list[str]:
+    """Los pasos llegan como lista separada por comas en un campo de formulario.
+
+    El ORDEN de lo que llega no importa: steps_from_selection lo reordena segun
+    el catalogo, porque la cadena tiene causalidad y un request no deberia poder
+    invertirla.
+
+    Acepta `object` y no `str | None` a proposito: los tests de ruta de este
+    repo llaman las corrutinas DIRECTO, sin pasar por FastAPI, asi que un
+    parametro no provisto llega como el sentinel `Form(...)` en vez de None.
+    Tratar cualquier cosa que no sea str como "no vino" cubre los dos caminos.
+    """
+    if not isinstance(raw, str) or not raw.strip():
+        return []
+    return [entry.strip() for entry in raw.split(",") if entry.strip()]
 
 
 class ResolvedVideoJobFields(NamedTuple):
@@ -861,6 +880,9 @@ async def create_audio_job(
     restore: str | None = Form(default=None),
     device: str | None = Form(default=None),
     output_format: str = Form(default="flac"),
+    voice_steps: str | None = Form(default=None),
+    voice_delivery: str | None = Form(default=None),
+    voice_presence_db: float | None = Form(default=None),
     audio_jobs: AudioJobManager = Depends(get_audio_job_manager),
     storage: StorageService = Depends(get_storage),
     settings: Settings = Depends(get_settings),
@@ -881,6 +903,11 @@ async def create_audio_job(
             restore=restore,
             device=device,
             output_format=output_format,
+            voice_steps=_parse_voice_steps(voice_steps),
+            voice_delivery=voice_delivery if isinstance(voice_delivery, str) else None,
+            voice_presence_db=(
+                voice_presence_db if isinstance(voice_presence_db, (int, float)) else None
+            ),
             job_id=token,
             owner=current_user,
         )
@@ -923,6 +950,38 @@ async def audio_capabilities(settings: Settings = Depends(get_settings)) -> Audi
         denoise_modes=denoise_modes,
         restore_available=bool(restore_modes),
         restore_modes=restore_modes,
+    )
+
+
+@router.get("/audio/voice-catalog", response_model=VoiceCatalogResponse)
+async def get_voice_catalog() -> VoiceCatalogResponse:
+    """Los pasos y destinos de la cadena de voz, con sus explicaciones.
+
+    Vienen del backend a proposito: una sola fuente de verdad para las
+    etiquetas, las descripciones y los numeros de loudness, en vez de que el
+    frontend los duplique y se desincronicen.
+    """
+    return VoiceCatalogResponse(
+        steps=[
+            {
+                "id": info.id,
+                "label": info.label,
+                "description": info.description,
+                "kind": info.kind,
+                "default_enabled": info.default_enabled,
+            }
+            for info in step_catalog()
+        ],
+        deliveries=[
+            {
+                "id": choice["id"],
+                "label": choice["label"],
+                "description": choice["description"],
+                "lufs": choice["lufs"],
+                "true_peak_db": choice["truePeakDb"],
+            }
+            for choice in delivery_choices()
+        ],
     )
 
 

@@ -53,6 +53,11 @@ dependencies = [
   "optimum==2.1.0",
   "optimum-onnx==0.1.0",
   "transformers>=4.36,<4.58",
+  # Tokenizer T5 de SD3.5 y Flux. Sin esto el install de esas dos
+  # arquitecturas muere con "Cannot instantiate this tokenizer from a slow
+  # version. If it's based on sentencepiece, make sure you have sentencepiece
+  # installed" (reportado 2026-07-29 con un repo Flux real).
+  "sentencepiece>=0.2.0,<1.0.0",
   "diffusers>=0.30,<1.0",
   # Subproyecto B (admision por capacidad, ver docs/superpowers/specs/
   # 2026-07-24-gpu-capacity-admission-design.md) - RAM libre real para

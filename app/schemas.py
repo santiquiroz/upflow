@@ -267,6 +267,30 @@ class PreflightResponse(BaseModel):
     )
 
 
+class VoiceStepResponse(BaseModel):
+    id: str
+    label: str
+    # Descripcion en lenguaje llano. SIEMPRE visible en la UI, no solo en un
+    # tooltip: usar hover como unico mecanismo para informacion critica es un
+    # fallo de accesibilidad conocido.
+    description: str
+    kind: str
+    default_enabled: bool = Field(serialization_alias="defaultEnabled")
+
+
+class VoiceDeliveryResponse(BaseModel):
+    id: str
+    label: str
+    description: str
+    lufs: float
+    true_peak_db: float = Field(serialization_alias="truePeakDb")
+
+
+class VoiceCatalogResponse(BaseModel):
+    steps: list[VoiceStepResponse]
+    deliveries: list[VoiceDeliveryResponse]
+
+
 class InstallModelRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 

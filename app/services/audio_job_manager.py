@@ -75,10 +75,16 @@ class AudioJobManager:
         restore: str | None = None,
         device: str | None = None,
         output_format: str = "flac",
+        voice_steps: list[str] | None = None,
+        voice_delivery: str | None = None,
+        voice_presence_db: float | None = None,
         job_id: str | None = None,
         owner: AuthenticatedUser | None = None,
     ) -> AudioJob:
         self._validate_modes(denoise, restore)
+        selected_voice_steps = self._validate_voice_selection(
+            voice_steps or [], voice_delivery
+        )
         self._validate_output_format(output_format)
         await self._validate_device(device)
 
@@ -92,6 +98,9 @@ class AudioJobManager:
             restore=restore,
             device=device,
             output_format=output_format,
+            voice_steps=selected_voice_steps,
+            voice_delivery=voice_delivery,
+            voice_presence_db=voice_presence_db,
             owner_id=owner.id if owner is not None else None,
         )
         if job_id is not None:
@@ -146,6 +155,32 @@ class AudioJobManager:
         if restore not in AUDIO_RESTORE_MODES:
             raise ValueError(f"restore must be one of {sorted(AUDIO_RESTORE_MODES)}")
         validate_restore_mode_ready(self.settings, restore)
+
+    def _validate_voice_selection(
+        self, selected: list[str], delivery: str | None
+    ) -> list[str]:
+        from app.services.voice_chain import delivery_choices, step_catalog
+
+        known = {info.id for info in step_catalog()}
+        unknown = sorted(set(selected) - known)
+        if unknown:
+            raise ValueError(
+                "Pasos de mejora de voz desconocidos: " + ", ".join(unknown)
+            )
+        if delivery is not None:
+            valid = {choice["id"] for choice in delivery_choices()}
+            if delivery not in valid:
+                raise ValueError(
+                    f"Destino de entrega desconocido: {delivery!r}. "
+                    f"Validos: {', '.join(sorted(str(v) for v in valid))}."
+                )
+        # Pedir ajuste de loudness sin destino no tiene numero al que ajustar.
+        # Se rechaza en vez de inventar uno o de descartarlo en silencio.
+        if "loudness" in selected and delivery is None:
+            raise ValueError(
+                "El paso de ajuste de loudness necesita un destino de entrega."
+            )
+        return list(selected)
 
     def _validate_output_format(self, output_format: str) -> None:
         if output_format not in AUDIO_OUTPUT_FORMATS:

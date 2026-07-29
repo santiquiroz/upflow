@@ -7,6 +7,8 @@ from pathlib import Path
 from app.config import Settings
 from app.models import AudioJob
 from app.services.engines.audio_enhance import AudioEnhancer
+from app.services.engines.voice_enhance import VoiceEnhancer
+from app.services.voice_chain import steps_from_selection
 from app.services.restorer_registry import AudioRestorer
 from app.services.process_runner import run_guarded_process
 from app.services.progress import advance_audio_stage, complete_audio_stages
@@ -41,10 +43,12 @@ class AudioPipeline:
         settings: Settings,
         audio_enhancers: dict[str, AudioEnhancer],
         restorers: dict[str, AudioRestorer],
+        voice_enhancer: VoiceEnhancer | None = None,
     ) -> None:
         self.settings = settings
         self.audio_enhancers = audio_enhancers
         self.restorers = restorers
+        self.voice_enhancer = voice_enhancer
 
     async def run(self, job: AudioJob) -> Path:
         work_dir = self.settings.temp_path / f"audio-{job.id}"
@@ -70,6 +74,22 @@ class AudioPipeline:
             restored = work_dir / "restored.wav"
             await self._restore(job.restore, current, restored, job.device)
             current = restored
+
+        if job.voice_steps and self.voice_enhancer is not None:
+            advance_audio_stage(job, "voicing")
+            voiced = work_dir / "voiced.wav"
+            await self.voice_enhancer.run(
+                steps_from_selection(
+                    job.voice_steps,
+                    delivery=job.voice_delivery,
+                    presence_db=job.voice_presence_db,
+                    rnnoise_model=str(self.settings.rnnoise_model_path),
+                ),
+                current,
+                voiced,
+                work_dir,
+            )
+            current = voiced
 
         advance_audio_stage(job, "finalizing")
         output_path = self.settings.outputs_path / f"{job.id}.{job.output_format}"

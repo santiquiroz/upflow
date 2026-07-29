@@ -17,6 +17,7 @@ from app.services.generation_installer import (
     _filter_to_declared,
     _generation_model_id,
     _patch_legacy_component_configs,
+    _read_declared_components,
     _select_files,
     map_disk_full,
 )
@@ -783,3 +784,61 @@ async def test_single_file_missing_checkpoint_lists_root_candidates(
     assert "pony.safetensors" in str(exc_info.value)
     assert "nested/ignored.safetensors" not in str(exc_info.value)
     assert hf.download_calls == []
+
+
+# ---------------------------------------------------------------------------
+# Bug 2026-07-29: componentes declarados [null, null]
+#
+# Reportado con UnfilteredAI/NSFW-GEN-ANIME, un SDXL normal de 3559 descargas.
+# Su model_index declara feature_extractor e image_encoder como [null, null] --
+# el pipeline reconoce el slot, ese repo no lo incluye. El codigo los contaba
+# como presentes y la validacion estructural exigia carpetas que nunca iban a
+# existir, fallando con "Faltan componentes del pipeline en el repo".
+# ---------------------------------------------------------------------------
+
+NULL_SLOT_MODEL_INDEX = json.dumps(
+    {
+        "_class_name": "StableDiffusionXLPipeline",
+        "feature_extractor": [None, None],
+        "image_encoder": [None, None],
+        "scheduler": ["diffusers", "EulerAncestralDiscreteScheduler"],
+        "text_encoder": ["transformers", "CLIPTextModel"],
+        "unet": ["diffusers", "UNet2DConditionModel"],
+        "vae": ["diffusers", "AutoencoderKL"],
+    }
+)
+
+
+def test_null_declared_components_are_not_counted_as_present(tmp_path: Path) -> None:
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    (staging / "model_index.json").write_text(NULL_SLOT_MODEL_INDEX, encoding="utf-8")
+
+    declared = _read_declared_components(staging)
+
+    assert "feature_extractor" not in declared
+    assert "image_encoder" not in declared
+    assert declared == ["scheduler", "text_encoder", "unet", "vae"]
+
+
+def test_components_with_a_real_class_are_still_counted(tmp_path: Path) -> None:
+    # Guard contra sobre-corregir: un slot con clase real sigue siendo requerido.
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    (staging / "model_index.json").write_text(NULL_SLOT_MODEL_INDEX, encoding="utf-8")
+
+    declared = _read_declared_components(staging)
+
+    assert "unet" in declared
+    assert "vae" in declared
+
+
+def test_a_partially_null_slot_is_still_counted(tmp_path: Path) -> None:
+    # [null, "Algo"] no es un slot vacio: alcanza con que UNA entrada no sea null.
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    (staging / "model_index.json").write_text(
+        json.dumps({"_class_name": "X", "raro": [None, "CLIPTokenizer"]}), encoding="utf-8"
+    )
+
+    assert _read_declared_components(staging) == ["raro"]

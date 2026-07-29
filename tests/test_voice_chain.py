@@ -12,6 +12,7 @@ from app.services.voice_chain import (
     delivery_choices,
     plan_stages,
     step_catalog,
+    steps_from_selection,
 )
 
 
@@ -320,3 +321,64 @@ def test_defaults_in_the_catalog_match_the_options_defaults():
     assert defaults["denoise"] is (options.denoise != "none")
     assert defaults["presence"] is (options.presence_db is not None)
     assert defaults["loudness"] is (options.delivery != "none")
+
+
+# ---------------------------------------------------------------------------
+# steps_from_selection: de lo que tildo el usuario a pasos ejecutables
+# ---------------------------------------------------------------------------
+
+
+def test_selection_only_includes_what_was_asked():
+    steps = steps_from_selection(["highpass", "deesser"])
+    assert [s.id for s in steps] == ["highpass", "deesser"]
+
+
+def test_selection_ignores_the_order_the_ids_arrived_in():
+    # La cadena tiene causalidad: un request no deberia poder invertirla por
+    # accidente segun como el frontend serializo la lista.
+    reversed_order = steps_from_selection(["loudness", "deesser", "highpass"], delivery="streaming")
+    assert [s.id for s in reversed_order] == ["highpass", "deesser", "loudness"]
+
+
+def test_selection_carries_the_human_label_for_each_step():
+    steps = steps_from_selection(["highpass"])
+    assert steps[0].label == "Limpiar los graves"
+
+
+def test_loudness_without_a_delivery_target_is_dropped():
+    # Sin destino no hay numero al que ajustar: incluirlo seria inventar uno.
+    steps = steps_from_selection(["loudness"], delivery=None)
+    assert steps == []
+
+
+def test_presence_without_a_gain_is_dropped():
+    assert steps_from_selection(["presence"], presence_db=None) == []
+    assert [s.id for s in steps_from_selection(["presence"], presence_db=3.0)] == ["presence"]
+
+
+def test_empty_selection_gives_no_steps():
+    assert steps_from_selection([]) == []
+
+
+def test_unknown_ids_are_ignored_instead_of_failing():
+    steps = steps_from_selection(["highpass", "inventado"])
+    assert [s.id for s in steps] == ["highpass"]
+
+
+def test_selection_uses_rnnoise_when_the_model_is_available():
+    steps = steps_from_selection(
+        ["denoise"], denoise="rnnoise", rnnoise_model=r"C\:/m.rnnn"
+    )
+    assert steps[0].filter_expr == r"arnndn=m=C\:/m.rnnn"
+
+
+def test_a_full_selection_produces_the_documented_order():
+    steps = steps_from_selection(
+        ["denoise", "highpass", "compress", "presence", "deesser", "loudness"],
+        delivery="ebu_r128",
+        presence_db=3.0,
+    )
+    assert [s.id for s in steps] == [
+        "denoise", "highpass", "compress", "presence", "deesser", "loudness",
+    ]
+    assert "loudnorm=I=-23.0" in (steps[-1].filter_expr or "")
