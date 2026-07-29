@@ -1,0 +1,96 @@
+{
+ "flux2_backbone": {
+  "detector_says": "flux-2-dev",
+  "filename": "flux-2-klein-4b-fp8.safetensors",
+  "has_lora_markers": false,
+  "repo": "black-forest-labs/FLUX.2-klein-4b-fp8",
+  "role_sample_keys": {
+   "double_blocks.0.img_attn.proj.input_scale": [],
+   "single_blocks.0.linear1.input_scale": []
+  },
+  "total_keys": 309,
+  "watched_keys": {
+   "double_blocks.0.img_attn.norm.key_norm.scale": [
+    128
+   ],
+   "single_stream_modulation.lin.weight": [
+    9216,
+    3072
+   ]
+  }
+ },
+ "ipadapter_lora": {
+  "detector_says": "v1",
+  "filename": "ip-adapter-faceid-plusv2_sdxl_lora.safetensors",
+  "has_lora_markers": true,
+  "repo": "h94/IP-Adapter-FaceID",
+  "role_sample_keys": {},
+  "total_keys": 1680,
+  "watched_keys": {}
+ },
+ "pony_sdxl": {
+  "detector_says": "xl_base",
+  "filename": "ponyDiffusionV6XL_v6StartWithThisOne.safetensors",
+  "has_lora_markers": false,
+  "repo": "LyliaEngine/Pony_Diffusion_V6_XL",
+  "role_sample_keys": {
+   "conditioner.embedders.0.transformer.text_model.embeddings.position_embedding.weight": [
+    77,
+    768
+   ],
+   "first_stage_model.decoder.conv_in.bias": [
+    512
+   ],
+   "model.diffusion_model.input_blocks.0.0.bias": [
+    320
+   ]
+  },
+  "total_keys": 2515,
+  "watched_keys": {
+   "conditioner.embedders.0.transformer.text_model.embeddings.position_embedding.weight": [
+    77,
+    768
+   ],
+   "conditioner.embedders.1.model.positional_embedding": [
+    77,
+    1280
+   ],
+   "conditioner.embedders.1.model.transformer.resblocks.9.mlp.c_proj.bias": [
+    1280
+   ],
+   "model.diffusion_model.input_blocks.0.0.weight": [
+    320,
+    4,
+    3,
+    3
+   ]
+  }
+ },
+ "vae_only": {
+  "detector_says": "v1",
+  "filename": "sdxl_vae.safetensors",
+  "has_lora_markers": false,
+  "repo": "LyliaEngine/Pony_Diffusion_V6_XL",
+  "role_sample_keys": {
+   "decoder.conv_in.bias": [
+    512
+   ],
+   "encoder.conv_in.bias": [
+    128
+   ]
+  },
+  "total_keys": 250,
+  "watched_keys": {}
+ },
+ "zimage_lora": {
+  "detector_says": "v1",
+  "filename": "ZI Ada Wong (vrtlAdaWong).safetensors",
+  "has_lora_markers": true,
+  "repo": "nphSi/Z-Image-Lora",
+  "role_sample_keys": {
+   "diffusion_model.layers.0.attention.to_k.alpha": []
+  },
+  "total_keys": 630,
+  "watched_keys": {}
+ }
+}
