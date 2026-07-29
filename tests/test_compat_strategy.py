@@ -68,14 +68,14 @@ def test_the_generation_strategy_offers_the_root_checkpoints():
 def test_an_onnx_upscaler_installs_direct():
     verdict, reason = UpscalerCompatStrategy().classify(("RealESRGAN_x4.onnx",), False)
     assert verdict == "ready_onnx"
-    assert reason
+    assert reason.key
 
 
 def test_torch_weights_need_conversion():
     for name in ("model.safetensors", "model.pth"):
         verdict, reason = UpscalerCompatStrategy().classify((name,), False)
         assert verdict == "needs_conversion", name
-        assert "Spandrel" in reason
+        assert reason.key == "compat.upscaler.needsConversion"
 
 
 def test_onnx_wins_over_torch_weights():
@@ -92,7 +92,7 @@ def test_a_repo_without_weights_is_incompatible():
         ("README.md", "config.json", "preview.png"), False
     )
     assert verdict == "incompatible"
-    assert reason
+    assert reason.key
 
 
 def test_an_empty_repo_is_incompatible():
@@ -106,7 +106,7 @@ def test_a_gated_repo_is_gated_no_matter_what_it_contains(gated):
     # seria una conjetura.
     verdict, reason = UpscalerCompatStrategy().classify(("model.onnx",), gated)
     assert verdict == "gated"
-    assert "token" in reason
+    assert reason.key == "compat.gated"
 
 
 def test_a_not_gated_repo_is_classified_by_its_content():

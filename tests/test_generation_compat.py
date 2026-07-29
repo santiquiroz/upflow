@@ -22,7 +22,7 @@ def test_repo_without_model_index_and_root_safetensors_is_single_file_candidate(
     # Caso real: wikeeyang/Flux2-Klein-9B-True-V2 (15 archivos, sin model_index).
     verdict, reason = classify(("config.json", "weights.safetensors"), False)
     assert verdict == "single_file"
-    assert "header" in reason.lower()
+    assert reason.key == "compat.singleFile"
 
 
 def test_repo_without_model_index_or_root_safetensors_is_incompatible():
@@ -31,13 +31,13 @@ def test_repo_without_model_index_or_root_safetensors_is_incompatible():
         False,
     )
     assert verdict == "incompatible"
-    assert "model_index.json" in reason
+    assert reason.params["filename"] == "model_index.json"
 
 
 def test_torch_only_repo_needs_conversion():
     verdict, reason = classify(SD15, False)
     assert verdict == "needs_conversion"
-    assert reason
+    assert reason.key
 
 
 def test_repo_with_onnx_for_every_torch_component_is_ready():
@@ -60,7 +60,7 @@ def test_gated_repo_wins_over_everything_else():
     for gated in ("auto", "manual", True):
         verdict, reason = classify(SD15, gated)
         assert verdict == "gated"
-        assert "token" in reason.lower()
+        assert reason.key == "compat.gated"
 
 
 def test_gated_wins_even_when_model_index_is_missing():
@@ -104,15 +104,16 @@ SINGLE_FILE_CHECKPOINTS = (
 def test_repo_with_weights_only_at_root_is_incompatible():
     verdict, reason = classify(SINGLE_FILE_CHECKPOINTS, False)
     assert verdict == "incompatible"
-    assert reason
+    assert reason.key
 
 
-def test_incompatible_reason_explains_the_single_file_layout():
+def test_incompatible_reason_distinguishes_the_single_file_layout():
     _verdict, reason = classify(SINGLE_FILE_CHECKPOINTS, False)
-    lowered = reason.lower()
     # El motivo tiene que distinguirse del "falta model_index.json": aca SI
-    # esta, el problema es otro y el usuario necesita saber cual.
-    assert "model_index.json" not in lowered or "carpeta" in lowered or "componente" in lowered
+    # esta, el problema es otro y el usuario necesita saber cual. Con claves eso
+    # se verifica directo en vez de buscar palabras en una oracion.
+    assert reason.key == "compat.weightsAtRoot"
+    assert reason.key != "compat.noModelIndex"
 
 
 def test_repo_with_no_weights_at_all_is_incompatible():

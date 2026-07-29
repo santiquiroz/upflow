@@ -1089,7 +1089,8 @@ def _result_to_response(item, strategy: CompatStrategy) -> HfModelSearchResultRe
         likes=item.likes,
         tags=list(item.tags),
         compat=verdict,
-        compat_reason=reason,
+        compat_reason_key=reason.key,
+        compat_reason_params=dict(reason.params),
         available_precisions=list(options.precisions),
     )
 

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from app.exceptions import HfAuthError
-from app.services.generation_compat import CompatVerdict, classify
+from app.services.generation_compat import CompatReason, CompatVerdict, classify
 from app.services.generation_single_file import (
     CheckpointVerdict,
     classify_checkpoint,
@@ -59,10 +59,11 @@ class CheckpointCandidate:
 class PreflightReport:
     repo_id: str
     compat: CompatVerdict | None
-    compat_reason: str | None
+    compat_reason_key: str | None
     degraded: bool
     reference_width: int
     reference_height: int
+    compat_reason_params: dict[str, str] = field(default_factory=dict)
     precisions: list[PrecisionCost] = field(default_factory=list)
     devices: list[DeviceCapacity] = field(default_factory=list)
     disk: DiskCapacity | None = None
@@ -153,7 +154,7 @@ async def preflight(
 
     def build(
         compat: CompatVerdict | None,
-        reason: str | None,
+        reason: CompatReason | None,
         degraded: bool,
         precisions: list[PrecisionCost] | None = None,
         checkpoints: list[CheckpointCandidate] | None = None,
@@ -161,7 +162,8 @@ async def preflight(
         return PreflightReport(
             repo_id=repo_id,
             compat=compat,
-            compat_reason=reason,
+            compat_reason_key=None if reason is None else reason.key,
+            compat_reason_params={} if reason is None else dict(reason.params),
             degraded=degraded,
             reference_width=width,
             reference_height=height,
@@ -180,7 +182,8 @@ async def preflight(
         # puede detectarlo desde aca porque repo_files no devuelve el flag
         # `gated` -- el error de auth ES la senal. Si el usuario tiene un token
         # valido, repo_files funciona y el repo se clasifica por su contenido.
-        return build("gated", str(exc), False)
+        # El detalle es el texto del 401/403: dato, no copia.
+        return build("gated", CompatReason("compat.gatedAuth", {"detail": str(exc)}), False)
     except Exception:  # noqa: BLE001 - el pre-flight es diagnostico: nunca propaga
         return build(None, None, True)
 
@@ -227,7 +230,8 @@ async def preflight(
     try:
         declared = await _read_declared(hf_client, repo_id)
     except HfAuthError as exc:
-        return build("gated", str(exc), False)
+        # El detalle es el texto del 401/403: dato, no copia.
+        return build("gated", CompatReason("compat.gatedAuth", {"detail": str(exc)}), False)
     except Exception:  # noqa: BLE001
         # El veredicto se conserva: se sabe que necesita conversion, solo no se
         # pudo poner precio a cada precision.

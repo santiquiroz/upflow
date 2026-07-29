@@ -4,7 +4,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from app.services.generation_compat import CompatVerdict, classify as classify_generation
+from app.services.generation_compat import (
+    CompatReason,
+    CompatVerdict,
+    classify as classify_generation,
+)
 from app.services.generation_variants import available_precisions_from_names
 
 # Lo unico especifico de un dominio en todo el descubrimiento de modelos es la
@@ -33,7 +37,7 @@ class InstallOptions:
 class CompatStrategy(Protocol):
     def classify(
         self, filenames: tuple[str, ...], gated: bool | str | None
-    ) -> tuple[CompatVerdict, str]: ...
+    ) -> tuple[CompatVerdict, CompatReason]: ...
 
     def install_options(self, filenames: tuple[str, ...]) -> InstallOptions: ...
 
@@ -47,7 +51,7 @@ class GenerationCompatStrategy:
 
     def classify(
         self, filenames: tuple[str, ...], gated: bool | str | None
-    ) -> tuple[CompatVerdict, str]:
+    ) -> tuple[CompatVerdict, CompatReason]:
         return classify_generation(filenames, gated)
 
     def install_options(self, filenames: tuple[str, ...]) -> InstallOptions:
@@ -76,30 +80,19 @@ class UpscalerCompatStrategy:
 
     def classify(
         self, filenames: tuple[str, ...], gated: bool | str | None
-    ) -> tuple[CompatVerdict, str]:
+    ) -> tuple[CompatVerdict, CompatReason]:
         # gated primero y sin excepcion: sin token no se puede leer nada mas del
         # repo, asi que cualquier otro veredicto seria una conjetura.
         if gated:
-            return (
-                "gated",
-                "Repo con acceso restringido: necesita un token de Hugging Face "
-                "y aceptar la licencia.",
-            )
+            return "gated", CompatReason("compat.gated")
 
         if _has_suffix(filenames, (_ONNX_SUFFIX,)):
-            return "ready_onnx", "Trae un .onnx: se instala directo."
+            return "ready_onnx", CompatReason("compat.upscaler.readyOnnx")
 
         if _has_suffix(filenames, _CONVERTIBLE_SUFFIXES):
-            return (
-                "needs_conversion",
-                "Trae pesos en formato de PyTorch: se convierten a ONNX con "
-                "Spandrel al instalar.",
-            )
+            return "needs_conversion", CompatReason("compat.upscaler.needsConversion")
 
-        return (
-            "incompatible",
-            "No hay ningun archivo de pesos .onnx, .safetensors ni .pth en el repo.",
-        )
+        return "incompatible", CompatReason("compat.upscaler.noWeights")
 
     def install_options(self, filenames: tuple[str, ...]) -> InstallOptions:
         # El instalador de upscalers elige el archivo de pesos solo, con

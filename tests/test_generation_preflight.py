@@ -266,7 +266,7 @@ async def test_gated_repo_reports_gated_not_degraded(tmp_path: Path) -> None:
     )
     assert report.compat == "gated"
     assert report.degraded is False
-    assert report.compat_reason
+    assert report.compat_reason_key
     assert report.precisions == []
 
 

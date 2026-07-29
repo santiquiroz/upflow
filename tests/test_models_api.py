@@ -354,7 +354,7 @@ async def test_an_onnx_upscaler_repo_is_reported_ready() -> None:
     response = await search_models(q="anime", hf_client=hf_client)
 
     assert response.results[0].compat == "ready_onnx"
-    assert response.results[0].compat_reason
+    assert response.results[0].compat_reason_key
 
 
 async def test_a_torch_upscaler_repo_is_reported_as_needing_conversion() -> None:
@@ -397,5 +397,5 @@ async def test_the_upscaler_search_still_serializes_camel_case() -> None:
     response = await search_models(q="anime", hf_client=hf_client)
     dumped = response.model_dump(by_alias=True)["results"][0]
 
-    assert "compatReason" in dumped
+    assert "compatReasonKey" in dumped
     assert "availablePrecisions" in dumped

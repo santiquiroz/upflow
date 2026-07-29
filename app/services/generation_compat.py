@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Literal
 
 CompatVerdict = Literal[
@@ -9,6 +10,21 @@ CompatVerdict = Literal[
     "gated",
     "incompatible",
 ]
+
+@dataclass(frozen=True, slots=True)
+class CompatReason:
+    """Clave de traduccion mas sus datos, no copia.
+
+    Misma decision que el resto del backend desde el spec de i18n de 2026-07-29:
+    con dos idiomas la unica fuente de verdad de la copia es el catalogo de
+    traducciones, y tenerla aca significaria mantener dos catalogos en dos
+    lenguajes distintos. Los params existen para no perder el DATO -- que
+    componentes les falta el ONNX -- al pasar de oracion a clave.
+    """
+
+    key: str
+    params: dict[str, str] = field(default_factory=dict)
+
 
 MODEL_INDEX_FILENAME = "model_index.json"
 _TORCH_SUFFIXES = (".safetensors", ".bin")
@@ -50,34 +66,22 @@ def _has_root_safetensors(filenames: tuple[str, ...]) -> bool:
 
 def classify(
     filenames: tuple[str, ...], gated: bool | str | None
-) -> tuple[CompatVerdict, str]:
+) -> tuple[CompatVerdict, CompatReason]:
     # gated primero y sin excepcion: sin token no se puede leer nada mas del
     # repo, asi que cualquier otro veredicto seria una conjetura.
     if gated:
-        return (
-            "gated",
-            "Repo con acceso restringido: necesita un token de Hugging Face y aceptar la licencia.",
-        )
+        return "gated", CompatReason("compat.gated")
 
     if MODEL_INDEX_FILENAME not in filenames:
         if _has_root_safetensors(filenames):
-            return (
-                "single_file",
-                "Tiene checkpoints .safetensors en la raiz: hay que evaluar sus "
-                "headers antes de saber cuales se pueden instalar.",
-            )
+            return "single_file", CompatReason("compat.singleFile")
         return (
             "incompatible",
-            f"No es un pipeline diffusers: falta {MODEL_INDEX_FILENAME}.",
+            CompatReason("compat.noModelIndex", {"filename": MODEL_INDEX_FILENAME}),
         )
 
     if not has_component_weights(filenames):
-        return (
-            "incompatible",
-            "Los pesos estan sueltos en la raiz del repo, sin carpetas por componente "
-            "(unet, vae, text_encoder...). Es un checkpoint single-file: este instalador "
-            "necesita el layout de carpetas de diffusers.",
-        )
+        return "incompatible", CompatReason("compat.weightsAtRoot")
 
     torch_dirs = _top_level_dirs_with(filenames, _TORCH_SUFFIXES)
     onnx_dirs = _top_level_dirs_with(filenames, (_ONNX_SUFFIX,))
@@ -85,6 +89,6 @@ def classify(
     if missing_onnx:
         return (
             "needs_conversion",
-            "Sin ONNX propio para " + ", ".join(missing_onnx) + ": requiere conversion local.",
+            CompatReason("compat.needsConversion", {"components": ", ".join(missing_onnx)}),
         )
-    return "ready_onnx", "Trae ONNX para todos los componentes: se instala directo."
+    return "ready_onnx", CompatReason("compat.readyOnnx")

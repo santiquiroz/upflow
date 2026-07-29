@@ -29,7 +29,6 @@ export const en = {
     "Could not evaluate this model. You can install it anyway.",
   "generation.warning.gated":
     "Restricted repo: you need a Hugging Face token and to accept the license.",
-  "generation.warning.incompatible.reason": "{{reason}}",
   "generation.warning.incompatible.fallback":
     "This does not look like a diffusers pipeline.",
   "generation.warning.diskLow":
@@ -188,4 +187,46 @@ export const en = {
   "capability.provision.running": "Downloading the package… this can take a few minutes.",
   "capability.provision.done": "Package downloaded. The capability is ready.",
   "capability.provision.failed": "The download failed: {{error}}",
+
+  // --- pila de pasos de video -------------------------------------------
+  "video.steps.title": "Steps",
+  "video.steps.description":
+    "The profile fills this stack. Removing or adding a step updates the panel settings.",
+  "video.steps.listLabel": "Video job steps",
+  "video.steps.empty": "No steps are active. Choose a profile or add one.",
+  "video.steps.add": "Add step",
+  "video.steps.addStep": "Add {{step}}",
+  "video.steps.removeStep": "Remove {{step}}",
+  "video.steps.upscale.label": "Upscale",
+  "video.steps.upscale.description": "{{model}} · {{scale}}×",
+  "video.steps.modelUnknown": "Selected model",
+  "video.steps.interpolate.label": "Interpolate",
+  "video.steps.interpolate.multiplierDescription": "{{engine}} · {{multiplier}}× fps",
+  "video.steps.interpolate.targetDescription": "{{engine}} · target {{target}}",
+  "video.steps.audio.label": "Audio",
+  "video.steps.audio.description": "Enhance with {{modes}}.",
+  "video.steps.subtitles.label": "Subtitles",
+  "video.steps.subtitles.description": "Keep the embedded subtitle tracks.",
+  // --- compatibilidad detectada de un repo -----------------------------
+  "compat.gated":
+    "Restricted repo: it needs a Hugging Face token and the license accepted.",
+  "compat.gatedAuth":
+    "Restricted repo: Hugging Face refused the request ({{detail}}). You need a " +
+    "token and the license accepted.",
+  "compat.singleFile":
+    "It has loose .safetensors checkpoints at the root: their headers have to be " +
+    "read before knowing which ones can be installed.",
+  "compat.noModelIndex": "Not a diffusers pipeline: {{filename}} is missing.",
+  "compat.weightsAtRoot":
+    "The weights sit loose at the root of the repo, with no per-component folders " +
+    "(unet, vae, text_encoder…). That is a single-file checkpoint, and this " +
+    "installer needs the diffusers folder layout.",
+  "compat.needsConversion":
+    "No ONNX of its own for {{components}}: it needs a local conversion.",
+  "compat.readyOnnx": "It ships ONNX for every component: installs directly.",
+  "compat.upscaler.readyOnnx": "It ships an .onnx: installs directly.",
+  "compat.upscaler.needsConversion":
+    "It ships PyTorch weights: they get converted to ONNX with Spandrel on install.",
+  "compat.upscaler.noWeights":
+    "There is no .onnx, .safetensors or .pth weight file in the repo.",
 } as const;

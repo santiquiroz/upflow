@@ -21,7 +21,8 @@ const RESULT: HfModelSearchResultResponse = {
   likes: 42,
   tags: ["onnx"],
   compat: null,
-  compatReason: null,
+  compatReasonKey: null,
+  compatReasonParams: {},
   availablePrecisions: [],
 };
 

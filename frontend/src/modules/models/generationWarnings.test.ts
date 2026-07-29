@@ -7,7 +7,8 @@ const GB = 1024 ** 3;
 const base = {
   repoId: "owner/name",
   compat: "needs_conversion" as const,
-  compatReason: "Sin ONNX propio para unet",
+  compatReasonKey: "compat.needsConversion",
+  compatReasonParams: {},
   degraded: false,
   referenceWidth: 512,
   referenceHeight: 512,

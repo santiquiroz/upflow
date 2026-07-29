@@ -55,18 +55,14 @@ export function buildWarnings(
     });
   }
   if (preflight.compat === "incompatible") {
-    warnings.push(
-      preflight.compatReason
-        ? {
-            code: "incompatible",
-            key: "generation.warning.incompatible.reason",
-            params: { reason: preflight.compatReason },
-          }
-        : {
-            code: "incompatible",
-            key: "generation.warning.incompatible.fallback",
-          },
-    );
+    // El backend ya manda la clave del motivo, asi que se usa tal cual en vez de
+    // envolverla en otra: el fallback es solo para un reporte degradado, donde no
+    // hubo veredicto que explicar.
+    warnings.push({
+      code: "incompatible",
+      key: preflight.compatReasonKey ?? "generation.warning.incompatible.fallback",
+      params: preflight.compatReasonParams,
+    });
   }
 
   const cost = preflight.precisions.find((p) => p.precision === precision);

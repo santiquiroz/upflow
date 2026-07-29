@@ -27,14 +27,16 @@ const RESULT: HfModelSearchResultResponse = {
   likes: 2,
   tags: [],
   compat: "needs_conversion",
-  compatReason: "Sin ONNX propio para unet",
+  compatReasonKey: "compat.needsConversion",
+  compatReasonParams: {},
   availablePrecisions: ["fp16", "fp32"],
 };
 
 const TIGHT_PREFLIGHT: PreflightResponse = {
   repoId: "owner/name",
   compat: "needs_conversion",
-  compatReason: "Sin ONNX propio para unet",
+  compatReasonKey: "compat.needsConversion",
+  compatReasonParams: {},
   degraded: false,
   referenceWidth: 512,
   referenceHeight: 512,
@@ -51,14 +53,16 @@ const TIGHT_PREFLIGHT: PreflightResponse = {
 const SINGLE_FILE_RESULT: HfModelSearchResultResponse = {
   ...RESULT,
   compat: "single_file",
-  compatReason: "Checkpoints safetensors en la raíz",
+  compatReasonKey: "compat.singleFile",
+  compatReasonParams: {},
   availablePrecisions: ["fp16"],
 };
 
 const SINGLE_FILE_PREFLIGHT: PreflightResponse = {
   ...TIGHT_PREFLIGHT,
   compat: "single_file",
-  compatReason: "Checkpoints safetensors en la raíz",
+  compatReasonKey: "compat.singleFile",
+  compatReasonParams: {},
   checkpoints: [
     {
       path: "ponyDiffusionV6XL_v6StartWithThisOne.safetensors",

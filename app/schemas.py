@@ -215,7 +215,12 @@ class HfModelSearchResultResponse(BaseModel):
     # available_precisions queda vacio en upscalers porque su instalador elige
     # el archivo de pesos solo.
     compat: str | None = None
-    compat_reason: str | None = Field(default=None, serialization_alias="compatReason")
+    compat_reason_key: str | None = Field(
+        default=None, serialization_alias="compatReasonKey"
+    )
+    compat_reason_params: dict[str, str] = Field(
+        default_factory=dict, serialization_alias="compatReasonParams"
+    )
     available_precisions: list[str] = Field(
         default_factory=list, serialization_alias="availablePrecisions"
     )
@@ -258,7 +263,12 @@ class CheckpointCandidateResponse(BaseModel):
 class PreflightResponse(BaseModel):
     repo_id: str = Field(serialization_alias="repoId")
     compat: str | None = None
-    compat_reason: str | None = Field(default=None, serialization_alias="compatReason")
+    compat_reason_key: str | None = Field(
+        default=None, serialization_alias="compatReasonKey"
+    )
+    compat_reason_params: dict[str, str] = Field(
+        default_factory=dict, serialization_alias="compatReasonParams"
+    )
     degraded: bool
     reference_width: int = Field(serialization_alias="referenceWidth")
     reference_height: int = Field(serialization_alias="referenceHeight")

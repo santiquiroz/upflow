@@ -468,7 +468,7 @@ def test_preflight_response_serializes_checkpoint_and_ram_aliases() -> None:
     response = PreflightResponse(
         repo_id="owner/checkpoints",
         compat="single_file",
-        compat_reason="candidate",
+        compat_reason_key="compat.singleFile",
         degraded=False,
         reference_width=512,
         reference_height=512,
@@ -901,7 +901,7 @@ async def test_search_results_carry_compat_and_precisions() -> None:
     )
     [result] = response.results
     assert result.compat == "needs_conversion"
-    assert result.compat_reason
+    assert result.compat_reason_key
     assert result.available_precisions == ["fp16", "fp32"]
 
 
@@ -953,7 +953,8 @@ async def test_search_response_serializes_camel_case() -> None:
     )
     dumped = response.model_dump(by_alias=True)["results"][0]
     assert "availablePrecisions" in dumped
-    assert "compatReason" in dumped
+    assert "compatReasonKey" in dumped
+    assert "compatReasonParams" in dumped
 
 
 def test_lifespan_exposes_resource_probes_for_preflight() -> None:

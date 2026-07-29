@@ -23,7 +23,6 @@ export const es = {
     "No se pudo evaluar este modelo. Podés instalarlo igual.",
   "generation.warning.gated":
     "Repo con acceso restringido: necesitás un token de Hugging Face y aceptar la licencia.",
-  "generation.warning.incompatible.reason": "{{reason}}",
   "generation.warning.incompatible.fallback":
     "No parece un pipeline diffusers.",
   "generation.warning.diskLow":
@@ -182,4 +181,46 @@ export const es = {
   "capability.provision.running": "Descargando el paquete… puede tardar unos minutos.",
   "capability.provision.done": "Paquete descargado. La capacidad quedó lista.",
   "capability.provision.failed": "La descarga falló: {{error}}",
+
+  // --- pila de pasos de video -------------------------------------------
+  "video.steps.title": "Pasos",
+  "video.steps.description":
+    "El perfil llena esta pila. Quitar o agregar un paso actualiza los ajustes del panel.",
+  "video.steps.listLabel": "Pasos del trabajo de video",
+  "video.steps.empty": "No hay pasos activos. Elegí un perfil o agregá uno.",
+  "video.steps.add": "Agregar paso",
+  "video.steps.addStep": "Agregar {{step}}",
+  "video.steps.removeStep": "Quitar {{step}}",
+  "video.steps.upscale.label": "Reescalar",
+  "video.steps.upscale.description": "{{model}} · {{scale}}×",
+  "video.steps.modelUnknown": "Modelo seleccionado",
+  "video.steps.interpolate.label": "Interpolar",
+  "video.steps.interpolate.multiplierDescription": "{{engine}} · {{multiplier}}× fps",
+  "video.steps.interpolate.targetDescription": "{{engine}} · objetivo {{target}}",
+  "video.steps.audio.label": "Audio",
+  "video.steps.audio.description": "Mejorar con {{modes}}.",
+  "video.steps.subtitles.label": "Subtítulos",
+  "video.steps.subtitles.description": "Conservar las pistas de subtítulos incluidas.",
+  // --- compatibilidad detectada de un repo -----------------------------
+  "compat.gated":
+    "Repo con acceso restringido: necesita un token de Hugging Face y aceptar la licencia.",
+  "compat.gatedAuth":
+    "Repo con acceso restringido: Hugging Face rechazó el pedido ({{detail}}). " +
+    "Hace falta un token y aceptar la licencia.",
+  "compat.singleFile":
+    "Tiene checkpoints .safetensors sueltos en la raíz: hay que evaluar sus " +
+    "headers antes de saber cuáles se pueden instalar.",
+  "compat.noModelIndex": "No es un pipeline diffusers: falta {{filename}}.",
+  "compat.weightsAtRoot":
+    "Los pesos están sueltos en la raíz del repo, sin carpetas por componente " +
+    "(unet, vae, text_encoder…). Es un checkpoint single-file, y este instalador " +
+    "necesita el layout de carpetas de diffusers.",
+  "compat.needsConversion":
+    "Sin ONNX propio para {{components}}: requiere conversión local.",
+  "compat.readyOnnx": "Trae ONNX para todos los componentes: se instala directo.",
+  "compat.upscaler.readyOnnx": "Trae un .onnx: se instala directo.",
+  "compat.upscaler.needsConversion":
+    "Trae pesos en formato de PyTorch: se convierten a ONNX con Spandrel al instalar.",
+  "compat.upscaler.noWeights":
+    "No hay ningún archivo de pesos .onnx, .safetensors ni .pth en el repo.",
 } as const;

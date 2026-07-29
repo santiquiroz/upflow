@@ -294,7 +294,8 @@ export interface DeviceCapacity {
 export interface PreflightResponse {
   repoId: string;
   compat: CompatVerdict | null;
-  compatReason: string | null;
+  compatReasonKey: string | null;
+  compatReasonParams: Record<string, string>;
   degraded: boolean;
   referenceWidth: number;
   referenceHeight: number;
@@ -313,7 +314,8 @@ export interface HfModelSearchResultResponse {
   likes: number;
   tags: string[];
   compat: CompatVerdict | null;
-  compatReason: string | null;
+  compatReasonKey: string | null;
+  compatReasonParams: Record<string, string>;
   availablePrecisions: Precision[];
 }
 
