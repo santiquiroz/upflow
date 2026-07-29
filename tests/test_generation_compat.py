@@ -64,3 +64,61 @@ def test_gated_false_and_none_are_not_gated():
     for gated in (False, None, ""):
         verdict, _ = classify(SD15, gated)
         assert verdict != "gated"
+
+
+# ---------------------------------------------------------------------------
+# Bug reportado 2026-07-28: un repo de checkpoints sueltos (formato single-file,
+# estilo Civitai) se clasificaba ready_onnx y el install fallaba despues de no
+# descargar nada. Causa: torch_dirs y onnx_dirs son AMBOS vacios cuando los
+# pesos estan en la raiz, y la resta de conjuntos vacios es vacuamente
+# verdadera -> "todo componente torch tiene ONNX".
+# Caso real: Manjushri/pornworks-...-sdxl-and-pony-chekpoint (7 archivos, todos
+# en la raiz, 4 checkpoints de 6616 MB, model_index.json declarando 9
+# componentes que no existen como carpetas).
+# ---------------------------------------------------------------------------
+
+SINGLE_FILE_CHECKPOINTS = (
+    ".gitattributes",
+    "README.md",
+    "model_index.json",
+    "pornworksRealPornPhoto_ponyV04.safetensors",
+    "pornworksRealPornPhoto_v03.safetensors",
+    "pornworksRealPorn_Illustrious_v4_04.safetensors",
+)
+
+
+def test_repo_with_weights_only_at_root_is_incompatible():
+    verdict, reason = classify(SINGLE_FILE_CHECKPOINTS, False)
+    assert verdict == "incompatible"
+    assert reason
+
+
+def test_incompatible_reason_explains_the_single_file_layout():
+    _verdict, reason = classify(SINGLE_FILE_CHECKPOINTS, False)
+    lowered = reason.lower()
+    # El motivo tiene que distinguirse del "falta model_index.json": aca SI
+    # esta, el problema es otro y el usuario necesita saber cual.
+    assert "model_index.json" not in lowered or "carpeta" in lowered or "componente" in lowered
+
+
+def test_repo_with_no_weights_at_all_is_incompatible():
+    # Solo metadata, sin un solo peso: tampoco es instalable.
+    verdict, _ = classify(("model_index.json", "README.md"), False)
+    assert verdict == "incompatible"
+
+
+def test_a_real_pipeline_layout_is_still_classified_normally():
+    # Guard contra sobre-corregir: SD1.5 tiene pesos DENTRO de carpetas de
+    # componente y tiene que seguir siendo needs_conversion.
+    verdict, _ = classify(SD15, False)
+    assert verdict == "needs_conversion"
+
+
+def test_a_real_onnx_pipeline_is_still_ready():
+    verdict, _ = classify(SDXL_ONNX, False)
+    assert verdict == "ready_onnx"
+
+
+def test_gated_still_wins_over_the_single_file_layout():
+    verdict, _ = classify(SINGLE_FILE_CHECKPOINTS, "auto")
+    assert verdict == "gated"

@@ -17,6 +17,24 @@ def _top_level_dirs_with(filenames: tuple[str, ...], suffixes: tuple[str, ...]) 
     }
 
 
+def has_component_weights(filenames: tuple[str, ...]) -> bool:
+    """Hay al menos un peso DENTRO de una carpeta de componente.
+
+    Un pipeline diffusers guarda unet/vae/text_encoder en carpetas propias por
+    definicion, asi que sin esto no es ese layout -- es un repo de checkpoints
+    sueltos (formato single-file, estilo Civitai), que este instalador no sabe
+    usar aunque traiga un model_index.json.
+
+    Existe porque comparar conjuntos de carpetas no distingue "todos los
+    componentes torch tienen su ONNX" de "no hay ningun componente": la resta
+    de dos conjuntos vacios tambien da vacio.
+    """
+    return bool(
+        _top_level_dirs_with(filenames, _TORCH_SUFFIXES)
+        | _top_level_dirs_with(filenames, (_ONNX_SUFFIX,))
+    )
+
+
 def classify(
     filenames: tuple[str, ...], gated: bool | str | None
 ) -> tuple[CompatVerdict, str]:
@@ -32,6 +50,14 @@ def classify(
         return (
             "incompatible",
             f"No es un pipeline diffusers: falta {MODEL_INDEX_FILENAME}.",
+        )
+
+    if not has_component_weights(filenames):
+        return (
+            "incompatible",
+            "Los pesos estan sueltos en la raiz del repo, sin carpetas por componente "
+            "(unet, vae, text_encoder...). Es un checkpoint single-file: este instalador "
+            "necesita el layout de carpetas de diffusers.",
         )
 
     torch_dirs = _top_level_dirs_with(filenames, _TORCH_SUFFIXES)

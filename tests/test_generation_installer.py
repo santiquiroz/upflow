@@ -681,3 +681,38 @@ def test_install_maps_disk_full_to_actionable_error(tmp_path: Path) -> None:
 
     assert job.status == InstallStatus.error
     assert "espacio" in (job.error or "").lower()
+
+
+# ---------------------------------------------------------------------------
+# Bug 2026-07-28: repo de checkpoints sueltos (pesos en la raiz, sin carpetas
+# por componente) pasaba el ruteo, no descargaba NADA y recien fallaba en la
+# validacion estructural con "Faltan componentes". Misma causa raiz que el badge
+# ready_onnx equivocado: la resta de conjuntos de carpetas no distingue "todos
+# los componentes tienen ONNX" de "no hay ningun componente".
+# Caso real: Manjushri/pornworks-...-sdxl-and-pony-chekpoint.
+# ---------------------------------------------------------------------------
+
+
+def _single_file_checkpoint_repo() -> list[HfFile]:
+    return [
+        HfFile(path="model_index.json", size=1024),
+        HfFile(path="README.md", size=512),
+        HfFile(path="pornworksRealPornPhoto_v04.safetensors", size=6616 * 1024 * 1024),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_single_file_checkpoint_repo_fails_early_with_the_layout_reason(
+    tmp_path: Path,
+) -> None:
+    installer, _registry, _settings, hf = make_installer(
+        tmp_path, _single_file_checkpoint_repo()
+    )
+    install_id = await installer.install_from_hf("owner/single-file")
+    await installer._process_next()
+
+    job = installer.status(install_id)
+    assert job.status is InstallStatus.error
+    assert "raiz" in job.error.lower() or "single-file" in job.error.lower()
+    # Falla ANTES de bajar nada: el repo no es instalable por este camino.
+    assert hf.download_calls == []

@@ -20,8 +20,9 @@ from app.services.engines.generation_onnx import (
     _wrap_generation_error,
     generation_dependencies_available,
 )
-from app.services.gpu_session_coordinator import GpuSessionCoordinator
+from app.services.generation_compat import has_component_weights
 from app.services.generation_variants import Precision
+from app.services.gpu_session_coordinator import GpuSessionCoordinator
 from app.services.hf_client import HfClient, HfFile
 from app.services.model_installer import (
     InstallJob,
@@ -177,6 +178,22 @@ def _ensure_model_index_listed(files: list[HfFile], repo_id: str) -> None:
         )
 
 
+def _ensure_installable_layout(files: list[HfFile], repo_id: str) -> None:
+    """Rechaza los repos de checkpoints sueltos ANTES de descargar.
+
+    Traen model_index.json pero guardan los pesos en la raiz, sin carpetas por
+    componente. Sin este guard el ruteo los daba por validos, la seleccion no
+    elegia ni un archivo y el fallo aparecia recien en la validacion
+    estructural, con un mensaje que no decia el motivo real.
+    """
+    if not has_component_weights(tuple(f.path for f in files)):
+        raise ValueError(
+            f"El repo {repo_id!r} guarda los pesos sueltos en la raiz, sin carpetas por "
+            "componente (unet, vae, text_encoder...). Es un checkpoint single-file: este "
+            "instalador necesita el layout de carpetas de diffusers."
+        )
+
+
 def map_disk_full(exc: OSError) -> str | None:
     if exc.errno != errno.ENOSPC:
         return None
@@ -297,6 +314,7 @@ class GenerationModelInstaller:
     async def _download_and_register(self, job: InstallJob) -> None:
         files = await self.hf_client.repo_files(job.repo_id)
         _ensure_model_index_listed(files, job.repo_id)
+        _ensure_installable_layout(files, job.repo_id)
         if _needs_conversion(files):
             # Pipeline con al menos un componente publicado sólo en PyTorch:
             # se auto-rutea a un job de conversión separado y visible.

@@ -16,6 +16,7 @@ from app.services.engines.generation_onnx import generation_dependencies_availab
 from app.services.generation_installer import (
     MODEL_INDEX_FILENAME,
     GenerationModelInstaller,
+    _ensure_installable_layout,
     _ensure_model_index_listed,
     _generation_model_id,
     _read_declared_components,
@@ -219,6 +220,7 @@ class GenerationModelConverter:
     async def _convert_and_register(self, job: ConversionJob) -> None:
         files = await self.hf_client.repo_files(job.repo_id)
         _ensure_model_index_listed(files, job.repo_id)
+        _ensure_installable_layout(files, job.repo_id)
         model_id = _generation_model_id(job.repo_id)
         src_root = self.settings.temp_path / f"genconv-src-{model_id}"
         out_root = self.settings.temp_path / f"genconv-onnx-{model_id}"
