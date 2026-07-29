@@ -145,7 +145,7 @@ describe("GenerationModelCard", () => {
     // El motivo llega como clave + roles faltantes, y cada rol se traduce: si
     // se olvidara, aca se leeria "component.backbone".
     expect(
-      screen.getByText(/no es un pipeline completo.*backbone.*text encoder/i),
+      screen.getByText(/not a complete pipeline.*backbone.*text encoder/i),
     ).toBeInTheDocument();
   });
 
@@ -205,7 +205,9 @@ describe("GenerationModelCard", () => {
     );
     expect(checkpointRadios).not.toHaveLength(0);
     expect(checkpointRadios.every((radio) => !(radio as HTMLInputElement).checked)).toBe(true);
-    expect(screen.getByText(/no se pudo evaluar.*no se pudo leer el header/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/could not evaluate.*could not read its header/i),
+    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^install$/i })).toBeEnabled();
   });
 

@@ -15,10 +15,10 @@ export function isLocale(value: unknown): value is Locale {
 }
 
 export function detectLocale(): Locale {
-  // Los tests fijan el locale en español (ver vitest.setup.ts): la app se
-  // escribió en español, así que el catálogo `es` reproduce los textos
-  // originales VERBATIM y los 521 tests que buscan texto literal siguen siendo
-  // la red que detecta una extracción mal hecha.
+  // Los tests fijan el locale en inglés (ver vitest.setup.ts): la copia de la
+  // app es inglesa, así que el catálogo `en` reproduce los textos originales
+  // VERBATIM y los tests que buscan texto literal siguen siendo la red que
+  // detecta una extracción mal hecha.
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (isLocale(stored)) return stored;

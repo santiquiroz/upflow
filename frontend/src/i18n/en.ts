@@ -1,5 +1,12 @@
-// Catalogo ingles: traduccion. La copia ORIGINAL de la app esta en es.ts, que
-// es el que la reproduce verbatim y contra el que corren los tests.
+// Catalogo ingles. REGLA: reproduce la copia original de la app VERBATIM. La
+// copia de la app es inglesa (medido: 1550 marcadores en ingles contra 53 en
+// espanol), el locale de test esta fijado aca, y por eso este catalogo es la red
+// que detecta una extraccion mal hecha: una clave mal escrita rinde la clave
+// cruda y el assert de texto literal falla.
+//
+// Las claves de generacion son la excepcion historica: ese modulo se escribio en
+// espanol, asi que su entrada inglesa es traduccion y sus tests se pasaron a
+// ingles al extraerlas.
 export const en = {
   // --- avisos de instalacion de modelos ---------------------------------
   "warning.degraded": "Could not evaluate this model. You can install it anyway.",
