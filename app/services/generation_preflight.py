@@ -51,7 +51,8 @@ class CheckpointCandidate:
     size_bytes: int
     architecture: str | None
     installable: bool | None
-    reason: str
+    reason_key: str
+    reason_params: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(slots=True, frozen=True)
@@ -115,7 +116,8 @@ def _candidate_from_verdict(
         size_bytes=size_bytes,
         architecture=verdict.architecture,
         installable=verdict.installable,
-        reason=verdict.reason,
+        reason_key=verdict.reason_key,
+        reason_params=verdict.reason_params,
     )
 
 
@@ -208,7 +210,9 @@ async def preflight(
                         size_bytes=file.size,
                         architecture=None,
                         installable=None,
-                        reason=f"No se pudo evaluar el header: {detail}",
+                        reason_key="checkpoint.headerUnreadable",
+                        # El detalle es texto de la excepcion: dato, no copia.
+                        reason_params={"detail": detail},
                     )
                 )
         return build(verdict, reason, False, checkpoints=candidates)

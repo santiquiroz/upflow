@@ -18,6 +18,8 @@ import {
 } from "./HfResultCard";
 import { InstallError, InstallProgress, isInstallInFlight } from "./installUi";
 import { buildWarnings } from "./generationWarnings";
+import { useTranslation } from "../../i18n/LocaleProvider";
+import type { TranslationParams } from "../../i18n";
 
 interface GenerationModelCardProps {
   result: HfModelSearchResultResponse;
@@ -33,6 +35,24 @@ const COMPAT_LABELS: Record<CompatVerdict, string> = {
 
 function formatGb(bytes: number): string {
   return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+}
+
+function checkpointReason(
+  candidate: CheckpointCandidate,
+  t: (key: string, params?: TranslationParams) => string,
+): string {
+  // `missing` llega como lista de claves de componente separadas por coma: cada
+  // rol se traduce antes de armar la oracion, si no el usuario lee
+  // "component.vae" en pantalla.
+  const params: TranslationParams = { ...candidate.reasonParams };
+  const missing = candidate.reasonParams.missing;
+  if (missing) {
+    params.missing = missing
+      .split(",")
+      .map((role) => t(role))
+      .join(", ");
+  }
+  return t(candidate.reasonKey, params);
 }
 
 function CompatBadge({ verdict }: { verdict: CompatVerdict | null }) {
@@ -122,6 +142,8 @@ function CheckpointPicker({
   selected: string | undefined;
   onChange: (path: string) => void;
 }) {
+  const { t } = useTranslation();
+
   if (candidates.length === 0) {
     return null;
   }
@@ -163,8 +185,12 @@ function CheckpointPicker({
                 </span>
                 {!selectable && (
                   <span className="text-xs text-warn">
-                    {candidate.installable === null ? "No se pudo evaluar: " : "No instalable: "}
-                    {candidate.reason}
+                    {t(
+                      candidate.installable === null
+                        ? "checkpoint.prefix.unknown"
+                        : "checkpoint.prefix.notInstallable",
+                    )}
+                    {checkpointReason(candidate, t)}
                   </span>
                 )}
               </span>

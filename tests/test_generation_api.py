@@ -481,7 +481,8 @@ def test_preflight_response_serializes_checkpoint_and_ram_aliases() -> None:
                 "size_bytes": 123,
                 "architecture": "xl_base",
                 "installable": True,
-                "reason": "ok",
+                "reason_key": "checkpoint.ready",
+                "reason_params": {"architecture": "xl_base"},
             }
         ],
         free_ram_bytes=456,
@@ -490,6 +491,10 @@ def test_preflight_response_serializes_checkpoint_and_ram_aliases() -> None:
     dumped = response.model_dump(by_alias=True)
     assert dumped["freeRamBytes"] == 456
     assert dumped["checkpoints"][0]["sizeBytes"] == 123
+    # El motivo viaja como clave + datos: la oracion la arma el frontend en el
+    # idioma activo.
+    assert dumped["checkpoints"][0]["reasonKey"] == "checkpoint.ready"
+    assert dumped["checkpoints"][0]["reasonParams"] == {"architecture": "xl_base"}
 
 
 async def test_install_generation_model_returns_400_for_invalid_repo_id() -> None:

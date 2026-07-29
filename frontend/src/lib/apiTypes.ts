@@ -254,7 +254,8 @@ export interface CheckpointCandidate {
   sizeBytes: number;
   architecture: string | null;
   installable: boolean | null;
-  reason: string;
+  reasonKey: string;
+  reasonParams: Record<string, string>;
 }
 
 export interface DeviceCapacity {

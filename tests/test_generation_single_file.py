@@ -116,20 +116,20 @@ def test_standalone_vae_is_not_installable():
     # sdxl_vae.safetensors, al lado del checkpoint real en el mismo repo.
     verdict = classify_checkpoint(_header("vae_only"))
     assert verdict.installable is False
-    assert verdict.reason
+    assert verdict.reason_key
 
 
 def test_standalone_vae_rejected_for_missing_roles_not_for_being_a_lora():
     verdict = classify_checkpoint(_header("vae_only"))
-    assert "falta" in verdict.reason.lower()
-    assert "lora" not in verdict.reason.lower()
+    assert verdict.reason_key == "checkpoint.incomplete"
+    assert "component." in verdict.reason_params["missing"]
 
 
 @pytest.mark.parametrize("name", ["zimage_lora", "ipadapter_lora"])
 def test_loras_are_not_installable(name):
     verdict = classify_checkpoint(_header(name))
     assert verdict.installable is False
-    assert "lora" in verdict.reason.lower() or "adapter" in verdict.reason.lower()
+    assert verdict.reason_key == "checkpoint.isLora"
 
 
 def test_flux2_backbone_only_file_is_not_installable():
@@ -160,7 +160,7 @@ def test_lora_check_runs_before_the_role_check():
     # el rol de backbone. Si el orden se invirtiera, el motivo hablaria de roles
     # faltantes en vez de decir que es un LoRA.
     verdict = classify_checkpoint(_header("zimage_lora"))
-    assert "lora" in verdict.reason.lower() or "adapter" in verdict.reason.lower()
+    assert verdict.reason_key == "checkpoint.isLora"
 
 
 def test_vae_role_requires_first_stage_model_prefix():
@@ -190,6 +190,6 @@ def test_empty_header_is_not_installable():
     assert classify_checkpoint({"__metadata__": {"format": "pt"}}).installable is False
 
 
-def test_verdict_reason_is_always_populated():
+def test_verdict_reason_key_is_always_populated():
     for name in _fixtures():
-        assert classify_checkpoint(_header(name)).reason
+        assert classify_checkpoint(_header(name)).reason_key

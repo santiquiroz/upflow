@@ -15,11 +15,11 @@ def make_settings(tmp_path: Path) -> Settings:
 
 
 def _filter(step_id: str, expr: str) -> ChainStep:
-    return ChainStep(id=step_id, kind="filter", label=step_id, filter_expr=expr)
+    return ChainStep(id=step_id, kind="filter", label_key=step_id, filter_expr=expr)
 
 
 def _model(step_id: str, capability: str) -> ChainStep:
-    return ChainStep(id=step_id, kind="model", label=step_id, model_capability=capability)
+    return ChainStep(id=step_id, kind="model", label_key=step_id, model_capability=capability)
 
 
 class FakeFfmpeg:

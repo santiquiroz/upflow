@@ -106,11 +106,13 @@ def test_delivery_none_adds_no_loudnorm():
 
 
 def test_delivery_choices_expose_the_numbers_for_the_ui():
+    # Los NUMEROS siguen viniendo del backend: son especificaciones, no copia.
+    # La oracion la arma el frontend con la clave.
     choices = delivery_choices()
     by_id = {c["id"]: c for c in choices}
     assert by_id["streaming"]["lufs"] == -14.0
     assert by_id["atsc_a85"]["truePeakDb"] == -2.0
-    assert all(c["label"] for c in choices)
+    assert all(c["labelKey"] for c in choices)
 
 
 # ---------------------------------------------------------------------------
@@ -182,11 +184,11 @@ def test_defaults_are_a_sane_dialogue_chain():
 
 
 def _filter(step_id: str, expr: str) -> ChainStep:
-    return ChainStep(id=step_id, kind="filter", label=step_id, filter_expr=expr)
+    return ChainStep(id=step_id, kind="filter", label_key=step_id, filter_expr=expr)
 
 
 def _model(step_id: str, capability: str) -> ChainStep:
-    return ChainStep(id=step_id, kind="model", label=step_id, model_capability=capability)
+    return ChainStep(id=step_id, kind="model", label_key=step_id, model_capability=capability)
 
 
 def test_consecutive_filters_collapse_into_one_pass():
@@ -249,12 +251,12 @@ def test_no_steps_means_no_stages():
 
 def test_a_filter_step_without_an_expression_is_rejected():
     with pytest.raises(ValueError, match="expresion"):
-        ChainStep(id="broken", kind="filter", label="broken")
+        ChainStep(id="broken", kind="filter", label_key="broken")
 
 
 def test_a_model_step_without_a_capability_is_rejected():
     with pytest.raises(ValueError, match="capacidad"):
-        ChainStep(id="broken", kind="model", label="broken")
+        ChainStep(id="broken", kind="model", label_key="broken")
 
 
 def test_step_order_is_preserved_verbatim():
@@ -272,17 +274,17 @@ def test_step_order_is_preserved_verbatim():
 # ---------------------------------------------------------------------------
 
 
-def test_every_step_has_plain_language_help():
+def test_every_step_declares_both_translation_keys():
     for step in step_catalog():
-        assert step.label and not step.label.endswith(":")
-        # La descripcion tiene que explicar, no repetir la etiqueta.
-        assert len(step.description) > 40
-        assert step.description != step.label
+        assert step.label_key.startswith("voice.step.")
+        assert step.description_key.startswith("voice.step.")
+        assert step.label_key != step.description_key
 
 
-def test_every_delivery_target_has_plain_language_help():
+def test_every_delivery_target_declares_both_translation_keys():
     for choice in delivery_choices():
-        assert len(str(choice["description"])) > 40
+        assert str(choice["labelKey"]).startswith("voice.delivery.")
+        assert str(choice["descriptionKey"]).startswith("voice.delivery.")
 
 
 def test_catalog_order_matches_the_real_chain_order():
@@ -340,9 +342,9 @@ def test_selection_ignores_the_order_the_ids_arrived_in():
     assert [s.id for s in reversed_order] == ["highpass", "deesser", "loudness"]
 
 
-def test_selection_carries_the_human_label_for_each_step():
+def test_selection_carries_the_translation_key_for_each_step():
     steps = steps_from_selection(["highpass"])
-    assert steps[0].label == "Limpiar los graves"
+    assert steps[0].label_key == "voice.step.highpass.label"
 
 
 def test_loudness_without_a_delivery_target_is_dropped():

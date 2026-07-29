@@ -247,7 +247,10 @@ class CheckpointCandidateResponse(BaseModel):
     size_bytes: int = Field(serialization_alias="sizeBytes")
     architecture: str | None = None
     installable: bool | None = None
-    reason: str
+    reason_key: str = Field(serialization_alias="reasonKey")
+    reason_params: dict[str, str] = Field(
+        default_factory=dict, serialization_alias="reasonParams"
+    )
 
 
 class PreflightResponse(BaseModel):

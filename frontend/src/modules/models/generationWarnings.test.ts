@@ -47,7 +47,8 @@ it("warns when free RAM is below the chosen checkpoint size", () => {
     sizeBytes: 7 * GB,
     architecture: "xl_base",
     installable: true,
-    reason: "Checkpoint SDXL completo.",
+    reasonKey: "checkpoint.ready",
+    reasonParams: { architecture: "xl_base" },
   };
   const tightRam = { ...base, freeRamBytes: 6 * GB };
   expect(buildWarnings(tightRam, "fp16", checkpoint).map((w) => w.code)).toContain("ram_low");
@@ -59,7 +60,8 @@ it("never warns about RAM when it could not be measured", () => {
     sizeBytes: 7 * GB,
     architecture: "xl_base",
     installable: true,
-    reason: "Checkpoint SDXL completo.",
+    reasonKey: "checkpoint.ready",
+    reasonParams: { architecture: "xl_base" },
   };
   expect(buildWarnings(base, "fp16", checkpoint).map((w) => w.code)).not.toContain("ram_low");
 });
@@ -92,7 +94,8 @@ describe("aviso de disco para checkpoints single-file", () => {
     sizeBytes: 6 * GB,
     architecture: "xl_base",
     installable: true,
-    reason: "listo",
+    reasonKey: "checkpoint.ready",
+    reasonParams: { architecture: "xl_base" },
   };
   const singleFile = {
     ...base,

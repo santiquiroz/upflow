@@ -367,7 +367,7 @@ async def test_single_file_report_classifies_each_root_checkpoint(
     assert report.checkpoints[0].installable is True
     assert report.checkpoints[0].architecture == "xl_base"
     assert report.checkpoints[1].installable is False
-    assert report.checkpoints[1].reason
+    assert report.checkpoints[1].reason_key
 
 
 @pytest.mark.asyncio
@@ -394,6 +394,7 @@ async def test_single_file_header_failure_only_marks_that_candidate_unknown(
 
     assert report.degraded is False
     assert report.checkpoints[0].installable is None
-    assert "range request failed" in report.checkpoints[0].reason
+    assert report.checkpoints[0].reason_key == "checkpoint.headerUnreadable"
+    assert "range request failed" in report.checkpoints[0].reason_params["detail"]
     assert report.checkpoints[1].installable is True
     assert report.checkpoints[1].architecture == "xl_base"

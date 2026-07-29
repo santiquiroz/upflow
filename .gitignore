@@ -13,3 +13,6 @@ dist/
 node_modules/
 *.tsbuildinfo
 installer/build/
+
+# Config local de Claude Code: por maquina, no del repo.
+.claude/

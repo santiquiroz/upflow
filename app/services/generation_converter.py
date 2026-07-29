@@ -96,7 +96,7 @@ def _architecture_from_verdict(verdict: CheckpointVerdict) -> str:
         and supported_architecture(verdict.architecture) is not None
     ):
         return verdict.architecture
-    raise ValueError(verdict.reason)
+    raise ValueError(verdict.diagnostic())
 
 
 async def _read_checkpoint_architecture(

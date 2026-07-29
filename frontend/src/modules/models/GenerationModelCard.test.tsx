@@ -65,14 +65,16 @@ const SINGLE_FILE_PREFLIGHT: PreflightResponse = {
       sizeBytes: 6.5 * GB,
       architecture: "xl_base",
       installable: true,
-      reason: "Checkpoint SDXL completo.",
+      reasonKey: "checkpoint.ready",
+      reasonParams: { architecture: "xl_base" },
     },
     {
       path: "sdxl_vae.safetensors",
       sizeBytes: 335 * 1024 ** 2,
       architecture: null,
       installable: false,
-      reason: "Es un VAE, no un pipeline completo.",
+      reasonKey: "checkpoint.incomplete",
+      reasonParams: { missing: "component.backbone,component.textEncoder" },
     },
   ],
   freeRamBytes: 12 * GB,
@@ -140,7 +142,11 @@ describe("GenerationModelCard", () => {
     expect(installable).toBeChecked();
     expect(installable).toBeEnabled();
     expect(vae).toBeDisabled();
-    expect(screen.getByText(/es un VAE, no un pipeline completo/i)).toBeInTheDocument();
+    // El motivo llega como clave + roles faltantes, y cada rol se traduce: si
+    // se olvidara, aca se leeria "component.backbone".
+    expect(
+      screen.getByText(/no es un pipeline completo.*backbone.*text encoder/i),
+    ).toBeInTheDocument();
   });
 
   it("installs the checkpoint selected by the user", async () => {
@@ -153,7 +159,8 @@ describe("GenerationModelCard", () => {
           sizeBytes: 6 * GB,
           architecture: "xl_base",
           installable: true,
-          reason: "Checkpoint SDXL completo.",
+          reasonKey: "checkpoint.ready",
+          reasonParams: { architecture: "xl_base" },
         },
       ],
     };
@@ -184,7 +191,9 @@ describe("GenerationModelCard", () => {
       checkpoints: SINGLE_FILE_PREFLIGHT.checkpoints.map((checkpoint, index) => ({
         ...checkpoint,
         installable: index === 0 ? null : false,
-        reason: index === 0 ? "No se pudo leer el header." : checkpoint.reason,
+        reasonKey: index === 0 ? "checkpoint.headerUnreadable" : checkpoint.reasonKey,
+        reasonParams:
+          index === 0 ? { detail: "range request failed" } : checkpoint.reasonParams,
       })),
     });
 

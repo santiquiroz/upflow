@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -67,12 +67,43 @@ _TEXT_ENCODER_PREFIXES = (
 _VAE_PREFIXES = ("first_stage_model.",)
 
 
+# Copia de DIAGNOSTICO, no de UI. La UI la arma el frontend desde reason_key en
+# el idioma activo; esto es para mensajes de error de job y logs, que son texto
+# libre (llevan stderr, rutas, nombres de excepcion) y nunca van a estar
+# traducidos. Son dos superficies distintas a proposito.
+_REASON_DIAGNOSTICS: dict[str, str] = {
+    "checkpoint.noTensors": "El archivo no declara tensores.",
+    "checkpoint.isLora": "Es un LoRA, no un pipeline completo: necesita un modelo base.",
+    "checkpoint.incomplete": "No es un pipeline completo: le faltan componentes ({missing}).",
+    "checkpoint.unknownArchitecture": "No se pudo identificar la arquitectura.",
+    "checkpoint.unsupportedArchitecture": "Arquitectura {architecture} no soportada.",
+    "checkpoint.ready": "Checkpoint {architecture} instalable.",
+}
+
+
 @dataclass(slots=True, frozen=True)
 class CheckpointVerdict:
     installable: bool
     architecture: Architecture | None
     ort_model_type: str | None
-    reason: str
+    # Clave de traduccion + sus datos, no copia: el frontend arma la oracion en
+    # el idioma activo (ver el spec de i18n de 2026-07-29).
+    reason_key: str
+    reason_params: dict[str, str] = field(default_factory=dict)
+
+    def diagnostic(self) -> str:
+        """Oracion para logs y errores de job. Ver _REASON_DIAGNOSTICS."""
+        template = _REASON_DIAGNOSTICS.get(self.reason_key, self.reason_key)
+        # Los params llevan claves de traduccion (`component.vae`): en un log se
+        # muestra solo el nombre del rol.
+        plain = {
+            key: value.replace("component.", "").replace(",", ", ")
+            for key, value in self.reason_params.items()
+        }
+        try:
+            return template.format(**plain)
+        except KeyError:
+            return template
 
 
 class _ShapeOnly:
@@ -146,9 +177,9 @@ def _looks_like_lora(keys: list[str]) -> bool:
 
 def _missing_roles(keys: list[str]) -> list[str]:
     roles = (
-        ("backbone (unet/transformer)", _BACKBONE_PREFIXES),
-        ("text encoder", _TEXT_ENCODER_PREFIXES),
-        ("VAE", _VAE_PREFIXES),
+        ("component.backbone", _BACKBONE_PREFIXES),
+        ("component.textEncoder", _TEXT_ENCODER_PREFIXES),
+        ("component.vae", _VAE_PREFIXES),
     )
     return [name for name, prefixes in roles if not _has_role(keys, prefixes)]
 
@@ -173,46 +204,32 @@ def classify_checkpoint(header: dict[str, Any]) -> CheckpointVerdict:
     """
     keys = _tensor_keys(header)
     if not keys:
-        return CheckpointVerdict(
-            False, None, None, "El header del archivo no declara ningun tensor."
-        )
+        return CheckpointVerdict(False, None, None, "checkpoint.noTensors")
 
     if _looks_like_lora(keys):
-        return CheckpointVerdict(
-            False,
-            None,
-            None,
-            "Es un LoRA o un adapter, no un modelo completo: se aplica sobre un "
-            "modelo base en vez de instalarse solo.",
-        )
+        return CheckpointVerdict(False, None, None, "checkpoint.isLora")
 
     missing = _missing_roles(keys)
     if missing:
         return CheckpointVerdict(
-            False,
-            None,
-            None,
-            "No es un pipeline completo: le falta " + ", ".join(missing) + ".",
+            False, None, None, "checkpoint.incomplete",
+            {"missing": ",".join(missing)},
         )
 
     detected = _detect({key: _ShapeOnly(header[key]["shape"]) for key in keys})
     if detected is None:
-        return CheckpointVerdict(
-            False, None, None, "No se pudo determinar la arquitectura del checkpoint."
-        )
+        return CheckpointVerdict(False, None, None, "checkpoint.unknownArchitecture")
 
     ort_model_type = supported_architecture(detected)
     if ort_model_type is None:
         return CheckpointVerdict(
-            False,
-            detected,
-            None,
-            f"Arquitectura {detected!r}: optimum-onnx no puede ejecutarla, "
-            "asi que convertirla no serviria de nada.",
+            False, detected, None, "checkpoint.unsupportedArchitecture",
+            {"architecture": detected},
         )
 
     return CheckpointVerdict(
-        True, detected, ort_model_type, f"Checkpoint {detected} listo para convertir."
+        True, detected, ort_model_type, "checkpoint.ready",
+        {"architecture": detected},
     )
 
 
