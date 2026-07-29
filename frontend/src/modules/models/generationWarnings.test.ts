@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { buildWarnings } from "./generationWarnings";
+import { SINGLE_FILE_DISK_PEAK_FACTOR, buildWarnings } from "./generationWarnings";
 
 const GB = 1024 ** 3;
 
@@ -84,4 +84,51 @@ it("warns when the repo is gated", () => {
 it("returns a degraded notice and nothing else when preflight failed", () => {
   const degraded = { ...base, degraded: true, precisions: [], compat: null };
   expect(buildWarnings(degraded, "fp16").map((w) => w.code)).toEqual(["degraded"]);
+});
+
+describe("aviso de disco para checkpoints single-file", () => {
+  const checkpoint = {
+    path: "pony.safetensors",
+    sizeBytes: 6 * GB,
+    architecture: "xl_base",
+    installable: true,
+    reason: "listo",
+  };
+  const singleFile = {
+    ...base,
+    compat: "single_file" as const,
+    precisions: [],
+    checkpoints: [checkpoint],
+  };
+
+  it("avisa cuando el pico de 4x no entra, aunque el checkpoint solo si entre", () => {
+    // Medido: el pico es ~4x el checkpoint, no su tamano. Con 20 GB libres un
+    // checkpoint de 6 GB "entra" pero su conversion necesita ~24 GB.
+    const tight = { ...singleFile, disk: { targetPath: "D:\temp", freeBytes: 20 * GB } };
+    const codes = buildWarnings(tight, "fp16", checkpoint).map((w) => w.code);
+    expect(codes).toContain("disk_low");
+  });
+
+  it("no avisa cuando el pico entra holgado", () => {
+    const roomy = { ...singleFile, disk: { targetPath: "D:\temp", freeBytes: 200 * GB } };
+    const codes = buildWarnings(roomy, "fp16", checkpoint).map((w) => w.code);
+    expect(codes).not.toContain("disk_low");
+  });
+
+  it("nunca avisa de disco si no se pudo medir", () => {
+    const noDisk = { ...singleFile, disk: null };
+    const codes = buildWarnings(noDisk, "fp16", checkpoint).map((w) => w.code);
+    expect(codes).not.toContain("disk_low");
+  });
+
+  it("el mensaje nombra el pico, no el tamano del checkpoint", () => {
+    const tight = { ...singleFile, disk: { targetPath: "D:\temp", freeBytes: 20 * GB } };
+    const warning = buildWarnings(tight, "fp16", checkpoint).find((w) => w.code === "disk_low");
+    expect(warning?.message).toContain("24.0 GB");
+    expect(warning?.message).not.toContain("6.0 GB requeridos");
+  });
+
+  it("el factor medido esta expuesto como constante revisable", () => {
+    expect(SINGLE_FILE_DISK_PEAK_FACTOR).toBe(4);
+  });
 });

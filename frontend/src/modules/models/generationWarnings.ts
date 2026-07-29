@@ -22,6 +22,11 @@ function formatGb(bytes: number): string {
   return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
 }
 
+// Medido de punta a punta el 2026-07-29: un checkpoint de 2034 MB dejo un pico
+// de 8140 MB en disco. Se conserva como constante nombrada para que revisarlo
+// con otra medicion sea un cambio de una linea.
+export const SINGLE_FILE_DISK_PEAK_FACTOR = 4;
+
 // El servidor manda hechos medidos; la decision de que amerita un aviso vive
 // aca, para que cambiar de precision no re-consulte el backend. `null` en una
 // medicion significa "no se pudo medir": nunca genera aviso.
@@ -63,6 +68,25 @@ export function buildWarnings(
         `Quedan ${formatGb(preflight.disk.freeBytes)} libres en ${preflight.disk.targetPath} ` +
         `y hace falta ${formatGb(cost.downloadBytes)}.`,
     });
+  }
+
+  // Un checkpoint suelto no pasa por `precisions`, asi que la rama de arriba
+  // nunca lo cubria: quedaba sin ningun aviso de disco. Y el pico no es el
+  // tamano de la descarga -- convertirlo deja tres copias en disco a la vez.
+  // MEDIDO de punta a punta el 2026-07-29 sobre un SD1.5 real: 2034 MB de
+  // checkpoint dejaron un pico de 8140 MB (4.0x) = el checkpoint + 4069 MB de
+  // arbol diffusers + 2037 MB de ONNX fp16. Exportar en fp32 lo sube mas.
+  if (checkpoint && preflight.disk) {
+    const peakBytes = checkpoint.sizeBytes * SINGLE_FILE_DISK_PEAK_FACTOR;
+    if (preflight.disk.freeBytes < peakBytes) {
+      warnings.push({
+        code: "disk_low",
+        message:
+          `Convertir este checkpoint necesita ~${formatGb(peakBytes)} de pico en ` +
+          `${preflight.disk.targetPath} (deja el checkpoint, el pipeline y el ONNX ` +
+          `en disco a la vez) y quedan ${formatGb(preflight.disk.freeBytes)} libres.`,
+      });
+    }
   }
 
   if (
