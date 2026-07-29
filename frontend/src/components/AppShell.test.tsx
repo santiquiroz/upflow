@@ -50,8 +50,16 @@ describe("AppShell", () => {
     expect(screen.getByRole("link", { name: "Settings" })).not.toHaveAttribute("aria-current");
   });
 
-  it("highlights Enhance as active on the root route", () => {
+  it("highlights Tasks as active on the root route", () => {
+    // La raiz paso a ser el selector de tareas; Enhance vive en /enhance.
     renderAt("/");
+
+    expect(screen.getByRole("link", { name: "Tasks" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "Enhance" })).not.toHaveAttribute("aria-current");
+  });
+
+  it("highlights Enhance as active on its own route", () => {
+    renderAt("/enhance");
 
     expect(screen.getByRole("link", { name: "Enhance" })).toHaveAttribute("aria-current", "page");
   });

@@ -182,4 +182,10 @@ export const en = {
   "capability.tree.roadmap": "Roadmap",
   "capability.tree.download": "Download package",
 
+  // --- selector de tareas ------------------------------------------------
+  "tasks.title": "What do you want to do?",
+  "tasks.subtitle": "Pick a task and Upflow takes you to the right screen.",
+  "capability.provision.running": "Downloading the package… this can take a few minutes.",
+  "capability.provision.done": "Package downloaded. The capability is ready.",
+  "capability.provision.failed": "The download failed: {{error}}",
 } as const;

@@ -41,7 +41,10 @@ describe("App auth gate", () => {
     vi.mocked(authService.getMe).mockResolvedValue(OFF_MODE_ME);
     renderApp();
 
-    await waitFor(() => expect(screen.getByRole("heading", { name: /enhance/i })).toBeInTheDocument());
+    // La raiz paso a ser el selector de tareas (Fase 3.3 del gestor unificado).
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: /what do you want to do/i })).toBeInTheDocument(),
+    );
   });
 
   it("renders LoginPage when GET /auth/me returns not_authenticated", async () => {

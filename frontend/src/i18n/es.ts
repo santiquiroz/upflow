@@ -176,4 +176,10 @@ export const es = {
   "capability.tree.roadmap": "Mapa de ruta",
   "capability.tree.download": "Descargar paquete",
 
+  // --- selector de tareas ------------------------------------------------
+  "tasks.title": "¿Qué querés hacer?",
+  "tasks.subtitle": "Elegí una tarea y Upflow te lleva a la pantalla que corresponde.",
+  "capability.provision.running": "Descargando el paquete… puede tardar unos minutos.",
+  "capability.provision.done": "Paquete descargado. La capacidad quedó lista.",
+  "capability.provision.failed": "La descarga falló: {{error}}",
 } as const;

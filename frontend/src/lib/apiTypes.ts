@@ -428,6 +428,18 @@ export interface CapabilityTreeResponse {
   domains: CapabilityDomainResponse[];
 }
 
+// Mirrors app/schemas.py::ProvisionJobResponse. Mismo shape que un install job
+// a proposito, para que la UI pueda tratarlos igual.
+export type ProvisionStatus = "queued" | "running" | "done" | "error";
+
+export interface ProvisionJob {
+  jobId: string;
+  pack: string;
+  status: ProvisionStatus;
+  error: string | null;
+  statusUrl: string;
+}
+
 export interface GenerationJob {
   id: string;
   status: JobStatus;

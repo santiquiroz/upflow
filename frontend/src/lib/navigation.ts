@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react";
-import { AudioWaveform, Boxes, Sliders, Sparkles, Users as UsersIcon, Wand2, Zap } from "lucide-react";
+import { AudioWaveform, Boxes, LayoutGrid, Sliders, Sparkles, Users as UsersIcon, Wand2, Zap } from "lucide-react";
 
 export interface NavEntry {
   label: string;
@@ -9,7 +9,8 @@ export interface NavEntry {
 }
 
 export const NAV_ENTRIES: readonly NavEntry[] = [
-  { label: "Enhance", path: "/", icon: Wand2 },
+  { label: "Tasks", path: "/", icon: LayoutGrid },
+  { label: "Enhance", path: "/enhance", icon: Wand2 },
   { label: "Audio", path: "/audio", icon: AudioWaveform },
   { label: "Generate", path: "/generate", icon: Sparkles },
   { label: "Models", path: "/models", icon: Boxes },

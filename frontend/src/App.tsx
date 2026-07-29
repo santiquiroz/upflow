@@ -5,12 +5,13 @@ import { ForcedPasswordChangeModal } from "./components/ForcedPasswordChangeModa
 import { useAuth } from "./hooks/useAuth";
 import { AudioPage } from "./modules/audio/AudioPage";
 import { GeneratePage } from "./modules/generate/GeneratePage";
-import { EnhancePage } from "./pages/EnhancePage";
+import { EnhanceRoute } from "./pages/EnhanceRoute";
 import { LoginPage } from "./pages/LoginPage";
 import { ModelsPage } from "./pages/ModelsPage";
 import { RealtimePage } from "./pages/RealtimePage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { SetupPage } from "./pages/SetupPage";
+import { TasksPage } from "./pages/TasksPage";
 import { UsersPage } from "./pages/UsersPage";
 
 function AuthGate({ children }: { children: ReactNode }) {
@@ -34,7 +35,10 @@ export function App() {
     <AuthGate>
       <AppShell>
         <Routes>
-          <Route path="/" element={<EnhancePage />} />
+          <Route path="/" element={<TasksPage />} />
+          {/* /enhance sin medio abre en imagen, igual que antes. */}
+          <Route path="/enhance" element={<EnhanceRoute />} />
+          <Route path="/enhance/:medium" element={<EnhanceRoute />} />
           <Route path="/audio" element={<AudioPage />} />
           <Route path="/generate" element={<GeneratePage />} />
           <Route path="/models" element={<ModelsPage />} />

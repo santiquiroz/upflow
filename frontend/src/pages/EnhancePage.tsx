@@ -45,8 +45,16 @@ function resolveNextTabIndex(currentIndex: number, key: string): number | null {
   return null;
 }
 
-export function EnhancePage() {
-  const [medium, setMedium] = useState<EnhanceMedium>("image");
+// La URL fija el punto de ENTRADA (el arbol de capacidades entra directo a
+// /enhance/video) y de ahi en mas las pestañas son estado local. Navegar en cada
+// pestaña metaria una entrada de historial por cada flecha del teclado, y el
+// componente ademas queda testeable sin router.
+export function EnhancePage({
+  initialMedium = "image",
+}: {
+  initialMedium?: EnhanceMedium;
+}) {
+  const [medium, setMedium] = useState<EnhanceMedium>(initialMedium);
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const activeTab = MEDIUM_TABS.find((tab) => tab.value === medium) ?? MEDIUM_TABS[0];
 
