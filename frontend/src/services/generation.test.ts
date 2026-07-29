@@ -146,6 +146,20 @@ describe("generation service", () => {
     });
   });
 
+  it("sends the chosen checkpoint path when installing", async () => {
+    const spy = vi.spyOn(api, "apiPostJson").mockResolvedValue({ installId: "1", statusUrl: "/x" });
+    await installGenerationModel(
+      "owner/name",
+      "fp16",
+      "ponyDiffusionV6XL_v6StartWithThisOne.safetensors",
+    );
+    expect(spy).toHaveBeenCalledWith("/generation/models", {
+      repoId: "owner/name",
+      precision: "fp16",
+      checkpointPath: "ponyDiffusionV6XL_v6StartWithThisOne.safetensors",
+    });
+  });
+
   it("omits precision when none is chosen", async () => {
     const spy = vi.spyOn(api, "apiPostJson").mockResolvedValue({ installId: "1", statusUrl: "/x" });
     await installGenerationModel("owner/name");

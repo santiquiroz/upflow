@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from app.config import Settings
+from app.models import InstallJob
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.engines.generation_onnx import (
     _build_providers_for_validation,
@@ -25,7 +26,6 @@ from app.services.generation_variants import Precision
 from app.services.gpu_session_coordinator import GpuSessionCoordinator
 from app.services.hf_client import HfClient, HfFile
 from app.services.model_installer import (
-    InstallJob,
     InstallStatus,
     PROMOTE_RETRY_DELAYS_SECONDS,
     _validate_repo_id,
@@ -73,8 +73,19 @@ VALIDATION_SIZE = 64
 VALIDATION_STEPS = 1
 
 
-def _generation_model_id(repo_id: str) -> str:
-    return "gen--" + repo_id.lower().replace("/", "--")
+class CheckpointNotFoundError(ValueError):
+    pass
+
+
+def _generation_model_id(
+    repo_id: str,
+    checkpoint_path: str | None = None,
+) -> str:
+    model_id = "gen--" + repo_id.lower().replace("/", "--")
+    if checkpoint_path is None:
+        return model_id
+    checkpoint_id = checkpoint_path.lower().replace("\\", "--").replace("/", "--")
+    return f"{model_id}--{checkpoint_id}"
 
 
 def _select_files(files: list[HfFile]) -> list[HfFile]:
@@ -178,7 +189,11 @@ def _ensure_model_index_listed(files: list[HfFile], repo_id: str) -> None:
         )
 
 
-def _ensure_installable_layout(files: list[HfFile], repo_id: str) -> None:
+def _ensure_installable_layout(
+    files: list[HfFile],
+    repo_id: str,
+    checkpoint_path: str | None = None,
+) -> None:
     """Rechaza los repos de checkpoints sueltos ANTES de descargar.
 
     Traen model_index.json pero guardan los pesos en la raiz, sin carpetas por
@@ -186,11 +201,35 @@ def _ensure_installable_layout(files: list[HfFile], repo_id: str) -> None:
     elegia ni un archivo y el fallo aparecia recien en la validacion
     estructural, con un mensaje que no decia el motivo real.
     """
+    if checkpoint_path is not None:
+        return
     if not has_component_weights(tuple(f.path for f in files)):
         raise ValueError(
             f"El repo {repo_id!r} guarda los pesos sueltos en la raiz, sin carpetas por "
             "componente (unet, vae, text_encoder...). Es un checkpoint single-file: este "
             "instalador necesita el layout de carpetas de diffusers."
+        )
+
+
+def _root_checkpoint_paths(files: list[HfFile]) -> list[str]:
+    return [
+        file.path
+        for file in files
+        if "/" not in file.path and file.path.lower().endswith(".safetensors")
+    ]
+
+
+def _ensure_checkpoint_listed(
+    files: list[HfFile],
+    repo_id: str,
+    checkpoint_path: str,
+) -> None:
+    candidates = _root_checkpoint_paths(files)
+    if checkpoint_path not in candidates:
+        available = ", ".join(candidates) if candidates else "(ninguno)"
+        raise CheckpointNotFoundError(
+            f"El checkpoint {checkpoint_path!r} no existe en la raiz del repo "
+            f"{repo_id!r}. Candidatos: {available}."
         )
 
 
@@ -238,7 +277,7 @@ class GenerationModelInstaller:
         self.gpu_coordinator = gpu_coordinator
         self.device_semaphores = device_semaphores
         self.enqueue_conversion: (
-            Callable[[str, Precision], Awaitable[str]] | None
+            Callable[[str, Precision, str | None], Awaitable[str]] | None
         ) = None
         self._queue: asyncio.Queue[InstallJob] = asyncio.Queue()
         self._jobs: dict[str, InstallJob] = {}
@@ -262,15 +301,21 @@ class GenerationModelInstaller:
         self,
         repo_id: str,
         precision: Precision = "fp16",
+        checkpoint_path: str | None = None,
     ) -> str:
         available, reason = generation_dependencies_available()
         if not available:
             raise ValueError(reason or "Generation dependencies missing")
         validated = _validate_repo_id(repo_id)
+        if checkpoint_path is not None:
+            files = await self.hf_client.repo_files(validated)
+            _ensure_checkpoint_listed(files, validated, checkpoint_path)
         job = InstallJob(
             id=uuid.uuid4().hex,
             repo_id=validated,
             precision=precision,
+            checkpoint_path=checkpoint_path,
+            status=InstallStatus.downloading,
         )
         self._jobs[job.id] = job
         await self._queue.put(job)
@@ -313,9 +358,12 @@ class GenerationModelInstaller:
 
     async def _download_and_register(self, job: InstallJob) -> None:
         files = await self.hf_client.repo_files(job.repo_id)
-        _ensure_model_index_listed(files, job.repo_id)
-        _ensure_installable_layout(files, job.repo_id)
-        if _needs_conversion(files):
+        if job.checkpoint_path is None:
+            _ensure_model_index_listed(files, job.repo_id)
+        else:
+            _ensure_checkpoint_listed(files, job.repo_id, job.checkpoint_path)
+        _ensure_installable_layout(files, job.repo_id, job.checkpoint_path)
+        if job.checkpoint_path is not None or _needs_conversion(files):
             # Pipeline con al menos un componente publicado sólo en PyTorch:
             # se auto-rutea a un job de conversión separado y visible.
             if self.enqueue_conversion is None:
@@ -324,10 +372,17 @@ class GenerationModelInstaller:
                     "con pesos PyTorch pero sin ONNX propio y la conversión "
                     "no está disponible."
                 )
-            job.conversion_id = await self.enqueue_conversion(
-                job.repo_id,
-                job.precision,
-            )
+            if job.checkpoint_path is None:
+                job.conversion_id = await self.enqueue_conversion(
+                    job.repo_id,
+                    job.precision,
+                )
+            else:
+                job.conversion_id = await self.enqueue_conversion(
+                    job.repo_id,
+                    job.precision,
+                    job.checkpoint_path,
+                )
             # Estado terminal del install job: el progreso real vive en el
             # conversion job y el frontend hace el hand-off con conversion_id.
             job.status = InstallStatus.converting
@@ -378,14 +433,18 @@ class GenerationModelInstaller:
                 shutil.rmtree(staging_root, ignore_errors=True)
 
     async def validate_and_promote(
-        self, staging_root: Path, repo_id: str, size_bytes: int
+        self,
+        staging_root: Path,
+        repo_id: str,
+        size_bytes: int,
+        checkpoint_path: str | None = None,
     ) -> str:
         _validate_structure(staging_root)
         _patch_legacy_component_configs(staging_root)
         async with self.device_semaphores.acquire(self.settings.default_device):
             await asyncio.to_thread(self._validate_pipeline, staging_root)
 
-        model_id = _generation_model_id(repo_id)
+        model_id = _generation_model_id(repo_id, checkpoint_path)
         final_dir = self.settings.models_path / GENERATION_MODELS_SUBDIR / model_id
         async with self._lock_for(model_id):
             await self._promote_staging_dir(staging_root, final_dir)

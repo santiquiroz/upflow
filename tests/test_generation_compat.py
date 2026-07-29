@@ -18,9 +18,18 @@ SDXL_ONNX = (
 )
 
 
-def test_repo_without_model_index_is_incompatible():
+def test_repo_without_model_index_and_root_safetensors_is_single_file_candidate():
     # Caso real: wikeeyang/Flux2-Klein-9B-True-V2 (15 archivos, sin model_index).
     verdict, reason = classify(("config.json", "weights.safetensors"), False)
+    assert verdict == "single_file"
+    assert "header" in reason.lower()
+
+
+def test_repo_without_model_index_or_root_safetensors_is_incompatible():
+    verdict, reason = classify(
+        ("config.json", "nested/weights.safetensors"),
+        False,
+    )
     assert verdict == "incompatible"
     assert "model_index.json" in reason
 
@@ -57,6 +66,11 @@ def test_gated_repo_wins_over_everything_else():
 def test_gated_wins_even_when_model_index_is_missing():
     # Sin token no se puede saber nada mas del repo, asi que gated gana.
     verdict, _ = classify(("config.json",), "auto")
+    assert verdict == "gated"
+
+
+def test_gated_wins_over_single_file_candidate():
+    verdict, _ = classify(("checkpoint.safetensors",), "auto")
     assert verdict == "gated"
 
 

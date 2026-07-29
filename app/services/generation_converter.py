@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import re
 import shutil
@@ -23,6 +24,12 @@ from app.services.generation_installer import (
     _safe_staging_dest,
     map_disk_full,
 )
+from app.services.generation_single_file import (
+    CheckpointVerdict,
+    classify_checkpoint,
+    materialize,
+    supported_architecture,
+)
 from app.services.generation_variants import (
     CONVERSION_SKIP_SUFFIXES,
     Precision,
@@ -30,7 +37,7 @@ from app.services.generation_variants import (
     canonical_weight_name,
     select_for_precision,
 )
-from app.services.hf_client import HfClient
+from app.services.hf_client import HfClient, HfFile
 from app.services.model_installer import _validate_repo_id
 from app.services.progress import (
     advance_conversion_stage,
@@ -45,6 +52,14 @@ _SUBMODEL_LINE = re.compile(
 # Medido en el smoke del 2026-07-28: fp16 necesita una tolerancia mayor por
 # redondeo esperado. La validacion sigue activa; solo se relaja su atol.
 FP16_EXPORT_ATOL = 1e-2
+_ALLOCATION_ERROR_MARKERS = (
+    "out of memory",
+    "not enough memory",
+    "cannot allocate",
+    "can't allocate",
+    "allocation",
+    "bad alloc",
+)
 
 
 def _parse_submodel_line(line: str) -> str | None:
@@ -52,6 +67,112 @@ def _parse_submodel_line(line: str) -> str | None:
     if match is None:
         return None
     return f"{match.group('index')}-{match.group('class_name')}"
+
+
+def _selected_checkpoint(
+    files: list[HfFile],
+    repo_id: str,
+    checkpoint_path: str,
+) -> HfFile:
+    candidates = [
+        file
+        for file in files
+        if "/" not in file.path and file.path.lower().endswith(".safetensors")
+    ]
+    for file in candidates:
+        if file.path == checkpoint_path:
+            return file
+    available = ", ".join(file.path for file in candidates) if candidates else "(ninguno)"
+    raise ValueError(
+        f"El checkpoint {checkpoint_path!r} no existe en la raiz del repo "
+        f"{repo_id!r}. Candidatos: {available}."
+    )
+
+
+def _architecture_from_verdict(verdict: CheckpointVerdict) -> str:
+    if (
+        verdict.installable
+        and verdict.architecture is not None
+        and supported_architecture(verdict.architecture) is not None
+    ):
+        return verdict.architecture
+    raise ValueError(verdict.reason)
+
+
+async def _read_checkpoint_architecture(
+    hf_client: HfClient,
+    repo_id: str,
+    checkpoint_path: str,
+) -> str | None:
+    try:
+        header, _header_length = await hf_client.read_safetensors_header(
+            repo_id,
+            checkpoint_path,
+        )
+    except Exception:  # noqa: BLE001 - install sigue habilitado si falla el preflight
+        return None
+    return _architecture_from_verdict(classify_checkpoint(header))
+
+
+def _read_local_checkpoint_architecture(checkpoint_path: Path) -> str:
+    with checkpoint_path.open("rb") as handle:
+        length_bytes = handle.read(8)
+        if len(length_bytes) != 8:
+            raise ValueError("El checkpoint no contiene un prefijo safetensors valido.")
+        header_length = int.from_bytes(length_bytes, byteorder="little", signed=False)
+        header_bytes = handle.read(header_length)
+    if len(header_bytes) != header_length:
+        raise ValueError("El header safetensors local esta truncado.")
+    header = json.loads(header_bytes)
+    if not isinstance(header, dict):
+        raise ValueError("El header safetensors local no es un objeto JSON.")
+    return _architecture_from_verdict(classify_checkpoint(header))
+
+
+def _advance_materializing_stage(job: ConversionJob) -> None:
+    job.metadata["stage"] = "materializing"
+    job.metadata["stages"] = [
+        {
+            "key": "downloading",
+            "label": "Downloading checkpoint",
+            "weight": 0.1,
+            "status": "done",
+        },
+        {
+            "key": "materializing",
+            "label": "Materializing checkpoint",
+            "weight": 0.05,
+            "status": "active",
+        },
+        {
+            "key": "exporting",
+            "label": "Exporting to ONNX",
+            "weight": 0.7,
+            "status": "pending",
+        },
+        {
+            "key": "validating",
+            "label": "Validating pipeline",
+            "weight": 0.15,
+            "status": "pending",
+        },
+    ]
+    job.metadata["progress"] = 0.1
+    job.metadata["stageStartedAt"] = utc_now().isoformat()
+
+
+def _allocation_message(checkpoint: HfFile) -> str:
+    gib = checkpoint.size / (1024 ** 3)
+    return (
+        "No hay RAM suficiente para materializar el checkpoint "
+        f"{checkpoint.path!r} de {checkpoint.size} bytes ({gib:.1f} GiB). "
+        "Cerrá otras aplicaciones o elegí un checkpoint más pequeño y volvé a intentar."
+    )
+
+
+def _is_allocation_runtime_error(exc: RuntimeError) -> bool:
+    message = str(exc).lower()
+    return any(marker in message for marker in _ALLOCATION_ERROR_MARKERS)
 
 
 class _SubmodelProgressHandler(logging.Handler):
@@ -174,12 +295,17 @@ class GenerationModelConverter:
         self,
         repo_id: str,
         precision: Precision = "fp16",
+        checkpoint_path: str | None = None,
     ) -> str:
         available, reason = generation_dependencies_available()
         if not available:
             raise ValueError(reason or "Generation dependencies missing")
         validated = _validate_repo_id(repo_id)
-        job = ConversionJob(repo_id=validated, precision=precision)
+        job = ConversionJob(
+            repo_id=validated,
+            precision=precision,
+            checkpoint_path=checkpoint_path,
+        )
         self._jobs[job.id] = job
         await self._queue.put(job)
         return job.id
@@ -219,9 +345,24 @@ class GenerationModelConverter:
 
     async def _convert_and_register(self, job: ConversionJob) -> None:
         files = await self.hf_client.repo_files(job.repo_id)
-        _ensure_model_index_listed(files, job.repo_id)
-        _ensure_installable_layout(files, job.repo_id)
-        model_id = _generation_model_id(job.repo_id)
+        checkpoint: HfFile | None = None
+        architecture: str | None = None
+        if job.checkpoint_path is None:
+            _ensure_model_index_listed(files, job.repo_id)
+            _ensure_installable_layout(files, job.repo_id)
+        else:
+            checkpoint = _selected_checkpoint(
+                files,
+                job.repo_id,
+                job.checkpoint_path,
+            )
+            _ensure_installable_layout(files, job.repo_id, job.checkpoint_path)
+            architecture = await _read_checkpoint_architecture(
+                self.hf_client,
+                job.repo_id,
+                job.checkpoint_path,
+            )
+        model_id = _generation_model_id(job.repo_id, job.checkpoint_path)
         src_root = self.settings.temp_path / f"genconv-src-{model_id}"
         out_root = self.settings.temp_path / f"genconv-onnx-{model_id}"
         for root in (src_root, out_root):
@@ -232,32 +373,64 @@ class GenerationModelConverter:
         component_keys: list[str] = []
         try:
             advance_conversion_stage(job, component_keys, "downloading")
-            await self.hf_client.download(
-                job.repo_id,
-                MODEL_INDEX_FILENAME,
-                _safe_staging_dest(src_root, MODEL_INDEX_FILENAME),
-                unlimited=True,
-            )
-            declared = _read_declared_components(src_root)
-            offered = available_precisions(files)
-            precision: Precision = (
-                job.precision
-                if job.precision in offered
-                else (offered[0] if offered else "fp32")
-            )
-            selected = select_for_precision(files, declared, precision)
-            for hf_file in selected:
-                dest = _safe_staging_dest(
-                    src_root,
-                    canonical_weight_name(hf_file.path),
-                )
-                dest.parent.mkdir(parents=True, exist_ok=True)
+            selected: list[HfFile]
+            if checkpoint is not None:
+                checkpoint_dest = _safe_staging_dest(src_root, checkpoint.path)
+                checkpoint_dest.parent.mkdir(parents=True, exist_ok=True)
                 await self.hf_client.download(
                     job.repo_id,
-                    hf_file.path,
-                    dest,
+                    checkpoint.path,
+                    checkpoint_dest,
                     unlimited=True,
                 )
+                _advance_materializing_stage(job)
+                if architecture is None:
+                    architecture = await asyncio.to_thread(
+                        _read_local_checkpoint_architecture,
+                        checkpoint_dest,
+                    )
+                try:
+                    await asyncio.to_thread(
+                        materialize,
+                        checkpoint_dest,
+                        src_root,
+                        architecture,
+                    )
+                except MemoryError as exc:
+                    raise RuntimeError(_allocation_message(checkpoint)) from exc
+                except RuntimeError as exc:
+                    if _is_allocation_runtime_error(exc):
+                        raise RuntimeError(_allocation_message(checkpoint)) from exc
+                    raise
+                selected = [checkpoint]
+                precision = job.precision
+            else:
+                await self.hf_client.download(
+                    job.repo_id,
+                    MODEL_INDEX_FILENAME,
+                    _safe_staging_dest(src_root, MODEL_INDEX_FILENAME),
+                    unlimited=True,
+                )
+                declared = _read_declared_components(src_root)
+                offered = available_precisions(files)
+                precision = (
+                    job.precision
+                    if job.precision in offered
+                    else (offered[0] if offered else "fp32")
+                )
+                selected = select_for_precision(files, declared, precision)
+                for hf_file in selected:
+                    dest = _safe_staging_dest(
+                        src_root,
+                        canonical_weight_name(hf_file.path),
+                    )
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    await self.hf_client.download(
+                        job.repo_id,
+                        hf_file.path,
+                        dest,
+                        unlimited=True,
+                    )
 
             def on_component(name: str) -> None:
                 if name not in component_keys:
@@ -282,6 +455,7 @@ class GenerationModelConverter:
                 out_root,
                 job.repo_id,
                 size_bytes,
+                checkpoint_path=job.checkpoint_path,
             )
             complete_conversion_stages(job, exported)
         finally:

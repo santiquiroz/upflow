@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import httpx
@@ -726,3 +727,73 @@ async def test_download_without_unlimited_still_enforces_the_upscaler_cap(
 
     with pytest.raises(HfDownloadTooLargeError):
         await client.download("owner/name", "f.onnx", tmp_path / "f.onnx")
+
+
+async def test_read_safetensors_header_uses_exact_ranges_and_parses_json(
+    tmp_path: Path,
+) -> None:
+    header = {
+        "__metadata__": {"format": "pt"},
+        "model.diffusion_model.input.weight": {
+            "dtype": "F16",
+            "shape": [320, 4, 3, 3],
+            "data_offsets": [0, 23040],
+        },
+    }
+    header_bytes = json.dumps(header).encode("utf-8")
+    ranges: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        ranges.append(request.headers["range"])
+        if len(ranges) == 1:
+            return httpx.Response(
+                206,
+                content=len(header_bytes).to_bytes(8, byteorder="little"),
+            )
+        return httpx.Response(206, content=header_bytes)
+
+    client = HfClient(make_settings(tmp_path), transport=transport_for(handler))
+
+    parsed, header_length = await client.read_safetensors_header(
+        "owner/model",
+        "checkpoint.safetensors",
+    )
+
+    assert ranges == [
+        "bytes=0-7",
+        f"bytes=8-{8 + len(header_bytes) - 1}",
+    ]
+    assert parsed == header
+    assert header_length == len(header_bytes)
+
+
+async def test_read_safetensors_header_rejects_an_absurd_declared_length(tmp_path: Path):
+    # El repo_id lo escribe el usuario: esos 8 bytes son contenido no confiable.
+    # Sin cota, un header declarado de 2**40 haria pedir un Range de un terabyte
+    # y buffearlo en memoria.
+    from app.services.hf_client import MAX_SAFETENSORS_HEADER_BYTES
+
+    absurd = (MAX_SAFETENSORS_HEADER_BYTES + 1).to_bytes(8, "little")
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.headers.get("Range", ""))
+        return httpx.Response(206, content=absurd)
+
+    client = HfClient(make_settings(tmp_path), transport=httpx.MockTransport(handler))
+    with pytest.raises(Exception) as exc_info:
+        await client.read_safetensors_header("owner/name", "model.safetensors")
+
+    assert "header" in str(exc_info.value).lower()
+    # Solo pidio el prefijo: nunca llego a pedir el header gigante.
+    assert calls == ["bytes=0-7"]
+
+
+async def test_read_safetensors_header_rejects_zero_length(tmp_path: Path):
+    zero = (0).to_bytes(8, "little")
+    client = HfClient(
+        make_settings(tmp_path),
+        transport=httpx.MockTransport(lambda request: httpx.Response(206, content=zero)),
+    )
+    with pytest.raises(Exception):
+        await client.read_safetensors_header("owner/name", "model.safetensors")

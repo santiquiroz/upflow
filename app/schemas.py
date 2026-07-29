@@ -242,6 +242,14 @@ class DiskCapacityResponse(BaseModel):
     free_bytes: int = Field(serialization_alias="freeBytes")
 
 
+class CheckpointCandidateResponse(BaseModel):
+    path: str
+    size_bytes: int = Field(serialization_alias="sizeBytes")
+    architecture: str | None = None
+    installable: bool | None = None
+    reason: str
+
+
 class PreflightResponse(BaseModel):
     repo_id: str = Field(serialization_alias="repoId")
     compat: str | None = None
@@ -252,6 +260,11 @@ class PreflightResponse(BaseModel):
     precisions: list[PrecisionCostResponse]
     devices: list[DeviceCapacityResponse]
     disk: DiskCapacityResponse | None = None
+    checkpoints: list[CheckpointCandidateResponse] = Field(default_factory=list)
+    free_ram_bytes: int | None = Field(
+        default=None,
+        serialization_alias="freeRamBytes",
+    )
 
 
 class InstallModelRequest(BaseModel):
@@ -260,6 +273,11 @@ class InstallModelRequest(BaseModel):
     repo_id: str = Field(alias="repoId")
     # Solo la usa el camino de generacion; el de upscalers la ignora.
     precision: Precision | None = None
+    checkpoint_path: str | None = Field(
+        default=None,
+        alias="checkpointPath",
+        serialization_alias="checkpointPath",
+    )
 
 
 class CreateInstallResponse(BaseModel):

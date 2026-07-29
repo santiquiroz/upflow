@@ -20,10 +20,11 @@ def make_settings(tmp_path: Path) -> Settings:
 
 
 class FakeHf:
-    def __init__(self, files, index=None, fail=False):
+    def __init__(self, files, index=None, fail=False, headers=None):
         self._files = files
         self._index = index or {}
         self._fail = fail
+        self._headers = headers or {}
 
     async def repo_files(self, repo_id):
         if self._fail:
@@ -35,6 +36,13 @@ class FakeHf:
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(json.dumps(self._index), encoding="utf-8")
         return dest
+
+    async def read_safetensors_header(self, repo_id, path):
+        value = self._headers[path]
+        if isinstance(value, Exception):
+            raise value
+        encoded = json.dumps(value).encode("utf-8")
+        return value, len(encoded)
 
 
 class FakeDevices:
@@ -90,6 +98,7 @@ async def test_report_has_one_row_per_enumerated_device(tmp_path: Path) -> None:
     assert [d.id for d in report.devices] == ["dml:0", "dml:1", "cpu"]
     assert report.devices[0].free_vram_bytes == 23700 * MB
     assert report.devices[1].free_vram_bytes == 7400 * MB
+    assert report.free_ram_bytes == 16000 * MB
 
 
 @pytest.mark.asyncio
@@ -143,6 +152,7 @@ async def test_device_without_a_registered_probe_yields_null(tmp_path: Path) -> 
         repo_id="owner/name",
     )
     assert all(d.free_vram_bytes is None for d in report.devices)
+    assert report.free_ram_bytes is None
 
 
 @pytest.mark.asyncio
@@ -261,7 +271,7 @@ async def test_gated_repo_reports_gated_not_degraded(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_repo_without_model_index_reports_incompatible_not_degraded(
+async def test_repo_without_model_index_reports_single_file_not_degraded(
     tmp_path: Path,
 ) -> None:
     # Se clasifica ANTES de pedir model_index.json, justamente porque el repo
@@ -274,9 +284,11 @@ async def test_repo_without_model_index_reports_incompatible_not_degraded(
         probes={},
         repo_id="wikeeyang/Flux2-Klein-9B-True-V2",
     )
-    assert report.compat == "incompatible"
+    assert report.compat == "single_file"
     assert report.degraded is False
     assert report.precisions == []
+    assert report.checkpoints[0].path == "weights.safetensors"
+    assert report.checkpoints[0].installable is None
 
 
 @pytest.mark.asyncio
@@ -310,3 +322,78 @@ async def test_index_read_failure_keeps_the_verdict_and_degrades_only_pricing(
     assert report.compat == "needs_conversion"
     assert report.degraded is True
     assert report.precisions == []
+
+
+def _single_file_fixture(name: str) -> dict:
+    fixture_path = Path(__file__).parent / "assets" / "single_file_fixtures.json"
+    entry = json.loads(fixture_path.read_text(encoding="utf-8"))[name]
+    header: dict[str, dict] = {}
+    for group in ("watched_keys", "role_sample_keys", "lora_sample_keys"):
+        for key, shape in entry[group].items():
+            header[key] = {"shape": shape, "dtype": "F16"}
+    return header
+
+
+@pytest.mark.asyncio
+async def test_single_file_report_classifies_each_root_checkpoint(
+    tmp_path: Path,
+) -> None:
+    files = [
+        HfFile(path="pony.safetensors", size=6616 * MB),
+        HfFile(path="vae.safetensors", size=335 * MB),
+        HfFile(path="nested/ignored.safetensors", size=10 * MB),
+    ]
+    report = await preflight(
+        hf_client=FakeHf(
+            files,
+            headers={
+                "pony.safetensors": _single_file_fixture("pony_sdxl"),
+                "vae.safetensors": _single_file_fixture("vae_only"),
+            },
+        ),
+        devices_service=FakeDevices(DEVICES),
+        settings=make_settings(tmp_path),
+        probes={"cpu": FakeProbe({"cpu": 32000})},
+        repo_id="owner/checkpoints",
+    )
+
+    assert report.compat == "single_file"
+    assert report.degraded is False
+    assert report.free_ram_bytes == 32000 * MB
+    assert [(row.path, row.size_bytes) for row in report.checkpoints] == [
+        ("pony.safetensors", 6616 * MB),
+        ("vae.safetensors", 335 * MB),
+    ]
+    assert report.checkpoints[0].installable is True
+    assert report.checkpoints[0].architecture == "xl_base"
+    assert report.checkpoints[1].installable is False
+    assert report.checkpoints[1].reason
+
+
+@pytest.mark.asyncio
+async def test_single_file_header_failure_only_marks_that_candidate_unknown(
+    tmp_path: Path,
+) -> None:
+    files = [
+        HfFile(path="broken.safetensors", size=100 * MB),
+        HfFile(path="pony.safetensors", size=6616 * MB),
+    ]
+    report = await preflight(
+        hf_client=FakeHf(
+            files,
+            headers={
+                "broken.safetensors": RuntimeError("range request failed"),
+                "pony.safetensors": _single_file_fixture("pony_sdxl"),
+            },
+        ),
+        devices_service=FakeDevices(DEVICES),
+        settings=make_settings(tmp_path),
+        probes={},
+        repo_id="owner/checkpoints",
+    )
+
+    assert report.degraded is False
+    assert report.checkpoints[0].installable is None
+    assert "range request failed" in report.checkpoints[0].reason
+    assert report.checkpoints[1].installable is True
+    assert report.checkpoints[1].architecture == "xl_base"

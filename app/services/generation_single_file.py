@@ -8,24 +8,33 @@ from typing import Any
 # infer_diffusers_model_type): "xl_base", "v1", "flux-dev", "sd35_medium"...
 Architecture = str
 
-# Mapeo entre los DOS vocabularios: el de diffusers (claves) y el de optimum
-# (valores, los de ORTPipelineForText2Image.ort_pipelines_mapping). No es
-# derivable en runtime: resolverlo por red via el repo base falla porque los
-# repos base de SD2.1, SD3.5, FLUX.1 y FLUX.2 estan gated (medido 2026-07-29).
+# Instalar un checkpoint suelto necesita DOS capacidades, y una arquitectura
+# entra solo si tiene las dos:
 #
-# Fuera a proposito: xl_refiner y las variantes inpainting son img2img/inpaint,
-# no text-to-image; flux-2-dev, z-image-turbo y los Qwen no tienen entrada en el
-# mapping de optimum aunque diffusers si los cargue.
-_ARCHITECTURE_TO_ORT: dict[Architecture, str] = {
-    "v1": "stable-diffusion",
-    "v2": "stable-diffusion",
-    "xl_base": "stable-diffusion-xl",
-    "playground-v2-5": "stable-diffusion-xl",
-    "sd35_large": "stable-diffusion-3",
-    "sd35_medium": "stable-diffusion-3",
-    "flux-dev": "flux",
-    "flux-schnell": "flux",
-    "sana": "sana",
+#   1. Que diffusers pueda CARGARLO desde un archivo suelto. Ninguna auto-clase
+#      expone from_single_file (ni DiffusionPipeline ni AutoPipelineForText2Image,
+#      medido 2026-07-29), asi que hay que nombrar la clase concreta.
+#   2. Que optimum-onnx pueda EJECUTAR el ONNX resultante, o sea tener entrada en
+#      ORTPipelineForText2Image.ort_pipelines_mapping.
+#
+# El mapeo no es derivable en runtime: resolverlo por red via el repo base falla
+# porque los repos base de SD2.1, SD3.5, FLUX.1 y FLUX.2 estan gated.
+#
+# Fuera a proposito: xl_refiner e inpainting son img2img/inpaint, no
+# text-to-image. flux-2-dev, z-image-turbo y los Qwen cargan en diffusers pero no
+# tienen entrada en el mapping de optimum. Y `sana` es el caso inverso: optimum
+# SI puede ejecutarlo, pero SanaPipeline no expone from_single_file, asi que no
+# se puede instalar desde un checkpoint suelto (si desde un repo diffusers).
+_ARCHITECTURE_SUPPORT: dict[Architecture, tuple[str, str]] = {
+    #                        (clase diffusers,              model type de optimum)
+    "v1": ("StableDiffusionPipeline", "stable-diffusion"),
+    "v2": ("StableDiffusionPipeline", "stable-diffusion"),
+    "xl_base": ("StableDiffusionXLPipeline", "stable-diffusion-xl"),
+    "playground-v2-5": ("StableDiffusionXLPipeline", "stable-diffusion-xl"),
+    "sd35_large": ("StableDiffusion3Pipeline", "stable-diffusion-3"),
+    "sd35_medium": ("StableDiffusion3Pipeline", "stable-diffusion-3"),
+    "flux-dev": ("FluxPipeline", "flux"),
+    "flux-schnell": ("FluxPipeline", "flux"),
 }
 
 # Un LoRA es composicion sobre un modelo base, no un modelo. Se chequea PRIMERO
@@ -78,23 +87,44 @@ class _ShapeOnly:
 
 
 def supported_architecture(detected: Architecture | None) -> str | None:
+    """Model type de optimum para esa arquitectura, o None si no se puede
+    instalar desde un checkpoint suelto."""
     if detected is None:
         return None
-    return _ARCHITECTURE_TO_ORT.get(detected)
+    support = _ARCHITECTURE_SUPPORT.get(detected)
+    return support[1] if support else None
+
+
+def pipeline_class_for(detected: Architecture) -> str | None:
+    support = _ARCHITECTURE_SUPPORT.get(detected)
+    return support[0] if support else None
 
 
 def validate_architecture_table() -> None:
-    """Falla ruidosamente si un upgrade de optimum renombra una clave del
-    mapping. Sin esto, el mapeo degradaria en silencio a "no soportado"."""
+    """Falla ruidosamente si un upgrade de una dependencia rompe el mapeo. Sin
+    esto degradaria en silencio a "arquitectura no soportada"."""
+    import diffusers
     from optimum.onnxruntime import ORTPipelineForText2Image
 
-    known = set(ORTPipelineForText2Image.ort_pipelines_mapping)
-    unknown = sorted(set(_ARCHITECTURE_TO_ORT.values()) - known)
-    if unknown:
+    known_ort = set(ORTPipelineForText2Image.ort_pipelines_mapping)
+    unknown_ort = sorted({t for _, t in _ARCHITECTURE_SUPPORT.values()} - known_ort)
+    if unknown_ort:
         raise RuntimeError(
             "optimum-onnx ya no soporta estos model types: "
-            + ", ".join(unknown)
-            + f". Soportados hoy: {sorted(known)}. Revisar _ARCHITECTURE_TO_ORT."
+            + ", ".join(unknown_ort)
+            + f". Soportados hoy: {sorted(known_ort)}. Revisar _ARCHITECTURE_SUPPORT."
+        )
+
+    broken = sorted(
+        name
+        for name, _ in _ARCHITECTURE_SUPPORT.values()
+        if not hasattr(getattr(diffusers, name, None), "from_single_file")
+    )
+    if broken:
+        raise RuntimeError(
+            "Estas clases de diffusers ya no exponen from_single_file: "
+            + ", ".join(broken)
+            + ". Revisar _ARCHITECTURE_SUPPORT."
         )
 
 
@@ -189,15 +219,23 @@ def classify_checkpoint(header: dict[str, Any]) -> CheckpointVerdict:
 def materialize(checkpoint_path: Path, out_dir: Path, architecture: Architecture) -> None:
     """Convierte un checkpoint suelto en el arbol diffusers que main_export espera.
 
+    Se resuelve la clase CONCRETA de diffusers: ninguna auto-clase expone
+    from_single_file (medido: ni DiffusionPipeline ni AutoPipelineForText2Image).
+
     Torch pesado y bloqueante: el caller lo corre en asyncio.to_thread, igual
     que el export. Carga el checkpoint entero en RAM, de ahi el aviso de RAM del
     pre-flight.
     """
-    from diffusers import DiffusionPipeline
+    import diffusers
 
-    pipeline = DiffusionPipeline.from_single_file(
-        str(checkpoint_path), local_files_only=False
-    )
+    class_name = pipeline_class_for(architecture)
+    if class_name is None:
+        raise ValueError(
+            f"Arquitectura {architecture!r} no se puede cargar desde un checkpoint suelto."
+        )
+    pipeline_cls = getattr(diffusers, class_name)
+
+    pipeline = pipeline_cls.from_single_file(str(checkpoint_path))
     try:
         out_dir.mkdir(parents=True, exist_ok=True)
         pipeline.save_pretrained(str(out_dir))

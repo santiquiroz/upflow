@@ -169,6 +169,7 @@ class GenerationJob:
 class ConversionJob:
     repo_id: str
     precision: Precision = "fp16"
+    checkpoint_path: str | None = None
     id: str = field(default_factory=lambda: uuid4().hex)
     status: JobStatus = JobStatus.queued
     created_at: datetime = field(default_factory=utc_now)
@@ -177,3 +178,16 @@ class ConversionJob:
     error: str | None = None
     model_id: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True, kw_only=True)
+class InstallJob:
+    id: str
+    repo_id: str
+    precision: Precision = "fp16"
+    checkpoint_path: str | None = None
+    status: Any = None
+    progress_pct: float | None = None
+    model_id: str | None = None
+    error: str | None = None
+    conversion_id: str | None = None

@@ -58,9 +58,18 @@ Usarlo como gate reproduciría exactamente el bug de v0.15.1: **ausencia de señ
 
 El checkpoint monolítico es una convención de la era UNet / linaje SD. Converge con el techo de arriba: los modelos que sí podemos correr son justamente los que se publican monolíticos.
 
+### Corrección (smoke de punta a punta, 2026-07-29): el camino single-file soporta CINCO, no seis
+
+Dos hallazgos del smoke real, que costaron un fallo en el primer intento:
+
+1. **Ninguna auto-clase expone `from_single_file`.** Medido: ni `DiffusionPipeline` (el primer intento murió con `AttributeError`) ni `AutoPipelineForText2Image`. Hay que resolver la clase concreta — `StableDiffusionPipeline`, `StableDiffusionXLPipeline`, `StableDiffusion3Pipeline`, `FluxPipeline` — así que la tabla mapea a **dos** cosas, no una.
+2. **`SanaPipeline.from_single_file` no existe.** Es el caso inverso al de FLUX.2: optimum **sí** puede ejecutar sana, pero diffusers no la carga desde un archivo suelto. Sana queda fuera del camino single-file (instalarla desde un repo diffusers sigue siendo otro camino y no lo afecta este trabajo).
+
+Instalar un checkpoint suelto necesita las **dos** capacidades, y una arquitectura entra solo si tiene ambas.
+
 ## Alcance
 
-Instalar un checkpoint single-file de las seis arquitecturas con clase ORT, eligiendo cuál archivo del repo instalar.
+Instalar un checkpoint single-file de las cinco arquitecturas que diffusers puede cargar desde un archivo suelto **y** optimum puede ejecutar, eligiendo cuál archivo del repo instalar.
 
 **Fuera de alcance:** GGUF (imposible, ver arriba). FLUX.2 / Z-Image / Qwen-Image (sin clase ORT; se detectan y se explican). LoRAs y adapters — son composición sobre un modelo base, otro problema. Tests E2E de instalación real.
 
@@ -114,22 +123,22 @@ def materialize(checkpoint_path: Path, out_dir: Path, architecture: Architecture
 **El mapeo entre los dos vocabularios va en una tabla explícita.** `infer_diffusers_model_type` devuelve nombres del vocabulario single-file de diffusers (`xl_base`, `v1`, `flux-dev`, `sd35_medium`); `ort_pipelines_mapping` usa el de optimum (`stable-diffusion-xl`, `stable-diffusion`, `flux`). No hay correspondencia derivable: intentar resolverla por red vía el repo base falla, porque los repos base de SD2.1, SD3.5, FLUX.1 y FLUX.2 están **gated** (HTTPError medido el 2026-07-29).
 
 ```python
-_ARCHITECTURE_TO_ORT: dict[str, str] = {
-    "v1": "stable-diffusion",
-    "v2": "stable-diffusion",
-    "xl_base": "stable-diffusion-xl",
-    "playground-v2-5": "stable-diffusion-xl",
-    "sd35_large": "stable-diffusion-3",
-    "sd35_medium": "stable-diffusion-3",
-    "flux-dev": "flux",
-    "flux-schnell": "flux",
-    "sana": "sana",
+_ARCHITECTURE_SUPPORT: dict[str, tuple[str, str]] = {
+    #                    (clase diffusers,            model type de optimum)
+    "v1":              ("StableDiffusionPipeline",   "stable-diffusion"),
+    "v2":              ("StableDiffusionPipeline",   "stable-diffusion"),
+    "xl_base":         ("StableDiffusionXLPipeline", "stable-diffusion-xl"),
+    "playground-v2-5": ("StableDiffusionXLPipeline", "stable-diffusion-xl"),
+    "sd35_large":      ("StableDiffusion3Pipeline",  "stable-diffusion-3"),
+    "sd35_medium":     ("StableDiffusion3Pipeline",  "stable-diffusion-3"),
+    "flux-dev":        ("FluxPipeline",              "flux"),
+    "flux-schnell":    ("FluxPipeline",              "flux"),
 }
 ```
 
-Deliberadamente **fuera** de la tabla, aunque diffusers los detecte: `xl_refiner` y las variantes `inpainting` (son img2img/inpaint, no text-to-image), y `flux-2-dev`, `z-image-turbo`, los Qwen y todo lo de video (sin soporte en el runtime).
+Deliberadamente **fuera** de la tabla, aunque diffusers los detecte: `xl_refiner` y las variantes `inpainting` (son img2img/inpaint, no text-to-image); `flux-2-dev`, `z-image-turbo`, los Qwen y todo lo de video (sin entrada en el mapping de optimum); y `sana` (optimum sí lo ejecuta, pero `SanaPipeline` no expone `from_single_file`).
 
-La tabla se **valida al importar el módulo** contra `ORTPipelineForText2Image.ort_pipelines_mapping`: si un upgrade de optimum renombra una clave, el import falla ruidosamente en vez de degradar en silencio a "no soportado".
+La tabla se **valida al importar el módulo** contra las dos dependencias: que cada model type esté en `ORTPipelineForText2Image.ort_pipelines_mapping`, y que cada clase de diffusers siga exponiendo `from_single_file`. Si un upgrade de cualquiera de las dos rompe el mapeo, el import falla ruidosamente en vez de degradar en silencio a "arquitectura no soportada".
 
 `materialize` corre `from_single_file()` y `save_pretrained(out_dir)`. Es torch pesado y bloqueante: va en `asyncio.to_thread`, como el export.
 

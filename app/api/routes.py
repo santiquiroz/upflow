@@ -69,7 +69,10 @@ from app.services.auth.permissions import Permission
 from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
 from app.services.engines.generation_onnx import generation_dependencies_available
 from app.services.generation_converter import GenerationModelConverter
-from app.services.generation_installer import GenerationModelInstaller
+from app.services.generation_installer import (
+    CheckpointNotFoundError,
+    GenerationModelInstaller,
+)
 from app.services.generation_compat import classify
 from app.services.generation_job_manager import GenerationJobManager
 from app.services.generation_preflight import preflight
@@ -1210,7 +1213,10 @@ async def install_generation_model(
         install_id = await installer.install_from_hf(
             payload.repo_id,
             precision=payload.precision or "fp16",
+            checkpoint_path=payload.checkpoint_path,
         )
+    except CheckpointNotFoundError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return CreateInstallResponse(

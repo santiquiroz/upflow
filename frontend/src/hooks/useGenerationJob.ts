@@ -174,7 +174,7 @@ export interface UseGenerationModelInstallResult {
   stageLabel: string | null;
   errorMessage: string | null;
   modelId: string | null;
-  install: (repoId: string, precision?: Precision) => void;
+  install: (repoId: string, precision?: Precision, checkpointPath?: string) => void;
   reset: () => void;
 }
 
@@ -222,8 +222,18 @@ export function useGenerationModelInstall(
   const queryClient = useQueryClient();
 
   const startMutation = useMutation({
-    mutationFn: ({ repoId, precision }: { repoId: string; precision?: Precision }) =>
-      installGenerationModel(repoId, precision),
+    mutationFn: ({
+      repoId,
+      precision,
+      checkpointPath,
+    }: {
+      repoId: string;
+      precision?: Precision;
+      checkpointPath?: string;
+    }) =>
+      checkpointPath
+        ? installGenerationModel(repoId, precision, checkpointPath)
+        : installGenerationModel(repoId, precision),
     onSuccess: (data) => setInstallId(data.installId),
   });
 
@@ -265,9 +275,9 @@ export function useGenerationModelInstall(
     }
   }, [installedModelId, queryClient]);
 
-  function install(repoId: string, precision?: Precision): void {
+  function install(repoId: string, precision?: Precision, checkpointPath?: string): void {
     setInstallId(null);
-    startMutation.mutate({ repoId, precision });
+    startMutation.mutate({ repoId, precision, checkpointPath });
   }
 
   function reset(): void {

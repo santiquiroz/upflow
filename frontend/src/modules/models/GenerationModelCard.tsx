@@ -5,6 +5,7 @@ import {
   useGenerationModelPreflight,
 } from "../../hooks/useGenerationJob";
 import type {
+  CheckpointCandidate,
   CompatVerdict,
   HfModelSearchResultResponse,
   Precision,
@@ -25,6 +26,7 @@ interface GenerationModelCardProps {
 const COMPAT_LABELS: Record<CompatVerdict, string> = {
   ready_onnx: "ONNX listo",
   needs_conversion: "Requiere conversión",
+  single_file: "Single-file",
   gated: "Acceso restringido",
   incompatible: "Incompatible",
 };
@@ -102,21 +104,100 @@ function PrecisionPicker({
   );
 }
 
+function formatFileSize(bytes: number): string {
+  if (bytes >= 1024 ** 3) {
+    return formatGb(bytes);
+  }
+  return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+}
+
+function CheckpointPicker({
+  repoId,
+  candidates,
+  selected,
+  onChange,
+}: {
+  repoId: string;
+  candidates: CheckpointCandidate[];
+  selected: string | undefined;
+  onChange: (path: string) => void;
+}) {
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  return (
+    <fieldset className="flex flex-col gap-2">
+      <legend className="font-heading text-xs font-semibold uppercase tracking-wide text-text-dim">
+        Checkpoint
+      </legend>
+      <div className="flex flex-col gap-2">
+        {candidates.map((candidate) => {
+          const selectable = candidate.installable === true;
+          const fileName = candidate.path.split("/").pop() ?? candidate.path;
+
+          return (
+            <label
+              key={candidate.path}
+              className={`flex items-start gap-3 rounded border px-3 py-2 text-sm ${
+                selected === candidate.path
+                  ? "border-accent bg-surface-2"
+                  : "border-border bg-surface"
+              } ${selectable ? "cursor-pointer" : "cursor-not-allowed"}`}
+            >
+              <input
+                type="radio"
+                name={`generation-checkpoint-${repoId}`}
+                value={candidate.path}
+                checked={selected === candidate.path}
+                disabled={!selectable}
+                onChange={() => onChange(candidate.path)}
+                className="mt-0.5 h-3.5 w-3.5 accent-accent"
+              />
+              <span className="flex min-w-0 flex-1 flex-col gap-1">
+                <span className="flex items-start justify-between gap-3">
+                  <span className="break-all font-medium text-text">{fileName}</span>
+                  <span className="shrink-0 font-mono-tabular text-xs text-text-dim">
+                    {formatFileSize(candidate.sizeBytes)}
+                  </span>
+                </span>
+                {!selectable && (
+                  <span className="text-xs text-warn">
+                    {candidate.installable === null ? "No se pudo evaluar: " : "No instalable: "}
+                    {candidate.reason}
+                  </span>
+                )}
+              </span>
+            </label>
+          );
+        })}
+      </div>
+    </fieldset>
+  );
+}
+
 export function GenerationModelCard({ result }: GenerationModelCardProps) {
   const [detailsExpanded, setDetailsExpanded] = useState(false);
   const [selectedPrecision, setSelectedPrecision] = useState<Precision | undefined>(
     result.availablePrecisions[0],
   );
+  const [selectedCheckpointPath, setSelectedCheckpointPath] = useState<string | undefined>();
   const preflightQuery = useGenerationModelPreflight(result.id, detailsExpanded);
   const { phase, progressPct, stageLabel, errorMessage, install, reset } =
     useGenerationModelInstall();
 
+  const checkpoints = preflightQuery.data?.checkpoints ?? [];
+  const selectedCheckpoint =
+    checkpoints.find(
+      (candidate) =>
+        candidate.path === selectedCheckpointPath && candidate.installable === true,
+    ) ?? checkpoints.find((candidate) => candidate.installable === true);
   const precisionCosts =
     preflightQuery.data?.precisions.filter((cost) =>
       result.availablePrecisions.includes(cost.precision),
     ) ?? [];
   const warnings = preflightQuery.data
-    ? buildWarnings(preflightQuery.data, selectedPrecision ?? "fp16")
+    ? buildWarnings(preflightQuery.data, selectedPrecision ?? "fp16", selectedCheckpoint)
     : [];
 
   return (
@@ -128,7 +209,11 @@ export function GenerationModelCard({ result }: GenerationModelCardProps) {
           <CompatBadge verdict={result.compat} />
         </div>
         {phase === "idle" && (
-          <InstallButton onInstall={() => install(result.id, selectedPrecision)} />
+          <InstallButton
+            onInstall={() =>
+              install(result.id, selectedPrecision, selectedCheckpoint?.path)
+            }
+          />
         )}
       </div>
 
@@ -164,6 +249,13 @@ export function GenerationModelCard({ result }: GenerationModelCardProps) {
 
           {preflightQuery.data && (
             <>
+              <CheckpointPicker
+                repoId={result.id}
+                candidates={checkpoints}
+                selected={selectedCheckpoint?.path}
+                onChange={setSelectedCheckpointPath}
+              />
+
               <PrecisionPicker
                 repoId={result.id}
                 costs={precisionCosts}
@@ -171,7 +263,8 @@ export function GenerationModelCard({ result }: GenerationModelCardProps) {
                 onChange={setSelectedPrecision}
               />
 
-              {preflightQuery.data.devices.length > 0 && (
+              {(preflightQuery.data.devices.length > 0 ||
+                preflightQuery.data.freeRamBytes !== null) && (
                 <dl className="flex flex-col gap-2">
                   {preflightQuery.data.devices.map((device) => (
                     <div
@@ -186,6 +279,14 @@ export function GenerationModelCard({ result }: GenerationModelCardProps) {
                       </dd>
                     </div>
                   ))}
+                  {preflightQuery.data.freeRamBytes !== null && (
+                    <div className="flex items-center justify-between gap-3 rounded border border-border bg-surface-2 px-3 py-2 text-sm">
+                      <dt className="text-text">RAM</dt>
+                      <dd className="font-mono-tabular text-xs text-text-dim">
+                        {formatGb(preflightQuery.data.freeRamBytes)} libre
+                      </dd>
+                    </div>
+                  )}
                 </dl>
               )}
 

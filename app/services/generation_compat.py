@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from typing import Literal
 
-CompatVerdict = Literal["ready_onnx", "needs_conversion", "gated", "incompatible"]
+CompatVerdict = Literal[
+    "ready_onnx",
+    "needs_conversion",
+    "single_file",
+    "gated",
+    "incompatible",
+]
 
 MODEL_INDEX_FILENAME = "model_index.json"
 _TORCH_SUFFIXES = (".safetensors", ".bin")
@@ -35,6 +41,13 @@ def has_component_weights(filenames: tuple[str, ...]) -> bool:
     )
 
 
+def _has_root_safetensors(filenames: tuple[str, ...]) -> bool:
+    return any(
+        "/" not in name and name.lower().endswith(".safetensors")
+        for name in filenames
+    )
+
+
 def classify(
     filenames: tuple[str, ...], gated: bool | str | None
 ) -> tuple[CompatVerdict, str]:
@@ -47,6 +60,12 @@ def classify(
         )
 
     if MODEL_INDEX_FILENAME not in filenames:
+        if _has_root_safetensors(filenames):
+            return (
+                "single_file",
+                "Tiene checkpoints .safetensors en la raiz: hay que evaluar sus "
+                "headers antes de saber cuales se pueden instalar.",
+            )
         return (
             "incompatible",
             f"No es un pipeline diffusers: falta {MODEL_INDEX_FILENAME}.",

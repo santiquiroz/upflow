@@ -1,10 +1,15 @@
-import type { PreflightResponse, Precision } from "../../lib/apiTypes";
+import type {
+  CheckpointCandidate,
+  PreflightResponse,
+  Precision,
+} from "../../lib/apiTypes";
 
 export type WarningCode =
   | "degraded"
   | "gated"
   | "incompatible"
   | "disk_low"
+  | "ram_low"
   | "device_wont_fit"
   | "cpu_slow";
 
@@ -23,6 +28,7 @@ function formatGb(bytes: number): string {
 export function buildWarnings(
   preflight: PreflightResponse,
   precision: Precision,
+  checkpoint?: CheckpointCandidate,
 ): Warning[] {
   if (preflight.degraded) {
     return [
@@ -56,6 +62,19 @@ export function buildWarnings(
       message:
         `Quedan ${formatGb(preflight.disk.freeBytes)} libres en ${preflight.disk.targetPath} ` +
         `y hace falta ${formatGb(cost.downloadBytes)}.`,
+    });
+  }
+
+  if (
+    checkpoint &&
+    preflight.freeRamBytes !== null &&
+    preflight.freeRamBytes < checkpoint.sizeBytes
+  ) {
+    warnings.push({
+      code: "ram_low",
+      message:
+        `La conversión carga el checkpoint completo en RAM: ${formatGb(checkpoint.sizeBytes)} ` +
+        `requeridos y ${formatGb(preflight.freeRamBytes)} libres.`,
     });
   }
 

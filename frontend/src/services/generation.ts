@@ -87,9 +87,11 @@ export function preflightGenerationModel(
 export function installGenerationModel(
   repoId: string,
   precision?: Precision,
+  checkpointPath?: string,
 ): Promise<CreateInstallResponse> {
   const body: Record<string, unknown> = { repoId };
   if (precision) body.precision = precision;
+  if (checkpointPath) body.checkpointPath = checkpointPath;
   return apiPostJson<CreateInstallResponse>("/generation/models", body);
 }
 

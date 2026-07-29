@@ -44,6 +44,38 @@ const TIGHT_PREFLIGHT: PreflightResponse = {
   ],
   devices: [{ id: "dml:0", name: "RX 6600", kind: "gpu", freeVramBytes: 7 * GB }],
   disk: { targetPath: "D:\\temp", freeBytes: 1 * GB },
+  checkpoints: [],
+  freeRamBytes: null,
+};
+
+const SINGLE_FILE_RESULT: HfModelSearchResultResponse = {
+  ...RESULT,
+  compat: "single_file",
+  compatReason: "Checkpoints safetensors en la raíz",
+  availablePrecisions: ["fp16"],
+};
+
+const SINGLE_FILE_PREFLIGHT: PreflightResponse = {
+  ...TIGHT_PREFLIGHT,
+  compat: "single_file",
+  compatReason: "Checkpoints safetensors en la raíz",
+  checkpoints: [
+    {
+      path: "ponyDiffusionV6XL_v6StartWithThisOne.safetensors",
+      sizeBytes: 6.5 * GB,
+      architecture: "xl_base",
+      installable: true,
+      reason: "Checkpoint SDXL completo.",
+    },
+    {
+      path: "sdxl_vae.safetensors",
+      sizeBytes: 335 * 1024 ** 2,
+      architecture: null,
+      installable: false,
+      reason: "Es un VAE, no un pipeline completo.",
+    },
+  ],
+  freeRamBytes: 12 * GB,
 };
 
 function renderCard(result: HfModelSearchResultResponse = RESULT) {
@@ -90,6 +122,82 @@ describe("GenerationModelCard", () => {
 
     await waitFor(() => expect(screen.getByRole("radio", { name: /fp32/i })).toBeInTheDocument());
     expect(screen.queryByRole("radio", { name: /fp16/i })).not.toBeInTheDocument();
+  });
+
+  it("shows single-file checkpoints and explains disabled candidates", async () => {
+    vi.mocked(generationService.preflightGenerationModel).mockResolvedValue(
+      SINGLE_FILE_PREFLIGHT,
+    );
+
+    renderCard(SINGLE_FILE_RESULT);
+    expect(screen.getByText(/single-file/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /detalles/i }));
+
+    const installable = await screen.findByRole("radio", {
+      name: /ponyDiffusionV6XL_v6StartWithThisOne.*6\.5 GB/i,
+    });
+    const vae = screen.getByRole("radio", { name: /sdxl_vae.*335\.0 MB/i });
+    expect(installable).toBeChecked();
+    expect(installable).toBeEnabled();
+    expect(vae).toBeDisabled();
+    expect(screen.getByText(/es un VAE, no un pipeline completo/i)).toBeInTheDocument();
+  });
+
+  it("installs the checkpoint selected by the user", async () => {
+    const preflight: PreflightResponse = {
+      ...SINGLE_FILE_PREFLIGHT,
+      checkpoints: [
+        SINGLE_FILE_PREFLIGHT.checkpoints[0],
+        {
+          path: "ponyDiffusionV6XL_v6Alt.safetensors",
+          sizeBytes: 6 * GB,
+          architecture: "xl_base",
+          installable: true,
+          reason: "Checkpoint SDXL completo.",
+        },
+      ],
+    };
+    vi.mocked(generationService.preflightGenerationModel).mockResolvedValue(preflight);
+    vi.mocked(generationService.installGenerationModel).mockResolvedValue({
+      installId: "1",
+      statusUrl: "/x",
+    });
+
+    renderCard(SINGLE_FILE_RESULT);
+    fireEvent.click(screen.getByRole("button", { name: /detalles/i }));
+    const alternate = await screen.findByRole("radio", { name: /v6Alt/i });
+    fireEvent.click(alternate);
+    fireEvent.click(screen.getByRole("button", { name: /^install$/i }));
+
+    await waitFor(() =>
+      expect(generationService.installGenerationModel).toHaveBeenCalledWith(
+        "owner/name",
+        "fp16",
+        "ponyDiffusionV6XL_v6Alt.safetensors",
+      ),
+    );
+  });
+
+  it("keeps Install enabled with no selection when no checkpoint is installable", async () => {
+    vi.mocked(generationService.preflightGenerationModel).mockResolvedValue({
+      ...SINGLE_FILE_PREFLIGHT,
+      checkpoints: SINGLE_FILE_PREFLIGHT.checkpoints.map((checkpoint, index) => ({
+        ...checkpoint,
+        installable: index === 0 ? null : false,
+        reason: index === 0 ? "No se pudo leer el header." : checkpoint.reason,
+      })),
+    });
+
+    renderCard(SINGLE_FILE_RESULT);
+    fireEvent.click(screen.getByRole("button", { name: /detalles/i }));
+
+    const checkpointRadios = (await screen.findAllByRole("radio")).filter((radio) =>
+      radio.getAttribute("name")?.includes("checkpoint"),
+    );
+    expect(checkpointRadios).not.toHaveLength(0);
+    expect(checkpointRadios.every((radio) => !(radio as HTMLInputElement).checked)).toBe(true);
+    expect(screen.getByText(/no se pudo evaluar.*no se pudo leer el header/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^install$/i })).toBeEnabled();
   });
 
   it("fires preflight once even when toggled repeatedly", async () => {

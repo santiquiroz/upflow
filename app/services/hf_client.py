@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -88,6 +89,10 @@ WEIGHT_EXTENSION_PRIORITY = (".onnx", ".safetensors", ".pth")
 DOWNLOAD_CHUNK_BYTES = 1024 * 1024
 REQUEST_TIMEOUT_SECONDS = 30.0
 PARTIAL_DOWNLOAD_SUFFIX = ".part"
+# Cota del header de un .safetensors leido por Range. Medidos en repos reales:
+# 25 KB (un VAE) a 358 KB (un SDXL de 2515 tensores). 64 MB deja mas de 100x de
+# margen y acota el gasto si un repo declara un largo absurdo.
+MAX_SAFETENSORS_HEADER_BYTES = 64 * 1024 * 1024
 
 ProgressCallback = Callable[[int, "int | None"], None]
 
@@ -267,6 +272,69 @@ class HfClient:
                     raise _wrap_hf_auth_error(exc, repo_id) from exc
                 logger.warning(
                     "Hugging Face repo_files attempt %d/%d failed (%s); retrying",
+                    attempt,
+                    DOWNLOAD_ATTEMPTS,
+                    type(exc).__name__,
+                )
+                await asyncio.sleep(2 ** (attempt - 1))
+
+    async def read_safetensors_header(
+        self,
+        repo_id: str,
+        path: str,
+    ) -> tuple[dict, int]:
+        url = _download_url(repo_id, path)
+        _validate_https_huggingface_host(url)
+
+        for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+            try:
+                async with self._build_client() as client:
+                    length_response = await client.get(
+                        url,
+                        headers={**self._auth_headers(), "Range": "bytes=0-7"},
+                    )
+                    length_response.raise_for_status()
+                    if len(length_response.content) != 8:
+                        raise ValueError(
+                            "El prefijo safetensors debe contener exactamente 8 bytes."
+                        )
+                    header_length = int.from_bytes(
+                        length_response.content,
+                        byteorder="little",
+                        signed=False,
+                    )
+                    # El repo_id lo escribe el usuario, asi que estos 8 bytes son
+                    # contenido no confiable: sin cota, un repo que declare un
+                    # header de 2**40 haria pedir un Range de un terabyte y
+                    # buffearlo entero en memoria. Los headers reales medidos van
+                    # de 25 KB a 358 KB; 64 MB deja 100x de margen.
+                    if not 0 < header_length <= MAX_SAFETENSORS_HEADER_BYTES:
+                        raise ValueError(
+                            f"El header safetensors declara {header_length} bytes, "
+                            f"fuera del maximo de {MAX_SAFETENSORS_HEADER_BYTES}."
+                        )
+
+                    header_response = await client.get(
+                        url,
+                        headers={
+                            **self._auth_headers(),
+                            "Range": f"bytes=8-{8 + header_length - 1}",
+                        },
+                    )
+                    header_response.raise_for_status()
+                    if len(header_response.content) != header_length:
+                        raise ValueError(
+                            "El header safetensors recibido no coincide con el largo declarado."
+                        )
+                    header = json.loads(header_response.content)
+                    if not isinstance(header, dict):
+                        raise ValueError("El header safetensors no es un objeto JSON.")
+                return header, header_length
+            except Exception as exc:  # noqa: BLE001 -- CancelledError is BaseException
+                if attempt == DOWNLOAD_ATTEMPTS or not _is_retryable_download_error(exc):
+                    raise _wrap_hf_auth_error(exc, repo_id) from exc
+                logger.warning(
+                    "Hugging Face safetensors header attempt %d/%d failed (%s); retrying",
                     attempt,
                     DOWNLOAD_ATTEMPTS,
                     type(exc).__name__,

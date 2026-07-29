@@ -17,6 +17,8 @@ const base = {
     { id: "cpu", name: "CPU", kind: "cpu", freeVramBytes: null },
   ],
   disk: { targetPath: "D:\\temp", freeBytes: 50 * GB },
+  checkpoints: [],
+  freeRamBytes: null,
 };
 
 it("warns about devices where the estimate does not fit", () => {
@@ -37,6 +39,29 @@ it("warns when free disk is below the download size", () => {
 it("never warns about disk when it could not be measured", () => {
   const noDisk = { ...base, disk: null };
   expect(buildWarnings(noDisk, "fp16").map((w) => w.code)).not.toContain("disk_low");
+});
+
+it("warns when free RAM is below the chosen checkpoint size", () => {
+  const checkpoint = {
+    path: "pony.safetensors",
+    sizeBytes: 7 * GB,
+    architecture: "xl_base",
+    installable: true,
+    reason: "Checkpoint SDXL completo.",
+  };
+  const tightRam = { ...base, freeRamBytes: 6 * GB };
+  expect(buildWarnings(tightRam, "fp16", checkpoint).map((w) => w.code)).toContain("ram_low");
+});
+
+it("never warns about RAM when it could not be measured", () => {
+  const checkpoint = {
+    path: "pony.safetensors",
+    sizeBytes: 7 * GB,
+    architecture: "xl_base",
+    installable: true,
+    reason: "Checkpoint SDXL completo.",
+  };
+  expect(buildWarnings(base, "fp16", checkpoint).map((w) => w.code)).not.toContain("ram_low");
 });
 
 it("never warns about a device whose VRAM could not be measured", () => {

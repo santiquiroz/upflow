@@ -6,8 +6,9 @@ from pathlib import Path
 import pytest
 
 from app.services.generation_single_file import (
-    _ARCHITECTURE_TO_ORT,
+    _ARCHITECTURE_SUPPORT,
     classify_checkpoint,
+    pipeline_class_for,
     supported_architecture,
     validate_architecture_table,
 )
@@ -38,15 +39,21 @@ def _header(name: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def test_architecture_table_matches_what_optimum_supports():
-    # El test que avisa si un upgrade de optimum renombra una clave. Sin esto el
-    # mapeo degradaria en silencio a "arquitectura no soportada".
+def test_architecture_table_matches_both_dependencies():
+    # Avisa si optimum renombra un model type O si diffusers deja de exponer
+    # from_single_file en una clase. Sin esto el mapeo degradaria en silencio a
+    # "arquitectura no soportada".
     validate_architecture_table()
 
 
 def test_supported_architecture_maps_every_table_entry():
-    for detected, expected in _ARCHITECTURE_TO_ORT.items():
-        assert supported_architecture(detected) == expected
+    for detected, (_pipeline, ort_type) in _ARCHITECTURE_SUPPORT.items():
+        assert supported_architecture(detected) == ort_type
+
+
+def test_pipeline_class_maps_every_table_entry():
+    for detected, (pipeline, _ort_type) in _ARCHITECTURE_SUPPORT.items():
+        assert pipeline_class_for(detected) == pipeline
 
 
 @pytest.mark.parametrize(
@@ -62,6 +69,29 @@ def test_supported_architecture_maps_every_table_entry():
 )
 def test_unsupported_architectures_return_none(detected):
     assert supported_architecture(detected) is None
+    assert pipeline_class_for(detected) is None
+
+
+def test_sana_is_excluded_from_the_single_file_path():
+    """optimum SI puede ejecutar sana, pero SanaPipeline no expone
+    from_single_file (medido 2026-07-29), asi que no se puede instalar desde un
+    checkpoint suelto. Instalar un repo diffusers de sana sigue siendo otro
+    camino y no lo afecta este modulo."""
+    import diffusers
+
+    assert hasattr(diffusers, "SanaPipeline")
+    assert not hasattr(diffusers.SanaPipeline, "from_single_file")
+    assert "sana" not in _ARCHITECTURE_SUPPORT
+
+
+def test_no_auto_class_exposes_from_single_file():
+    """Por esto materialize resuelve la clase concreta en vez de usar una
+    genérica: el primer intento con DiffusionPipeline fallo con AttributeError
+    en el smoke de punta a punta."""
+    import diffusers
+
+    for name in ("DiffusionPipeline", "AutoPipelineForText2Image"):
+        assert not hasattr(getattr(diffusers, name), "from_single_file")
 
 
 def test_supported_architecture_handles_none():

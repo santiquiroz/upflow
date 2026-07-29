@@ -9,6 +9,10 @@ from typing import Any
 
 from app.exceptions import HfAuthError
 from app.services.generation_compat import CompatVerdict, classify
+from app.services.generation_single_file import (
+    CheckpointVerdict,
+    classify_checkpoint,
+)
 from app.services.generation_variants import (
     MODEL_INDEX_FILENAME,
     Precision,
@@ -42,6 +46,15 @@ class DiskCapacity:
 
 
 @dataclass(slots=True, frozen=True)
+class CheckpointCandidate:
+    path: str
+    size_bytes: int
+    architecture: str | None
+    installable: bool | None
+    reason: str
+
+
+@dataclass(slots=True, frozen=True)
 class PreflightReport:
     repo_id: str
     compat: CompatVerdict | None
@@ -52,6 +65,8 @@ class PreflightReport:
     precisions: list[PrecisionCost] = field(default_factory=list)
     devices: list[DeviceCapacity] = field(default_factory=list)
     disk: DiskCapacity | None = None
+    checkpoints: list[CheckpointCandidate] = field(default_factory=list)
+    free_ram_bytes: int | None = None
 
 
 def _measure_disk(target: Path) -> DiskCapacity | None:
@@ -82,6 +97,28 @@ def _measure_devices(devices_service: Any, probes: dict[str, Any]) -> list[Devic
     return rows
 
 
+def _measure_free_ram(probes: dict[str, Any]) -> int | None:
+    probe = probes.get("cpu")
+    if probe is None:
+        return None
+    free_mb = probe.free_capacity_mb("cpu")
+    return None if free_mb is None else free_mb * MB
+
+
+def _candidate_from_verdict(
+    path: str,
+    size_bytes: int,
+    verdict: CheckpointVerdict,
+) -> CheckpointCandidate:
+    return CheckpointCandidate(
+        path=path,
+        size_bytes=size_bytes,
+        architecture=verdict.architecture,
+        installable=verdict.installable,
+        reason=verdict.reason,
+    )
+
+
 async def _read_declared(hf_client: Any, repo_id: str) -> list[str]:
     scratch = Path(tempfile.mkdtemp(prefix="upflow-preflight-"))
     try:
@@ -110,12 +147,14 @@ async def preflight(
     # aunque la parte de red falle: un reporte degradado sigue siendo util.
     devices = _measure_devices(devices_service, probes)
     disk = _measure_disk(Path(settings.temp_path))
+    free_ram_bytes = _measure_free_ram(probes)
 
     def build(
         compat: CompatVerdict | None,
         reason: str | None,
         degraded: bool,
         precisions: list[PrecisionCost] | None = None,
+        checkpoints: list[CheckpointCandidate] | None = None,
     ) -> PreflightReport:
         return PreflightReport(
             repo_id=repo_id,
@@ -127,6 +166,8 @@ async def preflight(
             precisions=precisions or [],
             devices=devices,
             disk=disk,
+            checkpoints=checkpoints or [],
+            free_ram_bytes=free_ram_bytes,
         )
 
     try:
@@ -142,6 +183,36 @@ async def preflight(
         return build(None, None, True)
 
     verdict, reason = classify(tuple(f.path for f in files), None)
+    if verdict == "single_file":
+        candidates: list[CheckpointCandidate] = []
+        for file in files:
+            if "/" in file.path or not file.path.lower().endswith(".safetensors"):
+                continue
+            try:
+                header, _header_length = await hf_client.read_safetensors_header(
+                    repo_id,
+                    file.path,
+                )
+                candidates.append(
+                    _candidate_from_verdict(
+                        file.path,
+                        file.size,
+                        classify_checkpoint(header),
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001 - falla aislada por candidato
+                detail = str(exc).strip() or type(exc).__name__
+                candidates.append(
+                    CheckpointCandidate(
+                        path=file.path,
+                        size_bytes=file.size,
+                        architecture=None,
+                        installable=None,
+                        reason=f"No se pudo evaluar el header: {detail}",
+                    )
+                )
+        return build(verdict, reason, False, checkpoints=candidates)
+
     # Clasificar ANTES de leer model_index.json: un repo `incompatible` es
     # justamente el que no lo tiene, y pedirlo daria un 404 que degradaria el
     # reporte y taparia el veredicto que ya conocemos. `ready_onnx` tampoco lo

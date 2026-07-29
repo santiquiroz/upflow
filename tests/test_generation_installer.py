@@ -11,6 +11,7 @@ import pytest
 from app.config import Settings
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.generation_installer import (
+    CheckpointNotFoundError,
     LEGACY_CONFIGS_ASSETS_DIR,
     GenerationModelInstaller,
     _filter_to_declared,
@@ -135,6 +136,13 @@ def install_and_drain(installer: GenerationModelInstaller, repo_id: str):
 
 def test_generation_model_id_is_prefixed_and_safe() -> None:
     assert _generation_model_id("amd/Stable-Diffusion-1.5") == "gen--amd--stable-diffusion-1.5"
+
+
+def test_generation_model_id_includes_selected_checkpoint() -> None:
+    assert _generation_model_id(
+        "owner/Checkpoints",
+        "Pony-V6.safetensors",
+    ) == "gen--owner--checkpoints--pony-v6.safetensors"
 
 
 def test_select_files_skips_torch_checkpoints() -> None:
@@ -715,4 +723,63 @@ async def test_single_file_checkpoint_repo_fails_early_with_the_layout_reason(
     assert job.status is InstallStatus.error
     assert "raiz" in job.error.lower() or "single-file" in job.error.lower()
     # Falla ANTES de bajar nada: el repo no es instalable por este camino.
+    assert hf.download_calls == []
+
+
+@pytest.mark.asyncio
+async def test_single_file_checkpoint_routes_selected_file_to_conversion(
+    tmp_path: Path,
+) -> None:
+    files = [
+        HfFile(path="README.md", size=512),
+        HfFile(path="pony.safetensors", size=6616 * 1024 * 1024),
+        HfFile(path="vae.safetensors", size=335 * 1024 * 1024),
+    ]
+    installer, _registry, _settings, hf = make_installer(tmp_path, files)
+    enqueued: list[tuple[str, str, str | None]] = []
+
+    async def fake_enqueue(
+        repo_id: str,
+        precision: str,
+        checkpoint_path: str | None,
+    ) -> str:
+        enqueued.append((repo_id, precision, checkpoint_path))
+        return "conv-single"
+
+    installer.enqueue_conversion = fake_enqueue
+    install_id = await installer.install_from_hf(
+        "owner/single-file",
+        precision="fp16",
+        checkpoint_path="pony.safetensors",
+    )
+    await installer._process_next()
+
+    job = installer.status(install_id)
+    assert job is not None
+    assert job.checkpoint_path == "pony.safetensors"
+    assert job.status is InstallStatus.converting
+    assert job.conversion_id == "conv-single"
+    assert enqueued == [
+        ("owner/single-file", "fp16", "pony.safetensors"),
+    ]
+    assert hf.download_calls == []
+
+
+@pytest.mark.asyncio
+async def test_single_file_missing_checkpoint_lists_root_candidates(
+    tmp_path: Path,
+) -> None:
+    files = [
+        HfFile(path="pony.safetensors", size=100),
+        HfFile(path="nested/ignored.safetensors", size=100),
+    ]
+    installer, _registry, _settings, hf = make_installer(tmp_path, files)
+    with pytest.raises(CheckpointNotFoundError) as exc_info:
+        await installer.install_from_hf(
+            "owner/single-file",
+            checkpoint_path="missing.safetensors",
+        )
+
+    assert "pony.safetensors" in str(exc_info.value)
+    assert "nested/ignored.safetensors" not in str(exc_info.value)
     assert hf.download_calls == []

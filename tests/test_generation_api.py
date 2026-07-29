@@ -21,10 +21,17 @@ from app.api.routes import (
 from app.config import Settings
 from app.main import app
 from app.models import ConversionJob, GenerationJob, JobStatus
-from app.schemas import CreateGenerationJobRequest, InstallModelRequest
+from app.schemas import (
+    CreateGenerationJobRequest,
+    InstallModelRequest,
+    PreflightResponse,
+)
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.generation_converter import GenerationModelConverter
-from app.services.generation_installer import GenerationModelInstaller
+from app.services.generation_installer import (
+    CheckpointNotFoundError,
+    GenerationModelInstaller,
+)
 from app.services.generation_job_manager import GenerationJobManager
 from app.services.model_installer import InstallJob, InstallStatus
 from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry
@@ -360,6 +367,7 @@ class FakeGenerationInstaller:
     def __init__(self) -> None:
         self.install_calls: list[str] = []
         self.install_precisions: list[str] = []
+        self.install_checkpoints: list[str | None] = []
         self.install_id = "install-123"
         self.install_error: Exception | None = None
         self._jobs: dict[str, InstallJob] = {}
@@ -371,9 +379,11 @@ class FakeGenerationInstaller:
         self,
         repo_id: str,
         precision: str = "fp16",
+        checkpoint_path: str | None = None,
     ) -> str:
         self.install_calls.append(repo_id)
         self.install_precisions.append(precision)
+        self.install_checkpoints.append(checkpoint_path)
         if self.install_error:
             raise self.install_error
         return self.install_id
@@ -436,6 +446,52 @@ async def test_install_generation_model_passes_selected_precision() -> None:
     assert installer.install_precisions == ["fp32"]
 
 
+async def test_install_generation_model_passes_selected_checkpoint() -> None:
+    from app.api.routes import install_generation_model
+
+    installer = FakeGenerationInstaller()
+    payload = InstallModelRequest.model_validate(
+        {
+            "repoId": "owner/checkpoints",
+            "checkpointPath": "pony.safetensors",
+        }
+    )
+
+    await install_generation_model(payload=payload, installer=installer)
+
+    assert payload.checkpoint_path == "pony.safetensors"
+    assert installer.install_checkpoints == ["pony.safetensors"]
+    assert payload.model_dump(by_alias=True)["checkpointPath"] == "pony.safetensors"
+
+
+def test_preflight_response_serializes_checkpoint_and_ram_aliases() -> None:
+    response = PreflightResponse(
+        repo_id="owner/checkpoints",
+        compat="single_file",
+        compat_reason="candidate",
+        degraded=False,
+        reference_width=512,
+        reference_height=512,
+        precisions=[],
+        devices=[],
+        disk=None,
+        checkpoints=[
+            {
+                "path": "pony.safetensors",
+                "size_bytes": 123,
+                "architecture": "xl_base",
+                "installable": True,
+                "reason": "ok",
+            }
+        ],
+        free_ram_bytes=456,
+    )
+
+    dumped = response.model_dump(by_alias=True)
+    assert dumped["freeRamBytes"] == 456
+    assert dumped["checkpoints"][0]["sizeBytes"] == 123
+
+
 async def test_install_generation_model_returns_400_for_invalid_repo_id() -> None:
     from app.api.routes import install_generation_model
 
@@ -446,6 +502,27 @@ async def test_install_generation_model_returns_400_for_invalid_repo_id() -> Non
         await install_generation_model(payload=InstallModelRequest(repo_id="amd/sd15"), installer=installer)
 
     assert exc_info.value.status_code == 400
+
+
+async def test_install_generation_model_returns_422_for_missing_checkpoint() -> None:
+    from app.api.routes import install_generation_model
+
+    installer = FakeGenerationInstaller()
+    installer.install_error = CheckpointNotFoundError(
+        "missing.safetensors no existe. Candidatos: pony.safetensors"
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await install_generation_model(
+            payload=InstallModelRequest(
+                repo_id="owner/checkpoints",
+                checkpoint_path="missing.safetensors",
+            ),
+            installer=installer,
+        )
+
+    assert exc_info.value.status_code == 422
+    assert "pony.safetensors" in exc_info.value.detail
 
 
 async def test_get_generation_install_status_returns_404_for_unknown_id() -> None:

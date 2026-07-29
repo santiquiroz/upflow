@@ -364,3 +364,209 @@ async def test_precision_falls_back_when_repo_lacks_requested_variant(
 
     assert converter.status(conversion_id).status is JobStatus.completed
     assert captured["dtype"] is None
+
+
+def _single_file_header(name: str) -> dict:
+    fixture_path = Path(__file__).parent / "assets" / "single_file_fixtures.json"
+    entry = json.loads(fixture_path.read_text(encoding="utf-8"))[name]
+    header: dict[str, dict] = {}
+    for group in ("watched_keys", "role_sample_keys", "lora_sample_keys"):
+        for key, shape in entry[group].items():
+            header[key] = {"shape": shape, "dtype": "F16"}
+    return header
+
+
+@pytest.mark.asyncio
+async def test_single_file_conversion_downloads_materializes_and_promotes_exact_checkpoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    converter, _installer, _settings, registry = make_converter(
+        tmp_path,
+        _recording_export(captured),
+    )
+    checkpoint = HfFile(path="pony.safetensors", size=6616 * 1024 * 1024)
+    converter.hf_client.files = [
+        checkpoint,
+        HfFile(path="other.safetensors", size=100),
+    ]
+
+    async def read_header(repo_id: str, path: str):
+        assert path == checkpoint.path
+        header = _single_file_header("pony_sdxl")
+        return header, len(json.dumps(header).encode("utf-8"))
+
+    converter.hf_client.read_safetensors_header = read_header  # type: ignore[attr-defined]
+
+    def fake_materialize(
+        checkpoint_path: Path,
+        out_dir: Path,
+        architecture: str,
+    ) -> None:
+        captured["checkpoint_path"] = checkpoint_path
+        captured["architecture"] = architecture
+        captured["stage"] = converter.status(conversion_id).metadata["stage"]
+        captured["stages"] = converter.status(conversion_id).metadata["stages"]
+        (out_dir / "model_index.json").write_text(
+            SOURCE_MODEL_INDEX,
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(generation_converter_module, "materialize", fake_materialize)
+
+    conversion_id = await converter.convert_from_hf(
+        "owner/checkpoints",
+        checkpoint_path=checkpoint.path,
+    )
+    await converter._process_next()
+
+    job = converter.status(conversion_id)
+    assert job is not None
+    assert job.status is JobStatus.completed, job.error
+    assert job.checkpoint_path == checkpoint.path
+    assert captured["architecture"] == "xl_base"
+    assert Path(captured["checkpoint_path"]).name == checkpoint.path
+    assert captured["stage"] == "materializing"
+    assert any(
+        stage["key"] == "materializing"
+        and stage["label"] == "Materializing checkpoint"
+        for stage in captured["stages"]
+    )
+    downloaded = [call[1] for call in converter.hf_client.download_calls]
+    assert downloaded == [checkpoint.path]
+    assert all(converter.hf_client.download_unlimited)
+    expected_model_id = _generation_model_id(
+        "owner/checkpoints",
+        checkpoint.path,
+    )
+    assert job.model_id == expected_model_id
+    assert registry.get(expected_model_id) is not None
+
+
+@pytest.mark.asyncio
+async def test_single_file_remote_header_failure_reclassifies_downloaded_checkpoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    converter, _installer, _settings, _registry = make_converter(
+        tmp_path,
+        _recording_export(captured),
+    )
+    header = _single_file_header("pony_sdxl")
+    header_bytes = json.dumps(header).encode("utf-8")
+    checkpoint = HfFile(path="pony.safetensors", size=len(header_bytes) + 8)
+    converter.hf_client.files = [checkpoint]
+    converter.hf_client.download_bytes_by_path[checkpoint.path] = (
+        len(header_bytes).to_bytes(8, byteorder="little") + header_bytes
+    )
+
+    async def fail_remote_header(repo_id: str, path: str):
+        raise RuntimeError("range unavailable")
+
+    converter.hf_client.read_safetensors_header = fail_remote_header  # type: ignore[attr-defined]
+
+    def fake_materialize(
+        checkpoint_path: Path,
+        out_dir: Path,
+        architecture: str,
+    ) -> None:
+        captured["architecture"] = architecture
+        (out_dir / "model_index.json").write_text(
+            SOURCE_MODEL_INDEX,
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(generation_converter_module, "materialize", fake_materialize)
+
+    conversion_id = await converter.convert_from_hf(
+        "owner/checkpoints",
+        checkpoint_path=checkpoint.path,
+    )
+    await converter._process_next()
+
+    job = converter.status(conversion_id)
+    assert job is not None
+    assert job.status is JobStatus.completed, job.error
+    assert captured["architecture"] == "xl_base"
+
+
+@pytest.mark.asyncio
+async def test_single_file_non_installable_header_fails_before_download(
+    tmp_path: Path,
+) -> None:
+    converter, _installer, _settings, _registry = make_converter(
+        tmp_path,
+        _recording_export({}),
+    )
+    checkpoint = HfFile(path="vae.safetensors", size=335 * 1024 * 1024)
+    converter.hf_client.files = [checkpoint]
+
+    async def read_header(repo_id: str, path: str):
+        header = _single_file_header("vae_only")
+        return header, len(json.dumps(header).encode("utf-8"))
+
+    converter.hf_client.read_safetensors_header = read_header  # type: ignore[attr-defined]
+
+    conversion_id = await converter.convert_from_hf(
+        "owner/checkpoints",
+        checkpoint_path=checkpoint.path,
+    )
+    await converter._process_next()
+
+    job = converter.status(conversion_id)
+    assert job is not None
+    assert job.status is JobStatus.failed
+    assert "pipeline completo" in (job.error or "")
+    assert converter.hf_client.download_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "allocation_error",
+    [
+        MemoryError("cannot allocate checkpoint"),
+        RuntimeError("DefaultCPUAllocator: not enough memory"),
+    ],
+)
+async def test_single_file_allocation_failure_mentions_checkpoint_size(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    allocation_error: Exception,
+) -> None:
+    converter, _installer, settings, _registry = make_converter(
+        tmp_path,
+        _recording_export({}),
+    )
+    checkpoint = HfFile(path="huge.safetensors", size=7_123_456_789)
+    converter.hf_client.files = [checkpoint]
+
+    async def read_header(repo_id: str, path: str):
+        header = _single_file_header("pony_sdxl")
+        return header, len(json.dumps(header).encode("utf-8"))
+
+    converter.hf_client.read_safetensors_header = read_header  # type: ignore[attr-defined]
+
+    def fail_materialize(*args, **kwargs) -> None:
+        raise allocation_error
+
+    monkeypatch.setattr(generation_converter_module, "materialize", fail_materialize)
+
+    conversion_id = await converter.convert_from_hf(
+        "owner/checkpoints",
+        checkpoint_path=checkpoint.path,
+    )
+    await converter._process_next()
+
+    job = converter.status(conversion_id)
+    assert job is not None
+    assert job.status is JobStatus.failed
+    assert "RAM" in (job.error or "")
+    assert str(checkpoint.size) in (job.error or "")
+    leftovers = (
+        list(settings.temp_path.iterdir())
+        if settings.temp_path.exists()
+        else []
+    )
+    assert leftovers == []

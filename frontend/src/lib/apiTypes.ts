@@ -236,12 +236,25 @@ export interface ModelsResponse {
 }
 
 export type Precision = "fp16" | "fp32";
-export type CompatVerdict = "ready_onnx" | "needs_conversion" | "gated" | "incompatible";
+export type CompatVerdict =
+  | "ready_onnx"
+  | "needs_conversion"
+  | "single_file"
+  | "gated"
+  | "incompatible";
 
 export interface PrecisionCost {
   precision: Precision;
   downloadBytes: number;
   estimatedPeakBytes: number;
+}
+
+export interface CheckpointCandidate {
+  path: string;
+  sizeBytes: number;
+  architecture: string | null;
+  installable: boolean | null;
+  reason: string;
 }
 
 export interface DeviceCapacity {
@@ -261,6 +274,8 @@ export interface PreflightResponse {
   precisions: PrecisionCost[];
   devices: DeviceCapacity[];
   disk: { targetPath: string; freeBytes: number } | null;
+  checkpoints: CheckpointCandidate[];
+  freeRamBytes: number | null;
 }
 
 export interface HfModelSearchResultResponse {
