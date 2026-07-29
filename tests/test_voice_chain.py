@@ -11,6 +11,7 @@ from app.services.voice_chain import (
     build_filter_chain,
     delivery_choices,
     plan_stages,
+    step_catalog,
 )
 
 
@@ -263,3 +264,59 @@ def test_step_order_is_preserved_verbatim():
     ]
     stages = plan_stages(steps)
     assert stages[0].filter_argument == "deesser,highpass=f=80"
+
+
+# ---------------------------------------------------------------------------
+# Catalogo para publico no tecnico
+# ---------------------------------------------------------------------------
+
+
+def test_every_step_has_plain_language_help():
+    for step in step_catalog():
+        assert step.label and not step.label.endswith(":")
+        # La descripcion tiene que explicar, no repetir la etiqueta.
+        assert len(step.description) > 40
+        assert step.description != step.label
+
+
+def test_every_delivery_target_has_plain_language_help():
+    for choice in delivery_choices():
+        assert len(str(choice["description"])) > 40
+
+
+def test_catalog_order_matches_the_real_chain_order():
+    # Si el catalogo se desincroniza del orden real, la UI mostraria una cadena
+    # que no es la que se ejecuta. Este test es el que lo impide.
+    chain = build_filter_chain(
+        VoiceChainOptions(
+            denoise="fft", highpass_hz=80, compress=True,
+            presence_db=3.0, deesser=True, delivery="streaming",
+        )
+    )
+    expr_by_step = {
+        "denoise": "afftdn",
+        "highpass": "highpass",
+        "compress": "acompressor",
+        "presence": "equalizer",
+        "deesser": "deesser",
+        "loudness": "loudnorm",
+    }
+    catalog_ids = [s.id for s in step_catalog()]
+    positions = [_index_of(chain, expr_by_step[step_id]) for step_id in catalog_ids]
+    assert positions == sorted(positions)
+
+
+def test_catalog_covers_every_step_the_chain_can_emit():
+    catalog_ids = {s.id for s in step_catalog()}
+    assert catalog_ids == {"denoise", "highpass", "compress", "presence", "deesser", "loudness"}
+
+
+def test_defaults_in_the_catalog_match_the_options_defaults():
+    defaults = {s.id: s.default_enabled for s in step_catalog()}
+    options = VoiceChainOptions()
+    assert defaults["highpass"] is bool(options.highpass_hz)
+    assert defaults["compress"] is options.compress
+    assert defaults["deesser"] is options.deesser
+    assert defaults["denoise"] is (options.denoise != "none")
+    assert defaults["presence"] is (options.presence_db is not None)
+    assert defaults["loudness"] is (options.delivery != "none")

@@ -20,6 +20,7 @@ _DELIVERY_SPECS: dict[str, tuple[float, float, str]] = {
 }
 
 DenoiseMode = Literal["rnnoise", "fft", "none"]
+StepKind = Literal["filter", "model"]
 
 # Banda de presencia de la voz humana. Subirla es lo que se siente como
 # "enfocar" el dialogo en una mezcla.
@@ -40,11 +41,128 @@ class VoiceChainOptions:
     delivery: DeliveryTarget = "none"
 
 
+# Explicaciones para publico no programador. Viven en el backend a proposito:
+# una sola fuente de verdad, en vez de repartidas por el frontend. La regla de
+# presentacion es que la descripcion corta va SIEMPRE VISIBLE y el tooltip solo
+# agrega profundidad -- usar hover como unico mecanismo para informacion
+# critica es un fallo de accesibilidad conocido.
+_DELIVERY_HELP: dict[str, str] = {
+    "streaming": (
+        "Si el audio va a Spotify, YouTube, TIDAL o Amazon. Esas plataformas "
+        "bajan o suben todo a un mismo volumen, asi que entregarlo mas fuerte "
+        "no lo hace sonar mas fuerte: solo le saca dinamica."
+    ),
+    "apple_music": (
+        "Apple Music normaliza un poco mas bajo que el resto. Usa este si es "
+        "su destino principal."
+    ),
+    "ebu_r128": (
+        "El estandar de television, radio y cine en Europa y buena parte del "
+        "mundo. Mucho mas bajo que streaming porque se escucha en ambientes "
+        "silenciosos, donde la dinamica amplia se aprecia."
+    ),
+    "atsc_a85": (
+        "El estandar de television en Estados Unidos. Casi igual al europeo, "
+        "con un techo de picos un poco mas permisivo."
+    ),
+}
+
+
+@dataclass(slots=True, frozen=True)
+class StepInfo:
+    id: str
+    label: str
+    description: str
+    kind: StepKind
+    default_enabled: bool
+
+
 def delivery_choices() -> list[dict[str, object]]:
-    """Los destinos con sus numeros, para que la UI los muestre sin duplicarlos."""
+    """Los destinos con sus numeros y su explicacion, para que la UI no los duplique."""
     return [
-        {"id": key, "label": label, "lufs": lufs, "truePeakDb": tp}
+        {
+            "id": key,
+            "label": label,
+            "lufs": lufs,
+            "truePeakDb": tp,
+            "description": _DELIVERY_HELP[key],
+        }
         for key, (lufs, tp, label) in _DELIVERY_SPECS.items()
+    ]
+
+
+def step_catalog() -> list[StepInfo]:
+    """Los pasos de la cadena con lenguaje para quien no es tecnico.
+
+    El ORDEN de esta lista es el orden correcto de la cadena, no alfabetico ni
+    de importancia: es el que build_filter_chain documenta y respeta.
+    """
+    return [
+        StepInfo(
+            id="denoise",
+            label="Quitar ruido de fondo",
+            description=(
+                "Saca el zumbido, el aire y el ruido constante. Va primero "
+                "porque todo lo que viene despues trabaja mejor sobre una "
+                "grabacion limpia."
+            ),
+            kind="filter",
+            default_enabled=False,
+        ),
+        StepInfo(
+            id="highpass",
+            label="Limpiar los graves",
+            description=(
+                "Corta lo que esta por debajo de la voz humana: golpes de mesa, "
+                "pisadas, viento. Ademas hace que el control de volumen no "
+                "tenga que pelear con esos graves."
+            ),
+            kind="filter",
+            default_enabled=True,
+        ),
+        StepInfo(
+            id="compress",
+            label="Nivelar el volumen",
+            description=(
+                "Acerca las partes muy fuertes a las muy suaves, para que no "
+                "haya que subir y bajar el volumen mientras se escucha."
+            ),
+            kind="filter",
+            default_enabled=True,
+        ),
+        StepInfo(
+            id="presence",
+            label="Enfocar la voz",
+            description=(
+                "Realza la banda donde vive la inteligibilidad de la voz. Es lo "
+                "que hace que el dialogo se entienda por encima de la musica y "
+                "los efectos."
+            ),
+            kind="filter",
+            default_enabled=False,
+        ),
+        StepInfo(
+            id="deesser",
+            label="Suavizar las eses",
+            description=(
+                "Baja los sibilantes que suenan filosos y molestan al escuchar "
+                "con auriculares. Va casi al final, sobre la sibilancia que "
+                "realmente quedo."
+            ),
+            kind="filter",
+            default_enabled=True,
+        ),
+        StepInfo(
+            id="loudness",
+            label="Ajustar al destino",
+            description=(
+                "Lleva el volumen general al valor que pide la plataforma donde "
+                "va a publicarse. Va siempre ultimo, porque mide el resultado "
+                "final: medirlo antes daria un numero que ya no seria cierto."
+            ),
+            kind="filter",
+            default_enabled=False,
+        ),
     ]
 
 
@@ -129,8 +247,6 @@ def build_filter_argument(
 # pasadas. Por eso los filtros consecutivos se fusionan en UNA pasada: cada
 # pasada extra es un ciclo completo de decode y encode sobre todo el audio.
 # ---------------------------------------------------------------------------
-
-StepKind = Literal["filter", "model"]
 
 
 @dataclass(slots=True, frozen=True)
