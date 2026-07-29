@@ -5,9 +5,13 @@ import { CPU_DEVICE, DevicePicker } from "../../components/DevicePicker";
 import { FormatOptionFieldset, type FormatOption } from "../../components/FormatOptionFieldset";
 import { JobCard } from "../../components/JobCard";
 import { useAudioCapabilities, useAudioJob, type AudioJobPhase } from "../../hooks/useAudioJob";
+import { useVoiceCatalog } from "../../hooks/useVoiceCatalog";
+import { useTranslation } from "../../i18n/LocaleProvider";
 import { denoiseLabel, restoreLabel } from "../../lib/audioLabels";
 import type { DeviceInfoResponse } from "../../lib/apiTypes";
 import { formatDeviceSummary } from "../enhance/accordionSummaries";
+import { VoiceChainPanel, voiceSummaryKey } from "./VoiceChainPanel";
+import { useVoiceSelection } from "./useVoiceSelection";
 
 type AudioOutputFormat = "flac" | "wav" | "mp3";
 
@@ -22,6 +26,8 @@ const DENOISE_TOOLTIP =
 const RESTORE_TOOLTIP =
   "Reconstruct high frequencies lost to lossy compression (MP3/AAC). Apollo is fast band-restore; AudioSR is diffusion super-resolution — much higher quality ceiling but far slower (minutes per minute of audio on GPU). Experimental — quality varies by source.";
 const DEVICE_TOOLTIP = "Pick the compute device that runs the restoration model (CPU or a DirectML GPU).";
+const VOICE_TOOLTIP =
+  "Shape the voice itself: remove noise, even out the volume, focus the dialogue, tame sibilance and match the loudness the destination platform expects. The steps run in a fixed order because each one works better on what the previous one left.";
 
 interface ModeOption {
   value: string | null;
@@ -132,7 +138,10 @@ export function AudioPanel() {
   const [device, setDevice] = useState<DeviceInfoResponse | null>(CPU_DEVICE);
 
   const capabilitiesQuery = useAudioCapabilities();
+  const voiceCatalogQuery = useVoiceCatalog();
+  const voice = useVoiceSelection(voiceCatalogQuery.data);
   const { phase, job, errorMessage, submit, cancel, reset } = useAudioJob();
+  const { t } = useTranslation();
 
   const denoiseModes = capabilitiesQuery.data?.denoiseModes ?? [];
   const restoreModes = capabilitiesQuery.data?.restoreModes ?? [];
@@ -144,14 +153,27 @@ export function AudioPanel() {
   }
 
   function handleSubmit() {
-    if (!file || (denoise === null && restore === null)) {
+    if (!canSubmit || !file) {
       return;
     }
-    submit({ file, denoise, restore, outputFormat, device: device?.id ?? null });
+    submit({
+      file,
+      denoise,
+      restore,
+      outputFormat,
+      device: device?.id ?? null,
+      voiceSteps: voice.enabledIds,
+      voiceDelivery: voice.delivery,
+      voicePresenceDb: voice.isEnabled("presence") ? voice.presenceDb : null,
+    });
   }
 
-  const hasSelection = denoise !== null || restore !== null;
-  const canSubmit = file !== null && hasSelection && !isJobBusy(phase);
+  // La mejora de voz cuenta como seleccion: alguien que solo quiere enfocar el
+  // dialogo no tiene por que encender denoise ni restore para poder enviar.
+  const hasSelection =
+    denoise !== null || restore !== null || voice.enabledIds.length > 0;
+  const canSubmit =
+    file !== null && hasSelection && !voice.needsDelivery && !isJobBusy(phase);
 
   return (
     <div className="grid grid-cols-[1fr_320px] gap-6 max-[900px]:grid-cols-1">
@@ -181,6 +203,20 @@ export function AudioPanel() {
             )}
           </AccordionSection>
         )}
+        <AccordionSection
+          title={t("voice.sectionTitle")}
+          summary={t(voiceSummaryKey(voice.enabledIds.length), {
+            count: voice.enabledIds.length,
+          })}
+          tooltip={VOICE_TOOLTIP}
+        >
+          <VoiceChainPanel
+            catalog={voiceCatalogQuery.data}
+            isLoading={voiceCatalogQuery.isLoading}
+            isError={voiceCatalogQuery.isError}
+            selection={voice}
+          />
+        </AccordionSection>
         <AccordionSection title="Device" summary={formatDeviceSummary(device)} tooltip={DEVICE_TOOLTIP}>
           <DevicePicker value={device?.id ?? null} onChange={setDevice} requiresGpu={false} allowAuto={false} />
         </AccordionSection>
@@ -194,7 +230,7 @@ export function AudioPanel() {
         <div className="flex flex-col gap-2">
           {!hasSelection && (
             <p role="status" className="text-xs text-text-faint">
-              Pick at least one of Denoise or Restore.
+              Pick at least one of Denoise, Restore or Voice.
             </p>
           )}
           <button

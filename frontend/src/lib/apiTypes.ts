@@ -153,6 +153,32 @@ export interface AudioCapabilities {
   restoreModes: string[];
 }
 
+// Mirrors app/schemas.py::VoiceStepResponse. La copia viaja como clave de
+// traduccion: el backend es dueño de la ESTRUCTURA (que pasos hay y en que
+// orden, que tiene causalidad documentada) y el frontend de la COPIA.
+export interface VoiceStep {
+  id: string;
+  labelKey: string;
+  descriptionKey: string;
+  // "filter" corre dentro del filtergraph de ffmpeg; "model" corta la cadena en
+  // dos pasadas porque ffmpeg no sabe invocar un modelo a mitad de camino.
+  kind: string;
+  defaultEnabled: boolean;
+}
+
+export interface VoiceDelivery {
+  id: string;
+  labelKey: string;
+  descriptionKey: string;
+  lufs: number;
+  truePeakDb: number;
+}
+
+export interface VoiceCatalog {
+  steps: VoiceStep[];
+  deliveries: VoiceDelivery[];
+}
+
 // Mirrors app/schemas.py::VideoCapabilitiesResponse. Only lists engines the
 // server actually has ready (ENABLE_GMFSS + models installed for "gmfss"),
 // same filtering convention as AudioCapabilities.restoreModes.

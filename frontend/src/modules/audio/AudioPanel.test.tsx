@@ -3,7 +3,13 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as api from "../../lib/api";
-import type { AudioCapabilities, AudioJob, CreateJobResponse, DevicesResponse } from "../../lib/apiTypes";
+import type {
+  AudioCapabilities,
+  AudioJob,
+  CreateJobResponse,
+  DevicesResponse,
+  VoiceCatalog,
+} from "../../lib/apiTypes";
 import * as audioService from "../../services/audio";
 import { AudioPanel } from "./AudioPanel";
 
@@ -14,7 +20,13 @@ vi.mock("../../lib/api", async (importOriginal) => {
 
 vi.mock("../../services/audio", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../services/audio")>();
-  return { ...actual, createAudioJob: vi.fn(), getAudioJob: vi.fn(), fetchAudioCapabilities: vi.fn() };
+  return {
+    ...actual,
+    createAudioJob: vi.fn(),
+    getAudioJob: vi.fn(),
+    fetchAudioCapabilities: vi.fn(),
+    fetchVoiceCatalog: vi.fn(),
+  };
 });
 
 const DEVICES: DevicesResponse = {
@@ -23,6 +35,34 @@ const DEVICES: DevicesResponse = {
     { id: "dml:0", kind: "gpu", name: "AMD Radeon RX 7900", backend: "directml" },
   ],
   defaultDeviceId: "dml:0",
+};
+
+function voiceStep(id: string, defaultEnabled: boolean) {
+  return {
+    id,
+    labelKey: `voice.step.${id}.label`,
+    descriptionKey: `voice.step.${id}.description`,
+    kind: "filter",
+    defaultEnabled,
+  };
+}
+
+const VOICE_CATALOG: VoiceCatalog = {
+  steps: [
+    voiceStep("highpass", true),
+    voiceStep("compress", true),
+    voiceStep("deesser", true),
+    voiceStep("loudness", false),
+  ],
+  deliveries: [
+    {
+      id: "streaming",
+      labelKey: "voice.delivery.streaming.label",
+      descriptionKey: "voice.delivery.streaming.description",
+      lufs: -14,
+      truePeakDb: -1,
+    },
+  ],
 };
 
 const FULL_CAPABILITIES: AudioCapabilities = {
@@ -34,6 +74,7 @@ const FULL_CAPABILITIES: AudioCapabilities = {
 function renderPanel(capabilities: AudioCapabilities = FULL_CAPABILITIES) {
   vi.mocked(api.getDevices).mockResolvedValue(DEVICES);
   vi.mocked(audioService.fetchAudioCapabilities).mockResolvedValue(capabilities);
+  vi.mocked(audioService.fetchVoiceCatalog).mockResolvedValue(VOICE_CATALOG);
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   function Wrapper({ children }: { children: ReactNode }) {
     return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
@@ -55,6 +96,7 @@ afterEach(() => {
   vi.mocked(audioService.fetchAudioCapabilities).mockReset();
   vi.mocked(audioService.createAudioJob).mockReset();
   vi.mocked(audioService.getAudioJob).mockReset();
+  vi.mocked(audioService.fetchVoiceCatalog).mockReset();
 });
 
 describe("AudioPanel", () => {
@@ -197,5 +239,54 @@ describe("AudioPanel", () => {
 
     await waitFor(() => expect(audioService.createAudioJob).toHaveBeenCalled());
     expect(vi.mocked(audioService.createAudioJob).mock.calls[0][0].outputFormat).toBe("wav");
+  });
+
+  it("lets a voice-only job through without denoise or restore", async () => {
+    // Alguien que solo quiere enfocar el dialogo no tiene por que encender
+    // denoise ni restore para poder enviar.
+    vi.mocked(audioService.createAudioJob).mockResolvedValue({
+      jobId: "aud-v", status: "queued", statusUrl: "/x", downloadUrl: null,
+    });
+    renderPanel();
+    selectFile();
+
+    const submitButton = screen.getByRole("button", { name: /enhance audio/i });
+    expect(submitButton).toBeDisabled();
+
+    // La seccion arranca colapsada: su cuerpo esta `hidden` y por lo tanto no
+    // es accesible hasta abrirla.
+    fireEvent.click(await screen.findByRole("button", { name: /^voice/i }));
+    // El catalogo llega async: hasta que resuelve, el panel muestra el mensaje
+    // de carga y no el opt-in.
+    fireEvent.click(
+      await screen.findByRole("checkbox", { name: /shape the voice/i }),
+    );
+    await waitFor(() => expect(submitButton).not.toBeDisabled());
+    fireEvent.click(submitButton);
+
+    await waitFor(() => expect(audioService.createAudioJob).toHaveBeenCalled());
+    const sent = vi.mocked(audioService.createAudioJob).mock.calls[0][0];
+    expect(sent.denoise).toBeNull();
+    expect(sent.restore).toBeNull();
+    expect(sent.voiceSteps?.sort()).toEqual(["compress", "deesser", "highpass"]);
+  });
+
+  it("sends no voice fields while the voice section is off", async () => {
+    vi.mocked(audioService.createAudioJob).mockResolvedValue({
+      jobId: "aud-n", status: "queued", statusUrl: "/x", downloadUrl: null,
+    });
+    renderPanel();
+    selectFile();
+    fireEvent.click(await screen.findByRole("button", { name: "DeepFilterNet" }));
+
+    const submitButton = screen.getByRole("button", { name: /enhance audio/i });
+    await waitFor(() => expect(submitButton).not.toBeDisabled());
+    fireEvent.click(submitButton);
+
+    await waitFor(() => expect(audioService.createAudioJob).toHaveBeenCalled());
+    const sent = vi.mocked(audioService.createAudioJob).mock.calls[0][0];
+    expect(sent.voiceSteps).toEqual([]);
+    expect(sent.voiceDelivery).toBeNull();
+    expect(sent.voicePresenceDb).toBeNull();
   });
 });

@@ -1,6 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AudioCapabilities, AudioJob, CreateJobResponse } from "../lib/apiTypes";
-import { cancelAudioJob, createAudioJob, fetchAudioCapabilities, getAudioJob } from "./audio";
+import type {
+  AudioCapabilities,
+  AudioJob,
+  CreateJobResponse,
+  VoiceCatalog,
+} from "../lib/apiTypes";
+import {
+  cancelAudioJob,
+  createAudioJob,
+  fetchAudioCapabilities,
+  fetchVoiceCatalog,
+  getAudioJob,
+} from "./audio";
 
 function mockFetchOnce(body: unknown, init: ResponseInit = { status: 200 }) {
   const response = new Response(JSON.stringify(body), {
@@ -142,5 +153,110 @@ describe("fetchAudioCapabilities", () => {
 
     expect(fetch).toHaveBeenCalledWith("/api/v1/audio/capabilities", expect.objectContaining({ method: "GET" }));
     expect(result).toEqual(payload);
+  });
+});
+
+describe("fetchVoiceCatalog", () => {
+  it("issues a GET to /api/v1/audio/voice-catalog and returns the typed payload", async () => {
+    const payload: VoiceCatalog = {
+      steps: [
+        {
+          id: "deesser",
+          labelKey: "voice.step.deesser.label",
+          descriptionKey: "voice.step.deesser.description",
+          kind: "filter",
+          defaultEnabled: true,
+        },
+      ],
+      deliveries: [
+        {
+          id: "streaming",
+          labelKey: "voice.delivery.streaming.label",
+          descriptionKey: "voice.delivery.streaming.description",
+          lufs: -14,
+          truePeakDb: -1,
+        },
+      ],
+    };
+    mockFetchOnce(payload);
+
+    const result = await fetchVoiceCatalog();
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/v1/audio/voice-catalog",
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(result).toEqual(payload);
+  });
+});
+
+describe("createAudioJob voice fields", () => {
+  const file = new File(["binary"], "voice.wav", { type: "audio/wav" });
+
+  function baseParams() {
+    return { file, denoise: null, restore: null, outputFormat: "flac", device: null };
+  }
+
+  function sentBody(): FormData {
+    return vi.mocked(fetch).mock.calls[0][1]?.body as FormData;
+  }
+
+  function mockAccepted() {
+    mockFetchOnce(
+      { jobId: "aud-9", status: "queued", statusUrl: "/x", downloadUrl: null },
+      { status: 202 },
+    );
+  }
+
+  it("sends the selected steps as a comma separated list", async () => {
+    mockAccepted();
+    await createAudioJob({
+      ...baseParams(),
+      voiceSteps: ["highpass", "compress", "deesser"],
+    });
+    expect(sentBody().get("voice_steps")).toBe("highpass,compress,deesser");
+  });
+
+  it("omits voice_steps entirely when nothing is selected", async () => {
+    // Un string vacio pediria una cadena de CERO pasos; el campo ausente
+    // significa "sin mejora de voz". No son lo mismo para el backend.
+    mockAccepted();
+    await createAudioJob({ ...baseParams(), voiceSteps: [] });
+    expect(sentBody().has("voice_steps")).toBe(false);
+  });
+
+  it("omits the voice fields when the caller does not pass them", async () => {
+    mockAccepted();
+    await createAudioJob(baseParams());
+    const body = sentBody();
+    expect(body.has("voice_steps")).toBe(false);
+    expect(body.has("voice_delivery")).toBe(false);
+    expect(body.has("voice_presence_db")).toBe(false);
+  });
+
+  it("sends the delivery target and the presence amount", async () => {
+    mockAccepted();
+    await createAudioJob({
+      ...baseParams(),
+      voiceSteps: ["loudness", "presence"],
+      voiceDelivery: "ebu_r128",
+      voicePresenceDb: 4.5,
+    });
+    const body = sentBody();
+    expect(body.get("voice_delivery")).toBe("ebu_r128");
+    expect(body.get("voice_presence_db")).toBe("4.5");
+  });
+
+  it("sends a presence amount of zero instead of dropping it", async () => {
+    // 0 es un valor valido: un truthy check lo descartaria en silencio.
+    mockAccepted();
+    await createAudioJob({ ...baseParams(), voiceSteps: ["presence"], voicePresenceDb: 0 });
+    expect(sentBody().get("voice_presence_db")).toBe("0");
+  });
+
+  it("omits the presence amount when it is null", async () => {
+    mockAccepted();
+    await createAudioJob({ ...baseParams(), voicePresenceDb: null });
+    expect(sentBody().has("voice_presence_db")).toBe(false);
   });
 });
