@@ -223,4 +223,7 @@ export const es = {
     "Trae pesos en formato de PyTorch: se convierten a ONNX con Spandrel al instalar.",
   "compat.upscaler.noWeights":
     "No hay ningún archivo de pesos .onnx, .safetensors ni .pth en el repo.",
+  "video.steps.upscaleRequired":
+    "Un job de video siempre reescala, así que ese paso no se puede quitar. " +
+    "Volvé a agregarlo para habilitar el botón.",
 } as const;

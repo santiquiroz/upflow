@@ -10,6 +10,7 @@ import { RuntimePicker, formatRuntimeSummary } from "../../components/RuntimePic
 import { EncoderPicker, formatEncoderSummary } from "../../components/EncoderPicker";
 import { SlowPresetCostHint } from "../../components/SlowPresetCostHint";
 import { useAudioCapabilities } from "../../hooks/useAudioJob";
+import { useTranslation } from "../../i18n/LocaleProvider";
 import { useVideoCapabilities, useVideoJob, type VideoJobPhase } from "../../hooks/useVideoJob";
 import { analyzeVideo, getDevices, getModels } from "../../lib/api";
 import type {
@@ -29,6 +30,15 @@ import { FpsBoostControls, TARGET_FPS_OPTIONS, type FpsBoostValue } from "./FpsB
 import { InterpEngineControls } from "./InterpEngineControls";
 import { TrackSelector } from "./TrackSelector";
 import { VideoProfileControls } from "./VideoProfileControls";
+import { VideoStepStack } from "./VideoStepStack";
+import {
+  addVideoStep,
+  deriveVideoSteps,
+  getAddableVideoStepIds,
+  removeVideoStep,
+  type VideoStepConfig,
+  type VideoStepId,
+} from "./videoSteps";
 
 const RIFE_ENGINE = "rife";
 
@@ -311,6 +321,7 @@ export function VideoPanel() {
   const [profile, setProfile] = useState<VideoProfileResponse | null>(null);
   const [model, setModel] = useState<ModelResponse | null>(null);
   const [device, setDevice] = useState<DeviceInfoResponse | null>(null);
+  const { t } = useTranslation();
   const [backend, setBackend] = useState<UpscaleBackend>("auto");
   const [videoEncoder, setVideoEncoder] = useState<VideoEncoder>("auto");
   const [scale, setScale] = useState<number | null>(null);
@@ -340,6 +351,19 @@ export function VideoPanel() {
   const interpEngines = videoCapabilitiesQuery.data?.interpEngines ?? [];
   const interpEngineSelectable = isInterpEngineSelectorVisible(interpEngines);
   const fpsBoostActive = isFpsBoostActive(fpsBoost);
+  const videoStepConfig: VideoStepConfig = {
+    modelName: model?.name ?? profile?.modelKey ?? null,
+    scale,
+    fpsMultiplier: fpsBoost.fpsMultiplier,
+    targetFps: fpsBoost.targetFps,
+    interpEngine,
+    keepAudio,
+    audioEnhance,
+    audioRestore,
+    keepSubtitles,
+  };
+  const videoSteps = deriveVideoSteps(videoStepConfig);
+  const addableVideoStepIds = profile === null ? [] : getAddableVideoStepIds(videoStepConfig);
 
   // Only re-applies the profile's default model the first time a given profile
   // becomes selected (including the async case where modelsQuery resolves after
@@ -423,6 +447,32 @@ export function VideoPanel() {
     }
   }
 
+  function applyVideoStepConfig(nextConfig: VideoStepConfig) {
+    setScale(nextConfig.scale);
+    setFpsBoost({
+      fpsMultiplier: nextConfig.fpsMultiplier,
+      targetFps: nextConfig.targetFps,
+    });
+    setKeepAudio(nextConfig.keepAudio);
+    setAudioEnhance(nextConfig.audioEnhance);
+    setAudioRestore(nextConfig.audioRestore);
+    setKeepSubtitles(nextConfig.keepSubtitles);
+  }
+
+  function handleRemoveVideoStep(stepId: VideoStepId) {
+    applyVideoStepConfig(removeVideoStep(videoStepConfig, stepId));
+  }
+
+  function handleAddVideoStep(stepId: VideoStepId) {
+    applyVideoStepConfig(
+      addVideoStep(videoStepConfig, stepId, {
+        upscaleScale: profile?.scale ?? model?.scale ?? 2,
+        fpsMultiplier: 2,
+        audioEnhance: capabilitiesQuery.data?.denoiseModes[0] ?? "deepfilter",
+      }),
+    );
+  }
+
   function handleSubmit() {
     if (!file || !profile || scale === null) {
       return;
@@ -479,6 +529,12 @@ export function VideoPanel() {
         >
           <VideoProfileControls value={profile?.key ?? null} onChange={handleProfileChange} />
         </AccordionSection>
+        <VideoStepStack
+          steps={videoSteps}
+          addableStepIds={addableVideoStepIds}
+          onRemove={handleRemoveVideoStep}
+          onAdd={handleAddVideoStep}
+        />
         <AccordionSection title="Model" summary={formatModelSummary(model)} tooltip={MODEL_TOOLTIP}>
           <ModelPicker value={model?.id ?? null} onChange={setModel} />
         </AccordionSection>
@@ -573,6 +629,14 @@ export function VideoPanel() {
           {showNoGpuHint && (
             <p role="status" className="text-xs text-warn">
               This profile's model requires a Vulkan GPU; no GPU device is available.
+            </p>
+          )}
+          {/* Un job de video siempre reescala: el request lleva scale obligatorio.
+              Quitar el paso apaga el CTA, asi que hay que decir por que en vez de
+              dejar un boton gris sin explicacion. */}
+          {file !== null && profile !== null && scale === null && (
+            <p role="status" className="text-xs text-warn">
+              {t("video.steps.upscaleRequired")}
             </p>
           )}
           <button

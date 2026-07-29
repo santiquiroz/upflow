@@ -229,4 +229,7 @@ export const en = {
     "It ships PyTorch weights: they get converted to ONNX with Spandrel on install.",
   "compat.upscaler.noWeights":
     "There is no .onnx, .safetensors or .pth weight file in the repo.",
+  "video.steps.upscaleRequired":
+    "A video job always upscales, so the upscale step cannot be removed. Add it " +
+    "back to enable the button.",
 } as const;

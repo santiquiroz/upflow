@@ -1,7 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { en } from "../../i18n/en";
 import * as api from "../../lib/api";
 import type {
   CreateJobResponse,
@@ -150,6 +151,16 @@ async function selectFile() {
 function openSection(title: string) {
   const toggle = screen.getByRole("button", { name: new RegExp(`^${title}`) });
   fireEvent.click(toggle);
+}
+
+function copy(
+  key: keyof typeof en,
+  params: Record<string, string | number> = {},
+): string {
+  return en[key].replace(/\{\{(\w+)\}\}/g, (match, name: string) => {
+    const value = params[name];
+    return value === undefined ? match : String(value);
+  });
 }
 
 afterEach(() => {
@@ -926,7 +937,9 @@ describe("VideoPanel", () => {
     await screen.findByText(/jpn/i);
 
     fireEvent.click(await screen.findByRole("radio", { name: /General Balanced 4x/ }));
-    fireEvent.click(screen.getByLabelText(/subtitle/i));
+    // La consulta vieja por label ya no es univoca: la pila agrega un boton
+    // "Add Subtitles". El contrato que importa sigue siendo activar el checkbox.
+    fireEvent.click(screen.getByRole("checkbox", { name: /subtitle/i }));
 
     const submitButton = await screen.findByRole("button", { name: /upscale video/i });
     await waitFor(() => expect(submitButton).not.toBeDisabled());
@@ -938,5 +951,141 @@ describe("VideoPanel", () => {
     expect(params.keepSubtitles).toBe(true);
     expect(params.file).toBeUndefined();
     expect(params.fileName).toBe("clip.mp4");
+  });
+
+  it("fills the step stack from the selected profile and reflects a manual model override", async () => {
+    renderPanel();
+    await selectFile();
+    fireEvent.click(await screen.findByRole("radio", { name: /Anime Balanced 2x/ }));
+
+    const stack = screen.getByRole("list", { name: en["video.steps.listLabel"] });
+    expect(
+      await within(stack).findByText(
+        copy("video.steps.upscale.description", {
+          model: "RealESR AnimeVideoV3 x2",
+          scale: 2,
+        }),
+      ),
+    ).toBeVisible();
+
+    openSection("Model");
+    fireEvent.click(await screen.findByRole("radio", { name: /RealESRGAN x4plus/ }));
+
+    expect(
+      await within(stack).findByText(
+        copy("video.steps.upscale.description", {
+          model: "RealESRGAN x4plus",
+          scale: 2,
+        }),
+      ),
+    ).toBeVisible();
+  });
+
+  it("removes and adds interpolation through the FPS fields instead of parallel step state", async () => {
+    renderPanel();
+    await selectFile();
+    fireEvent.click(await screen.findByRole("radio", { name: /General Balanced 4x/ }));
+    openSection("FPS boost");
+    fireEvent.click(screen.getByRole("button", { name: "3×" }));
+
+    expect(screen.getByText(en["video.steps.interpolate.label"])).toBeVisible();
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: copy("video.steps.removeStep", {
+          step: en["video.steps.interpolate.label"],
+        }),
+      }),
+    );
+
+    expect(screen.getByRole("button", { name: /^FPS boost/ })).toHaveTextContent("Off");
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: copy("video.steps.addStep", {
+          step: en["video.steps.interpolate.label"],
+        }),
+      }),
+    );
+
+    expect(screen.getByRole("button", { name: /^FPS boost/ })).toHaveTextContent("2×");
+    expect(screen.getByText(en["video.steps.interpolate.label"])).toBeVisible();
+  });
+
+  it("removes and adds audio enhancement while preserving the original audio track", async () => {
+    renderPanel();
+    await selectFile();
+    fireEvent.click(await screen.findByRole("radio", { name: /General Balanced 4x/ }));
+    openSection("Audio");
+
+    const keepAudioToggle = screen.getByRole("checkbox", { name: /keep original audio/i });
+    fireEvent.click(screen.getByRole("button", { name: "RNNoise" }));
+    const stack = screen.getByRole("list", { name: en["video.steps.listLabel"] });
+    expect(within(stack).getByText(en["video.steps.audio.label"])).toBeVisible();
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: copy("video.steps.removeStep", {
+          step: en["video.steps.audio.label"],
+        }),
+      }),
+    );
+
+    expect(keepAudioToggle).toBeChecked();
+    expect(screen.getByRole("button", { name: "RNNoise" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: copy("video.steps.addStep", {
+          step: en["video.steps.audio.label"],
+        }),
+      }),
+    );
+
+    expect(screen.getByRole("button", { name: "DeepFilterNet" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(keepAudioToggle).toBeChecked();
+  });
+
+  it("disables submission when upscale is removed and restores the profile scale when it is added", async () => {
+    renderPanel();
+    await selectFile();
+    fireEvent.click(await screen.findByRole("radio", { name: /Anime Balanced 2x/ }));
+
+    const submitButton = screen.getByRole("button", { name: /upscale video/i });
+    await waitFor(() => expect(submitButton).not.toBeDisabled());
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: copy("video.steps.removeStep", {
+          step: en["video.steps.upscale.label"],
+        }),
+      }),
+    );
+    expect(submitButton).toBeDisabled();
+    // Un boton que se apaga sin explicar es un callejon sin salida: el aviso dice
+    // que el paso de reescalado no es opcional y como volver atras.
+    expect(screen.getByText(en["video.steps.upscaleRequired"])).toBeVisible();
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: copy("video.steps.addStep", {
+          step: en["video.steps.upscale.label"],
+        }),
+      }),
+    );
+
+    await waitFor(() => expect(submitButton).not.toBeDisabled());
+    expect(screen.queryByText(en["video.steps.upscaleRequired"])).not.toBeInTheDocument();
+    const stack = screen.getByRole("list", { name: en["video.steps.listLabel"] });
+    expect(
+      within(stack).getByText(
+        copy("video.steps.upscale.description", {
+          model: "RealESR AnimeVideoV3 x2",
+          scale: 2,
+        }),
+      ),
+    ).toBeVisible();
   });
 });
