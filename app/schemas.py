@@ -294,6 +294,34 @@ class VoiceCatalogResponse(BaseModel):
     deliveries: list[VoiceDeliveryResponse]
 
 
+class CapabilityResponse(BaseModel):
+    id: str
+    domain: str
+    label_key: str = Field(serialization_alias="labelKey")
+    status: str
+    provisioning: str
+    job_kind: str | None = Field(default=None, serialization_alias="jobKind")
+    strategies: list[str] = Field(default_factory=list)
+    missing_packs: list[str] = Field(default_factory=list, serialization_alias="missingPacks")
+    unavailable_reason_key: str | None = Field(
+        default=None, serialization_alias="unavailableReasonKey"
+    )
+    setup_reason_key: str | None = Field(default=None, serialization_alias="setupReasonKey")
+
+
+class CapabilityDomainResponse(BaseModel):
+    domain: str
+    label_key: str = Field(serialization_alias="labelKey")
+    capabilities: list[CapabilityResponse] = Field(default_factory=list)
+    # Las no implementadas viajan separadas para que el frontend les pueda dar el
+    # encabezado de mapa de ruta sin tener que filtrar por su cuenta.
+    roadmap: list[CapabilityResponse] = Field(default_factory=list)
+
+
+class CapabilityTreeResponse(BaseModel):
+    domains: list[CapabilityDomainResponse] = Field(default_factory=list)
+
+
 class InstallModelRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 

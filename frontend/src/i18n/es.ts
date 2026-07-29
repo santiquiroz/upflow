@@ -132,4 +132,44 @@ export const es = {
   "settings.language.title": "Idioma",
   "settings.language.description":
     "Se aplica al instante y queda recordado en este equipo.",
+  // --- catalogo de capacidades -----------------------------------------
+  "capability.domain.video": "Video",
+  "capability.domain.image": "Imágenes",
+  "capability.domain.audio": "Audio",
+  "capability.domain.generate": "Generar",
+
+  "capability.video.upscale": "Reescalar video",
+  "capability.video.interpolate": "Generar fotogramas",
+  "capability.video.subtitles": "Generar subtítulos",
+  "capability.image.upscale": "Reescalar imágenes",
+  "capability.audio.denoise": "Quitar ruido",
+  "capability.audio.restore": "Restaurar calidad",
+  "capability.audio.voice": "Trabajar la voz",
+  "capability.audio.stems": "Separar stems",
+  "capability.generate.textToImage": "Texto a imagen",
+  "capability.generate.imageToImage": "Imagen a imagen",
+  "capability.generate.textToVideo": "Texto a video",
+  "capability.generate.videoToVideo": "Video a video",
+  "capability.generate.textTo3d": "Texto a 3D",
+  "capability.generate.imageTo3d": "Imagen a 3D",
+  "capability.generate.textToSound": "Texto a sonido",
+  "capability.generate.soundToSound": "Sonido a sonido",
+
+  // Motivos honestos: dicen QUE falta, sin prometer fecha.
+  "capability.reason.subtitles":
+    "Necesita un motor de reconocimiento de voz, que la app todavía no incluye. " +
+    "whisper.cpp es el camino previsto.",
+  "capability.reason.stems":
+    "Necesita un modelo tipo Demucs y un motor de inferencia que la app no incluye hoy.",
+  "capability.reason.imageToImage":
+    "Las clases de ONNX Runtime para imagen a imagen sí existen, así que el " +
+    "camino está confirmado. Es trabajo de cableado, no una dependencia que falte.",
+  "capability.reason.noOnnxPath":
+    "Todavía no hay un camino confirmado a un ONNX ejecutable. Que el modelo " +
+    "exista no alcanza: también tiene que poder correrlo ONNX Runtime, y acá se " +
+    "chocó con el mismo techo ya medido para FLUX.2 y Z-Image.",
+
+  "capability.setup.missingPack": "Falta descargar el paquete que necesita.",
+  "capability.setup.missingModel": "Todavía no hay ningún modelo compatible instalado.",
+
 } as const;

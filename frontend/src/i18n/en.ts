@@ -138,4 +138,44 @@ export const en = {
   "settings.language.title": "Language",
   "settings.language.description":
     "Applies right away and is remembered on this device.",
+  // --- catalogo de capacidades -----------------------------------------
+  "capability.domain.video": "Video",
+  "capability.domain.image": "Images",
+  "capability.domain.audio": "Audio",
+  "capability.domain.generate": "Generate",
+
+  "capability.video.upscale": "Upscale video",
+  "capability.video.interpolate": "Generate frames",
+  "capability.video.subtitles": "Generate subtitles",
+  "capability.image.upscale": "Upscale images",
+  "capability.audio.denoise": "Remove noise",
+  "capability.audio.restore": "Restore quality",
+  "capability.audio.voice": "Shape the voice",
+  "capability.audio.stems": "Separate stems",
+  "capability.generate.textToImage": "Text to image",
+  "capability.generate.imageToImage": "Image to image",
+  "capability.generate.textToVideo": "Text to video",
+  "capability.generate.videoToVideo": "Video to video",
+  "capability.generate.textTo3d": "Text to 3D",
+  "capability.generate.imageTo3d": "Image to 3D",
+  "capability.generate.textToSound": "Text to sound",
+  "capability.generate.soundToSound": "Sound to sound",
+
+  // Motivos honestos: dicen QUE falta, sin prometer fecha.
+  "capability.reason.subtitles":
+    "Needs a speech recognition engine, which the app does not ship yet. " +
+    "whisper.cpp is the intended path.",
+  "capability.reason.stems":
+    "Needs a Demucs-type model and an inference engine the app does not include today.",
+  "capability.reason.imageToImage":
+    "The ONNX Runtime classes for image to image do exist, so the path is " +
+    "confirmed. This is wiring work, not a missing dependency.",
+  "capability.reason.noOnnxPath":
+    "No confirmed path to a runnable ONNX model yet. The model existing is not " +
+    "enough: it also has to be executable by ONNX Runtime, and this hit the same " +
+    "ceiling already measured for FLUX.2 and Z-Image.",
+
+  "capability.setup.missingPack": "The package it needs is not downloaded yet.",
+  "capability.setup.missingModel": "No compatible model is installed yet.",
+
 } as const;

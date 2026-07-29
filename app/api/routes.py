@@ -29,6 +29,9 @@ from app.schemas import (
     AudioJobResponse,
     AudioJobsListResponse,
     AudioTrackResponse,
+    CapabilityDomainResponse,
+    CapabilityResponse,
+    CapabilityTreeResponse,
     ConversionStatusResponse,
     CreateConversionResponse,
     CreateGenerationJobRequest,
@@ -67,6 +70,11 @@ from app.schemas import (
 from app.services.audio_job_manager import AudioJobManager
 from app.services.auth.identity import AuthenticatedUser
 from app.services.auth.permissions import Permission
+from app.services.capabilities import (
+    ResolvedCapability,
+    group_by_domain,
+    resolve_capabilities,
+)
 from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
 from app.services.engines.generation_onnx import generation_dependencies_available
 from app.services.generation_converter import GenerationModelConverter
@@ -1408,6 +1416,45 @@ async def preflight_generation_model(
         height=height,
     )
     return PreflightResponse(**asdict(report))
+
+@router.get("/capabilities/tree", response_model=CapabilityTreeResponse)
+async def capability_tree(
+    settings: Settings = Depends(get_settings),
+    registry: ModelRegistry = Depends(get_model_registry),
+) -> CapabilityTreeResponse:
+    """El arbol de lo que la app puede hacer, resuelto contra esta maquina.
+
+    El frontend no puede mentir sobre lo que hay porque no decide: el status sale
+    de mirar el disco y el registro, no de un flag persistido.
+    """
+    grouped = group_by_domain(resolve_capabilities(settings, registry))
+    return CapabilityTreeResponse(
+        domains=[
+            CapabilityDomainResponse(
+                domain=group.domain,
+                label_key=group.label_key,
+                capabilities=[_capability_to_response(item) for item in group.capabilities],
+                roadmap=[_capability_to_response(item) for item in group.roadmap],
+            )
+            for group in grouped
+        ]
+    )
+
+
+def _capability_to_response(item: ResolvedCapability) -> CapabilityResponse:
+    return CapabilityResponse(
+        id=item.id,
+        domain=item.domain,
+        label_key=item.label_key,
+        status=item.status,
+        provisioning=item.provisioning,
+        job_kind=item.job_kind,
+        strategies=list(item.strategies),
+        missing_packs=list(item.missing_packs),
+        unavailable_reason_key=item.unavailable_reason_key,
+        setup_reason_key=item.setup_reason_key,
+    )
+
 
 
 # Gates con los permisos que C ya define (mismo patrón que capability_routes):
