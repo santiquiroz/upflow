@@ -1,6 +1,6 @@
 [project]
 name = "upflow"
-version = "0.17.0"
+version = "0.18.0"
 description = "Modern AI upscaling + frame interpolation for AMD GPUs — Vulkan-native, FastAPI, web UI + REST API."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -31,6 +31,12 @@ dependencies = [
   # Sin techo de version a proposito: libera casi mensualmente para seguirle el paso a
   # las defensas de los sitios, y quedarse atras es exactamente cuando deja de servir.
   "yt-dlp>=2026.7.1",
+  # Impersonation de TLS/HTTP, que varios sitios ya exigen. No es opcional en la
+  # practica: MEDIDO, Dailymotion fallaba con "the extractor is attempting
+  # impersonation, but none of these impersonate targets are available" y paso a
+  # funcionar (4 calidades) apenas se instalo -- de 0 a 37 targets disponibles.
+  # El rango lo dicta yt-dlp en su propio extra [curl-cffi].
+  "curl-cffi>=0.5.10,<0.16; implementation_name == 'cpython'",
   "numpy>=1.26.0,<3.0.0",
   "onnxruntime-directml>=1.19.0,<2.0.0; sys_platform == 'win32'",
   # SP1 Task 6 - .pth/.safetensors -> ONNX conversion (app/services/model_converter.py).
