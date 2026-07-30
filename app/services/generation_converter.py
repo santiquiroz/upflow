@@ -102,6 +102,27 @@ def _cap_vae_trace_resolution(src_root: Path) -> None:
     )
 
 
+def _disable_vae_force_upcast(src_root: Path) -> None:
+    config_path = src_root / "vae" / "config.json"
+    if not config_path.is_file():
+        return
+
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    if not isinstance(config, dict) or not config.get("force_upcast"):
+        return
+
+    # El VAE ONNX queda horneado en el dtype del export: el upcast dinámico de
+    # diffusers no existe en el wrapper ORT (sin post_quant_conv), por lo que
+    # force_upcast=true crashea durante el decode. Los repos modernos ya hornean
+    # VAEs fp16-safe; un VAE genuinamente fp16-unsafe daría una imagen negra que
+    # este flag tampoco podría corregir en ORT.
+    config["force_upcast"] = False
+    config_path.write_text(
+        json.dumps(config, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
 def _selected_checkpoint(
     files: list[HfFile],
     repo_id: str,
@@ -492,6 +513,7 @@ class GenerationModelConverter:
                 )
 
             _cap_vae_trace_resolution(src_root)
+            _disable_vae_force_upcast(src_root)
             exported = await asyncio.to_thread(
                 self.export_fn,
                 src_root,
