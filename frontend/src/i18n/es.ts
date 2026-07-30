@@ -162,9 +162,9 @@ export const es = {
     "primero: los subtítulos son ese resultado, alineado y muxeado al contenedor.",
   "capability.reason.stems":
     "El runtime ya está: los modelos MDX-Net corren sobre ONNX Runtime, medido en " +
-    "DirectML y en CPU. Lo que falta es el procesamiento de espectrograma (STFT, " +
-    "ventaneo, overlap-add) y validar la calidad de verdad. El modelo va a ser " +
-    "buscable como cualquier otro.",
+    "DirectML y en CPU. Lo que falta es acertar la convención de espectrograma que " +
+    "el modelo espera — un primer intento corrió pero devolvió ruido, así que " +
+    "publicarlo ahora sería publicar algo roto.",
   "capability.reason.noOnnxPath":
     "Todavía no hay un camino confirmado a un ONNX ejecutable. Que el modelo " +
     "exista no alcanza: también tiene que poder correrlo ONNX Runtime, y acá se " +

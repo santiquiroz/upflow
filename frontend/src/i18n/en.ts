@@ -168,9 +168,9 @@ export const en = {
     "that result, aligned and muxed into the container.",
   "capability.reason.stems":
     "The runtime is already here: MDX-Net models run on ONNX Runtime, measured on " +
-    "both DirectML and CPU. What is missing is the spectrogram processing (STFT, " +
-    "windowing, overlap-add) and a real quality check. The model will be searchable " +
-    "like any other.",
+    "both DirectML and CPU. What is still missing is matching the spectrogram " +
+    "convention the model expects — a first attempt ran but produced noise, so " +
+    "shipping it now would mean shipping a broken feature.",
   "capability.reason.noOnnxPath":
     "No confirmed path to a runnable ONNX model yet. The model existing is not " +
     "enough: it also has to be executable by ONNX Runtime, and this hit the same " +
