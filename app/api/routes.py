@@ -1213,7 +1213,12 @@ def _resolve_init_image(settings: Settings, token: str | None) -> Path | None:
     return matches[0]
 
 
-@router.post("/generation/init-image", response_model=InitImageResponse, status_code=201)
+@router.post(
+    "/generation/init-image",
+    response_model=InitImageResponse,
+    status_code=201,
+    dependencies=[Depends(require(Permission.jobs_create))],
+)
 async def upload_init_image(
     file: UploadFile = File(...),
     storage: StorageService = Depends(get_storage),

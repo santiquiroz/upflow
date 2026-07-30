@@ -266,3 +266,47 @@ async def test_an_unreadable_model_index_does_not_block_the_job(tmp_path: Path):
         settings=settings,
     )
     assert manager.get_job(response.id) is not None
+
+
+# ---------------------------------------------------------------------------
+# Autorizacion
+# ---------------------------------------------------------------------------
+
+
+def _required_permissions(path: str, method: str) -> set:
+    """Los Permission que una ruta exige de verdad.
+
+    Se lee el closure de require(): las dependencias de servicio (get_storage,
+    get_generation_job_manager) difieren por ruta y no dicen nada de seguridad.
+    """
+    from app.main import app
+    from app.services.auth.permissions import Permission
+
+    for route in app.routes:
+        if getattr(route, "path", None) != path or method not in getattr(route, "methods", set()):
+            continue
+        found = set()
+        for dependency in route.dependant.dependencies:
+            call = dependency.call
+            for cell in getattr(call, "__closure__", None) or ():
+                if isinstance(cell.cell_contents, Permission):
+                    found.add(cell.cell_contents)
+        return found
+    raise AssertionError(f"ruta no encontrada: {method} {path}")
+
+
+def test_uploading_an_init_image_requires_the_same_permission_as_creating_a_job():
+    """Subir escribe un archivo en el directorio de uploads.
+
+    Sin esto un llamador sin autenticar podia dejar archivos ahi. Todos los
+    endpoints que suben o crean jobs en este router exigen jobs_create; este es uno
+    mas. Se compara CONTRA el endpoint de crear el job para que endurecer ese no
+    deje este atras.
+    """
+    from app.services.auth.permissions import Permission
+
+    upload = _required_permissions("/api/v1/generation/init-image", "POST")
+    create = _required_permissions("/api/v1/generation/jobs", "POST")
+
+    assert Permission.jobs_create in upload
+    assert upload == create
