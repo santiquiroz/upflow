@@ -20,6 +20,7 @@ from app.services.device_semaphores import DeviceSemaphores
 from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
 from app.services.media_tools import MediaTools, parse_fps_fraction, resolve_video_fps
 from app.services.model_registry import ModelKind, ModelRegistry, ModelStatus
+from app.services.target_resolution import smallest_scale_reaching
 from app.services.video_upscaler import VideoUpscaler
 
 logger = logging.getLogger(__name__)
@@ -117,6 +118,10 @@ class VideoJobManager:
         validate_backend_choice(backend)
         self._validate_video_encoder(video_encoder)
         resolved_model_id = model_id if model_id is not None else model_name
+        # El objetivo MANDA sobre la escala. Sin esto el modelo corria al
+        # multiplicador del perfil y despues ffmpeg tiraba los pixeles: lo peor de
+        # los dos mundos, el mismo costo en GPU y un resultado chico.
+        scale = self._scale_for_target(probe, target_height, resolved_model_id, scale)
         if device is not None and device != AUTO_DEVICE_ID and self.devices is not None:
             await asyncio.to_thread(self.devices.validate, device)
         resolution = self._resolve_model(resolved_model_id, scale, device)
@@ -225,6 +230,55 @@ class VideoJobManager:
         if not reasons:
             return output_container, None
         return "mkv", f"Output container upgraded to mkv to {' and '.join(reasons)}"
+
+    def _source_dimensions(self, probe: dict) -> tuple[int, int] | None:
+        stream = next(
+            (s for s in probe.get("streams", []) if s.get("codec_type") == "video"), None
+        )
+        if stream is None:
+            return None
+        width, height = stream.get("width"), stream.get("height")
+        if not width or not height:
+            return None
+        return int(width), int(height)
+
+    def _scale_for_target(
+        self, probe: dict, target_height: int | None, model_id: str, requested_scale: int
+    ) -> int:
+        """La escala del modelo que hace falta para llegar al objetivo.
+
+        Sin esto, pedir 1080p sobre una fuente 4K corria el modelo al x4 del perfil
+        (15360x8640, horas) y despues reducia a 1920x1080: mismo costo que el
+        multiplicador ciego y encima tirando el trabajo.
+
+        Se acota a lo que el modelo elegido soporta: pedir una escala que no tiene
+        haria fallar la resolucion del modelo mas adelante.
+        """
+        if target_height is None:
+            return requested_scale
+        dimensions = self._source_dimensions(probe)
+        if dimensions is None:
+            # Sin dimensiones no se puede planificar; se respeta lo pedido en vez de
+            # adivinar.
+            return requested_scale
+
+        _source_width, source_height = dimensions
+        allowed = tuple(self._scales_for_model(model_id))
+        needed = smallest_scale_reaching(source_height, target_height, allowed)
+        if needed is None:
+            raise ValueError(
+                f"La fuente ya mide {source_height}p, asi que llegar a "
+                f"{target_height}p no necesita escalado por modelo -- solo un "
+                "redimensionado. Ese camino todavia no esta implementado: usa un "
+                "objetivo mayor que la fuente, o el multiplicador."
+            )
+        return needed
+
+    def _scales_for_model(self, model_id: str) -> list[int]:
+        option = self.settings.get_model_option(model_id)
+        if option and option.get("scales"):
+            return list(option["scales"])
+        return list(self.settings.allowed_scale_values)
 
     def _validate_target_height(self, target_height: int | None) -> None:
         """El alto pedido tiene que ser razonable y par.

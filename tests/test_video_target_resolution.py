@@ -160,3 +160,108 @@ def test_an_absurd_target_height_is_rejected(tmp_path: Path):
 
 def test_eight_k_is_the_ceiling_and_is_allowed(tmp_path: Path):
     make_manager(tmp_path)._validate_target_height(8640)
+
+
+# ---------------------------------------------------------------------------
+# El objetivo manda sobre la escala del modelo
+#
+# Sin esto, pedir 1080p sobre una fuente 4K corria el modelo al x4 del perfil
+# (15360x8640, horas) y DESPUES reducia a 1920x1080: el mismo costo en GPU que el
+# multiplicador ciego, y encima tirando el trabajo. Lo peor de los dos mundos.
+# ---------------------------------------------------------------------------
+
+
+def probe_for(width: int, height: int) -> dict:
+    return {"streams": [{"codec_type": "video", "width": width, "height": height}]}
+
+
+def test_without_a_target_the_requested_scale_is_untouched(tmp_path: Path):
+    manager = make_manager(tmp_path)
+    assert manager._scale_for_target(probe_for(1920, 1080), None, "realesrgan-x4plus", 4) == 4
+
+
+def test_a_target_lowers_the_scale_when_the_model_offers_more_than_one(tmp_path: Path):
+    """La ganancia real: 600p a 1080p alcanza con x2 en vez de x4.
+
+    El costo por frame va con el CUADRADO de la escala, asi que x2 en vez de x4 es 4
+    veces menos trabajo, y ese trabajo extra se tiraba en el redimensionado.
+
+    Solo aplica a modelos multi-escala: realesr-animevideov3 ofrece [2,3,4].
+    """
+    manager = make_manager(tmp_path)
+    scale = manager._scale_for_target(
+        probe_for(1067, 600), 1080, "realesr-animevideov3", 4
+    )
+
+    assert scale == 2
+
+
+def test_a_single_scale_model_cannot_be_made_cheaper_by_the_target(tmp_path: Path):
+    """Limite honesto que hay que conocer: la mayoria de los modelos son de una sola
+    escala.
+
+    realesrgan-x4plus solo ofrece [4], asi que pedir 1080p NO baja el costo en GPU --
+    el modelo hace x4 igual. Lo unico que cambia es el tamaño del archivo de salida.
+    Prometer velocidad ahi seria mentir.
+    """
+    manager = make_manager(tmp_path)
+    scale = manager._scale_for_target(probe_for(1067, 600), 1080, "realesrgan-x4plus", 4)
+
+    assert scale == 4
+
+
+def test_a_target_the_source_already_exceeds_is_refused_with_a_clear_reason(tmp_path: Path):
+    """El caso 4K a 1080p: no necesita modelo, solo un redimensionado.
+
+    Ese camino todavia no existe en el pipeline, asi que se RECHAZA diciendo por que,
+    en vez de correr el modelo al x4 y quemar horas para despues tirar los pixeles.
+    """
+    import pytest
+
+    manager = make_manager(tmp_path)
+    with pytest.raises(ValueError) as exc_info:
+        manager._scale_for_target(probe_for(3840, 2160), 1080, "realesrgan-x4plus", 4)
+
+    message = str(exc_info.value)
+    assert "2160p" in message
+    assert "redimensionado" in message
+
+
+def test_the_scale_is_clamped_to_what_the_model_supports(tmp_path: Path):
+    # Pedir una escala que el modelo no tiene haria fallar la resolucion del modelo
+    # mas adelante, ya con el job encolado.
+    manager = make_manager(tmp_path)
+    option = manager.settings.get_model_option("realesrgan-x4plus")
+    assert option is not None
+
+    scale = manager._scale_for_target(probe_for(480, 270), 2160, "realesrgan-x4plus", 2)
+    assert scale in option["scales"]
+
+
+def test_missing_source_dimensions_leave_the_request_alone(tmp_path: Path):
+    # Sin dimensiones no se puede planificar, y adivinar seria peor que respetar lo
+    # que se pidio.
+    manager = make_manager(tmp_path)
+    assert manager._scale_for_target({"streams": []}, 1080, "realesrgan-x4plus", 3) == 3
+
+
+def test_the_measured_saving_for_the_reported_case(tmp_path: Path):
+    """Cuantifica la mejora del caso que se puede arreglar hoy.
+
+    El costo por frame va con el cuadrado de la escala.
+    """
+    from app.services.target_resolution import megapixels_per_frame, plan_for_scale
+
+    manager = make_manager(tmp_path)
+    source = (1067, 600)
+    profile_scale = 4
+    planned = manager._scale_for_target(
+        probe_for(*source), 1080, "realesr-animevideov3", profile_scale
+    )
+
+    blind = plan_for_scale(*source, profile_scale)
+    targeted = plan_for_scale(*source, planned)
+    blind_mp = megapixels_per_frame(blind.output_width, blind.output_height)
+    targeted_mp = megapixels_per_frame(targeted.output_width, targeted.output_height)
+
+    assert blind_mp / targeted_mp > 3.9
