@@ -24,7 +24,7 @@ from app.services.model_preflight import (
 from app.services.generation_variants import (
     MODEL_INDEX_FILENAME,
     Precision,
-    available_precisions,
+    real_available_precisions,
     select_for_precision,
 )
 from app.services.vram_estimate import estimate_peak_bytes
@@ -192,12 +192,13 @@ async def preflight(
         # pudo poner precio a cada precision.
         return build(verdict, reason, True)
 
+    offered = await real_available_precisions(hf_client, repo_id, files, declared)
     costs = [
         PrecisionCost(
             precision=precision,
             download_bytes=(total := sum(f.size for f in select_for_precision(files, declared, precision))),
             estimated_peak_bytes=estimate_peak_bytes(total, width, height),
         )
-        for precision in available_precisions(files)
+        for precision in offered
     ]
     return build(verdict, reason, False, costs)

@@ -50,6 +50,65 @@ def available_precisions(files: list[HfFile]) -> tuple[Precision, ...]:
     return tuple(available_precisions_from_names(tuple(f.path for f in files)))
 
 
+def precision_from_header(header: dict) -> Precision:
+    f16_count = 0
+    f32_count = 0
+    for name, tensor in header.items():
+        if name == "__metadata__" or not isinstance(tensor, dict):
+            continue
+        if tensor.get("dtype") == "F16":
+            f16_count += 1
+        elif tensor.get("dtype") == "F32":
+            f32_count += 1
+    return "fp16" if f16_count > f32_count else "fp32"
+
+
+async def probe_precision(
+    hf_client,
+    repo_id: str,
+    files: list[HfFile],
+    declared: list[str],
+) -> Precision | None:
+    declared_set = set(declared)
+    candidates = [
+        hf_file
+        for hf_file in files
+        if "/" in hf_file.path
+        and hf_file.path.split("/", 1)[0] in declared_set
+        and hf_file.path.lower().endswith(".safetensors")
+        and _is_usable_weight(hf_file.path)
+    ]
+    if not candidates:
+        return None
+
+    candidate = max(candidates, key=lambda hf_file: hf_file.size)
+    try:
+        header, _header_length = await hf_client.read_safetensors_header(
+            repo_id,
+            candidate.path,
+        )
+        return precision_from_header(header)
+    except Exception:  # noqa: BLE001 - el sondeo es informativo: nunca propaga
+        return None
+
+
+async def real_available_precisions(
+    hf_client,
+    repo_id: str,
+    files: list[HfFile],
+    declared: list[str],
+) -> tuple[Precision, ...]:
+    offered = available_precisions(files)
+    if "fp16" in offered:
+        return offered
+    probed = await probe_precision(hf_client, repo_id, files, declared)
+    if probed != "fp16":
+        return offered
+    # fp32 sigue ofrecido aunque los pesos sean fp16: el upcast explicito es la
+    # ruta de escape para artefactos fp16 de driver y para VAEs fp32 a proposito.
+    return ("fp16", "fp32")
+
+
 def canonical_weight_name(path: str) -> str:
     """Quita el marcador de variante del nombre. main_export no expone un
     selector de variante, asi que la eleccion se materializa escribiendo el

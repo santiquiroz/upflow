@@ -5,6 +5,8 @@ import pytest
 from app.services.generation_variants import (
     available_precisions,
     canonical_weight_name,
+    precision_from_header,
+    real_available_precisions,
     select_for_precision,
 )
 from app.services.hf_client import HfFile
@@ -43,6 +45,149 @@ SD15_DECLARED = [
 
 def _total_mb(files: list[HfFile]) -> int:
     return sum(f.size for f in files) // MB
+
+
+def _tensor(dtype: str) -> dict:
+    return {
+        "dtype": dtype,
+        "shape": [1],
+        "data_offsets": [0, 2],
+    }
+
+
+class FakeHeaderClient:
+    def __init__(self, responses: dict[str, dict | Exception]) -> None:
+        self.responses = responses
+        self.paths: list[str] = []
+
+    async def read_safetensors_header(self, repo_id: str, path: str):
+        self.paths.append(path)
+        value = self.responses[path]
+        if isinstance(value, Exception):
+            raise value
+        return value, 8
+
+
+def test_precision_from_header_returns_fp16_for_all_f16_tensors():
+    assert precision_from_header({"a": _tensor("F16"), "b": _tensor("F16")}) == "fp16"
+
+
+def test_precision_from_header_returns_fp32_for_all_f32_tensors():
+    assert precision_from_header({"a": _tensor("F32"), "b": _tensor("F32")}) == "fp32"
+
+
+def test_precision_from_header_returns_fp16_when_f16_is_the_strict_majority():
+    header = {
+        "a": _tensor("F16"),
+        "b": _tensor("F16"),
+        "c": _tensor("F32"),
+    }
+    assert precision_from_header(header) == "fp16"
+
+
+def test_precision_from_header_treats_bf16_conservatively_as_fp32():
+    assert precision_from_header({"a": _tensor("BF16")}) == "fp32"
+
+
+def test_precision_from_header_treats_metadata_only_as_fp32():
+    assert precision_from_header({"__metadata__": {"format": "pt"}}) == "fp32"
+
+
+@pytest.mark.asyncio
+async def test_real_available_precisions_detects_fp16_from_plain_weight_header():
+    files = [
+        HfFile(path="model_index.json", size=1024),
+        HfFile(path="unet/diffusion_pytorch_model.safetensors", size=500 * MB),
+        HfFile(path="vae/diffusion_pytorch_model.safetensors", size=200 * MB),
+        HfFile(path="controlnet/diffusion_pytorch_model.safetensors", size=900 * MB),
+    ]
+    client = FakeHeaderClient(
+        {
+            "unet/diffusion_pytorch_model.safetensors": {
+                "weight": _tensor("F16"),
+            }
+        }
+    )
+
+    result = await real_available_precisions(
+        client,
+        "owner/name",
+        files,
+        ["unet", "vae"],
+    )
+
+    # fp32 sigue ofrecido: el upcast explicito es la ruta de escape para
+    # artefactos fp16 de driver y para VAEs mantenidos en fp32 a proposito.
+    assert result == ("fp16", "fp32")
+    assert client.paths == ["unet/diffusion_pytorch_model.safetensors"]
+
+
+@pytest.mark.asyncio
+async def test_real_available_precisions_keeps_fp32_for_plain_f32_weights():
+    files = [
+        HfFile(path="model_index.json", size=1024),
+        HfFile(path="unet/diffusion_pytorch_model.safetensors", size=500 * MB),
+    ]
+    client = FakeHeaderClient(
+        {
+            "unet/diffusion_pytorch_model.safetensors": {
+                "weight": _tensor("F32"),
+            }
+        }
+    )
+
+    result = await real_available_precisions(client, "owner/name", files, ["unet"])
+
+    assert result == ("fp32",)
+
+
+@pytest.mark.asyncio
+async def test_real_available_precisions_does_not_probe_named_fp16_variant():
+    files = [
+        HfFile(
+            path="unet/diffusion_pytorch_model.fp16.safetensors",
+            size=500 * MB,
+        ),
+    ]
+    client = FakeHeaderClient({})
+
+    result = await real_available_precisions(client, "owner/name", files, ["unet"])
+
+    assert result == ("fp16",)
+    assert client.paths == []
+
+
+@pytest.mark.asyncio
+async def test_real_available_precisions_skips_probe_without_safetensors_candidates():
+    # Repo .bin-only: no hay header safetensors que sondear, cero llamadas HTTP.
+    files = [
+        HfFile(path="model_index.json", size=1024),
+        HfFile(path="unet/diffusion_pytorch_model.bin", size=500 * MB),
+    ]
+    client = FakeHeaderClient({})
+
+    result = await real_available_precisions(client, "owner/name", files, ["unet"])
+
+    assert result == ("fp32",)
+    assert client.paths == []
+
+
+@pytest.mark.asyncio
+async def test_real_available_precisions_keeps_name_result_when_probe_fails():
+    files = [
+        HfFile(path="unet/diffusion_pytorch_model.safetensors", size=500 * MB),
+    ]
+    client = FakeHeaderClient(
+        {
+            "unet/diffusion_pytorch_model.safetensors": RuntimeError(
+                "range request failed"
+            ),
+        }
+    )
+
+    result = await real_available_precisions(client, "owner/name", files, ["unet"])
+
+    assert result == ("fp32",)
 
 
 def test_available_precisions_detects_both_when_repo_publishes_both():

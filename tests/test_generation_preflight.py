@@ -117,6 +117,35 @@ async def test_report_prices_every_available_precision(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_plain_fp16_weights_offer_fp16_first_with_fp32_escape(tmp_path: Path) -> None:
+    files = [
+        HfFile(path="model_index.json", size=1024),
+        HfFile(path="unet/diffusion_pytorch_model.safetensors", size=3278 * MB),
+    ]
+    report = await preflight(
+        hf_client=FakeHf(
+            files,
+            INDEX,
+            headers={
+                "unet/diffusion_pytorch_model.safetensors": {
+                    "weight": {
+                        "dtype": "F16",
+                        "shape": [1],
+                        "data_offsets": [0, 2],
+                    }
+                }
+            },
+        ),
+        devices_service=FakeDevices(DEVICES),
+        settings=make_settings(tmp_path),
+        probes={},
+        repo_id="owner/name",
+    )
+
+    assert [cost.precision for cost in report.precisions] == ["fp16", "fp32"]
+
+
+@pytest.mark.asyncio
 async def test_ready_onnx_repo_offers_no_precision_choice(tmp_path: Path) -> None:
     # Sin paso de export no hay dtype que elegir (alcance de B en el spec).
     report = await preflight(

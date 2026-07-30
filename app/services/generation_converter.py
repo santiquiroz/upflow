@@ -33,8 +33,8 @@ from app.services.generation_single_file import (
 from app.services.generation_variants import (
     CONVERSION_SKIP_SUFFIXES,
     Precision,
-    available_precisions,
     canonical_weight_name,
+    real_available_precisions,
     select_for_precision,
 )
 from app.services.hf_client import HfClient, HfFile
@@ -431,7 +431,12 @@ class GenerationModelConverter:
                     unlimited=True,
                 )
                 declared = _read_declared_components(src_root)
-                offered = available_precisions(files)
+                offered = await real_available_precisions(
+                    self.hf_client,
+                    job.repo_id,
+                    files,
+                    declared,
+                )
                 precision = (
                     job.precision
                     if job.precision in offered

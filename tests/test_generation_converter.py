@@ -366,6 +366,39 @@ async def test_precision_falls_back_when_repo_lacks_requested_variant(
     assert captured["dtype"] is None
 
 
+async def test_plain_fp16_weights_keep_requested_fp16_export_dtype(
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+    converter, *_ = make_converter(
+        tmp_path,
+        _recording_export(captured),
+    )
+
+    async def read_header(repo_id: str, path: str):
+        assert repo_id == "owner/name"
+        assert path == "unet/diffusion_pytorch_model.safetensors"
+        header = {
+            "weight": {
+                "dtype": "F16",
+                "shape": [1],
+                "data_offsets": [0, 2],
+            }
+        }
+        return header, len(json.dumps(header).encode("utf-8"))
+
+    converter.hf_client.read_safetensors_header = read_header  # type: ignore[attr-defined]
+
+    conversion_id = await converter.convert_from_hf(
+        "owner/name",
+        precision="fp16",
+    )
+    await converter._process_next()
+
+    assert converter.status(conversion_id).status is JobStatus.completed
+    assert captured["dtype"] == "fp16"
+
+
 def _single_file_header(name: str) -> dict:
     fixture_path = Path(__file__).parent / "assets" / "single_file_fixtures.json"
     entry = json.loads(fixture_path.read_text(encoding="utf-8"))[name]
