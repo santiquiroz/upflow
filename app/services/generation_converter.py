@@ -76,6 +76,32 @@ def _parse_submodel_line(line: str) -> str | None:
     return f"{match.group('index')}-{match.group('class_name')}"
 
 
+def _cap_vae_trace_resolution(src_root: Path) -> None:
+    config_path = src_root / "vae" / "config.json"
+    if not config_path.is_file():
+        return
+
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    if not isinstance(config, dict):
+        return
+    sample_size = config.get("sample_size")
+    if (
+        isinstance(sample_size, bool)
+        or not isinstance(sample_size, (int, float))
+        or sample_size <= 512
+    ):
+        return
+
+    # Optimum usa sample_size como resolución del input dummy del trace. Los ejes
+    # ONNX son dinámicos, así que el grafo no cambia; a 1024 el encoder cuadruplica
+    # el costo de CPU (medido: 75 minutos contra 15 a 512).
+    config["sample_size"] = 512
+    config_path.write_text(
+        json.dumps(config, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
 def _selected_checkpoint(
     files: list[HfFile],
     repo_id: str,
@@ -465,6 +491,7 @@ class GenerationModelConverter:
                     f"exporting:{name}",
                 )
 
+            _cap_vae_trace_resolution(src_root)
             exported = await asyncio.to_thread(
                 self.export_fn,
                 src_root,

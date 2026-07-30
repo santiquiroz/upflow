@@ -65,7 +65,14 @@ def make_converter(tmp_path: Path, export_fn):
     registry = ModelRegistry(settings)
     hf_client = FakeHfClient(files=_pytorch_repo_files())
     hf_client.download_bytes_by_path = {
-        "model_index.json": SOURCE_MODEL_INDEX.encode("utf-8")
+        "model_index.json": SOURCE_MODEL_INDEX.encode("utf-8"),
+        "vae/config.json": json.dumps(
+            {
+                "_class_name": "AutoencoderKL",
+                "sample_size": 1024,
+                "latent_channels": 4,
+            }
+        ).encode("utf-8"),
     }
     installer = GenerationModelInstaller(
         settings,
@@ -128,6 +135,75 @@ def test_parse_submodel_line_ignores_unrelated_output() -> None:
     assert _parse_submodel_line("Validating ONNX model unet/model.onnx") is None
 
 
+def _write_vae_config(src_root: Path, content: str) -> Path:
+    config_path = src_root / "vae" / "config.json"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(content, encoding="utf-8")
+    return config_path
+
+
+def test_cap_vae_trace_resolution_rewrites_large_sample_size(
+    tmp_path: Path,
+) -> None:
+    config_path = _write_vae_config(
+        tmp_path,
+        json.dumps(
+            {
+                "_class_name": "AutoencoderKL",
+                "sample_size": 1024,
+                "latent_channels": 4,
+            }
+        ),
+    )
+
+    generation_converter_module._cap_vae_trace_resolution(tmp_path)
+
+    assert json.loads(config_path.read_text(encoding="utf-8")) == {
+        "_class_name": "AutoencoderKL",
+        "sample_size": 512,
+        "latent_channels": 4,
+    }
+
+
+def test_cap_vae_trace_resolution_leaves_512_config_byte_identical(
+    tmp_path: Path,
+) -> None:
+    original = '{\n  "sample_size": 512,\n  "latent_channels": 4\n}\n'
+    config_path = _write_vae_config(tmp_path, original)
+
+    generation_converter_module._cap_vae_trace_resolution(tmp_path)
+
+    assert config_path.read_text(encoding="utf-8") == original
+
+
+def test_cap_vae_trace_resolution_without_vae_is_noop(tmp_path: Path) -> None:
+    generation_converter_module._cap_vae_trace_resolution(tmp_path)
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_cap_vae_trace_resolution_without_sample_size_is_byte_identical(
+    tmp_path: Path,
+) -> None:
+    original = '{\n  "_class_name": "AutoencoderKL",\n  "latent_channels": 4\n}\n'
+    config_path = _write_vae_config(tmp_path, original)
+
+    generation_converter_module._cap_vae_trace_resolution(tmp_path)
+
+    assert config_path.read_text(encoding="utf-8") == original
+
+
+def test_cap_vae_trace_resolution_with_non_numeric_sample_size_is_byte_identical(
+    tmp_path: Path,
+) -> None:
+    original = '{\n  "sample_size": "1024",\n  "latent_channels": 4\n}\n'
+    config_path = _write_vae_config(tmp_path, original)
+
+    generation_converter_module._cap_vae_trace_resolution(tmp_path)
+
+    assert config_path.read_text(encoding="utf-8") == original
+
+
 EXPORTED_LOG: list[str] = []
 
 
@@ -167,6 +243,41 @@ def test_convert_happy_path_exports_and_promotes(tmp_path, monkeypatch) -> None:
     assert EXPORTED_LOG == ["unet", "vae"]
     assert registry.get(job.model_id) is not None
     assert job.metadata["progress"] == 1.0
+
+
+def test_conversion_caps_staged_vae_config_before_export(tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    def inspect_vae_config_then_export(
+        src_dir: Path,
+        out_dir: Path,
+        on_component,
+        dtype=None,
+        atol=None,
+    ) -> list[str]:
+        config = json.loads(
+            (src_dir / "vae" / "config.json").read_text(encoding="utf-8")
+        )
+        captured["sample_size"] = config["sample_size"]
+        captured["latent_channels"] = config["latent_channels"]
+        return fake_export_ok(src_dir, out_dir, on_component, dtype, atol)
+
+    converter, *_ = make_converter(
+        tmp_path,
+        export_fn=inspect_vae_config_then_export,
+    )
+    converter.hf_client.download_bytes_by_path["vae/config.json"] = json.dumps(
+        {
+            "_class_name": "AutoencoderKL",
+            "sample_size": 1024,
+            "latent_channels": 4,
+        }
+    ).encode("utf-8")
+
+    job_id = convert_and_drain(converter, "amd/sdxl-torch")
+
+    assert converter.status(job_id).status is JobStatus.completed
+    assert captured == {"sample_size": 512, "latent_channels": 4}
 
 
 def test_convert_export_failure_leaves_no_orphans(tmp_path) -> None:
