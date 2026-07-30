@@ -334,6 +334,24 @@ class CapabilityTreeResponse(BaseModel):
     domains: list[CapabilityDomainResponse] = Field(default_factory=list)
 
 
+class UpscalerPreflightResponse(BaseModel):
+    repo_id: str = Field(serialization_alias="repoId")
+    compat: str | None = None
+    compat_reason_key: str | None = Field(
+        default=None, serialization_alias="compatReasonKey"
+    )
+    compat_reason_params: dict[str, str] = Field(
+        default_factory=dict, serialization_alias="compatReasonParams"
+    )
+    degraded: bool
+    # Peso del archivo que el instalador va a bajar. None si el repo no tiene
+    # ninguno, que la clasificacion ya reporta como incompatible.
+    download_bytes: int | None = Field(default=None, serialization_alias="downloadBytes")
+    devices: list[DeviceCapacityResponse] = Field(default_factory=list)
+    disk: DiskCapacityResponse | None = None
+    free_ram_bytes: int | None = Field(default=None, serialization_alias="freeRamBytes")
+
+
 class ProvisionJobResponse(BaseModel):
     job_id: str = Field(serialization_alias="jobId")
     pack: str

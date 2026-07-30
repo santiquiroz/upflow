@@ -62,6 +62,7 @@ from app.schemas import (
     UpdateCheckResponse,
     UpdateSettingRequest,
     UpdateSettingResponse,
+    UpscalerPreflightResponse,
     VideoCapabilitiesResponse,
     VideoJobResponse,
     VideoJobsListResponse,
@@ -92,6 +93,7 @@ from app.services.hf_client import GENERATION_SEARCH_TASK_TAGS, HfClient
 from app.services.job_manager import JobManager
 from app.services.media_tools import MediaTools
 from app.services.model_installer import ModelInstaller
+from app.services.model_preflight import preflight_upscaler
 from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry
 from app.services.pack_provisioner import PackProvisioner, ProvisionJob, UnknownPackError
 from app.services.settings_service import editable_settings_status, update_setting
@@ -1114,6 +1116,29 @@ async def search_models(
         logger.exception("Hugging Face search failed for query %r", q)
         raise HTTPException(status_code=502, detail="Hugging Face search failed") from exc
     return _search_results_to_response(results, strategy_for("image"))
+@router.get("/models/preflight", response_model=UpscalerPreflightResponse)
+async def preflight_upscaler_model(
+    request: Request,
+    repo_id: str = Query(..., alias="repoId"),
+    hf_client: HfClient = Depends(get_hf_client),
+    settings: Settings = Depends(get_settings),
+) -> UpscalerPreflightResponse:
+    """Capacidad y compatibilidad de un repo de upscaler antes de instalarlo.
+
+    Reusa las mediciones genericas del pre-flight de generacion. NO estima pico de
+    VRAM: el factor de vram_estimate asume activaciones que crecen con la
+    resolucion, y para un upscaler que hace tiling esa premisa es falsa. La VRAM
+    libre viaja como dato, sin veredicto de "no entra".
+    """
+    report = await preflight_upscaler(
+        hf_client=hf_client,
+        devices_service=request.app.state.devices_service,
+        settings=settings,
+        probes=request.app.state.resource_probes,
+        repo_id=repo_id,
+        strategy=strategy_for("image"),
+    )
+    return UpscalerPreflightResponse(**asdict(report))
 
 
 @router.post(

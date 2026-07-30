@@ -13,6 +13,14 @@ from app.services.generation_single_file import (
     CheckpointVerdict,
     classify_checkpoint,
 )
+from app.services.model_preflight import (
+    MB,
+    DeviceCapacity,
+    DiskCapacity,
+    measure_devices,
+    measure_disk,
+    measure_free_ram,
+)
 from app.services.generation_variants import (
     MODEL_INDEX_FILENAME,
     Precision,
@@ -21,28 +29,11 @@ from app.services.generation_variants import (
 )
 from app.services.vram_estimate import estimate_peak_bytes
 
-MB = 1024 * 1024
-
-
 @dataclass(slots=True, frozen=True)
 class PrecisionCost:
     precision: Precision
     download_bytes: int
     estimated_peak_bytes: int
-
-
-@dataclass(slots=True, frozen=True)
-class DeviceCapacity:
-    id: str
-    name: str
-    kind: str
-    free_vram_bytes: int | None
-
-
-@dataclass(slots=True, frozen=True)
-class DiskCapacity:
-    target_path: str
-    free_bytes: int
 
 
 @dataclass(slots=True, frozen=True)
@@ -69,42 +60,6 @@ class PreflightReport:
     disk: DiskCapacity | None = None
     checkpoints: list[CheckpointCandidate] = field(default_factory=list)
     free_ram_bytes: int | None = None
-
-
-def _measure_disk(target: Path) -> DiskCapacity | None:
-    # El directorio puede no existir todavia en una instalacion nueva: se sube
-    # al primer ancestro que exista antes de medir.
-    probe = target
-    while not probe.exists() and probe != probe.parent:
-        probe = probe.parent
-    try:
-        return DiskCapacity(target_path=str(target), free_bytes=shutil.disk_usage(probe).free)
-    except OSError:
-        return None
-
-
-def _measure_devices(devices_service: Any, probes: dict[str, Any]) -> list[DeviceCapacity]:
-    rows: list[DeviceCapacity] = []
-    for info in devices_service.list_devices():
-        probe = probes.get(info["kind"])
-        free_mb = probe.free_capacity_mb(info["id"]) if probe is not None else None
-        rows.append(
-            DeviceCapacity(
-                id=info["id"],
-                name=info.get("name") or info["id"],
-                kind=info["kind"],
-                free_vram_bytes=None if free_mb is None else free_mb * MB,
-            )
-        )
-    return rows
-
-
-def _measure_free_ram(probes: dict[str, Any]) -> int | None:
-    probe = probes.get("cpu")
-    if probe is None:
-        return None
-    free_mb = probe.free_capacity_mb("cpu")
-    return None if free_mb is None else free_mb * MB
 
 
 def _candidate_from_verdict(
@@ -148,9 +103,9 @@ async def preflight(
 ) -> PreflightReport:
     # Los dispositivos y el disco no dependen de Hugging Face, asi que se miden
     # aunque la parte de red falle: un reporte degradado sigue siendo util.
-    devices = _measure_devices(devices_service, probes)
-    disk = _measure_disk(Path(settings.temp_path))
-    free_ram_bytes = _measure_free_ram(probes)
+    devices = measure_devices(devices_service, probes)
+    disk = measure_disk(Path(settings.temp_path))
+    free_ram_bytes = measure_free_ram(probes)
 
     def build(
         compat: CompatVerdict | None,

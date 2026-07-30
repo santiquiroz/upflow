@@ -399,3 +399,65 @@ async def test_the_upscaler_search_still_serializes_camel_case() -> None:
 
     assert "compatReasonKey" in dumped
     assert "availablePrecisions" in dumped
+
+
+# ---------------------------------------------------------------------------
+# GET /models/preflight
+# ---------------------------------------------------------------------------
+
+
+class FakePreflightHfClient:
+    def __init__(self, files: list) -> None:
+        self._files = files
+
+    async def repo_files(self, _repo_id: str) -> list:
+        return self._files
+
+
+class FakePreflightRequest:
+    def __init__(self) -> None:
+        devices = [{"id": "cpu", "kind": "cpu", "name": "CPU", "backend": "cpu"}]
+        state = type(
+            "S",
+            (),
+            {
+                "devices_service": type("D", (), {"list_devices": lambda self: devices})(),
+                "resource_probes": {},
+            },
+        )()
+        self.app = type("A", (), {"state": state})()
+
+
+async def test_upscaler_preflight_reports_compat_and_capacity(tmp_path: Path) -> None:
+    from app.api.routes import preflight_upscaler_model
+    from app.services.hf_client import HfFile
+
+    response = await preflight_upscaler_model(
+        request=FakePreflightRequest(),
+        repo_id="owner/model",
+        hf_client=FakePreflightHfClient([HfFile(path="model.onnx", size=67 * 1024 * 1024)]),
+        settings=make_settings(tmp_path),
+    )
+
+    assert response.compat == "ready_onnx"
+    assert response.degraded is False
+    assert response.download_bytes == 67 * 1024 * 1024
+    assert response.disk is not None
+
+
+async def test_upscaler_preflight_serializes_camel_case(tmp_path: Path) -> None:
+    from app.api.routes import preflight_upscaler_model
+    from app.services.hf_client import HfFile
+
+    response = await preflight_upscaler_model(
+        request=FakePreflightRequest(),
+        repo_id="owner/model",
+        hf_client=FakePreflightHfClient([HfFile(path="model.onnx", size=1)]),
+        settings=make_settings(tmp_path),
+    )
+    dumped = response.model_dump(by_alias=True)
+
+    assert "repoId" in dumped
+    assert "downloadBytes" in dumped
+    assert "freeRamBytes" in dumped
+    assert "compatReasonKey" in dumped
