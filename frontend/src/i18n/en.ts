@@ -167,8 +167,10 @@ export const en = {
   "capability.reason.stems":
     "Needs a Demucs-type model and an inference engine the app does not include today.",
   "capability.reason.imageToImage":
-    "The ONNX Runtime classes for image to image do exist, so the path is " +
-    "confirmed. This is wiring work, not a missing dependency.",
+    "The path is confirmed and measured: ONNX Runtime can run image to image for " +
+    "Stable Diffusion, SDXL, SD3 and Latent Consistency — but not for Flux or " +
+    "Sana, which it does run for text to image. Wiring work, not a missing " +
+    "dependency.",
   "capability.reason.noOnnxPath":
     "No confirmed path to a runnable ONNX model yet. The model existing is not " +
     "enough: it also has to be executable by ONNX Runtime, and this hit the same " +
