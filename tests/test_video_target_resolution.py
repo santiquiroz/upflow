@@ -181,10 +181,12 @@ def test_without_a_target_the_requested_scale_is_untouched(tmp_path: Path):
 
 
 def test_a_target_lowers_the_scale_when_the_model_offers_more_than_one(tmp_path: Path):
-    """La ganancia real: 600p a 1080p alcanza con x2 en vez de x4.
+    """600p a 1080p alcanza con x2 en vez de x4.
 
-    El costo por frame va con el CUADRADO de la escala, asi que x2 en vez de x4 es 4
-    veces menos trabajo, y ese trabajo extra se tiraba en el redimensionado.
+    Que se ahorra, con precision: los PIXELES DE SALIDA bajan a la cuarta parte, y con
+    ellos los PNG intermedios, el disco y el encode. La inferencia NO baja igual -- los
+    bloques RRDB corren a resolucion de entrada y no cambian con la escala. Prometer
+    "4 veces mas rapido" seria falso.
 
     Solo aplica a modelos multi-escala: realesr-animevideov3 ofrece [2,3,4].
     """
@@ -246,9 +248,11 @@ def test_missing_source_dimensions_leave_the_request_alone(tmp_path: Path):
 
 
 def test_the_measured_saving_for_the_reported_case(tmp_path: Path):
-    """Cuantifica la mejora del caso que se puede arreglar hoy.
+    """Cuantifica la mejora en PIXELES DE SALIDA, que es lo que se puede afirmar.
 
-    El costo por frame va con el cuadrado de la escala.
+    Los pixeles de salida gobiernan los PNG intermedios, el disco y el encode. La
+    inferencia esta dominada por la resolucion de ENTRADA y casi no cambia, asi que este
+    numero NO es un factor de aceleracion total.
     """
     from app.services.target_resolution import megapixels_per_frame, plan_for_scale
 

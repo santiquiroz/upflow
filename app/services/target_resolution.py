@@ -73,9 +73,10 @@ def smallest_scale_reaching(
 ) -> int | None:
     """El escalado entero mas chico que ALCANZA el objetivo.
 
-    None si la fuente ya llega sola. Se elige el mas chico a proposito: correr el
-    modelo a 4x para despues bajar a 1080p gasta horas de GPU en pixeles que se van a
-    tirar.
+    None si la fuente ya llega sola. Se elige el mas chico porque todo lo que viene
+    DESPUES del modelo escala con el cuadrado: los PNG intermedios, el disco y el
+    encode. Ver la nota sobre el costo real mas abajo -- la inferencia en si casi no
+    cambia con la escala.
     """
     if source_height >= target_height:
         return None
@@ -159,6 +160,17 @@ def plan_for_scale(
 # [4], y los animevideov3-xN son un model_id por escala. Solo realesr-animevideov3
 # ofrece [2,3,4]. Asi que para abaratar un pedido no alcanza con bajar la escala --
 # hay que elegir OTRO modelo.
+#
+# DONDE ESTA EL COSTO, medido leyendo la red (scripts/export-realesrgan-onnx.py):
+# los bloques RRDB, que son el cuerpo y lo dominante, corren a resolucion de ENTRADA
+# y no cambian con la escala. Solo la cola (conv_up1 a 2x, conv_up2 a 4x) trabaja mas
+# grande. Y los tres .bin de animevideov3 son IDENTICOS en tamaño: sus grafos x2/x3
+# son derivados del x4 con un remuestreo hacia abajo.
+#
+# Consecuencia: elegir un modelo de 2x en vez de 4x NO divide por cuatro el tiempo de
+# inferencia. Lo que si baja con el cuadrado de la escala es todo lo de despues --
+# PNG intermedios, disco, encode -- y eso es real pero es otra cosa. Prometer "4 veces
+# mas rapido" seria falso.
 # ---------------------------------------------------------------------------
 
 
@@ -192,7 +204,9 @@ def choose_model_for_target(
         (mid, scale) for mid, scale in usable if source_height * scale >= target_height
     ]
     if reaching:
-        # El de menor escala: el costo por frame va con el CUADRADO de la escala.
+        # El de menor escala: menos pixeles de salida, o sea menos PNG intermedios,
+        # menos disco y menos encode. NO cuatro veces menos inferencia (ver la nota de
+        # arriba sobre donde esta el costo).
         model_id, scale = min(reaching, key=lambda item: item[1])
         return ModelChoice(model_id=model_id, scale=scale, falls_short=False)
 
