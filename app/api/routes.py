@@ -1053,9 +1053,17 @@ async def create_transcribe_job(
 async def get_transcribe_job(
     job_id: str,
     transcribe_jobs: TranscribeJobManager = Depends(get_transcribe_job_manager),
+    # Bare `Request` (not `Request | None`) so FastAPI's special-case injection
+    # still recognizes it -- `lenient_issubclass` rejects unions. Direct/unit-test
+    # calls that omit this kwarg still get `None`.
+    request: Request = None,
 ) -> TranscribeJobResponse:
     job = transcribe_jobs.get_job(job_id)
-    if job is None:
+    current_user = current_user_from_request(request)
+    # 404 y no 403 a proposito: un 403 confirmaria que el job existe. Una
+    # transcripcion es el contenido de un audio ajeno, asi que ni su existencia se
+    # filtra.
+    if not job or (current_user is not None and not _can_view_job(job, current_user)):
         raise HTTPException(status_code=404, detail="Transcribe job not found")
     return transcribe_job_to_response(job)
 
@@ -1068,9 +1076,11 @@ async def get_transcribe_job(
 async def cancel_transcribe_job(
     job_id: str,
     transcribe_jobs: TranscribeJobManager = Depends(get_transcribe_job_manager),
+    request: Request = None,
 ) -> TranscribeJobResponse:
     job = transcribe_jobs.get_job(job_id)
-    if job is None:
+    current_user = current_user_from_request(request)
+    if not job or (current_user is not None and not _can_cancel_job(job, current_user)):
         raise HTTPException(status_code=404, detail="Transcribe job not found")
     transcribe_jobs.cancel_job(job_id)
     return transcribe_job_to_response(job)
@@ -1083,9 +1093,11 @@ async def cancel_transcribe_job(
 async def download_transcribe_job(
     job_id: str,
     transcribe_jobs: TranscribeJobManager = Depends(get_transcribe_job_manager),
+    request: Request = None,
 ) -> FileResponse:
     job = transcribe_jobs.get_job(job_id)
-    if job is None:
+    current_user = current_user_from_request(request)
+    if not job or (current_user is not None and not _can_view_job(job, current_user)):
         raise HTTPException(status_code=404, detail="Transcribe job not found")
     if job.status != JobStatus.completed or not job.output_path:
         raise HTTPException(status_code=409, detail="Transcribe job is not completed yet")

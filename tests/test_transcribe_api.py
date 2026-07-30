@@ -263,3 +263,107 @@ def test_the_asr_search_route_is_registered():
     paths = {getattr(route, "path", None) for route in app.routes}
     assert "/api/v1/asr/models/search" in paths
     assert "/api/v1/asr/models/install/{install_id}" in paths
+
+
+# ---------------------------------------------------------------------------
+# Pertenencia
+#
+# Una transcripcion ES el contenido de un audio ajeno, asi que leer la de otro es
+# una fuga de datos. Estas rutas salieron SIN el chequeo y lo detecto el review
+# automatico de commit; el resto de las rutas de jobs del repo si lo tenian.
+# ---------------------------------------------------------------------------
+
+
+def make_user(user_id: str, role=None):
+    from app.services.auth.identity import AuthenticatedUser
+    from app.services.auth.permissions import ROLE_PERMISSIONS, Role
+
+    effective = role or Role.user
+    return AuthenticatedUser(
+        id=user_id,
+        username=user_id,
+        role=effective,
+        permissions=ROLE_PERMISSIONS[effective],
+        must_change_password=False,
+        quota_overrides={},
+    )
+
+
+class RequestWithUser:
+    def __init__(self, user) -> None:
+        self.state = type("S", (), {"current_user": user})()
+
+
+async def create_owned(manager: TranscribeJobManager, settings: Settings, owner_id: str):
+    job = await manager.create_job(
+        source_path=make_upload_file(settings),
+        original_filename="charla.wav",
+        model_id=MODEL_ID,
+    )
+    job.owner_id = owner_id
+    return job
+
+
+def make_upload_file(settings: Settings) -> Path:
+    path = settings.uploads_path / "charla.wav"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"RIFF....WAVE")
+    return path
+
+
+@pytest.mark.asyncio
+async def test_another_user_cannot_read_someone_elses_transcript(tmp_path: Path):
+    manager, settings = make_manager(tmp_path)
+    job = await create_owned(manager, settings, owner_id="alice")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_transcribe_job(job.id, manager, RequestWithUser(make_user("bob")))
+
+    # 404 y no 403: un 403 confirmaria que el job existe.
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_the_owner_can_read_their_own_transcript(tmp_path: Path):
+    manager, settings = make_manager(tmp_path)
+    job = await create_owned(manager, settings, owner_id="alice")
+
+    response = await get_transcribe_job(job.id, manager, RequestWithUser(make_user("alice")))
+    assert response.id == job.id
+
+
+@pytest.mark.asyncio
+async def test_an_admin_can_read_any_transcript(tmp_path: Path):
+    from app.services.auth.permissions import Role
+
+    manager, settings = make_manager(tmp_path)
+    job = await create_owned(manager, settings, owner_id="alice")
+
+    response = await get_transcribe_job(
+        job.id, manager, RequestWithUser(make_user("root", Role.admin))
+    )
+    assert response.id == job.id
+
+
+@pytest.mark.asyncio
+async def test_another_user_cannot_cancel_someone_elses_job(tmp_path: Path):
+    manager, settings = make_manager(tmp_path)
+    job = await create_owned(manager, settings, owner_id="alice")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await cancel_transcribe_job(job.id, manager, RequestWithUser(make_user("bob")))
+
+    assert exc_info.value.status_code == 404
+    assert job.status is JobStatus.queued
+
+
+@pytest.mark.asyncio
+async def test_another_user_cannot_download_someone_elses_transcript(tmp_path: Path):
+    manager, settings = make_manager(tmp_path)
+    job = await create_owned(manager, settings, owner_id="alice")
+    await manager._process_next()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await download_transcribe_job(job.id, manager, RequestWithUser(make_user("bob")))
+
+    assert exc_info.value.status_code == 404
