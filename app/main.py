@@ -42,6 +42,8 @@ from app.services.hf_client import HfClient
 from app.services.job_manager import JobManager
 from app.services.media_tools import MediaTools
 from app.services.model_installer import ModelInstaller
+from app.services.asr_installer import AsrModelInstaller
+from app.services.engines.transcribe_onnx import TranscribeEngine
 from app.services.pack_provisioner import PackProvisioner
 from app.services.model_registry import ModelRegistry
 from app.services.onnx_cpu_fallback_probe import OnnxCpuFallbackProbe
@@ -164,6 +166,8 @@ async def lifespan(app: FastAPI):
     )
     generation_converter = GenerationModelConverter(settings, generation_installer, hf_client)
     pack_provisioner = PackProvisioner(settings)
+    asr_installer = AsrModelInstaller(settings, model_registry, hf_client)
+    transcribe_engine = TranscribeEngine(settings, gpu_coordinator)
     generation_installer.enqueue_conversion = generation_converter.convert_from_hf
     await job_manager.start()
     await video_job_manager.start()
@@ -174,6 +178,7 @@ async def lifespan(app: FastAPI):
     await generation_installer.start()
     await generation_converter.start()
     await pack_provisioner.start()
+    await asr_installer.start()
 
     app.state.storage = storage
     app.state.engine = engine
@@ -202,6 +207,8 @@ async def lifespan(app: FastAPI):
     app.state.generation_installer = generation_installer
     app.state.generation_converter = generation_converter
     app.state.pack_provisioner = pack_provisioner
+    app.state.asr_installer = asr_installer
+    app.state.transcribe_engine = transcribe_engine
     app.state.user_store = user_store
     app.state.identity_provider = identity_provider
     app.state.quota_service = quota_service
@@ -217,6 +224,7 @@ async def lifespan(app: FastAPI):
         await generation_installer.stop()
         await generation_converter.stop()
         await pack_provisioner.stop()
+        await asr_installer.stop()
 
 
 def _serve_index(index_path: Path) -> Response:
