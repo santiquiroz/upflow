@@ -129,7 +129,7 @@ def make_engine(tmp_path: Path, pipeline: Any | None = None) -> tuple[Generation
     coordinator = RecordingCoordinator()
     engine = GenerationEngine(make_settings(tmp_path), coordinator)  # type: ignore[arg-type]
     fake = pipeline or FakePipeline()
-    engine._create_pipeline = lambda pipeline_dir, device: fake  # type: ignore[method-assign]
+    engine._create_pipeline = lambda pipeline_dir, device, mode="text2img": fake  # type: ignore[method-assign]
     return engine, coordinator, fake
 
 
@@ -178,7 +178,7 @@ async def test_run_passes_seeded_generator(tmp_path: Path) -> None:
 async def test_pipeline_cache_is_lru_one_across_devices(tmp_path: Path) -> None:
     engine, _coordinator, _fake = make_engine(tmp_path)
     created: list[str] = []
-    engine._create_pipeline = lambda pipeline_dir, device: created.append(device) or FakePipeline()  # type: ignore[method-assign]
+    engine._create_pipeline = lambda pipeline_dir, device, mode="text2img": created.append(device) or FakePipeline()  # type: ignore[method-assign]
 
     common = dict(
         model_id="m", pipeline_dir=tmp_path, request=make_request(),
@@ -196,7 +196,7 @@ async def test_pipeline_cache_is_lru_one_across_devices(tmp_path: Path) -> None:
 async def test_release_device_drops_cached_pipeline(tmp_path: Path) -> None:
     engine, _coordinator, _fake = make_engine(tmp_path)
     created: list[str] = []
-    engine._create_pipeline = lambda pipeline_dir, device: created.append(device) or FakePipeline()  # type: ignore[method-assign]
+    engine._create_pipeline = lambda pipeline_dir, device, mode="text2img": created.append(device) or FakePipeline()  # type: ignore[method-assign]
     common = dict(
         model_id="m", pipeline_dir=tmp_path, request=make_request(),
         output_path=tmp_path / "o.png", progress_cb=lambda *_: None,
@@ -281,3 +281,124 @@ async def test_run_wraps_pipeline_errors(tmp_path: Path) -> None:
             model_id="m", pipeline_dir=tmp_path, request=make_request(),
             device="dml:0", output_path=tmp_path / "o.png", progress_cb=lambda *_: None,
         )
+
+
+# ---------------------------------------------------------------------------
+# Imagen a imagen
+# ---------------------------------------------------------------------------
+
+
+def write_init_image(path: Path, size: tuple[int, int] = (64, 48), mode: str = "RGBA") -> Path:
+    from PIL import Image
+
+    Image.new(mode, size, (10, 20, 30, 255) if mode == "RGBA" else (10, 20, 30)).save(path)
+    return path
+
+
+@pytest.mark.anyio
+async def test_an_init_image_switches_the_call_to_image_to_image(tmp_path: Path) -> None:
+    engine, _coordinator, fake = make_engine(tmp_path)
+    init = write_init_image(tmp_path / "in.png")
+
+    await engine.run(
+        model_id="m",
+        pipeline_dir=tmp_path,
+        request=make_request(init_image_path=init, strength=0.35),
+        device="cpu",
+        output_path=tmp_path / "out.png",
+        progress_cb=lambda _done, _total: None,
+    )
+
+    call = fake.calls[0]
+    assert call["strength"] == 0.35
+    assert call["image"] is not None
+    # width/height NO se pasan: el pipeline de imagen a imagen deriva el tamaño de
+    # la entrada, y pasarlos ademas es lo que rompe en algunas versiones.
+    assert "width" not in call
+    assert "height" not in call
+
+
+@pytest.mark.anyio
+async def test_without_an_init_image_the_call_is_unchanged(tmp_path: Path) -> None:
+    engine, _coordinator, fake = make_engine(tmp_path)
+
+    await engine.run(
+        model_id="m",
+        pipeline_dir=tmp_path,
+        request=make_request(),
+        device="cpu",
+        output_path=tmp_path / "out.png",
+        progress_cb=lambda _done, _total: None,
+    )
+
+    call = fake.calls[0]
+    assert call["width"] == 256
+    assert call["height"] == 256
+    assert "image" not in call
+    assert "strength" not in call
+
+
+@pytest.mark.anyio
+async def test_the_init_image_is_resized_to_the_requested_size(tmp_path: Path) -> None:
+    # Se redimensiona aca y no en el pipeline para que la salida tenga el tamaño
+    # que el usuario pidio y no el del archivo que subio.
+    engine, _coordinator, fake = make_engine(tmp_path)
+    init = write_init_image(tmp_path / "in.png", size=(1000, 37))
+
+    await engine.run(
+        model_id="m",
+        pipeline_dir=tmp_path,
+        request=make_request(init_image_path=init, width=128, height=192),
+        device="cpu",
+        output_path=tmp_path / "out.png",
+        progress_cb=lambda _done, _total: None,
+    )
+
+    assert fake.calls[0]["image"].size == (128, 192)
+
+
+@pytest.mark.anyio
+async def test_an_image_with_alpha_is_flattened_to_rgb(tmp_path: Path) -> None:
+    # Un PNG con canal alfa rompe el VAE.
+    engine, _coordinator, fake = make_engine(tmp_path)
+    init = write_init_image(tmp_path / "in.png", mode="RGBA")
+
+    await engine.run(
+        model_id="m",
+        pipeline_dir=tmp_path,
+        request=make_request(init_image_path=init),
+        device="cpu",
+        output_path=tmp_path / "out.png",
+        progress_cb=lambda _done, _total: None,
+    )
+
+    assert fake.calls[0]["image"].mode == "RGB"
+
+
+@pytest.mark.anyio
+async def test_the_two_modes_do_not_share_a_cached_pipeline(tmp_path: Path) -> None:
+    """Sin el modo en la clave de cache, un job de imagen a imagen recibiria el
+    pipeline de texto ya cacheado y la imagen de entrada se ignoraria EN SILENCIO,
+    que es la peor forma de fallar."""
+    coordinator = RecordingCoordinator()
+    engine = GenerationEngine(make_settings(tmp_path), coordinator)  # type: ignore[arg-type]
+    modes: list[str] = []
+
+    def create(pipeline_dir: Path, device: str, mode: str = "text2img") -> FakePipeline:
+        modes.append(mode)
+        return FakePipeline()
+
+    engine._create_pipeline = create  # type: ignore[method-assign]
+    init = write_init_image(tmp_path / "in.png")
+
+    for request in (make_request(), make_request(init_image_path=init)):
+        await engine.run(
+            model_id="m",
+            pipeline_dir=tmp_path,
+            request=request,
+            device="cpu",
+            output_path=tmp_path / "out.png",
+            progress_cb=lambda _done, _total: None,
+        )
+
+    assert modes == ["text2img", "img2img"]

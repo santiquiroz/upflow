@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from app.config import Settings
+from app.services.generation_img2img import load_img2img_class
 from app.services.engines.gmfss_engine import _tune_session_options_for_device
 from app.services.engines.onnx_upscaler import _build_providers
 from app.services.gpu_session_coordinator import GpuSessionCoordinator
@@ -83,6 +84,10 @@ def _read_declared_class_name(pipeline_dir: Path) -> str:
     return declared
 
 
+def _pipeline_mode(request: "GenerationRequest") -> str:
+    return "img2img" if request.init_image_path is not None else "text2img"
+
+
 def _load_pipeline_class(declared_class_name: str) -> Any:
     if declared_class_name in _KNOWN_ORT_CLASS_NAMES:
         ort_class_name = declared_class_name
@@ -122,6 +127,19 @@ def _build_providers_for_validation(device: str) -> dict[str, Any]:
     return kwargs
 
 
+def _load_init_image(path: Path, width: int, height: int) -> Any:
+    """Carga la imagen de partida y la lleva al tamaño pedido.
+
+    Se convierte a RGB porque un PNG con canal alfa rompe el VAE, y se
+    redimensiona aca en vez de dejarlo al pipeline para que el tamaño de salida
+    sea el que el usuario pidio y no el del archivo que subio.
+    """
+    from PIL import Image
+
+    with Image.open(path) as image:
+        return image.convert("RGB").resize((width, height), Image.LANCZOS)
+
+
 def _build_seed_generator(seed: int) -> Any:
     # torch.Generator, NO np.random.RandomState: __call__ es el de diffusers y
     # randn_tensor accede a generator.device (findings §d/§e, verificado empirico).
@@ -139,13 +157,18 @@ class GenerationRequest:
     width: int
     height: int
     seed: int | None
+    # Imagen de partida. Presente = imagen a imagen; ausente = texto a imagen.
+    init_image_path: Path | None = None
+    # Cuanto se aparta del original: 0 lo devuelve casi igual, 1 lo ignora casi
+    # por completo. Solo se usa con init_image_path.
+    strength: float = 0.6
 
 
 class GenerationEngine:
     def __init__(self, settings: Settings, gpu_coordinator: GpuSessionCoordinator) -> None:
         self.settings = settings
         self.gpu_coordinator = gpu_coordinator
-        self._pipeline_cache: OrderedDict[tuple[str, str], Any] = OrderedDict()
+        self._pipeline_cache: OrderedDict[tuple[str, str, str], Any] = OrderedDict()
         self._cache_lock = threading.Lock()
 
     def release_device(self, device: str) -> None:
@@ -195,7 +218,8 @@ class GenerationEngine:
         cancel_event: threading.Event,
         progress_cb: Callable[[int, int], None],
     ) -> Path:
-        pipeline = self._get_pipeline(model_id, pipeline_dir, device)
+        mode = _pipeline_mode(request)
+        pipeline = self._get_pipeline(model_id, pipeline_dir, device, mode)
 
         def _on_step(step: int, _timestep: Any, _latents: Any) -> None:
             if cancel_event.is_set():
@@ -206,11 +230,19 @@ class GenerationEngine:
             "prompt": request.prompt,
             "num_inference_steps": request.steps,
             "guidance_scale": request.guidance,
-            "width": request.width,
-            "height": request.height,
             "callback": _on_step,
             "callback_steps": 1,
         }
+        if request.init_image_path is not None:
+            # width/height NO se pasan: el pipeline de imagen a imagen deriva el
+            # tamaño de la imagen de entrada, asi que se la redimensiona antes.
+            call_kwargs["image"] = _load_init_image(
+                request.init_image_path, request.width, request.height
+            )
+            call_kwargs["strength"] = request.strength
+        else:
+            call_kwargs["width"] = request.width
+            call_kwargs["height"] = request.height
         if request.negative_prompt:
             call_kwargs["negative_prompt"] = request.negative_prompt
         if request.seed is not None:
@@ -227,16 +259,22 @@ class GenerationEngine:
         result.images[0].save(output_path)
         return output_path
 
-    def _get_pipeline(self, model_id: str, pipeline_dir: Path, device: str) -> Any:
+    def _get_pipeline(
+        self, model_id: str, pipeline_dir: Path, device: str, mode: str = "text2img"
+    ) -> Any:
         self.gpu_coordinator.acquire(device, self)
-        key = (model_id, device)
+        # El modo entra en la clave: el mismo modelo en el mismo dispositivo carga
+        # una clase distinta para texto a imagen que para imagen a imagen, y sin
+        # esto un job de imagen a imagen recibiria el pipeline de texto cacheado y
+        # la imagen de entrada se ignoraria en silencio.
+        key = (model_id, device, mode)
         with self._cache_lock:
             cached = self._pipeline_cache.get(key)
             if cached is not None:
                 self._pipeline_cache.move_to_end(key)
                 return cached
         try:
-            pipeline = self._create_pipeline(pipeline_dir, device)
+            pipeline = self._create_pipeline(pipeline_dir, device, mode)
         except Exception as exc:
             raise _wrap_generation_error(exc) from exc
         with self._cache_lock:
@@ -246,10 +284,17 @@ class GenerationEngine:
                 self._pipeline_cache.popitem(last=False)
         return pipeline
 
-    def _create_pipeline(self, pipeline_dir: Path, device: str) -> Any:
+    def _create_pipeline(
+        self, pipeline_dir: Path, device: str, mode: str = "text2img"
+    ) -> Any:
         import onnxruntime as ort
 
-        pipeline_cls = _load_pipeline_class(_read_declared_class_name(pipeline_dir))
+        declared = _read_declared_class_name(pipeline_dir)
+        pipeline_cls = (
+            load_img2img_class(declared)
+            if mode == "img2img"
+            else _load_pipeline_class(declared)
+        )
         providers = _build_providers(device)
         sess_options = ort.SessionOptions()
         _tune_session_options_for_device(sess_options, device)
