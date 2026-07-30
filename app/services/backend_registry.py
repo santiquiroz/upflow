@@ -67,14 +67,87 @@ BUILTIN_ONNX_MODELS: dict[str, BuiltinOnnxModel] = {
     "realesrgan-x4plus": BuiltinOnnxModel(
         "realesrgan-x4plus", "realesrgan-x4plus-uint8.onnx", 4
     ),
+    # Escalas derivadas del x4plus: mismo .pth, la salida x4 se remuestrea al ratio
+    # pedido dentro del grafo (el `outscale` de Real-ESRGAN). Existen porque ncnn es
+    # Vulkan-only: sin ellas, x4plus a 2x no tendria NINGUN camino en una maquina sin
+    # GPU. La clave lleva el sufijo de escala aunque el modelo ncnn no lo tenga -- los
+    # dos runtimes nombran distinto el mismo pedido, y por eso el lookup es por escala.
+    "realesrgan-x4plus-x2": BuiltinOnnxModel(
+        "realesrgan-x4plus-x2", "realesrgan-x4plus-x2-uint8.onnx", 2
+    ),
+    "realesrgan-x4plus-x3": BuiltinOnnxModel(
+        "realesrgan-x4plus-x3", "realesrgan-x4plus-x3-uint8.onnx", 3
+    ),
     "realesrgan-x4plus-anime": BuiltinOnnxModel(
         "realesrgan-x4plus-anime", "realesrgan-x4plus-anime-uint8.onnx", 4
+    ),
+    "realesrgan-x4plus-anime-x2": BuiltinOnnxModel(
+        "realesrgan-x4plus-anime-x2", "realesrgan-x4plus-anime-x2-uint8.onnx", 2
+    ),
+    "realesrgan-x4plus-anime-x3": BuiltinOnnxModel(
+        "realesrgan-x4plus-anime-x3", "realesrgan-x4plus-anime-x3-uint8.onnx", 3
     ),
 }
 
 
-def get_builtin_onnx_model(engine_model_name: str) -> BuiltinOnnxModel | None:
-    return BUILTIN_ONNX_MODELS.get(engine_model_name)
+# Escalas que el binario ncnn produce BIEN, por modelo.
+#
+# MEDIDO, no leido del -h. El help dice "-s scale (can be 2, 3, 4)" y con
+# -n realesrgan-x4plus -s 2 el binario sale con codigo 0 y escribe un archivo con las
+# dimensiones exactas pedidas. Pero el CONTENIDO esta roto: una fuente de 256x256 con
+# cuatro cuadrantes de colores distintos (azul/verde/rojo/amarillo) sale 512x512 con los
+# cuatro cuadrantes AZULES -- magnifico solo el cuadrante superior izquierdo. Con -s 4 la
+# misma fuente sale con los cuatro colores correctos.
+#
+# O sea: chequear dimensiones no alcanza para saber si un escalado funciona. Este dict
+# existe porque el binario FALLA EN SILENCIO, con exit 0 y dimensiones correctas.
+#
+# animevideov3 trae un .param/.bin POR escala, asi que ahi cada escala es nativa. Los
+# x4plus traen un solo archivo y solo su 4x es real.
+NCNN_NATIVE_SCALES: dict[str, frozenset[int]] = {
+    "realesrgan-x4plus": frozenset({4}),
+    "realesrgan-x4plus-anime": frozenset({4}),
+    "realesr-animevideov3-x2": frozenset({2}),
+    "realesr-animevideov3-x3": frozenset({3}),
+    "realesr-animevideov3-x4": frozenset({4}),
+}
+
+
+def ncnn_produces_correct_output(engine_model_name: str, scale: int) -> bool:
+    """El binario ncnn da un resultado CORRECTO para este modelo y escala.
+
+    Un modelo desconocido se asume correcto: son los custom del usuario, que se resuelven
+    por otro camino y no pasan por esta tabla.
+    """
+    native = NCNN_NATIVE_SCALES.get(engine_model_name)
+    return True if native is None else scale in native
+
+
+def get_builtin_onnx_model(
+    engine_model_name: str, scale: int | None = None
+) -> BuiltinOnnxModel | None:
+    """El export ONNX de un modelo builtin, opcionalmente para una escala concreta.
+
+    Sin `scale` devuelve la entrada por nombre y nada mas -- el comportamiento
+    historico, cuando cada modelo tenia una sola escala.
+
+    Con `scale` el lookup se vuelve ESTRICTO, y eso es el punto: `realesrgan-x4plus`
+    ahora acepta 2x y 3x (ncnn lo resuelve con -s, medido), pero su grafo ONNX base es
+    x4. Devolverlo para un pedido de 2x correria el grafo x4 y entregaria un video al
+    doble del tamano pedido, sin error y sin aviso. Se busca primero el export derivado
+    con sufijo de escala; si no esta y la escala base no coincide, se devuelve None para
+    que el ruteo caiga a ncnn en vez de mentir.
+    """
+    if scale is not None:
+        scoped = BUILTIN_ONNX_MODELS.get(f"{engine_model_name}-x{scale}")
+        if scoped is not None:
+            return scoped
+    base = BUILTIN_ONNX_MODELS.get(engine_model_name)
+    if base is None:
+        return None
+    if scale is not None and base.scale != scale:
+        return None
+    return base
 
 
 def validate_backend_choice(value: str | None) -> str | None:

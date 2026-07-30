@@ -12,7 +12,11 @@ from app.exceptions import QueueFullError
 from app.models import JobStatus, TERMINAL_JOB_STATUSES, VideoUpscaleJob, utc_now
 from app.services.auth.identity import AuthenticatedUser
 from app.services.auth.quotas import QuotaService
-from app.services.backend_registry import validate_backend_choice
+from app.services.backend_registry import (
+    get_builtin_onnx_model,
+    ncnn_produces_correct_output,
+    validate_backend_choice,
+)
 from app.services.video_encoders import VIDEO_ENCODERS
 from app.services.device_router import DeviceRouter, has_compatible_device
 from app.services.restorer_registry import validate_restore_mode_ready
@@ -350,6 +354,7 @@ class VideoJobManager:
         option = self.settings.get_model_option(model_id)
         if option and scale not in option["scales"]:
             raise ValueError(f"Model {model_id} supports only scales {option['scales']}")
+        self._require_a_runtime_that_produces_this_scale(model_id, scale)
         if device == "cpu":
             raise ValueError(
                 f"Device 'cpu' is not supported for builtin model {model_id!r} (requires a Vulkan GPU device)"
@@ -357,6 +362,26 @@ class VideoJobManager:
         engine_model_name = self.settings.resolve_engine_model_name(model_id, scale)
         return VideoModelResolution(
             model_id=model_id, engine_model_name=engine_model_name, kind=ModelKind.builtin_ncnn, scale=scale
+        )
+
+    def _require_a_runtime_that_produces_this_scale(self, model_id: str, scale: int) -> None:
+        """Rechaza una combinacion que ningun runtime puede entregar bien.
+
+        realesrgan-x4plus y su variante anime ofrecen 2x y 3x, pero SOLO por ONNX: el
+        binario ncnn devuelve las dimensiones pedidas con el contenido roto (magnifica
+        un cuadrante), y sale con codigo 0 -- o sea que sin esta guarda el usuario
+        recibiria un video destruido sin un solo error.
+        """
+        engine_model_name = self.settings.resolve_engine_model_name(model_id, scale)
+        if ncnn_produces_correct_output(engine_model_name, scale):
+            return
+        onnx_model = get_builtin_onnx_model(engine_model_name, scale)
+        if onnx_model is not None and (self.settings.builtin_onnx_path / onnx_model.filename).exists():
+            return
+        raise ValueError(
+            f"El modelo {model_id} solo puede hacer {scale}x con el runtime ONNX, y su "
+            f"export no esta instalado. Usa escala 4, elegi otro modelo, o instala los "
+            f"exports ONNX (scripts/download-realesrgan-onnx.ps1)."
         )
 
     def _resolve_onnx_model(self, model_id: str) -> VideoModelResolution:

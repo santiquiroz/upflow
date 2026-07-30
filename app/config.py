@@ -120,16 +120,28 @@ MODEL_CATALOG: list[ModelOption] = [
         "engine_name": "realesrgan-x4plus",
         "label": "RealESRGAN x4 Plus",
         "category": "general",
-        "description": "Best general-purpose photo upscaling.",
-        "scales": [4],
+        "description": (
+            "Best general-purpose photo upscaling. Pick 2x for fast jobs at sane "
+            "output sizes; 4x only when you really want the pixels."
+        ),
+        # 2x y 3x salen del mismo modelo: el binario ncnn los resuelve con -s (medido:
+        # 64x48 -> 128x96 y 192x144) y hay exports ONNX derivados para el camino CPU.
+        # Antes esta categoria SOLO ofrecia 4x, que sobre una fuente grande es la
+        # causa del pedido de 15360x8640 que tardo 2,8 horas.
+        "scales": [2, 3, 4],
     },
     {
         "key": "realesrgan-x4plus-anime",
         "engine_name": "realesrgan-x4plus-anime",
         "label": "RealESRGAN x4 Plus Anime",
         "category": "anime",
-        "description": "Still anime images, illustrations and line art.",
-        "scales": [4],
+        "description": (
+            "Still anime images, illustrations and line art. 2x is the fast pick; "
+            "for anime VIDEO prefer the AnimeVideo v3 preset."
+        ),
+        # Mismo motivo que el x4plus general: ncnn resuelve 2x/3x con -s (medido) y hay
+        # exports ONNX derivados para el camino CPU.
+        "scales": [2, 3, 4],
     },
     {
         "key": "realesr-animevideov3-x2",

@@ -198,16 +198,34 @@ def test_a_target_lowers_the_scale_when_the_model_offers_more_than_one(tmp_path:
     assert scale == 2
 
 
-def test_a_single_scale_model_cannot_be_made_cheaper_by_the_target(tmp_path: Path):
-    """Limite honesto que hay que conocer: la mayoria de los modelos son de una sola
-    escala.
+def test_the_general_model_can_now_be_made_cheaper_by_the_target(tmp_path: Path):
+    """El limite que este test documentaba ya no existe.
 
-    realesrgan-x4plus solo ofrece [4], asi que pedir 1080p NO baja el costo en GPU --
-    el modelo hace x4 igual. Lo unico que cambia es el tamaño del archivo de salida.
-    Prometer velocidad ahi seria mentir.
+    realesrgan-x4plus ofrecia SOLO [4], asi que pedir 1080p desde 600p corria x4 igual y
+    solo cambiaba el tamaño del archivo. Ahora ofrece [2,3,4]: el binario ncnn resuelve
+    2x/3x con -s sobre el mismo modelo (medido: 64x48 -> 128x96 y 192x144) y hay exports
+    ONNX derivados para el camino CPU. Asi que el objetivo SI baja la escala.
+
+    Sigue valiendo la precision de siempre sobre QUE se ahorra: los pixeles de salida
+    bajan a la cuarta parte y con ellos los PNG intermedios, el disco y el encode. La
+    inferencia no baja igual -- el cuerpo RRDB corre a resolucion de entrada.
     """
     manager = make_manager(tmp_path)
     scale = manager._scale_for_target(probe_for(1067, 600), 1080, "realesrgan-x4plus", 4)
+
+    assert scale == 2
+
+
+def test_a_genuinely_single_scale_model_is_still_not_cheapened(tmp_path: Path):
+    """El limite sigue existiendo donde es real.
+
+    realesr-animevideov3-x4 es un model_id POR escala: pedir 1080p no puede bajarlo,
+    porque el modelo elegido solo hace x4.
+    """
+    manager = make_manager(tmp_path)
+    scale = manager._scale_for_target(
+        probe_for(1067, 600), 1080, "realesr-animevideov3-x4", 4
+    )
 
     assert scale == 4
 
@@ -269,3 +287,51 @@ def test_the_measured_saving_for_the_reported_case(tmp_path: Path):
     targeted_mp = megapixels_per_frame(targeted.output_width, targeted.output_height)
 
     assert blind_mp / targeted_mp > 3.9
+
+
+# ---------------------------------------------------------------------------
+# El objetivo tambien manda en el camino streaming
+#
+# El -vf solo se inyectaba en el camino PNG. Los tres caminos de streaming ignoraban
+# target_height por completo: el archivo salia en fuente*escala mientras
+# _final_output_dims reportaba el objetivo, o sea que la metadata, la API y la vista
+# previa del frontend mentian sobre el resultado entregado.
+# ---------------------------------------------------------------------------
+
+
+def test_the_rawpipe_encode_applies_the_target_resize(tmp_path: Path):
+    upscaler = make_upscaler(tmp_path)
+    job = make_job((1920, 1080), 2, target_height=1440)
+
+    cmd = upscaler._build_rawpipe_command(
+        3840, 2160, "24", None, [], tmp_path / "out.mp4", job, "libx264"
+    )
+
+    assert "-vf" in cmd, "el camino streaming descartaba el objetivo en silencio"
+    assert "scale=2560:1440:flags=lanczos" in cmd
+
+
+def test_the_rawpipe_encode_is_untouched_without_a_target(tmp_path: Path):
+    # El camino del multiplicador no debe ganar una pasada de ffmpeg.
+    upscaler = make_upscaler(tmp_path)
+    job = make_job((1920, 1080), 2)
+
+    cmd = upscaler._build_rawpipe_command(
+        3840, 2160, "24", None, [], tmp_path / "out.mp4", job, "libx264"
+    )
+
+    assert "-vf" not in cmd
+
+
+def test_what_the_rawpipe_produces_matches_what_the_job_reports(tmp_path: Path):
+    """La invariante que el bug rompia: lo reportado y lo entregado son lo mismo."""
+    upscaler = make_upscaler(tmp_path)
+    job = make_job((1920, 1080), 2, target_height=1440)
+
+    reported = upscaler._final_output_dims(job)
+    cmd = upscaler._build_rawpipe_command(
+        3840, 2160, "24", None, [], tmp_path / "out.mp4", job, "libx264"
+    )
+    filter_arg = cmd[cmd.index("-vf") + 1]
+
+    assert filter_arg.startswith(f"scale={reported[0]}:{reported[1]}")

@@ -1,6 +1,10 @@
 param(
     [switch]$Zip,
-    [switch]$Installer
+    [switch]$Installer,
+    # Escape hatch explicito para empaquetar sin el set completo de exports ONNX.
+    # Existe porque el default pasa a ser FALLAR: un release sin ellos deja sin
+    # reescalado a las maquinas sin GPU, y antes eso salia con solo un Write-Host.
+    [switch]$AllowMissingOnnx
 )
 
 $ErrorActionPreference = 'Stop'
@@ -313,8 +317,37 @@ function Add-RealesrganOnnxModelsToInstaller {
     if (Test-Path $onnxSrcDir) {
         $onnxFiles = Get-ChildItem -Path $onnxSrcDir -Filter '*.onnx' -File
     }
+    # Los exports NO son un extra opcional desde que el catalogo ofrece 2x/3x en los
+    # modelos generales: ncnn resuelve esas escalas por su cuenta, pero es Vulkan-only,
+    # asi que sin los .onnx una maquina SIN GPU se queda sin 2x general. Antes esto era
+    # un Write-Host que nadie lee y el release salia mutilado en silencio.
+    $requiredOnnx = @(
+        'realesr-animevideov3-x2-uint8.onnx',
+        'realesr-animevideov3-x3-uint8.onnx',
+        'realesr-animevideov3-x4-uint8.onnx',
+        'realesrgan-x4plus-uint8.onnx',
+        'realesrgan-x4plus-x2-uint8.onnx',
+        'realesrgan-x4plus-x3-uint8.onnx',
+        'realesrgan-x4plus-anime-uint8.onnx',
+        'realesrgan-x4plus-anime-x2-uint8.onnx',
+        'realesrgan-x4plus-anime-x3-uint8.onnx'
+    )
+    $presentNames = @($onnxFiles | ForEach-Object { $_.Name })
+    $missingOnnx = @($requiredOnnx | Where-Object { $presentNames -notcontains $_ })
+    if ($missingOnnx.Count -gt 0) {
+        if (-not $AllowMissingOnnx) {
+            throw @"
+Faltan $($missingOnnx.Count) export(s) ONNX en vendor\realesrgan-onnx:
+  $($missingOnnx -join "`n  ")
+Sin ellos el release deja sin reescalado a las maquinas sin GPU (ncnn es Vulkan-only).
+Corre scripts\download-realesrgan-onnx.ps1 y volve a empaquetar.
+Si de verdad querés un release incompleto, pasa -AllowMissingOnnx.
+"@
+        }
+        Write-Warning "Empaquetando SIN $($missingOnnx.Count) export(s) ONNX por -AllowMissingOnnx: $($missingOnnx -join ', ')"
+    }
     if ($onnxFiles.Count -eq 0) {
-        Write-Host 'AVISO: no hay exports en vendor\realesrgan-onnx; el instalador usara solo NCNN (correr scripts\download-realesrgan-onnx.ps1 para el backend ONNX).'
+        Write-Warning 'No hay ningun export en vendor\realesrgan-onnx; el instalador usara solo NCNN (sin camino CPU).'
         return
     }
     $onnxDst = Join-Path $installerAppDir 'vendor\realesrgan-onnx'

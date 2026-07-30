@@ -101,7 +101,7 @@ def _builtin_entry_from_catalog(option: ModelOption) -> ModelEntry:
     return ModelEntry(
         id=option["key"],
         name=option["label"],
-        kind=_kind_for_catalog_option(option),
+        kind=ModelKind.builtin_ncnn,
         source="builtin",
         size_bytes=0,
         scale=_single_scale(option),
@@ -109,23 +109,34 @@ def _builtin_entry_from_catalog(option: ModelOption) -> ModelEntry:
     )
 
 
-def _seedable_catalog() -> list[ModelOption]:
-    """Lo que se siembra en el registro al arrancar.
+def _classic_entries() -> list[ModelEntry]:
+    """Los upscalers clasicos, SIEMPRE en memoria y NUNCA en registry.json.
 
-    Los clasicos no viven en MODEL_CATALOG porque esa lista describe modelos con pesos.
-    Pero sin sembrarlos GET /models no los devuelve y el selector nunca los ofrece: el
-    pipeline sabria ejecutarlos y nadie podria elegirlos.
+    Se derivan del catalogo en cada llamada en vez de persistirse, y la razon es de
+    compatibilidad hacia ATRAS, no de estilo: el `_load` de las versiones ya publicadas
+    (v0.16.2 incluida) es todo-o-nada, asi que al toparse con un kind desconocido como
+    "classic" no saltea la entrada -- respalda el registry.json ENTERO y arranca vacio.
+    Alguien que instale esta version y despues vuelva a la anterior perderia todos sus
+    modelos instalados. El fix que saltea entradas ilegibles existe pero no esta en
+    ninguna tag publicada, asi que no puede protegernos.
+
+    Como no tienen archivos ni estado, no hay nada que persistir: derivarlos es
+    equivalente y no toca el disco.
     """
-    return [*MODEL_CATALOG, *classic_catalog_entries()]  # type: ignore[list-item]
+    return [
+        ModelEntry(
+            id=option["key"],
+            name=option["label"],
+            kind=ModelKind.classic,
+            source="builtin",
+            size_bytes=0,
+            scale=None,
+            status=ModelStatus.installed,
+        )
+        for option in classic_catalog_entries()
+    ]
 
 
-def _kind_for_catalog_option(option: ModelOption) -> ModelKind:
-    # Los clasicos no son builtin-ncnn: ese kind EXIGE una GPU Vulkan en el ruteo de
-    # dispositivo, y swscale corre en CPU. Confundirlos dejaria el reescalado sin IA
-    # inaccesible justo en las maquinas que mas lo necesitan.
-    if option["key"] in CLASSIC_MODEL_IDS:
-        return ModelKind.classic
-    return ModelKind.builtin_ncnn
 
 
 def _write_json_atomically(path: Path, payload: list[dict[str, Any]]) -> None:
@@ -167,11 +178,14 @@ class ModelRegistry:
 
     def list(self) -> list[ModelEntry]:
         with self._lock:
-            return list(self._entries.values())
+            return [*self._entries.values(), *_classic_entries()]
 
     def get(self, model_id: str) -> ModelEntry | None:
         with self._lock:
-            return self._entries.get(model_id)
+            entry = self._entries.get(model_id)
+        if entry is not None:
+            return entry
+        return next((e for e in _classic_entries() if e.id == model_id), None)
 
     def register(self, entry: ModelEntry) -> ModelEntry:
         _reject_builtin_conflicts(entry)
@@ -182,6 +196,10 @@ class ModelRegistry:
         return stored
 
     def remove(self, model_id: str) -> None:
+        if model_id in CLASSIC_MODEL_IDS:
+            # No viven en _entries (ver _classic_entries), asi que sin este chequeo el
+            # error diria "id desconocido" y sonaria a un bug en vez de a una negativa.
+            raise ValueError(f"Cannot remove builtin model: {model_id!r}")
         with self._lock:
             entry = self._require_entry(model_id)
             if entry.kind in (ModelKind.builtin_ncnn, ModelKind.classic):
@@ -255,7 +273,7 @@ class ModelRegistry:
         with self._lock:
             missing = [
                 _builtin_entry_from_catalog(option)
-                for option in _seedable_catalog()
+                for option in MODEL_CATALOG
                 if option["key"] not in self._entries
             ]
             if not missing:

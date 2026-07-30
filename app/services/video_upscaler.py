@@ -19,6 +19,7 @@ from app.services.target_resolution import plan_for_scale, plan_for_target
 from app.services import video_encoders
 from app.services.backend_registry import (
     UpscaleBackend,
+    ncnn_produces_correct_output,
     resolve_upscale_backend,
 )
 from app.services.devices_service import DevicesService
@@ -441,9 +442,19 @@ class VideoUpscaler:
         await self._upscale_frames_ncnn(job, frames_in, frames_out)
 
     def _resolve_builtin_backend(self, job: VideoUpscaleJob) -> UpscaleBackend:
+        # ncnn devuelve contenido ROTO para las escalas no nativas de un modelo (medido:
+        # x4plus con -s 2 magnifica un cuadrante y sale con codigo 0). Ahi el runtime no
+        # es una preferencia sino la unica opcion correcta, asi que la regla auto y
+        # cualquier preferencia por ncnn quedan de lado. VideoJobManager ya rechazo el
+        # job si el export ONNX no estaba, asi que llegar aca significa que existe.
+        if not ncnn_produces_correct_output(job.model_name, job.scale):
+            return UpscaleBackend.onnx
+
         engine = self.onnx_video_engine
         onnx_model_available = (
-            engine is not None and engine.available() and engine.builtin_onnx_available(job.model_name)
+            engine is not None
+            and engine.available()
+            and engine.builtin_onnx_available(job.model_name, job.scale)
         )
         gpu_ep_available = engine is not None and engine.has_gpu_execution_provider()
         device = job.device or self.settings.default_device
@@ -496,7 +507,9 @@ class VideoUpscaler:
         if self.onnx_video_engine is None:
             raise RuntimeError("ONNX backend selected but the ONNX video engine is not configured")
         device = job.device or self.settings.default_device
-        await self.onnx_video_engine.run_frames_builtin(frames_in, frames_out, job.model_name, device)
+        await self.onnx_video_engine.run_frames_builtin(
+            frames_in, frames_out, job.model_name, device, job.scale
+        )
 
     async def _prepare_audio_mux(
         self, job: VideoUpscaleJob, has_audio: bool, audio_path: Path
@@ -1081,7 +1094,11 @@ class VideoUpscaler:
             source_frame_count=frames_total,
             output_frame_count=output_frame_count,
             # El híbrido streamea el upscale: nunca materializa el set grande.
-            writes_upscaled_frames=stream_mode is None,
+            # El clásico tampoco: no corre ningún motor, así que los frames de entrada
+            # SON los del encode y no se escribe un segundo set. Sin esta condición el
+            # guard le pedía a un 4K clásico el disco de un 4x que nunca va a ocurrir
+            # (scale² veces más) y rechazaba justo el camino barato.
+            writes_upscaled_frames=stream_mode is None and not is_classic_upscaler(job.model_id),
             writes_interpolated_frames=interpolating,
         )
         usable = int(shutil.disk_usage(work_dir).free * _DISK_HEADROOM_FRACTION)
@@ -1287,7 +1304,7 @@ class VideoUpscaler:
             # trade-off que documentaba la fusión eliminada; vigilarlo en el
             # smoke real. La serialización sigue en el coordinator/semáforos.
             stages.append(gmfss_stage_factory(device))
-        upscale_frame = self.onnx_video_engine.build_frame_upscaler(job.model_name, device)
+        upscale_frame = self.onnx_video_engine.build_frame_upscaler(job.model_name, device, job.scale)
         stages.append(MapStage(upscale_frame))
 
         input_bytes = width * height * 3
@@ -1588,6 +1605,13 @@ class VideoUpscaler:
             self._map_extra_audio_tracks(maps, job, source_input_index)
             self._map_subtitles(maps, job, source_input_index)
         cmd += maps
+        # Mismo ajuste al objetivo que el camino PNG. Sin esto los tres caminos de
+        # streaming ignoraban target_height por completo: el archivo salia en
+        # fuente*escala mientras _final_output_dims reportaba el objetivo, o sea que la
+        # metadata, la API y la vista previa del frontend mentian sobre el resultado.
+        # Los frames que entran por el pipe ya vienen en fuente*escala, que es
+        # exactamente lo que _resize_filter_args toma como punto de partida.
+        cmd += self._resize_filter_args(job)
 
         cmd += self._build_video_encode_options(job, encoder)
         if audio_mux_path is not None:
@@ -1628,7 +1652,9 @@ class VideoUpscaler:
         # thread is blocked writing to ffmpeg's pipe. We kill ffmpeg FIRST (which
         # unblocks that write with BrokenPipe so the engine unwinds), then await it.
         stream_task = asyncio.ensure_future(
-            self.onnx_video_engine.run_frames_streaming(frames_in, job.model_name, device, write_frame)
+            self.onnx_video_engine.run_frames_streaming(
+                frames_in, job.model_name, device, write_frame, job.scale
+            )
         )
         try:
             async with self._track_streaming_progress(job, counter):

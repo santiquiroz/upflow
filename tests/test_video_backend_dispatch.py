@@ -87,6 +87,13 @@ class FakeOnnxVideoEngine:
         self._gpu_ep = gpu_ep
         self._builtin_available = builtin_available
         self.calls: list[tuple[Path, Path, str, str]] = []
+        # La escala que recibio el motor. Se registra porque un lookup ONNX sin escala
+        # correria el grafo x4 para un pedido de 2x y devolveria el doble del tamano
+        # pedido sin error: nada afuera lo delataria.
+        self.scales: list[int | None] = []
+        # (modelo, escala) de cada consulta de disponibilidad. Sin la escala, un grafo
+        # x4 responderia True a un pedido de 2x.
+        self.availability_queries: list[tuple[str, int | None]] = []
 
     def available(self) -> bool:
         return self._available
@@ -94,13 +101,20 @@ class FakeOnnxVideoEngine:
     def has_gpu_execution_provider(self) -> bool:
         return self._gpu_ep
 
-    def builtin_onnx_available(self, engine_model_name: str) -> bool:
+    def builtin_onnx_available(self, engine_model_name: str, scale: int | None = None) -> bool:
+        self.availability_queries.append((engine_model_name, scale))
         return self._builtin_available
 
     async def run_frames_builtin(
-        self, frames_in: Path, frames_out: Path, engine_model_name: str, device: str
+        self,
+        frames_in: Path,
+        frames_out: Path,
+        engine_model_name: str,
+        device: str,
+        scale: int | None = None,
     ) -> Path:
         self.calls.append((frames_in, frames_out, engine_model_name, device))
+        self.scales.append(scale)
         frames_out.mkdir(parents=True, exist_ok=True)
         for frame in sorted(frames_in.glob("*.png")):
             (frames_out / frame.name).write_bytes(b"onnx-frame")
@@ -367,3 +381,45 @@ def test_video_job_response_exposes_backend() -> None:
 
     assert response.backend == UPSCALE_BACKEND_ONNX
     assert response.model_dump(by_alias=True)["backend"] == UPSCALE_BACKEND_ONNX
+
+
+# ---------------------------------------------------------------------------
+# La escala llega al motor ONNX
+#
+# Sin estas pruebas el cableado no tenia NADA que lo cubriera: revertir job.scale en los
+# cuatro sitios de llamada dejaba la suite entera en verde (2094/2094, verificado por
+# mutacion). Y la regresion que evita es silenciosa: pedir 2x sobre un modelo cuyo grafo
+# es x4 entrega el doble del tamano pedido, sin error y sin log.
+# ---------------------------------------------------------------------------
+
+
+async def test_the_requested_scale_reaches_the_onnx_engine(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    onnx_video = FakeOnnxVideoEngine(available=True, gpu_ep=True, builtin_available=True)
+    upscaler = make_upscaler(settings, onnx_video_engine=onnx_video)
+    job = make_video_job(
+        tmp_path / "clip.mp4", model_name="realesr-animevideov3-x2",
+        model_id="realesr-animevideov3-x2", scale=2,
+    )
+
+    await upscaler._upscale_frames(job, make_frames_in(tmp_path), tmp_path / "out")
+
+    assert onnx_video.scales == [2], (
+        "el motor recibio la escala equivocada: correria el grafo de otra escala"
+    )
+
+
+async def test_the_availability_check_is_asked_about_the_requested_scale(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    onnx_video = FakeOnnxVideoEngine(available=True, gpu_ep=True, builtin_available=True)
+    upscaler = make_upscaler(settings, onnx_video_engine=onnx_video)
+    job = make_video_job(
+        tmp_path / "clip.mp4", model_name="realesr-animevideov3-x3",
+        model_id="realesr-animevideov3-x3", scale=3,
+    )
+
+    await upscaler._upscale_frames(job, make_frames_in(tmp_path), tmp_path / "out")
+
+    assert ("realesr-animevideov3-x3", 3) in onnx_video.availability_queries, (
+        "sin la escala, un grafo x4 daria True para un pedido de 3x"
+    )

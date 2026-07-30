@@ -383,3 +383,78 @@ def test_an_image_job_still_accepts_a_real_model(tmp_path: Path):
     )
 
     assert resolution.model_id == "realesrgan-x4plus"
+
+
+# ---------------------------------------------------------------------------
+# La guarda contra el fallo silencioso de ncnn
+#
+# realesrgan-x4plus ofrece 2x y 3x, pero SOLO por ONNX. El binario ncnn devuelve las
+# dimensiones pedidas con el contenido roto y sale con codigo 0, asi que sin esta guarda
+# el usuario recibiria un video destruido sin un solo error.
+# ---------------------------------------------------------------------------
+
+
+def make_manager_without_onnx_exports(tmp_path: Path):
+    """Manager apuntando a un directorio de exports VACIO.
+
+    Hace falta apuntarlo a proposito: builtin_onnx_path se resuelve contra la raiz del
+    proyecto, no contra el runtime, asi que un tmp_path no lo deja vacio -- ve los
+    exports reales del repo. Un test que no lo hiciera pasaria por la razon equivocada.
+    """
+    from app.services.device_semaphores import DeviceSemaphores
+    from app.services.video_job_manager import VideoJobManager
+
+    settings = Settings(
+        RUNTIME_DIR=str(tmp_path),
+        BUILTIN_ONNX_DIR=str(tmp_path / "sin-exports"),
+        _env_file=None,
+    )
+    return VideoJobManager(settings, None, None, DeviceSemaphores(settings))  # type: ignore[arg-type]
+
+
+def test_a_scale_only_onnx_can_do_is_refused_when_the_export_is_missing(tmp_path: Path):
+    manager = make_manager_without_onnx_exports(tmp_path)
+
+    with pytest.raises(ValueError, match="ONNX"):
+        manager._resolve_model("realesrgan-x4plus", 2, None)
+
+
+def test_the_same_model_at_its_native_scale_needs_no_onnx(tmp_path: Path):
+    # 4x es nativo en ncnn: anda incluso sin ningun export ONNX en disco.
+    manager = make_manager_without_onnx_exports(tmp_path)
+    resolution = manager._resolve_model("realesrgan-x4plus", 4, None)
+
+    assert resolution.scale == 4
+
+
+def test_the_scale_is_allowed_once_the_onnx_export_exists(tmp_path: Path):
+    manager = make_manager_without_onnx_exports(tmp_path)
+    onnx_dir = manager.settings.builtin_onnx_path
+    onnx_dir.mkdir(parents=True, exist_ok=True)
+    (onnx_dir / "realesrgan-x4plus-x2-uint8.onnx").write_bytes(b"grafo")
+
+    resolution = manager._resolve_model("realesrgan-x4plus", 2, None)
+
+    assert resolution.scale == 2
+
+
+def test_a_per_scale_model_is_unaffected_by_the_guard(tmp_path: Path):
+    # animevideov3 trae archivos ncnn por escala: 2x es nativo y no necesita ONNX.
+    resolution = make_manager(tmp_path)._resolve_model("realesr-animevideov3-x2", 2, None)
+
+    assert resolution.scale == 2
+
+
+def test_the_runtime_is_forced_to_onnx_for_a_scale_ncnn_would_corrupt(tmp_path: Path):
+    """El ruteo no puede caer a ncnn como fallback cuando ncnn corrompe.
+
+    La regla auto normalmente prefiere ncnn si el export ONNX no esta; aca eso entregaria
+    un video roto, asi que la escala manda sobre la preferencia.
+    """
+    from app.services.backend_registry import UpscaleBackend
+
+    upscaler = make_upscaler(tmp_path)
+    job = make_job((1920, 1080), 2, model_id="realesrgan-x4plus")
+    job.model_name = "realesrgan-x4plus"
+
+    assert upscaler._resolve_builtin_backend(job) == UpscaleBackend.onnx

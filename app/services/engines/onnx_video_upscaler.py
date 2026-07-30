@@ -219,8 +219,14 @@ class OnnxVideoUpscaler:
             return False
         return bool(set(ort.get_available_providers()) & GPU_EXECUTION_PROVIDERS)
 
-    def builtin_onnx_available(self, engine_model_name: str) -> bool:
-        model = get_builtin_onnx_model(engine_model_name)
+    def builtin_onnx_available(self, engine_model_name: str, scale: int | None = None) -> bool:
+        """Hay un export ONNX en disco para este modelo (y esta escala, si se pasa).
+
+        `scale` es opcional por compatibilidad, pero pasarlo es lo correcto: sin el, un
+        pedido de 2x sobre realesrgan-x4plus daria True y correria el grafo x4,
+        entregando el doble del tamano pedido en silencio.
+        """
+        model = get_builtin_onnx_model(engine_model_name, scale)
         if model is None:
             return False
         return (self.settings.builtin_onnx_path / model.filename).exists()
@@ -245,16 +251,24 @@ class OnnxVideoUpscaler:
     # --- public video entry point ------------------------------------------
 
     async def run_frames_builtin(
-        self, frames_in: Path, frames_out: Path, engine_model_name: str, device: str
+        self,
+        frames_in: Path,
+        frames_out: Path,
+        engine_model_name: str,
+        device: str,
+        scale: int | None = None,
     ) -> Path:
         # Mirrors OnnxUpscaler.run_frames/RifeNcnnEngine.run: frames_in/out are
         # "%08d.png" directories; the whole run happens off the event loop in a
         # worker thread. A threading.Event makes the (otherwise un-cancellable)
         # to_thread pipeline cooperatively stoppable so per-job cancel and the
         # stall watchdog can actually kill it.
-        model = get_builtin_onnx_model(engine_model_name)
+        model = get_builtin_onnx_model(engine_model_name, scale)
         if model is None:
-            raise RuntimeError(f"No ONNX export configured for builtin model {engine_model_name!r}")
+            raise RuntimeError(
+                f"No ONNX export configured for builtin model {engine_model_name!r} "
+                f"at scale {scale}"
+            )
         onnx_path = self._select_model_file(model, device)
         frames_out.mkdir(parents=True, exist_ok=True)
         source_frame_count = self._count_frame_files(frames_in)
@@ -290,6 +304,7 @@ class OnnxVideoUpscaler:
         engine_model_name: str,
         device: str,
         write_frame: "Callable[[np.ndarray], None]",
+        scale: int | None = None,
     ) -> int:
         """Upscale frames and hand each RGB HWC uint8 frame, IN ORDER, to
         write_frame -- no PNG round-trip to disk. Returns the frame count.
@@ -298,9 +313,12 @@ class OnnxVideoUpscaler:
         cancel we signal, then wait for the worker to unwind before propagating so
         the caller can tear down its ffmpeg process without racing a live write.
         """
-        model = get_builtin_onnx_model(engine_model_name)
+        model = get_builtin_onnx_model(engine_model_name, scale)
         if model is None:
-            raise RuntimeError(f"No ONNX export configured for builtin model {engine_model_name!r}")
+            raise RuntimeError(
+                f"No ONNX export configured for builtin model {engine_model_name!r} "
+                f"at scale {scale}"
+            )
         onnx_path = self._select_model_file(model, device)
 
         cancel_event = threading.Event()
@@ -319,7 +337,9 @@ class OnnxVideoUpscaler:
 
     # --- per-frame closure for the stream pipeline ---------------------------
 
-    def build_frame_upscaler(self, engine_model_name: str, device: str) -> "Callable[[np.ndarray], np.ndarray]":
+    def build_frame_upscaler(
+        self, engine_model_name: str, device: str, scale: int | None = None
+    ) -> "Callable[[np.ndarray], np.ndarray]":
         """Closure NHWC uint8 → NHWC uint8 sobre la MISMA sesión/tiling/fp16 que
         run_frames_builtin: la etapa de upscale del stream pipeline (MapStage).
 
@@ -329,9 +349,12 @@ class OnnxVideoUpscaler:
         """
         if not self.available():
             raise RuntimeError("ONNX video engine is not available: onnxruntime and opencv are required")
-        model = get_builtin_onnx_model(engine_model_name)
+        model = get_builtin_onnx_model(engine_model_name, scale)
         if model is None:
-            raise RuntimeError(f"No ONNX export configured for builtin model {engine_model_name!r}")
+            raise RuntimeError(
+                f"No ONNX export configured for builtin model {engine_model_name!r} "
+                f"at scale {scale}"
+            )
         onnx_path = self._select_model_file(model, device)
         if not onnx_path.exists():
             raise RuntimeError(f"ONNX model file not found: {onnx_path}")

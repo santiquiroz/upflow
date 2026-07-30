@@ -107,7 +107,27 @@ def test_seeding_persists_registry_json_under_models_dir(tmp_path: Path) -> None
     registry_path = settings.models_path / "registry.json"
     assert registry_path.exists()
     raw = json.loads(registry_path.read_text(encoding="utf-8"))
-    assert {item["id"] for item in raw} == CATALOG_IDS
+    assert {item["id"] for item in raw} == {option["key"] for option in MODEL_CATALOG}
+
+
+def test_classic_upscalers_are_never_written_to_disk(tmp_path: Path) -> None:
+    """Compatibilidad hacia ATRAS, y por eso importa tanto.
+
+    El `_load` de las versiones ya publicadas (v0.16.2 incluida) es todo-o-nada: al
+    toparse con el kind desconocido "classic" NO saltea la entrada, respalda el
+    registry.json entero y arranca vacio. Persistirlos haria que instalar esta version y
+    volver a la anterior borre todos los modelos instalados del usuario.
+    """
+    settings = make_settings(tmp_path)
+    registry = ModelRegistry(settings)
+
+    raw = json.loads((settings.models_path / "registry.json").read_text(encoding="utf-8"))
+    persisted_kinds = {item["kind"] for item in raw}
+
+    assert "classic" not in persisted_kinds
+    assert not (CLASSIC_IDS & {item["id"] for item in raw})
+    # Y sin embargo se ven, que es el punto: existen en memoria, no en disco.
+    assert CLASSIC_IDS <= {entry.id for entry in registry.list()}
 
 
 def test_seeding_is_idempotent_across_registry_instances(tmp_path: Path) -> None:

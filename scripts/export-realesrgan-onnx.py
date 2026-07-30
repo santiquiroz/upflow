@@ -175,8 +175,19 @@ TARGETS: list[ExportTarget] = [
     ExportTarget("realesr-animevideov3-x3-uint8.onnx", "realesr-animevideov3.pth", "srvgg", 4, 3),
     ExportTarget("realesr-animevideov3-x2-uint8.onnx", "realesr-animevideov3.pth", "srvgg", 4, 2),
     ExportTarget("realesrgan-x4plus-uint8.onnx", "RealESRGAN_x4plus.pth", "rrdb", 4, 4, num_block=23),
+    # Escalas derivadas: mismos pesos, la salida x4 se remuestrea al ratio pedido.
+    # Existen para el camino CPU -- ncnn resuelve 2x/3x por su cuenta con -s, pero es
+    # Vulkan-only, asi que sin estos exports una maquina sin GPU no tiene 2x general.
+    ExportTarget("realesrgan-x4plus-x2-uint8.onnx", "RealESRGAN_x4plus.pth", "rrdb", 4, 2, num_block=23),
+    ExportTarget("realesrgan-x4plus-x3-uint8.onnx", "RealESRGAN_x4plus.pth", "rrdb", 4, 3, num_block=23),
     ExportTarget(
         "realesrgan-x4plus-anime-uint8.onnx", "RealESRGAN_x4plus_anime_6B.pth", "rrdb", 4, 4, num_block=6
+    ),
+    ExportTarget(
+        "realesrgan-x4plus-anime-x2-uint8.onnx", "RealESRGAN_x4plus_anime_6B.pth", "rrdb", 4, 2, num_block=6
+    ),
+    ExportTarget(
+        "realesrgan-x4plus-anime-x3-uint8.onnx", "RealESRGAN_x4plus_anime_6B.pth", "rrdb", 4, 3, num_block=6
     ),
 ]
 

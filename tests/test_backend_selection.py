@@ -9,6 +9,7 @@ from app.config import (
     Settings,
 )
 from app.services.backend_registry import (
+    ncnn_produces_correct_output,
     BUILTIN_ONNX_MODELS,
     UpscaleBackend,
     get_builtin_onnx_model,
@@ -123,9 +124,67 @@ def test_builtin_onnx_catalog_covers_all_builtin_engine_names() -> None:
         "realesr-animevideov3-x3",
         "realesr-animevideov3-x4",
         "realesrgan-x4plus",
+        # Escalas derivadas del x4plus. La clave lleva sufijo aunque el modelo ncnn NO
+        # lo tenga: ncnn resuelve 2x/3x con -s sobre el mismo archivo, mientras ONNX
+        # necesita un grafo por escala. Los dos runtimes nombran distinto el mismo
+        # pedido, y por eso el lookup ONNX es por (nombre, escala).
+        "realesrgan-x4plus-x2",
+        "realesrgan-x4plus-x3",
         "realesrgan-x4plus-anime",
+        "realesrgan-x4plus-anime-x2",
+        "realesrgan-x4plus-anime-x3",
     }
     assert set(BUILTIN_ONNX_MODELS.keys()) == expected
+
+
+# ---------------------------------------------------------------------------
+# El lookup estricto por escala
+#
+# Es la guarda contra un fallo silencioso: realesrgan-x4plus ahora acepta 2x, pero su
+# grafo ONNX base es x4. Devolverlo para un pedido de 2x entregaria un video al doble
+# del tamano pedido, sin error, sin log y sin nada afuera que lo delate.
+# ---------------------------------------------------------------------------
+
+
+def test_the_base_graph_is_refused_for_a_scale_it_does_not_produce() -> None:
+    assert get_builtin_onnx_model("realesrgan-x4plus", 4) is not None
+    assert get_builtin_onnx_model("realesrgan-x4plus", 4).scale == 4
+
+
+def test_a_derived_scale_resolves_to_its_own_graph() -> None:
+    model = get_builtin_onnx_model("realesrgan-x4plus", 2)
+
+    assert model is not None
+    assert model.scale == 2
+    assert model.filename == "realesrgan-x4plus-x2-uint8.onnx"
+
+
+def test_a_scale_with_no_graph_returns_none_instead_of_the_wrong_one() -> None:
+    # 8x no existe para ningun builtin. Devolver el grafo x4 daria la mitad del tamano
+    # pedido; None manda el ruteo a ncnn, que al menos falla fuerte o resuelve bien.
+    assert get_builtin_onnx_model("realesrgan-x4plus", 8) is None
+
+
+def test_a_model_whose_engine_name_already_carries_the_scale_still_resolves() -> None:
+    # animevideov3 nombra la escala en el propio engine_name, sin sufijo extra.
+    model = get_builtin_onnx_model("realesr-animevideov3-x3", 3)
+
+    assert model is not None
+    assert model.scale == 3
+
+
+def test_a_mismatched_scale_on_a_self_named_model_is_refused() -> None:
+    assert get_builtin_onnx_model("realesr-animevideov3-x3", 2) is None
+
+
+def test_without_a_scale_the_lookup_keeps_its_historical_behavior() -> None:
+    # Compatibilidad: los llamadores viejos que no pasan escala siguen viendo la
+    # entrada por nombre. Es permisivo a proposito, y por eso el pipeline SI pasa
+    # la escala.
+    model = get_builtin_onnx_model("realesrgan-x4plus")
+
+    assert model is not None
+    assert model.scale == 4
 
 
 def test_get_builtin_onnx_model_returns_scale_and_filename() -> None:
@@ -150,3 +209,33 @@ def test_settings_rejects_invalid_upscale_backend(tmp_path) -> None:
 def test_settings_defaults_upscale_backend_to_auto(tmp_path) -> None:
     settings = Settings(_env_file=None, RUNTIME_DIR=str(tmp_path))
     assert settings.upscale_backend == UPSCALE_BACKEND_AUTO
+
+
+# ---------------------------------------------------------------------------
+# Las escalas que ncnn hace BIEN
+#
+# El binario FALLA EN SILENCIO: con -n realesrgan-x4plus -s 2 sale con codigo 0 y escribe
+# un archivo con las dimensiones exactas pedidas, pero magnifica solo un cuadrante. Una
+# fuente 256x256 con cuatro cuadrantes de colores distintos sale 512x512 con los cuatro
+# AZULES; con -s 4 los cuatro colores salen bien. Chequear dimensiones no alcanza.
+# ---------------------------------------------------------------------------
+
+
+def test_the_x4_native_models_only_do_four_on_ncnn() -> None:
+    assert ncnn_produces_correct_output("realesrgan-x4plus", 4) is True
+    assert ncnn_produces_correct_output("realesrgan-x4plus", 2) is False
+    assert ncnn_produces_correct_output("realesrgan-x4plus", 3) is False
+    assert ncnn_produces_correct_output("realesrgan-x4plus-anime", 2) is False
+
+
+def test_the_per_scale_models_are_native_at_their_own_scale() -> None:
+    # animevideov3 trae un .param/.bin por escala, asi que cada uno es nativo.
+    assert ncnn_produces_correct_output("realesr-animevideov3-x2", 2) is True
+    assert ncnn_produces_correct_output("realesr-animevideov3-x3", 3) is True
+    assert ncnn_produces_correct_output("realesr-animevideov3-x4", 4) is True
+
+
+def test_an_unknown_model_is_assumed_correct() -> None:
+    # Los modelos custom del usuario se resuelven por otro camino y no pasan por la
+    # tabla; asumirlos rotos los bloquearia sin motivo.
+    assert ncnn_produces_correct_output("un-modelo-del-usuario", 2) is True

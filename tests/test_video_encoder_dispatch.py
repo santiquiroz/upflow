@@ -154,7 +154,7 @@ class _FakeOnnxVideoEngine:
     def has_gpu_execution_provider(self) -> bool:
         return True
 
-    def builtin_onnx_available(self, engine_model_name: str) -> bool:
+    def builtin_onnx_available(self, engine_model_name: str, scale: int | None = None) -> bool:
         return True
 
 

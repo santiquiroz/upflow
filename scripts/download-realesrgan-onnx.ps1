@@ -25,7 +25,11 @@ $expectedOnnx = @(
     'realesr-animevideov3-x3-uint8.onnx',
     'realesr-animevideov3-x4-uint8.onnx',
     'realesrgan-x4plus-uint8.onnx',
-    'realesrgan-x4plus-anime-uint8.onnx'
+    'realesrgan-x4plus-x2-uint8.onnx',
+    'realesrgan-x4plus-x3-uint8.onnx',
+    'realesrgan-x4plus-anime-uint8.onnx',
+    'realesrgan-x4plus-anime-x2-uint8.onnx',
+    'realesrgan-x4plus-anime-x3-uint8.onnx'
 )
 
 $missingOnnx = $expectedOnnx | Where-Object { -not (Test-Path (Join-Path $vendorDir $_)) }
