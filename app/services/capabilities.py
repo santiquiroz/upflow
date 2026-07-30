@@ -163,10 +163,10 @@ CATALOG: tuple[Capability, ...] = (
         id="audio.transcribe",
         domain="audio",
         label_key="capability.audio.transcribe",
-        provisioning="none",
-        job_kind=None,
+        provisioning="registry",
+        job_kind="transcribe",
         strategies=("model",),
-        unavailable_reason_key="capability.reason.transcribe",
+        requirements=(RegistryRequirement((ModelKind.asr_onnx,)),),
     ),
     Capability(
         id="audio.stems",

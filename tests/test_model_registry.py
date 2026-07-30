@@ -325,14 +325,54 @@ def test_valid_json_with_wrong_schema_is_backed_up_and_reseeded(tmp_path: Path) 
     assert_recovers_from_corrupt_file(tmp_path, json.dumps([{"foo": "bar"}]))
 
 
-def test_valid_json_with_bad_enum_value_is_backed_up_and_reseeded(tmp_path: Path) -> None:
+def test_one_entry_with_a_bad_enum_is_skipped_and_the_rest_survive(tmp_path: Path) -> None:
+    """CAMBIO DE COMPORTAMIENTO deliberado.
+
+    Antes, una sola entrada con un enum desconocido hacia respaldar el registro
+    COMPLETO y resembrar builtins, o sea el usuario perdia todos sus modelos
+    instalados por una entrada que el codigo no entiende.
+
+    Eso importa por las versiones: ModelKind se PERSISTE, asi que una version que
+    agrega un kind (por ejemplo asr-onnx para reconocimiento de voz) deja entradas
+    que una version anterior no sabe leer. Con el comportamiento viejo, volver atras
+    de version vaciaba el registro.
+
+    Ahora la entrada ilegible se salta y las demas sobreviven.
+    """
     entry = make_onnx_entry()
     registry_path = tmp_path / "runtime" / "models" / "registry.json"
     settings = make_settings(tmp_path)
     ModelRegistry(settings).register(entry)
     raw = json.loads(registry_path.read_text(encoding="utf-8"))
-    raw[0]["kind"] = "not-a-kind"
-    assert_recovers_from_corrupt_file(tmp_path, json.dumps(raw))
+    # Se corrompe la entrada del USUARIO y no un builtin: los builtins se resiembran
+    # del catalogo, asi que volverian igual y el test no probaria nada.
+    installed = next(item for item in raw if item["id"] == entry.id)
+    installed["kind"] = "not-a-kind"
+    seed_corrupt_registry(settings, json.dumps(raw))
+
+    registry = ModelRegistry(settings)
+
+    ids = {item.id for item in registry.list()}
+    assert entry.id not in ids
+    # Y los builtins, que si se pudieron leer, siguen ahi.
+    assert CATALOG_IDS <= ids
+    # No se respaldo nada: el archivo no estaba corrupto, una entrada lo estaba.
+    assert list(settings.models_path.glob("registry.json.corrupt-*")) == []
+
+
+def test_a_registry_where_every_entry_is_unreadable_is_backed_up(tmp_path: Path) -> None:
+    # Si NINGUNA entrada se pudo leer, el archivo si esta roto de verdad y hay que
+    # conservar una copia para poder mirarla despues.
+    content = json.dumps([{"id": "x", "kind": "not-a-kind"}])
+    settings = make_settings(tmp_path)
+    seed_corrupt_registry(settings, content)
+
+    registry = ModelRegistry(settings)
+
+    assert {item.id for item in registry.list()} == CATALOG_IDS
+    backups = list(settings.models_path.glob("registry.json.corrupt-*"))
+    assert len(backups) == 1
+    assert backups[0].read_text(encoding="utf-8") == content
 
 
 def test_corrupt_recovery_persists_fresh_registry(tmp_path: Path) -> None:

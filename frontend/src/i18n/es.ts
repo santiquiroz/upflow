@@ -160,9 +160,6 @@ export const es = {
     "Necesita un modelo de reconocimiento de voz más el paso de sincronizado que " +
     "convierte la transcripción en una pista de subtítulos. La transcripción va " +
     "primero: los subtítulos son ese resultado, alineado y muxeado al contenedor.",
-  "capability.reason.transcribe":
-    "Necesita un modelo de reconocimiento de voz. La idea es que se pueda buscar " +
-    "como cualquier otro modelo, no cablear un motor fijo.",
   "capability.reason.stems":
     "Necesita un modelo de separación de stems y un motor de inferencia que la app " +
     "no incluye hoy. Va a ser buscable como cualquier otro modelo: Demucs es la " +

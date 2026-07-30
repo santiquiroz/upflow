@@ -166,9 +166,6 @@ export const en = {
     "Needs a speech recognition model plus the timing pass that turns the " +
     "transcript into a subtitle track. Transcription comes first: subtitles are " +
     "that result, aligned and muxed into the container.",
-  "capability.reason.transcribe":
-    "Needs a speech recognition model. The plan is to make it searchable like any " +
-    "other model, not to hard-wire one engine.",
   "capability.reason.stems":
     "Needs a stem separation model and an inference engine the app does not " +
     "include today. It will be searchable like any other model: Demucs is the " +

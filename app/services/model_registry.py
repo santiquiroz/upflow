@@ -24,6 +24,10 @@ class ModelKind(str, Enum):
     builtin_ncnn = "builtin-ncnn"
     onnx = "onnx"
     diffusion_onnx = "diffusion-onnx"
+    # Reconocimiento de voz: el par encoder/decoder de un seq2seq exportado.
+    # Se persiste, asi que una version anterior no va a saber leerlo -- por eso
+    # _parse_entries SALTA la entrada en vez de invalidar el registro entero.
+    asr_onnx = "asr-onnx"
 
 
 class ModelStatus(str, Enum):
@@ -168,10 +172,43 @@ class ModelRegistry:
             return {}
         try:
             raw = json.loads(self._registry_path.read_text(encoding="utf-8"))
-            return {item["id"]: _entry_from_json_dict(item) for item in raw}
-        except (json.JSONDecodeError, KeyError, ValueError, TypeError) as exc:
+            if not isinstance(raw, list):
+                raise TypeError(f"expected a list of entries, got {type(raw).__name__}")
+        except (json.JSONDecodeError, TypeError) as exc:
+            # El ARCHIVO no se puede leer: ahi si hay que respaldarlo y resembrar.
             self._backup_corrupt_registry(exc)
             return {}
+        return self._parse_entries(raw)
+
+    def _parse_entries(self, raw: list[Any]) -> dict[str, ModelEntry]:
+        """Una entrada ilegible se SALTA; no invalida el archivo entero.
+
+        Importa por las versiones: ModelKind se persiste, asi que una version nueva
+        que agrega un kind deja entradas que la anterior no sabe leer. Tratar eso
+        como archivo corrupto renombraba el registro completo y el usuario perdia
+        TODOS sus modelos instalados por una sola entrada que no entiende.
+        """
+        entries: dict[str, ModelEntry] = {}
+        last_error: Exception | None = None
+        for item in raw:
+            try:
+                entry = _entry_from_json_dict(item)
+            except (KeyError, ValueError, TypeError) as exc:
+                last_error = exc
+                logger.warning(
+                    "Skipping unreadable model registry entry %r: %s",
+                    item.get("id") if isinstance(item, dict) else item,
+                    exc,
+                )
+                continue
+            entries[entry.id] = entry
+
+        # Si NINGUNA entrada se pudo leer, el archivo esta roto de verdad: se
+        # respalda para poder mirarlo despues. Con al menos una entrada buena, en
+        # cambio, saltar las malas conserva lo que sirve.
+        if raw and not entries and last_error is not None:
+            self._backup_corrupt_registry(last_error)
+        return entries
 
     def _backup_corrupt_registry(self, exc: Exception) -> None:
         timestamp = utc_now().strftime("%Y%m%dT%H%M%S%f")
