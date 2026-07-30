@@ -6,7 +6,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from app.services.fetch.options import FetchPlan
+from app.services.fetch.options import (
+    EXTRACTOR_RETRIES,
+    SLEEP_BETWEEN_REQUESTS_SECONDS,
+    FetchPlan,
+)
 
 # Capa fina sobre yt_dlp. Todo lo que decide QUE pedir vive en options.py; aca solo se
 # ejecuta, se reporta progreso y se cancela.
@@ -118,7 +122,18 @@ def probe(url: str) -> MediaInfo:
     tambien lo que hace visible que una URL es una playlist de 200 items.
     """
     yt_dlp = _require_yt_dlp()
-    options = {"quiet": True, "no_warnings": True, "skip_download": True, "noprogress": True}
+    options = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "noprogress": True,
+        # El probe cuenta para el limite de pedidos del sitio igual que la descarga.
+        # Sin la pausa aca, mirar tres URLs seguidas alcanzaba para que YouTube cortara
+        # la sesion por una hora -- pasó probando la app.
+        "sleep_interval_requests": SLEEP_BETWEEN_REQUESTS_SECONDS,
+        "extractor_retries": EXTRACTOR_RETRIES,
+        "color": "no_color",
+    }
     with yt_dlp.YoutubeDL(options) as ydl:
         info = ydl.extract_info(url, download=False)
 

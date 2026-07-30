@@ -999,6 +999,10 @@ def download_job_to_response(job: DownloadJob) -> DownloadJobResponse:
         # Solo el NOMBRE: la ruta absoluta expondria la estructura de directorios del
         # servidor sin darle nada util a quien la lee.
         output_files=[path.name for path in job.output_paths],
+        # El DIRECTORIO si viaja (a diferencia de las rutas completas por archivo): es
+        # la carpeta que el usuario ya ve en Ajustes, y sin ella la UI decia el nombre
+        # del archivo sin decir donde buscarlo.
+        output_directory=str(job.output_paths[0].parent) if job.output_paths else "",
         error=job.error,
         owner_id=job.owner_id,
     )

@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Download as DownloadIcon, Loader2, Music, Video } from "lucide-react";
+import { Download as DownloadIcon, FolderOpen, Loader2, Music, Video } from "lucide-react";
 import { useState } from "react";
+import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import { DeterminateProgressBar } from "../components/DeterminateProgressBar";
 import { IndeterminateProgressBar } from "../components/IndeterminateProgressBar";
 import type { DownloadJob, MediaProbe } from "../lib/apiTypes";
@@ -58,10 +59,18 @@ function JobProgress({ job, onCancel }: { job: DownloadJob; onCancel: () => void
       )}
 
       {job.status === "completed" && job.outputFiles.length > 0 && (
-        <span className="text-xs text-text-dim">
-          Listo en tus archivos: {job.outputFiles.join(", ")} — ya podés escalarlo o limpiarle
-          el audio desde Enhance.
-        </span>
+        <div className="flex flex-col gap-1">
+          <span className="text-xs text-text-dim">
+            {job.outputFiles.join(", ")} — ya podés escalarlo o limpiarle el audio desde Enhance.
+          </span>
+          {/* La carpeta, no solo el nombre: decir el nombre sin decir donde quedo
+              obliga a salir a buscarlo. */}
+          {job.outputDirectory && (
+            <span className="flex items-center gap-1.5 font-mono-tabular text-xs text-text-faint">
+              <FolderOpen className="h-3 w-3" /> {job.outputDirectory}
+            </span>
+          )}
+        </div>
       )}
 
       {job.error && <span className="text-xs text-danger">{job.error}</span>}
@@ -82,7 +91,18 @@ export function DownloadPage() {
   const [playlistLimit, setPlaylistLimit] = useState(10);
   const [jobId, setJobId] = useState<string | null>(null);
 
-  const probe = useMutation({ mutationFn: () => probeMedia({ url }) });
+  // Automatico y no un boton: las calidades solo pueden reflejar la realidad si el
+  // probe corrio, y con un boton manual la lista se ve "quemada" cuando nadie lo toca.
+  // Con debounce para no pedirle al sitio una consulta por cada tecla -- ese exceso es
+  // justo lo que hace que YouTube corte la sesion por una hora.
+  const settledUrl = useDebouncedValue(url, 700);
+  const probe = useQuery({
+    queryKey: ["download-probe", settledUrl],
+    queryFn: () => probeMedia({ url: settledUrl }),
+    enabled: isProbablyUrl(settledUrl),
+    retry: false,
+    staleTime: 5 * 60 * 1000,
+  });
 
   const create = useMutation({
     mutationFn: () =>
@@ -131,15 +151,12 @@ export function DownloadPage() {
                 placeholder="https://…"
                 className="flex-1 rounded border border-border bg-surface px-3 py-2 text-sm text-text"
               />
-              <button
-                type="button"
-                onClick={() => probe.mutate()}
-                disabled={!urlLooksValid || probe.isPending}
-                className="rounded border px-3 py-1.5 text-sm transition-[background-color,border-color] duration-fast disabled:opacity-50 disabled:cursor-not-allowed border-border bg-surface text-text-dim hover:border-text-faint"
-              >
-                {probe.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Ver qué hay"}
-              </button>
             </div>
+            {probe.isFetching && (
+              <span className="flex items-center gap-1.5 text-xs text-text-dim">
+                <Loader2 className="h-3 w-3 animate-spin" /> Viendo qué hay…
+              </span>
+            )}
             {probe.isError && (
               <span className="text-xs text-danger">{(probe.error as Error).message}</span>
             )}

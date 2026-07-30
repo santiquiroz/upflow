@@ -385,6 +385,9 @@ class DownloadJobResponse(BaseModel):
     # Los nombres de archivo producidos. Son la entrada del pipeline de mejora, que es
     # el punto de tener esto adentro de Upflow y no al lado.
     output_files: list[str] = Field(default_factory=list, serialization_alias="outputFiles")
+    # Donde quedaron. Es configuracion que el usuario ya controla desde Ajustes, no una
+    # fuga: sin esto la UI decia el nombre del archivo y no donde buscarlo.
+    output_directory: str = Field(default="", serialization_alias="outputDirectory")
     error: str | None = None
     owner_id: str | None = Field(default=None, serialization_alias="ownerId")
 

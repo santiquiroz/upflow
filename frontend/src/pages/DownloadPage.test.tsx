@@ -47,6 +47,7 @@ function makeJob(overrides: Partial<DownloadJob> = {}): DownloadJob {
     downloadedBytes: 1024,
     totalBytes: 2048,
     outputFiles: [],
+    outputDirectory: "",
     error: null,
     ownerId: null,
     ...overrides,
@@ -83,12 +84,10 @@ describe("DownloadPage", () => {
     expect(screen.getByRole("button", { name: /Descargar/i })).toBeEnabled();
   });
 
-  it("muestra qué hay en la URL antes de comprometerse", async () => {
+  it("consulta la URL sola, sin que haya que tocar nada", async () => {
     vi.mocked(downloadService.probeMedia).mockResolvedValue(makeProbe());
     renderPage();
     typeUrl("https://youtube.com/watch?v=x");
-
-    fireEvent.click(screen.getByRole("button", { name: /Ver qué hay/i }));
 
     expect(await screen.findByText("Big Buck Bunny")).toBeInTheDocument();
     // 635s -> 10:35, y el sitio del que viene.
@@ -103,7 +102,6 @@ describe("DownloadPage", () => {
     );
     renderPage();
     typeUrl("https://youtube.com/playlist?list=x");
-    fireEvent.click(screen.getByRole("button", { name: /Ver qué hay/i }));
 
     expect(await screen.findByText(/lista de 200 elementos/i)).toBeInTheDocument();
     expect(screen.getByText("1")).toBeInTheDocument();
@@ -115,7 +113,6 @@ describe("DownloadPage", () => {
     );
     renderPage();
     typeUrl("https://youtube.com/watch?v=x");
-    fireEvent.click(screen.getByRole("button", { name: /Ver qué hay/i }));
 
     await screen.findByText("Big Buck Bunny");
 
@@ -163,8 +160,6 @@ describe("DownloadPage", () => {
     renderPage();
     typeUrl("https://vimeo.com/1");
 
-    fireEvent.click(screen.getByRole("button", { name: /Ver qué hay/i }));
-
     expect(await screen.findByText(/401/)).toBeInTheDocument();
   });
 
@@ -210,5 +205,47 @@ describe("DownloadPage", () => {
     fireEvent.click(cancelButton);
 
     await waitFor(() => expect(downloadService.cancelDownloadJob).toHaveBeenCalled());
+  });
+});
+
+describe("DownloadPage — lo que faltaba", () => {
+  it("dice en qué carpeta quedó el archivo", async () => {
+    // Decir el nombre sin decir dónde obliga a salir a buscarlo. Fue lo primero que se
+    // notó usándolo de verdad.
+    vi.mocked(downloadService.createDownloadJob).mockResolvedValue(makeJob());
+    vi.mocked(downloadService.getDownloadJob).mockResolvedValue(
+      makeJob({
+        status: "completed",
+        outputFiles: ["bunny.mp4"],
+        outputDirectory: String.raw`C:\litellm\uploads`,
+      }),
+    );
+    renderPage();
+    typeUrl("https://youtube.com/watch?v=x");
+    fireEvent.click(screen.getByRole("button", { name: /Descargar/i }));
+
+    expect(await screen.findByText(/litellm/)).toBeInTheDocument();
+  });
+
+  it("no consulta el sitio por cada tecla", async () => {
+    // Una consulta por pulsación es exactamente cómo se llega al "rate-limited por una
+    // hora" que apareció usándolo.
+    vi.mocked(downloadService.probeMedia).mockResolvedValue(makeProbe());
+    renderPage();
+
+    typeUrl("https://youtube.com/watch?v=");
+    typeUrl("https://youtube.com/watch?v=a");
+    typeUrl("https://youtube.com/watch?v=ab");
+
+    await screen.findByText("Big Buck Bunny");
+    expect(vi.mocked(downloadService.probeMedia).mock.calls.length).toBeLessThan(3);
+  });
+
+  it("no consulta nada mientras la dirección no parezca una dirección", () => {
+    renderPage();
+
+    typeUrl("holaaa");
+
+    expect(downloadService.probeMedia).not.toHaveBeenCalled();
   });
 });

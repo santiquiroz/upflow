@@ -623,8 +623,10 @@ export interface DownloadJob {
   progressPct: number | null;
   downloadedBytes: number;
   totalBytes: number | null;
-  /** Solo nombres: la ruta del servidor nunca sale. */
+  /** Solo nombres, uno por archivo. */
   outputFiles: string[];
+  /** Donde quedaron. Vacio mientras no haya archivos. */
+  outputDirectory: string;
   error: string | null;
   ownerId: string | null;
 }

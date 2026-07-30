@@ -28,6 +28,16 @@ ALLOWED_MAX_HEIGHTS: tuple[int, ...] = (360, 480, 720, 1080, 1440, 2160)
 # videos sin querer -- la queja mas repetida en los foros de descargadores.
 MAX_PLAYLIST_ITEMS = 50
 
+# Pausa entre pedidos. NO es prudencia teorica: sin esto YouTube corta la sesion con
+# "the current session has been rate-limited by YouTube for up to an hour" -- se
+# reprodujo probando la app, y una hora de espera por unos pocos pedidos seguidos es
+# mucho peor que un segundo de pausa entre ellos.
+SLEEP_BETWEEN_REQUESTS_SECONDS = 1
+
+# Reintentos ante errores conocidos del extractor. yt-dlp ya trae 3 por defecto; se
+# declara explicito para que se vea que es una decision y no un descuido.
+EXTRACTOR_RETRIES = 3
+
 
 @dataclass(frozen=True, slots=True)
 class FetchRequest:
@@ -100,6 +110,13 @@ def build_plan(request: FetchRequest, ffmpeg_bin_dir: Path) -> FetchPlan:
         "noprogress": True,
         "quiet": True,
         "no_warnings": True,
+        # Ver la nota de SLEEP_BETWEEN_REQUESTS_SECONDS: sin la pausa, YouTube corta la
+        # sesion por una hora.
+        "sleep_interval_requests": SLEEP_BETWEEN_REQUESTS_SECONDS,
+        "extractor_retries": EXTRACTOR_RETRIES,
+        # Sin colores ANSI: yt-dlp los mete en los mensajes de error y llegaban crudos
+        # a la pantalla ("[0;31mERROR: [0m...").
+        "color": "no_color",
         # Metadata y subtitulos por defecto: es lo que la gente espera que pase, y
         # pedirlo por separado es la friccion que hace que los descargadores se sientan
         # burocraticos.

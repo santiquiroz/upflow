@@ -143,11 +143,33 @@ def test_cancelling_an_unknown_job_is_404(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_the_response_never_leaks_server_paths(tmp_path: Path):
-    """Solo el nombre del archivo.
+def test_per_file_entries_are_names_and_never_paths(tmp_path: Path):
+    """La lista de archivos lleva NOMBRES, uno por archivo.
 
-    La ruta absoluta expone la estructura de directorios del servidor sin darle nada
-    util a quien la lee.
+    Antes este test afirmaba que la respuesta no contenía ninguna ruta del servidor, y
+    lo hacía con `str(tmp_path) not in str(body)`. Esa aserción es CIEGA en Windows:
+    `str(dict)` duplica los backslashes, así que la ruta con escape simple nunca es
+    subcadena del dict con escape doble. Pasaba por accidente y no habría detectado una
+    fuga. Ahora se comprueba campo por campo.
+    """
+    client, manager = make_client(tmp_path)
+    job_id = client.post("/api/v1/download/jobs", json={"url": "https://example.com/v"}).json()["id"]
+    manager.get_job(job_id).output_paths = [tmp_path / "sub" / "video.mp4", tmp_path / "sub" / "b.mp4"]
+
+    body = client.get(f"/api/v1/download/jobs/{job_id}").json()
+
+    assert body["outputFiles"] == ["video.mp4", "b.mp4"]
+    for name in body["outputFiles"]:
+        assert "/" not in name and "\\" not in name
+
+
+def test_the_output_directory_is_reported_on_purpose(tmp_path: Path):
+    """El directorio SÍ viaja, y es una decisión, no un descuido.
+
+    Decir el nombre del archivo sin decir dónde quedó vuelve la descarga inútil: hay que
+    salir a buscarlo. Es la carpeta que el usuario ya ve en Ajustes, en su propia
+    máquina, así que no revela nada que no controle. Las rutas por archivo siguen
+    afuera.
     """
     client, manager = make_client(tmp_path)
     job_id = client.post("/api/v1/download/jobs", json={"url": "https://example.com/v"}).json()["id"]
@@ -155,8 +177,15 @@ def test_the_response_never_leaks_server_paths(tmp_path: Path):
 
     body = client.get(f"/api/v1/download/jobs/{job_id}").json()
 
-    assert body["outputFiles"] == ["video.mp4"]
-    assert str(tmp_path) not in str(body)
+    assert body["outputDirectory"] == str(tmp_path / "sub")
+
+
+def test_a_job_with_no_files_reports_no_directory(tmp_path: Path):
+    # Un job en cola no tiene dónde, y inventar una carpeta sería adivinar.
+    client, _ = make_client(tmp_path)
+    job_id = client.post("/api/v1/download/jobs", json={"url": "https://example.com/v"}).json()["id"]
+
+    assert client.get(f"/api/v1/download/jobs/{job_id}").json()["outputDirectory"] == ""
 
 
 # ---------------------------------------------------------------------------
