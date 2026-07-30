@@ -10,6 +10,7 @@ const SURFACE_BY_CAPABILITY: Record<string, string> = {
   "audio.denoise": "/audio",
   "audio.restore": "/audio",
   "audio.voice": "/audio",
+  "audio.transcribe": "/transcribe",
   "generate.textToImage": "/generate",
 };
 

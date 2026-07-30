@@ -7,17 +7,30 @@ import { AuthProvider } from "./hooks/useAuth";
 import * as authService from "./services/auth";
 import type { MeResponse } from "./lib/apiTypes";
 import { ApiError } from "./lib/api";
+import { en } from "./i18n/en";
+import * as transcribeService from "./services/transcribe";
 
 vi.mock("./services/auth", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./services/auth")>();
   return { ...actual, getMe: vi.fn() };
 });
 
-function renderApp() {
+vi.mock("./services/transcribe", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./services/transcribe")>();
+  return {
+    ...actual,
+    fetchInstalledAsrModels: vi.fn(),
+    fetchTranscribeDevices: vi.fn(),
+    searchAsrModels: vi.fn(),
+  };
+});
+
+function renderApp(initialEntry = "/") {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
+      <MemoryRouter initialEntries={[initialEntry]}>
         <AuthProvider>
           <App />
         </AuthProvider>
@@ -34,6 +47,9 @@ const OFF_MODE_ME: MeResponse = {
 
 afterEach(() => {
   vi.mocked(authService.getMe).mockReset();
+  vi.mocked(transcribeService.fetchInstalledAsrModels).mockReset();
+  vi.mocked(transcribeService.fetchTranscribeDevices).mockReset();
+  vi.mocked(transcribeService.searchAsrModels).mockReset();
 });
 
 describe("App auth gate", () => {
@@ -66,5 +82,25 @@ describe("App auth gate", () => {
     renderApp();
 
     await waitFor(() => expect(screen.getByRole("heading", { name: /cambiá tu contraseña/i })).toBeInTheDocument());
+  });
+
+  it("renders the transcription page at /transcribe", async () => {
+    vi.mocked(authService.getMe).mockResolvedValue(OFF_MODE_ME);
+    vi.mocked(transcribeService.fetchInstalledAsrModels).mockResolvedValue([]);
+    vi.mocked(transcribeService.fetchTranscribeDevices).mockResolvedValue({
+      devices: [],
+      defaultDeviceId: "cpu",
+    });
+    vi.mocked(transcribeService.searchAsrModels).mockResolvedValue({
+      results: [],
+    });
+
+    renderApp("/transcribe");
+
+    expect(
+      await screen.findByRole("heading", {
+        name: en["transcribe.page.title"],
+      }),
+    ).toBeInTheDocument();
   });
 });

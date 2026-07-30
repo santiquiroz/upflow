@@ -281,4 +281,76 @@ export const es = {
   "compat.asr.noWeights":
     "No parece un modelo de reconocimiento de voz instalable: le falta el par " +
     "encoder/decoder exportado o los pesos de PyTorch.",
+
+  "transcribe.page.title": "Transcribir",
+  "transcribe.page.description":
+    "Convertí un archivo de audio en texto editable con un modelo de reconocimiento de voz instalado.",
+  "transcribe.file.drop": "Arrastrá un audio acá o hacé clic para buscarlo",
+  "transcribe.file.formats": "WAV, MP3, FLAC, M4A, OGG y OPUS",
+  "transcribe.file.inputLabel": "Elegir un audio para transcribir",
+  "transcribe.model.label": "Modelo de reconocimiento de voz",
+  "transcribe.language.label": "Idioma del audio",
+  "transcribe.language.auto": "Detectar automáticamente",
+  "transcribe.language.es": "Español (es)",
+  "transcribe.language.en": "Inglés (en)",
+  "transcribe.language.pt": "Portugués (pt)",
+  "transcribe.language.fr": "Francés (fr)",
+  "transcribe.language.de": "Alemán (de)",
+  "transcribe.language.it": "Italiano (it)",
+  "transcribe.device.label": "Dispositivo",
+  "transcribe.device.loading": "Cargando dispositivos…",
+  "transcribe.device.loadFailed":
+    "No se pudieron cargar los dispositivos. Se usará el predeterminado del backend.",
+  "transcribe.submit": "Transcribir audio",
+  "transcribe.job.waiting": "Esperando un archivo de audio.",
+  "transcribe.job.uploading": "Subiendo el audio…",
+  "transcribe.job.queued": "Transcripción en cola…",
+  "transcribe.job.running": "Transcribiendo el audio…",
+  "transcribe.job.cancel": "Cancelar transcripción",
+  "transcribe.job.cancelled": "La transcripción fue cancelada.",
+  "transcribe.job.failedFallback": "La transcripción falló.",
+  "transcribe.result.title": "Transcripción",
+  "transcribe.result.waiting":
+    "El texto transcripto va a aparecer acá cuando termine el job.",
+  "transcribe.result.empty": "La transcripción terminada está vacía.",
+  "transcribe.result.copy": "Copiar texto",
+  "transcribe.result.copied": "Copiado",
+  "transcribe.result.copyFailed": "No se pudo copiar el texto.",
+  "transcribe.result.download": "Descargar .txt",
+  "transcribe.models.loadingInstalled":
+    "Cargando modelos de reconocimiento de voz instalados…",
+  "transcribe.models.loadInstalledFailed":
+    "No se pudieron cargar los modelos de reconocimiento de voz instalados.",
+  "transcribe.models.noneTitle": "No hay ningún modelo de transcripción instalado",
+  "transcribe.models.noneDescription":
+    "Buscá abajo en Hugging Face e instalá un modelo de reconocimiento de voz antes de transcribir tu primer audio.",
+  "transcribe.models.title": "Modelos de reconocimiento de voz",
+  "transcribe.models.description":
+    "Buscá un modelo ASR en Hugging Face e instalalo localmente.",
+  "transcribe.models.searchLabel":
+    "Buscar modelos de reconocimiento de voz en Hugging Face",
+  "transcribe.models.searchPlaceholder":
+    "Buscar modelos de reconocimiento de voz…",
+  "transcribe.models.searching": "Buscando en Hugging Face…",
+  "transcribe.models.searchFailed":
+    "No se pudieron buscar modelos de reconocimiento de voz en Hugging Face.",
+  "transcribe.models.noResults":
+    "No se encontraron modelos de reconocimiento de voz.",
+  "transcribe.models.author": "Por {{author}}",
+  "transcribe.models.downloads": "Descargas",
+  "transcribe.models.likes": "Me gusta",
+  "transcribe.models.compat.readyOnnx": "ONNX listo",
+  "transcribe.models.compat.needsConversion": "Requiere conversión",
+  "transcribe.models.compat.gated": "Acceso restringido",
+  "transcribe.models.compat.incompatible": "Incompatible",
+  "transcribe.models.compat.unknown": "Compatibilidad desconocida",
+  "transcribe.models.install": "Instalar",
+  "transcribe.models.installed": "Instalado",
+  "transcribe.models.install.starting": "Iniciando instalación…",
+  "transcribe.models.install.queued": "Instalación en cola…",
+  "transcribe.models.install.downloading": "Descargando modelo…",
+  "transcribe.models.install.working": "Instalando modelo…",
+  "transcribe.models.install.failedFallback":
+    "La instalación del modelo falló.",
+  "transcribe.models.retry": "Reintentar",
 } as const;

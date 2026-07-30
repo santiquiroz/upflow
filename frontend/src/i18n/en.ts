@@ -287,4 +287,75 @@ export const en = {
   "compat.asr.noWeights":
     "This does not look like an installable speech recognition model: it is " +
     "missing either the exported encoder/decoder pair or the PyTorch weights.",
+
+  "transcribe.page.title": "Transcribe",
+  "transcribe.page.description":
+    "Turn an audio file into editable text with an installed speech recognition model.",
+  "transcribe.file.drop": "Drop an audio file here or click to browse",
+  "transcribe.file.formats": "WAV, MP3, FLAC, M4A, OGG, and OPUS",
+  "transcribe.file.inputLabel": "Choose an audio file to transcribe",
+  "transcribe.model.label": "Speech recognition model",
+  "transcribe.language.label": "Audio language",
+  "transcribe.language.auto": "Detect automatically",
+  "transcribe.language.es": "Spanish (es)",
+  "transcribe.language.en": "English (en)",
+  "transcribe.language.pt": "Portuguese (pt)",
+  "transcribe.language.fr": "French (fr)",
+  "transcribe.language.de": "German (de)",
+  "transcribe.language.it": "Italian (it)",
+  "transcribe.device.label": "Device",
+  "transcribe.device.loading": "Loading devices…",
+  "transcribe.device.loadFailed":
+    "Could not load devices. The backend default will be used.",
+  "transcribe.submit": "Transcribe audio",
+  "transcribe.job.waiting": "Waiting for an audio file.",
+  "transcribe.job.uploading": "Uploading audio…",
+  "transcribe.job.queued": "Transcription queued…",
+  "transcribe.job.running": "Transcribing audio…",
+  "transcribe.job.cancel": "Cancel transcription",
+  "transcribe.job.cancelled": "The transcription was cancelled.",
+  "transcribe.job.failedFallback": "The transcription failed.",
+  "transcribe.result.title": "Transcription",
+  "transcribe.result.waiting":
+    "The transcribed text will appear here when the job completes.",
+  "transcribe.result.empty": "The completed transcription is empty.",
+  "transcribe.result.copy": "Copy text",
+  "transcribe.result.copied": "Copied",
+  "transcribe.result.copyFailed": "Could not copy the text.",
+  "transcribe.result.download": "Download .txt",
+  "transcribe.models.loadingInstalled":
+    "Loading installed speech recognition models…",
+  "transcribe.models.loadInstalledFailed":
+    "Could not load installed speech recognition models.",
+  "transcribe.models.noneTitle": "No transcription model is installed",
+  "transcribe.models.noneDescription":
+    "Search Hugging Face below and install a speech recognition model before transcribing your first audio file.",
+  "transcribe.models.title": "Speech recognition models",
+  "transcribe.models.description":
+    "Search Hugging Face for an ASR model and install it locally.",
+  "transcribe.models.searchLabel":
+    "Search Hugging Face for speech recognition models",
+  "transcribe.models.searchPlaceholder":
+    "Search speech recognition models…",
+  "transcribe.models.searching": "Searching Hugging Face…",
+  "transcribe.models.searchFailed":
+    "Could not search Hugging Face for speech recognition models.",
+  "transcribe.models.noResults": "No speech recognition models found.",
+  "transcribe.models.author": "By {{author}}",
+  "transcribe.models.downloads": "Downloads",
+  "transcribe.models.likes": "Likes",
+  "transcribe.models.compat.readyOnnx": "ONNX ready",
+  "transcribe.models.compat.needsConversion": "Requires conversion",
+  "transcribe.models.compat.gated": "Restricted access",
+  "transcribe.models.compat.incompatible": "Incompatible",
+  "transcribe.models.compat.unknown": "Compatibility unknown",
+  "transcribe.models.install": "Install",
+  "transcribe.models.installed": "Installed",
+  "transcribe.models.install.starting": "Starting installation…",
+  "transcribe.models.install.queued": "Installation queued…",
+  "transcribe.models.install.downloading": "Downloading model…",
+  "transcribe.models.install.working": "Installing model…",
+  "transcribe.models.install.failedFallback":
+    "The model installation failed.",
+  "transcribe.models.retry": "Try again",
 } as const;

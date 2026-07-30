@@ -32,12 +32,24 @@ describe("surfaceFor", () => {
     );
   });
 
-  it("sends every audio capability to the audio surface", () => {
+  it("sends audio enhancement capabilities to the audio surface", () => {
     for (const id of ["audio.denoise", "audio.restore", "audio.voice"]) {
       expect(surfaceFor(capability({ id, domain: "audio", jobKind: "audio" }))).toBe(
         "/audio",
       );
     }
+  });
+
+  it("sends audio transcription to the transcribe surface", () => {
+    expect(
+      surfaceFor(
+        capability({
+          id: "audio.transcribe",
+          domain: "audio",
+          jobKind: "transcribe",
+        }),
+      ),
+    ).toBe("/transcribe");
   });
 
   it("sends text to image to the generate surface", () => {

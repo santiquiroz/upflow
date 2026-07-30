@@ -5,6 +5,7 @@ import { ForcedPasswordChangeModal } from "./components/ForcedPasswordChangeModa
 import { useAuth } from "./hooks/useAuth";
 import { AudioPage } from "./modules/audio/AudioPage";
 import { GeneratePage } from "./modules/generate/GeneratePage";
+import { TranscribePage } from "./modules/transcribe/TranscribePage";
 import { EnhanceRoute } from "./pages/EnhanceRoute";
 import { LoginPage } from "./pages/LoginPage";
 import { ModelsPage } from "./pages/ModelsPage";
@@ -40,6 +41,7 @@ export function App() {
           <Route path="/enhance" element={<EnhanceRoute />} />
           <Route path="/enhance/:medium" element={<EnhanceRoute />} />
           <Route path="/audio" element={<AudioPage />} />
+          <Route path="/transcribe" element={<TranscribePage />} />
           <Route path="/generate" element={<GeneratePage />} />
           <Route path="/models" element={<ModelsPage />} />
           <Route path="/realtime" element={<RealtimePage />} />

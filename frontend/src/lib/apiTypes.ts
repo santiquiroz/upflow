@@ -563,3 +563,33 @@ export interface EditableSettingStatus {
 export interface EditableSettingsResponse {
   settings: EditableSettingStatus[];
 }
+
+// Mirrors app/schemas.py::TranscribeJobResponse. The transcription text is
+// part of the polled job response; downloadUrl is only the optional .txt copy.
+export interface TranscribeJob {
+  id: string;
+  status: JobStatus;
+  originalFilename: string;
+  modelId: string;
+  language: string | null;
+  device: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  progressPct: number | null;
+  text: string | null;
+  error: string | null;
+  ownerId: string | null;
+  downloadUrl: string | null;
+}
+
+export type AsrInstallStatus = "queued" | "downloading" | "installed" | "error";
+
+export interface AsrInstallStatusResponse {
+  installId: string;
+  repoId: string;
+  status: AsrInstallStatus;
+  progressPct: number | null;
+  modelId: string | null;
+  error: string | null;
+}
