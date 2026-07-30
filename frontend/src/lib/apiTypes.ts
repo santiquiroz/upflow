@@ -306,6 +306,18 @@ export interface PreflightResponse {
   freeRamBytes: number | null;
 }
 
+export interface UpscalerPreflightResponse {
+  repoId: string;
+  compat: CompatVerdict | null;
+  compatReasonKey: string | null;
+  compatReasonParams: Record<string, string>;
+  degraded: boolean;
+  downloadBytes: number | null;
+  devices: DeviceCapacity[];
+  disk: { targetPath: string; freeBytes: number } | null;
+  freeRamBytes: number | null;
+}
+
 export interface HfModelSearchResultResponse {
   id: string;
   author: string | null;

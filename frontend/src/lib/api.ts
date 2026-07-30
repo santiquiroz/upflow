@@ -14,6 +14,7 @@ import type {
   OnnxDiagnosticsResponse,
   ScanOnnxDiagnosticResponse,
   UpscaleBackend,
+  UpscalerPreflightResponse,
   VideoCapabilities,
   VideoEncoder,
   VideoJobResponse,
@@ -267,6 +268,12 @@ export function getVideoCapabilities(): Promise<VideoCapabilities> {
 
 export function searchHfModels(query: string): Promise<ModelSearchResponse> {
   return apiGet<ModelSearchResponse>(`/models/search?q=${encodeURIComponent(query)}`);
+}
+
+export function preflightUpscalerModel(repoId: string): Promise<UpscalerPreflightResponse> {
+  return apiGet<UpscalerPreflightResponse>(
+    `/models/preflight?repoId=${encodeURIComponent(repoId)}`,
+  );
 }
 
 export function installModel(repoId: string): Promise<CreateInstallResponse> {

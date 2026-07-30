@@ -226,4 +226,31 @@ export const es = {
   "video.steps.upscaleRequired":
     "Un job de video siempre reescala, así que ese paso no se puede quitar. " +
     "Volvé a agregarlo para habilitar el botón.",
+
+  // --- pre-flight de modelos de reescalado -----------------------------
+  "upscaler.compat.readyOnnx": "ONNX listo",
+  "upscaler.compat.needsConversion": "Requiere conversión",
+  "upscaler.compat.gated": "Acceso restringido",
+  "upscaler.compat.incompatible": "Incompatible",
+  "upscaler.compat.unknown": "Compatibilidad desconocida",
+  "upscaler.details.hide": "Ocultar detalles",
+  "upscaler.details.show": "Ver detalles",
+  "upscaler.preflight.loading": "Evaluando descarga y capacidad…",
+  "upscaler.capacity.ariaLabel": "Capacidad de instalación medida",
+  "upscaler.capacity.vramUnknown": "VRAM libre desconocida",
+  "upscaler.capacity.vramFree": "{{free}} VRAM libre",
+  "upscaler.capacity.ramLabel": "RAM",
+  "upscaler.capacity.ramFree": "{{free}} libre",
+  "upscaler.capacity.diskLabel": "Disco en {{path}}",
+  "upscaler.capacity.diskFree": "{{free}} libres",
+  "upscaler.capacity.downloadLabel": "Descarga",
+  "upscaler.warnings.ariaLabel": "Avisos de instalación",
+  "upscaler.warning.degraded":
+    "No se pudo evaluar este modelo. Podés instalarlo igual.",
+  "upscaler.warning.gated":
+    "Repo con acceso restringido: necesitás un token de Hugging Face y aceptar la licencia.",
+  "upscaler.warning.incompatibleFallback":
+    "Este repositorio no contiene un modelo de reescalado compatible.",
+  "upscaler.warning.diskLow":
+    "Quedan {{free}} libres en {{path}}; hacen falta aproximadamente {{needed}} para instalarlo.",
 } as const;

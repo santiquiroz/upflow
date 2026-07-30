@@ -232,4 +232,31 @@ export const en = {
   "video.steps.upscaleRequired":
     "A video job always upscales, so the upscale step cannot be removed. Add it " +
     "back to enable the button.",
+
+  // --- upscaler model pre-flight ---------------------------------------
+  "upscaler.compat.readyOnnx": "ONNX ready",
+  "upscaler.compat.needsConversion": "Requires conversion",
+  "upscaler.compat.gated": "Restricted access",
+  "upscaler.compat.incompatible": "Incompatible",
+  "upscaler.compat.unknown": "Compatibility unknown",
+  "upscaler.details.hide": "Hide details",
+  "upscaler.details.show": "View details",
+  "upscaler.preflight.loading": "Evaluating download and capacity…",
+  "upscaler.capacity.ariaLabel": "Measured installation capacity",
+  "upscaler.capacity.vramUnknown": "Available VRAM unknown",
+  "upscaler.capacity.vramFree": "{{free}} VRAM available",
+  "upscaler.capacity.ramLabel": "RAM",
+  "upscaler.capacity.ramFree": "{{free}} available",
+  "upscaler.capacity.diskLabel": "Disk at {{path}}",
+  "upscaler.capacity.diskFree": "{{free}} available",
+  "upscaler.capacity.downloadLabel": "Download",
+  "upscaler.warnings.ariaLabel": "Installation warnings",
+  "upscaler.warning.degraded":
+    "Could not evaluate this model. You can install it anyway.",
+  "upscaler.warning.gated":
+    "Restricted repo: you need a Hugging Face token and to accept the license.",
+  "upscaler.warning.incompatibleFallback":
+    "This repository does not contain a supported upscaler model.",
+  "upscaler.warning.diskLow":
+    "Only {{free}} free on {{path}}; about {{needed}} is required to install it.",
 } as const;
