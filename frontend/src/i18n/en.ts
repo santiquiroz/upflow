@@ -283,4 +283,11 @@ export const en = {
   "generation.strength.label": "Transformation strength",
   "generation.strength.hint":
     "Lower values stay closer to the starting image; higher values move further away.",
+  "compat.asr.readyOnnx":
+    "It ships the exported encoder and decoder: installs directly.",
+  "compat.asr.needsConversion":
+    "It ships PyTorch weights: they get converted to ONNX on install.",
+  "compat.asr.noWeights":
+    "This does not look like an installable speech recognition model: it is " +
+    "missing either the exported encoder/decoder pair or the PyTorch weights.",
 } as const;

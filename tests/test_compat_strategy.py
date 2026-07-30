@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from app.services.compat_strategy import (
+    AsrCompatStrategy,
     GenerationCompatStrategy,
     UpscalerCompatStrategy,
     strategy_for,
@@ -129,6 +130,93 @@ def test_the_suffix_check_is_case_insensitive():
 
 
 # ---------------------------------------------------------------------------
+# La de reconocimiento de voz
+# ---------------------------------------------------------------------------
+
+# Capturado de onnx-community/whisper-tiny.en el 2026-07-29.
+WHISPER_ONNX = (
+    "config.json",
+    "preprocessor_config.json",
+    "generation_config.json",
+    "onnx/encoder_model.onnx",
+    "onnx/decoder_model.onnx",
+    "onnx/decoder_model_merged.onnx",
+)
+# Capturado de openai/whisper-tiny.en el mismo dia.
+WHISPER_TORCH = (
+    "config.json",
+    "preprocessor_config.json",
+    "generation_config.json",
+    "model.safetensors",
+    "flax_model.msgpack",
+)
+
+
+def test_an_exported_asr_repo_installs_direct():
+    verdict, reason = AsrCompatStrategy().classify(WHISPER_ONNX, False)
+    assert verdict == "ready_onnx"
+    assert reason.key == "compat.asr.readyOnnx"
+
+
+def test_an_asr_repo_in_torch_needs_conversion():
+    verdict, reason = AsrCompatStrategy().classify(WHISPER_TORCH, False)
+    assert verdict == "needs_conversion"
+    assert reason.key == "compat.asr.needsConversion"
+
+
+def test_the_encoder_alone_is_not_installable():
+    # Un seq2seq necesita las dos mitades: con el encoder solo no se transcribe.
+    verdict, _reason = AsrCompatStrategy().classify(
+        ("config.json", "onnx/encoder_model.onnx"), False
+    )
+    assert verdict != "ready_onnx"
+
+
+def test_the_decoder_alone_is_not_installable():
+    verdict, _reason = AsrCompatStrategy().classify(
+        ("config.json", "onnx/decoder_model.onnx"), False
+    )
+    assert verdict != "ready_onnx"
+
+
+def test_torch_weights_without_a_preprocessor_are_not_asr():
+    # Sin extractor de features el repo no procesa audio: son pesos de otra cosa.
+    verdict, _reason = AsrCompatStrategy().classify(
+        ("config.json", "model.safetensors"), False
+    )
+    assert verdict == "incompatible"
+
+
+def test_a_preprocessor_without_weights_is_incompatible():
+    verdict, reason = AsrCompatStrategy().classify(
+        ("config.json", "preprocessor_config.json"), False
+    )
+    assert verdict == "incompatible"
+    assert reason.key == "compat.asr.noWeights"
+
+
+def test_the_onnx_pair_wins_over_torch_weights():
+    verdict, _reason = AsrCompatStrategy().classify(WHISPER_ONNX + WHISPER_TORCH, False)
+    assert verdict == "ready_onnx"
+
+
+@pytest.mark.parametrize("gated", [True, "auto"])
+def test_a_gated_asr_repo_is_gated_no_matter_what_it_contains(gated):
+    verdict, reason = AsrCompatStrategy().classify(WHISPER_ONNX, gated)
+    assert verdict == "gated"
+    assert reason.key == "compat.gated"
+
+
+def test_asr_offers_no_install_options():
+    # El export de whisper produce variantes (fp16, int8) pero elegirlas no esta
+    # medido: solo se verifico la fp32 por default. Ofrecer una eleccion no medida
+    # seria prometer algo que no se sabe.
+    options = AsrCompatStrategy().install_options(WHISPER_ONNX)
+    assert options.precisions == ()
+    assert options.checkpoints == ()
+
+
+# ---------------------------------------------------------------------------
 # Resolucion por dominio
 # ---------------------------------------------------------------------------
 
@@ -143,14 +231,18 @@ def test_video_and_image_share_the_upscaler_strategy(domain):
     assert isinstance(strategy_for(domain), UpscalerCompatStrategy)
 
 
+def test_audio_resolves_to_the_asr_strategy():
+    assert isinstance(strategy_for("audio"), AsrCompatStrategy)
+
+
 def test_an_unknown_domain_is_rejected_loudly():
     # Devolver una estrategia por defecto clasificaria un dominio nuevo con las
     # reglas del equivocado, en silencio.
     with pytest.raises(ValueError):
-        strategy_for("audio")
+        strategy_for("inventado")
 
 
 def test_every_strategy_satisfies_the_protocol():
-    for strategy in (GenerationCompatStrategy(), UpscalerCompatStrategy()):
+    for strategy in (GenerationCompatStrategy(), UpscalerCompatStrategy(), AsrCompatStrategy()):
         assert callable(strategy.classify)
         assert callable(strategy.install_options)

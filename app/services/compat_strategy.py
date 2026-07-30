@@ -100,9 +100,62 @@ class UpscalerCompatStrategy:
         return InstallOptions()
 
 
+# Un repo de ASN exportado a ONNX trae el par encoder/decoder bajo onnx/. Eso es
+# especifico del export seq2seq y no se confunde con nada mas.
+_ASR_ENCODER = "onnx/encoder_model"
+_ASR_DECODER = "onnx/decoder_model"
+# El extractor de features: sin esto el repo no procesa audio.
+_ASR_PREPROCESSOR = "preprocessor_config.json"
+_TORCH_WEIGHT_NAMES = ("model.safetensors", "pytorch_model.bin")
+
+
+def _has_prefix(filenames: tuple[str, ...], prefix: str) -> bool:
+    return any(name.startswith(prefix) for name in filenames)
+
+
+class AsrCompatStrategy:
+    """Reconocimiento de voz: transcripcion y, sobre ella, subtitulos.
+
+    Medido el 2026-07-29 (ver el spike de whisper): un repo ya exportado carga y
+    corre sobre DirectML y CPU sin exportar nada, asi que entra por el mismo
+    `ready_onnx` que el resto.
+
+    LIMITE conocido: con solo los nombres de archivo no se puede distinguir un
+    modelo de ASR de otro modelo de audio o de vision -- `preprocessor_config.json`
+    lo tienen varios. El filtro real es el TAG de la busqueda
+    (automatic-speech-recognition), que ya se aplica antes de llegar aca. Esta
+    estrategia responde "se puede instalar", no "es de ASR".
+    """
+
+    def classify(
+        self, filenames: tuple[str, ...], gated: bool | str | None
+    ) -> tuple[CompatVerdict, CompatReason]:
+        if gated:
+            return "gated", CompatReason("compat.gated")
+
+        if _has_prefix(filenames, _ASR_ENCODER) and _has_prefix(filenames, _ASR_DECODER):
+            return "ready_onnx", CompatReason("compat.asr.readyOnnx")
+
+        if _ASR_PREPROCESSOR in filenames and any(
+            name in filenames for name in _TORCH_WEIGHT_NAMES
+        ):
+            return "needs_conversion", CompatReason("compat.asr.needsConversion")
+
+        # Falta el par ONNX Y faltan los pesos de torch: no hay nada que instalar.
+        return "incompatible", CompatReason("compat.asr.noWeights")
+
+    def install_options(self, filenames: tuple[str, ...]) -> InstallOptions:
+        # El export de whisper produce variantes (fp16, int8, quantized) pero
+        # elegirlas todavia no esta medido: el spike solo verifico la fp32 por
+        # default. Ofrecer una eleccion no medida seria prometer algo que no se sabe.
+        return InstallOptions()
+
+
 def strategy_for(domain: str) -> CompatStrategy:
     if domain == "generate":
         return GenerationCompatStrategy()
     if domain in ("video", "image"):
         return UpscalerCompatStrategy()
+    if domain == "audio":
+        return AsrCompatStrategy()
     raise ValueError(f"No hay estrategia de compatibilidad para el dominio {domain!r}.")

@@ -277,4 +277,11 @@ export const es = {
   "generation.strength.label": "Fuerza de transformación",
   "generation.strength.hint":
     "Los valores bajos conservan más la imagen de partida; los altos se alejan más.",
+  "compat.asr.readyOnnx":
+    "Trae el encoder y el decoder ya exportados: se instala directo.",
+  "compat.asr.needsConversion":
+    "Trae pesos en formato de PyTorch: se convierten a ONNX al instalar.",
+  "compat.asr.noWeights":
+    "No parece un modelo de reconocimiento de voz instalable: le falta el par " +
+    "encoder/decoder exportado o los pesos de PyTorch.",
 } as const;
