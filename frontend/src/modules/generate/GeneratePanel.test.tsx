@@ -3,8 +3,16 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { en } from "../../i18n/en";
+import { LocaleProvider } from "../../i18n/LocaleProvider";
 import * as api from "../../lib/api";
-import type { DevicesResponse, GenerationCapabilities, GenerationJob, ModelsResponse } from "../../lib/apiTypes";
+import type {
+  DevicesResponse,
+  GenerationCapabilities,
+  GenerationJob,
+  InitImageResponse,
+  ModelsResponse,
+} from "../../lib/apiTypes";
 import * as generationService from "../../services/generation";
 import { GeneratePanel } from "./GeneratePanel";
 
@@ -20,6 +28,7 @@ vi.mock("../../services/generation", async (importOriginal) => {
     createGenerationJob: vi.fn(),
     getGenerationJob: vi.fn(),
     fetchGenerationCapabilities: vi.fn(),
+    uploadGenerationInitImage: vi.fn(),
   };
 });
 
@@ -96,6 +105,13 @@ const BASE_JOB: GenerationJob = {
   downloadUrl: "/api/v1/generation/jobs/gen-1/download",
 };
 
+const INIT_IMAGE: InitImageResponse = {
+  initImageToken: "a1b2c3",
+  originalFilename: "starting-photo.png",
+  width: 1024,
+  height: 768,
+};
+
 function renderPanel(
   capabilities: GenerationCapabilities = AVAILABLE_CAPABILITIES,
   devices: DevicesResponse = DEVICES,
@@ -107,7 +123,9 @@ function renderPanel(
   function Wrapper({ children }: { children: ReactNode }) {
     return (
       <QueryClientProvider client={queryClient}>
-        <MemoryRouter>{children}</MemoryRouter>
+        <LocaleProvider initialLocale="en">
+          <MemoryRouter>{children}</MemoryRouter>
+        </LocaleProvider>
       </QueryClientProvider>
     );
   }
@@ -121,12 +139,28 @@ async function fillPromptAndModel() {
   fireEvent.change(modelSelect, { target: { value: "sd15-onnx" } });
 }
 
+async function switchToImageMode() {
+  fireEvent.click(
+    await screen.findByRole("radio", { name: en["generation.mode.imageToImage"] }),
+  );
+}
+
+async function uploadInitImage(file = new File(["pixels"], "starting-photo.png", { type: "image/png" })) {
+  vi.mocked(generationService.uploadGenerationInitImage).mockResolvedValue({ ...INIT_IMAGE });
+  await switchToImageMode();
+  fireEvent.change(screen.getByLabelText(en["generation.initImage.inputLabel"]), {
+    target: { files: [file] },
+  });
+  await screen.findByText(INIT_IMAGE.originalFilename);
+}
+
 afterEach(() => {
   vi.mocked(api.getDevices).mockReset();
   vi.mocked(api.getModels).mockReset();
   vi.mocked(generationService.fetchGenerationCapabilities).mockReset();
   vi.mocked(generationService.createGenerationJob).mockReset();
   vi.mocked(generationService.getGenerationJob).mockReset();
+  vi.mocked(generationService.uploadGenerationInitImage).mockReset();
 });
 
 describe("GeneratePanel", () => {
@@ -135,6 +169,120 @@ describe("GeneratePanel", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("No compatible ONNX runtime found.");
     expect(screen.queryByLabelText(/prompt/i)).not.toBeInTheDocument();
+  });
+
+  it("defaults to text-to-image mode and keeps the existing panel workflow", async () => {
+    renderPanel();
+
+    expect(
+      await screen.findByRole("radio", { name: en["generation.mode.textToImage"] }),
+    ).toBeChecked();
+    expect(
+      screen.getByRole("radio", { name: en["generation.mode.imageToImage"] }),
+    ).not.toBeChecked();
+    expect(
+      screen.queryByLabelText(en["generation.initImage.inputLabel"]),
+    ).not.toBeInTheDocument();
+
+    await fillPromptAndModel();
+    expect(screen.getByRole("button", { name: /^generate$/i })).not.toBeDisabled();
+  });
+
+  it("preserves the prompt when switching to image-to-image mode and back", async () => {
+    renderPanel();
+    const promptField = await screen.findByLabelText(/^prompt$/i);
+    fireEvent.change(promptField, { target: { value: "keep this prompt" } });
+
+    await switchToImageMode();
+    fireEvent.click(
+      screen.getByRole("radio", { name: en["generation.mode.textToImage"] }),
+    );
+
+    expect(promptField).toHaveValue("keep this prompt");
+  });
+
+  it("uploads a starting image, shows its real metadata, and sends its token in the job", async () => {
+    vi.mocked(generationService.createGenerationJob).mockResolvedValue({ ...BASE_JOB });
+    vi.mocked(generationService.getGenerationJob).mockResolvedValue({ ...BASE_JOB });
+
+    renderPanel();
+    await fillPromptAndModel();
+    await uploadInitImage();
+
+    expect(generationService.uploadGenerationInitImage).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "starting-photo.png" }),
+    );
+    expect(
+      screen.getByText(
+        en["generation.initImage.dimensions"]
+          .replace("{{width}}", String(INIT_IMAGE.width))
+          .replace("{{height}}", String(INIT_IMAGE.height)),
+      ),
+    ).toBeInTheDocument();
+
+    const submitButton = screen.getByRole("button", { name: /^generate$/i });
+    await waitFor(() => expect(submitButton).not.toBeDisabled());
+    fireEvent.click(submitButton);
+
+    await waitFor(() => expect(generationService.createGenerationJob).toHaveBeenCalled());
+    expect(vi.mocked(generationService.createGenerationJob).mock.calls[0][0]).toEqual(
+      expect.objectContaining({ initImageToken: INIT_IMAGE.initImageToken }),
+    );
+  });
+
+  it("blocks image-to-image generation without an uploaded image and explains why", async () => {
+    renderPanel();
+    await fillPromptAndModel();
+    await switchToImageMode();
+
+    expect(screen.getByRole("button", { name: /^generate$/i })).toBeDisabled();
+    expect(screen.getByText(en["generation.initImage.required"])).toBeInTheDocument();
+  });
+
+  it("omits initImageToken and strength from a text-to-image job", async () => {
+    vi.mocked(generationService.createGenerationJob).mockResolvedValue({ ...BASE_JOB });
+    vi.mocked(generationService.getGenerationJob).mockResolvedValue({ ...BASE_JOB });
+
+    renderPanel();
+    await fillPromptAndModel();
+    fireEvent.click(screen.getByRole("button", { name: /^generate$/i }));
+
+    await waitFor(() => expect(generationService.createGenerationJob).toHaveBeenCalled());
+    const params = vi.mocked(generationService.createGenerationJob).mock.calls[0][0];
+    expect(params).not.toHaveProperty("initImageToken");
+    expect(params).not.toHaveProperty("strength");
+  });
+
+  it("sends the selected strength in an image-to-image job", async () => {
+    vi.mocked(generationService.createGenerationJob).mockResolvedValue({ ...BASE_JOB });
+    vi.mocked(generationService.getGenerationJob).mockResolvedValue({ ...BASE_JOB });
+
+    renderPanel();
+    await fillPromptAndModel();
+    await uploadInitImage();
+    fireEvent.change(screen.getByLabelText(en["generation.strength.label"]), {
+      target: { value: "0.35" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^generate$/i }));
+
+    await waitFor(() => expect(generationService.createGenerationJob).toHaveBeenCalled());
+    expect(vi.mocked(generationService.createGenerationJob).mock.calls[0][0]).toEqual(
+      expect.objectContaining({ strength: 0.35 }),
+    );
+  });
+
+  it("shows the backend detail when the selected model rejects image-to-image", async () => {
+    const detail = "The selected model does not support image-to-image generation.";
+    vi.mocked(generationService.createGenerationJob).mockRejectedValue(
+      new api.ApiError(400, detail),
+    );
+
+    renderPanel();
+    await fillPromptAndModel();
+    await uploadInitImage();
+    fireEvent.click(screen.getByRole("button", { name: /^generate$/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(detail);
   });
 
   it("populates the model select from capabilities and submits with the chosen params", async () => {

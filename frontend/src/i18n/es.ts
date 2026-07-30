@@ -250,4 +250,24 @@ export const es = {
     "Este repositorio no contiene un modelo de reescalado compatible.",
   "upscaler.warning.diskLow":
     "Quedan {{free}} libres en {{path}}; hacen falta aproximadamente {{needed}} para instalarlo.",
+
+  "generation.page.title": "Generar",
+  "generation.page.description":
+    "Creá una imagen desde un prompt de texto o transformá una imagen de partida, con reescalado opcional al terminar.",
+  "generation.mode.label": "Modo de generación",
+  "generation.mode.textToImage": "Texto a imagen",
+  "generation.mode.imageToImage": "Imagen a imagen",
+  "generation.initImage.drop": "Arrastrá una imagen de partida acá o hacé clic para buscarla",
+  "generation.initImage.formats": "PNG, JPEG, WEBP y otros formatos de imagen legibles",
+  "generation.initImage.inputLabel": "Elegir una imagen de partida",
+  "generation.initImage.uploading": "Subiendo {{filename}}…",
+  "generation.initImage.dimensions": "{{width}} × {{height}} px",
+  "generation.initImage.replace": "Hacé clic o arrastrá otra imagen para reemplazarla",
+  "generation.initImage.unknownError": "Error de subida desconocido",
+  "generation.initImage.uploadFailed": "No se pudo subir la imagen de partida: {{error}}",
+  "generation.initImage.required":
+    "Agregá una imagen de partida para habilitar la generación de imagen a imagen.",
+  "generation.strength.label": "Fuerza de transformación",
+  "generation.strength.hint":
+    "Los valores bajos conservan más la imagen de partida; los altos se alejan más.",
 } as const;

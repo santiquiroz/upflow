@@ -454,6 +454,13 @@ export interface ProvisionJob {
   statusUrl: string;
 }
 
+export interface InitImageResponse {
+  initImageToken: string;
+  originalFilename: string;
+  width: number;
+  height: number;
+}
+
 export interface GenerationJob {
   id: string;
   status: JobStatus;

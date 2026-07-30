@@ -1,15 +1,30 @@
-import { Sparkles } from "lucide-react";
-import { useState, type ChangeEvent } from "react";
+import { Sparkles, UploadCloud } from "lucide-react";
+import { useId, useRef, useState, type ChangeEvent, type DragEvent } from "react";
 import { Link } from "react-router-dom";
 import { DevicePicker } from "../../components/DevicePicker";
 import { JobCard } from "../../components/JobCard";
 import { ModelPicker } from "../../components/ModelPicker";
 import { useGenerationCapabilities, useGenerationJob, type GenerationJobPhase } from "../../hooks/useGenerationJob";
-import type { CreateGenerationJobParams } from "../../services/generation";
-import type { DeviceInfoResponse, GenerationModelSummary, ModelResponse } from "../../lib/apiTypes";
+import { useTranslation } from "../../i18n/LocaleProvider";
+import type {
+  DeviceInfoResponse,
+  GenerationModelSummary,
+  InitImageResponse,
+  ModelResponse,
+} from "../../lib/apiTypes";
+import {
+  uploadGenerationInitImage,
+  type CreateGenerationJobParams,
+} from "../../services/generation";
 
 const SIZE_OPTIONS = [256, 384, 512, 640, 768, 896, 1024];
 const UPSCALE_SCALE_OPTIONS = [2, 3, 4];
+const DEFAULT_STRENGTH = 0.6;
+const STRENGTH_MIN = 0.05;
+const STRENGTH_MAX = 1;
+const STRENGTH_STEP = 0.05;
+
+type GenerationMode = "text-to-image" | "image-to-image";
 
 export const CPU_ONLY_WARNING =
   "No se detectó GPU compatible (DirectX 12). Generar en CPU tarda varios minutos por imagen. ¿Continuar igual?";
@@ -126,7 +141,117 @@ function SizeSelect({ id, value, onChange }: { id: string; value: number; onChan
   );
 }
 
+function InitImageDropzone({
+  image,
+  pendingFileName,
+  isUploading,
+  errorMessage,
+  onFileSelected,
+}: {
+  image: InitImageResponse | null;
+  pendingFileName: string | null;
+  isUploading: boolean;
+  errorMessage: string | null;
+  onFileSelected: (file: File) => void;
+}) {
+  const { t } = useTranslation();
+
+  function handleDrop(event: DragEvent<HTMLLabelElement>) {
+    event.preventDefault();
+    const dropped = event.dataTransfer.files[0];
+    if (dropped) {
+      onFileSelected(dropped);
+    }
+  }
+
+  function handleInputChange(event: ChangeEvent<HTMLInputElement>) {
+    const selected = event.target.files?.[0];
+    if (selected) {
+      onFileSelected(selected);
+    }
+    event.target.value = "";
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <label
+        htmlFor="generation-init-image-input"
+        onDragOver={(event) => event.preventDefault()}
+        onDrop={handleDrop}
+        className="flex cursor-pointer flex-col items-center gap-2 rounded border border-dashed border-border bg-surface px-6 py-8 text-center transition-[border-color] duration-fast hover:border-accent"
+      >
+        <UploadCloud aria-hidden="true" className="h-6 w-6 text-text-faint" strokeWidth={1.5} />
+        {isUploading ? (
+          <span role="status" className="text-sm text-text">
+            {t("generation.initImage.uploading", { filename: pendingFileName ?? "" })}
+          </span>
+        ) : image ? (
+          <>
+            <span className="text-sm text-text">{image.originalFilename}</span>
+            <span className="font-mono-tabular text-xs text-text-dim">
+              {t("generation.initImage.dimensions", {
+                width: image.width,
+                height: image.height,
+              })}
+            </span>
+            <span className="text-xs text-accent">{t("generation.initImage.replace")}</span>
+          </>
+        ) : (
+          <span className="text-sm text-text">{t("generation.initImage.drop")}</span>
+        )}
+        <span className="text-xs text-text-faint">{t("generation.initImage.formats")}</span>
+        <input
+          id="generation-init-image-input"
+          type="file"
+          accept="image/*"
+          aria-label={t("generation.initImage.inputLabel")}
+          className="sr-only"
+          onChange={handleInputChange}
+        />
+      </label>
+      {errorMessage && (
+        <p role="alert" className="text-xs text-danger">
+          {errorMessage}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function StrengthControl({ value, onChange }: { value: number; onChange: (value: number) => void }) {
+  const { t } = useTranslation();
+  const sliderId = useId();
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-baseline justify-between gap-2">
+        <label htmlFor={sliderId} className="text-xs font-medium text-text-dim">
+          {t("generation.strength.label")}
+        </label>
+        <span className="font-mono-tabular text-[10px] text-text-faint">
+          {value.toFixed(2)}
+        </span>
+      </div>
+      <input
+        id={sliderId}
+        type="range"
+        min={STRENGTH_MIN}
+        max={STRENGTH_MAX}
+        step={STRENGTH_STEP}
+        value={value}
+        onChange={(event) => onChange(Number(event.target.value))}
+        className="h-1.5 w-full cursor-pointer accent-accent"
+      />
+      <p className="text-[11px] leading-relaxed text-text-faint">
+        {t("generation.strength.hint")}
+      </p>
+    </div>
+  );
+}
+
 export function GeneratePanel() {
+  const { t } = useTranslation();
+  const [mode, setMode] = useState<GenerationMode>("text-to-image");
   const [prompt, setPrompt] = useState("");
   const [negativePrompt, setNegativePrompt] = useState("");
   const [modelId, setModelId] = useState<string | null>(null);
@@ -140,6 +265,12 @@ export function GeneratePanel() {
   const [upscaleModel, setUpscaleModel] = useState<ModelResponse | null>(null);
   const [upscaleScale, setUpscaleScale] = useState(2);
   const [cpuConfirmPending, setCpuConfirmPending] = useState(false);
+  const [initImage, setInitImage] = useState<InitImageResponse | null>(null);
+  const [initImageFileName, setInitImageFileName] = useState<string | null>(null);
+  const [isInitImageUploading, setIsInitImageUploading] = useState(false);
+  const [initImageError, setInitImageError] = useState<string | null>(null);
+  const [strength, setStrength] = useState(DEFAULT_STRENGTH);
+  const initImageUploadSequence = useRef(0);
 
   const capabilitiesQuery = useGenerationCapabilities();
   const { phase, job, errorMessage, submit, cancel } = useGenerationJob();
@@ -154,7 +285,7 @@ export function GeneratePanel() {
   const needsCpuConfirm = capabilities?.cpuOnly === true && (device === null || device === "cpu");
 
   function buildParams(): CreateGenerationJobParams {
-    return {
+    const params: CreateGenerationJobParams = {
       prompt,
       negativePrompt: negativePrompt.trim() === "" ? null : negativePrompt,
       modelId: modelId ?? "",
@@ -169,6 +300,11 @@ export function GeneratePanel() {
       upscaleModelId: autoUpscale ? resolveUpscaleModelId(upscaleModel) : null,
       upscaleScale: autoUpscale ? upscaleScale : null,
     };
+    if (mode === "image-to-image" && initImage) {
+      params.initImageToken = initImage.initImageToken;
+      params.strength = strength;
+    }
+    return params;
   }
 
   function handleGenerate() {
@@ -188,6 +324,36 @@ export function GeneratePanel() {
     setAutoUpscale(event.target.checked);
   }
 
+  function handleModeChange(nextMode: GenerationMode) {
+    setMode(nextMode);
+    setCpuConfirmPending(false);
+  }
+
+  async function handleInitImageSelected(file: File) {
+    const sequence = initImageUploadSequence.current + 1;
+    initImageUploadSequence.current = sequence;
+    setInitImage(null);
+    setInitImageFileName(file.name);
+    setInitImageError(null);
+    setIsInitImageUploading(true);
+
+    try {
+      const uploaded = await uploadGenerationInitImage(file);
+      if (sequence === initImageUploadSequence.current) {
+        setInitImage(uploaded);
+      }
+    } catch (error) {
+      if (sequence === initImageUploadSequence.current) {
+        const detail = error instanceof Error ? error.message : t("generation.initImage.unknownError");
+        setInitImageError(t("generation.initImage.uploadFailed", { error: detail }));
+      }
+    } finally {
+      if (sequence === initImageUploadSequence.current) {
+        setIsInitImageUploading(false);
+      }
+    }
+  }
+
   // A device change invalidates any already-armed CPU-only confirmation --
   // otherwise switching from cpu to a GPU device after arming would leave a
   // stale warning on screen for a device that no longer needs confirming.
@@ -196,11 +362,57 @@ export function GeneratePanel() {
     setCpuConfirmPending(false);
   }
 
-  const canSubmit = prompt.trim() !== "" && modelId !== null && !isJobBusy(phase);
+  const initImageRequired = mode === "image-to-image" && initImage === null;
+  const canSubmit =
+    prompt.trim() !== "" &&
+    modelId !== null &&
+    !isJobBusy(phase) &&
+    !initImageRequired;
 
   return (
     <div className="grid grid-cols-[1fr_320px] gap-6 max-[900px]:grid-cols-1">
       <div className="flex flex-col gap-6">
+        <fieldset className="flex flex-col gap-2">
+          <legend className="text-xs font-medium text-text-dim">
+            {t("generation.mode.label")}
+          </legend>
+          <div className="grid grid-cols-2 gap-2">
+            <label className="flex cursor-pointer items-center gap-2 rounded border border-border bg-surface p-3 text-sm text-text">
+              <input
+                type="radio"
+                name="generation-mode"
+                value="text-to-image"
+                checked={mode === "text-to-image"}
+                onChange={() => handleModeChange("text-to-image")}
+                className="h-3.5 w-3.5 accent-accent"
+              />
+              {t("generation.mode.textToImage")}
+            </label>
+            <label className="flex cursor-pointer items-center gap-2 rounded border border-border bg-surface p-3 text-sm text-text">
+              <input
+                type="radio"
+                name="generation-mode"
+                value="image-to-image"
+                checked={mode === "image-to-image"}
+                onChange={() => handleModeChange("image-to-image")}
+                className="h-3.5 w-3.5 accent-accent"
+              />
+              {t("generation.mode.imageToImage")}
+            </label>
+          </div>
+        </fieldset>
+        {mode === "image-to-image" && (
+          <div className="flex flex-col gap-4 rounded border border-border bg-surface-2 p-4">
+            <InitImageDropzone
+              image={initImage}
+              pendingFileName={initImageFileName}
+              isUploading={isInitImageUploading}
+              errorMessage={initImageError}
+              onFileSelected={(file) => void handleInitImageSelected(file)}
+            />
+            <StrengthControl value={strength} onChange={setStrength} />
+          </div>
+        )}
         <div className="flex flex-col gap-2">
           <label htmlFor="generate-prompt" className="text-xs font-medium text-text-dim">
             Prompt
@@ -320,6 +532,11 @@ export function GeneratePanel() {
         <div className="flex flex-col gap-2">
           {cpuConfirmPending && needsCpuConfirm && (
             <CpuConfirmBanner onConfirm={handleGenerate} onCancel={handleCancelCpuConfirm} />
+          )}
+          {initImageRequired && (
+            <p role="status" className="text-xs text-warn">
+              {t("generation.initImage.required")}
+            </p>
           )}
           <button
             type="button"

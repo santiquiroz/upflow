@@ -256,4 +256,24 @@ export const en = {
     "This repository does not contain a supported upscaler model.",
   "upscaler.warning.diskLow":
     "Only {{free}} free on {{path}}; about {{needed}} is required to install it.",
+
+  "generation.page.title": "Generate",
+  "generation.page.description":
+    "Create an image from a text prompt or transform a starting image, with optional upscaling on completion.",
+  "generation.mode.label": "Generation mode",
+  "generation.mode.textToImage": "Text to image",
+  "generation.mode.imageToImage": "Image to image",
+  "generation.initImage.drop": "Drop a starting image here or click to browse",
+  "generation.initImage.formats": "PNG, JPEG, WEBP, and other readable image formats",
+  "generation.initImage.inputLabel": "Choose a starting image",
+  "generation.initImage.uploading": "Uploading {{filename}}…",
+  "generation.initImage.dimensions": "{{width}} × {{height}} px",
+  "generation.initImage.replace": "Click or drop another image to replace it",
+  "generation.initImage.unknownError": "Unknown upload error",
+  "generation.initImage.uploadFailed": "Could not upload the starting image: {{error}}",
+  "generation.initImage.required":
+    "Add a starting image to enable image-to-image generation.",
+  "generation.strength.label": "Transformation strength",
+  "generation.strength.hint":
+    "Lower values stay closer to the starting image; higher values move further away.",
 } as const;

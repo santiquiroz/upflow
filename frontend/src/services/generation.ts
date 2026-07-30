@@ -1,9 +1,10 @@
-import { apiGet, apiPost, apiPostJson } from "../lib/api";
+import { apiGet, apiPost, apiPostForm, apiPostJson } from "../lib/api";
 import type {
   ConversionStatusResponse,
   CreateInstallResponse,
   GenerationCapabilities,
   GenerationJob,
+  InitImageResponse,
   InstallStatusResponse,
   ModelSearchResponse,
   Precision,
@@ -24,6 +25,8 @@ export interface CreateGenerationJobParams {
   upscaleModelName: string | null;
   upscaleScale: number | null;
   upscaleModelId: string | null;
+  initImageToken?: string;
+  strength?: number;
 }
 
 function buildRequestBody(params: CreateGenerationJobParams): Record<string, unknown> {
@@ -39,6 +42,10 @@ function buildRequestBody(params: CreateGenerationJobParams): Record<string, unk
   if (params.negativePrompt) body.negativePrompt = params.negativePrompt;
   if (params.seed !== null) body.seed = params.seed;
   if (params.device) body.device = params.device;
+  if (params.initImageToken) {
+    body.initImageToken = params.initImageToken;
+    if (params.strength !== undefined) body.strength = params.strength;
+  }
   if (params.autoUpscale) {
     if (params.upscaleModelName) body.upscaleModelName = params.upscaleModelName;
     if (params.upscaleScale !== null) body.upscaleScale = params.upscaleScale;
@@ -53,6 +60,16 @@ function buildRequestBody(params: CreateGenerationJobParams): Record<string, unk
 // "arreglarla" para parecerse a audio.
 export function createGenerationJob(params: CreateGenerationJobParams): Promise<GenerationJob> {
   return apiPostJson<GenerationJob>("/generation/jobs", buildRequestBody(params));
+}
+
+function buildInitImageFormData(file: File): FormData {
+  const formData = new FormData();
+  formData.append("file", file);
+  return formData;
+}
+
+export function uploadGenerationInitImage(file: File): Promise<InitImageResponse> {
+  return apiPostForm<InitImageResponse>("/generation/init-image", buildInitImageFormData(file));
 }
 
 export function getGenerationJob(jobId: string): Promise<GenerationJob> {
