@@ -140,13 +140,22 @@ Abrí **http://localhost:5173** durante el desarrollo. `npm run build` genera el
 
 ### Web UI
 
-La SPA de React tiene cuatro módulos, accesibles desde la barra lateral:
+La SPA de React se navega **por tarea**: la raíz pregunta qué querés hacer y te
+lleva a la pantalla que corresponde, con el estado preseleccionado.
 
-- **Enhance** (`/`) — imagen y video en la misma pantalla, con tabs:
+- **Tasks** (`/`) — el árbol de capacidades, resuelto contra tu máquina: cuatro
+  dominios (video, imágenes, audio, generar) y sus capacidades. Una capacidad
+  lista te lleva a su pantalla; una que le falta un paquete ofrece bajarlo con
+  un click (corre el mismo `scripts/download-*.ps1` que antes se corría a
+  mano); y las que todavía no existen se muestran **inertes, con el motivo
+  escrito**, bajo un encabezado de mapa de ruta. El status sale de mirar el
+  disco y el registro, así que borrar una carpeta de `vendor/` a mano se refleja
+  al instante.
+- **Enhance** (`/enhance`, `/enhance/image`, `/enhance/video`) — imagen y video, con tabs:
   - *Imagen*: subís el archivo, elegís modelo, dispositivo de cómputo (`cpu`/`dml:N`) y escala (la lista se filtra automáticamente según lo que soporta cada modelo), formato de salida. Job en vivo con progreso y descarga directa al terminar.
-  - *Video*: subís el archivo (se analiza automáticamente con `/video/analyze`) y elegís un perfil (ver tabla de perfiles abajo), con opciones avanzadas para sobreescribir modelo, escala, contenedor, códec, preset, CRF, audio, el dropdown **FPS boost** (Off, o 2×/3×/4×; solo produce resultado si tenés `ENABLE_INTERPOLATION=true` y RIFE instalado — ver más abajo), **mejora de audio** (Off/RNNoise/DeepFilterNet) y **formato de audio de salida** (Auto/FLAC/AAC). Si el video trae más de una pista de audio o subtítulos embebidos, aparece un **selector de pistas**: tildá cuáles pistas de audio conservar (la primera tildada es la primaria, la única que pasa por enhance/restore) y si querés preservar los subtítulos (sube el contenedor a `.mkv` automáticamente si hacía falta).
-- **Models** (`/models`) — buscador de modelos de super-resolución en Hugging Face, instalación con un click (con polling de progreso hasta `done`/`error`), lista de modelos instalados con borrado, y selección de dispositivo por default.
-- **Settings** (`/settings`) — estado del motor (disponibilidad, ffmpeg), concurrencia de GPU y profundidad de las colas de jobs, en vivo.
+  - *Video*: subís el archivo (se analiza automáticamente con `/video/analyze`) y elegís un perfil, que **rellena una pila de pasos** con lo que el job va a hacer de verdad (reescalar, interpolar, audio, subtítulos). Podés quitar y agregar pasos; el orden se muestra pero no se reordena, porque el backend lo tiene fijo y ofrecer reordenar sería un control que miente. Hay opciones avanzadas para sobreescribir modelo, escala, contenedor, códec, preset, CRF, audio, el dropdown **FPS boost** (Off, o 2×/3×/4×; solo produce resultado si tenés `ENABLE_INTERPOLATION=true` y RIFE instalado — ver más abajo), **mejora de audio** (Off/RNNoise/DeepFilterNet) y **formato de audio de salida** (Auto/FLAC/AAC). Si el video trae más de una pista de audio o subtítulos embebidos, aparece un **selector de pistas**: tildá cuáles pistas de audio conservar (la primera tildada es la primaria, la única que pasa por enhance/restore) y si querés preservar los subtítulos (sube el contenedor a `.mkv` automáticamente si hacía falta).
+- **Models** (`/models`) — buscador de modelos de super-resolución en Hugging Face con **compatibilidad detectada** en cada resultado (si trae `.onnx` se instala directo; si trae pesos de PyTorch se convierten con Spandrel; si está restringido o no tiene pesos, lo dice antes de que aprietes instalar), instalación con un click con polling de progreso, lista de modelos instalados con borrado, y selección de dispositivo por default.
+- **Settings** (`/settings`) — estado del motor (disponibilidad, ffmpeg), concurrencia de GPU y profundidad de las colas de jobs, en vivo, y **selector de idioma** (español / inglés, se recuerda en el equipo).
 - **Realtime** (`/realtime`) — página de roadmap: explica el plan de interpolación en tiempo real (Fase 7) y por qué el frame generation en vivo no es viable todavía en Windows sin driver hooks propietarios.
 
 Un panel de **cola de jobs** global (imagen + video) con progreso en vivo está disponible desde cualquier módulo.
@@ -161,7 +170,12 @@ Todos los endpoints viven bajo `/api/v1`. Los campos de formulario (subida) van 
 | `GET` | `/api/v1/engine` | Estado del motor, si FFmpeg está disponible, catálogo de modelos y de perfiles de video |
 | `GET` | `/api/v1/devices` | Dispositivos de cómputo disponibles (`cpu`, `dml:0`, `dml:1`...) y `defaultDeviceId` efectivo |
 | `GET` | `/api/v1/models` | Catálogo completo de modelos instalados (builtin + los instalados desde Hugging Face) |
-| `GET` | `/api/v1/models/search?q=` | Busca modelos de super-resolución en Hugging Face Hub |
+| `GET` | `/api/v1/models/search?q=` | Busca modelos de super-resolución en Hugging Face Hub, con compatibilidad detectada por resultado (sin requests extra: sale de la metadata que ya viene) |
+| `GET` | `/api/v1/models/preflight?repoId=` | Antes de instalar un upscaler: veredicto de compatibilidad, tamaño real de la descarga, disco libre, VRAM libre por dispositivo y RAM. No estima pico de VRAM a propósito — un upscaler hace tiling, así que el factor de estimación de difusión no aplica |
+| `GET` | `/api/v1/capabilities/tree` | El árbol de lo que la app puede hacer, resuelto contra esta máquina: `available`, `needs_setup` (con el paquete que falta) o `not_implemented` (con el motivo) |
+| `POST` | `/api/v1/capabilities/{id}/provision` | Baja el paquete que le falta a una capacidad corriendo su `scripts/download-*.ps1` → 202 |
+| `GET` | `/api/v1/capabilities/provision/{jobId}` | Estado de esa descarga |
+| `GET` | `/api/v1/audio/voice-catalog` | Los pasos de la cadena de mejora de voz **en su orden causal** y los destinos de entrega con sus números de loudness publicados |
 | `POST` | `/api/v1/models/install` | Instala un modelo desde HF por `repo_id` (`202`, devuelve `install_id`) |
 | `GET` | `/api/v1/models/install/{install_id}` | Estado de una instalación en curso (`pending`/`downloading`/`converting`/`done`/`error`) |
 | `DELETE` | `/api/v1/models/{model_id}` | Borra un modelo instalado (`204`; `403` si es builtin, `404` si no existe) |

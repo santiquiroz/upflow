@@ -189,3 +189,89 @@ Es la fase más independiente: se puede hacer antes o después de las 3 y 4.
 ## Lo que este plan NO hace
 
 Implementar ninguna de las nueve capacidades faltantes. Cada una es su propio trabajo con su propia investigación de viabilidad, y varias arrastran el mismo techo que ya se documentó para FLUX.2 y Z-Image: no alcanza que el modelo exista, tiene que existir el camino a ONNX. Texto a video y texto a 3D son los candidatos más probables a no tenerlo.
+
+---
+
+# Estado de ejecución — 2026-07-29 (misma sesión que el plan)
+
+Se ejecutaron las **Fases 0 a 5**. Lo único que queda del plan es la Fase 4.3, en
+vuelo al momento de escribir esto.
+
+## Qué quedó hecho
+
+| Fase | Estado | Commit |
+|---|---|---|
+| 0.1 — nivel 1 de mejora de voz | hecho, con UI | `f4fc5f9` |
+| 1 — catálogo de capacidades | hecho | `5c320ed` |
+| 2 — provisión de paquetes vendorizados | hecho | `d356854` |
+| 3.1 / 3.2 — árbol en la UI | hecho | `fd81419` |
+| 3.3 — rutas por tarea | hecho | `2255944` |
+| 4.1 — estrategia de compatibilidad por dominio | hecho | `26f8330` |
+| 4.2 — pre-flight compartido | hecho | `e049666` |
+| 4.3 — tarjeta compartida | en vuelo | — |
+| 5.1 — video como pila de pasos | hecho | `324a8a0` |
+| 5.2 — contrato del request | **no se hizo, a propósito** (ver abajo) |
+
+## Cuatro desvíos del plan, con su razón
+
+Están acá porque el plan tal como estaba escrito habría producido bugs concretos.
+
+1. **El status de una capacidad sale de requisitos explícitos, no de su
+   `provisioning`.** El plan proponía "available si el registro tiene al menos un
+   modelo del kind que la capacidad necesita". Eso miente en el reescalado: las
+   entradas `builtin-ncnn` se siembran solas en el registro, así que una
+   instalación sin `vendor/realesrgan/` habría dado `available` sin binario. Cada
+   capacidad declara ahora `PathRequirement` y/o `RegistryRequirement` y sólo está
+   disponible si se cumplen todos.
+
+2. **Lo que habilita la descarga es el paquete faltante, no la etiqueta
+   `vendored_pack`.** El plan pedía rechazar con 400 toda capacidad que no fuera
+   `vendored_pack`. `video.upscale` es de provisioning `registry` y aun así
+   necesita el binario del motor, así que esa regla le habría dejado la descarga
+   sin botón.
+
+3. **El pre-flight de upscalers NO estima pico de VRAM.** El plan decía que el
+   pre-flight era genérico tal cual. No lo es: el factor de `vram_estimate` está
+   documentado como extrapolado y asume que las activaciones crecen con la
+   resolución de salida. Un upscaler hace *tiling*, así que el pico lo acota el
+   tamaño del tile y la premisa es falsa. La VRAM libre viaja como dato, sin
+   veredicto de "no entra". Estimarlo de verdad necesita mediciones sobre un
+   upscaler real y es su propio trabajo.
+
+4. **`generation_preflight.py` no se renombró a `model_preflight.py`.** Se creó
+   `model_preflight.py` con las mediciones compartidas y el pre-flight de
+   upscalers, y el de generación las importa. El rename completo era churn sobre
+   todos sus call sites y tests para cero cambio de comportamiento.
+
+## Lo que se agregó y el plan no pedía
+
+- El backend devuelve **claves de traducción** en toda superficie de copia
+  (capacidades, motivos de compatibilidad, veredictos de checkpoint, pasos de
+  voz). Se hizo junto con la infraestructura de i18n de la misma sesión. La
+  frontera quedó: veredictos estructurados → claves; errores de job (que llevan
+  stderr y rutas) → oraciones, porque nunca van a estar traducidos.
+- Aviso de por qué el CTA de video se apaga al quitar el paso de reescalado. Un
+  job de video siempre reescala y el botón se apagaba en silencio.
+
+## Bug encontrado de paso
+
+`GET /audio/voice-catalog` tiraba `AttributeError` en la primera llamada real
+desde el rename `label` → `label_key`, y **la suite entera seguía verde porque
+ningún test lo ejecutaba** (`a6bf3fa`). Sexta aparición del mismo patrón en la
+sesión: ausencia de señal leída como veredicto positivo.
+
+## Qué sigue, en orden de valor
+
+1. **Fase 4.3** si quedó a medias.
+2. **Nivel 2 — imagen a imagen.** Es la única capacidad faltante con camino ONNX
+   ya confirmado (las clases ORT img2img existen), y ahora se apoya sobre el
+   gestor entero. Es la siguiente más barata por lejos.
+3. **Nivel 3 — stems y subtítulos.** El usuario fue explícito en que stems **no**
+   se hardcodea a Demucs: tiene que ser una capacidad buscable, con modelos
+   alternativos de Hugging Face. Necesita un motor de inferencia nuevo.
+4. **Nivel 4 — los cinco de generación sin camino confirmado.** Cada uno arranca
+   con un spike de viabilidad, no con implementación, y el resultado honesto de
+   alguno puede ser "no hay camino todavía", como ya pasó con GGUF.
+5. **Task 5.2** (la pila en el contrato del request) sólo si se quiere reordenar
+   pasos de verdad. Hoy el orden es fijo en el backend y la UI no ofrece
+   reordenar justamente para no mentir.
