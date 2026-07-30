@@ -44,6 +44,7 @@ from app.services.media_tools import MediaTools
 from app.services.model_installer import ModelInstaller
 from app.services.asr_installer import AsrModelInstaller
 from app.services.engines.transcribe_onnx import TranscribeEngine
+from app.services.download_job_manager import DownloadJobManager
 from app.services.transcribe_job_manager import TranscribeJobManager
 from app.services.pack_provisioner import PackProvisioner
 from app.services.model_registry import ModelRegistry
@@ -177,6 +178,7 @@ async def lifespan(app: FastAPI):
         devices=devices_service,
         quota_service=quota_service,
     )
+    download_jobs = DownloadJobManager(settings, quota_service=quota_service)
     generation_installer.enqueue_conversion = generation_converter.convert_from_hf
     await job_manager.start()
     await video_job_manager.start()
@@ -189,6 +191,7 @@ async def lifespan(app: FastAPI):
     await pack_provisioner.start()
     await asr_installer.start()
     await transcribe_jobs.start()
+    await download_jobs.start()
 
     app.state.storage = storage
     app.state.engine = engine
@@ -220,6 +223,7 @@ async def lifespan(app: FastAPI):
     app.state.asr_installer = asr_installer
     app.state.transcribe_engine = transcribe_engine
     app.state.transcribe_jobs = transcribe_jobs
+    app.state.download_jobs = download_jobs
     app.state.user_store = user_store
     app.state.identity_provider = identity_provider
     app.state.quota_service = quota_service
@@ -237,6 +241,7 @@ async def lifespan(app: FastAPI):
         await pack_provisioner.stop()
         await asr_installer.stop()
         await transcribe_jobs.stop()
+        await download_jobs.stop()
 
 
 def _serve_index(index_path: Path) -> Response:

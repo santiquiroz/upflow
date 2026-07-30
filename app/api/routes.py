@@ -23,6 +23,7 @@ from app.config import (
 )
 from app.exceptions import ModelNotFoundError, ModelProtectedError, QueueFullError, QuotaExceededError
 from app.models import (
+    DownloadJob,
     AudioJob,
     GenerationJob,
     JobStatus,
@@ -32,6 +33,9 @@ from app.models import (
     VideoUpscaleJob,
 )
 from app.schemas import (
+    CreateDownloadJobRequest,
+    DownloadJobResponse,
+    MediaProbeResponse,
     AnalyzeVideoResponse,
     AudioCapabilitiesResponse,
     AudioJobResponse,
@@ -113,6 +117,12 @@ from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry
 from app.services.pack_provisioner import PackProvisioner, ProvisionJob, UnknownPackError
 from app.services.settings_service import editable_settings_status, update_setting
 from app.services.storage import StorageService
+from app.services.download_job_manager import (
+    DownloadJobManager,
+    describe_failure,
+    validate_url,
+)
+from app.services.fetch import engine as fetch_engine
 from app.services.transcribe_job_manager import TranscribeJobManager
 from app.services.stream_analysis import parse_audio_tracks, parse_subtitle_tracks
 from app.services.update_service import UpdateService
@@ -964,6 +974,131 @@ async def create_audio_job(
         status_url=f"/api/v1/audio/jobs/{job.id}",
         download_url=None,
     )
+
+
+def get_download_job_manager(request: Request) -> DownloadJobManager:
+    return request.app.state.download_jobs
+
+
+def download_job_to_response(job: DownloadJob) -> DownloadJobResponse:
+    return DownloadJobResponse(
+        id=job.id,
+        status=job.status,
+        url=job.url,
+        max_height=job.max_height,
+        audio_only=job.audio_only,
+        media_title=job.media_title,
+        media_uploader=job.media_uploader,
+        extractor=job.extractor,
+        created_at=job.created_at,
+        started_at=job.started_at,
+        finished_at=job.finished_at,
+        progress_pct=job.progress_pct,
+        downloaded_bytes=job.downloaded_bytes,
+        total_bytes=job.total_bytes,
+        # Solo el NOMBRE: la ruta absoluta expondria la estructura de directorios del
+        # servidor sin darle nada util a quien la lee.
+        output_files=[path.name for path in job.output_paths],
+        error=job.error,
+        owner_id=job.owner_id,
+    )
+
+
+@router.post(
+    "/download/probe",
+    response_model=MediaProbeResponse,
+    dependencies=[Depends(require(Permission.jobs_create))],
+)
+async def probe_media(payload: CreateDownloadJobRequest) -> MediaProbeResponse:
+    """Que hay en esta URL, sin descargar.
+
+    Existe para que la UI muestre titulo, duracion y calidades ANTES de comprometerse, y
+    sobre todo para que se vea que una URL es una playlist de 200 items antes de
+    disparar 200 descargas.
+    """
+    try:
+        validate_url(payload.url)
+        info = await asyncio.to_thread(fetch_engine.probe, payload.url)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except fetch_engine.FetchUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 - el motivo del sitio es lo util
+        raise HTTPException(status_code=422, detail=describe_failure(exc)) from exc
+    return MediaProbeResponse(
+        title=info.title,
+        duration_seconds=info.duration_seconds,
+        uploader=info.uploader,
+        extractor=info.extractor,
+        is_playlist=info.is_playlist,
+        entry_count=info.entry_count,
+        available_heights=list(info.available_heights),
+    )
+
+
+@router.post(
+    "/download/jobs",
+    response_model=DownloadJobResponse,
+    status_code=202,
+    dependencies=[Depends(require(Permission.jobs_create))],
+)
+async def create_download_job(
+    payload: CreateDownloadJobRequest,
+    download_jobs: DownloadJobManager = Depends(get_download_job_manager),
+    request: Request = None,
+) -> DownloadJobResponse:
+    try:
+        job = await download_jobs.create_job(
+            url=payload.url,
+            max_height=payload.max_height,
+            audio_only=payload.audio_only,
+            include_playlist=payload.include_playlist,
+            playlist_limit=payload.playlist_limit,
+            subtitle_languages=payload.subtitle_languages,
+            owner=current_user_from_request(request),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except QueueFullError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    return download_job_to_response(job)
+
+
+@router.get(
+    "/download/jobs/{job_id}",
+    response_model=DownloadJobResponse,
+    dependencies=[Depends(require(Permission.jobs_read_own))],
+)
+async def get_download_job(
+    job_id: str,
+    download_jobs: DownloadJobManager = Depends(get_download_job_manager),
+    request: Request = None,
+) -> DownloadJobResponse:
+    job = download_jobs.get_job(job_id)
+    current_user = current_user_from_request(request)
+    # 404 y no 403: un 403 confirmaria que el job existe, y con el la URL que otro
+    # usuario decidio bajar.
+    if not job or (current_user is not None and not _can_view_job(job, current_user)):
+        raise HTTPException(status_code=404, detail="Download job not found")
+    return download_job_to_response(job)
+
+
+@router.post(
+    "/download/jobs/{job_id}/cancel",
+    response_model=DownloadJobResponse,
+    dependencies=[Depends(require(Permission.jobs_cancel_own))],
+)
+async def cancel_download_job(
+    job_id: str,
+    download_jobs: DownloadJobManager = Depends(get_download_job_manager),
+    request: Request = None,
+) -> DownloadJobResponse:
+    job = download_jobs.get_job(job_id)
+    current_user = current_user_from_request(request)
+    if not job or (current_user is not None and not _can_cancel_job(job, current_user)):
+        raise HTTPException(status_code=404, detail="Download job not found")
+    download_jobs.cancel_job(job_id)
+    return download_job_to_response(job)
 
 
 def get_transcribe_job_manager(request: Request) -> TranscribeJobManager:

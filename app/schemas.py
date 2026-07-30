@@ -353,6 +353,54 @@ class UpscalerPreflightResponse(BaseModel):
     free_ram_bytes: int | None = Field(default=None, serialization_alias="freeRamBytes")
 
 
+class CreateDownloadJobRequest(BaseModel):
+    url: str
+    # 1080p y no 4K por defecto: el pedido caro tiene que ser una eleccion.
+    max_height: int = Field(default=1080, alias="maxHeight")
+    audio_only: bool = Field(default=False, alias="audioOnly")
+    # Una URL de playlist es tambien una URL de video. El default es el item suelto
+    # para que nadie dispare 200 descargas por pegar un link.
+    include_playlist: bool = Field(default=False, alias="includePlaylist")
+    playlist_limit: int = Field(default=10, alias="playlistLimit")
+    subtitle_languages: list[str] = Field(default_factory=list, alias="subtitleLanguages")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class DownloadJobResponse(BaseModel):
+    id: str
+    status: JobStatus
+    url: str
+    max_height: int = Field(serialization_alias="maxHeight")
+    audio_only: bool = Field(serialization_alias="audioOnly")
+    media_title: str | None = Field(default=None, serialization_alias="mediaTitle")
+    media_uploader: str | None = Field(default=None, serialization_alias="mediaUploader")
+    extractor: str | None = None
+    created_at: datetime = Field(serialization_alias="createdAt")
+    started_at: datetime | None = Field(default=None, serialization_alias="startedAt")
+    finished_at: datetime | None = Field(default=None, serialization_alias="finishedAt")
+    progress_pct: float | None = Field(default=None, serialization_alias="progressPct")
+    downloaded_bytes: int = Field(default=0, serialization_alias="downloadedBytes")
+    total_bytes: int | None = Field(default=None, serialization_alias="totalBytes")
+    # Los nombres de archivo producidos. Son la entrada del pipeline de mejora, que es
+    # el punto de tener esto adentro de Upflow y no al lado.
+    output_files: list[str] = Field(default_factory=list, serialization_alias="outputFiles")
+    error: str | None = None
+    owner_id: str | None = Field(default=None, serialization_alias="ownerId")
+
+
+class MediaProbeResponse(BaseModel):
+    """Lo que hay en una URL, antes de comprometerse a descargarlo."""
+
+    title: str
+    duration_seconds: int | None = Field(default=None, serialization_alias="durationSeconds")
+    uploader: str | None = None
+    extractor: str
+    is_playlist: bool = Field(serialization_alias="isPlaylist")
+    entry_count: int = Field(serialization_alias="entryCount")
+    available_heights: list[int] = Field(serialization_alias="availableHeights")
+
+
 class TranscribeJobResponse(BaseModel):
     id: str
     status: JobStatus

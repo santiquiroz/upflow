@@ -177,6 +177,38 @@ class TranscribeJob:
 
 
 @dataclass(slots=True)
+class DownloadJob:
+    """Traer un video o audio de una URL.
+
+    A diferencia del resto, la entrada no es un archivo sino una URL, y la SALIDA es lo
+    que despues puede entrar al pipeline de mejora: por eso `output_paths` es una lista
+    (una playlist produce varios) y aterriza en el directorio de uploads.
+    """
+
+    url: str
+    max_height: int = 1080
+    audio_only: bool = False
+    include_playlist: bool = False
+    playlist_limit: int = 10
+    subtitle_languages: list[str] = field(default_factory=list)
+    # Lo que el probe encontro antes de descargar: titulo, duracion, sitio.
+    media_title: str | None = None
+    media_uploader: str | None = None
+    extractor: str | None = None
+    id: str = field(default_factory=lambda: uuid4().hex)
+    status: JobStatus = JobStatus.queued
+    created_at: datetime = field(default_factory=utc_now)
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    progress_pct: float | None = None
+    downloaded_bytes: int = 0
+    total_bytes: int | None = None
+    output_paths: list[Path] = field(default_factory=list)
+    error: str | None = None
+    owner_id: str | None = None
+
+
+@dataclass(slots=True)
 class GenerationJob:
     prompt: str
     model_id: str

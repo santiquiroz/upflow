@@ -23,6 +23,14 @@ dependencies = [
   # Approved exception to this project's zero-new-dependencies default.
   "argon2-cffi>=23.1.0,<24.0.0",
   "httpx>=0.27.0,<1.0.0",
+  # Motor del apartado de descargas. Se toma del WHEEL de PyPI y NUNCA del ejecutable
+  # prebuilt: yt-dlp es The Unlicense (dominio publico, cero obligaciones), pero su
+  # .exe empaquetado con PyInstaller incluye codigo GPLv3+ y el trabajo combinado pasa
+  # a ser GPLv3+. El repo git, el sdist y el wheel solo traen codigo Unlicense.
+  #
+  # Sin techo de version a proposito: libera casi mensualmente para seguirle el paso a
+  # las defensas de los sitios, y quedarse atras es exactamente cuando deja de servir.
+  "yt-dlp>=2026.7.1",
   "numpy>=1.26.0,<3.0.0",
   "onnxruntime-directml>=1.19.0,<2.0.0; sys_platform == 'win32'",
   # SP1 Task 6 - .pth/.safetensors -> ONNX conversion (app/services/model_converter.py).
