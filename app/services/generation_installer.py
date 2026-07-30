@@ -194,10 +194,24 @@ def _patch_legacy_component_configs(staging_root: Path) -> None:
 
 
 def _ensure_model_index_listed(files: list[HfFile], repo_id: str) -> None:
-    if not any(f.path == MODEL_INDEX_FILENAME for f in files):
+    if any(f.path == MODEL_INDEX_FILENAME for f in files):
+        return
+    # Un repo SIN model_index.json pero CON checkpoints sueltos en la raiz no es un
+    # repo invalido: es de archivo unico, y se instala eligiendo cual. Decir solo
+    # "falta model_index.json" es cierto y no sirve para nada -- paso con tres repos
+    # Flux reales, donde el motivo real era que nadie habia elegido archivo.
+    candidates = _root_checkpoint_paths(files)
+    if candidates:
+        listed = ", ".join(candidates[:5])
+        more = f" (y {len(candidates) - 5} mas)" if len(candidates) > 5 else ""
         raise ValueError(
-            f"El repo {repo_id!r} no parece un pipeline diffusers ONNX: falta {MODEL_INDEX_FILENAME}."
+            f"El repo {repo_id!r} es de archivo unico: hay que elegir que checkpoint "
+            f"instalar. Disponibles: {listed}{more}."
         )
+    raise ValueError(
+        f"El repo {repo_id!r} no parece un pipeline diffusers ONNX: falta "
+        f"{MODEL_INDEX_FILENAME}, y tampoco tiene checkpoints en la raiz para elegir."
+    )
 
 
 def _ensure_installable_layout(

@@ -282,3 +282,43 @@ describe("GenerationModelCard", () => {
     expect(screen.getByRole("button", { name: /^install$/i })).toBeEnabled();
   });
 });
+
+describe("GenerationModelCard — repos de archivo único", () => {
+  it("consulta los checkpoints sin esperar a que se expandan los detalles", async () => {
+    // Tres repos Flux reales fallaban al tocar Instalar de una: el preflight estaba
+    // atado a "Ver detalles", así que el pedido salía sin checkpoint y el backend lo
+    // rechazaba con "falta model_index.json" -- cierto, e inútil.
+    vi.mocked(generationService.preflightGenerationModel).mockResolvedValue(
+      SINGLE_FILE_PREFLIGHT,
+    );
+
+    renderCard(SINGLE_FILE_RESULT);
+
+    await waitFor(() =>
+      expect(generationService.preflightGenerationModel).toHaveBeenCalledWith(
+        SINGLE_FILE_RESULT.id,
+      ),
+    );
+  });
+
+  it("manda el checkpoint aunque nadie haya abierto los detalles", async () => {
+    vi.mocked(generationService.preflightGenerationModel).mockResolvedValue(
+      SINGLE_FILE_PREFLIGHT,
+    );
+    vi.mocked(generationService.installGenerationModel).mockResolvedValue({
+      installId: "i-1",
+      statusUrl: "/api/v1/generation/installs/i-1",
+    });
+
+    renderCard(SINGLE_FILE_RESULT);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /Install/i })).toBeEnabled(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Install/i }));
+
+    await waitFor(() => {
+      const args = vi.mocked(generationService.installGenerationModel).mock.calls[0];
+      expect(args?.[2]).toBeTruthy();
+    });
+  });
+});

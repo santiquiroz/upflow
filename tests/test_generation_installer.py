@@ -842,3 +842,63 @@ def test_a_partially_null_slot_is_still_counted(tmp_path: Path) -> None:
     )
 
     assert _read_declared_components(staging) == ["raro"]
+
+
+# ---------------------------------------------------------------------------
+# Un repo de archivo unico no es un repo invalido
+#
+# Tres repos Flux reales (diroverflo/FLux_Klein_9B_NSFW, Winnougan/Ideogram_Instant_NSFW,
+# lustlyai/Flux_Lustly.ai_Uncensored_nsfw_v1) fallaban con "no parece un pipeline
+# diffusers ONNX: falta model_index.json". Cierto, e inutil: los tres son de archivo
+# unico y el motivo real era que nadie habia elegido que checkpoint instalar.
+# ---------------------------------------------------------------------------
+
+
+def test_a_single_file_repo_is_told_to_pick_a_checkpoint(tmp_path: Path) -> None:
+    from app.services.generation_installer import _ensure_model_index_listed
+
+    files = [
+        HfFile(path="Flux Klein - NSFW v2.safetensors", size=1_000),
+        HfFile(path="README.md", size=10),
+    ]
+
+    with pytest.raises(ValueError) as exc_info:
+        _ensure_model_index_listed(files, "diroverflo/FLux_Klein_9B_NSFW")
+
+    message = str(exc_info.value)
+    assert "archivo unico" in message
+    # El nombre del archivo tiene que estar: sin el, "elegi un checkpoint" no dice cual.
+    assert "Flux Klein - NSFW v2.safetensors" in message
+
+
+def test_every_candidate_is_listed_so_the_choice_is_possible() -> None:
+    # Winnougan trae dos: int8 y BF16. Elegir mal cuesta una descarga entera.
+    from app.services.generation_installer import _ensure_model_index_listed
+
+    files = [
+        HfFile(path="Fal_Ideo_4_NSFW-int8_convrot.safetensors", size=1_000),
+        HfFile(path="Fal_Ideo_4_NSFW_BF16.safetensors", size=2_000),
+    ]
+
+    with pytest.raises(ValueError) as exc_info:
+        _ensure_model_index_listed(files, "Winnougan/Ideogram_Instant_NSFW")
+
+    message = str(exc_info.value)
+    assert "int8" in message and "BF16" in message
+
+
+def test_a_repo_with_neither_says_so_plainly() -> None:
+    # Sin model_index.json y sin checkpoints no hay nada que elegir, y ahi el mensaje
+    # viejo si era el correcto.
+    from app.services.generation_installer import _ensure_model_index_listed
+
+    files = [HfFile(path="README.md", size=10), HfFile(path="preview.png", size=20)]
+
+    with pytest.raises(ValueError, match="tampoco tiene checkpoints"):
+        _ensure_model_index_listed(files, "alguien/solo-un-readme")
+
+
+def test_a_real_pipeline_is_not_rejected() -> None:
+    from app.services.generation_installer import _ensure_model_index_listed
+
+    _ensure_model_index_listed([HfFile(path="model_index.json", size=100)], "amd/sdxl-onnx")

@@ -11,6 +11,8 @@ export const es = {
   "generation.compat.unknown": "Compatibilidad desconocida",
   "generation.precision.title": "Precisión",
   "generation.precision.download": "{{size}} de descarga",
+  "generation.checkpoint.required":
+    "Elegí primero qué archivo instalar",
   "generation.checkpoint.title": "Checkpoint",
   "generation.details.hide": "Ocultar detalles",
   "generation.details.show": "Ver detalles",

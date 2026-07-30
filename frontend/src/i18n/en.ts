@@ -17,6 +17,8 @@ export const en = {
   "generation.compat.unknown": "Compatibility unknown",
   "generation.precision.title": "Precision",
   "generation.precision.download": "{{size}} download",
+  "generation.checkpoint.required":
+    "Pick which checkpoint file to install first",
   "generation.checkpoint.title": "Checkpoint",
   "generation.details.hide": "Hide details",
   "generation.details.show": "View details",

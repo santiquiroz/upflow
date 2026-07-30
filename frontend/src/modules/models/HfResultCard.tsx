@@ -76,12 +76,25 @@ export function InstalledIndicator() {
   );
 }
 
-export function InstallButton({ onInstall }: { onInstall: () => void }) {
+export function InstallButton({
+  onInstall,
+  disabled = false,
+  title,
+}: {
+  onInstall: () => void;
+  // Un repo de archivo único no se puede instalar hasta saber qué checkpoint usar.
+  // Bloquear el botón dice eso ANTES de intentarlo; dejarlo activo producía un fallo
+  // cuyo mensaje no explicaba qué hacer.
+  disabled?: boolean;
+  title?: string;
+}) {
   return (
     <button
       type="button"
       onClick={onInstall}
-      className="inline-flex shrink-0 items-center gap-2 rounded bg-accent px-3 py-1.5 text-sm font-medium text-bg transition-[background-color] duration-fast hover:bg-accent-hover active:bg-accent-press focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+      disabled={disabled}
+      title={title}
+      className="inline-flex shrink-0 items-center gap-2 rounded bg-accent px-3 py-1.5 text-sm font-medium text-bg transition-[background-color] duration-fast hover:bg-accent-hover active:bg-accent-press focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50"
     >
       <Download aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />
       Install

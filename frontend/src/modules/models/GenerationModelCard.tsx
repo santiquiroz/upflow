@@ -214,11 +214,22 @@ export function GenerationModelCard({ result }: GenerationModelCardProps) {
     result.availablePrecisions[0],
   );
   const [selectedCheckpointPath, setSelectedCheckpointPath] = useState<string | undefined>();
-  const preflightQuery = useGenerationModelPreflight(result.id, detailsExpanded);
+  // Un repo de archivo único NO se puede instalar sin elegir cuál checkpoint, y esa
+  // lista sale del preflight. Con el preflight atado solo a "Ver detalles", tocar
+  // Instalar de una mandaba el pedido sin checkpoint y el backend lo rechazaba con
+  // "falta model_index.json" -- cierto pero inútil, porque el problema real era que
+  // nadie había elegido archivo. Pasó con tres repos Flux reales.
+  const needsCheckpointChoice = result.compat === "single_file";
+  const preflightQuery = useGenerationModelPreflight(
+    result.id,
+    detailsExpanded || needsCheckpointChoice,
+  );
   const { phase, progressPct, stageLabel, errorMessage, install, reset } =
     useGenerationModelInstall();
 
   const checkpoints = preflightQuery.data?.checkpoints ?? [];
+  // Todavía no llegó la lista. Distinto de "llegó y ninguno sirve", que es un dato.
+  const checkpointsUnknown = checkpoints.length === 0;
   const selectedCheckpoint =
     checkpoints.find(
       (candidate) =>
@@ -244,6 +255,17 @@ export function GenerationModelCard({ result }: GenerationModelCardProps) {
           <InstallButton
             onInstall={() =>
               install(result.id, selectedPrecision, selectedCheckpoint?.path)
+            }
+            // Solo se bloquea mientras TODAVÍA no sabemos qué checkpoints hay: sin esa
+            // lista el pedido falla seguro. Una vez que llegó, se deja intentar aunque
+            // ninguno esté confirmado como instalable — que no se haya podido leer un
+            // header no es lo mismo que saber que no sirve, y bloquear por eso sería
+            // convertir la falta de señal en un veredicto.
+            disabled={needsCheckpointChoice && checkpointsUnknown}
+            title={
+              needsCheckpointChoice && checkpointsUnknown
+                ? t("generation.checkpoint.required")
+                : undefined
             }
           />
         )}
