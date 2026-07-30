@@ -367,3 +367,61 @@ async def test_another_user_cannot_download_someone_elses_transcript(tmp_path: P
         await download_transcribe_job(job.id, manager, RequestWithUser(make_user("bob")))
 
     assert exc_info.value.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# La rama `current_user is not None` es inalcanzable por HTTP
+#
+# Un review automatico marco ese guard como fail-open. No lo es, y estos tests lo
+# fijan en vez de dejarlo como razonamiento:
+#
+#   - require(...) es dependencia de ruta, y depende de get_current_user.
+#   - get_current_user con auth ACTIVA resuelve la sesion o tira 401 ANTES del
+#     handler; con auth apagada devuelve el usuario admin de modo local.
+#
+# O sea: ninguna request llega al cuerpo del handler con state.current_user vacio.
+# El guard existe solo para los tests que llaman la corrutina DIRECTO, que es la
+# convencion de este repo y esta documentada en el propio parametro.
+# ---------------------------------------------------------------------------
+
+
+def test_transcribe_endpoints_require_login_in_multi_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fastapi.testclient import TestClient
+
+    from app.api import auth_routes
+    from app.config import get_settings
+    from app.main import app
+
+    auth_routes._login_attempts.clear()
+    monkeypatch.setenv("RUNTIME_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setenv("AUTH_MODE", "multi")
+    monkeypatch.setenv("AUTH_SECRET", "s" * 32)
+    get_settings.cache_clear()
+    try:
+        with TestClient(app, client=("127.0.0.1", 12345)) as client:
+            client.post(
+                "/api/v1/auth/setup", json={"username": "admin", "password": "adminpass1"}
+            )
+            for path in (
+                "/api/v1/transcribe/jobs/some-id",
+                "/api/v1/transcribe/jobs/some-id/download",
+            ):
+                assert client.get(path).status_code == 401, path
+            assert client.post("/api/v1/transcribe/jobs/some-id/cancel").status_code == 401
+    finally:
+        get_settings.cache_clear()
+
+
+def test_off_mode_is_a_single_admin_user(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Con auth apagada el usuario resuelto es admin, asi que ve sus propios jobs.
+
+    Es deliberado y es el caso de uso principal: una app de escritorio de un solo
+    usuario. Fallar cerrado ahi la dejaria inutilizable.
+    """
+    from app.api.auth_deps import off_mode_user
+    from app.services.auth.permissions import Permission
+
+    user = off_mode_user()
+    assert Permission.jobs_read_all in user.permissions
