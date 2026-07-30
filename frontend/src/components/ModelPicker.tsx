@@ -5,6 +5,10 @@ import type { ModelResponse } from "../lib/apiTypes";
 interface ModelPickerProps {
   value: string | null;
   onChange: (model: ModelResponse) => void;
+  // El reescalado sin IA lo hace swscale DENTRO del encode de video, asi que hoy solo
+  // existe para video. Default false (fail-closed): ofrecerlo donde el pipeline no lo
+  // sabe ejecutar seria una opcion que falla al enviar.
+  allowNoAi?: boolean;
 }
 
 interface ModelGroup {
@@ -14,15 +18,27 @@ interface ModelGroup {
 
 // Explicit kind === "onnx" (not "everything non-builtin") so kinds like
 // diffusion-onnx never leak into the upscale picker's Installed group.
-function groupModels(models: ModelResponse[]): ModelGroup[] {
+//
+// "No AI" goes LAST and named for what it is, not for how it works: someone who picks
+// it must know no model runs, and someone who wants AI must not land on it by accident.
+function groupModels(models: ModelResponse[], allowNoAi: boolean): ModelGroup[] {
   const groups: ModelGroup[] = [
     { label: "Builtin", models: models.filter((model) => model.kind === "builtin-ncnn") },
     { label: "ONNX", models: models.filter((model) => model.kind === "onnx") },
+    {
+      label: "No AI (classic resize)",
+      models: allowNoAi ? models.filter((model) => model.kind === "classic") : [],
+    },
   ];
   return groups.filter((group) => group.models.length > 0);
 }
 
 function formatModelMeta(model: ModelResponse): string {
+  // El clasico no tiene escala fija (va a cualquier medida en una pasada) ni
+  // arquitectura: mostrar "—x · classic" no diria nada util.
+  if (model.kind === "classic") {
+    return "any scale · CPU, no model";
+  }
   const scale = model.scale ? `${model.scale}x` : "—";
   const arch = model.arch ?? model.kind;
   return `${scale} · ${arch}`;
@@ -78,7 +94,7 @@ function ModelOption({
   );
 }
 
-export function ModelPicker({ value, onChange }: ModelPickerProps) {
+export function ModelPicker({ value, onChange, allowNoAi = false }: ModelPickerProps) {
   const modelsQuery = useQuery({ queryKey: ["models"], queryFn: getModels });
 
   if (modelsQuery.isLoading) {
@@ -89,7 +105,7 @@ export function ModelPicker({ value, onChange }: ModelPickerProps) {
     return <p className="text-sm text-danger">Could not load models.</p>;
   }
 
-  const groups = groupModels(modelsQuery.data?.models ?? []);
+  const groups = groupModels(modelsQuery.data?.models ?? [], allowNoAi);
 
   return (
     <fieldset className="flex flex-col gap-4">

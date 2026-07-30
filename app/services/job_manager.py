@@ -16,6 +16,7 @@ from app.services.device_router import DeviceRouter, has_compatible_device
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
 from app.services.engines.base import UpscaleEngine
+from app.services.classic_upscalers import is_classic_upscaler
 from app.services.model_registry import ModelKind, ModelRegistry, ModelStatus
 from app.services.progress import advance_image_stage, complete_image_stages
 
@@ -174,6 +175,14 @@ class JobManager:
             raise ValueError("Output format must be png, jpg, jpeg, or webp")
         if not model_id.strip():
             raise ValueError("Model id is required")
+        if is_classic_upscaler(model_id):
+            # El reescalado clasico lo hace swscale DENTRO del encode de video, y el
+            # pipeline de imagen no tiene ese paso. Sin este rechazo el job se encolaria
+            # y fallaria en el motor ncnn buscando un modelo llamado "lanczos".
+            raise ValueError(
+                f"Classic upscaler {model_id!r} is only available for video jobs "
+                "(image upscaling has no resize stage yet)"
+            )
 
         if model_id in self.settings.model_keys:
             return self._resolve_builtin_model(model_id, scale, device)

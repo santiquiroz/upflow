@@ -354,4 +354,27 @@ export const es = {
   "transcribe.models.install.failedFallback":
     "La instalación del modelo falló.",
   "transcribe.models.retry": "Reintentar",
+  "video.output.mode.label": "Modo de salida",
+  "video.output.mode.resolution": "Resolución objetivo",
+  "video.output.mode.resolution.description":
+    "Elegí el alto de salida; el ancho conserva la relación de aspecto de la fuente.",
+  "video.output.mode.multiplier": "Multiplicador",
+  "video.output.mode.multiplier.description":
+    "Usá la escala del perfil seleccionado.",
+  "video.output.target.label": "Alto objetivo",
+  "video.output.target.sourceAlreadyReaches":
+    "La fuente ya alcanza o supera este valor: elegí un modelo sin IA para reducir",
+  "video.output.preview.label": "Salida esperada",
+  "video.output.preview.dimensions": "{{width}} × {{height}} px",
+  "video.output.preview.targetOnly":
+    "{{height}}p de alto · el ancho conserva la relación de aspecto",
+  "video.output.preview.scaleOnly":
+    "{{scale}}× las dimensiones de la fuente · tamaño exacto no disponible",
+  "video.output.preview.unavailable":
+    "Agregá un paso de reescalado para calcular la salida.",
+  "video.output.warnings.label": "Avisos de tamaño de salida",
+  "video.output.warning.target":
+    "Esto produciría {{width}} × {{height}} ({{megapixels}} MP) por cuadro. Un objetivo de {{suggestedHeight}}p es una alternativa más proporcionada.",
+  "video.output.warning.keepSource":
+    "Esto produciría {{width}} × {{height}} ({{megapixels}} MP) por cuadro. La fuente ya tiene {{sourceHeight}}p; conservar su resolución actual es una alternativa más proporcionada.",
 } as const;

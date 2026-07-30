@@ -14,6 +14,7 @@ import type {
 } from "../../lib/apiTypes";
 import * as audioService from "../../services/audio";
 import { VideoPanel } from "./VideoPanel";
+import * as videoOutputResolution from "./videoOutputResolution";
 
 vi.mock("../../lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/api")>();
@@ -32,6 +33,14 @@ vi.mock("../../lib/api", async (importOriginal) => {
 vi.mock("../../services/audio", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../services/audio")>();
   return { ...actual, fetchAudioCapabilities: vi.fn() };
+});
+
+vi.mock("./videoOutputResolution", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./videoOutputResolution")>();
+  return {
+    ...actual,
+    readVideoDimensions: vi.fn(),
+  };
 });
 
 const GENERAL_PROFILE: VideoProfileResponse = {
@@ -126,6 +135,10 @@ function renderPanel(
     audioTracks: [],
     subtitleTracks: [],
   });
+  vi.mocked(videoOutputResolution.readVideoDimensions).mockResolvedValue({
+    width: 1920,
+    height: 1080,
+  });
   vi.mocked(audioService.fetchAudioCapabilities).mockResolvedValue({
     denoiseModes: ["deepfilter", "rnnoise"],
     restoreAvailable,
@@ -140,6 +153,41 @@ function renderPanel(
 
 function makeFile(): File {
   return new File(["binary"], "clip.mp4", { type: "video/mp4" });
+}
+
+function queuedVideoJob(
+  jobId: string,
+  scale: number,
+  targetHeight: number | null,
+): VideoJobResponse {
+  return {
+    ownerId: null,
+    jobId,
+    status: "queued",
+    originalFilename: "clip.mp4",
+    modelName: scale === 4 ? "realesrgan-x4plus" : "realesr-animevideov3-x2",
+    scale,
+    targetHeight,
+    outputContainer: "mp4",
+    videoCodec: "libx264",
+    videoPreset: "medium",
+    crf: 18,
+    keepAudio: true,
+    fpsMultiplier: 1,
+    targetFps: null,
+    audioEnhance: null,
+    audioRestore: null,
+    interpEngine: "rife",
+    modelId: scale === 4 ? "realesrgan-x4plus" : "realesr-animevideov3-x2",
+    device: "dml:0",
+    createdAt: "2026-01-01T00:00:00Z",
+    startedAt: null,
+    finishedAt: null,
+    error: null,
+    metadata: {},
+    progressPct: null,
+    downloadUrl: null,
+  };
 }
 
 async function selectFile() {
@@ -172,6 +220,7 @@ afterEach(() => {
   vi.mocked(api.createVideoJob).mockReset();
   vi.mocked(api.getVideoJob).mockReset();
   vi.mocked(audioService.fetchAudioCapabilities).mockReset();
+  vi.mocked(videoOutputResolution.readVideoDimensions).mockReset();
 });
 
 describe("VideoPanel", () => {
@@ -235,6 +284,114 @@ describe("VideoPanel", () => {
     fireEvent.click(profileRadio);
 
     await waitFor(() => expect(submitButton).not.toBeDisabled());
+  });
+
+  it("defaults to target resolution and preserves both target and profile scale across mode changes", async () => {
+    renderPanel();
+    await selectFile();
+
+    const resolutionMode = screen.getByRole("radio", {
+      name: new RegExp(`^${en["video.output.mode.resolution"]}`),
+    });
+    const multiplierMode = screen.getByRole("radio", {
+      name: new RegExp(`^${en["video.output.mode.multiplier"]}`),
+    });
+    expect(resolutionMode).toBeChecked();
+
+    const sourceSizedPreset = screen.getByRole("radio", { name: /^1080p/ });
+    expect(sourceSizedPreset.closest("label")).toHaveTextContent(
+      en["video.output.target.sourceAlreadyReaches"],
+    );
+
+    fireEvent.click(screen.getByRole("radio", { name: "1440p" }));
+    fireEvent.click(await screen.findByRole("radio", { name: /General Balanced 4x/ }));
+    fireEvent.click(multiplierMode);
+
+    expect(await screen.findByText(copy("video.output.preview.dimensions", {
+      width: 7680,
+      height: 4320,
+    }))).toBeVisible();
+
+    fireEvent.click(resolutionMode);
+    expect(screen.getByRole("radio", { name: "1440p" })).toBeChecked();
+    expect(screen.getByText(copy("video.output.preview.dimensions", {
+      width: 2560,
+      height: 1440,
+    }))).toBeVisible();
+
+    fireEvent.click(multiplierMode);
+    expect(screen.getByText(copy("video.output.preview.dimensions", {
+      width: 7680,
+      height: 4320,
+    }))).toBeVisible();
+  });
+
+  it("submits the selected target height in target-resolution mode", async () => {
+    vi.mocked(api.createVideoJob).mockResolvedValue({
+      jobId: "target-job",
+      status: "queued",
+      statusUrl: "/api/v1/video/jobs/target-job",
+      downloadUrl: null,
+    });
+    vi.mocked(api.getVideoJob).mockResolvedValue(queuedVideoJob("target-job", 4, 1440));
+    renderPanel();
+    await selectFile();
+    fireEvent.click(await screen.findByRole("radio", { name: /General Balanced 4x/ }));
+    fireEvent.click(screen.getByRole("radio", { name: "1440p" }));
+
+    const submitButton = screen.getByRole("button", { name: /upscale video/i });
+    await waitFor(() => expect(submitButton).not.toBeDisabled());
+    fireEvent.click(submitButton);
+
+    await waitFor(() => expect(api.createVideoJob).toHaveBeenCalled());
+    expect(vi.mocked(api.createVideoJob).mock.calls[0][0]).toEqual(
+      expect.objectContaining({ targetHeight: 1440 }),
+    );
+  });
+
+  it("omits target height from multiplier-mode submissions", async () => {
+    vi.mocked(api.createVideoJob).mockResolvedValue({
+      jobId: "scale-job",
+      status: "queued",
+      statusUrl: "/api/v1/video/jobs/scale-job",
+      downloadUrl: null,
+    });
+    vi.mocked(api.getVideoJob).mockResolvedValue(queuedVideoJob("scale-job", 2, null));
+    renderPanel();
+    await selectFile();
+    fireEvent.click(await screen.findByRole("radio", { name: /Anime Balanced 2x/ }));
+    fireEvent.click(screen.getByRole("radio", {
+      name: new RegExp(`^${en["video.output.mode.multiplier"]}`),
+    }));
+
+    const submitButton = screen.getByRole("button", { name: /upscale video/i });
+    await waitFor(() => expect(submitButton).not.toBeDisabled());
+    fireEvent.click(submitButton);
+
+    await waitFor(() => expect(api.createVideoJob).toHaveBeenCalled());
+    const params = vi.mocked(api.createVideoJob).mock.calls[0][0];
+    expect(Object.prototype.hasOwnProperty.call(params, "targetHeight")).toBe(false);
+  });
+
+  it("warns for a disproportionate multiplier, keeps the CTA enabled, and clears for a reasonable one", async () => {
+    renderPanel();
+    await selectFile();
+    fireEvent.click(await screen.findByRole("radio", { name: /General Balanced 4x/ }));
+    fireEvent.click(screen.getByRole("radio", {
+      name: new RegExp(`^${en["video.output.mode.multiplier"]}`),
+    }));
+
+    const warning = copy("video.output.warning.target", {
+      width: 7680,
+      height: 4320,
+      megapixels: "33.2",
+      suggestedHeight: 2160,
+    });
+    expect(await screen.findByText(warning)).toBeVisible();
+    expect(screen.getByRole("button", { name: /upscale video/i })).not.toBeDisabled();
+
+    fireEvent.click(screen.getByRole("radio", { name: /Anime Balanced 2x/ }));
+    expect(screen.queryByText(warning)).not.toBeInTheDocument();
   });
 
   it("auto-selects the profile's model and applies its advanced defaults", async () => {

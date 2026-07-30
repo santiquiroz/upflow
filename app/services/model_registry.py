@@ -12,12 +12,17 @@ from typing import Any
 
 from app.config import MODEL_CATALOG, ModelOption, Settings
 from app.models import utc_now
+from app.services.classic_upscalers import catalog_entries as classic_catalog_entries
 
 logger = logging.getLogger(__name__)
 
 REGISTRY_FILENAME = "registry.json"
 
-BUILTIN_MODEL_IDS = frozenset(option["key"] for option in MODEL_CATALOG)
+CLASSIC_MODEL_IDS = frozenset(entry["key"] for entry in classic_catalog_entries())
+
+# Ids que nadie puede sobrescribir ni borrar. Incluye los clasicos: no tienen archivos
+# que borrar, asi que quitarlos solo los volveria a resembrar como zombies.
+BUILTIN_MODEL_IDS = frozenset(option["key"] for option in MODEL_CATALOG) | CLASSIC_MODEL_IDS
 
 
 class ModelKind(str, Enum):
@@ -28,6 +33,10 @@ class ModelKind(str, Enum):
     # Se persiste, asi que una version anterior no va a saber leerlo -- por eso
     # _parse_entries SALTA la entrada en vez de invalidar el registro entero.
     asr_onnx = "asr-onnx"
+    # Reescalado sin IA (swscale). No hay pesos ni archivo: nunca aparece en el
+    # registro, solo como resolucion de un job. Existe como kind para que el ruteo de
+    # dispositivo no lo confunda con builtin-ncnn, que EXIGE una GPU Vulkan.
+    classic = "classic"
 
 
 class ModelStatus(str, Enum):
@@ -92,12 +101,31 @@ def _builtin_entry_from_catalog(option: ModelOption) -> ModelEntry:
     return ModelEntry(
         id=option["key"],
         name=option["label"],
-        kind=ModelKind.builtin_ncnn,
+        kind=_kind_for_catalog_option(option),
         source="builtin",
         size_bytes=0,
         scale=_single_scale(option),
         status=ModelStatus.installed,
     )
+
+
+def _seedable_catalog() -> list[ModelOption]:
+    """Lo que se siembra en el registro al arrancar.
+
+    Los clasicos no viven en MODEL_CATALOG porque esa lista describe modelos con pesos.
+    Pero sin sembrarlos GET /models no los devuelve y el selector nunca los ofrece: el
+    pipeline sabria ejecutarlos y nadie podria elegirlos.
+    """
+    return [*MODEL_CATALOG, *classic_catalog_entries()]  # type: ignore[list-item]
+
+
+def _kind_for_catalog_option(option: ModelOption) -> ModelKind:
+    # Los clasicos no son builtin-ncnn: ese kind EXIGE una GPU Vulkan en el ruteo de
+    # dispositivo, y swscale corre en CPU. Confundirlos dejaria el reescalado sin IA
+    # inaccesible justo en las maquinas que mas lo necesitan.
+    if option["key"] in CLASSIC_MODEL_IDS:
+        return ModelKind.classic
+    return ModelKind.builtin_ncnn
 
 
 def _write_json_atomically(path: Path, payload: list[dict[str, Any]]) -> None:
@@ -122,8 +150,8 @@ def _reject_builtin_conflicts(entry: ModelEntry) -> None:
         raise ValueError(f"Cannot overwrite builtin model: {entry.id!r}")
     # Only the internal seed creates builtin entries; a caller-registered
     # builtin-ncnn entry would be an unremovable zombie.
-    if entry.kind == ModelKind.builtin_ncnn:
-        raise ValueError(f"Cannot register builtin-ncnn entry: {entry.id!r}")
+    if entry.kind in (ModelKind.builtin_ncnn, ModelKind.classic):
+        raise ValueError(f"Cannot register builtin entry: {entry.id!r} ({entry.kind.value})")
 
 
 class ModelRegistry:
@@ -156,7 +184,7 @@ class ModelRegistry:
     def remove(self, model_id: str) -> None:
         with self._lock:
             entry = self._require_entry(model_id)
-            if entry.kind == ModelKind.builtin_ncnn:
+            if entry.kind in (ModelKind.builtin_ncnn, ModelKind.classic):
                 raise ValueError(f"Cannot remove builtin model: {model_id!r}")
             del self._entries[model_id]
             self._persist()
@@ -227,7 +255,7 @@ class ModelRegistry:
         with self._lock:
             missing = [
                 _builtin_entry_from_catalog(option)
-                for option in MODEL_CATALOG
+                for option in _seedable_catalog()
                 if option["key"] not in self._entries
             ]
             if not missing:

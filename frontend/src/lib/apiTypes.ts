@@ -71,6 +71,9 @@ export interface VideoJobResponse {
   originalFilename: string;
   modelName: string;
   scale: number;
+  // Present on current responses; optional keeps older persisted/mock jobs
+  // readable while exposing the target-resolution contract to new callers.
+  targetHeight?: number | null;
   outputContainer: string;
   videoCodec: string;
   videoPreset: string;

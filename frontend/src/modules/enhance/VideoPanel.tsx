@@ -29,8 +29,14 @@ import { AUDIO_ENHANCE_OPTIONS, AudioEnhanceControls } from "./AudioEnhanceContr
 import { FpsBoostControls, TARGET_FPS_OPTIONS, type FpsBoostValue } from "./FpsBoostControls";
 import { InterpEngineControls } from "./InterpEngineControls";
 import { TrackSelector } from "./TrackSelector";
+import { VideoOutputControls } from "./VideoOutputControls";
 import { VideoProfileControls } from "./VideoProfileControls";
 import { VideoStepStack } from "./VideoStepStack";
+import {
+  readVideoDimensions,
+  type VideoDimensions,
+  type VideoOutputMode,
+} from "./videoOutputResolution";
 import {
   addVideoStep,
   deriveVideoSteps,
@@ -325,6 +331,9 @@ export function VideoPanel() {
   const [backend, setBackend] = useState<UpscaleBackend>("auto");
   const [videoEncoder, setVideoEncoder] = useState<VideoEncoder>("auto");
   const [scale, setScale] = useState<number | null>(null);
+  const [outputMode, setOutputMode] = useState<VideoOutputMode>("resolution");
+  const [targetHeight, setTargetHeight] = useState(2160);
+  const [sourceDimensions, setSourceDimensions] = useState<VideoDimensions | null>(null);
   const [outputContainer, setOutputContainer] = useState("mp4");
   const [videoCodec, setVideoCodec] = useState("libx264");
   const [videoPreset, setVideoPreset] = useState("medium");
@@ -370,6 +379,7 @@ export function VideoPanel() {
   // the click) -- excluding `model` from the deps means a manual ModelPicker
   // override afterward is never fought back to the profile default.
   const appliedProfileKeyRef = useRef<string | null>(null);
+  const fileSelectionIdRef = useRef(0);
   useEffect(() => {
     if (!modelsQuery.data || !profile) {
       return;
@@ -408,15 +418,31 @@ export function VideoPanel() {
   }, [interpEngines, interpEngine]);
 
   async function handleFileSelected(selected: File) {
+    const selectionId = ++fileSelectionIdRef.current;
     setFile(selected);
     reset();
     setAnalyzeResult(null);
+    setSourceDimensions(null);
     setSelectedAudioIndices([]);
     setKeepSubtitles(false);
+
+    void readVideoDimensions(selected)
+      .then((dimensions) => {
+        if (fileSelectionIdRef.current === selectionId) {
+          setSourceDimensions(dimensions);
+        }
+      })
+      .catch(() => {
+        // Browser metadata is best-effort. The controls still show the selected
+        // height or multiplier without pretending an exact output size.
+      });
+
     try {
       const result = await analyzeVideo(selected);
-      setAnalyzeResult(result);
-      setSelectedAudioIndices(resolveDefaultAudioIndices(result.audioTracks));
+      if (fileSelectionIdRef.current === selectionId) {
+        setAnalyzeResult(result);
+        setSelectedAudioIndices(resolveDefaultAudioIndices(result.audioTracks));
+      }
     } catch {
       // Analysis is best-effort: leaving analyzeResult null falls back to
       // submitting the raw file below, same as before this feature existed.
@@ -487,6 +513,7 @@ export function VideoPanel() {
       backend,
       videoEncoder,
       scale,
+      ...(outputMode === "resolution" ? { targetHeight } : {}),
       outputContainer,
       videoCodec,
       videoPreset,
@@ -529,6 +556,14 @@ export function VideoPanel() {
         >
           <VideoProfileControls value={profile?.key ?? null} onChange={handleProfileChange} />
         </AccordionSection>
+        <VideoOutputControls
+          mode={outputMode}
+          onModeChange={setOutputMode}
+          targetHeight={targetHeight}
+          onTargetHeightChange={setTargetHeight}
+          scale={scale}
+          sourceDimensions={sourceDimensions}
+        />
         <VideoStepStack
           steps={videoSteps}
           addableStepIds={addableVideoStepIds}
@@ -536,7 +571,7 @@ export function VideoPanel() {
           onAdd={handleAddVideoStep}
         />
         <AccordionSection title="Model" summary={formatModelSummary(model)} tooltip={MODEL_TOOLTIP}>
-          <ModelPicker value={model?.id ?? null} onChange={setModel} />
+          <ModelPicker value={model?.id ?? null} onChange={setModel} allowNoAi />
         </AccordionSection>
         <AccordionSection title="Device" summary={formatDeviceSummary(device)} tooltip={DEVICE_TOOLTIP}>
           <DevicePicker value={device?.id ?? null} onChange={setDevice} requiresGpu={requiresGpu} />

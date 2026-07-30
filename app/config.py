@@ -9,6 +9,7 @@ from typing import TypedDict
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.services.classic_upscalers import catalog_entries as classic_catalog_entries
 from app.services.json_store import write_text_atomically
 
 
@@ -731,7 +732,10 @@ class Settings(BaseSettings):
 
     @property
     def model_catalog(self) -> list[ModelOption]:
-        return MODEL_CATALOG
+        # Los clasicos van SIEMPRE y al final: no necesitan descarga ni modelo
+        # instalado, asi que nunca pueden faltar, pero tampoco deben desplazar a los
+        # de IA en el selector.
+        return [*MODEL_CATALOG, *classic_catalog_entries()]  # type: ignore[list-item]
 
     @property
     def model_keys(self) -> set[str]:

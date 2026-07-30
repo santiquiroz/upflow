@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from app.config import MODEL_CATALOG, Settings
+from app.services.classic_upscalers import CLASSIC_UPSCALERS
 from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry, ModelStatus
 
 # ---------------------------------------------------------------------------
@@ -42,7 +43,11 @@ def make_onnx_entry(**overrides: object) -> ModelEntry:
     return ModelEntry(**defaults)
 
 
-CATALOG_IDS = {option["key"] for option in MODEL_CATALOG}
+# El registro siembra los modelos del catalogo Y los upscalers clasicos: sin sembrarlos
+# GET /models no los devuelve y el selector nunca los ofrece.
+CLASSIC_IDS = {upscaler.key for upscaler in CLASSIC_UPSCALERS}
+CATALOG_IDS = {option["key"] for option in MODEL_CATALOG} | CLASSIC_IDS
+SEEDED_COUNT = len(MODEL_CATALOG) + len(CLASSIC_UPSCALERS)
 
 
 # ---------------------------------------------------------------------------
@@ -62,9 +67,36 @@ def test_seeded_builtins_are_marked_builtin_ncnn_and_installed(tmp_path: Path) -
     registry = ModelRegistry(make_settings(tmp_path))
 
     for entry in registry.list():
+        if entry.id in CLASSIC_IDS:
+            continue
         assert entry.kind == ModelKind.builtin_ncnn
         assert entry.status == ModelStatus.installed
         assert entry.error is None
+
+
+def test_seeded_classic_upscalers_are_not_builtin_ncnn(tmp_path: Path) -> None:
+    """El kind importa: builtin-ncnn EXIGE una GPU Vulkan en el ruteo de dispositivo.
+
+    Sembrarlos con ese kind dejaria el reescalado sin IA inaccesible justo en las
+    maquinas sin GPU, que son las que mas lo necesitan.
+    """
+    registry = ModelRegistry(make_settings(tmp_path))
+
+    classic = [entry for entry in registry.list() if entry.id in CLASSIC_IDS]
+
+    assert len(classic) == len(CLASSIC_IDS)
+    for entry in classic:
+        assert entry.kind == ModelKind.classic
+        assert entry.status == ModelStatus.installed
+        assert entry.size_bytes == 0
+
+
+def test_a_classic_upscaler_cannot_be_removed(tmp_path: Path) -> None:
+    # No hay archivos que borrar: quitarlo solo lo resembraria como zombie.
+    registry = ModelRegistry(make_settings(tmp_path))
+
+    with pytest.raises(ValueError, match="Cannot remove builtin model"):
+        registry.remove(next(iter(CLASSIC_IDS)))
 
 
 def test_seeding_persists_registry_json_under_models_dir(tmp_path: Path) -> None:
@@ -84,7 +116,7 @@ def test_seeding_is_idempotent_across_registry_instances(tmp_path: Path) -> None
 
     second = ModelRegistry(settings)
 
-    assert len(second.list()) == len(MODEL_CATALOG)
+    assert len(second.list()) == SEEDED_COUNT
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +152,7 @@ def test_register_adds_custom_onnx_entry(tmp_path: Path) -> None:
     registry.register(entry)
 
     assert registry.get(entry.id) == entry
-    assert len(registry.list()) == len(MODEL_CATALOG) + 1
+    assert len(registry.list()) == SEEDED_COUNT + 1
 
 
 def test_register_persists_custom_entry_across_instances(tmp_path: Path) -> None:
@@ -146,7 +178,7 @@ def test_register_overwrites_entry_with_same_id(tmp_path: Path) -> None:
     updated = registry.get("swinir-real-sr-x4")
     assert updated is not None
     assert updated.status == ModelStatus.installed
-    assert len(registry.list()) == len(MODEL_CATALOG) + 1
+    assert len(registry.list()) == SEEDED_COUNT + 1
 
 
 def test_register_stores_error_entry_for_failed_conversion(tmp_path: Path) -> None:
@@ -189,7 +221,7 @@ def test_remove_deletes_custom_entry(tmp_path: Path) -> None:
     registry.remove("swinir-real-sr-x4")
 
     assert registry.get("swinir-real-sr-x4") is None
-    assert len(registry.list()) == len(MODEL_CATALOG)
+    assert len(registry.list()) == SEEDED_COUNT
 
 
 def test_remove_persists_deletion_across_instances(tmp_path: Path) -> None:

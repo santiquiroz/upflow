@@ -359,4 +359,29 @@ export const en = {
   "transcribe.models.install.failedFallback":
     "The model installation failed.",
   "transcribe.models.retry": "Try again",
+  "video.output.mode.label": "Output mode",
+  "video.output.mode.resolution": "Target resolution",
+  "video.output.mode.resolution.description":
+    "Choose the output height; width follows the source aspect ratio.",
+  "video.output.mode.multiplier": "Multiplier",
+  "video.output.mode.multiplier.description":
+    "Use the scale from the selected profile.",
+  "video.output.target.label": "Target height",
+  // Dice QUE hacer, no solo que algo esta mal: los modelos de IA solo amplian, asi que
+  // bajar de resolucion necesita el grupo "No AI" del selector de modelo.
+  "video.output.target.sourceAlreadyReaches":
+    "Source already meets or exceeds this — pick a No AI model to downscale",
+  "video.output.preview.label": "Expected output",
+  "video.output.preview.dimensions": "{{width}} × {{height}} px",
+  "video.output.preview.targetOnly":
+    "{{height}}p high · width follows the source aspect ratio",
+  "video.output.preview.scaleOnly":
+    "{{scale}}× source dimensions · exact size unavailable",
+  "video.output.preview.unavailable":
+    "Add an upscale step to calculate the output.",
+  "video.output.warnings.label": "Output size warnings",
+  "video.output.warning.target":
+    "This would produce {{width}} × {{height}} ({{megapixels}} MP) per frame. A {{suggestedHeight}}p target is a more proportionate alternative.",
+  "video.output.warning.keepSource":
+    "This would produce {{width}} × {{height}} ({{megapixels}} MP) per frame. The source is already {{sourceHeight}}p; keeping its current resolution is a more proportionate alternative.",
 } as const;

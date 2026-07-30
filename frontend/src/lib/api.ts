@@ -168,6 +168,7 @@ export interface CreateVideoJobParams {
   modelId: string | null;
   device: string | null;
   scale: number;
+  targetHeight?: number;
   outputContainer: string;
   videoCodec: string;
   videoPreset: string;
@@ -206,6 +207,9 @@ function buildVideoJobFormData(params: CreateVideoJobParams): FormData {
   appendVideoSourceFields(formData, params);
   formData.append("profile_key", params.profileKey);
   formData.append("scale", String(params.scale));
+  if (params.targetHeight !== undefined) {
+    formData.append("target_height", String(params.targetHeight));
+  }
   formData.append("output_container", params.outputContainer);
   formData.append("video_codec", params.videoCodec);
   formData.append("video_preset", params.videoPreset);

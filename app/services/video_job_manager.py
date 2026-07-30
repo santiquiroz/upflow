@@ -19,6 +19,11 @@ from app.services.restorer_registry import validate_restore_mode_ready
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
 from app.services.media_tools import MediaTools, parse_fps_fraction, resolve_video_fps
+from app.services.classic_upscalers import (
+    CLASSIC_SCALES,
+    is_classic_upscaler,
+    swscale_flag_for,
+)
 from app.services.model_registry import ModelKind, ModelRegistry, ModelStatus
 from app.services.target_resolution import smallest_scale_reaching
 from app.services.video_upscaler import VideoUpscaler
@@ -254,6 +259,12 @@ class VideoJobManager:
         Se acota a lo que el modelo elegido soporta: pedir una escala que no tiene
         haria fallar la resolucion del modelo mas adelante.
         """
+        if is_classic_upscaler(model_id):
+            # El clasico no escala por pasos enteros: swscale va a cualquier medida en
+            # una sola pasada. Con un objetivo pedido la escala deja de significar algo,
+            # asi que se fija en 1 y el redimensionado hace todo el trabajo. Esto es lo
+            # que habilita el caso 4K a 1080p, que ningun modelo puede resolver.
+            return requested_scale if target_height is None else 1
         if target_height is None:
             return requested_scale
         dimensions = self._source_dimensions(probe)
@@ -312,9 +323,28 @@ class VideoJobManager:
         return fps, probe
 
     def _resolve_model(self, model_id: str, scale: int, device: str | None) -> VideoModelResolution:
+        if is_classic_upscaler(model_id):
+            return self._resolve_classic_upscaler(model_id, scale)
         if model_id in self.settings.model_keys:
             return self._resolve_builtin_model(model_id, scale, device)
         return self._resolve_onnx_model(model_id)
+
+    def _resolve_classic_upscaler(self, model_id: str, scale: int) -> VideoModelResolution:
+        """El reescalado clasico no tiene modelo ni motor: lo hace swscale en el encode.
+
+        Por eso no valida dispositivo -- corre en CPU y acepta 'cpu' explicito, al
+        contrario de los builtin ncnn que exigen una GPU Vulkan.
+        """
+        if scale not in CLASSIC_SCALES:
+            raise ValueError(
+                f"Classic upscaler {model_id} supports only scales {list(CLASSIC_SCALES)}"
+            )
+        return VideoModelResolution(
+            model_id=model_id,
+            engine_model_name=swscale_flag_for(model_id),
+            kind=ModelKind.classic,
+            scale=scale,
+        )
 
     def _resolve_builtin_model(self, model_id: str, scale: int, device: str | None) -> VideoModelResolution:
         option = self.settings.get_model_option(model_id)
@@ -355,6 +385,8 @@ class VideoJobManager:
             )
 
     def _model_kind_for_job(self, job: VideoUpscaleJob) -> ModelKind:
+        if is_classic_upscaler(job.model_id):
+            return ModelKind.classic
         if job.model_id in self.settings.model_keys:
             return ModelKind.builtin_ncnn
         if self.registry is not None:

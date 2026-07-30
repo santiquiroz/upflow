@@ -14,7 +14,8 @@ import numpy as np
 
 from app.config import GMFSS_ENGINE, Settings
 from app.models import VideoUpscaleJob
-from app.services.target_resolution import plan_for_target
+from app.services.classic_upscalers import is_classic_upscaler, swscale_flag_for
+from app.services.target_resolution import plan_for_scale, plan_for_target
 from app.services import video_encoders
 from app.services.backend_registry import (
     UpscaleBackend,
@@ -311,6 +312,17 @@ class VideoUpscaler:
             # (peak footprint on a long episode is tens-hundreds of GB).
             await asyncio.to_thread(self._safe_rmtree, frames_in)
 
+        if is_classic_upscaler(job.model_id):
+            # Sin IA no hay etapa de escalado: swscale reescala DENTRO del encode que
+            # igual iba a correr, asi que los frames de entrada YA son los de salida.
+            # Copiarlos a frames_out solo para no escalarlos duplicaria el disco (en 4K,
+            # decenas de GB) sin cambiar un pixel.
+            #
+            # Sale ANTES del tramo streaming a proposito: ese camino existe para fusionar
+            # escalado y encode, y aca no hay escalado que fusionar -- entrar correria el
+            # motor de un modelo que este job no eligio.
+            return upscale_src, encode_fps
+
         # Tramo streaming: con el pipeline nuevo activo (modo híbrido) va por
         # FramePipeline; si no (flag OFF / no elegible / fallback del modo
         # full), el raw-pipe legacy queda intacto. Ambos caen al camino PNG
@@ -368,22 +380,39 @@ class VideoUpscaler:
     def _resize_filter_args(self, job: VideoUpscaleJob) -> list[str]:
         """El -vf que lleva a la medida exacta, o nada si no hace falta.
 
-        Los modelos solo hacen escalados enteros, asi que un objetivo como 1080p casi
-        nunca cae justo. lanczos porque el paso es una REDUCCION en la mayoria de los
-        casos y ahi es el que menos detalle pierde.
+        Cumple dos papeles distintos. Con un modelo de IA es un AJUSTE: el modelo solo
+        hace escalados enteros y un objetivo como 1080p casi nunca cae justo. Con un
+        upscaler clasico es TODO el trabajo -- no corrio ningun motor, los frames siguen
+        en resolucion de fuente, y este filtro es el que escala.
         """
-        if job.target_height is None:
+        classic = is_classic_upscaler(job.model_id)
+        if job.target_height is None and not classic:
             return []
         source_width = job.metadata.get("sourceWidth")
         source_height = job.metadata.get("sourceHeight")
         if not source_width or not source_height:
             return []
-        plan = plan_for_target(source_width, source_height, job.target_height)
-        reached = (source_width * job.scale, source_height * job.scale)
+
+        if job.target_height is None:
+            plan = plan_for_scale(source_width, source_height, job.scale)
+        else:
+            plan = plan_for_target(source_width, source_height, job.target_height)
+
+        # Lo que ya se logro antes del encode. En el camino clasico no corrio nada, asi
+        # que los frames siguen midiendo lo que la fuente.
+        reached = (
+            (source_width, source_height)
+            if classic
+            else (source_width * job.scale, source_height * job.scale)
+        )
         if reached == (plan.output_width, plan.output_height):
-            # El escalado entero cayo justo: una pasada de ffmpeg al vicio.
+            # Ya esta en la medida pedida: una pasada de ffmpeg al vicio.
             return []
-        return ["-vf", f"scale={plan.output_width}:{plan.output_height}:flags=lanczos"]
+        # El flag elegido cuando es clasico (es la opcion del usuario); lanczos para el
+        # ajuste post-modelo, porque ahi el paso casi siempre es una REDUCCION y es el
+        # que menos detalle pierde.
+        flags = swscale_flag_for(job.model_id) if classic else "lanczos"
+        return ["-vf", f"scale={plan.output_width}:{plan.output_height}:flags={flags}"]
 
     @staticmethod
     def _interpolated_encode_fps(fps: str, fps_multiplier: int, target_fps: str | None) -> str:
@@ -845,11 +874,19 @@ class VideoUpscaler:
         return hw
 
     def _expected_output_dims(self, job: VideoUpscaleJob) -> tuple[int, int]:
-        """Resolución de salida según el probe (0,0 si no se conoce todavía)."""
+        """Resolución de salida según el probe (0,0 si no se conoce todavía).
+
+        Con un alto objetivo NO es fuente*escala: el encoder se elige probando que
+        soporte esta resolución, así que pasarle la del multiplicador descartaría
+        encoders por hardware capaces de la salida real.
+        """
         width = int(job.metadata.get("sourceWidth") or 0)
         height = int(job.metadata.get("sourceHeight") or 0)
         if width <= 0 or height <= 0:
             return 0, 0
+        if job.target_height is not None:
+            plan = plan_for_target(width, height, job.target_height)
+            return plan.output_width, plan.output_height
         return width * job.scale, height * job.scale
 
     def _device_name(self, device_id: str | None) -> str | None:

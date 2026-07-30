@@ -42,13 +42,18 @@ const CONVERTING_ONNX_MODEL: ModelResponse = {
   status: "converting",
 };
 
-function renderPicker(models: ModelResponse[], onChange = vi.fn()) {
+function renderPicker(models: ModelResponse[], onChange = vi.fn(), allowNoAi = false) {
   vi.mocked(api.getModels).mockResolvedValue({ models } satisfies ModelsResponse);
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   function Wrapper({ children }: { children: ReactNode }) {
     return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
   }
-  return { onChange, ...render(<ModelPicker value={null} onChange={onChange} />, { wrapper: Wrapper }) };
+  return {
+    onChange,
+    ...render(<ModelPicker value={null} onChange={onChange} allowNoAi={allowNoAi} />, {
+      wrapper: Wrapper,
+    }),
+  };
 }
 
 afterEach(() => {
@@ -107,5 +112,86 @@ describe("ModelPicker", () => {
     render(<ModelPicker value={null} onChange={vi.fn()} />, { wrapper: Wrapper });
 
     expect(await screen.findByText(/Could not load models/i)).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// El grupo sin IA
+//
+// Existe para que la eleccion sea informada en las dos direcciones: quien lo elige tiene
+// que saber que no corre ningun modelo, y quien quiere IA no debe caer aca por accidente.
+// ---------------------------------------------------------------------------
+
+const CLASSIC_MODEL: ModelResponse = {
+  id: "classic-lanczos",
+  name: "Lanczos (no AI)",
+  kind: "classic",
+  source: "builtin",
+  scale: null,
+  arch: null,
+  sizeBytes: 0,
+  status: "installed",
+  error: null,
+};
+
+describe("ModelPicker classic group", () => {
+  it("names the group for what it is instead of how it works", async () => {
+    renderPicker([BUILTIN_MODEL, CLASSIC_MODEL], vi.fn(), true);
+
+    const group = await screen.findByRole("group", { name: "No AI (classic resize)" });
+
+    expect(within(group).getByText("Lanczos (no AI)")).toBeInTheDocument();
+  });
+
+  it("puts the no-AI group last so AI models are not displaced", async () => {
+    renderPicker([CLASSIC_MODEL, BUILTIN_MODEL, ONNX_MODEL], vi.fn(), true);
+    await screen.findByRole("group", { name: "Builtin" });
+
+    // El <fieldset> tambien es role="group" pero no lleva aria-label: solo interesan
+    // los grupos nombrados.
+    const labels = screen
+      .getAllByRole("group")
+      .map((group) => group.getAttribute("aria-label"))
+      .filter(Boolean);
+
+    expect(labels).toEqual(["Builtin", "ONNX", "No AI (classic resize)"]);
+  });
+
+  it("describes the classic option by what it costs, not by a scale it does not have", async () => {
+    // scale es null: mostrar "—x · classic" no diria nada. Lo que importa es que va a
+    // cualquier medida y que no necesita GPU ni modelo.
+    renderPicker([CLASSIC_MODEL], vi.fn(), true);
+
+    const group = await screen.findByRole("group", { name: "No AI (classic resize)" });
+
+    expect(within(group).getByText("any scale · CPU, no model")).toBeInTheDocument();
+  });
+
+  it("is selectable like any other installed model", async () => {
+    const onChange = vi.fn();
+    renderPicker([BUILTIN_MODEL, CLASSIC_MODEL], onChange, true);
+    const group = await screen.findByRole("group", { name: "No AI (classic resize)" });
+
+    fireEvent.click(within(group).getByRole("radio"));
+
+    expect(onChange).toHaveBeenCalledWith(CLASSIC_MODEL);
+  });
+
+  it("hides the no-AI group by default, even when the backend offers one", async () => {
+    // Fail-closed: el reescalado clasico solo existe en el encode de VIDEO. Donde el
+    // pipeline no lo sabe ejecutar (imagenes, upscale post-generacion) ofrecerlo seria
+    // una opcion que falla al enviar.
+    renderPicker([BUILTIN_MODEL, CLASSIC_MODEL]);
+    await screen.findByRole("group", { name: "Builtin" });
+
+    expect(screen.queryByRole("group", { name: "No AI (classic resize)" })).toBeNull();
+    expect(screen.queryByText("Lanczos (no AI)")).toBeNull();
+  });
+
+  it("shows no classic group when the backend sends none", async () => {
+    renderPicker([BUILTIN_MODEL], vi.fn(), true);
+    await screen.findByRole("group", { name: "Builtin" });
+
+    expect(screen.queryByRole("group", { name: "No AI (classic resize)" })).toBeNull();
   });
 });
