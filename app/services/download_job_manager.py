@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import logging
-import re
 import socket
 import threading
 from pathlib import Path
@@ -14,8 +13,11 @@ from app.exceptions import QueueFullError
 from app.models import DownloadJob, JobStatus, TERMINAL_JOB_STATUSES, utc_now
 from app.services.auth.identity import AuthenticatedUser
 from app.services.auth.quotas import QuotaService
-from app.services.fetch import engine as fetch_engine
-from app.services.fetch.options import (
+from fetchflow import engine as fetch_engine
+# describe_failure vive en la libreria: limpiar la decoracion de terminal de yt-dlp y
+# traducir un rate limit le sirve a cualquiera que la use, no solo a Upflow.
+from fetchflow.errors import describe_failure
+from fetchflow.options import (
     FetchRequest,
     build_plan,
     validate_max_height,
@@ -235,36 +237,3 @@ def _reject_internal_target(host: str) -> None:
             )
 
 
-# Códigos de color de terminal. yt-dlp los mete en sus mensajes de error, y sin
-# limpiarlos llegan crudos a la pantalla: se vio "[0;31mERROR: [0m[youtube] ..." en la
-# UI. Es lo primero que ve alguien cuando algo falla, así que importa.
-_ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
-
-# yt-dlp no tiene una excepción propia para esto, así que se reconoce por el texto.
-# Frágil por naturaleza -- si cambian la redacción, el aviso se degrada al mensaje
-# original, que ya es legible. Nunca se pierde información.
-_RATE_LIMIT_MARKERS = ("rate-limited", "rate limited", "too many requests", "http error 429")
-
-
-def describe_failure(exc: Exception) -> str:
-    """Un motivo que le sirva a una persona, no un stacktrace.
-
-    Es el punto mas importante de la UX de un descargador: los sitios cambian y la
-    extraccion se rompe seguido, asi que la diferencia entre util e inutil es decir
-    QUE paso. yt-dlp ya escribe mensajes legibles, pero les pega codigos de color de
-    terminal, un prefijo 'ERROR: ' y a veces el nombre del extractor.
-    """
-    message = _ANSI_ESCAPE.sub("", str(exc)).strip()
-    for prefix in ("ERROR: ", "error: "):
-        if message.startswith(prefix):
-            message = message[len(prefix):].strip()
-    if not message:
-        return exc.__class__.__name__
-    if any(marker in message.lower() for marker in _RATE_LIMIT_MARKERS):
-        # Lo que la persona necesita saber es que NO esta roto y que esperar alcanza.
-        # El mensaje de yt-dlp habla de un flag de linea de comandos que acá no existe.
-        return (
-            "El sitio limitó los pedidos por hacer demasiados seguidos. "
-            "Esperá unos minutos y volvé a intentar; no hay nada roto."
-        )
-    return message

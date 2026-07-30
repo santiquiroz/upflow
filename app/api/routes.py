@@ -122,7 +122,7 @@ from app.services.download_job_manager import (
     describe_failure,
     validate_url,
 )
-from app.services.fetch import engine as fetch_engine
+from fetchflow import engine as fetch_engine
 from app.services.transcribe_job_manager import TranscribeJobManager
 from app.services.stream_analysis import parse_audio_tracks, parse_subtitle_tracks
 from app.services.update_service import UpdateService

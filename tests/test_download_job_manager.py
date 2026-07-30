@@ -13,7 +13,7 @@ from app.services.download_job_manager import (
     describe_failure,
     validate_url,
 )
-from app.services.fetch import engine as fetch_engine
+from fetchflow import engine as fetch_engine
 
 
 @pytest.fixture(autouse=True)

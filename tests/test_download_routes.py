@@ -203,7 +203,7 @@ def test_probe_refuses_a_non_web_scheme(tmp_path: Path):
 
 def test_probe_reports_the_sites_own_reason_when_extraction_fails(tmp_path: Path, monkeypatch):
     """Cuando un sitio cambia, el motivo es lo unico util que se puede dar."""
-    from app.services.fetch import engine as fetch_engine
+    from fetchflow import engine as fetch_engine
 
     def boom(url: str):
         raise RuntimeError("ERROR: [vimeo] 1: Failed to fetch OAuth token: HTTP Error 401")
@@ -219,7 +219,7 @@ def test_probe_reports_the_sites_own_reason_when_extraction_fails(tmp_path: Path
 
 
 def test_probe_says_when_yt_dlp_is_missing(tmp_path: Path, monkeypatch):
-    from app.services.fetch import engine as fetch_engine
+    from fetchflow import engine as fetch_engine
 
     def unavailable(url: str):
         raise fetch_engine.FetchUnavailable("yt-dlp no esta instalado. Instalalo con: pip install yt-dlp")
@@ -237,7 +237,7 @@ def test_probe_surfaces_that_a_url_is_a_playlist_before_anything_downloads(
     tmp_path: Path, monkeypatch
 ):
     """Es el punto del probe: ver los 200 items ANTES de disparar 200 descargas."""
-    from app.services.fetch import engine as fetch_engine
+    from fetchflow import engine as fetch_engine
 
     monkeypatch.setattr(
         fetch_engine,

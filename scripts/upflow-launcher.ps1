@@ -134,6 +134,34 @@ function Install-PythonEnvironment {
     }
 }
 
+function Install-VendoredWheels {
+    # Wheels que viajan EN el instalador, instaladas ANTES de `pip install -e .` para
+    # que pip las vea ya satisfechas y no salga a buscarlas.
+    #
+    # Hoy es fetchflow (github.com/santiquiroz/fetchflow), el motor del descargador.
+    # Va asi y no como dependencia `git+` porque esa forma exigiria el binario git en
+    # esta maquina, y sin el fallaria la instalacion ENTERA de Upflow -- no solo el
+    # apartado de descargas. Tampoco desde PyPI todavia: no esta publicado ahi.
+    #
+    # Ausente no es fatal a proposito: una instalacion desde el repo (sin instalador)
+    # no tiene vendor\wheels, y ahi se espera que fetchflow ya este en el entorno.
+    $wheelDir = Join-Path $root 'vendor\wheels'
+    if (-not (Test-Path $wheelDir)) { return }
+    $wheels = @(Get-ChildItem -Path $wheelDir -Filter '*.whl' -File)
+    if ($wheels.Count -eq 0) { return }
+
+    Write-Step "Instalando $($wheels.Count) componente(s) incluido(s)..."
+    foreach ($wheel in $wheels) {
+        # SIN --no-deps: la wheel trae solo fetchflow, y sus dependencias (yt-dlp,
+        # curl-cffi) tienen que bajarse igual. Con --no-deps el descargador quedaria
+        # instalado y sin motor, fallando recien al primer uso.
+        & $pythonExe -m pip install --quiet --force-reinstall $wheel.FullName
+        if ($LASTEXITCODE -ne 0) {
+            throw "No se pudo instalar $($wheel.Name)."
+        }
+    }
+}
+
 function Install-BundledPythonDependencies {
     if (Test-UpflowAlreadyInstalled) {
         Write-Host 'Upflow ya esta instalado en el Python embebido, se omite este paso.'
@@ -146,6 +174,8 @@ function Install-BundledPythonDependencies {
     if ($LASTEXITCODE -ne 0) {
         throw 'No se pudo actualizar pip en el Python embebido.'
     }
+    Install-VendoredWheels
+
     # --no-build-isolation: el instalador ya deja setuptools/wheel instalados
     # en el Python embebido (ver package-release.ps1 Initialize-EmbeddedPython).
     # pip build-isolation normal falla aca porque inyecta las build

@@ -358,6 +358,45 @@ Si de verdad querés un release incompleto, pasa -AllowMissingOnnx.
     Write-Host "Modelos ONNX ($($onnxFiles.Count)) incluidos en el instalador (backend rapido SP11)."
 }
 
+function Add-FetchflowWheelToInstaller {
+    # fetchflow (github.com/santiquiroz/fetchflow) es nuestro y vive en su propio repo:
+    # ahi se hacen los ajustes del descargador y Upflow solo lo consume.
+    #
+    # Viaja como WHEEL construida, no como dependencia `git+`: esa forma exigiria el
+    # binario git en la maquina del usuario final, y sin el, el `pip install -e .` del
+    # primer arranque falla ENTERO -- no solo para quien use descargas. Tampoco desde
+    # PyPI todavia, porque el paquete no esta publicado ahi.
+    $fetchflowRoot = Join-Path (Split-Path -Parent $root) 'fetchflow'
+    if (-not (Test-Path (Join-Path $fetchflowRoot 'pyproject.toml'))) {
+        throw @"
+No se encontro el repo de fetchflow en: $fetchflowRoot
+Es el motor del apartado de descargas y viaja como wheel en el instalador.
+Clonalo al lado de este repo: git clone https://github.com/santiquiroz/fetchflow
+"@
+    }
+    $wheelDir = Join-Path $installerAppDir 'vendor\wheels'
+    New-Item -ItemType Directory -Force -Path $wheelDir | Out-Null
+    # El Python embeddable ya quedo armado por Initialize-EmbeddedPython y es el que va
+    # a instalar la wheel en la maquina del usuario, asi que construirla con EL es lo
+    # que garantiza que sea compatible.
+    $buildPython = Join-Path $installerPythonDir 'python.exe'
+    if (-not (Test-Path $buildPython)) {
+        throw "No se encontro el Python embebido en $buildPython"
+    }
+    Write-Host 'Construyendo la wheel de fetchflow ...'
+    & $buildPython -m pip wheel --no-deps --no-build-isolation --wheel-dir $wheelDir $fetchflowRoot --quiet
+    if ($LASTEXITCODE -ne 0) {
+        throw 'No se pudo construir la wheel de fetchflow.'
+    }
+    # Falla fuerte si no quedo nada: un instalador sin esta wheel deja el apartado de
+    # descargas muerto, y un aviso en una linea es justo lo que nadie lee.
+    $built = @(Get-ChildItem -Path $wheelDir -Filter 'fetchflow-*.whl' -File)
+    if ($built.Count -eq 0) {
+        throw "pip wheel no dejo ninguna fetchflow-*.whl en $wheelDir"
+    }
+    Write-Host "fetchflow incluido en el instalador: $($built[0].Name)"
+}
+
 function New-Installer {
     param([string]$IsccPath)
 
@@ -365,6 +404,7 @@ function New-Installer {
     Copy-AppAllowlist -Destination $installerAppDir
     Add-ApolloModelToInstaller
     Add-RealesrganOnnxModelsToInstaller
+    Add-FetchflowWheelToInstaller
     New-Item -ItemType Directory -Force -Path $distDir | Out-Null
     Invoke-InnoSetupCompile -IsccPath $IsccPath
 }
