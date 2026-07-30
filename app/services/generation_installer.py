@@ -269,12 +269,36 @@ def map_disk_full(exc: OSError) -> str | None:
     )
 
 
+# Un componente declarado por el pipeline de ORIGEN que en la exportacion ONNX se
+# materializa con OTROS nombres. El VAE es el caso: optimum lo parte en encoder y
+# decoder (sus propias constantes DIFFUSION_MODEL_VAE_{ENCODER,DECODER}_SUBFOLDER), asi
+# que una carpeta `vae` no existe ni va a existir en un pipeline convertido.
+#
+# Sin esto, un SDXL exportaba sus cinco componentes correctamente y la validacion lo
+# rechazaba con "Faltan componentes del pipeline en el repo: vae" -- estaba comparando
+# la salida convertida contra los nombres del formato de entrada. Medido con
+# John6666/hassaku-xl-illustrious-v31-sdxl.
+_COMPONENT_ALIASES: dict[str, tuple[str, ...]] = {
+    "vae": ("vae_encoder", "vae_decoder"),
+}
+
+
+def _component_is_present(staging_root: Path, name: str) -> bool:
+    if (staging_root / name).is_dir():
+        return True
+    aliases = _COMPONENT_ALIASES.get(name)
+    # Todas y no alguna: media exportacion del VAE es una exportacion rota.
+    return bool(aliases) and all((staging_root / alias).is_dir() for alias in aliases)
+
+
 def _validate_structure(staging_root: Path) -> None:
     index_path = staging_root / MODEL_INDEX_FILENAME
     if not index_path.is_file():
         raise ValueError(f"Descarga incompleta: falta {MODEL_INDEX_FILENAME}.")
     declared = _read_declared_components(staging_root)
-    missing = sorted(name for name in declared if not (staging_root / name).is_dir())
+    missing = sorted(
+        name for name in declared if not _component_is_present(staging_root, name)
+    )
     if missing:
         raise ValueError(f"Faltan componentes del pipeline en el repo: {', '.join(missing)}.")
 

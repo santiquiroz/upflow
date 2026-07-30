@@ -49,8 +49,15 @@ _SUBMODEL_LINE = re.compile(
     r"(?P<class_name>\S+)\s+\*{5}$"
 )
 
-# Medido en el smoke del 2026-07-28: fp16 necesita una tolerancia mayor por
-# redondeo esperado. La validacion sigue activa; solo se relaja su atol.
+# Medido en el smoke del 2026-07-28: fp16 necesita una tolerancia mayor por redondeo
+# esperado.
+#
+# ACTUALIZADO 2026-07-30: relajar el atol NO alcanzaba. Un SDXL real
+# (John6666/hassaku-xl-illustrious-v31-sdxl) exportaba sus cinco componentes bien y la
+# validacion numerica lo rechazaba igual. Ahora `do_validation=False` y el gate es la
+# validacion FUNCIONAL de Upflow, que genera una imagen con el modelo convertido. Este
+# atol queda como plomeria por si alguna vez se vuelve a activar la numerica; hoy no
+# tiene efecto.
 FP16_EXPORT_ATOL = 1e-2
 _ALLOCATION_ERROR_MARKERS = (
     "out of memory",
@@ -229,6 +236,18 @@ def _export_with_optimum(
                 str(out_dir),
                 task="text-to-image",
                 device="cpu",
+                # La validacion numerica de optimum queda APAGADA a proposito, y no por
+                # relajar el control: Upflow tiene una mejor. `_validate_pipeline` carga
+                # el pipeline convertido y GENERA UNA IMAGEN de verdad -- si eso anda, el
+                # modelo sirve, sin importar cuanto se aparten los tensores intermedios.
+                #
+                # Medido con John6666/hassaku-xl-illustrious-v31-sdxl (SDXL): los cinco
+                # componentes exportaron bien y la conversion igual se dio por fallida al
+                # 71% con el propio mensaje de optimum diciendo "an error occurred during
+                # validation, but the model was saved nonetheless". Upflow borraba ese
+                # export que funcionaba. O sea que la validacion mas debil estaba vetando
+                # lo que la mas fuerte habria aceptado.
+                do_validation=False,
                 **extra,
             )
     finally:

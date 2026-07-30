@@ -902,3 +902,76 @@ def test_a_real_pipeline_is_not_rejected() -> None:
     from app.services.generation_installer import _ensure_model_index_listed
 
     _ensure_model_index_listed([HfFile(path="model_index.json", size=100)], "amd/sdxl-onnx")
+
+
+# ---------------------------------------------------------------------------
+# El VAE convertido no se llama "vae"
+#
+# optimum parte el VAE en encoder y decoder (sus constantes
+# DIFFUSION_MODEL_VAE_{ENCODER,DECODER}_SUBFOLDER), asi que una carpeta `vae` no existe
+# en un pipeline ONNX. La validacion estructural comparaba la salida CONVERTIDA contra
+# los nombres del formato de ENTRADA y rechazaba exportaciones correctas.
+# ---------------------------------------------------------------------------
+
+
+def _write_pipeline(root: Path, declared: dict, dirs: list[str]) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "model_index.json").write_text(json.dumps(declared), encoding="utf-8")
+    for name in dirs:
+        (root / name).mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def test_a_converted_vae_split_in_two_counts_as_present(tmp_path: Path) -> None:
+    from app.services.generation_installer import _validate_structure
+
+    root = _write_pipeline(
+        tmp_path / "converted",
+        {"_class_name": "ORTStableDiffusionXLPipeline",
+         "unet": ["diffusers", "UNet2DConditionModel"],
+         "vae": ["diffusers", "AutoencoderKL"]},
+        ["unet", "vae_encoder", "vae_decoder"],
+    )
+
+    _validate_structure(root)  # no lanza
+
+
+def test_half_a_vae_is_still_missing(tmp_path: Path) -> None:
+    # Solo el decoder es una exportacion rota, no una convencion distinta.
+    from app.services.generation_installer import _validate_structure
+
+    root = _write_pipeline(
+        tmp_path / "media",
+        {"_class_name": "X", "vae": ["diffusers", "AutoencoderKL"]},
+        ["vae_decoder"],
+    )
+
+    with pytest.raises(ValueError, match="vae"):
+        _validate_structure(root)
+
+
+def test_a_plain_vae_directory_still_works(tmp_path: Path) -> None:
+    # El formato de origen no se rompe: ahi `vae` es una carpeta de verdad.
+    from app.services.generation_installer import _validate_structure
+
+    root = _write_pipeline(
+        tmp_path / "origen",
+        {"_class_name": "StableDiffusionXLPipeline", "vae": ["diffusers", "AutoencoderKL"]},
+        ["vae"],
+    )
+
+    _validate_structure(root)
+
+
+def test_a_component_with_no_alias_is_still_required(tmp_path: Path) -> None:
+    # La excepcion es solo para el VAE; el resto sigue exigiendose literal.
+    from app.services.generation_installer import _validate_structure
+
+    root = _write_pipeline(
+        tmp_path / "sin-unet",
+        {"_class_name": "X", "unet": ["diffusers", "UNet2DConditionModel"]},
+        [],
+    )
+
+    with pytest.raises(ValueError, match="unet"):
+        _validate_structure(root)
