@@ -14,8 +14,11 @@ Las tres preguntas que si deciden:
   1. ¿Se puede CARGAR un repo Whisper ya exportado a ONNX, sin exportar nada?
      Si la respuesta es si, no hace falta el exportador y la capacidad entra por el
      mismo camino `ready_onnx` que ya usa el instalador.
-  2. ¿Corre sobre DirectML, o solo CPU?
-  3. ¿Transcribe de verdad? (--transcribe, genera un tono y mide que no explote)
+  2. ¿Corre sobre DirectML, o solo CPU? Y con QUE variante del decoder: con el
+     merged, que es el default, DirectML devuelve basura sin fallar.
+  3. ¿Transcribe VOZ REAL bien? (--real-speech, con una muestra de transcripcion
+     conocida) -- es lo unico que dice algo sobre calidad. El modo --transcribe usa
+     un tono sin habla y solo mide que el grafo corra.
 
 Todo lo que descarga va a %TEMP% y se borra al terminar.
 """
@@ -39,6 +42,12 @@ CANDIDATE_REPOS = (
 )
 
 PROVIDERS_TO_TRY = ("DmlExecutionProvider", "CPUExecutionProvider")
+
+# Muestra de voz REAL, en un repo con los audios sueltos (sin necesidad de la
+# libreria `datasets`). El texto esperado sale de la frase famosa que contiene.
+SPEECH_REPO = "Narsil/asr_dummy"
+SPEECH_FILE = "i-know-kung-fu.mp3"
+SPEECH_EXPECTED_WORDS = ("know", "kung", "fu")
 
 
 def _versions() -> dict[str, str]:
@@ -87,19 +96,83 @@ def _exporter_knows_whisper() -> dict[str, Any]:
     return result
 
 
-def _try_load(repo_id: str, provider: str, cache_dir: Path) -> dict[str, Any]:
+def _try_load(
+    repo_id: str, provider: str, cache_dir: Path, use_merged: bool = True
+) -> dict[str, Any]:
+    """Carga el modelo.
+
+    use_merged=False NO es cosmetico: con el decoder merged (que es el DEFAULT),
+    DirectML carga, corre sin error y devuelve BASURA. Medido 2026-07-29. Ver el
+    doc de hallazgos.
+    """
     from optimum.onnxruntime import ORTModelForSpeechSeq2Seq
 
+    kwargs: dict[str, Any] = {} if use_merged else {"use_merged": False}
     try:
         model = ORTModelForSpeechSeq2Seq.from_pretrained(
             repo_id,
             provider=provider,
             use_io_binding=False,
             cache_dir=str(cache_dir),
+            **kwargs,
         )
     except Exception as exc:  # noqa: BLE001 - el spike reporta, no falla
         return {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:300]}"}
     return {"ok": True, "class": type(model).__name__, "model": model}
+
+
+def _load_real_speech(cache_dir: Path) -> Any:
+    """Baja una muestra de voz real y la deja a 16 kHz mono, que es lo que Whisper espera."""
+    import numpy as np
+    import soundfile as sf
+    from huggingface_hub import hf_hub_download
+
+    path = hf_hub_download(
+        repo_id=SPEECH_REPO,
+        filename=SPEECH_FILE,
+        repo_type="dataset",
+        cache_dir=str(cache_dir),
+    )
+    audio, sample_rate = sf.read(path, dtype="float32", always_2d=True)
+    mono = audio.mean(axis=1)
+    if sample_rate != 16000:
+        # Remuestreo lineal: alcanza para un spike y evita traer librosa.
+        target_length = int(len(mono) * 16000 / sample_rate)
+        mono = np.interp(
+            np.linspace(0, len(mono), target_length, endpoint=False),
+            np.arange(len(mono)),
+            mono,
+        ).astype("float32")
+    return mono
+
+
+def _transcribe_real_speech(model: Any, repo_id: str, cache_dir: Path) -> dict[str, Any]:
+    """Transcribe voz REAL y verifica que aparezcan las palabras esperadas.
+
+    Esto SI dice algo sobre calidad, a diferencia del smoke con un tono: si el
+    texto no contiene las palabras que la muestra dice, el camino no sirve por mas
+    que el grafo corra.
+    """
+    try:
+        from transformers import AutoProcessor
+
+        processor = AutoProcessor.from_pretrained(repo_id, cache_dir=str(cache_dir))
+        audio = _load_real_speech(cache_dir)
+        features = processor(audio, sampling_rate=16000, return_tensors="pt")
+        tokens = model.generate(input_features=features.input_features, max_new_tokens=64)
+        text = processor.batch_decode(tokens, skip_special_tokens=True)[0].strip()
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:300]}"}
+
+    lowered = text.lower()
+    hits = [word for word in SPEECH_EXPECTED_WORDS if word in lowered]
+    return {
+        "ok": True,
+        "text": text,
+        "palabras_esperadas": list(SPEECH_EXPECTED_WORDS),
+        "encontradas": hits,
+        "calidad_aceptable": len(hits) == len(SPEECH_EXPECTED_WORDS),
+    }
 
 
 def _transcribe_smoke(model: Any, repo_id: str, cache_dir: Path) -> dict[str, Any]:
@@ -131,7 +204,12 @@ def main() -> None:
     parser.add_argument(
         "--transcribe",
         action="store_true",
-        help="Descarga un whisper-tiny ONNX y corre una transcripcion de humo.",
+        help="Descarga un whisper-tiny ONNX y corre una transcripcion de humo (tono, sin habla).",
+    )
+    parser.add_argument(
+        "--real-speech",
+        action="store_true",
+        help="Transcribe VOZ REAL. Es lo unico que dice algo sobre calidad.",
     )
     args = parser.parse_args()
 
@@ -142,7 +220,7 @@ def main() -> None:
         "estado_del_exportador": _exporter_knows_whisper(),
     }
 
-    if args.transcribe:
+    if args.transcribe or args.real_speech:
         cache_dir = Path(tempfile.mkdtemp(prefix="upflow-whisper-spike-"))
         loads: dict[str, Any] = {}
         try:
@@ -151,14 +229,23 @@ def main() -> None:
                     if provider not in report["providers_disponibles"]:
                         loads[f"{repo_id} @ {provider}"] = {"ok": False, "error": "provider ausente"}
                         continue
-                    outcome = _try_load(repo_id, provider, cache_dir)
-                    model = outcome.pop("model", None)
-                    loads[f"{repo_id} @ {provider}"] = outcome
-                    if outcome["ok"] and model is not None:
-                        loads[f"{repo_id} @ {provider}"]["transcripcion"] = _transcribe_smoke(
-                            model, repo_id, cache_dir
-                        )
-                        del model
+                    # Las DOS variantes del decoder: el merged es el default y en
+                    # DirectML devuelve basura sin fallar.
+                    for use_merged in (True, False):
+                        label = f"{repo_id} @ {provider} merged={use_merged}"
+                        outcome = _try_load(repo_id, provider, cache_dir, use_merged)
+                        model = outcome.pop("model", None)
+                        loads[label] = outcome
+                        if outcome["ok"] and model is not None:
+                            if args.transcribe:
+                                loads[label]["tono_sin_habla"] = _transcribe_smoke(
+                                    model, repo_id, cache_dir
+                                )
+                            if args.real_speech:
+                                loads[label]["voz_real"] = _transcribe_real_speech(
+                                    model, repo_id, cache_dir
+                                )
+                            del model
                 if any(entry.get("ok") for entry in loads.values()):
                     break
         finally:

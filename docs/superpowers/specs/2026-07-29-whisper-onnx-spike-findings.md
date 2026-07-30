@@ -21,25 +21,55 @@ búsqueda en Hugging Face que ya existen.
 | ¿Existe la clase de runtime? | Sí, `ORTModelForSpeechSeq2Seq` |
 | ¿El exportador conoce whisper? | Sí: `automatic-speech-recognition` y su variante `-with-past` |
 | ¿Carga un repo ONNX ya exportado, sin exportar nada? | **Sí**, `onnx-community/whisper-tiny.en` |
-| ¿Sobre DirectML? | **Sí** (`DmlExecutionProvider`) |
-| ¿Sobre CPU? | Sí |
-| ¿Corre de punta a punta? | Sí, devuelve texto en las dos rutas |
+| ¿Sobre DirectML? | **Sí, pero sólo con `use_merged=False`** — ver abajo |
+| ¿Sobre CPU? | Sí, con el default |
+| ¿Transcribe voz real bien? | Sí: `"I know Kung Fu."` exacto |
 
 Clase resultante: `ORTModelForWhisper`.
 
 Versiones: optimum 2.1.0, optimum-onnx 0.1.0, onnxruntime-directml 1.24.4,
 transformers 4.57.6.
 
-## Lo que el spike NO prueba
+## El hallazgo que importa: DirectML con el decoder merged devuelve basura
 
-La transcripción de humo usa un **tono sinusoidal de 220 Hz**, que no contiene
-habla. El texto que salió es basura ("you treatedholderededed volunteer volunteer
-…"), y eso es lo esperado: Whisper alucina sobre entrada sin voz, es un
-comportamiento conocido. Lo único que el smoke mide es que **el grafo corre de
-punta a punta sin explotar**.
+Medido con voz real (`Narsil/asr_dummy`, `i-know-kung-fu.mp3`, transcripción
+conocida):
 
-**Un veredicto sobre CALIDAD necesita audio con voz real.** No está medido acá y no
-hay que darlo por supuesto.
+| Configuración | Resultado |
+|---|---|
+| CPU, default | `"I know Kung Fu."` ✅ |
+| DirectML, decoder **merged** (el DEFAULT) | `"Ioti plur plur plur plur fighting fighting…"` ❌ |
+| DirectML, `use_merged=False` | `"I know Kung Fu."` ✅ |
+
+**No falla: carga bien, corre sin excepción, y devuelve texto equivocado.** Es la
+peor forma de fallar, porque nada avisa.
+
+**Consecuencia obligatoria para la implementación:** el motor tiene que pasar
+`use_merged=False`. No es una optimización ni una preferencia — con el default, la
+transcripción sobre DirectML es inservible y silenciosamente.
+
+### Cómo casi se me pasa
+
+La primera corrida usó un tono sinusoidal de 220 Hz como entrada. Dio esto:
+
+- CPU: `"you"`
+- DirectML: `"you treatedholderededed volunteer volunteer volunteer…"`
+
+Y lo escribí como *"es lo esperado: Whisper alucina sobre entrada sin voz"*. Eso
+es cierto para el caso de CPU, y **tapó un defecto real** en el de DirectML: la
+diferencia entre una salida mínima y un delirio en bucle era la señal, y la
+atribuí entera a la entrada. Sólo la voz real lo expuso.
+
+Es el motivo por el que medir calidad antes de construir el motor era el orden
+correcto: con el veredicto anterior habría cableado el engine sobre una ruta que
+produce basura.
+
+### Lo que sigue sin estar medido
+
+- Velocidad. No se midió tiempo de transcripción ni RTF, ni en CPU ni en DirectML.
+- Modelos más grandes que `tiny`. La aritmética de DirectML podría degradarse
+  distinto en `base`, `small` o `large`.
+- Idiomas distintos del inglés (se probó `whisper-tiny.en`).
 
 ## Un falso negativo que casi me hace descartar el camino
 
@@ -86,7 +116,11 @@ antes de que costara trabajo. El spike conserva ese control a propósito.
 2. Un motor `TranscribeEngine` sobre `ORTModelForSpeechSeq2Seq`, con el mismo
    patrón de caché por `(model_id, device)` que el de generación — y con el modo en
    la clave desde el principio, que en generación fue un bug.
+   **Obligatorio: `use_merged=False`.** Con el default, DirectML devuelve basura sin
+   fallar. Y un test que transcriba voz real y verifique el texto, porque un test
+   que sólo chequee "devolvió string" habría pasado con la basura.
 3. El job de transcripción, con el audio de entrada y el idioma.
 4. Recién después, subtítulos: el paso de sincronizado más el muxeo, que ya sabe
    hacer el pipeline de video.
-5. **Antes de prometer calidad, medir con voz real.**
+5. Medir **velocidad** antes de prometer que sirve para un video largo, y volver
+   a medir calidad al pasar de `tiny` a un modelo más grande.
