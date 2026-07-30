@@ -262,10 +262,9 @@ sesión: ausencia de señal leída como veredicto positivo.
 
 ## Qué sigue, en orden de valor
 
-1. **Fase 4.3** si quedó a medias.
-2. **Nivel 2 — imagen a imagen.** Es la única capacidad faltante con camino ONNX
-   ya confirmado (las clases ORT img2img existen), y ahora se apoya sobre el
-   gestor entero. Es la siguiente más barata por lejos.
+1. ~~**Fase 4.3**~~ — hecha (`1ab7388`).
+2. ~~**Nivel 2 — imagen a imagen**~~ — **backend completo**, UI en vuelo. Ver la
+   sección de abajo: la cobertura resultó más angosta de lo que el spec asumía.
 3. **Nivel 3 — stems y subtítulos.** El usuario fue explícito en que stems **no**
    se hardcodea a Demucs: tiene que ser una capacidad buscable, con modelos
    alternativos de Hugging Face. Necesita un motor de inferencia nuevo.
@@ -275,3 +274,49 @@ sesión: ausencia de señal leída como veredicto positivo.
 5. **Task 5.2** (la pila en el contrato del request) sólo si se quiere reordenar
    pasos de verdad. Hoy el orden es fijo en el backend y la UI no ofrece
    reordenar justamente para no mentir.
+
+---
+
+# Imagen a imagen — cobertura medida, 2026-07-29
+
+El spec decía "las clases ORT img2img sí existen", lo cual es cierto pero
+incompleto de una forma que cambia el diseño. Medido contra
+`ORTPipelineForImage2Image.ort_pipelines_mapping`:
+
+| | texto a imagen | imagen a imagen |
+|---|---|---|
+| latent-consistency | sí | sí |
+| stable-diffusion | sí | sí |
+| stable-diffusion-xl | sí | sí |
+| stable-diffusion-3 | sí | sí |
+| **flux** | **sí** | **no** |
+| **sana** | **sí** | **no** |
+
+**Consecuencia de diseño:** un modelo instalado y perfectamente usable para texto
+a imagen puede no servir para imagen a imagen. Así que:
+
+- El job manager valida la clase declarada en el `model_index.json` del modelo
+  elegido **al crear el job**, y rechaza con 400 y un motivo que dice que el
+  modelo sirve para texto a imagen. Descubrirlo después de encolar sería un job
+  que muere segundos más tarde con un error de carga de clase.
+- El rechazo es de la **capacidad**, no del modelo: el mismo modelo sin imagen de
+  partida sigue funcionando igual que siempre, y hay un test que lo fija.
+- El frontend **no** intenta adivinar qué modelos sirven. El backend lo sabe
+  leyendo el `model_index.json` del modelo instalado; el frontend no.
+
+**Bug arreglado en el camino:** la clave de la caché de pipelines era
+`(model_id, device)`. El mismo modelo en el mismo dispositivo carga una clase
+distinta según el modo, así que un job de imagen a imagen habría recibido el
+pipeline de texto ya cacheado y **la imagen de entrada se habría ignorado en
+silencio**. La clave ahora incluye el modo.
+
+**Contrato de la API:** la imagen se sube aparte
+(`POST /generation/init-image` → `initImageToken`) y `POST /generation/jobs` sigue
+siendo JSON, con `initImageToken` y `strength` opcionales. Volverlo multipart
+habría cambiado el contrato de todos sus clientes por una capacidad que no todos
+usan. Es el mismo patrón que `/video/analyze` ya usaba.
+
+**Nota de seguridad:** el endpoint de subida salió sin `Permission.jobs_create` y
+lo detectó el review automático de commit. Corregido en `95a5353`, con un test que
+lee el closure de `require()` y lo compara contra el endpoint de crear el job, para
+que endurecer ese no deje el de subida atrás.
