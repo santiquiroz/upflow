@@ -190,6 +190,11 @@ Todos los endpoints viven bajo `/api/v1`. Los campos de formulario (subida) van 
 | `POST` | `/api/v1/capabilities/{id}/provision` | Baja el paquete que le falta a una capacidad corriendo su `scripts/download-*.ps1` → 202 |
 | `GET` | `/api/v1/capabilities/provision/{jobId}` | Estado de esa descarga |
 | `POST` | `/api/v1/generation/init-image` | Sube la imagen de partida para imagen a imagen y devuelve su token (201). Va aparte del job para que `POST /generation/jobs` siga siendo JSON |
+| `GET` | `/api/v1/asr/models/search?q=` | Busca modelos de reconocimiento de voz en Hugging Face. El filtro por TAG es lo que decide que un repo es de ASR: los nombres de archivo no alcanzan para distinguirlo de otro modelo de audio |
+| `POST` | `/api/v1/asr/models/install` | Instala un modelo de ASR: baja el par encoder/decoder no fusionado mas su metadata (~257 MB para whisper-tiny) → 202 |
+| `GET` | `/api/v1/asr/models/install/{install_id}` | Estado de esa instalacion |
+| `POST` | `/api/v1/transcribe/jobs` | Transcribe un audio a texto (multipart: `file`, `model_id`, `language?`, `device?`) → 202 |
+| `GET` | `/api/v1/transcribe/jobs/{id}` | Estado del job. El TEXTO viaja en la respuesta; `.../download` da el .txt |
 | `GET` | `/api/v1/audio/voice-catalog` | Los pasos de la cadena de mejora de voz **en su orden causal** y los destinos de entrega con sus números de loudness publicados |
 | `POST` | `/api/v1/models/install` | Instala un modelo desde HF por `repo_id` (`202`, devuelve `install_id`) |
 | `GET` | `/api/v1/models/install/{install_id}` | Estado de una instalación en curso (`pending`/`downloading`/`converting`/`done`/`error`) |

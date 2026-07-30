@@ -22,7 +22,15 @@ from app.config import (
     get_settings,
 )
 from app.exceptions import ModelNotFoundError, ModelProtectedError, QueueFullError, QuotaExceededError
-from app.models import AudioJob, GenerationJob, JobStatus, UpdateStatus, UpscaleJob, VideoUpscaleJob
+from app.models import (
+    AudioJob,
+    GenerationJob,
+    JobStatus,
+    TranscribeJob,
+    UpdateStatus,
+    UpscaleJob,
+    VideoUpscaleJob,
+)
 from app.schemas import (
     AnalyzeVideoResponse,
     AudioCapabilitiesResponse,
@@ -60,6 +68,7 @@ from app.schemas import (
     ProvisionJobResponse,
     SubtitleTrackResponse,
     SupportedModelResponse,
+    TranscribeJobResponse,
     UpdateCheckResponse,
     UpdateSettingRequest,
     UpdateSettingResponse,
@@ -70,6 +79,7 @@ from app.schemas import (
     VideoProfileResponse,
     VoiceCatalogResponse,
 )
+from app.services.asr_installer import AsrModelInstaller
 from app.services.audio_job_manager import AudioJobManager
 from app.services.auth.identity import AuthenticatedUser
 from app.services.auth.permissions import Permission
@@ -90,7 +100,11 @@ from app.services.generation_compat import classify
 from app.services.generation_job_manager import GenerationJobManager
 from app.services.generation_preflight import preflight
 from app.services.generation_variants import available_precisions_from_names
-from app.services.hf_client import GENERATION_SEARCH_TASK_TAGS, HfClient
+from app.services.hf_client import (
+    ASR_SEARCH_TASK_TAGS,
+    GENERATION_SEARCH_TASK_TAGS,
+    HfClient,
+)
 from app.services.job_manager import JobManager
 from app.services.media_tools import MediaTools
 from app.services.model_installer import ModelInstaller
@@ -99,6 +113,7 @@ from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry
 from app.services.pack_provisioner import PackProvisioner, ProvisionJob, UnknownPackError
 from app.services.settings_service import editable_settings_status, update_setting
 from app.services.storage import StorageService
+from app.services.transcribe_job_manager import TranscribeJobManager
 from app.services.stream_analysis import parse_audio_tracks, parse_subtitle_tracks
 from app.services.update_service import UpdateService
 from app.services.video_job_manager import VideoJobManager
@@ -943,6 +958,197 @@ async def create_audio_job(
         status=job.status,
         status_url=f"/api/v1/audio/jobs/{job.id}",
         download_url=None,
+    )
+
+
+def get_transcribe_job_manager(request: Request) -> TranscribeJobManager:
+    return request.app.state.transcribe_jobs
+
+
+def transcribe_job_to_response(job: TranscribeJob) -> TranscribeJobResponse:
+    return TranscribeJobResponse(
+        id=job.id,
+        status=job.status,
+        original_filename=job.original_filename,
+        model_id=job.model_id,
+        language=job.language,
+        device=job.device,
+        created_at=job.created_at,
+        started_at=job.started_at,
+        finished_at=job.finished_at,
+        progress_pct=job.progress_pct,
+        text=job.text,
+        error=job.error,
+        owner_id=job.owner_id,
+        download_url=(
+            f"/api/v1/transcribe/jobs/{job.id}/download"
+            if job.status == JobStatus.completed and job.output_path
+            else None
+        ),
+    )
+
+
+@router.post(
+    "/transcribe/jobs", response_model=CreateJobResponse, status_code=202,
+    dependencies=[Depends(require(Permission.jobs_create))],
+)
+async def create_transcribe_job(
+    request: Request,
+    file: UploadFile = File(...),
+    model_id: str = Form(...),
+    language: str | None = Form(default=None),
+    device: str | None = Form(default=None),
+    transcribe_jobs: TranscribeJobManager = Depends(get_transcribe_job_manager),
+    storage: StorageService = Depends(get_storage),
+    settings: Settings = Depends(get_settings),
+) -> CreateJobResponse:
+    original_name = Path(file.filename or "upload.wav").name
+    safe_name = sanitize_filename(original_name, default="upload.wav")
+    token = uuid4().hex
+    destination = settings.uploads_path / f"{token}-{safe_name}"
+    current_user = current_user_from_request(request)
+
+    job: TranscribeJob | None = None
+    try:
+        await storage.save_upload(file, destination, max_mb=settings.max_audio_upload_mb)
+        job = await transcribe_jobs.create_job(
+            source_path=destination,
+            original_filename=original_name,
+            model_id=model_id,
+            # Los tests de ruta llaman las corrutinas DIRECTO, sin FastAPI, asi que
+            # un Form no provisto llega como su sentinel en vez de None.
+            language=language if isinstance(language, str) and language else None,
+            device=device if isinstance(device, str) and device else None,
+            job_id=token,
+            owner=current_user,
+        )
+    except QueueFullError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except QuotaExceededError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Unexpected error while creating transcribe job")
+        raise HTTPException(
+            status_code=500, detail="Failed to process the uploaded audio"
+        ) from exc
+    finally:
+        if job is None and destination.exists():
+            destination.unlink(missing_ok=True)
+
+    return CreateJobResponse(
+        job_id=job.id,
+        status=job.status,
+        status_url=f"/api/v1/transcribe/jobs/{job.id}",
+        download_url=None,
+    )
+
+
+@router.get(
+    "/transcribe/jobs/{job_id}",
+    response_model=TranscribeJobResponse,
+    dependencies=[Depends(require(Permission.jobs_read_own))],
+)
+async def get_transcribe_job(
+    job_id: str,
+    transcribe_jobs: TranscribeJobManager = Depends(get_transcribe_job_manager),
+) -> TranscribeJobResponse:
+    job = transcribe_jobs.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Transcribe job not found")
+    return transcribe_job_to_response(job)
+
+
+@router.post(
+    "/transcribe/jobs/{job_id}/cancel",
+    response_model=TranscribeJobResponse,
+    dependencies=[Depends(require(Permission.jobs_cancel_own))],
+)
+async def cancel_transcribe_job(
+    job_id: str,
+    transcribe_jobs: TranscribeJobManager = Depends(get_transcribe_job_manager),
+) -> TranscribeJobResponse:
+    job = transcribe_jobs.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Transcribe job not found")
+    transcribe_jobs.cancel_job(job_id)
+    return transcribe_job_to_response(job)
+
+
+@router.get(
+    "/transcribe/jobs/{job_id}/download",
+    dependencies=[Depends(require(Permission.jobs_read_own))],
+)
+async def download_transcribe_job(
+    job_id: str,
+    transcribe_jobs: TranscribeJobManager = Depends(get_transcribe_job_manager),
+) -> FileResponse:
+    job = transcribe_jobs.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Transcribe job not found")
+    if job.status != JobStatus.completed or not job.output_path:
+        raise HTTPException(status_code=409, detail="Transcribe job is not completed yet")
+    return FileResponse(
+        path=job.output_path,
+        filename=f"{Path(job.original_filename).stem}.txt",
+        media_type="text/plain; charset=utf-8",
+    )
+
+
+def get_asr_installer(request: Request) -> AsrModelInstaller:
+    return request.app.state.asr_installer
+
+
+@router.get("/asr/models/search", response_model=ModelSearchResponse)
+async def search_asr_models(
+    q: str = Query("", max_length=200),
+    hf_client: HfClient = Depends(get_hf_client),
+) -> ModelSearchResponse:
+    """Modelos de reconocimiento de voz en Hugging Face.
+
+    El filtro por TAG es lo que decide que es un modelo de ASR: la clasificacion por
+    nombres de archivo no puede distinguirlo de otro modelo de audio, y decir lo
+    contrario seria prometer una deteccion que no existe.
+    """
+    try:
+        results = await hf_client.search(q, task_tags=ASR_SEARCH_TASK_TAGS, sort="downloads")
+    except Exception as exc:
+        logger.exception("Hugging Face ASR search failed for query %r", q)
+        raise HTTPException(status_code=502, detail="Hugging Face search failed") from exc
+    return _search_results_to_response(results, strategy_for("audio"))
+
+
+@router.post(
+    "/asr/models/install", response_model=CreateInstallResponse, status_code=202,
+    dependencies=[Depends(require(Permission.models_install))],
+)
+async def install_asr_model(
+    payload: InstallModelRequest,
+    installer: AsrModelInstaller = Depends(get_asr_installer),
+) -> CreateInstallResponse:
+    install_id = await installer.install_from_hf(payload.repo_id)
+    return CreateInstallResponse(
+        install_id=install_id,
+        status_url=f"/api/v1/asr/models/install/{install_id}",
+    )
+
+
+@router.get("/asr/models/install/{install_id}", response_model=InstallStatusResponse)
+async def get_asr_install_status(
+    install_id: str,
+    installer: AsrModelInstaller = Depends(get_asr_installer),
+) -> InstallStatusResponse:
+    job = installer.status(install_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Install job not found")
+    return InstallStatusResponse(
+        install_id=job.id,
+        repo_id=job.repo_id,
+        status=job.status.value,
+        progress_pct=job.progress_pct,
+        model_id=job.model_id,
+        error=job.error,
     )
 
 

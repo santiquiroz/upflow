@@ -85,6 +85,9 @@ HF_API_BASE = "https://huggingface.co/api"
 HF_RESOLVE_BASE = "https://huggingface.co"
 SEARCH_TASK_TAGS = ("image-to-image", "super-resolution")
 GENERATION_SEARCH_TASK_TAGS = ("text-to-image",)
+# El tag es el filtro REAL de que es un modelo de ASR: los nombres de archivo no
+# alcanzan para distinguirlo de otro modelo de audio (ver AsrCompatStrategy).
+ASR_SEARCH_TASK_TAGS = ("automatic-speech-recognition",)
 WEIGHT_EXTENSION_PRIORITY = (".onnx", ".safetensors", ".pth")
 DOWNLOAD_CHUNK_BYTES = 1024 * 1024
 REQUEST_TIMEOUT_SECONDS = 30.0

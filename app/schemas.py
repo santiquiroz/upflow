@@ -352,6 +352,29 @@ class UpscalerPreflightResponse(BaseModel):
     free_ram_bytes: int | None = Field(default=None, serialization_alias="freeRamBytes")
 
 
+class TranscribeJobResponse(BaseModel):
+    id: str
+    status: JobStatus
+    original_filename: str = Field(serialization_alias="originalFilename")
+    model_id: str = Field(serialization_alias="modelId")
+    language: str | None = None
+    device: str | None = None
+    created_at: datetime = Field(serialization_alias="createdAt")
+    started_at: datetime | None = Field(default=None, serialization_alias="startedAt")
+    finished_at: datetime | None = Field(default=None, serialization_alias="finishedAt")
+    progress_pct: float | None = Field(default=None, serialization_alias="progressPct")
+    # El TEXTO es el resultado, a diferencia del resto de los jobs. Viaja en la
+    # respuesta para que la UI no tenga que descargar un archivo para mostrarlo.
+    text: str | None = None
+    error: str | None = None
+    owner_id: str | None = Field(default=None, serialization_alias="ownerId")
+    download_url: str | None = Field(default=None, serialization_alias="downloadUrl")
+
+
+class TranscribeJobsListResponse(BaseModel):
+    jobs: list[TranscribeJobResponse] = Field(default_factory=list)
+
+
 class ProvisionJobResponse(BaseModel):
     job_id: str = Field(serialization_alias="jobId")
     pack: str
