@@ -150,6 +150,7 @@ export const en = {
   "capability.audio.denoise": "Remove noise",
   "capability.audio.restore": "Restore quality",
   "capability.audio.voice": "Shape the voice",
+  "capability.audio.transcribe": "Transcribe to text",
   "capability.audio.stems": "Separate stems",
   "capability.generate.textToImage": "Text to image",
   "capability.generate.imageToImage": "Image to image",
@@ -162,10 +163,16 @@ export const en = {
 
   // Motivos honestos: dicen QUE falta, sin prometer fecha.
   "capability.reason.subtitles":
-    "Needs a speech recognition engine, which the app does not ship yet. " +
-    "whisper.cpp is the intended path.",
+    "Needs a speech recognition model plus the timing pass that turns the " +
+    "transcript into a subtitle track. Transcription comes first: subtitles are " +
+    "that result, aligned and muxed into the container.",
+  "capability.reason.transcribe":
+    "Needs a speech recognition model. The plan is to make it searchable like any " +
+    "other model, not to hard-wire one engine.",
   "capability.reason.stems":
-    "Needs a Demucs-type model and an inference engine the app does not include today.",
+    "Needs a stem separation model and an inference engine the app does not " +
+    "include today. It will be searchable like any other model: Demucs is the " +
+    "best known option, not the only one.",
   "capability.reason.noOnnxPath":
     "No confirmed path to a runnable ONNX model yet. The model existing is not " +
     "enough: it also has to be executable by ONNX Runtime, and this hit the same " +

@@ -160,6 +160,15 @@ CATALOG: tuple[Capability, ...] = (
         requirements=(PathRequirement("ffmpeg_binary", "ffmpeg"),),
     ),
     Capability(
+        id="audio.transcribe",
+        domain="audio",
+        label_key="capability.audio.transcribe",
+        provisioning="none",
+        job_kind=None,
+        strategies=("model",),
+        unavailable_reason_key="capability.reason.transcribe",
+    ),
+    Capability(
         id="audio.stems",
         domain="audio",
         label_key="capability.audio.stems",

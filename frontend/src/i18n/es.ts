@@ -144,6 +144,7 @@ export const es = {
   "capability.audio.denoise": "Quitar ruido",
   "capability.audio.restore": "Restaurar calidad",
   "capability.audio.voice": "Trabajar la voz",
+  "capability.audio.transcribe": "Transcribir a texto",
   "capability.audio.stems": "Separar stems",
   "capability.generate.textToImage": "Texto a imagen",
   "capability.generate.imageToImage": "Imagen a imagen",
@@ -156,10 +157,16 @@ export const es = {
 
   // Motivos honestos: dicen QUE falta, sin prometer fecha.
   "capability.reason.subtitles":
-    "Necesita un motor de reconocimiento de voz, que la app todavía no incluye. " +
-    "whisper.cpp es el camino previsto.",
+    "Necesita un modelo de reconocimiento de voz más el paso de sincronizado que " +
+    "convierte la transcripción en una pista de subtítulos. La transcripción va " +
+    "primero: los subtítulos son ese resultado, alineado y muxeado al contenedor.",
+  "capability.reason.transcribe":
+    "Necesita un modelo de reconocimiento de voz. La idea es que se pueda buscar " +
+    "como cualquier otro modelo, no cablear un motor fijo.",
   "capability.reason.stems":
-    "Necesita un modelo tipo Demucs y un motor de inferencia que la app no incluye hoy.",
+    "Necesita un modelo de separación de stems y un motor de inferencia que la app " +
+    "no incluye hoy. Va a ser buscable como cualquier otro modelo: Demucs es la " +
+    "opción más conocida, no la única.",
   "capability.reason.noOnnxPath":
     "Todavía no hay un camino confirmado a un ONNX ejecutable. Que el modelo " +
     "exista no alcanza: también tiene que poder correrlo ONNX Runtime, y acá se " +
