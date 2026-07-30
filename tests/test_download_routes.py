@@ -13,6 +13,22 @@ from app.models import JobStatus
 from app.services.download_job_manager import DownloadJobManager
 
 
+@pytest.fixture(autouse=True)
+def _no_real_dns(monkeypatch):
+    """Ningun test toca el DNS de verdad.
+
+    La guarda de SSRF resuelve el host, asi que sin esto la suite dependeria de la red y
+    fallaria offline. Los tests que necesitan otra resolucion la pisan encima.
+    """
+    from app.services import download_job_manager as manager_module
+
+    monkeypatch.setattr(
+        manager_module.socket,
+        "getaddrinfo",
+        lambda host, port, **kwargs: [(0, 0, 0, "", ("93.184.216.34", 0))],
+    )
+
+
 def make_client(tmp_path: Path) -> tuple[TestClient, DownloadJobManager]:
     settings = Settings(RUNTIME_DIR=str(tmp_path), _env_file=None)
     manager = DownloadJobManager(settings)

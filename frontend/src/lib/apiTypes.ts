@@ -596,3 +596,35 @@ export interface AsrInstallStatusResponse {
   modelId: string | null;
   error: string | null;
 }
+
+/** Lo que hay en una URL, antes de comprometerse a descargarlo. */
+export interface MediaProbe {
+  title: string;
+  durationSeconds: number | null;
+  uploader: string | null;
+  extractor: string;
+  isPlaylist: boolean;
+  entryCount: number;
+  availableHeights: number[];
+}
+
+export interface DownloadJob {
+  id: string;
+  status: JobStatus;
+  url: string;
+  maxHeight: number;
+  audioOnly: boolean;
+  mediaTitle: string | null;
+  mediaUploader: string | null;
+  extractor: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  progressPct: number | null;
+  downloadedBytes: number;
+  totalBytes: number | null;
+  /** Solo nombres: la ruta del servidor nunca sale. */
+  outputFiles: string[];
+  error: string | null;
+  ownerId: string | null;
+}

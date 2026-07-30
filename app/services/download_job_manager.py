@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
+import socket
 import threading
 from pathlib import Path
 from urllib.parse import urlparse
@@ -177,8 +179,59 @@ def validate_url(url: str) -> None:
         raise ValueError(
             f"Solo se aceptan URLs http o https; se recibio {parsed.scheme or 'ninguno'!r}"
         )
-    if not parsed.netloc:
+    host = (parsed.hostname or "").strip().rstrip(".")
+    if not host:
         raise ValueError("La URL no tiene host")
+    _reject_internal_target(host)
+
+
+def _addresses_for(host: str) -> list[ipaddress.IPv4Address | ipaddress.IPv6Address]:
+    """Todas las direcciones a las que resuelve el host.
+
+    TODAS y no la primera: un DNS con round-robin puede devolver una publica y una
+    privada, y quedarse con la primera dejaria pasar la privada la mitad de las veces.
+    """
+    try:
+        # Un host que YA es una IP no necesita DNS. Resolverlo igual seria una consulta
+        # al vicio, y en un equipo sin red haria fallar la validacion de una direccion
+        # que se puede evaluar sola.
+        return [ipaddress.ip_address(host.strip("[]"))]
+    except ValueError:
+        pass
+    try:
+        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    except socket.gaierror as exc:
+        raise ValueError(f"No se pudo resolver el host {host!r}") from exc
+    return [ipaddress.ip_address(info[4][0]) for info in infos]
+
+
+def _reject_internal_target(host: str) -> None:
+    """Rechaza lo que apunte a la red interna o al propio equipo.
+
+    Es la guarda contra SSRF: sin ella, cualquiera que pueda crear un job hace que el
+    SERVIDOR pida la URL, y con el extractor generico de yt-dlp eso alcanza para sondear
+    servicios internos, el endpoint de metadata de la nube (169.254.169.254) o la propia
+    app en localhost.
+
+    LIMITE CONOCIDO, que conviene decir en vez de aparentar que no existe: la validacion
+    resuelve el nombre ACA y yt-dlp lo resuelve de nuevo al descargar, asi que un DNS
+    hostil que cambie la respuesta entre los dos momentos (rebinding) se escapa. Cerrarlo
+    del todo pide fijar la IP en el socket, que yt-dlp no expone. Esto sube el costo del
+    ataque de trivial a no trivial; no lo vuelve imposible.
+    """
+    for address in _addresses_for(host):
+        if (
+            address.is_private
+            or address.is_loopback
+            or address.is_link_local
+            or address.is_reserved
+            or address.is_multicast
+            or address.is_unspecified
+        ):
+            raise ValueError(
+                f"El host {host!r} apunta a una direccion interna ({address}). "
+                "Solo se pueden descargar URLs publicas."
+            )
 
 
 def describe_failure(exc: Exception) -> str:

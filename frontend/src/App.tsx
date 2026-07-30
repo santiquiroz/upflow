@@ -4,6 +4,7 @@ import { AppShell } from "./components/AppShell";
 import { ForcedPasswordChangeModal } from "./components/ForcedPasswordChangeModal";
 import { useAuth } from "./hooks/useAuth";
 import { AudioPage } from "./modules/audio/AudioPage";
+import { DownloadPage } from "./pages/DownloadPage";
 import { GeneratePage } from "./modules/generate/GeneratePage";
 import { TranscribePage } from "./modules/transcribe/TranscribePage";
 import { EnhanceRoute } from "./pages/EnhanceRoute";
@@ -42,6 +43,7 @@ export function App() {
           <Route path="/enhance/:medium" element={<EnhanceRoute />} />
           <Route path="/audio" element={<AudioPage />} />
           <Route path="/transcribe" element={<TranscribePage />} />
+          <Route path="/download" element={<DownloadPage />} />
           <Route path="/generate" element={<GeneratePage />} />
           <Route path="/models" element={<ModelsPage />} />
           <Route path="/realtime" element={<RealtimePage />} />
