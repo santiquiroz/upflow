@@ -175,6 +175,7 @@ Todos los endpoints viven bajo `/api/v1`. Los campos de formulario (subida) van 
 | `GET` | `/api/v1/capabilities/tree` | El árbol de lo que la app puede hacer, resuelto contra esta máquina: `available`, `needs_setup` (con el paquete que falta) o `not_implemented` (con el motivo) |
 | `POST` | `/api/v1/capabilities/{id}/provision` | Baja el paquete que le falta a una capacidad corriendo su `scripts/download-*.ps1` → 202 |
 | `GET` | `/api/v1/capabilities/provision/{jobId}` | Estado de esa descarga |
+| `POST` | `/api/v1/generation/init-image` | Sube la imagen de partida para imagen a imagen y devuelve su token (201). Va aparte del job para que `POST /generation/jobs` siga siendo JSON |
 | `GET` | `/api/v1/audio/voice-catalog` | Los pasos de la cadena de mejora de voz **en su orden causal** y los destinos de entrega con sus números de loudness publicados |
 | `POST` | `/api/v1/models/install` | Instala un modelo desde HF por `repo_id` (`202`, devuelve `install_id`) |
 | `GET` | `/api/v1/models/install/{install_id}` | Estado de una instalación en curso (`pending`/`downloading`/`converting`/`done`/`error`) |

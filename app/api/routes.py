@@ -49,6 +49,7 @@ from app.schemas import (
     HealthResponse,
     HfModelSearchResultResponse,
     InstallModelRequest,
+    InitImageResponse,
     InstallStatusResponse,
     JobResponse,
     JobsListResponse,
@@ -1192,6 +1193,63 @@ async def delete_model(
     return Response(status_code=204)
 
 
+INIT_IMAGE_TOKEN_PATTERN = "%s-*"
+
+
+def _resolve_init_image(settings: Settings, token: str | None) -> Path | None:
+    """Traduce el token a la ruta staged, sin confiar en el token.
+
+    El token viene del cliente, asi que se valida que sea hexadecimal antes de
+    usarlo en un glob: sin eso, un token con separadores de ruta podria hacer que
+    el glob mire fuera del directorio de uploads.
+    """
+    if token is None:
+        return None
+    if not token or len(token) > 64 or any(char not in "0123456789abcdef" for char in token):
+        raise HTTPException(status_code=400, detail="init_image_token invalido")
+    matches = sorted(settings.uploads_path.glob(INIT_IMAGE_TOKEN_PATTERN % token))
+    if not matches:
+        raise HTTPException(status_code=400, detail="init_image_token desconocido o expirado")
+    return matches[0]
+
+
+@router.post("/generation/init-image", response_model=InitImageResponse, status_code=201)
+async def upload_init_image(
+    file: UploadFile = File(...),
+    storage: StorageService = Depends(get_storage),
+    settings: Settings = Depends(get_settings),
+) -> InitImageResponse:
+    """Deja la imagen de partida en staging y devuelve su token.
+
+    Va aparte del job para que POST /generation/jobs siga siendo JSON: volverlo
+    multipart cambiaria el contrato de todos sus clientes por una capacidad que no
+    todos usan. Es el mismo patron que /video/analyze ya usa.
+    """
+    original_name = Path(file.filename or "init.png").name
+    safe_name = sanitize_filename(original_name, default="init.png")
+    token = uuid4().hex
+    destination = settings.uploads_path / f"{token}-{safe_name}"
+    await storage.save_upload(file, destination)
+
+    try:
+        from PIL import Image
+
+        with Image.open(destination) as image:
+            width, height = image.size
+    except Exception as exc:  # noqa: BLE001 - un archivo que no es imagen se rechaza aca
+        destination.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=400, detail=f"El archivo no es una imagen legible: {exc}"
+        ) from exc
+
+    return InitImageResponse(
+        init_image_token=token,
+        original_filename=original_name,
+        width=width,
+        height=height,
+    )
+
+
 @router.post(
     "/generation/jobs", response_model=GenerationJobResponse, status_code=201,
     dependencies=[Depends(require(Permission.jobs_create))],
@@ -1199,17 +1257,21 @@ async def delete_model(
 async def create_generation_job(
     payload: CreateGenerationJobRequest,
     generation_jobs: GenerationJobManager = Depends(get_generation_job_manager),
+    settings: Settings = Depends(get_settings),
     # Bare `Request` (not `Request | None`) so FastAPI's special-case
     # injection still recognizes it -- `lenient_issubclass` rejects unions.
     # Direct/unit-test calls that omit this kwarg still get `None`.
     request: Request = None,
 ) -> GenerationJobResponse:
     current_user = current_user_from_request(request)
+    init_image_path = _resolve_init_image(settings, payload.init_image_token)
     try:
         job = await generation_jobs.create_job(
             prompt=payload.prompt, negative_prompt=payload.negative_prompt, model_id=payload.model_id,
             steps=payload.steps, guidance=payload.guidance, width=payload.width, height=payload.height,
-            seed=payload.seed, device=payload.device, auto_upscale=payload.auto_upscale,
+            seed=payload.seed, device=payload.device,
+            init_image_path=init_image_path, strength=payload.strength,
+            auto_upscale=payload.auto_upscale,
             upscale_model_name=payload.upscale_model_name, upscale_scale=payload.upscale_scale,
             upscale_model_id=payload.upscale_model_id, owner=current_user,
         )

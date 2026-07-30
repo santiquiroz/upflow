@@ -426,10 +426,22 @@ class CreateGenerationJobRequest(BaseModel):
     height: int = Field(default=512, ge=64, le=1024, multiple_of=64)
     seed: int | None = Field(default=None, ge=0)
     device: str | None = None
+    # Token de una imagen ya subida con POST /generation/init-image. Presente =
+    # imagen a imagen. Se sube aparte para no volver multipart el contrato JSON
+    # de este endpoint, igual que hace el flujo de video con /video/analyze.
+    init_image_token: str | None = Field(default=None, alias="initImageToken")
+    strength: float = Field(default=0.6, gt=0, le=1)
     auto_upscale: bool = Field(default=False, alias="autoUpscale")
     upscale_model_name: str | None = Field(default=None, alias="upscaleModelName")
     upscale_scale: int | None = Field(default=None, alias="upscaleScale", ge=2, le=4)
     upscale_model_id: str | None = Field(default=None, alias="upscaleModelId")
+
+
+class InitImageResponse(BaseModel):
+    init_image_token: str = Field(serialization_alias="initImageToken")
+    original_filename: str = Field(serialization_alias="originalFilename")
+    width: int
+    height: int
 
 
 class GenerationJobResponse(BaseModel):

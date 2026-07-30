@@ -156,6 +156,10 @@ class GenerationJob:
     height: int = 512
     seed: int | None = None
     device: str | None = None
+    # Imagen de partida ya staged en disco. Presente = imagen a imagen.
+    init_image_path: Path | None = None
+    # Cuanto se aparta del original: 0 lo devuelve casi igual, 1 lo ignora.
+    strength: float = 0.6
     auto_upscale: bool = False
     upscale_model_name: str | None = None
     upscale_scale: int | None = None

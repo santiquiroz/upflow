@@ -182,10 +182,14 @@ CATALOG: tuple[Capability, ...] = (
         id="generate.imageToImage",
         domain="generate",
         label_key="capability.generate.imageToImage",
-        provisioning="none",
-        job_kind=None,
+        provisioning="registry",
+        job_kind="generation",
         strategies=("model",),
-        unavailable_reason_key="capability.reason.imageToImage",
+        # Reusa el MISMO modelo instalado que texto a imagen -- los pesos son los
+        # mismos y solo cambia la clase de pipeline. La cobertura si es mas
+        # angosta (no hay flux ni sana), pero eso lo valida el job manager contra
+        # la clase declarada del modelo elegido, no el catalogo.
+        requirements=(RegistryRequirement((ModelKind.diffusion_onnx,)),),
     ),
     Capability(
         id="generate.textToVideo",

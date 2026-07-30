@@ -13,6 +13,7 @@ from app.services.auth.quotas import QuotaService
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
 from app.services.engines.generation_onnx import GenerationEngine, GenerationRequest
+from app.services.generation_img2img import supports_img2img
 from app.services.job_manager import select_upscale_engine
 from app.services.model_registry import ModelKind, ModelRegistry
 from app.services.progress import (
@@ -101,6 +102,8 @@ class GenerationJobManager:
         height: int = 512,
         seed: int | None = None,
         device: str | None = None,
+        init_image_path: Path | None = None,
+        strength: float = 0.6,
         auto_upscale: bool = False,
         upscale_model_name: str | None = None,
         upscale_scale: int | None = None,
@@ -111,6 +114,8 @@ class GenerationJobManager:
         self._validate_generation_model(model_id)
         self._validate_params(prompt, steps, width, height)
         await self._validate_device(device)
+        if init_image_path is not None:
+            self._validate_img2img(model_id, init_image_path, strength)
         if auto_upscale:
             self._validate_upscale_params(upscale_model_name, upscale_scale, upscale_model_id)
         if owner is not None and self.quota_service is not None:
@@ -118,6 +123,7 @@ class GenerationJobManager:
         job = GenerationJob(
             prompt=prompt, model_id=model_id, negative_prompt=negative_prompt, steps=steps,
             guidance=guidance, width=width, height=height, seed=seed, device=device,
+            init_image_path=init_image_path, strength=strength,
             auto_upscale=auto_upscale, upscale_model_name=upscale_model_name,
             upscale_scale=upscale_scale, upscale_model_id=upscale_model_id,
             owner_id=owner.id if owner is not None else None,
@@ -168,6 +174,42 @@ class GenerationJobManager:
                 raise ValueError(
                     f"{label} must be a multiple of {DIMENSION_MULTIPLE} between {MIN_DIMENSION} and {MAX_DIMENSION}"
                 )
+
+    def _validate_img2img(
+        self, model_id: str, init_image_path: Path, strength: float
+    ) -> None:
+        """Rechaza al CREAR el job y no a mitad de la ejecucion.
+
+        Un modelo Flux corre perfecto para texto a imagen y no tiene camino de
+        imagen a imagen en optimum. Descubrirlo despues de encolar significaria un
+        job que falla varios segundos mas tarde con un error de carga de clase.
+        """
+        if not 0 < strength <= 1:
+            raise ValueError("strength must be greater than 0 and at most 1")
+        if not init_image_path.exists():
+            raise ValueError(f"init image not found: {init_image_path.name}")
+
+        entry = self.registry.get(model_id)
+        declared = self._declared_pipeline_class(entry)
+        if declared is None:
+            # No se pudo leer el model_index.json: no se bloquea por eso. El motor
+            # va a fallar con su propio mensaje si de verdad no sirve, y rechazar
+            # aca convertiria una lectura fallida en un veredicto.
+            return
+        if not supports_img2img(declared):
+            raise ValueError(
+                f"El modelo {model_id!r} ({declared}) no soporta imagen a imagen. "
+                "Sirve para texto a imagen; para imagen a imagen usa un modelo "
+                "Stable Diffusion, SDXL, SD3 o Latent Consistency."
+            )
+
+    def _declared_pipeline_class(self, entry: Any) -> str | None:
+        from app.services.engines.generation_onnx import _read_declared_class_name
+
+        try:
+            return _read_declared_class_name(self._resolve_pipeline_dir(entry))
+        except Exception:  # noqa: BLE001 - una lectura fallida no es un veredicto
+            return None
 
     async def _validate_device(self, device: str | None) -> None:
         if device is None:
@@ -246,6 +288,7 @@ class GenerationJobManager:
         request = GenerationRequest(
             prompt=job.prompt, negative_prompt=job.negative_prompt, steps=job.steps,
             guidance=job.guidance, width=job.width, height=job.height, seed=job.seed,
+            init_image_path=job.init_image_path, strength=job.strength,
         )
 
         def on_progress(done: int, total: int) -> None:
