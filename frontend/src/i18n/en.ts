@@ -167,9 +167,10 @@ export const en = {
     "transcript into a subtitle track. Transcription comes first: subtitles are " +
     "that result, aligned and muxed into the container.",
   "capability.reason.stems":
-    "Needs a stem separation model and an inference engine the app does not " +
-    "include today. It will be searchable like any other model: Demucs is the " +
-    "best known option, not the only one.",
+    "The runtime is already here: MDX-Net models run on ONNX Runtime, measured on " +
+    "both DirectML and CPU. What is missing is the spectrogram processing (STFT, " +
+    "windowing, overlap-add) and a real quality check. The model will be searchable " +
+    "like any other.",
   "capability.reason.noOnnxPath":
     "No confirmed path to a runnable ONNX model yet. The model existing is not " +
     "enough: it also has to be executable by ONNX Runtime, and this hit the same " +

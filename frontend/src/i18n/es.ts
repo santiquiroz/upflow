@@ -161,9 +161,10 @@ export const es = {
     "convierte la transcripción en una pista de subtítulos. La transcripción va " +
     "primero: los subtítulos son ese resultado, alineado y muxeado al contenedor.",
   "capability.reason.stems":
-    "Necesita un modelo de separación de stems y un motor de inferencia que la app " +
-    "no incluye hoy. Va a ser buscable como cualquier otro modelo: Demucs es la " +
-    "opción más conocida, no la única.",
+    "El runtime ya está: los modelos MDX-Net corren sobre ONNX Runtime, medido en " +
+    "DirectML y en CPU. Lo que falta es el procesamiento de espectrograma (STFT, " +
+    "ventaneo, overlap-add) y validar la calidad de verdad. El modelo va a ser " +
+    "buscable como cualquier otro.",
   "capability.reason.noOnnxPath":
     "Todavía no hay un camino confirmado a un ONNX ejecutable. Que el modelo " +
     "exista no alcanza: también tiene que poder correrlo ONNX Runtime, y acá se " +
