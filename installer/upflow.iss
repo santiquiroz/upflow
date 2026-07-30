@@ -45,6 +45,29 @@ Name: "spanish"; MessagesFile: "compiler:Languages\Spanish.isl"
 [Messages]
 FinishedLabel=Upflow se instalo correctamente en tu computadora.%n%nIMPORTANTE: la primera vez que lo abras va a descargar ~3-4 GB (motor de upscaling, FFmpeg, RIFE y las dependencias de Python) y puede tardar varios minutos segun tu conexion a internet. Las siguientes veces arranca al instante.%n%nPodes iniciarlo ahora tildando la opcion de abajo, o mas tarde desde el acceso directo.
 
+; Las funciones que el usuario puede elegir, descritas por lo que HABILITAN y no
+; por el nombre del binario: nadie que instale por primera vez sabe que es "RIFE".
+;
+; Los paquetes NO viajan en el instalador -- los baja el launcher en el primer
+; arranque -- asi que estos componentes se usan como pantalla de eleccion: el
+; codigo de [Code] persiste lo tildado en optional-packs.txt y el launcher lo lee.
+;
+; Saltear algo no deja a nadie encerrado: la pantalla de Tasks de la app muestra
+; cada capacidad a la que le falta su paquete, con un boton que corre el mismo
+; script de descarga.
+[Types]
+Name: "full"; Description: "Completa (recomendada)"
+Name: "minimal"; Description: "Minima: solo imagen y video"
+Name: "custom"; Description: "Personalizada"; Flags: iscustom
+
+[Components]
+; `fixed` porque sin estos dos la app no hace nada: Real-ESRGAN es el motor de
+; upscaling y ffmpeg lo usa todo, incluida la cadena de mejora de voz.
+Name: "core"; Description: "Reescalar imagenes y video (motor + FFmpeg, ~1 GB)"; Types: full minimal custom; Flags: fixed
+Name: "frames"; Description: "Generar fotogramas: duplicar o triplicar los FPS de un video (~45 MB)"; Types: full custom
+Name: "denoise"; Description: "Quitar ruido de audio con un modelo de IA, mas fuerte que el filtro rapido (~20 MB)"; Types: full custom
+Name: "restore"; Description: "Restaurar los agudos que perdio un MP3 o un AAC (~90 MB)"; Types: full custom
+
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 Name: "deleteuserdata"; Description: "Al desinstalar, borrar tambien los datos y descargas (~4 GB): archivos subidos, resultados y modelos de Hugging Face (runtime\), binarios de Real-ESRGAN/FFmpeg/RIFE/DeepFilterNet (vendor\) y las dependencias de Python (torch, etc.) descargadas en el primer arranque - accion irreversible"; GroupDescription: "Datos de usuario al desinstalar:"; Flags: unchecked
@@ -69,6 +92,31 @@ Filename: "{app}\Upflow.bat"; Description: "{cm:LaunchProgram,Upflow}"; Flags: p
 [Code]
 const
   DeleteUserDataMarker = '.delete-user-data-on-uninstall';
+  OptionalPacksFile = 'optional-packs.txt';
+
+{ Persiste lo que el usuario tildo, para que el launcher lo lea en el primer
+  arranque en vez de preguntarlo por consola.
+
+  Se escribe SIEMPRE, incluso vacio: el archivo ausente significa "no hubo
+  instalador" (zip portable, o una instalacion anterior a esta version) y ahi el
+  launcher instala todo, que es el comportamiento historico. Un archivo vacio, en
+  cambio, significa "el usuario eligio nada", y son cosas distintas. }
+procedure SaveOptionalPacks;
+var
+  Selected: String;
+  PackPath: String;
+begin
+  Selected := '';
+  if WizardIsComponentSelected('frames') then
+    Selected := Selected + 'rife' + #13#10;
+  if WizardIsComponentSelected('denoise') then
+    Selected := Selected + 'deepfilternet' + #13#10;
+  if WizardIsComponentSelected('restore') then
+    Selected := Selected + 'apollo' + #13#10;
+
+  PackPath := ExpandConstant('{app}\' + OptionalPacksFile);
+  SaveStringToFile(PackPath, Selected, False);
+end;
 
 { WizardIsTaskSelected lleva el flag sfNoUninstall (Setup-only): llamarla en
   CurUninstallStepChanged lanza un InternalError en runtime ("Cannot call
@@ -94,6 +142,8 @@ begin
       SaveStringToFile(MarkerPath, '1', False)
     else
       DeleteFile(MarkerPath);
+
+    SaveOptionalPacks;
   end;
 end;
 
@@ -127,6 +177,11 @@ begin
     (bundleado + descargado) de una sola pasada. }
   if CurUninstallStep = usUninstall then
   begin
+    { Lo escribe [Code] y no [Files], asi que Inno no lo rastrea: sin este
+      DeleteFile queda huerfano y la carpeta de instalacion no se puede borrar
+      completa. Va afuera del if del marker porque existe en TODA instalacion. }
+    DeleteFile(ExpandConstant('{app}\' + OptionalPacksFile));
+
     MarkerPath := ExpandConstant('{app}\' + DeleteUserDataMarker);
     if FileExists(MarkerPath) then
     begin

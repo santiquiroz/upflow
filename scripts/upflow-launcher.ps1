@@ -267,42 +267,36 @@ $script:OptionalPacks = @(
     }
 )
 
-function Test-CanPrompt {
-    # Sin consola interactiva no se puede preguntar. Pasa en el instalador silencioso
-    # y en CI: ahi se instala TODO, que es el comportamiento historico.
-    if ($SkipOptional -or $InstallAll) { return $false }
-    try {
-        return [Environment]::UserInteractive -and -not [Console]::IsInputRedirected
-    } catch {
-        return $false
-    }
-}
+# Lo que el usuario tildo en el asistente del instalador. Una clave por linea.
+# El instalador lo escribe SIEMPRE, incluso vacio, en CurStepChanged(ssPostInstall).
+$script:OptionalPacksFile = Join-Path $root 'optional-packs.txt'
 
 function Select-OptionalPacks {
+    # NO se pregunta por consola: la eleccion se hace en el asistente grafico del
+    # instalador. Aca solo se lee lo que ya se decidio.
     if ($SkipOptional) {
         Write-Host 'Se saltean los paquetes opcionales (-SkipOptional).'
         Write-Host 'Se pueden instalar despues desde la pantalla de tareas de la app.'
         return @()
     }
-    if (-not (Test-CanPrompt)) { return $script:OptionalPacks }
+    if ($InstallAll) { return $script:OptionalPacks }
 
-    Write-Host ''
-    Write-Host 'Upflow puede descargar estas funciones extra. Vienen todas por defecto,'
-    Write-Host 'y las que saltees se instalan despues con un click desde la app.'
-    Write-Host ''
-    foreach ($pack in $script:OptionalPacks) {
-        Write-Host ('  - {0} ({1})' -f $pack.Feature, $pack.Size)
+    # Archivo AUSENTE y archivo VACIO son distintos: ausente significa que no hubo
+    # instalador (zip portable, o una instalacion previa a esta version) y ahi se
+    # instala todo, que es el comportamiento historico. Vacio significa que el
+    # usuario destildo las tres.
+    if (-not (Test-Path $script:OptionalPacksFile)) {
+        return $script:OptionalPacks
     }
-    Write-Host ''
-    $answer = Read-Host 'Instalar todas? [S/n]  (n = elegir una por una)'
-    if ($answer -notmatch '^[nN]') { return $script:OptionalPacks }
 
-    $chosen = @()
-    foreach ($pack in $script:OptionalPacks) {
-        $reply = Read-Host ('Instalar "{0}" {1}? [S/n]' -f $pack.Feature, $pack.Size)
-        if ($reply -notmatch '^[nN]') { $chosen += $pack }
-    }
-    return $chosen
+    $chosenKeys = @(
+        Get-Content -LiteralPath $script:OptionalPacksFile -ErrorAction SilentlyContinue |
+            ForEach-Object { $_.Trim() } |
+            Where-Object { $_ -ne '' }
+    )
+    Write-Host ('Funciones extra elegidas en el instalador: {0}' -f
+        $(if ($chosenKeys.Count -gt 0) { $chosenKeys -join ', ' } else { 'ninguna' }))
+    return @($script:OptionalPacks | Where-Object { $chosenKeys -contains $_.Key })
 }
 
 function Install-RequiredBinaries {
