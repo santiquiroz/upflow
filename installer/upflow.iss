@@ -67,6 +67,8 @@ Name: "core"; Description: "Reescalar imagenes y video (motor + FFmpeg, ~1 GB)";
 Name: "frames"; Description: "Generar fotogramas: duplicar o triplicar los FPS de un video (~45 MB)"; Types: full custom
 Name: "denoise"; Description: "Quitar ruido de audio con un modelo de IA, mas fuerte que el filtro rapido (~20 MB)"; Types: full custom
 Name: "restore"; Description: "Restaurar los agudos que perdio un MP3 o un AAC (~90 MB)"; Types: full custom
+Name: "modelanime"; Description: "Generar imagenes: modelo anime (Hassaku XL Illustrious, descarga ~6.5 GB y se prepara solo la primera vez, ~20 min)"
+Name: "modelphoto"; Description: "Generar imagenes: modelo fotorrealista (epiCRealism XL Last FAME, descarga ~6.5 GB y se prepara solo la primera vez, ~20 min)"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
@@ -113,6 +115,10 @@ begin
     Selected := Selected + 'deepfilternet' + #13#10;
   if WizardIsComponentSelected('restore') then
     Selected := Selected + 'apollo' + #13#10;
+  if WizardIsComponentSelected('modelanime') then
+    Selected := Selected + 'model-anime' + #13#10;
+  if WizardIsComponentSelected('modelphoto') then
+    Selected := Selected + 'model-photo' + #13#10;
 
   PackPath := ExpandConstant('{app}\' + OptionalPacksFile);
   SaveStringToFile(PackPath, Selected, False);

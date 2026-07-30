@@ -46,6 +46,7 @@ from app.services.asr_installer import AsrModelInstaller
 from app.services.engines.transcribe_onnx import TranscribeEngine
 from app.services.download_job_manager import DownloadJobManager
 from app.services.transcribe_job_manager import TranscribeJobManager
+from app.services.model_packs import enqueue_pending_model_packs
 from app.services.pack_provisioner import PackProvisioner
 from app.services.model_registry import ModelRegistry
 from app.services.onnx_cpu_fallback_probe import OnnxCpuFallbackProbe
@@ -188,6 +189,7 @@ async def lifespan(app: FastAPI):
     await generation_job_manager.start()
     await generation_installer.start()
     await generation_converter.start()
+    await enqueue_pending_model_packs(model_registry, generation_converter)
     await pack_provisioner.start()
     await asr_installer.start()
     await transcribe_jobs.start()
