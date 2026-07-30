@@ -146,6 +146,33 @@ class AudioJob:
 
 
 @dataclass(slots=True)
+class TranscribeJob:
+    """Audio a texto.
+
+    A diferencia del resto de los jobs, el resultado es TEXTO y no un archivo de
+    medios: `text` es la respuesta, y `output_path` es solo la copia en .txt para
+    poder descargarla con el mismo patron que los demas.
+    """
+
+    source_path: Path
+    original_filename: str
+    model_id: str
+    # None deja que el modelo detecte el idioma.
+    language: str | None = None
+    device: str | None = None
+    id: str = field(default_factory=lambda: uuid4().hex)
+    status: JobStatus = JobStatus.queued
+    created_at: datetime = field(default_factory=utc_now)
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    progress_pct: float | None = None
+    text: str | None = None
+    output_path: Path | None = None
+    error: str | None = None
+    owner_id: str | None = None
+
+
+@dataclass(slots=True)
 class GenerationJob:
     prompt: str
     model_id: str
