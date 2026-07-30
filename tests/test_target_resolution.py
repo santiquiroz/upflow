@@ -4,10 +4,12 @@ import pytest
 
 from app.services.target_resolution import (
     TARGET_PRESETS,
+    choose_model_for_target,
     megapixels_per_frame,
     plan_for_scale,
     plan_for_target,
     resolve_target_height,
+    scale_hint_from_name,
     smallest_scale_reaching,
 )
 
@@ -186,3 +188,100 @@ def test_upscaling_a_small_source_is_far_cheaper_than_upscaling_a_large_one():
     large_cost = megapixels_per_frame(large.output_width, large.output_height)
 
     assert large_cost / small_cost > 12
+
+
+# ---------------------------------------------------------------------------
+# Elegir el MODELO segun el objetivo
+#
+# En este catalogo la escala esta pegada al modelo: realesrgan-x4plus solo ofrece [4].
+# Asi que para abaratar un pedido no alcanza con bajar la escala, hay que elegir OTRO
+# modelo. Eso es lo que hace que "pedir 1080p" pueda ser mas rapido de verdad.
+# ---------------------------------------------------------------------------
+
+INSTALLED = (
+    ("realesrgan-x4plus", 4),
+    ("realesr-animevideov3-x2", 2),
+    ("realesr-animevideov3-x3", 3),
+)
+
+
+def test_the_cheapest_model_that_reaches_the_target_is_chosen():
+    # 600 x2 = 1200 >= 1080: alcanza con el de 2x, y el costo va con el CUADRADO de la
+    # escala, asi que es 4 veces mas barato que el de 4x.
+    choice = choose_model_for_target(INSTALLED, source_height=600, target_height=1080)
+
+    assert choice.model_id == "realesr-animevideov3-x2"
+    assert choice.scale == 2
+    assert choice.falls_short is False
+
+
+def test_a_bigger_target_picks_a_bigger_model():
+    # 600 x2 = 1200 y x3 = 1800, ninguno llega a 2160: hace falta el de 4x.
+    choice = choose_model_for_target(INSTALLED, source_height=600, target_height=2160)
+
+    assert choice.scale == 4
+    assert choice.falls_short is False
+
+
+def test_when_nothing_reaches_the_biggest_is_returned_and_flagged():
+    # "lo mejor que puedo" es mas util que "no puedo", siempre que se diga.
+    choice = choose_model_for_target(INSTALLED, source_height=200, target_height=2160)
+
+    assert choice.scale == 4
+    assert choice.falls_short is True
+
+
+def test_models_with_an_unknown_scale_are_excluded():
+    # Planificar con un dato que no se tiene es adivinar.
+    choice = choose_model_for_target(
+        (("desconocido", None), ("realesr-animevideov3-x2", 2)), 600, 1080
+    )
+    assert choice.model_id == "realesr-animevideov3-x2"
+
+
+def test_no_usable_candidate_returns_none():
+    assert choose_model_for_target((("a", None), ("b", None)), 600, 1080) is None
+    assert choose_model_for_target((), 600, 1080) is None
+
+
+def test_a_single_installed_model_is_used_even_if_it_overshoots():
+    # Con solo un 4x instalado, pedir 1080p desde 600p usa ese: no hay alternativa, y
+    # el redimensionado final igual deja el archivo en 1080p.
+    choice = choose_model_for_target((("realesrgan-x4plus", 4),), 600, 1080)
+    assert choice.scale == 4
+    assert choice.falls_short is False
+
+
+# ---------------------------------------------------------------------------
+# La escala insinuada por el nombre del repo
+#
+# No es metadata, es una costumbre de nombres. La escala REAL la detecta el instalador
+# leyendo el grafo ONNX; esto es solo una pista para la busqueda.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "name,expected",
+    [
+        ("2x-AnimeSharpV4", 2),
+        ("4x_foolhardy_Remacri", 4),
+        ("RealESRGAN_x4plus", 4),
+        ("ESRGAN-x2", 2),
+        ("4x-UltraSharp", 4),
+        ("SwinIR-M-x4", 4),
+        ("owner/8x-Model", 8),
+    ],
+)
+def test_the_scale_is_read_from_names_that_follow_the_convention(name: str, expected: int):
+    assert scale_hint_from_name(name) == expected
+
+
+@pytest.mark.parametrize("name", ["libx264", "x264-encoder", "ESRGAN-v22", "realesr-animevideov3"])
+def test_names_that_do_not_say_the_scale_return_none(name: str):
+    """Ante la duda, None.
+
+    Un falso positivo haria que la UI etiquete "2x" un modelo de 4x, y eso es peor que
+    no mostrar nada. "libx264" y "v22" son justamente los que romperian un patron
+    ingenuo.
+    """
+    assert scale_hint_from_name(name) is None

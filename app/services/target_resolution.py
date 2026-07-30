@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 # Nadie quiere "x4": quiere que el resultado quede en 1080p. El multiplicador ciego
@@ -149,3 +150,79 @@ def plan_for_scale(
         needs_resize=False,
         exceeds_model_reach=False,
     )
+
+
+# ---------------------------------------------------------------------------
+# Elegir el MODELO segun el objetivo
+#
+# En este catalogo la escala esta pegada al modelo: realesrgan-x4plus solo ofrece
+# [4], y los animevideov3-xN son un model_id por escala. Solo realesr-animevideov3
+# ofrece [2,3,4]. Asi que para abaratar un pedido no alcanza con bajar la escala --
+# hay que elegir OTRO modelo.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class ModelChoice:
+    model_id: str
+    scale: int
+    # El objetivo queda por encima de lo que este modelo alcanza. Se devuelve igual
+    # porque es lo mejor disponible, pero el que llama tiene que poder avisarlo.
+    falls_short: bool
+
+
+def choose_model_for_target(
+    candidates: tuple[tuple[str, int | None], ...],
+    source_height: int,
+    target_height: int,
+) -> ModelChoice | None:
+    """El modelo mas barato que ALCANZA el objetivo.
+
+    Los candidatos son (model_id, escala). Una escala None significa desconocida --
+    se excluye, porque planificar con un dato que no se tiene es adivinar.
+
+    Si ninguno alcanza se devuelve el de mayor escala con falls_short, en vez de None:
+    "lo mejor que puedo" es mas util que "no puedo", siempre que se diga.
+    """
+    usable = [(mid, scale) for mid, scale in candidates if scale is not None and scale > 0]
+    if not usable:
+        return None
+
+    reaching = [
+        (mid, scale) for mid, scale in usable if source_height * scale >= target_height
+    ]
+    if reaching:
+        # El de menor escala: el costo por frame va con el CUADRADO de la escala.
+        model_id, scale = min(reaching, key=lambda item: item[1])
+        return ModelChoice(model_id=model_id, scale=scale, falls_short=False)
+
+    model_id, scale = max(usable, key=lambda item: item[1])
+    return ModelChoice(model_id=model_id, scale=scale, falls_short=True)
+
+
+# Convencion de nombres de los repos de upscalers: "2x-AnimeSharpV4",
+# "4x_foolhardy_Remacri", "RealESRGAN_x4plus". No es metadata, es una costumbre, asi
+# que esto es una PISTA y no un dato: la escala real la detecta el instalador leyendo
+# el grafo ONNX. Mostrarla como certeza seria prometer una deteccion que no existe.
+# El digito NO puede tener otro digito al lado: sin eso "libx264" daria 2 y
+# "ESRGAN-v22" daria 2. Un falso positivo es peor que no mostrar nada, porque haria
+# que la UI etiquete "2x" un modelo de 4x.
+_SCALE_HINT_PATTERNS = (
+    # "2x-AnimeSharp", "4x_Remacri"
+    re.compile(r"(?<!\d)([1-8])x(?![\da-z])", re.IGNORECASE),
+    # "RealESRGAN_x4plus", "ESRGAN-x2"
+    re.compile(r"x([1-8])(?!\d)", re.IGNORECASE),
+)
+
+
+def scale_hint_from_name(name: str) -> int | None:
+    """Escala insinuada por el nombre del repo, o None si no se puede decir.
+
+    Deliberadamente conservador: ante la duda devuelve None. Un falso positivo haria
+    que la UI muestre "2x" sobre un modelo de 4x, y eso es peor que no mostrar nada.
+    """
+    for pattern in _SCALE_HINT_PATTERNS:
+        match = pattern.search(name)
+        if match:
+            return int(match.group(1))
+    return None
