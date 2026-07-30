@@ -277,3 +277,65 @@ async def test_the_provision_response_serializes_camel_case_aliases(tmp_path: Pa
     dumped = response.model_dump(by_alias=True)
     assert "jobId" in dumped
     assert "statusUrl" in dumped
+
+
+# ---------------------------------------------------------------------------
+# A traves de la app real
+#
+# Todo lo de arriba llama las corrutinas DIRECTO, que es el patron del repo pero
+# no ejercita ni el ruteo ni la inyeccion de dependencias: un prefijo mal escrito
+# o un Depends mal cableado pasaria entero. Estos van por TestClient.
+# ---------------------------------------------------------------------------
+
+
+def test_the_tree_answers_through_the_real_app():
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/capabilities/tree")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [group["domain"] for group in payload["domains"]] == list(DOMAIN_ORDER)
+    # camelCase en el cable, no los nombres snake_case de Python.
+    first = payload["domains"][0]
+    assert "labelKey" in first
+    for item in (*first["capabilities"], *first["roadmap"]):
+        assert "unavailableReasonKey" in item
+        assert "missingPacks" in item
+
+
+def test_the_provisioner_is_wired_into_the_app_state():
+    # Sin esto el endpoint de provision tiraria AttributeError en la primera
+    # llamada real, que es exactamente como se rompio /audio/voice-catalog.
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+    from app.services.pack_provisioner import PackProvisioner
+
+    with TestClient(app):
+        assert isinstance(app.state.pack_provisioner, PackProvisioner)
+
+
+def test_provisioning_an_unknown_capability_answers_404_through_the_app():
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    with TestClient(app) as client:
+        response = client.post("/api/v1/capabilities/no.existe/provision")
+
+    assert response.status_code == 404
+
+
+def test_the_provision_status_of_an_unknown_job_answers_404_through_the_app():
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/capabilities/provision/nope")
+
+    assert response.status_code == 404

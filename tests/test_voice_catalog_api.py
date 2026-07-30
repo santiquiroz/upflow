@@ -76,3 +76,27 @@ async def test_the_default_selection_is_a_usable_chain():
     response = await get_voice_catalog()
     enabled = [step.id for step in response.steps if step.default_enabled]
     assert enabled
+
+
+def test_the_catalog_answers_through_the_real_app():
+    """Este endpoint se rompio en silencio una vez porque nada lo ejecutaba.
+
+    Los tests de arriba llaman la corrutina directo; este va por el ruteo real,
+    que es el camino que el frontend usa de verdad.
+    """
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/audio/voice-catalog")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [step["id"] for step in payload["steps"]] == [info.id for info in step_catalog()]
+    for step in payload["steps"]:
+        assert "labelKey" in step
+        assert "descriptionKey" in step
+        assert "defaultEnabled" in step
+    for delivery in payload["deliveries"]:
+        assert "truePeakDb" in delivery
