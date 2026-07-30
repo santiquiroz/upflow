@@ -47,6 +47,7 @@ class VideoJobResponse(BaseModel):
     video_preset: str = Field(serialization_alias="videoPreset")
     crf: int
     keep_audio: bool = Field(serialization_alias="keepAudio")
+    target_height: int | None = Field(default=None, serialization_alias="targetHeight")
     fps_multiplier: int = Field(serialization_alias="fpsMultiplier")
     target_fps: str | None = Field(default=None, serialization_alias="targetFps")
     audio_enhance: str | None = Field(default=None, serialization_alias="audioEnhance")

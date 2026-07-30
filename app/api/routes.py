@@ -353,6 +353,7 @@ def video_job_to_response(job: VideoUpscaleJob) -> VideoJobResponse:
         video_preset=job.video_preset,
         crf=job.crf,
         keep_audio=job.keep_audio,
+        target_height=job.target_height,
         fps_multiplier=job.fps_multiplier,
         target_fps=job.target_fps,
         audio_enhance=job.audio_enhance,
@@ -570,6 +571,9 @@ async def create_video_job(
     keep_audio: bool | None = Form(default=None),
     fps_multiplier: int | None = Form(default=None),
     target_fps: str | None = Form(default=None),
+    # Alto de salida pedido. Presente = el usuario pidio una RESOLUCION y no un
+    # multiplicador ciego, que es lo que llevaba a pedir 15360x8640 sin querer.
+    target_height: int | None = Form(default=None),
     audio_enhance: str | None = Form(default=None),
     audio_restore: str | None = Form(default=None),
     audio_track_indices: str | None = Form(default=None),
@@ -668,6 +672,7 @@ async def create_video_job(
             video_preset=resolved.video_preset,
             crf=resolved.crf,
             keep_audio=resolved.keep_audio,
+            target_height=target_height if isinstance(target_height, int) else None,
             fps_multiplier=resolved.fps_multiplier,
             target_fps=resolved.target_fps,
             audio_enhance=resolved.audio_enhance,

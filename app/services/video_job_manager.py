@@ -95,6 +95,7 @@ class VideoJobManager:
         video_preset: str,
         crf: int,
         keep_audio: bool,
+        target_height: int | None = None,
         fps_multiplier: int = 1,
         target_fps: str | None = None,
         audio_enhance: str | None = None,
@@ -112,6 +113,7 @@ class VideoJobManager:
     ) -> VideoUpscaleJob:
         resolved_source_path = self._resolve_source_path(source_path, upload_token)
         source_fps, probe = await self._validate_video(resolved_source_path)
+        self._validate_target_height(target_height)
         validate_backend_choice(backend)
         self._validate_video_encoder(video_encoder)
         resolved_model_id = model_id if model_id is not None else model_name
@@ -140,6 +142,7 @@ class VideoJobManager:
             self.quota_service.check_admission(owner)
 
         job = VideoUpscaleJob(
+            target_height=target_height,
             source_path=resolved_source_path,
             original_filename=original_filename,
             model_name=resolution.engine_model_name,
@@ -222,6 +225,23 @@ class VideoJobManager:
         if not reasons:
             return output_container, None
         return "mkv", f"Output container upgraded to mkv to {' and '.join(reasons)}"
+
+    def _validate_target_height(self, target_height: int | None) -> None:
+        """El alto pedido tiene que ser razonable y par.
+
+        Se acota arriba porque un objetivo absurdo (100000) llevaria al mismo problema
+        que el multiplicador ciego: un pedido enorme que nada advierte. El limite es
+        8640, o sea 8K, que ya es mas de lo que cualquier pantalla usa hoy.
+        """
+        if target_height is None:
+            return
+        if not 144 <= target_height <= 8640:
+            raise ValueError(
+                f"target_height must be between 144 and 8640, got {target_height}"
+            )
+        if target_height % 2:
+            # yuv420p no acepta dimensiones impares y el encode falla al final del job.
+            raise ValueError(f"target_height must be even, got {target_height}")
 
     async def _validate_video(self, source_path: Path) -> tuple[Fraction, dict]:
         """Returns (source_fps, probe). The probe travels with the job so the

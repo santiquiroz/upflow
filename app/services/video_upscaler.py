@@ -14,6 +14,7 @@ import numpy as np
 
 from app.config import GMFSS_ENGINE, Settings
 from app.models import VideoUpscaleJob
+from app.services.target_resolution import plan_for_target
 from app.services import video_encoders
 from app.services.backend_registry import (
     UpscaleBackend,
@@ -347,8 +348,42 @@ class VideoUpscaler:
         if not self._is_non_empty_file(output_path):
             raise RuntimeError("Video processing finished but no output file was produced")
         complete_video_stages(job)
-        job.metadata["outputWidth"] = job.metadata["sourceWidth"] * job.scale
-        job.metadata["outputHeight"] = job.metadata["sourceHeight"] * job.scale
+        width, height = self._final_output_dims(job)
+        job.metadata["outputWidth"] = width
+        job.metadata["outputHeight"] = height
+
+    def _final_output_dims(self, job: VideoUpscaleJob) -> tuple[int, int]:
+        """Lo que el archivo REALMENTE mide.
+
+        Con un alto objetivo el tamaño final es el del plan, no el del multiplicador:
+        reportar sourceWidth*scale mentiria en la UI y en la cola de jobs.
+        """
+        source_width = job.metadata["sourceWidth"]
+        source_height = job.metadata["sourceHeight"]
+        if job.target_height is None:
+            return source_width * job.scale, source_height * job.scale
+        plan = plan_for_target(source_width, source_height, job.target_height)
+        return plan.output_width, plan.output_height
+
+    def _resize_filter_args(self, job: VideoUpscaleJob) -> list[str]:
+        """El -vf que lleva a la medida exacta, o nada si no hace falta.
+
+        Los modelos solo hacen escalados enteros, asi que un objetivo como 1080p casi
+        nunca cae justo. lanczos porque el paso es una REDUCCION en la mayoria de los
+        casos y ahi es el que menos detalle pierde.
+        """
+        if job.target_height is None:
+            return []
+        source_width = job.metadata.get("sourceWidth")
+        source_height = job.metadata.get("sourceHeight")
+        if not source_width or not source_height:
+            return []
+        plan = plan_for_target(source_width, source_height, job.target_height)
+        reached = (source_width * job.scale, source_height * job.scale)
+        if reached == (plan.output_width, plan.output_height):
+            # El escalado entero cayo justo: una pasada de ffmpeg al vicio.
+            return []
+        return ["-vf", f"scale={plan.output_width}:{plan.output_height}:flags=lanczos"]
 
     @staticmethod
     def _interpolated_encode_fps(fps: str, fps_multiplier: int, target_fps: str | None) -> str:
@@ -925,6 +960,7 @@ class VideoUpscaler:
             self._map_extra_audio_tracks(maps, job, source_input_index)
             self._map_subtitles(maps, job, source_input_index)
         cmd += maps
+        cmd += self._resize_filter_args(job)
         cmd += self._build_video_encode_options(job, encoder)
         if audio_mux_path is not None:
             cmd += audio_codec_args

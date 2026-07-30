@@ -68,6 +68,10 @@ class VideoUpscaleJob:
     video_preset: str
     crf: int
     keep_audio: bool
+    # Alto de salida pedido. Presente = el usuario pidio una RESOLUCION y no un
+    # multiplicador: `scale` sigue siendo el escalado entero del modelo y el
+    # redimensionado final lleva a la medida exacta. Ver target_resolution.py.
+    target_height: int | None = None
     fps_multiplier: int = 1
     target_fps: str | None = None
     audio_enhance: str | None = None

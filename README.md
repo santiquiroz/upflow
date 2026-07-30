@@ -189,6 +189,7 @@ Todos los endpoints viven bajo `/api/v1`. Los campos de formulario (subida) van 
 | `GET` | `/api/v1/capabilities/tree` | El árbol de lo que la app puede hacer, resuelto contra esta máquina: `available`, `needs_setup` (con el paquete que falta) o `not_implemented` (con el motivo) |
 | `POST` | `/api/v1/capabilities/{id}/provision` | Baja el paquete que le falta a una capacidad corriendo su `scripts/download-*.ps1` → 202 |
 | `GET` | `/api/v1/capabilities/provision/{jobId}` | Estado de esa descarga |
+| `POST` | `/api/v1/video/jobs` | Acepta `target_height` (opcional): se pide una RESOLUCION de salida en vez de un multiplicador. La app elige el escalado entero mas chico que la alcance y redimensiona a la medida exacta; si la fuente ya llega, no corre el modelo |
 | `POST` | `/api/v1/generation/init-image` | Sube la imagen de partida para imagen a imagen y devuelve su token (201). Va aparte del job para que `POST /generation/jobs` siga siendo JSON |
 | `GET` | `/api/v1/asr/models/search?q=` | Busca modelos de reconocimiento de voz en Hugging Face. El filtro por TAG es lo que decide que un repo es de ASR: los nombres de archivo no alcanzan para distinguirlo de otro modelo de audio |
 | `POST` | `/api/v1/asr/models/install` | Instala un modelo de ASR: baja el par encoder/decoder no fusionado mas su metadata (~257 MB para whisper-tiny) → 202 |
