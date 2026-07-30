@@ -1,3 +1,10 @@
+param(
+    # Instala todo sin preguntar. Lo usa el instalador silencioso y CI.
+    [switch]$InstallAll,
+    # Instala solo lo imprescindible: el motor de upscaling y ffmpeg.
+    [switch]$SkipOptional
+)
+
 # 'Continue', NO 'Stop': el launcher maneja errores con checks manuales de
 # $LASTEXITCODE + throw explicitos en cada llamada nativa. Con 'Stop',
 # Windows PowerShell convierte CUALQUIER escritura a stderr de un comando
@@ -236,7 +243,71 @@ function Invoke-DownloadScript {
     }
 }
 
-function Install-MissingBinaries {
+# Los paquetes que el usuario PUEDE saltear, descritos por lo que habilitan y no
+# por el nombre del binario: en el primer arranque nadie sabe que es "RIFE".
+#
+# Saltear es seguro y reversible: la pantalla de tareas de la app muestra cada
+# capacidad a la que le falta su paquete, con un boton que corre ESTE MISMO script.
+# Por eso preguntar no deja a nadie encerrado.
+$script:OptionalPacks = @(
+    @{
+        Key     = 'rife'
+        Feature = 'Generar fotogramas: duplicar o triplicar los FPS de un video'
+        Size    = '~45 MB'
+    },
+    @{
+        Key     = 'deepfilternet'
+        Feature = 'Quitar ruido de audio con un modelo de IA (mas fuerte que el filtro rapido)'
+        Size    = '~20 MB'
+    },
+    @{
+        Key     = 'apollo'
+        Feature = 'Restaurar los agudos que perdio un MP3 o un AAC'
+        Size    = '~90 MB'
+    }
+)
+
+function Test-CanPrompt {
+    # Sin consola interactiva no se puede preguntar. Pasa en el instalador silencioso
+    # y en CI: ahi se instala TODO, que es el comportamiento historico.
+    if ($SkipOptional -or $InstallAll) { return $false }
+    try {
+        return [Environment]::UserInteractive -and -not [Console]::IsInputRedirected
+    } catch {
+        return $false
+    }
+}
+
+function Select-OptionalPacks {
+    if ($SkipOptional) {
+        Write-Host 'Se saltean los paquetes opcionales (-SkipOptional).'
+        Write-Host 'Se pueden instalar despues desde la pantalla de tareas de la app.'
+        return @()
+    }
+    if (-not (Test-CanPrompt)) { return $script:OptionalPacks }
+
+    Write-Host ''
+    Write-Host 'Upflow puede descargar estas funciones extra. Vienen todas por defecto,'
+    Write-Host 'y las que saltees se instalan despues con un click desde la app.'
+    Write-Host ''
+    foreach ($pack in $script:OptionalPacks) {
+        Write-Host ('  - {0} ({1})' -f $pack.Feature, $pack.Size)
+    }
+    Write-Host ''
+    $answer = Read-Host 'Instalar todas? [S/n]  (n = elegir una por una)'
+    if ($answer -notmatch '^[nN]') { return $script:OptionalPacks }
+
+    $chosen = @()
+    foreach ($pack in $script:OptionalPacks) {
+        $reply = Read-Host ('Instalar "{0}" {1}? [S/n]' -f $pack.Feature, $pack.Size)
+        if ($reply -notmatch '^[nN]') { $chosen += $pack }
+    }
+    return $chosen
+}
+
+function Install-RequiredBinaries {
+    # Estos dos NO son opcionales: Real-ESRGAN es el motor de upscaling y ffmpeg lo
+    # usa todo, incluida la cadena de mejora de voz. Sin ellos la app no hace nada.
     if (Test-RealesrganPresent) {
         Write-Host 'Real-ESRGAN NCNN Vulkan ya esta descargado.'
     } else {
@@ -248,21 +319,42 @@ function Install-MissingBinaries {
     } else {
         Invoke-DownloadScript -ScriptName 'download-ffmpeg.ps1' -Label 'FFmpeg'
     }
+}
 
-    if (Test-RifePresent) {
-        Write-Host 'RIFE NCNN Vulkan ya esta descargado.'
-    } else {
-        Invoke-DownloadScript -ScriptName 'download-rife.ps1' -Label 'RIFE NCNN Vulkan (FPS boost)'
+function Install-MissingBinaries {
+    Install-RequiredBinaries
+
+    $selectedKeys = @((Select-OptionalPacks) | ForEach-Object { $_.Key })
+
+    if ($selectedKeys -contains 'rife') {
+        if (Test-RifePresent) {
+            Write-Host 'RIFE NCNN Vulkan ya esta descargado.'
+        } else {
+            Invoke-DownloadScript -ScriptName 'download-rife.ps1' -Label 'RIFE NCNN Vulkan (FPS boost)'
+        }
     }
 
-    if (Test-DeepfilternetPresent) {
-        Write-Host 'DeepFilterNet ya esta descargado.'
-    } else {
-        Invoke-DownloadScript -ScriptName 'download-deepfilternet.ps1' -Label 'DeepFilterNet (mejora de audio con IA)'
+    if ($selectedKeys -contains 'deepfilternet') {
+        if (Test-DeepfilternetPresent) {
+            Write-Host 'DeepFilterNet ya esta descargado.'
+        } else {
+            Invoke-DownloadScript -ScriptName 'download-deepfilternet.ps1' -Label 'DeepFilterNet (mejora de audio con IA)'
+        }
     }
 
-    # download-apollo.ps1 se auto-saltea si el modelo ya esta presente.
-    Invoke-DownloadScript -ScriptName 'download-apollo.ps1' -Label 'Apollo (restauracion de audio por compresion, experimental)'
+    if ($selectedKeys -contains 'apollo') {
+        # download-apollo.ps1 se auto-saltea si el modelo ya esta presente.
+        Invoke-DownloadScript -ScriptName 'download-apollo.ps1' -Label 'Apollo (restauracion de audio por compresion, experimental)'
+    }
+
+    $skipped = @($script:OptionalPacks | Where-Object { $selectedKeys -notcontains $_.Key })
+    if ($skipped.Count -gt 0) {
+        Write-Host ''
+        Write-Host 'Sin instalar (se agregan despues desde la pantalla de tareas):'
+        foreach ($pack in $skipped) {
+            Write-Host ('  - {0}' -f $pack.Feature)
+        }
+    }
 }
 
 function New-EnvFileWithFeaturesEnabled {

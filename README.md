@@ -143,6 +143,13 @@ Abrí **http://localhost:5173** durante el desarrollo. `npm run build` genera el
 La SPA de React se navega **por tarea**: la raíz pregunta qué querés hacer y te
 lleva a la pantalla que corresponde, con el estado preseleccionado.
 
+> **Primer arranque:** el launcher pregunta qué funciones extra querés bajar
+> (generar fotogramas, quitar ruido con IA, restaurar agudos), con su tamaño al
+> lado. Vienen todas marcadas. Lo que saltees no se pierde: la pantalla de Tasks
+> lo muestra con un botón que corre el mismo script de descarga. Dos paquetes no
+> son opcionales porque sin ellos la app no hace nada: el motor de upscaling y
+> ffmpeg. Para instalaciones no interactivas hay `-InstallAll` y `-SkipOptional`.
+
 - **Tasks** (`/`) — el árbol de capacidades, resuelto contra tu máquina: cuatro
   dominios (video, imágenes, audio, generar) y sus capacidades. Una capacidad
   lista te lleva a su pantalla; una que le falta un paquete ofrece bajarlo con
