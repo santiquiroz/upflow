@@ -444,12 +444,14 @@ class Settings(BaseSettings):
     winml_catalog_enabled: bool = Field(default=True, alias="WINML_CATALOG_ENABLED")
     # Fase 3: lane experimental de difusión por stable-diffusion.cpp Vulkan
     # (multi-vendor, sin EP). Mismo patrón opt-in que GMFSS: apagado por
-    # default, el usuario provee su checkpoint (.safetensors/.gguf) — los
-    # originales NO sobreviven a la conversión ONNX (generation_converter
-    # borra staging siempre), así que este lane usa un modelo propio.
+    # default. scripts/download-sdcpp.ps1 baja binario + checkpoint default
+    # (DreamShaper 8) — cero configuración manual; SDCPP_MODEL solo se toca
+    # para usar otro checkpoint (avanzado). Los .safetensors originales de los
+    # modelos instalados no sobreviven a la conversión ONNX, por eso el pack
+    # trae el suyo.
     enable_sdcpp: bool = Field(default=False, alias="ENABLE_SDCPP")
     sdcpp_binary: str = Field(default="vendor/sdcpp/sd.exe", alias="SDCPP_BINARY")
-    sdcpp_model: str = Field(default="", alias="SDCPP_MODEL")
+    sdcpp_model: str = Field(default="vendor/sdcpp/model.safetensors", alias="SDCPP_MODEL")
 
     # Log a archivo, opt-in para diagnosticar reportes de otras maquinas. En uso
     # normal es ruido y disco, asi que arranca apagado; se enciende desde
