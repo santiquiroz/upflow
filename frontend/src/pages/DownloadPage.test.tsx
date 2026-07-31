@@ -37,6 +37,9 @@ function makeJob(overrides: Partial<DownloadJob> = {}): DownloadJob {
     url: "https://example.com/v",
     maxHeight: 1080,
     audioOnly: false,
+    audioFormat: "mp3",
+    audioBitrateKbps: null,
+    videoContainer: "mp4",
     mediaTitle: "Big Buck Bunny",
     mediaUploader: "Blender",
     extractor: "Youtube",
@@ -247,5 +250,97 @@ describe("DownloadPage — lo que faltaba", () => {
     typeUrl("holaaa");
 
     expect(downloadService.probeMedia).not.toHaveBeenCalled();
+  });
+});
+
+describe("DownloadPage — formato y calidad de salida", () => {
+  it("con Solo audio aparecen el formato y la calidad, con los defaults históricos", () => {
+    renderPage();
+
+    fireEvent.click(screen.getByRole("button", { name: /Solo audio/i }));
+
+    expect(screen.getByRole("radio", { name: /MP3/i })).toBeChecked();
+    expect(screen.getByRole("radio", { name: /Mejor \(VBR\)/i })).toBeChecked();
+  });
+
+  it("un formato sin pérdida esconde la calidad", () => {
+    // FLAC no tiene bitrate elegible; dejar el selector sería un knob mudo.
+    renderPage();
+    fireEvent.click(screen.getByRole("button", { name: /Solo audio/i }));
+
+    fireEvent.click(screen.getByRole("radio", { name: /FLAC/i }));
+
+    expect(screen.queryByText(/Calidad de audio/i)).not.toBeInTheDocument();
+  });
+
+  it("manda el formato y la calidad elegidos al crear el trabajo", async () => {
+    vi.mocked(downloadService.createDownloadJob).mockResolvedValue(makeJob());
+    vi.mocked(downloadService.getDownloadJob).mockResolvedValue(makeJob());
+    renderPage();
+    typeUrl("https://youtube.com/watch?v=x");
+    fireEvent.click(screen.getByRole("button", { name: /Solo audio/i }));
+    fireEvent.click(screen.getByRole("radio", { name: /FLAC/i }));
+
+    fireEvent.click(screen.getByRole("button", { name: /Descargar/i }));
+
+    await waitFor(() =>
+      expect(downloadService.createDownloadJob).toHaveBeenCalledWith(
+        expect.objectContaining({ audioOnly: true, audioFormat: "flac" }),
+      ),
+    );
+  });
+
+  it("manda el bitrate elegido para un formato con pérdida", async () => {
+    vi.mocked(downloadService.createDownloadJob).mockResolvedValue(makeJob());
+    vi.mocked(downloadService.getDownloadJob).mockResolvedValue(makeJob());
+    renderPage();
+    typeUrl("https://youtube.com/watch?v=x");
+    fireEvent.click(screen.getByRole("button", { name: /Solo audio/i }));
+    fireEvent.click(screen.getByRole("radio", { name: /192/ }));
+
+    fireEvent.click(screen.getByRole("button", { name: /Descargar/i }));
+
+    await waitFor(() =>
+      expect(downloadService.createDownloadJob).toHaveBeenCalledWith(
+        expect.objectContaining({ audioFormat: "mp3", audioBitrateKbps: 192 }),
+      ),
+    );
+  });
+
+  it("para video se elige el contenedor y viaja al crear", async () => {
+    vi.mocked(downloadService.createDownloadJob).mockResolvedValue(makeJob());
+    vi.mocked(downloadService.getDownloadJob).mockResolvedValue(makeJob());
+    renderPage();
+    typeUrl("https://youtube.com/watch?v=x");
+
+    expect(screen.getByRole("radio", { name: /MP4/i })).toBeChecked();
+    fireEvent.click(screen.getByRole("radio", { name: /MKV/i }));
+
+    fireEvent.click(screen.getByRole("button", { name: /Descargar/i }));
+
+    await waitFor(() =>
+      expect(downloadService.createDownloadJob).toHaveBeenCalledWith(
+        expect.objectContaining({ videoContainer: "mkv" }),
+      ),
+    );
+  });
+});
+
+describe("DownloadPage — bajar el resultado por HTTP", () => {
+  it("cada archivo terminado tiene su propio link de descarga", async () => {
+    // Es lo que vuelve usable el módulo desde otra máquina: el nombre y la carpeta
+    // del server no alcanzan si no estás sentado en el server.
+    vi.mocked(downloadService.createDownloadJob).mockResolvedValue(makeJob());
+    vi.mocked(downloadService.getDownloadJob).mockResolvedValue(
+      makeJob({ id: "job-1", status: "completed", outputFiles: ["a.mp4", "b.mp4"] }),
+    );
+    renderPage();
+    typeUrl("https://youtube.com/watch?v=x");
+    fireEvent.click(screen.getByRole("button", { name: /Descargar/i }));
+
+    const first = await screen.findByRole("link", { name: /a\.mp4/ });
+    const second = screen.getByRole("link", { name: /b\.mp4/ });
+    expect(first).toHaveAttribute("href", "/api/v1/download/jobs/job-1/download?index=0");
+    expect(second).toHaveAttribute("href", "/api/v1/download/jobs/job-1/download?index=1");
   });
 });

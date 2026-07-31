@@ -75,6 +75,32 @@ export function offeredHeights(probe: MediaProbe | null): readonly number[] {
   return offered.length > 0 ? offered : [HEIGHT_OPTIONS[0]];
 }
 
+export const AUDIO_FORMAT_OPTIONS = ["mp3", "m4a", "opus", "flac", "wav"] as const;
+export type AudioFormat = (typeof AUDIO_FORMAT_OPTIONS)[number];
+
+/** null = mejor calidad variable (VBR). */
+export const AUDIO_BITRATE_OPTIONS: readonly (number | null)[] = [null, 320, 256, 192, 128];
+
+export const VIDEO_CONTAINER_OPTIONS = ["mp4", "mkv"] as const;
+export type VideoContainer = (typeof VIDEO_CONTAINER_OPTIONS)[number];
+
+const LOSSLESS_FORMATS: readonly AudioFormat[] = ["flac", "wav"];
+
+/** FLAC/WAV no tienen bitrate elegible: ofrecerlo sería un knob mudo. */
+export function bitrateSelectable(format: AudioFormat): boolean {
+  return !LOSSLESS_FORMATS.includes(format);
+}
+
+/**
+ * El link para bajar el archivo producido, servido por el backend.
+ *
+ * Sin esto un usuario remoto ve el nombre del archivo y una ruta de otra máquina:
+ * la descarga termina y el resultado queda inalcanzable.
+ */
+export function downloadFileHref(jobId: string, index: number): string {
+  return `/api/v1/download/jobs/${jobId}/download?index=${index}`;
+}
+
 export function formatBytes(bytes: number | null): string {
   if (bytes === null || bytes <= 0) {
     return "—";

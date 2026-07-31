@@ -189,6 +189,156 @@ def test_a_job_with_no_files_reports_no_directory(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
+# Formato de salida y calidad
+# ---------------------------------------------------------------------------
+
+
+def test_audio_knobs_travel_to_the_job(tmp_path: Path):
+    client, manager = make_client(tmp_path)
+
+    body = client.post(
+        "/api/v1/download/jobs",
+        json={
+            "url": "https://example.com/v",
+            "audioOnly": True,
+            "audioFormat": "flac",
+            "audioBitrateKbps": 192,
+        },
+    ).json()
+
+    assert body["audioFormat"] == "flac"
+    assert body["audioBitrateKbps"] == 192
+    job = manager.get_job(body["id"])
+    assert job.audio_format == "flac"
+    assert job.audio_bitrate_kbps == 192
+
+
+def test_the_container_travels_to_the_job(tmp_path: Path):
+    client, manager = make_client(tmp_path)
+
+    body = client.post(
+        "/api/v1/download/jobs",
+        json={"url": "https://example.com/v", "videoContainer": "mkv"},
+    ).json()
+
+    assert body["videoContainer"] == "mkv"
+    assert manager.get_job(body["id"]).video_container == "mkv"
+
+
+def test_the_format_defaults_preserve_the_historic_behavior(tmp_path: Path):
+    client, _ = make_client(tmp_path)
+
+    body = client.post(
+        "/api/v1/download/jobs", json={"url": "https://example.com/v"}
+    ).json()
+
+    assert body["audioFormat"] == "mp3"
+    assert body["audioBitrateKbps"] is None
+    assert body["videoContainer"] == "mp4"
+
+
+def test_an_unknown_audio_format_is_refused_by_the_route(tmp_path: Path):
+    # Mismo criterio que maxHeight: rechazar al crear es mas barato que fallar
+    # despues de encolar.
+    client, _ = make_client(tmp_path)
+
+    response = client.post(
+        "/api/v1/download/jobs",
+        json={"url": "https://example.com/v", "audioOnly": True, "audioFormat": "ogg"},
+    )
+
+    assert response.status_code == 400
+
+
+def test_an_unknown_container_is_refused_by_the_route(tmp_path: Path):
+    client, _ = make_client(tmp_path)
+
+    response = client.post(
+        "/api/v1/download/jobs",
+        json={"url": "https://example.com/v", "videoContainer": "webm"},
+    )
+
+    assert response.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Bajar el resultado por HTTP
+#
+# Sin esto, un usuario remoto ve el NOMBRE del archivo y una ruta de otra maquina:
+# la descarga termina y el resultado es inalcanzable.
+# ---------------------------------------------------------------------------
+
+
+def _finished_job_with_files(client, manager, tmp_path: Path, names: list[str]):
+    job_id = client.post(
+        "/api/v1/download/jobs", json={"url": "https://example.com/v"}
+    ).json()["id"]
+    job = manager.get_job(job_id)
+    paths = []
+    for name in names:
+        file = tmp_path / "uploads" / name
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_bytes(f"contenido-{name}".encode())
+        paths.append(file)
+    job.output_paths = paths
+    job.status = JobStatus.completed
+    return job_id
+
+
+def test_a_finished_file_can_be_downloaded_over_http(tmp_path: Path):
+    client, manager = make_client(tmp_path)
+    job_id = _finished_job_with_files(client, manager, tmp_path, ["video.mp4"])
+
+    response = client.get(f"/api/v1/download/jobs/{job_id}/download")
+
+    assert response.status_code == 200
+    assert response.content == b"contenido-video.mp4"
+    assert "video.mp4" in response.headers["content-disposition"]
+
+
+def test_each_file_of_a_playlist_is_addressable_by_index(tmp_path: Path):
+    client, manager = make_client(tmp_path)
+    job_id = _finished_job_with_files(client, manager, tmp_path, ["a.mp4", "b.mp4"])
+
+    response = client.get(f"/api/v1/download/jobs/{job_id}/download?index=1")
+
+    assert response.status_code == 200
+    assert response.content == b"contenido-b.mp4"
+
+
+def test_an_index_out_of_range_is_404(tmp_path: Path):
+    client, manager = make_client(tmp_path)
+    job_id = _finished_job_with_files(client, manager, tmp_path, ["a.mp4"])
+
+    assert client.get(f"/api/v1/download/jobs/{job_id}/download?index=5").status_code == 404
+
+
+def test_a_job_without_files_yet_is_409(tmp_path: Path):
+    # Misma convencion que el resto de los modulos: el job existe pero no termino.
+    client, _ = make_client(tmp_path)
+    job_id = client.post(
+        "/api/v1/download/jobs", json={"url": "https://example.com/v"}
+    ).json()["id"]
+
+    assert client.get(f"/api/v1/download/jobs/{job_id}/download").status_code == 409
+
+
+def test_downloading_an_unknown_job_is_404(tmp_path: Path):
+    client, _ = make_client(tmp_path)
+
+    assert client.get("/api/v1/download/jobs/no-existe/download").status_code == 404
+
+
+def test_a_file_that_vanished_from_disk_is_404_and_not_500(tmp_path: Path):
+    # El sweeper de retencion puede borrar el archivo antes que el job expire.
+    client, manager = make_client(tmp_path)
+    job_id = _finished_job_with_files(client, manager, tmp_path, ["a.mp4"])
+    (tmp_path / "uploads" / "a.mp4").unlink()
+
+    assert client.get(f"/api/v1/download/jobs/{job_id}/download").status_code == 404
+
+
+# ---------------------------------------------------------------------------
 # El probe
 # ---------------------------------------------------------------------------
 

@@ -324,3 +324,86 @@ def test_a_host_that_does_not_resolve_is_refused(monkeypatch):
 
     with pytest.raises(ValueError, match="resolver"):
         validate_url("https://no-existe.invalid/v")
+
+
+# ---------------------------------------------------------------------------
+# Lo que viaja al motor
+# ---------------------------------------------------------------------------
+
+
+async def test_the_fetch_request_carries_every_knob(tmp_path: Path, monkeypatch):
+    """El cableado job -> FetchRequest es lo unico que une la API con el motor.
+
+    Sin este test, perder un campo en el pass-through no rompe ninguna suite y el
+    knob queda mudo: la UI lo muestra, el backend lo guarda y el motor nunca lo ve.
+    """
+    from types import SimpleNamespace
+
+    from app.services import download_job_manager as manager_module
+    from fetchflow.options import FetchPlan
+
+    manager = make_manager(tmp_path)
+    job = await manager.create_job(
+        url="https://example.com/v",
+        audio_only=True,
+        audio_format="flac",
+        audio_bitrate_kbps=192,
+        subtitle_languages=["es"],
+    )
+
+    captured: dict = {}
+    monkeypatch.setattr(
+        manager_module.fetch_engine,
+        "probe",
+        lambda url: SimpleNamespace(title="t", uploader="u", extractor="e"),
+    )
+    def capture(request, ffmpeg_dir):
+        captured["request"] = request
+        return FetchPlan()
+
+    monkeypatch.setattr(manager_module, "build_plan", capture)
+    monkeypatch.setattr(
+        manager_module.fetch_engine,
+        "download",
+        lambda plan, url, on_progress=None, cancel_event=None: [],
+    )
+
+    manager._download_blocking(job, threading.Event())
+
+    request = captured["request"]
+    assert request.audio_only is True
+    assert request.audio_format == "flac"
+    assert request.audio_bitrate_kbps == 192
+    assert request.subtitle_languages == ("es",)
+
+
+async def test_the_container_reaches_the_fetch_request(tmp_path: Path, monkeypatch):
+    from types import SimpleNamespace
+
+    from app.services import download_job_manager as manager_module
+    from fetchflow.options import FetchPlan
+
+    manager = make_manager(tmp_path)
+    job = await manager.create_job(url="https://example.com/v", video_container="mkv")
+
+    captured: dict = {}
+    monkeypatch.setattr(
+        manager_module.fetch_engine,
+        "probe",
+        lambda url: SimpleNamespace(title="t", uploader="u", extractor="e"),
+    )
+
+    def capture(request, ffmpeg_dir):
+        captured["request"] = request
+        return FetchPlan()
+
+    monkeypatch.setattr(manager_module, "build_plan", capture)
+    monkeypatch.setattr(
+        manager_module.fetch_engine,
+        "download",
+        lambda plan, url, on_progress=None, cancel_event=None: [],
+    )
+
+    manager._download_blocking(job, threading.Event())
+
+    assert captured["request"].video_container == "mkv"

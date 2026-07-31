@@ -614,6 +614,9 @@ export interface DownloadJob {
   url: string;
   maxHeight: number;
   audioOnly: boolean;
+  audioFormat: string;
+  audioBitrateKbps: number | null;
+  videoContainer: string;
   mediaTitle: string | null;
   mediaUploader: string | null;
   extractor: string | null;

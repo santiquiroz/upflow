@@ -12,13 +12,20 @@ import {
   probeMedia,
 } from "../services/download";
 import {
+  AUDIO_BITRATE_OPTIONS,
+  AUDIO_FORMAT_OPTIONS,
   DEFAULT_HEIGHT,
+  VIDEO_CONTAINER_OPTIONS,
+  bitrateSelectable,
   clampPlaylistLimit,
+  downloadFileHref,
   formatBytes,
   formatDuration,
   isProbablyUrl,
   offeredHeights,
   playlistNotice,
+  type AudioFormat,
+  type VideoContainer,
 } from "../modules/download/downloadRequest";
 
 const TERMINAL = new Set(["completed", "failed", "cancelled"]);
@@ -60,8 +67,22 @@ function JobProgress({ job, onCancel }: { job: DownloadJob; onCancel: () => void
 
       {job.status === "completed" && job.outputFiles.length > 0 && (
         <div className="flex flex-col gap-1">
+          {/* Un link por archivo, servido por el backend: el nombre y la carpeta del
+              server no alcanzan si no estás sentado en el server. */}
+          <div className="flex flex-wrap gap-2">
+            {job.outputFiles.map((name, index) => (
+              <a
+                key={name}
+                href={downloadFileHref(job.id, index)}
+                download
+                className="flex items-center gap-1.5 rounded border border-border bg-surface px-3 py-1.5 text-sm text-text hover:border-accent"
+              >
+                <DownloadIcon className="h-3.5 w-3.5" /> {name}
+              </a>
+            ))}
+          </div>
           <span className="text-xs text-text-dim">
-            {job.outputFiles.join(", ")} — ya podés escalarlo o limpiarle el audio desde Enhance.
+            Ya podés escalarlo o limpiarle el audio desde Enhance.
           </span>
           {/* La carpeta, no solo el nombre: decir el nombre sin decir donde quedo
               obliga a salir a buscarlo. */}
@@ -87,6 +108,9 @@ export function DownloadPage() {
   const [url, setUrl] = useState("");
   const [maxHeight, setMaxHeight] = useState(DEFAULT_HEIGHT);
   const [audioOnly, setAudioOnly] = useState(false);
+  const [audioFormat, setAudioFormat] = useState<AudioFormat>("mp3");
+  const [audioBitrate, setAudioBitrate] = useState<number | null>(null);
+  const [videoContainer, setVideoContainer] = useState<VideoContainer>("mp4");
   const [includePlaylist, setIncludePlaylist] = useState(false);
   const [playlistLimit, setPlaylistLimit] = useState(10);
   const [jobId, setJobId] = useState<string | null>(null);
@@ -110,6 +134,9 @@ export function DownloadPage() {
         url,
         maxHeight,
         audioOnly,
+        audioFormat,
+        audioBitrateKbps: bitrateSelectable(audioFormat) ? audioBitrate : null,
+        videoContainer,
         includePlaylist,
         playlistLimit: clampPlaylistLimit(playlistLimit),
       }),
@@ -192,6 +219,62 @@ export function DownloadPage() {
             </div>
           </fieldset>
 
+          {audioOnly && (
+            <fieldset className="flex flex-col gap-2">
+              <legend className="text-xs font-medium text-text-dim">Formato</legend>
+              <div className="flex flex-wrap gap-2">
+                {AUDIO_FORMAT_OPTIONS.map((format) => (
+                  <label
+                    key={format}
+                    className={`cursor-pointer rounded border px-3 py-1.5 text-sm ${
+                      audioFormat === format
+                        ? "border-accent bg-surface-2 text-text"
+                        : "border-border bg-surface text-text-dim"
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="download-audio-format"
+                      className="sr-only"
+                      checked={audioFormat === format}
+                      onChange={() => setAudioFormat(format)}
+                    />
+                    <span className="font-mono-tabular">{format.toUpperCase()}</span>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+          )}
+
+          {audioOnly && bitrateSelectable(audioFormat) && (
+            <fieldset className="flex flex-col gap-2">
+              <legend className="text-xs font-medium text-text-dim">Calidad de audio</legend>
+              <div className="flex flex-wrap gap-2">
+                {AUDIO_BITRATE_OPTIONS.map((bitrate) => (
+                  <label
+                    key={bitrate ?? "vbr"}
+                    className={`cursor-pointer rounded border px-3 py-1.5 text-sm ${
+                      audioBitrate === bitrate
+                        ? "border-accent bg-surface-2 text-text"
+                        : "border-border bg-surface text-text-dim"
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="download-audio-bitrate"
+                      className="sr-only"
+                      checked={audioBitrate === bitrate}
+                      onChange={() => setAudioBitrate(bitrate)}
+                    />
+                    <span className="font-mono-tabular">
+                      {bitrate === null ? "Mejor (VBR)" : `${bitrate} kbps`}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+          )}
+
           {!audioOnly && (
             <fieldset className="flex flex-col gap-2">
               <legend className="text-xs font-medium text-text-dim">Calidad máxima</legend>
@@ -213,6 +296,33 @@ export function DownloadPage() {
                       onChange={() => setMaxHeight(height)}
                     />
                     <span className="font-mono-tabular">{height}p</span>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+          )}
+
+          {!audioOnly && (
+            <fieldset className="flex flex-col gap-2">
+              <legend className="text-xs font-medium text-text-dim">Contenedor</legend>
+              <div className="flex gap-2">
+                {VIDEO_CONTAINER_OPTIONS.map((container) => (
+                  <label
+                    key={container}
+                    className={`cursor-pointer rounded border px-3 py-1.5 text-sm ${
+                      videoContainer === container
+                        ? "border-accent bg-surface-2 text-text"
+                        : "border-border bg-surface text-text-dim"
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="download-container"
+                      className="sr-only"
+                      checked={videoContainer === container}
+                      onChange={() => setVideoContainer(container)}
+                    />
+                    <span className="font-mono-tabular">{container.toUpperCase()}</span>
                   </label>
                 ))}
               </div>

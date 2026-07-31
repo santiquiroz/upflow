@@ -150,3 +150,28 @@ describe("formatos legibles", () => {
     expect(formatDuration(null)).toBe("—");
   });
 });
+
+describe("formato y calidad de audio", () => {
+  it("los formatos con pérdida permiten elegir bitrate", async () => {
+    const { bitrateSelectable } = await import("./downloadRequest");
+    expect(bitrateSelectable("mp3")).toBe(true);
+    expect(bitrateSelectable("m4a")).toBe(true);
+    expect(bitrateSelectable("opus")).toBe(true);
+  });
+
+  it("los formatos sin pérdida no tienen bitrate elegible", async () => {
+    // FLAC/WAV no tienen bitrate: ofrecerlo sería ofrecer un knob mudo.
+    const { bitrateSelectable } = await import("./downloadRequest");
+    expect(bitrateSelectable("flac")).toBe(false);
+    expect(bitrateSelectable("wav")).toBe(false);
+  });
+});
+
+describe("el link de descarga del resultado", () => {
+  it("apunta al endpoint del backend con el índice del archivo", async () => {
+    // Sin esto un usuario remoto ve el nombre del archivo y una ruta de otra máquina.
+    const { downloadFileHref } = await import("./downloadRequest");
+    expect(downloadFileHref("job-9", 0)).toBe("/api/v1/download/jobs/job-9/download?index=0");
+    expect(downloadFileHref("job-9", 2)).toBe("/api/v1/download/jobs/job-9/download?index=2");
+  });
+});

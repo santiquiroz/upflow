@@ -1,6 +1,6 @@
 [project]
 name = "upflow"
-version = "0.19.1"
+version = "0.20.0"
 description = "Modern AI upscaling + frame interpolation for AMD GPUs — Vulkan-native, FastAPI, web UI + REST API."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -31,7 +31,7 @@ dependencies = [
   # SIN url git+ a proposito: eso exigiria el binario git en la maquina del usuario
   # final, y el `pip install -e .` del primer arranque fallaria ENTERO, no solo para
   # quien use descargas. El instalador vendoriza la wheel (ver package-release.ps1).
-  "fetchflow>=0.1.1",
+  "fetchflow>=0.2.0",
   "numpy>=1.26.0,<3.0.0",
   "onnxruntime-directml>=1.19.0,<2.0.0; sys_platform == 'win32'",
   # SP1 Task 6 - .pth/.safetensors -> ONNX conversion (app/services/model_converter.py).

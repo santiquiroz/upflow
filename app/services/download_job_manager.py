@@ -20,8 +20,11 @@ from fetchflow.errors import describe_failure
 from fetchflow.options import (
     FetchRequest,
     build_plan,
+    validate_audio_bitrate,
+    validate_audio_format,
     validate_max_height,
     validate_playlist_limit,
+    validate_video_container,
 )
 
 logger = logging.getLogger(__name__)
@@ -68,6 +71,9 @@ class DownloadJobManager:
         url: str,
         max_height: int = 1080,
         audio_only: bool = False,
+        audio_format: str = "mp3",
+        audio_bitrate_kbps: int | None = None,
+        video_container: str = "mp4",
         include_playlist: bool = False,
         playlist_limit: int = 10,
         subtitle_languages: list[str] | None = None,
@@ -77,6 +83,13 @@ class DownloadJobManager:
         validate_max_height(max_height)
         if include_playlist:
             validate_playlist_limit(playlist_limit)
+        # Mismo criterio que build_plan: cada knob se valida solo si el pedido lo usa,
+        # y aca ademas se rechaza al crear, que es mas barato que fallar encolado.
+        if audio_only:
+            validate_audio_format(audio_format)
+            validate_audio_bitrate(audio_bitrate_kbps)
+        else:
+            validate_video_container(video_container)
         if owner is not None and self.quota_service is not None:
             self.quota_service.check_admission(owner)
 
@@ -84,6 +97,9 @@ class DownloadJobManager:
             url=url,
             max_height=max_height,
             audio_only=audio_only,
+            audio_format=audio_format,
+            audio_bitrate_kbps=audio_bitrate_kbps,
+            video_container=video_container,
             include_playlist=include_playlist,
             playlist_limit=playlist_limit,
             subtitle_languages=list(subtitle_languages or []),
@@ -159,6 +175,9 @@ class DownloadJobManager:
             output_dir=self.settings.uploads_path,
             max_height=job.max_height,
             audio_only=job.audio_only,
+            audio_format=job.audio_format,
+            audio_bitrate_kbps=job.audio_bitrate_kbps,
+            video_container=job.video_container,
             include_playlist=job.include_playlist,
             playlist_limit=job.playlist_limit,
             subtitle_languages=tuple(job.subtitle_languages),

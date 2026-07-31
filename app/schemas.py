@@ -358,6 +358,9 @@ class CreateDownloadJobRequest(BaseModel):
     # 1080p y no 4K por defecto: el pedido caro tiene que ser una eleccion.
     max_height: int = Field(default=1080, alias="maxHeight")
     audio_only: bool = Field(default=False, alias="audioOnly")
+    audio_format: str = Field(default="mp3", alias="audioFormat")
+    audio_bitrate_kbps: int | None = Field(default=None, alias="audioBitrateKbps")
+    video_container: str = Field(default="mp4", alias="videoContainer")
     # Una URL de playlist es tambien una URL de video. El default es el item suelto
     # para que nadie dispare 200 descargas por pegar un link.
     include_playlist: bool = Field(default=False, alias="includePlaylist")
@@ -373,6 +376,9 @@ class DownloadJobResponse(BaseModel):
     url: str
     max_height: int = Field(serialization_alias="maxHeight")
     audio_only: bool = Field(serialization_alias="audioOnly")
+    audio_format: str = Field(default="mp3", serialization_alias="audioFormat")
+    audio_bitrate_kbps: int | None = Field(default=None, serialization_alias="audioBitrateKbps")
+    video_container: str = Field(default="mp4", serialization_alias="videoContainer")
     media_title: str | None = Field(default=None, serialization_alias="mediaTitle")
     media_uploader: str | None = Field(default=None, serialization_alias="mediaUploader")
     extractor: str | None = None

@@ -5,6 +5,9 @@ export interface DownloadRequest {
   url: string;
   maxHeight?: number;
   audioOnly?: boolean;
+  audioFormat?: string;
+  audioBitrateKbps?: number | null;
+  videoContainer?: string;
   includePlaylist?: boolean;
   playlistLimit?: number;
   subtitleLanguages?: string[];

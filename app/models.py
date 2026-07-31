@@ -188,6 +188,9 @@ class DownloadJob:
     url: str
     max_height: int = 1080
     audio_only: bool = False
+    audio_format: str = "mp3"
+    audio_bitrate_kbps: int | None = None
+    video_container: str = "mp4"
     include_playlist: bool = False
     playlist_limit: int = 10
     subtitle_languages: list[str] = field(default_factory=list)

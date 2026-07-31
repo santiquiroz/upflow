@@ -987,6 +987,9 @@ def download_job_to_response(job: DownloadJob) -> DownloadJobResponse:
         url=job.url,
         max_height=job.max_height,
         audio_only=job.audio_only,
+        audio_format=job.audio_format,
+        audio_bitrate_kbps=job.audio_bitrate_kbps,
+        video_container=job.video_container,
         media_title=job.media_title,
         media_uploader=job.media_uploader,
         extractor=job.extractor,
@@ -1056,6 +1059,9 @@ async def create_download_job(
             url=payload.url,
             max_height=payload.max_height,
             audio_only=payload.audio_only,
+            audio_format=payload.audio_format,
+            audio_bitrate_kbps=payload.audio_bitrate_kbps,
+            video_container=payload.video_container,
             include_playlist=payload.include_playlist,
             playlist_limit=payload.playlist_limit,
             subtitle_languages=payload.subtitle_languages,
@@ -1103,6 +1109,40 @@ async def cancel_download_job(
         raise HTTPException(status_code=404, detail="Download job not found")
     download_jobs.cancel_job(job_id)
     return download_job_to_response(job)
+
+
+@router.get(
+    "/download/jobs/{job_id}/download",
+    dependencies=[Depends(require(Permission.jobs_read_own))],
+)
+async def download_download_job_file(
+    job_id: str,
+    index: int = Query(default=0, ge=0),
+    download_jobs: DownloadJobManager = Depends(get_download_job_manager),
+    # Bare `Request` (not `Request | None`) so FastAPI's special-case
+    # injection still recognizes it -- `lenient_issubclass` rejects unions.
+    # Direct/unit-test calls that omit this kwarg still get `None`.
+    request: Request = None,
+) -> FileResponse:
+    """El archivo producido, servido por HTTP.
+
+    Sin esto un usuario remoto ve el NOMBRE del archivo y la ruta de otra maquina:
+    la descarga termina y el resultado queda inalcanzable. `index` porque una
+    playlist produce varios archivos y cada uno necesita su propio link.
+    """
+    job = download_jobs.get_job(job_id)
+    current_user = current_user_from_request(request)
+    if not job or (current_user is not None and not _can_view_job(job, current_user)):
+        raise HTTPException(status_code=404, detail="Download job not found")
+    if job.status != JobStatus.completed or not job.output_paths:
+        raise HTTPException(status_code=409, detail="Download job is not completed yet")
+    if index >= len(job.output_paths):
+        raise HTTPException(status_code=404, detail="No such file in this download job")
+    path = job.output_paths[index]
+    # El sweeper de retencion puede borrar el archivo antes de que el job expire.
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="El archivo ya no esta en disco")
+    return FileResponse(path=path, filename=path.name, media_type="application/octet-stream")
 
 
 def get_transcribe_job_manager(request: Request) -> TranscribeJobManager:
