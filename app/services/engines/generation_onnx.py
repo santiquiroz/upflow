@@ -215,6 +215,12 @@ class GenerationRequest:
     # Máscara de inpainting (blanco=editar, negro=conservar). Requiere
     # init_image_path; presente = modo inpaint.
     mask_image_path: Path | None = None
+    # Preparación de la máscara (ver inpaint_mask/inpaint_pipeline): agrandar lo
+    # marcado se come el halo del contorno, la transición evita la costura, y el
+    # contexto es lo que le permite al modelo continuar el fondo.
+    mask_dilate_px: int = 8
+    mask_feather_px: int = 8
+    mask_padding_px: int = 48
 
 
 class GenerationEngine:
@@ -279,6 +285,11 @@ class GenerationEngine:
                 raise GenerationCancelled()
             progress_cb(step + 1, request.steps)
 
+        if mode == "inpaint":
+            return self._run_masked_edit_blocking(
+                pipeline, request, output_path, _on_step
+            )
+
         call_kwargs: dict[str, Any] = {
             "prompt": request.prompt,
             "num_inference_steps": request.steps,
@@ -286,26 +297,13 @@ class GenerationEngine:
             "callback": _on_step,
             "callback_steps": 1,
         }
-        init_image = None
-        mask_image = None
         if request.init_image_path is not None:
             # width/height NO se pasan: el pipeline de imagen a imagen deriva el
             # tamaño de la imagen de entrada, asi que se la redimensiona antes.
-            init_image = _load_init_image(
+            call_kwargs["image"] = _load_init_image(
                 request.init_image_path, request.width, request.height
             )
-            call_kwargs["image"] = init_image
             call_kwargs["strength"] = request.strength
-            if request.mask_image_path is not None:
-                mask_image = _load_mask_image(
-                    request.mask_image_path, request.width, request.height
-                )
-                call_kwargs["mask_image"] = mask_image
-                call_kwargs["strength"] = _inpaint_strength(pipeline, request.strength)
-                # SDXL inpaint deriva el tamaño solo de forma fiable con estos
-                # explicitos; ya redimensionamos ambas entradas a ese tamaño.
-                call_kwargs["width"] = request.width
-                call_kwargs["height"] = request.height
         else:
             call_kwargs["width"] = request.width
             call_kwargs["height"] = request.height
@@ -321,11 +319,66 @@ class GenerationEngine:
         except Exception as exc:
             raise _wrap_generation_error(exc) from exc
 
-        output_image = result.images[0]
-        if mask_image is not None and init_image is not None:
-            output_image = _composite_outside_mask(output_image, init_image, mask_image)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_image.save(output_path)
+        result.images[0].save(output_path)
+        return output_path
+
+    def _run_masked_edit_blocking(
+        self,
+        pipeline: Any,
+        request: GenerationRequest,
+        output_path: Path,
+        on_step: Callable[[int, Any, Any], None],
+    ) -> Path:
+        """Edición con máscara por el camino 'solo el área marcada'.
+
+        La foto sale con su resolución original: el modelo solo ve el recorte
+        de la zona marcada, así que ni la reduce ni la vuelve a comprimir.
+        """
+        from PIL import Image
+
+        from app.services.inpaint_pipeline import MaskedEditSettings, run_masked_edit
+
+        with Image.open(request.init_image_path) as source:
+            base_image = source.convert("RGB")
+        with Image.open(request.mask_image_path) as source_mask:
+            mask_image = source_mask.convert("L")
+
+        strength = _inpaint_strength(pipeline, request.strength)
+
+        def run_model(image: Any, mask: Any, width: int, height: int) -> Any:
+            call_kwargs: dict[str, Any] = {
+                "prompt": request.prompt,
+                "image": image,
+                "mask_image": mask,
+                "num_inference_steps": request.steps,
+                "guidance_scale": request.guidance,
+                "strength": strength,
+                "width": width,
+                "height": height,
+                "callback": on_step,
+                "callback_steps": 1,
+            }
+            if request.negative_prompt:
+                call_kwargs["negative_prompt"] = request.negative_prompt
+            if request.seed is not None:
+                call_kwargs["generator"] = _build_seed_generator(request.seed)
+            try:
+                return pipeline(**call_kwargs).images[0]
+            except GenerationCancelled:
+                raise
+            except Exception as exc:
+                raise _wrap_generation_error(exc) from exc
+
+        settings = MaskedEditSettings(
+            dilate_px=request.mask_dilate_px,
+            feather_px=request.mask_feather_px,
+            padding_px=request.mask_padding_px,
+            target_side=max(request.width, request.height),
+        )
+        edited = run_masked_edit(base_image, mask_image, run_model, settings)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        edited.save(output_path)
         return output_path
 
     def _get_pipeline(

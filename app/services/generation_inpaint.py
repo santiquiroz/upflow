@@ -27,6 +27,16 @@ INPAINT_CLASS_NAMES: dict[str, str] = {
     "StableDiffusionXLImg2ImgPipeline": "ORTStableDiffusionXLInpaintPipeline",
     "StableDiffusion3Pipeline": "ORTStableDiffusion3InpaintPipeline",
     "ORTStableDiffusion3Pipeline": "ORTStableDiffusion3InpaintPipeline",
+    # Checkpoints de inpainting DEDICADOS (unet de 9 canales): su model_index
+    # ya declara la clase de inpainting. Son los que de verdad borran limpio —
+    # el unet recibe la máscara como entrada en vez de adivinar — así que hay
+    # que aceptarlos tal como se declaran, no solo los checkpoints normales.
+    "StableDiffusionInpaintPipeline": "ORTStableDiffusionInpaintPipeline",
+    "ORTStableDiffusionInpaintPipeline": "ORTStableDiffusionInpaintPipeline",
+    "StableDiffusionXLInpaintPipeline": "ORTStableDiffusionXLInpaintPipeline",
+    "ORTStableDiffusionXLInpaintPipeline": "ORTStableDiffusionXLInpaintPipeline",
+    "StableDiffusion3InpaintPipeline": "ORTStableDiffusion3InpaintPipeline",
+    "ORTStableDiffusion3InpaintPipeline": "ORTStableDiffusion3InpaintPipeline",
 }
 
 # Arquitecturas que la app conoce pero que NO tienen camino de inpainting en

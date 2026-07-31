@@ -30,6 +30,7 @@ import {
 } from "./maskCanvas";
 import {
   IDENTITY_VIEWPORT,
+  clampPan,
   isZoomed,
   panBy,
   transformStyle,
@@ -210,8 +211,11 @@ export function EditorPanel() {
   const uploadSequence = useRef(0);
 
   function stageSize(): { width: number; height: number } {
-    const rect = stageRef.current?.getBoundingClientRect();
-    return { width: rect?.width ?? 0, height: rect?.height ?? 0 };
+    // clientWidth/Height y no getBoundingClientRect: el rect incluye el borde de
+    // 1px del recuadro y el contenido vive en la caja interior, así que medir el
+    // borde afloja los límites de arrastre 2*(zoom-1) px y deja una franja vacía.
+    const stage = stageRef.current;
+    return { width: stage?.clientWidth ?? 0, height: stage?.clientHeight ?? 0 };
   }
 
   const models = capabilitiesQuery.data?.models ?? [];
@@ -241,14 +245,36 @@ export function EditorPanel() {
     function handleWheel(event: WheelEvent) {
       event.preventDefault();
       const rect = stage!.getBoundingClientRect();
-      const focus = { x: event.clientX - rect.left, y: event.clientY - rect.top };
-      const container = { width: rect.width, height: rect.height };
+      // El origen del transform es la caja interior: descontar el borde o el
+      // punto anclado se corre un píxel por paso y el error se acumula.
+      const focus = {
+        x: event.clientX - rect.left - stage!.clientLeft,
+        y: event.clientY - rect.top - stage!.clientTop,
+      };
+      const container = { width: stage!.clientWidth, height: stage!.clientHeight };
       setViewport((current) =>
         zoomAtPoint(current, current.zoom * (event.deltaY < 0 ? 1.15 : 1 / 1.15), focus, container),
       );
     }
     stage.addEventListener("wheel", handleWheel, { passive: false });
     return () => stage.removeEventListener("wheel", handleWheel);
+  }, [baseInfo]);
+
+  // Al achicar la ventana el lienzo encoge y un desplazamiento que era legal
+  // deja la foto entera fuera de la vista: el usuario ve un recuadro vacío sin
+  // ninguna pista. Se vuelve a acotar cada vez que cambia el tamaño.
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage || typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(() => {
+      setViewport((current) =>
+        clampPan(current, { width: stage.clientWidth, height: stage.clientHeight }),
+      );
+    });
+    observer.observe(stage);
+    return () => observer.disconnect();
   }, [baseInfo]);
 
   const handleBaseSelected = useCallback(

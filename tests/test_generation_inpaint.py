@@ -95,3 +95,12 @@ def test_inpaint_strength_is_respected_for_real_inpaint_checkpoints() -> None:
         assert _inpaint_strength(pipeline, 0.85) == 0.85
     finally:
         pipeline.unet.config.in_channels = 4
+
+
+def test_dedicated_inpaint_checkpoints_are_accepted() -> None:
+    # Un checkpoint de inpainting real (unet 9ch) declara la clase de inpainting
+    # en su model_index; si no la aceptamos, el modelo que MEJOR borra sería el
+    # único rechazado.
+    assert inpaint_class_for("StableDiffusionXLInpaintPipeline") == "ORTStableDiffusionXLInpaintPipeline"
+    assert inpaint_class_for("StableDiffusionInpaintPipeline") == "ORTStableDiffusionInpaintPipeline"
+    assert supports_inpaint("StableDiffusionXLInpaintPipeline") is True

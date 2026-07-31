@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -337,5 +337,61 @@ describe("EditorPanel zoom y desplazamiento", () => {
     });
 
     await waitFor(() => expect(screen.getByText("100%")).toBeInTheDocument());
+  });
+});
+
+describe("EditorPanel: la vista sobrevive a un cambio de tamaño", () => {
+  it("re-acota el desplazamiento cuando el lienzo encoge", async () => {
+    // Regresión (review adversarial): con la ventana grande se podía arrastrar
+    // hasta un desplazamiento legal que, al achicar la ventana, dejaba la foto
+    // entera fuera de la vista y el editor en blanco.
+    const observers: Array<() => void> = [];
+    class FakeResizeObserver {
+      constructor(private readonly cb: () => void) {
+        observers.push(() => this.cb());
+      }
+      observe() {}
+      disconnect() {}
+    }
+    vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+
+    let clientWidth = 1200;
+    Object.defineProperty(HTMLDivElement.prototype, "clientWidth", {
+      configurable: true,
+      get() {
+        return this.dataset?.testid === "editor-stage" ? clientWidth : 0;
+      },
+    });
+    Object.defineProperty(HTMLDivElement.prototype, "clientHeight", {
+      configurable: true,
+      get() {
+        return this.dataset?.testid === "editor-stage" ? 800 : 0;
+      },
+    });
+
+    try {
+      renderPanel();
+      await loadBaseImage();
+
+      fireEvent.click(screen.getByRole("button", { name: en["editor.zoom.in"] }));
+      const stage = screen.getByTestId("editor-stage");
+      const inner = stage.firstElementChild as HTMLElement;
+      const panned = inner.style.transform;
+      expect(panned).toContain("scale(1.5)");
+
+      clientWidth = 300;
+      act(() => {
+        observers.forEach((fire) => fire());
+      });
+
+      const clamped = inner.style.transform;
+      const panX = Number(clamped.match(/translate\((-?[\d.]+)px/)?.[1] ?? "0");
+      // Con 300 px de ancho a 1.5x el mínimo legal es -150: nunca menos.
+      expect(panX).toBeGreaterThanOrEqual(-150);
+    } finally {
+      vi.unstubAllGlobals();
+      delete (HTMLDivElement.prototype as never as Record<string, unknown>).clientWidth;
+      delete (HTMLDivElement.prototype as never as Record<string, unknown>).clientHeight;
+    }
   });
 });
