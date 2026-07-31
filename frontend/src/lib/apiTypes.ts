@@ -606,6 +606,8 @@ export interface MediaProbe {
   isPlaylist: boolean;
   entryCount: number;
   availableHeights: number[];
+  /** La miniatura que vuelve reconocible un video antes de bajarlo. */
+  thumbnailUrl: string | null;
 }
 
 export interface DownloadJob {

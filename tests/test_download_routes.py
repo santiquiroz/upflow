@@ -409,3 +409,28 @@ def test_probe_surfaces_that_a_url_is_a_playlist_before_anything_downloads(
     assert body["isPlaylist"] is True
     assert body["entryCount"] == 200
     assert body["availableHeights"] == [360, 720, 1080]
+
+
+def test_probe_carries_the_thumbnail_for_the_preview(tmp_path: Path, monkeypatch):
+    # La miniatura es lo que vuelve reconocible un video antes de bajarlo.
+    from fetchflow import engine as fetch_engine
+
+    monkeypatch.setattr(
+        fetch_engine,
+        "probe",
+        lambda url: fetch_engine.MediaInfo(
+            title="Un video",
+            duration_seconds=60,
+            uploader="alguien",
+            extractor="Youtube",
+            is_playlist=False,
+            entry_count=1,
+            available_heights=(720,),
+            thumbnail_url="https://i.ytimg.com/vi/x/max.jpg",
+        ),
+    )
+    client, _ = make_client(tmp_path)
+
+    body = client.post("/api/v1/download/probe", json={"url": "https://example.com/v"}).json()
+
+    assert body["thumbnailUrl"] == "https://i.ytimg.com/vi/x/max.jpg"

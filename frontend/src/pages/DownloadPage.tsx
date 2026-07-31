@@ -32,11 +32,20 @@ const TERMINAL = new Set(["completed", "failed", "cancelled"]);
 
 function ProbeSummary({ probe }: { probe: MediaProbe }) {
   return (
-    <div className="flex flex-col gap-1 rounded border border-border bg-surface-2 px-3 py-2">
-      <span className="text-sm text-text">{probe.title}</span>
-      <span className="font-mono-tabular text-xs text-text-dim">
-        {probe.uploader ?? "—"} · {formatDuration(probe.durationSeconds)} · {probe.extractor}
-      </span>
+    <div className="flex items-center gap-3 rounded border border-border bg-surface-2 px-3 py-2">
+      {probe.thumbnailUrl && (
+        <img
+          src={probe.thumbnailUrl}
+          alt={`Miniatura de ${probe.title}`}
+          className="h-14 w-24 shrink-0 rounded object-cover"
+        />
+      )}
+      <div className="flex min-w-0 flex-col gap-1">
+        <span className="truncate text-sm text-text">{probe.title}</span>
+        <span className="font-mono-tabular text-xs text-text-dim">
+          {probe.uploader ?? "—"} · {formatDuration(probe.durationSeconds)} · {probe.extractor}
+        </span>
+      </div>
     </div>
   );
 }

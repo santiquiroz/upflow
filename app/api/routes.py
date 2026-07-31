@@ -1040,6 +1040,7 @@ async def probe_media(payload: CreateDownloadJobRequest) -> MediaProbeResponse:
         is_playlist=info.is_playlist,
         entry_count=info.entry_count,
         available_heights=list(info.available_heights),
+        thumbnail_url=info.thumbnail_url,
     )
 
 

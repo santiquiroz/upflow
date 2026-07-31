@@ -104,3 +104,42 @@ describe("App auth gate", () => {
     ).toBeInTheDocument();
   });
 });
+
+vi.mock("./services/download", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./services/download")>();
+  return { ...actual, probeMedia: vi.fn(), createDownloadJob: vi.fn(), getDownloadJob: vi.fn() };
+});
+
+describe("App — las pestañas de trabajo no pierden su estado", () => {
+  it("el formulario de Download sobrevive a pasar por otra pestaña", async () => {
+    // La queja real: "estoy escalando algo, paso a descargar un audio y se pierde
+    // todo el formulario". Las páginas de trabajo quedan montadas y ocultas.
+    vi.mocked(authService.getMe).mockResolvedValue(OFF_MODE_ME);
+    renderApp("/download");
+
+    const input = await screen.findByLabelText(/Dirección del video/i);
+    const { fireEvent } = await import("@testing-library/react");
+    fireEvent.change(input, { target: { value: "https://youtube.com/watch?v=persistente" } });
+
+    fireEvent.click(screen.getByRole("link", { name: /Settings/i }));
+    await waitFor(() =>
+      expect(screen.queryByLabelText(/Dirección del video/i)).not.toBeVisible(),
+    );
+
+    fireEvent.click(screen.getByRole("link", { name: /Download/i }));
+
+    const restored = await screen.findByLabelText(/Dirección del video/i);
+    expect(restored).toHaveValue("https://youtube.com/watch?v=persistente");
+  });
+
+  it("una pestaña de trabajo nunca visitada no se monta", async () => {
+    // Montar todo al arrancar dispararía las consultas de todas las páginas.
+    vi.mocked(authService.getMe).mockResolvedValue(OFF_MODE_ME);
+    renderApp("/");
+
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: /what do you want to do/i })).toBeInTheDocument(),
+    );
+    expect(screen.queryByLabelText(/Dirección del video/i)).not.toBeInTheDocument();
+  });
+});

@@ -21,6 +21,7 @@ function makeProbe(overrides: Partial<MediaProbe> = {}): MediaProbe {
     isPlaylist: false,
     entryCount: 1,
     availableHeights: [360, 720, 1080, 2160],
+    thumbnailUrl: null,
     ...overrides,
   };
 }

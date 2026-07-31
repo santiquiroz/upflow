@@ -26,6 +26,7 @@ function makeProbe(overrides: Partial<MediaProbe> = {}): MediaProbe {
     isPlaylist: false,
     entryCount: 1,
     availableHeights: [360, 720, 1080, 2160],
+    thumbnailUrl: "https://i.ytimg.com/vi/x/max.jpg",
     ...overrides,
   };
 }
@@ -342,5 +343,27 @@ describe("DownloadPage — bajar el resultado por HTTP", () => {
     const second = screen.getByRole("link", { name: /b\.mp4/ });
     expect(first).toHaveAttribute("href", "/api/v1/download/jobs/job-1/download?index=0");
     expect(second).toHaveAttribute("href", "/api/v1/download/jobs/job-1/download?index=1");
+  });
+});
+
+describe("DownloadPage — la miniatura del preview", () => {
+  it("muestra la miniatura cuando el probe la trae", async () => {
+    vi.mocked(downloadService.probeMedia).mockResolvedValue(makeProbe());
+    renderPage();
+    typeUrl("https://youtube.com/watch?v=x");
+
+    const img = await screen.findByAltText(/miniatura/i);
+    expect(img).toHaveAttribute("src", "https://i.ytimg.com/vi/x/max.jpg");
+  });
+
+  it("sin miniatura no hay imagen rota", async () => {
+    vi.mocked(downloadService.probeMedia).mockResolvedValue(
+      makeProbe({ thumbnailUrl: null }),
+    );
+    renderPage();
+    typeUrl("https://youtube.com/watch?v=x");
+
+    await screen.findByText("Big Buck Bunny");
+    expect(screen.queryByAltText(/miniatura/i)).not.toBeInTheDocument();
   });
 });

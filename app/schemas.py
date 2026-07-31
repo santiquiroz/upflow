@@ -408,6 +408,8 @@ class MediaProbeResponse(BaseModel):
     is_playlist: bool = Field(serialization_alias="isPlaylist")
     entry_count: int = Field(serialization_alias="entryCount")
     available_heights: list[int] = Field(serialization_alias="availableHeights")
+    # La miniatura es lo que vuelve reconocible un video antes de bajarlo.
+    thumbnail_url: str | None = Field(default=None, serialization_alias="thumbnailUrl")
 
 
 class TranscribeJobResponse(BaseModel):
