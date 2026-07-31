@@ -4,6 +4,7 @@ import ctypes
 import importlib
 import logging
 import os
+import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -80,6 +81,15 @@ NATIVE_EP_SPECS: tuple[NativeEpSpec, ...] = (
 )
 
 
+# Fase 2: catálogo Windows ML (Win11 24H2+, build 26100). Los EPs del catálogo
+# se registran sobre el MISMO onnxruntime de pip vía register_execution_provider
+# _library — Microsoft advierte explícitamente que EnsureAndRegisterCertifiedAsync
+# no sirve para el env de Python. EPs embebidos en nuestro build jamás se
+# re-registran como plugin (issue #29372: double-free).
+WINML_MIN_BUILD = 26100
+EMBEDDED_EP_NAMES = frozenset({CPU_PROVIDER, DML_PROVIDER})
+
+
 @dataclass(frozen=True, slots=True)
 class EpStatus:
     ep_name: str
@@ -151,6 +161,57 @@ def _resolve_plugin_library(spec: NativeEpSpec, settings: Settings) -> str | Non
     return str(candidate) if candidate.is_file() else None
 
 
+def _windows_build() -> int:
+    if sys.platform != "win32":
+        return 0
+    return sys.getwindowsversion().build
+
+
+def _winml_find_providers() -> list[Any]:
+    import winui3.microsoft.windows.ai.machinelearning as winml  # type: ignore[import-not-found]
+
+    catalog = winml.ExecutionProviderCatalog.get_default()
+    return list(catalog.find_all_providers())
+
+
+def _register_winml_provider(provider: Any) -> _PluginState | None:
+    import onnxruntime as ort
+
+    spec = NativeEpSpec(
+        ep_name=provider.name,
+        label=f"{provider.name} (Windows ML)",
+        vendor_id=0,
+        import_module=None,
+    )
+    try:
+        provider.ensure_ready_async().get()
+        ort.register_execution_provider_library(provider.name, provider.library_path)
+        devices = [d for d in ort.get_ep_devices() if d.ep_name == provider.name]
+    except Exception as exc:  # noqa: BLE001 -- un EP del catálogo jamás tumba el baseline
+        logger.warning("ep_registry: EP de Windows ML %s falló: %s", provider.name, exc)
+        return None
+    if not devices:
+        return None
+    logger.info("ep_registry: %s (Windows ML) registrado con %d device(s)", provider.name, len(devices))
+    return _PluginState(spec=spec, devices=devices, error="")
+
+
+def _register_winml_catalog(settings: Settings) -> None:
+    if not settings.winml_catalog_enabled or _windows_build() < WINML_MIN_BUILD:
+        return
+    try:
+        providers = _winml_find_providers()
+    except Exception:  # noqa: BLE001 -- proyección no instalada / catálogo ausente: skip limpio
+        return
+    for provider in providers:
+        name = getattr(provider, "name", "")
+        if not name or name in EMBEDDED_EP_NAMES or name in _plugins:
+            continue
+        state = _register_winml_provider(provider)
+        if state is not None:
+            _plugins[name] = state
+
+
 def _register_plugin(spec: NativeEpSpec, lib_path: str) -> _PluginState:
     import onnxruntime as ort
 
@@ -183,6 +244,9 @@ def _initialize(settings: Settings) -> None:
             if lib_path is None:
                 continue
             _plugins[spec.ep_name] = _register_plugin(spec, lib_path)
+        # El catálogo va después de los plugins explícitos: pip/EP_PLUGINS_DIR
+        # son elección del usuario y ganan sobre lo que resuelva el sistema.
+        _register_winml_catalog(settings)
 
 
 def _parse_dml_device_id(device: str) -> int:

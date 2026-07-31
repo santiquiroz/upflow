@@ -330,3 +330,119 @@ def test_openvino_plugin_detected_from_plugins_dir(
     ep_registry.create_session("model.onnx", "dml:0", settings)
 
     assert clean_registry == [("OpenVINOExecutionProvider", str(dll))]
+
+
+# --- Fase 2: catálogo Windows ML ------------------------------------------
+
+
+class FakeReadyResult:
+    def __init__(self, ok: bool = True) -> None:
+        self.status = "SUCCESS" if ok else "FAILURE"
+
+
+class FakeReadyOperation:
+    def __init__(self, ok: bool = True) -> None:
+        self._ok = ok
+
+    def get(self) -> FakeReadyResult:
+        if not self._ok:
+            raise RuntimeError("download failed")
+        return FakeReadyResult()
+
+
+class FakeCatalogProvider:
+    def __init__(self, name: str, library_path: str, ok: bool = True) -> None:
+        self.name = name
+        self.library_path = library_path
+        self._ok = ok
+
+    def ensure_ready_async(self) -> FakeReadyOperation:
+        return FakeReadyOperation(self._ok)
+
+
+def install_winml_catalog(
+    monkeypatch: pytest.MonkeyPatch, providers: list[FakeCatalogProvider], build: int = 26100
+) -> None:
+    monkeypatch.setattr(ep_registry, "_windows_build", lambda: build)
+    monkeypatch.setattr(ep_registry, "_winml_find_providers", lambda: providers)
+
+
+def test_winml_catalog_registers_ready_provider(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, clean_registry: list
+) -> None:
+    dll = tmp_path / "onnxruntime_providers_migraphx.dll"
+    dll.write_bytes(b"fake")
+    install_winml_catalog(
+        monkeypatch, [FakeCatalogProvider("MIGraphXExecutionProvider", str(dll))]
+    )
+    settings = make_settings(tmp_path)
+
+    ep_registry.create_session("model.onnx", "dml:0", settings)
+
+    assert clean_registry == [("MIGraphXExecutionProvider", str(dll))]
+    status = ep_registry.active_ep_for_device("dml:0", settings)
+    assert status.state == ep_registry.EP_STATE_NATIVE
+    assert "Windows ML" in status.label
+
+
+def test_winml_catalog_skipped_below_min_build(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, clean_registry: list
+) -> None:
+    dll = tmp_path / "ep.dll"
+    dll.write_bytes(b"fake")
+    install_winml_catalog(
+        monkeypatch, [FakeCatalogProvider("MIGraphXExecutionProvider", str(dll))], build=22631
+    )
+
+    ep_registry.create_session("model.onnx", "dml:0", make_settings(tmp_path))
+
+    assert clean_registry == []
+
+
+def test_winml_catalog_absent_projection_is_clean_skip(tmp_path: Path, clean_registry: list) -> None:
+    # Sin proyección Python instalada (el default del fixture lanza ImportError
+    # vía _winml_find_providers real): baseline intacto, cero ruido.
+    ep_registry.create_session("model.onnx", "dml:0", make_settings(tmp_path))
+    assert clean_registry == []
+
+
+def test_winml_catalog_never_registers_embedded_eps(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, clean_registry: list
+) -> None:
+    # Regla issue microsoft/onnxruntime#29372: registrar como plugin un EP ya
+    # embebido en el build (DML/CPU) causa double-free.
+    dll = tmp_path / "dml.dll"
+    dll.write_bytes(b"fake")
+    install_winml_catalog(monkeypatch, [FakeCatalogProvider("DmlExecutionProvider", str(dll))])
+
+    ep_registry.create_session("model.onnx", "dml:0", make_settings(tmp_path))
+
+    assert clean_registry == []
+
+
+def test_winml_catalog_provider_failure_is_isolated(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, clean_registry: list
+) -> None:
+    bad = FakeCatalogProvider("QNNExecutionProvider", str(tmp_path / "missing.dll"), ok=False)
+    good_dll = tmp_path / "migraphx.dll"
+    good_dll.write_bytes(b"fake")
+    good = FakeCatalogProvider("MIGraphXExecutionProvider", str(good_dll))
+    install_winml_catalog(monkeypatch, [bad, good])
+
+    ep_registry.create_session("model.onnx", "dml:0", make_settings(tmp_path))
+
+    assert clean_registry == [("MIGraphXExecutionProvider", str(good_dll))]
+
+
+def test_winml_catalog_disabled_by_setting(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, clean_registry: list
+) -> None:
+    dll = tmp_path / "ep.dll"
+    dll.write_bytes(b"fake")
+    install_winml_catalog(monkeypatch, [FakeCatalogProvider("MIGraphXExecutionProvider", str(dll))])
+
+    ep_registry.create_session(
+        "model.onnx", "dml:0", make_settings(tmp_path, WINML_CATALOG_ENABLED=False)
+    )
+
+    assert clean_registry == []

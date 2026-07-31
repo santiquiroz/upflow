@@ -434,6 +434,14 @@ class Settings(BaseSettings):
     # Intel.ML.OnnxRuntime.EP.OpenVINO -> ep-plugins/openvino/*.dll). Vacío =
     # solo se detectan plugins instalados por pip.
     ep_plugins_dir: str = Field(default="", alias="EP_PLUGINS_DIR")
+    # Fase 2: catálogo de EPs de Windows ML (Win11 24H2+). Triple gate real:
+    # este flag + build >= 26100 + proyección Python del catálogo importable
+    # (winui3.microsoft.windows.ai.machinelearning — a 2026-07-31 NO publicada
+    # en PyPI, así que el lane queda dormido hasta que Microsoft la publique;
+    # verificado empíricamente, ver docs/superpowers/research). La paridad de
+    # operadores con nuestros grafos la garantiza el mismo fallback de sesión
+    # nativo->DirectML del ep_registry.
+    winml_catalog_enabled: bool = Field(default=True, alias="WINML_CATALOG_ENABLED")
 
     # Log a archivo, opt-in para diagnosticar reportes de otras maquinas. En uso
     # normal es ruido y disco, asi que arranca apagado; se enciende desde

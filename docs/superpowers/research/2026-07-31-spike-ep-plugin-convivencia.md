@@ -80,3 +80,28 @@ opcional, y verificación de que DML sigue vivo tras registrar plugins.
 Lo que buscamos del tester NVIDIA: `trt_rtx_inferencia OK` con su `X.XXx vs DML`
 (y el tiempo de compilación de primer uso, que en producción se mitiga con cache
 EP context + copy de expectativa estilo v0.22.0).
+
+## Addendum Fase 2 (2026-07-31, misma sesión): catálogo Windows ML
+
+Spike ejecutado en esta máquina (build 26200 ≥ 26100 requerido):
+
+- **La proyección Python del catálogo NO está publicada.** La doc oficial de MS
+  ([initialize-execution-providers](https://learn.microsoft.com/en-us/windows/ai/new-windows-ml/initialize-execution-providers))
+  muestra el tab Python importando `winui3.microsoft.windows.ai.machinelearning`,
+  pero ese paquete no existe en PyPI (probados: `winui3`, `onnxruntime-winml`,
+  `winrt-Microsoft.Windows.AI.MachineLearning`, `pywinrt`, `windows-ml` — todos
+  ausentes a 2026-07-31). El único camino Python soportado que documenta MS es:
+  catálogo descarga/instala → `ort.register_execution_provider_library(
+  provider.name, provider.library_path)` — con advertencia explícita de NO usar
+  `EnsureAndRegisterCertifiedAsync` desde Python.
+- **Adapter implementado igual, gateado y dormido** (`_register_winml_catalog`
+  en ep_registry): flag `WINML_CATALOG_ENABLED` + build ≥ 26100 + proyección
+  importable. Cuando Microsoft publique la proyección, los EPs del sistema
+  (MIGraphX para AMD incluido) entran solos al mismo pool con el mismo fallback
+  nativo→DirectML→CPU. EPs embebidos (DML/CPU) jamás se re-registran (#29372).
+- **Gate de paridad de operadores** (uint8 IO, io16): no hay lista blanca por
+  EP — la garantía es el fallback de sesión: si el EP del catálogo no soporta
+  nuestros grafos, la creación de sesión falla y cae a DirectML sin afectar el
+  job. Mismo contrato verificado con mutation check en Fase 1b.
+
+## Addendum Fase 3 (2026-07-31): lane sd.cpp Vulkan — ver commit correspondiente
