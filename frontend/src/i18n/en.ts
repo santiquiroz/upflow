@@ -152,7 +152,12 @@ export const en = {
   "editor.tool.tap": "Tap object",
   "editor.tool.tapUnavailable":
     "Tap-to-select is not installed yet. Install it from Settings, or use the brush.",
+  "editor.tool.pan": "Move view",
   "editor.brushSize": "Size",
+  "editor.zoom.in": "Zoom in",
+  "editor.zoom.out": "Zoom out",
+  "editor.zoom.reset": "Fit to view",
+  "editor.zoomHint": "Scroll to zoom. Drag with the hand tool or the middle mouse button to move around.",
   "editor.undo": "Undo",
   "editor.clear": "Clear selection",
   "editor.segmenting": "Finding the object…",

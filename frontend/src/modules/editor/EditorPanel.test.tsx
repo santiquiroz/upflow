@@ -282,3 +282,60 @@ describe("EditorPanel vista avanzada", () => {
     expect(screen.getByRole("button", { name: en["editor.submit.erase"] })).toBeDisabled();
   });
 });
+
+describe("EditorPanel zoom y desplazamiento", () => {
+  it("zooms in and out from the toolbar and can reset", async () => {
+    renderPanel();
+    await loadBaseImage();
+
+    expect(screen.getByText("100%")).toBeInTheDocument();
+    const reset = screen.getByRole("button", { name: en["editor.zoom.reset"] });
+    expect(reset).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: en["editor.zoom.in"] }));
+    expect(screen.getByText("150%")).toBeInTheDocument();
+    expect(reset).toBeEnabled();
+
+    fireEvent.click(screen.getByRole("button", { name: en["editor.zoom.reset"] }));
+    expect(screen.getByText("100%")).toBeInTheDocument();
+  });
+
+  it("never zooms out past the fitted view", async () => {
+    renderPanel();
+    await loadBaseImage();
+
+    fireEvent.click(screen.getByRole("button", { name: en["editor.zoom.out"] }));
+
+    expect(screen.getByText("100%")).toBeInTheDocument();
+  });
+
+  it("the hand tool drags the view instead of painting", async () => {
+    renderPanel();
+    await loadBaseImage();
+    fireEvent.click(screen.getByRole("radio", { name: en["editor.tool.pan"] }));
+
+    const canvas = screen.getByTestId("editor-mask-canvas");
+    fireEvent.pointerDown(canvas, { clientX: 100, clientY: 100, pointerId: 1, button: 0 });
+    fireEvent.pointerMove(canvas, { clientX: 40, clientY: 40, pointerId: 1 });
+    fireEvent.pointerUp(canvas, { pointerId: 1 });
+
+    // Sin trazos: el submit sigue bloqueado por falta de máscara.
+    fireEvent.change(screen.getByLabelText(en["editor.model.label"]), {
+      target: { value: "gen--sdxl" },
+    });
+    expect(screen.getByRole("button", { name: en["editor.submit.erase"] })).toBeDisabled();
+  });
+
+  it("resets the view when a new image is loaded", async () => {
+    renderPanel();
+    await loadBaseImage();
+    fireEvent.click(screen.getByRole("button", { name: en["editor.zoom.in"] }));
+    expect(screen.getByText("150%")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText(/Image to edit|Use another image/), {
+      target: { files: [new File(["img2"], "otra.png", { type: "image/png" })] },
+    });
+
+    await waitFor(() => expect(screen.getByText("100%")).toBeInTheDocument());
+  });
+});

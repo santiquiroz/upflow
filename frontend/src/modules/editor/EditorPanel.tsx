@@ -1,5 +1,16 @@
 import { useQuery } from "@tanstack/react-query";
-import { Brush, Eraser, ImageUp, MousePointerClick, RotateCcw, Trash2 } from "lucide-react";
+import {
+  Brush,
+  Eraser,
+  Hand,
+  ImageUp,
+  Maximize,
+  MousePointerClick,
+  RotateCcw,
+  Trash2,
+  ZoomIn,
+  ZoomOut,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AccordionSection } from "../../components/AccordionSection";
 import { DevicePicker } from "../../components/DevicePicker";
@@ -17,6 +28,16 @@ import {
   toImagePoint,
   type BrushStroke,
 } from "./maskCanvas";
+import {
+  IDENTITY_VIEWPORT,
+  isZoomed,
+  panBy,
+  transformStyle,
+  zoomAtPoint,
+  zoomByStep,
+  zoomPercent,
+  type Viewport,
+} from "./viewport";
 
 // Prompts fijos del modo "Eliminar": el modelo rellena con entorno coherente.
 // En inglés porque los checkpoints SD responden mejor a prompts en inglés.
@@ -25,7 +46,7 @@ const ERASE_NEGATIVE_PROMPT = "object, person, animal, text, watermark, logo";
 const DEFAULT_STEPS = 30;
 const DEFAULT_GUIDANCE = 7.0;
 
-type Tool = "brush" | "eraser" | "tap";
+type Tool = "brush" | "eraser" | "tap" | "pan";
 type EditMode = "erase" | "replace";
 
 interface HistoryEntry {
@@ -180,9 +201,18 @@ export function EditorPanel() {
   const [segmenting, setSegmenting] = useState(false);
   const [segmentError, setSegmentError] = useState<string | null>(null);
 
+  const [viewport, setViewport] = useState<Viewport>(IDENTITY_VIEWPORT);
+
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const stageRef = useRef<HTMLDivElement | null>(null);
   const liveStrokeRef = useRef<BrushStroke | null>(null);
+  const panOriginRef = useRef<{ x: number; y: number } | null>(null);
   const uploadSequence = useRef(0);
+
+  function stageSize(): { width: number; height: number } {
+    const rect = stageRef.current?.getBoundingClientRect();
+    return { width: rect?.width ?? 0, height: rect?.height ?? 0 };
+  }
 
   const models = capabilitiesQuery.data?.models ?? [];
   const tapAvailable = editorCapabilities.data?.tapSelect ?? false;
@@ -201,12 +231,33 @@ export function EditorPanel() {
     }
   }, [baseUrl]);
 
+  // La rueda se escucha a mano con passive:false — React registra onWheel como
+  // pasivo y preventDefault ahí no frena el scroll de la página.
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) {
+      return;
+    }
+    function handleWheel(event: WheelEvent) {
+      event.preventDefault();
+      const rect = stage!.getBoundingClientRect();
+      const focus = { x: event.clientX - rect.left, y: event.clientY - rect.top };
+      const container = { width: rect.width, height: rect.height };
+      setViewport((current) =>
+        zoomAtPoint(current, current.zoom * (event.deltaY < 0 ? 1.15 : 1 / 1.15), focus, container),
+      );
+    }
+    stage.addEventListener("wheel", handleWheel, { passive: false });
+    return () => stage.removeEventListener("wheel", handleWheel);
+  }, [baseInfo]);
+
   const handleBaseSelected = useCallback(
     async (file: File) => {
       const sequence = ++uploadSequence.current;
       setUploadError(null);
       setHistory([]);
       setSegmentError(null);
+      setViewport(IDENTITY_VIEWPORT);
       reset();
       try {
         const response = await uploadGenerationInitImage(file);
@@ -249,7 +300,17 @@ export function EditorPanel() {
   }
 
   function handlePointerDown(event: React.PointerEvent<HTMLCanvasElement>) {
-    if (tool === "tap" || !baseInfo || busy) {
+    if (!baseInfo) {
+      return;
+    }
+    // El botón del medio arrastra la vista con cualquier herramienta activa.
+    if (tool === "pan" || event.button === 1) {
+      event.preventDefault();
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+      panOriginRef.current = { x: event.clientX, y: event.clientY };
+      return;
+    }
+    if (tool === "tap" || busy) {
       return;
     }
     const point = imagePointFromEvent(event);
@@ -265,6 +326,15 @@ export function EditorPanel() {
   }
 
   function handlePointerMove(event: React.PointerEvent<HTMLCanvasElement>) {
+    const panOrigin = panOriginRef.current;
+    if (panOrigin) {
+      const dx = event.clientX - panOrigin.x;
+      const dy = event.clientY - panOrigin.y;
+      panOriginRef.current = { x: event.clientX, y: event.clientY };
+      const container = stageSize();
+      setViewport((current) => panBy(current, dx, dy, container));
+      return;
+    }
     if (!liveStrokeRef.current) {
       return;
     }
@@ -280,12 +350,18 @@ export function EditorPanel() {
   }
 
   function handlePointerUp() {
+    panOriginRef.current = null;
     const stroke = liveStrokeRef.current;
     if (!stroke) {
       return;
     }
     liveStrokeRef.current = null;
     setHistory((previous) => [...previous, { kind: "stroke", stroke }]);
+  }
+
+  function handleZoomStep(direction: number) {
+    const container = stageSize();
+    setViewport((current) => zoomByStep(current, direction, container));
   }
 
   async function handleCanvasClick(event: React.MouseEvent<HTMLCanvasElement>) {
@@ -430,6 +506,7 @@ export function EditorPanel() {
               !tapAvailable,
               tapAvailable ? undefined : t("editor.tool.tapUnavailable"),
             )}
+            {toolButton("pan", <Hand aria-hidden="true" className="h-4 w-4" />, t("editor.tool.pan"))}
             <label className="ml-2 flex items-center gap-2 text-xs text-text-dim">
               {t("editor.brushSize")}
               <input
@@ -441,6 +518,38 @@ export function EditorPanel() {
               />
             </label>
             <div className="ml-auto flex items-center gap-1">
+              <button
+                type="button"
+                aria-label={t("editor.zoom.out")}
+                title={t("editor.zoom.out")}
+                onClick={() => handleZoomStep(-1)}
+                className="rounded p-2 text-text-dim hover:bg-surface-2 hover:text-text"
+              >
+                <ZoomOut aria-hidden="true" className="h-4 w-4" />
+              </button>
+              <span className="min-w-[3.5rem] text-center font-mono-tabular text-xs text-text-dim">
+                {zoomPercent(viewport)}%
+              </span>
+              <button
+                type="button"
+                aria-label={t("editor.zoom.in")}
+                title={t("editor.zoom.in")}
+                onClick={() => handleZoomStep(1)}
+                className="rounded p-2 text-text-dim hover:bg-surface-2 hover:text-text"
+              >
+                <ZoomIn aria-hidden="true" className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                aria-label={t("editor.zoom.reset")}
+                title={t("editor.zoom.reset")}
+                disabled={!isZoomed(viewport)}
+                onClick={() => setViewport(IDENTITY_VIEWPORT)}
+                className="rounded p-2 text-text-dim hover:bg-surface-2 hover:text-text disabled:opacity-40"
+              >
+                <Maximize aria-hidden="true" className="h-4 w-4" />
+              </button>
+              <span aria-hidden="true" className="mx-1 h-5 w-px bg-border" />
               <button
                 type="button"
                 aria-label={t("editor.undo")}
@@ -464,22 +573,36 @@ export function EditorPanel() {
             </div>
           </div>
 
-          <div className="relative w-fit max-w-full self-center overflow-hidden rounded border border-border">
-            {baseUrl && <img src={baseUrl} alt={baseInfo.originalFilename} className="block max-w-full" />}
-            <canvas
-              ref={canvasRef}
-              width={baseInfo.width}
-              height={baseInfo.height}
-              data-testid="editor-mask-canvas"
-              className={`absolute inset-0 h-full w-full opacity-60 ${
-                tool === "tap" ? "cursor-pointer" : "cursor-crosshair"
-              } ${baseUrl ? "" : "relative bg-surface-2"}`}
-              onPointerDown={handlePointerDown}
-              onPointerMove={handlePointerMove}
-              onPointerUp={handlePointerUp}
-              onPointerLeave={handlePointerUp}
-              onClick={(event) => void handleCanvasClick(event)}
-            />
+          <div
+            ref={stageRef}
+            data-testid="editor-stage"
+            className="relative w-fit max-w-full touch-none self-center overflow-hidden rounded border border-border"
+          >
+            {/* El zoom es un transform CSS sobre imagen+canvas juntos: el
+                rectángulo que devuelve el canvas ya viene transformado, así que
+                el mapeo click->píxel y el radio del pincel siguen valiendo. */}
+            <div style={{ transform: transformStyle(viewport), transformOrigin: "0 0" }}>
+              {baseUrl && <img src={baseUrl} alt={baseInfo.originalFilename} className="block max-w-full" />}
+              <canvas
+                ref={canvasRef}
+                width={baseInfo.width}
+                height={baseInfo.height}
+                data-testid="editor-mask-canvas"
+                className={`absolute inset-0 h-full w-full opacity-60 ${
+                  tool === "pan"
+                    ? "cursor-grab active:cursor-grabbing"
+                    : tool === "tap"
+                      ? "cursor-pointer"
+                      : "cursor-crosshair"
+                } ${baseUrl ? "" : "relative bg-surface-2"}`}
+                onPointerDown={handlePointerDown}
+                onPointerMove={handlePointerMove}
+                onPointerUp={handlePointerUp}
+                onPointerLeave={handlePointerUp}
+                onPointerCancel={handlePointerUp}
+                onClick={(event) => void handleCanvasClick(event)}
+              />
+            </div>
             {segmenting && (
               <p className="absolute bottom-2 left-2 rounded bg-surface px-2 py-1 text-xs text-text-dim">
                 {t("editor.segmenting")}
@@ -487,6 +610,7 @@ export function EditorPanel() {
             )}
           </div>
           <p className="text-center text-xs text-text-faint">{t("editor.maskHint")}</p>
+          <p className="text-center text-xs text-text-faint">{t("editor.zoomHint")}</p>
           {segmentError && <p className="text-center text-xs text-danger">{segmentError}</p>}
 
           <div

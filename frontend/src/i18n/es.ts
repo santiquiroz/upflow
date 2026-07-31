@@ -146,7 +146,12 @@ export const es = {
   "editor.tool.tap": "Tocar objeto",
   "editor.tool.tapUnavailable":
     "La selección por toque no está instalada todavía. Instalala desde Ajustes, o usá el pincel.",
+  "editor.tool.pan": "Mover vista",
   "editor.brushSize": "Tamaño",
+  "editor.zoom.in": "Acercar",
+  "editor.zoom.out": "Alejar",
+  "editor.zoom.reset": "Ajustar a la vista",
+  "editor.zoomHint": "Girá la rueda para acercar. Arrastrá con la manito o el botón del medio para moverte.",
   "editor.undo": "Deshacer",
   "editor.clear": "Limpiar selección",
   "editor.segmenting": "Buscando el objeto…",
