@@ -226,6 +226,8 @@ class GenerationJob:
     init_image_path: Path | None = None
     # Cuanto se aparta del original: 0 lo devuelve casi igual, 1 lo ignora.
     strength: float = 0.6
+    # Máscara de inpainting (blanco=editar, negro=conservar); requiere init.
+    mask_image_path: Path | None = None
     auto_upscale: bool = False
     upscale_model_name: str | None = None
     upscale_scale: int | None = None

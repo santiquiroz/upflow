@@ -521,7 +521,11 @@ class CreateGenerationJobRequest(BaseModel):
     # imagen a imagen. Se sube aparte para no volver multipart el contrato JSON
     # de este endpoint, igual que hace el flujo de video con /video/analyze.
     init_image_token: str | None = Field(default=None, alias="initImageToken")
-    strength: float = Field(default=0.6, gt=0, le=1)
+    # Token de la máscara de inpainting (PNG blanco=editar, negro=conservar),
+    # subida con el mismo POST /generation/init-image. Requiere initImageToken.
+    mask_image_token: str | None = Field(default=None, alias="maskImageToken")
+    # None = default por modo: 0.85 con máscara (inpainting), 0.6 sin (img2img).
+    strength: float | None = Field(default=None, gt=0, le=1)
     auto_upscale: bool = Field(default=False, alias="autoUpscale")
     upscale_model_name: str | None = Field(default=None, alias="upscaleModelName")
     upscale_scale: int | None = Field(default=None, alias="upscaleScale", ge=2, le=4)
@@ -565,6 +569,10 @@ class GenerationModelSummary(BaseModel):
     # (deshabilitadas) para que una instalacion desde el installer no parezca
     # que "no trajo nada" durante los ~40 min de conversion.
     status: str = "installed"
+    # Soporte REAL de inpainting: chequeado contra el mapeo de clases
+    # (generation_inpaint), no contra existencia de la clase. El picker filtra
+    # con esto en vez de descubrir el rechazo al crear el job.
+    supports_inpaint: bool = Field(default=True, serialization_alias="supportsInpaint")
 
 
 class GenerationCapabilitiesResponse(BaseModel):

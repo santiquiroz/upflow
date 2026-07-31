@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -14,6 +15,8 @@ from app.services.generation_img2img import load_img2img_class
 from app.services.engines.gmfss_engine import _tune_session_options_for_device
 from app.services.engines.onnx_upscaler import _build_providers
 from app.services.gpu_session_coordinator import GpuSessionCoordinator
+
+logger = logging.getLogger(__name__)
 
 GENERATION_IMPORT_ERROR_HINT = (
     "Las dependencias de generación no están instaladas (paquete optimum). "
@@ -85,6 +88,8 @@ def _read_declared_class_name(pipeline_dir: Path) -> str:
 
 
 def _pipeline_mode(request: "GenerationRequest") -> str:
+    if request.mask_image_path is not None:
+        return "inpaint"
     return "img2img" if request.init_image_path is not None else "text2img"
 
 
@@ -140,6 +145,51 @@ def _load_init_image(path: Path, width: int, height: int) -> Any:
         return image.convert("RGB").resize((width, height), Image.LANCZOS)
 
 
+def _load_mask_image(path: Path, width: int, height: int) -> Any:
+    """Máscara en escala de grises (blanco=editar, negro=conservar).
+
+    NEAREST y no LANCZOS: un resampling suave crea grises intermedios en el
+    borde que el compositing final interpretaría a medias.
+    """
+    from PIL import Image
+
+    with Image.open(path) as image:
+        return image.convert("L").resize((width, height), Image.NEAREST)
+
+
+def _composite_outside_mask(generated: Any, original: Any, mask: Any) -> Any:
+    """Pega los píxeles originales fuera de la máscara, a nivel de píxel.
+
+    El pipeline de inpainting pasa TODA la imagen por el roundtrip del VAE, así
+    que fuera de la máscara los píxeles quedan parecidos pero no idénticos.
+    El contrato de la feature es "negro=conservar" literal: se compone acá.
+    """
+    import numpy as np
+    from PIL import Image
+
+    gen = np.asarray(generated.convert("RGB"))
+    orig = np.asarray(original.convert("RGB"))
+    keep_original = np.asarray(mask)[:, :, None] <= 127
+    return Image.fromarray(np.where(keep_original, orig, gen))
+
+
+def _inpaint_strength(pipeline: Any, requested: float) -> float:
+    """Checkpoint normal (unet de 4 canales): strength DEBE ser 1.0.
+
+    Medido 2026-07-31 en SDXL/DirectML/diffusers 0.39: con unet 4ch el camino de
+    blending latente del pipeline de inpainting devuelve la imagen casi intacta
+    para CUALQUIER strength < 1.0 (0.85/0.90/0.95/0.99 -> diff media ~2/255 = solo
+    roundtrip VAE; 1.0 -> regeneracion real). add_noise no es el culpable: img2img
+    con 0.6/0.85 funciona en el mismo stack. Un checkpoint de inpainting real
+    (unet 9ch) si soporta strength parcial y se respeta lo pedido.
+    """
+    in_channels = getattr(getattr(getattr(pipeline, "unet", None), "config", None), "in_channels", None)
+    if in_channels == 4 and requested < 1.0:
+        logger.info("inpaint: unet 4ch, strength %.2f -> 1.0 (strength parcial es no-op medido)", requested)
+        return 1.0
+    return requested
+
+
 def _build_seed_generator(seed: int) -> Any:
     # torch.Generator, NO np.random.RandomState: __call__ es el de diffusers y
     # randn_tensor accede a generator.device (findings §d/§e, verificado empirico).
@@ -162,6 +212,9 @@ class GenerationRequest:
     # Cuanto se aparta del original: 0 lo devuelve casi igual, 1 lo ignora casi
     # por completo. Solo se usa con init_image_path.
     strength: float = 0.6
+    # Máscara de inpainting (blanco=editar, negro=conservar). Requiere
+    # init_image_path; presente = modo inpaint.
+    mask_image_path: Path | None = None
 
 
 class GenerationEngine:
@@ -233,13 +286,26 @@ class GenerationEngine:
             "callback": _on_step,
             "callback_steps": 1,
         }
+        init_image = None
+        mask_image = None
         if request.init_image_path is not None:
             # width/height NO se pasan: el pipeline de imagen a imagen deriva el
             # tamaño de la imagen de entrada, asi que se la redimensiona antes.
-            call_kwargs["image"] = _load_init_image(
+            init_image = _load_init_image(
                 request.init_image_path, request.width, request.height
             )
+            call_kwargs["image"] = init_image
             call_kwargs["strength"] = request.strength
+            if request.mask_image_path is not None:
+                mask_image = _load_mask_image(
+                    request.mask_image_path, request.width, request.height
+                )
+                call_kwargs["mask_image"] = mask_image
+                call_kwargs["strength"] = _inpaint_strength(pipeline, request.strength)
+                # SDXL inpaint deriva el tamaño solo de forma fiable con estos
+                # explicitos; ya redimensionamos ambas entradas a ese tamaño.
+                call_kwargs["width"] = request.width
+                call_kwargs["height"] = request.height
         else:
             call_kwargs["width"] = request.width
             call_kwargs["height"] = request.height
@@ -255,8 +321,11 @@ class GenerationEngine:
         except Exception as exc:
             raise _wrap_generation_error(exc) from exc
 
+        output_image = result.images[0]
+        if mask_image is not None and init_image is not None:
+            output_image = _composite_outside_mask(output_image, init_image, mask_image)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        result.images[0].save(output_path)
+        output_image.save(output_path)
         return output_path
 
     def _get_pipeline(
@@ -290,11 +359,14 @@ class GenerationEngine:
         import onnxruntime as ort
 
         declared = _read_declared_class_name(pipeline_dir)
-        pipeline_cls = (
-            load_img2img_class(declared)
-            if mode == "img2img"
-            else _load_pipeline_class(declared)
-        )
+        if mode == "inpaint":
+            from app.services.generation_inpaint import load_inpaint_class
+
+            pipeline_cls = load_inpaint_class(declared)
+        elif mode == "img2img":
+            pipeline_cls = load_img2img_class(declared)
+        else:
+            pipeline_cls = _load_pipeline_class(declared)
         providers = _build_providers(device)
         sess_options = ort.SessionOptions()
         _tune_session_options_for_device(sess_options, device)

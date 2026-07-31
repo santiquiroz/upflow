@@ -1690,12 +1690,18 @@ async def create_generation_job(
 ) -> GenerationJobResponse:
     current_user = current_user_from_request(request)
     init_image_path = _resolve_init_image(settings, payload.init_image_token)
+    mask_image_path = _resolve_init_image(settings, payload.mask_image_token)
+    if payload.strength is not None:
+        strength = payload.strength
+    else:
+        strength = 0.85 if mask_image_path is not None else 0.6
     try:
         job = await generation_jobs.create_job(
             prompt=payload.prompt, negative_prompt=payload.negative_prompt, model_id=payload.model_id,
             steps=payload.steps, guidance=payload.guidance, width=payload.width, height=payload.height,
             seed=payload.seed, device=payload.device,
-            init_image_path=init_image_path, strength=payload.strength,
+            init_image_path=init_image_path, strength=strength,
+            mask_image_path=mask_image_path,
             auto_upscale=payload.auto_upscale,
             upscale_model_name=payload.upscale_model_name, upscale_scale=payload.upscale_scale,
             upscale_model_id=payload.upscale_model_id, owner=current_user,
@@ -1778,10 +1784,22 @@ async def download_generation_job(
     return FileResponse(path=job.output_path, filename=job.output_path.name, media_type="image/png")
 
 
+def _entry_supports_inpaint(settings: Settings, entry: Any) -> bool:
+    from app.services.engines.generation_onnx import _read_declared_class_name
+    from app.services.generation_inpaint import supports_inpaint
+
+    try:
+        declared = _read_declared_class_name(settings.models_path / (entry.file_path or ""))
+    except Exception:  # noqa: BLE001 -- una lectura fallida no es un veredicto (mismo criterio que el job manager)
+        return True
+    return supports_inpaint(declared)
+
+
 @router.get("/generation/capabilities", response_model=GenerationCapabilitiesResponse)
 async def generation_capabilities(
     registry: ModelRegistry = Depends(get_model_registry),
     devices_service: DevicesService = Depends(get_devices_service),
+    settings: Settings = Depends(get_settings),
 ) -> GenerationCapabilitiesResponse:
     available, reason = generation_dependencies_available()
     if not available:
@@ -1789,10 +1807,23 @@ async def generation_capabilities(
     # error queda afuera: una conversion fallida se ve en Models con su motivo;
     # el dropdown de Generate no es lugar para un modelo que no existe en disco.
     models = [
-        GenerationModelSummary(id=entry.id, name=entry.name, status=entry.status.value)
+        GenerationModelSummary(
+            id=entry.id,
+            name=entry.name,
+            status=entry.status.value,
+            supports_inpaint=_entry_supports_inpaint(settings, entry),
+        )
         for entry in registry.list()
         if entry.kind == ModelKind.diffusion_onnx and entry.status != ModelStatus.error
     ]
+    if settings.sdcpp_available():
+        from app.services.engines.sdcpp_engine import SDCPP_MODEL_ID, SDCPP_MODEL_LABEL
+
+        models.append(
+            GenerationModelSummary(
+                id=SDCPP_MODEL_ID, name=SDCPP_MODEL_LABEL, supports_inpaint=False
+            )
+        )
     device_infos = devices_service.list_devices()
     return GenerationCapabilitiesResponse(
         available=True,

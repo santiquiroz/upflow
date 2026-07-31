@@ -318,7 +318,7 @@ async def test_generation_capabilities_reports_unavailable_without_deps(
     settings = make_settings(tmp_path)
     registry = ModelRegistry(settings)
 
-    response = await generation_capabilities(registry=registry, devices_service=FakeDevicesService())
+    response = await generation_capabilities(registry=registry, devices_service=FakeDevicesService(), settings=settings)
 
     assert response.available is False
     assert response.reason == "optimum missing"
@@ -334,10 +334,13 @@ async def test_generation_capabilities_lists_models_and_cpu_only_flag(tmp_path: 
     response = await generation_capabilities(
         registry=registry,
         devices_service=FakeDevicesService([{"id": "cpu", "kind": "cpu", "name": "CPU", "backend": "cpu"}]),
+        settings=settings,
     )
 
     assert response.available is True
-    assert [m.model_dump() for m in response.models] == [{"id": MODEL_ID, "name": "amd/sd15", "status": "installed"}]
+    assert [m.model_dump() for m in response.models] == [
+        {"id": MODEL_ID, "name": "amd/sd15", "status": "installed", "supports_inpaint": True}
+    ]
     assert response.cpu_only is True
 
 
@@ -353,6 +356,7 @@ async def test_generation_capabilities_cpu_only_false_when_gpu_present(tmp_path:
                 {"id": "dml:0", "kind": "gpu", "name": "Fake GPU", "backend": "directml"},
             ]
         ),
+        settings=settings,
     )
 
     assert response.cpu_only is False
@@ -788,7 +792,9 @@ def test_capabilities_reports_unavailable_without_deps(client, monkeypatch) -> N
 def test_capabilities_lists_installed_models_and_cpu_only_flag(client_with_model) -> None:
     payload = client_with_model.get("/api/v1/generation/capabilities").json()
     assert payload["available"] is True
-    assert payload["models"] == [{"id": "gen--amd--sd15", "name": "amd/sd15", "status": "installed"}]
+    assert payload["models"] == [
+        {"id": "gen--amd--sd15", "name": "amd/sd15", "status": "installed", "supportsInpaint": True}
+    ]
     assert isinstance(payload["cpuOnly"], bool)
 
 
@@ -993,7 +999,7 @@ async def test_capabilities_include_converting_models_with_their_status(tmp_path
     )
 
     response = await generation_capabilities(
-        registry=registry, devices_service=FakeDevicesService()
+        registry=registry, devices_service=FakeDevicesService(), settings=settings
     )
 
     by_id = {model.id: model for model in response.models}
@@ -1023,7 +1029,7 @@ async def test_capabilities_never_offer_error_entries(tmp_path: Path) -> None:
     )
 
     response = await generation_capabilities(
-        registry=registry, devices_service=FakeDevicesService()
+        registry=registry, devices_service=FakeDevicesService(), settings=settings
     )
 
     assert response.models == []

@@ -442,6 +442,14 @@ class Settings(BaseSettings):
     # operadores con nuestros grafos la garantiza el mismo fallback de sesión
     # nativo->DirectML del ep_registry.
     winml_catalog_enabled: bool = Field(default=True, alias="WINML_CATALOG_ENABLED")
+    # Fase 3: lane experimental de difusión por stable-diffusion.cpp Vulkan
+    # (multi-vendor, sin EP). Mismo patrón opt-in que GMFSS: apagado por
+    # default, el usuario provee su checkpoint (.safetensors/.gguf) — los
+    # originales NO sobreviven a la conversión ONNX (generation_converter
+    # borra staging siempre), así que este lane usa un modelo propio.
+    enable_sdcpp: bool = Field(default=False, alias="ENABLE_SDCPP")
+    sdcpp_binary: str = Field(default="vendor/sdcpp/sd.exe", alias="SDCPP_BINARY")
+    sdcpp_model: str = Field(default="", alias="SDCPP_MODEL")
 
     # Log a archivo, opt-in para diagnosticar reportes de otras maquinas. En uso
     # normal es ruido y disco, asi que arranca apagado; se enciende desde
@@ -754,6 +762,20 @@ class Settings(BaseSettings):
         from app.services.engines.gmfss.assets import GmfssAssets
 
         return GmfssAssets.is_complete(self.gmfss_model_dir_path)
+
+    @property
+    def sdcpp_binary_path(self) -> Path:
+        return resolve_against_project_root(self.sdcpp_binary)
+
+    @property
+    def sdcpp_model_path(self) -> Path | None:
+        return resolve_against_project_root(self.sdcpp_model) if self.sdcpp_model else None
+
+    def sdcpp_available(self) -> bool:
+        if not self.enable_sdcpp:
+            return False
+        model = self.sdcpp_model_path
+        return self.sdcpp_binary_path.exists() and model is not None and model.exists()
 
     def interp_engine_available(self, engine: str) -> bool:
         if engine == RIFE_ENGINE:

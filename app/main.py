@@ -62,6 +62,16 @@ APP_DIR = Path(__file__).resolve().parent
 FRONTEND_DIST_DIR = APP_DIR.parent / "frontend" / "dist"
 
 
+def _build_sdcpp_engine(settings):
+    # Lane experimental Fase 3: solo se construye si el flag está encendido;
+    # apagado no importa ni el módulo.
+    if not settings.enable_sdcpp:
+        return None
+    from app.services.engines.sdcpp_engine import SdcppEngine
+
+    return SdcppEngine(settings)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
@@ -107,6 +117,7 @@ async def lifespan(app: FastAPI):
         onnx_upscale_engine=onnx_engine,
         devices=devices_service,
         quota_service=quota_service,
+        sdcpp_engine=_build_sdcpp_engine(settings),
     )
     # Shared across both managers (like device_semaphores) so an auto-routed
     # image job and an auto-routed video job never pick the same free

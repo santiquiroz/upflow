@@ -13,7 +13,9 @@ from app.services.auth.quotas import QuotaService
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
 from app.services.engines.generation_onnx import GenerationEngine, GenerationRequest
+from app.services.engines.sdcpp_engine import SDCPP_MODEL_ID
 from app.services.generation_img2img import supports_img2img
+from app.services.generation_inpaint import supports_inpaint
 from app.services.job_manager import select_upscale_engine
 from app.services.model_registry import ModelKind, ModelRegistry
 from app.services.progress import (
@@ -55,6 +57,7 @@ class GenerationJobManager:
         onnx_upscale_engine: Any | None = None,
         devices: DevicesService | None = None,
         quota_service: QuotaService | None = None,
+        sdcpp_engine: Any | None = None,
     ) -> None:
         self.settings = settings
         self.engine = engine
@@ -64,6 +67,7 @@ class GenerationJobManager:
         self.onnx_upscale_engine = onnx_upscale_engine
         self.devices = devices
         self.quota_service = quota_service
+        self.sdcpp_engine = sdcpp_engine
         self.jobs: dict[str, GenerationJob] = {}
         self.queue: asyncio.Queue[GenerationJob] = asyncio.Queue(maxsize=settings.max_queue_size)
         self.worker_tasks: list[asyncio.Task] = []
@@ -104,6 +108,7 @@ class GenerationJobManager:
         device: str | None = None,
         init_image_path: Path | None = None,
         strength: float = 0.6,
+        mask_image_path: Path | None = None,
         auto_upscale: bool = False,
         upscale_model_name: str | None = None,
         upscale_scale: int | None = None,
@@ -114,7 +119,9 @@ class GenerationJobManager:
         self._validate_generation_model(model_id)
         self._validate_params(prompt, steps, width, height)
         await self._validate_device(device)
-        if init_image_path is not None:
+        if mask_image_path is not None:
+            self._validate_inpaint(model_id, init_image_path, mask_image_path, strength)
+        elif init_image_path is not None:
             self._validate_img2img(model_id, init_image_path, strength)
         if auto_upscale:
             self._validate_upscale_params(upscale_model_name, upscale_scale, upscale_model_id)
@@ -124,6 +131,7 @@ class GenerationJobManager:
             prompt=prompt, model_id=model_id, negative_prompt=negative_prompt, steps=steps,
             guidance=guidance, width=width, height=height, seed=seed, device=device,
             init_image_path=init_image_path, strength=strength,
+            mask_image_path=mask_image_path,
             auto_upscale=auto_upscale, upscale_model_name=upscale_model_name,
             upscale_scale=upscale_scale, upscale_model_id=upscale_model_id,
             owner_id=owner.id if owner is not None else None,
@@ -160,6 +168,14 @@ class GenerationJobManager:
             raise QueueFullError("Generation job queue is full; try again later") from exc
 
     def _validate_generation_model(self, model_id: str) -> None:
+        if model_id == SDCPP_MODEL_ID:
+            # Lane experimental Fase 3: no vive en el registry, se gatea por flag.
+            if self.sdcpp_engine is None or not self.settings.sdcpp_available():
+                raise ValueError(
+                    "El lane sd.cpp es experimental y está apagado: ENABLE_SDCPP=true "
+                    "+ scripts/download-sdcpp.ps1 + SDCPP_MODEL con tu checkpoint"
+                )
+            return
         entry = self.registry.get(model_id)
         if entry is None or entry.kind != ModelKind.diffusion_onnx:
             raise ValueError(f"Unknown generation model: {model_id!r}")
@@ -201,6 +217,31 @@ class GenerationJobManager:
                 f"El modelo {model_id!r} ({declared}) no soporta imagen a imagen. "
                 "Sirve para texto a imagen; para imagen a imagen usa un modelo "
                 "Stable Diffusion, SDXL, SD3 o Latent Consistency."
+            )
+
+    def _validate_inpaint(
+        self, model_id: str, init_image_path: Path | None, mask_image_path: Path, strength: float
+    ) -> None:
+        """Mismo principio que _validate_img2img: rechazar al crear, no a mitad
+        de la ejecución; una lectura fallida del model_index no es un veredicto."""
+        if model_id == SDCPP_MODEL_ID:
+            raise ValueError("El lane experimental sd.cpp es solo texto a imagen")
+        if init_image_path is None:
+            raise ValueError("inpainting requiere una imagen base además de la máscara")
+        if not 0 < strength <= 1:
+            raise ValueError("strength must be greater than 0 and at most 1")
+        if not init_image_path.exists():
+            raise ValueError(f"init image not found: {init_image_path.name}")
+        if not mask_image_path.exists():
+            raise ValueError(f"mask image not found: {mask_image_path.name}")
+        entry = self.registry.get(model_id)
+        declared = self._declared_pipeline_class(entry)
+        if declared is None:
+            return
+        if not supports_inpaint(declared):
+            raise ValueError(
+                f"El modelo {model_id!r} ({declared}) no soporta inpainting. "
+                "Usa un modelo Stable Diffusion, SDXL o SD3."
             )
 
     def _declared_pipeline_class(self, entry: Any) -> str | None:
@@ -278,6 +319,9 @@ class GenerationJobManager:
         self.quota_service.record_usage(job.owner_id, duration)
 
     async def _run_engine(self, job: GenerationJob) -> None:
+        if job.model_id == SDCPP_MODEL_ID:
+            await self._run_sdcpp(job)
+            return
         entry = self.registry.get(job.model_id)
         if entry is None or entry.kind != ModelKind.diffusion_onnx:
             raise RuntimeError(f"Generation model not found: {job.model_id!r}")
@@ -289,6 +333,7 @@ class GenerationJobManager:
             prompt=job.prompt, negative_prompt=job.negative_prompt, steps=job.steps,
             guidance=job.guidance, width=job.width, height=job.height, seed=job.seed,
             init_image_path=job.init_image_path, strength=job.strength,
+            mask_image_path=job.mask_image_path,
         )
 
         def on_progress(done: int, total: int) -> None:
@@ -315,6 +360,19 @@ class GenerationJobManager:
             job.metadata["upscaleError"] = str(exc)
             job.output_path = generated
         complete_generation_stages(job, include_upscale)
+
+    async def _run_sdcpp(self, job: GenerationJob) -> None:
+        # Lane experimental: subprocess sd.cpp Vulkan, sin progreso por paso ni
+        # auto-upscale en v1. La cancelación mata el proceso (run_guarded_process).
+        advance_generation_stage(job, "generating", False)
+        request = GenerationRequest(
+            prompt=job.prompt, negative_prompt=job.negative_prompt, steps=job.steps,
+            guidance=job.guidance, width=job.width, height=job.height, seed=job.seed,
+        )
+        job.output_path = await self.sdcpp_engine.run(
+            request, self.settings.outputs_path / f"{job.id}.png"
+        )
+        complete_generation_stages(job, False)
 
     def _resolve_pipeline_dir(self, entry: Any) -> Path:
         models_root = self.settings.models_path.resolve()
