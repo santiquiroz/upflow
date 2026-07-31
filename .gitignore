@@ -16,3 +16,4 @@ installer/build/
 
 # Config local de Claude Code: por maquina, no del repo.
 .claude/
+.spike-ep-venv/
