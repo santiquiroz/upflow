@@ -333,6 +333,10 @@ $script:OptionalPacks = @(
 # El instalador lo escribe SIEMPRE, incluso vacio, en CurStepChanged(ssPostInstall).
 $script:OptionalPacksFile = Join-Path $root 'optional-packs.txt'
 
+# Los logs del servidor van tambien a un archivo: si el arranque falla, la ventana
+# se cierra con el error adentro y sin esto no queda rastro para diagnosticar.
+$script:ServerLogPath = Join-Path $root 'runtime\logs\startup.log'
+
 function Select-OptionalPacks {
     # NO se pregunta por consola: la eleccion se hace en el asistente grafico del
     # instalador. Aca solo se lee lo que ya se decidio.
@@ -452,12 +456,44 @@ function Get-EnvValue {
     return $valueWithoutComment.Trim()
 }
 
+function Test-PortInUse {
+    param([int]$Port)
+    # Un Upflow ya abierto (o cualquier cosa en el puerto) hacia que uvicorn
+    # muriera al instante y la ventana se cerrara con el error adentro: el
+    # usuario solo veia "se cierra solo".
+    try {
+        $listening = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop
+        return ($null -ne $listening)
+    } catch {
+        return $false
+    }
+}
+
+function Wait-BeforeClosing {
+    param([string]$Message)
+    Write-Host ''
+    Write-Host $Message -ForegroundColor Red
+    Write-Host ''
+    Write-Host "El detalle quedo guardado en: $script:ServerLogPath"
+    if ($env:UPFLOW_NO_PAUSE) { return }
+    Write-Host 'Presiona Enter para cerrar esta ventana...' -ForegroundColor Yellow
+    try { [void](Read-Host) } catch { Start-Sleep -Seconds 30 }
+}
+
 function Start-Upflow {
     $appHost = Get-EnvValue -Key 'APP_HOST' -Default '127.0.0.1'
     $appPort = Get-EnvValue -Key 'APP_PORT' -Default '8090'
     $browserHost = if ($appHost -eq '0.0.0.0') { '127.0.0.1' } else { $appHost }
     $url = "http://${browserHost}:${appPort}"
     $healthUrl = "$url/api/v1/health"
+
+    if (Test-PortInUse -Port ([int]$appPort)) {
+        Write-Host ''
+        Write-Host "Upflow ya parece estar abierto: algo esta usando el puerto $appPort." -ForegroundColor Yellow
+        Write-Host "Se abre la ventana que ya esta funcionando en vez de iniciar otra."
+        Start-Process $url
+        return
+    }
 
     $browserJob = Start-Job -ScriptBlock {
         param($Url, $HealthUrl)
@@ -478,13 +514,24 @@ function Start-Upflow {
     Write-Step "Iniciando Upflow en $url ..."
     Write-Host 'La ventana va a mostrar los logs del servidor. Cerra esta ventana o presiona Ctrl+C para detenerlo.'
 
+    $exitCode = 0
+    New-Item -ItemType Directory -Force (Split-Path -Parent $script:ServerLogPath) | Out-Null
     try {
-        & $pythonExe -m uvicorn app.main:app --host $appHost --port $appPort
+        # Tee: los logs siguen a la vista Y quedan en un archivo. Sin esto, si el
+        # servidor moria al arrancar la ventana se cerraba con el error adentro y
+        # no habia forma de saber que paso.
+        & $pythonExe -m uvicorn app.main:app --host $appHost --port $appPort 2>&1 |
+            Tee-Object -FilePath $script:ServerLogPath
+        $exitCode = $LASTEXITCODE
     } finally {
         Stop-Job $browserJob -ErrorAction SilentlyContinue | Out-Null
         Remove-Job $browserJob -Force -ErrorAction SilentlyContinue | Out-Null
         Write-Host ''
         Write-Host 'Upflow se detuvo.'
+    }
+
+    if ($exitCode -ne 0) {
+        Wait-BeforeClosing -Message "Upflow no pudo iniciarse (codigo $exitCode). El motivo esta unas lineas mas arriba."
     }
 }
 
