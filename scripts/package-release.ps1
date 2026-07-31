@@ -364,8 +364,9 @@ function Add-FetchflowWheelToInstaller {
     #
     # Viaja como WHEEL construida, no como dependencia `git+`: esa forma exigiria el
     # binario git en la maquina del usuario final, y sin el, el `pip install -e .` del
-    # primer arranque falla ENTERO -- no solo para quien use descargas. Tampoco desde
-    # PyPI todavia, porque el paquete no esta publicado ahi.
+    # primer arranque falla ENTERO -- no solo para quien use descargas. Ya esta en
+    # PyPI (2026-07-30), pero la wheel local garantiza que el instalador lleve la
+    # MISMA version que se probo con este repo, sin depender de la red en ese paso.
     $fetchflowRoot = Join-Path (Split-Path -Parent $root) 'fetchflow'
     if (-not (Test-Path (Join-Path $fetchflowRoot 'pyproject.toml'))) {
         throw @"
