@@ -161,6 +161,18 @@ export const es = {
   "editor.submit.replace": "Reemplazar selección",
   "editor.changeImage": "Usar otra imagen",
   "editor.useAsBase": "Seguir editando este resultado",
+  "editor.advanced.title": "Vista avanzada",
+  "editor.advanced.tooltip": "Parámetros del modelo: prompts, pasos, guía, semilla y fuerza.",
+  "editor.advanced.summary": "{{steps}} pasos · guía {{guidance}}",
+  "editor.advanced.fillPrompt": "Prompt de relleno (qué va en el área quitada)",
+  "editor.advanced.negativePrompt": "Prompt negativo (qué evitar)",
+  "editor.advanced.steps": "Pasos",
+  "editor.advanced.guidance": "Guía",
+  "editor.advanced.seed": "Semilla",
+  "editor.advanced.seedPlaceholder": "aleatoria",
+  "editor.advanced.strength": "Fuerza",
+  "editor.advanced.strengthHint":
+    "Con modelos estándar la edición corre siempre a 1.0; valores menores solo aplican con checkpoints de inpainting dedicados.",
 
   // --- ajustes: aceleracion por dispositivo -----------------------------
   "settings.acceleration.title": "Aceleración",

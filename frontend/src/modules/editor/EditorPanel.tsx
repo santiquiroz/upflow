@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Brush, Eraser, ImageUp, MousePointerClick, RotateCcw, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { AccordionSection } from "../../components/AccordionSection";
 import { DevicePicker } from "../../components/DevicePicker";
 import { JobCard } from "../../components/JobCard";
 import { useGenerationCapabilities, useGenerationJob } from "../../hooks/useGenerationJob";
@@ -167,6 +168,15 @@ export function EditorPanel() {
   const [prompt, setPrompt] = useState("");
   const [modelId, setModelId] = useState<string | null>(null);
   const [device, setDevice] = useState<string | null>(null);
+  // Vista avanzada: los defaults de Quitar quedan visibles y editables en vez
+  // de vivir escondidos en constantes.
+  const [erasePromptText, setErasePromptText] = useState(ERASE_PROMPT);
+  const [eraseNegative, setEraseNegative] = useState(ERASE_NEGATIVE_PROMPT);
+  const [replaceNegative, setReplaceNegative] = useState("");
+  const [steps, setSteps] = useState(DEFAULT_STEPS);
+  const [guidance, setGuidance] = useState(DEFAULT_GUIDANCE);
+  const [seedText, setSeedText] = useState("");
+  const [strength, setStrength] = useState(1);
   const [segmenting, setSegmenting] = useState(false);
   const [segmentError, setSegmentError] = useState<string | null>(null);
 
@@ -310,15 +320,17 @@ export function EditorPanel() {
       const maskFile = new File([maskBlob], "mask.png", { type: "image/png" });
       const maskResponse = await uploadGenerationInitImage(maskFile);
       const size = fitGenerationSize(baseInfo.width, baseInfo.height);
+      const seed = seedText.trim() === "" ? null : Number.parseInt(seedText, 10);
+      const negative = mode === "erase" ? eraseNegative : replaceNegative;
       const params: CreateGenerationJobParams = {
-        prompt: mode === "erase" ? ERASE_PROMPT : prompt,
-        negativePrompt: mode === "erase" ? ERASE_NEGATIVE_PROMPT : null,
+        prompt: mode === "erase" ? erasePromptText : prompt,
+        negativePrompt: negative.trim() === "" ? null : negative,
         modelId,
-        steps: DEFAULT_STEPS,
-        guidance: DEFAULT_GUIDANCE,
+        steps,
+        guidance,
         width: size.width,
         height: size.height,
-        seed: null,
+        seed: seed !== null && Number.isFinite(seed) ? seed : null,
         device,
         autoUpscale: false,
         upscaleModelName: null,
@@ -326,6 +338,7 @@ export function EditorPanel() {
         upscaleModelId: null,
         initImageToken: baseInfo.initImageToken,
         maskImageToken: maskResponse.initImageToken,
+        strength,
       };
       submit(params);
     } catch (error) {
@@ -350,7 +363,7 @@ export function EditorPanel() {
     Boolean(baseInfo) &&
     Boolean(modelId) &&
     maskHasContent(history) &&
-    (mode === "erase" || prompt.trim().length > 0) &&
+    (mode === "erase" ? erasePromptText.trim().length > 0 : prompt.trim().length > 0) &&
     !busy &&
     !segmenting;
 
@@ -519,6 +532,94 @@ export function EditorPanel() {
               allowAuto={false}
             />
           </div>
+
+          <AccordionSection
+            title={t("editor.advanced.title")}
+            summary={t("editor.advanced.summary", { steps: String(steps), guidance: String(guidance) })}
+            tooltip={t("editor.advanced.tooltip")}
+          >
+            <div className="flex flex-col gap-3">
+              {mode === "erase" && (
+                <label className="flex flex-col gap-1 text-sm text-text">
+                  {t("editor.advanced.fillPrompt")}
+                  <textarea
+                    value={erasePromptText}
+                    onChange={(event) => setErasePromptText(event.target.value)}
+                    rows={2}
+                    className="rounded border border-border bg-surface-2 px-2 py-1.5 text-sm text-text"
+                  />
+                </label>
+              )}
+              <label className="flex flex-col gap-1 text-sm text-text">
+                {t("editor.advanced.negativePrompt")}
+                <textarea
+                  value={mode === "erase" ? eraseNegative : replaceNegative}
+                  onChange={(event) =>
+                    mode === "erase"
+                      ? setEraseNegative(event.target.value)
+                      : setReplaceNegative(event.target.value)
+                  }
+                  rows={2}
+                  className="rounded border border-border bg-surface-2 px-2 py-1.5 text-sm text-text"
+                />
+              </label>
+              <div className="grid grid-cols-3 gap-3 max-[700px]:grid-cols-1">
+                <label className="flex flex-col gap-1 text-sm text-text">
+                  {t("editor.advanced.steps")}
+                  <input
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={steps}
+                    onChange={(event) =>
+                      setSteps(Math.min(100, Math.max(1, Number(event.target.value) || 1)))
+                    }
+                    className="rounded border border-border bg-surface-2 px-2 py-1.5 text-sm text-text"
+                  />
+                </label>
+                <label className="flex flex-col gap-1 text-sm text-text">
+                  {t("editor.advanced.guidance")}
+                  <input
+                    type="number"
+                    min={0}
+                    max={30}
+                    step={0.5}
+                    value={guidance}
+                    onChange={(event) =>
+                      setGuidance(Math.min(30, Math.max(0, Number(event.target.value) || 0)))
+                    }
+                    className="rounded border border-border bg-surface-2 px-2 py-1.5 text-sm text-text"
+                  />
+                </label>
+                <label className="flex flex-col gap-1 text-sm text-text">
+                  {t("editor.advanced.seed")}
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    value={seedText}
+                    onChange={(event) => setSeedText(event.target.value.replace(/[^0-9]/g, ""))}
+                    placeholder={t("editor.advanced.seedPlaceholder")}
+                    className="rounded border border-border bg-surface-2 px-2 py-1.5 text-sm text-text"
+                  />
+                </label>
+              </div>
+              <label className="flex flex-col gap-1 text-sm text-text">
+                <span>
+                  {t("editor.advanced.strength")}{" "}
+                  <span className="font-mono-tabular text-text-dim">{strength.toFixed(2)}</span>
+                </span>
+                <input
+                  type="range"
+                  min={0.05}
+                  max={1}
+                  step={0.05}
+                  value={strength}
+                  onChange={(event) => setStrength(Number(event.target.value))}
+                />
+                <span className="text-xs text-text-faint">{t("editor.advanced.strengthHint")}</span>
+              </label>
+            </div>
+          </AccordionSection>
 
           {uploadError && <p className="text-sm text-danger">{uploadError}</p>}
 

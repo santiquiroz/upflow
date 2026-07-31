@@ -222,3 +222,63 @@ describe("EditorPanel", () => {
     );
   });
 });
+
+describe("EditorPanel vista avanzada", () => {
+  async function setupReadyToSubmit() {
+    vi.mocked(generationService.uploadGenerationInitImage)
+      .mockResolvedValueOnce(BASE_IMAGE)
+      .mockResolvedValueOnce({ ...BASE_IMAGE, initImageToken: "mask-token" });
+    vi.mocked(generationService.createGenerationJob).mockResolvedValue({
+      id: "job-2",
+      status: "queued",
+    } as never);
+    renderPanel();
+    await loadBaseImage();
+    fireEvent.change(screen.getByLabelText(en["editor.model.label"]), {
+      target: { value: "gen--sdxl" },
+    });
+    paintOnCanvas();
+    fireEvent.click(screen.getByRole("button", { name: (n) => n.startsWith(en["editor.advanced.title"]) }));
+  }
+
+  it("advanced params flow into the job payload", async () => {
+    await setupReadyToSubmit();
+
+    fireEvent.change(screen.getByLabelText(en["editor.advanced.steps"]), { target: { value: "45" } });
+    fireEvent.change(screen.getByLabelText(en["editor.advanced.negativePrompt"]), {
+      target: { value: "blurry, low quality" },
+    });
+    fireEvent.change(screen.getByLabelText(en["editor.advanced.seed"]), { target: { value: "1234" } });
+
+    fireEvent.click(screen.getByRole("button", { name: en["editor.submit.erase"] }));
+    await waitFor(() => expect(generationService.createGenerationJob).toHaveBeenCalled());
+
+    const params = vi.mocked(generationService.createGenerationJob).mock.calls[0][0];
+    expect(params.steps).toBe(45);
+    expect(params.negativePrompt).toBe("blurry, low quality");
+    expect(params.seed).toBe(1234);
+    expect(params.strength).toBe(1);
+  });
+
+  it("the erase fill prompt is editable and used as the job prompt", async () => {
+    await setupReadyToSubmit();
+
+    fireEvent.change(screen.getByLabelText(/Fill prompt/), {
+      target: { value: "clean sand, beach" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: en["editor.submit.erase"] }));
+    await waitFor(() => expect(generationService.createGenerationJob).toHaveBeenCalled());
+    expect(vi.mocked(generationService.createGenerationJob).mock.calls[0][0].prompt).toBe(
+      "clean sand, beach",
+    );
+  });
+
+  it("clearing the erase fill prompt blocks submission", async () => {
+    await setupReadyToSubmit();
+
+    fireEvent.change(screen.getByLabelText(/Fill prompt/), { target: { value: "  " } });
+
+    expect(screen.getByRole("button", { name: en["editor.submit.erase"] })).toBeDisabled();
+  });
+});

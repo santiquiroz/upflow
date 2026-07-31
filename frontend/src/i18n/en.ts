@@ -167,6 +167,18 @@ export const en = {
   "editor.submit.replace": "Replace selection",
   "editor.changeImage": "Use another image",
   "editor.useAsBase": "Keep editing this result",
+  "editor.advanced.title": "Advanced view",
+  "editor.advanced.tooltip": "Model parameters: prompts, steps, guidance, seed and strength.",
+  "editor.advanced.summary": "{{steps}} steps · guidance {{guidance}}",
+  "editor.advanced.fillPrompt": "Fill prompt (what replaces the removed area)",
+  "editor.advanced.negativePrompt": "Negative prompt (what to avoid)",
+  "editor.advanced.steps": "Steps",
+  "editor.advanced.guidance": "Guidance",
+  "editor.advanced.seed": "Seed",
+  "editor.advanced.seedPlaceholder": "random",
+  "editor.advanced.strength": "Strength",
+  "editor.advanced.strengthHint":
+    "With standard models the edit always runs at 1.0; lower values only take effect with dedicated inpainting checkpoints.",
 
   // --- ajustes: aceleracion por dispositivo -----------------------------
   "settings.acceleration.title": "Acceleration",
