@@ -55,9 +55,19 @@ function Build-Frontend {
     Write-Step 'Compilando la SPA de React (frontend/)...'
     Push-Location $frontendDir
     try {
+        # `npm ci` borra node_modules antes de instalar y en Windows eso choca de
+        # forma intermitente con el antivirus o el indexador, que todavia tienen
+        # tomado algun archivo (EPERM). Falla el primer intento y anda el segundo,
+        # visto tres veces seguidas empaquetando. Un reintento evita tener que
+        # correr el script dos veces a mano.
         npm ci
         if ($LASTEXITCODE -ne 0) {
-            throw 'npm ci fallo en frontend/.'
+            Write-Host 'npm ci fallo (archivo tomado por otro proceso); reintentando una vez...' -ForegroundColor Yellow
+            Start-Sleep -Seconds 3
+            npm ci
+        }
+        if ($LASTEXITCODE -ne 0) {
+            throw 'npm ci fallo en frontend/ (dos intentos).'
         }
         npm run build
         if ($LASTEXITCODE -ne 0) {
