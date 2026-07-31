@@ -133,6 +133,35 @@ export const es = {
   "settings.language.title": "Idioma",
   "settings.language.description":
     "Se aplica al instante y queda recordado en este equipo.",
+  // --- editor de imagen --------------------------------------------------
+  "editor.title": "Editor",
+  "editor.description":
+    "Elegí qué quitar o reemplazar: pintalo con el pincel, o tocá un objeto para seleccionarlo solo.",
+  "editor.dropzone.label": "Elegir una imagen",
+  "editor.dropzone.inputLabel": "Imagen a editar",
+  "editor.dropzone.hint": "Elegí una foto para empezar a editar.",
+  "editor.tools.label": "Herramientas de edición",
+  "editor.tool.brush": "Pincel",
+  "editor.tool.eraser": "Goma",
+  "editor.tool.tap": "Tocar objeto",
+  "editor.tool.tapUnavailable":
+    "La selección por toque no está instalada todavía. Instalala desde Ajustes, o usá el pincel.",
+  "editor.brushSize": "Tamaño",
+  "editor.undo": "Deshacer",
+  "editor.clear": "Limpiar selección",
+  "editor.segmenting": "Buscando el objeto…",
+  "editor.maskHint": "El área iluminada es lo que va a cambiar. El resto queda intacto.",
+  "editor.mode.label": "Qué hacer con la selección",
+  "editor.mode.erase": "Quitar",
+  "editor.mode.replace": "Reemplazar",
+  "editor.prompt.label": "Reemplazar por…",
+  "editor.prompt.placeholder": "ej. un banco de madera, un ramo de flores",
+  "editor.model.label": "Modelo",
+  "editor.submit.erase": "Quitar selección",
+  "editor.submit.replace": "Reemplazar selección",
+  "editor.changeImage": "Usar otra imagen",
+  "editor.useAsBase": "Seguir editando este resultado",
+
   // --- ajustes: aceleracion por dispositivo -----------------------------
   "settings.acceleration.title": "Aceleración",
   "settings.acceleration.description":

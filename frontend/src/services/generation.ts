@@ -27,6 +27,8 @@ export interface CreateGenerationJobParams {
   upscaleModelId: string | null;
   initImageToken?: string;
   strength?: number;
+  // Máscara de inpainting (blanco=editar, negro=conservar); requiere initImageToken.
+  maskImageToken?: string;
 }
 
 function buildRequestBody(params: CreateGenerationJobParams): Record<string, unknown> {
@@ -45,6 +47,7 @@ function buildRequestBody(params: CreateGenerationJobParams): Record<string, unk
   if (params.initImageToken) {
     body.initImageToken = params.initImageToken;
     if (params.strength !== undefined) body.strength = params.strength;
+    if (params.maskImageToken) body.maskImageToken = params.maskImageToken;
   }
   if (params.autoUpscale) {
     if (params.upscaleModelName) body.upscaleModelName = params.upscaleModelName;

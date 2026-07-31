@@ -5,6 +5,7 @@ import { ForcedPasswordChangeModal } from "./components/ForcedPasswordChangeModa
 import { useAuth } from "./hooks/useAuth";
 import { AudioPage } from "./modules/audio/AudioPage";
 import { DownloadPage } from "./pages/DownloadPage";
+import { EditorPage } from "./modules/editor/EditorPage";
 import { GeneratePage } from "./modules/generate/GeneratePage";
 import { TranscribePage } from "./modules/transcribe/TranscribePage";
 import { EnhanceRoute } from "./pages/EnhanceRoute";
@@ -73,6 +74,9 @@ export function App() {
         <KeepMounted active={pathname === "/generate"}>
           <GeneratePage />
         </KeepMounted>
+        <KeepMounted active={pathname === "/editor"}>
+          <EditorPage />
+        </KeepMounted>
         <Routes>
           <Route path="/" element={<TasksPage />} />
           <Route path="/enhance" element={null} />
@@ -81,6 +85,7 @@ export function App() {
           <Route path="/transcribe" element={null} />
           <Route path="/download" element={null} />
           <Route path="/generate" element={null} />
+          <Route path="/editor" element={null} />
           <Route path="/models" element={<ModelsPage />} />
           <Route path="/realtime" element={<RealtimePage />} />
           <Route path="/settings" element={<SettingsPage />} />

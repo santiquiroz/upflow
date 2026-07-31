@@ -139,6 +139,35 @@ export const en = {
   "settings.language.title": "Language",
   "settings.language.description":
     "Applies right away and is remembered on this device.",
+  // --- editor de imagen --------------------------------------------------
+  "editor.title": "Editor",
+  "editor.description":
+    "Select what to remove or replace: paint over it, or tap an object to select it automatically.",
+  "editor.dropzone.label": "Choose an image",
+  "editor.dropzone.inputLabel": "Image to edit",
+  "editor.dropzone.hint": "Pick a photo to start editing.",
+  "editor.tools.label": "Editing tools",
+  "editor.tool.brush": "Brush",
+  "editor.tool.eraser": "Eraser",
+  "editor.tool.tap": "Tap object",
+  "editor.tool.tapUnavailable":
+    "Tap-to-select is not installed yet. Install it from Settings, or use the brush.",
+  "editor.brushSize": "Size",
+  "editor.undo": "Undo",
+  "editor.clear": "Clear selection",
+  "editor.segmenting": "Finding the object…",
+  "editor.maskHint": "The highlighted area is what will change. Everything else stays untouched.",
+  "editor.mode.label": "What to do with the selection",
+  "editor.mode.erase": "Remove",
+  "editor.mode.replace": "Replace",
+  "editor.prompt.label": "Replace with…",
+  "editor.prompt.placeholder": "e.g. a wooden bench, a bouquet of flowers",
+  "editor.model.label": "Model",
+  "editor.submit.erase": "Remove selection",
+  "editor.submit.replace": "Replace selection",
+  "editor.changeImage": "Use another image",
+  "editor.useAsBase": "Keep editing this result",
+
   // --- ajustes: aceleracion por dispositivo -----------------------------
   "settings.acceleration.title": "Acceleration",
   "settings.acceleration.description":

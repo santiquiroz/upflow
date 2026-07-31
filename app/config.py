@@ -453,6 +453,16 @@ class Settings(BaseSettings):
     sdcpp_binary: str = Field(default="vendor/sdcpp/sd.exe", alias="SDCPP_BINARY")
     sdcpp_model: str = Field(default="vendor/sdcpp/model.safetensors", alias="SDCPP_MODEL")
 
+    # Editor: segmentación interactiva "tocar un objeto -> máscara" (MobileSAM,
+    # Acly/MobileSAM rev 0d3b4033, MIT, ~45MB total, preprocesamiento embebido
+    # en el grafo del encoder). scripts/download-mobilesam.ps1 lo instala.
+    editor_segmenter_encoder: str = Field(
+        default="vendor/mobilesam/mobile_sam_image_encoder.onnx", alias="EDITOR_SEGMENTER_ENCODER"
+    )
+    editor_segmenter_decoder: str = Field(
+        default="vendor/mobilesam/sam_mask_decoder_single.onnx", alias="EDITOR_SEGMENTER_DECODER"
+    )
+
     # Log a archivo, opt-in para diagnosticar reportes de otras maquinas. En uso
     # normal es ruido y disco, asi que arranca apagado; se enciende desde
     # Settings sin reiniciar y rota con techo duro.
@@ -772,6 +782,17 @@ class Settings(BaseSettings):
     @property
     def sdcpp_model_path(self) -> Path | None:
         return resolve_against_project_root(self.sdcpp_model) if self.sdcpp_model else None
+
+    @property
+    def editor_segmenter_encoder_path(self) -> Path:
+        return resolve_against_project_root(self.editor_segmenter_encoder)
+
+    @property
+    def editor_segmenter_decoder_path(self) -> Path:
+        return resolve_against_project_root(self.editor_segmenter_decoder)
+
+    def editor_segmenter_available(self) -> bool:
+        return self.editor_segmenter_encoder_path.exists() and self.editor_segmenter_decoder_path.exists()
 
     def sdcpp_available(self) -> bool:
         if not self.enable_sdcpp:

@@ -28,6 +28,7 @@ PACK_SCRIPTS: dict[str, str] = {
     "apollo": "download-apollo.ps1",
     "audiosr": "download-audiosr-onnx.ps1",
     "ffmpeg": "download-ffmpeg.ps1",
+    "mobilesam": "download-mobilesam.ps1",
 }
 
 # Los scripts descargan cientos de MB desde GitHub releases. El techo es un

@@ -500,6 +500,8 @@ export interface GenerationModelSummary {
   name: string;
   /** "installed" o "converting" — el dropdown muestra las conversiones en curso. */
   status: string;
+  /** Soporte real de inpainting (chequeado contra el mapeo de clases del backend). */
+  supportsInpaint?: boolean;
 }
 
 export interface GenerationCapabilities {

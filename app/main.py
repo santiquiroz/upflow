@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.auth_routes import router as auth_router
 from app.api.capability_routes import router as capability_router
+from app.api.editor_routes import router as editor_router
 from app.api.routes import router as api_router
 from app.api.users_routes import router as users_router
 from app.core.log_file import configure_file_logging
@@ -229,6 +230,9 @@ async def lifespan(app: FastAPI):
     app.state.update_service = update_service
     app.state.hf_client = hf_client
     app.state.model_installer = model_installer
+    from app.services.editor_segmenter import EditorSegmenter
+
+    app.state.editor_segmenter = EditorSegmenter(settings)
     app.state.generation_job_manager = generation_job_manager
     app.state.generation_installer = generation_installer
     app.state.generation_converter = generation_converter
@@ -301,6 +305,7 @@ app.add_middleware(OriginGuardMiddleware, allowed_origins=settings.allowed_origi
 app.add_middleware(LoopbackGuardMiddleware, auth_mode=settings.auth_mode)
 app.include_router(api_router)
 app.include_router(capability_router)
+app.include_router(editor_router)
 app.include_router(auth_router)
 app.include_router(users_router)
 configure_web_routes(app)

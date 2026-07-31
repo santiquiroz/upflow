@@ -562,6 +562,17 @@ class GenerationJobResponse(BaseModel):
     download_url: str | None = Field(default=None, serialization_alias="downloadUrl")
 
 
+class EditorSegmentRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    # Token de una imagen subida con POST /generation/init-image; coords del
+    # click en píxeles de la imagen ORIGINAL.
+    image_token: str = Field(alias="imageToken")
+    x: float = Field(ge=0)
+    y: float = Field(ge=0)
+    device: str | None = None
+
+
 class GenerationModelSummary(BaseModel):
     id: str
     name: str
