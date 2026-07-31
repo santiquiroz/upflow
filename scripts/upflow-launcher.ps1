@@ -17,6 +17,17 @@ $ErrorActionPreference = 'Continue'
 # Resolved against the script's own location, so the launcher works no
 # matter what directory it was double-clicked or invoked from.
 $root = Split-Path -Parent $PSScriptRoot
+
+# El Python embebido trae `import site` habilitado (lo necesita pip), y eso arrastra
+# el site-packages de USUARIO del Python del sistema (%APPDATA%\Python\PythonXY\
+# site-packages), que se comparte por version de Python. En una maquina con Python
+# instalado y paquetes propios, Upflow terminaba cargando la mitad de sus
+# dependencias desde ahi: reportado en vivo como "se abre y se cierra sola", con un
+# ModuleNotFoundError de pydantic_settings mientras uvicorn se resolvia desde
+# AppData\Roaming. Peor: el chequeo de "ya esta instalado" (import uvicorn) daba
+# verdadero por ese uvicorn ajeno y se salteaba la instalacion entera.
+$env:PYTHONNOUSERSITE = '1'
+$env:PYTHONPATH = ''
 $venvPath = Join-Path $root '.venv'
 $venvPython = Join-Path $venvPath 'Scripts\python.exe'
 
@@ -99,6 +110,15 @@ function Assert-SystemPythonOk {
     Write-Host "Python $version detectado en el PATH."
 }
 
+function Test-RuntimeDepsPresent {
+    # Tres dependencias de terceros que el arranque necesita si o si. Se prueban
+    # juntas y NO solo uvicorn: una instalacion a medias (o contaminada por el
+    # Python del sistema) tenia uvicorn y le faltaba pydantic_settings, y el
+    # servidor moria recien al importar la config.
+    & $pythonExe -c "import uvicorn, pydantic_settings, fastapi" 2>$null
+    return ($LASTEXITCODE -eq 0)
+}
+
 function Test-UpflowAlreadyInstalled {
     if (Test-Path $installedSentinel) {
         # Un sentinel de una version distinta significa que el instalador
@@ -113,6 +133,13 @@ function Test-UpflowAlreadyInstalled {
             Write-Host "Actualizacion detectada ($stamped -> $declaredVersion): se reinstala el paquete."
             return $false
         }
+        # El sentinel dice "instalado", pero eso no garantiza que el entorno SIGA
+        # sano: una instalacion que se completo tomando dependencias del Python
+        # del sistema deja el sentinel escrito y el entorno roto. Se comprueba.
+        if (-not (Test-RuntimeDepsPresent)) {
+            Write-Host 'El entorno de Python quedo incompleto: se reinstalan las dependencias.' -ForegroundColor Yellow
+            return $false
+        }
         return $true
     }
     # Probe una dep de terceros (uvicorn), NO el paquete local `app`: con cwd en
@@ -122,8 +149,7 @@ function Test-UpflowAlreadyInstalled {
     # Start-Upflow crashearia al correr uvicorn (no instalado). uvicorn solo
     # existe despues de `pip install -e .`, asi que es el proxy correcto de
     # "deps instaladas" en ambas ramas (embebida y venv).
-    & $pythonExe -c "import uvicorn" 2>$null
-    return ($LASTEXITCODE -eq 0)
+    return (Test-RuntimeDepsPresent)
 }
 
 function Install-PythonEnvironment {
