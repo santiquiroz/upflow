@@ -416,7 +416,7 @@ describe("GeneratePanel — conversiones visibles en el dropdown", () => {
         { id: "sd15-onnx", name: "SD 1.5 (ONNX)", status: "installed" },
         { id: "gen--john--anime", name: "john/anime", status: "converting" },
       ],
-      devices: [{ id: "dml:0", kind: "gpu", name: "AMD Radeon RX 7900", backend: "directml" }],
+      devices: ["dml:0"],
       cpuOnly: false,
     });
 
@@ -431,7 +431,7 @@ describe("GeneratePanel — conversiones visibles en el dropdown", () => {
       available: true,
       reason: null,
       models: [{ id: "gen--john--anime", name: "john/anime", status: "converting" }],
-      devices: [{ id: "dml:0", kind: "gpu", name: "AMD Radeon RX 7900", backend: "directml" }],
+      devices: ["dml:0"],
       cpuOnly: false,
     });
 
