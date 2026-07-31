@@ -237,7 +237,8 @@ def _hardware_adapter_ptr_by_index(
         _release_com(adapter_ptr, _IDXGIADAPTER1_VTABLE_SIZE)
 
 
-def _query_video_memory_info_mb(adapter1_ptr: ctypes.c_void_p) -> int | None:
+def _query_video_memory_info_mb(adapter1_ptr: ctypes.c_void_p) -> tuple[int, int] | None:
+    """(libre, uso propio) en MB, o None si el adapter no soporta la consulta."""
     adapter1_vtable = _com_vtable(adapter1_ptr.value, _IDXGIADAPTER1_VTABLE_SIZE)
     query_interface = _QueryInterfaceProto(adapter1_vtable[_QUERY_INTERFACE_VTABLE_INDEX])
     adapter3_ptr = ctypes.c_void_p()
@@ -256,12 +257,15 @@ def _query_video_memory_info_mb(adapter1_ptr: ctypes.c_void_p) -> int | None:
         # Budget can transiently dip below CurrentUsage under real pressure
         # (documented DXGI behavior) -- clamp instead of returning negative.
         free_bytes = max(0, info.Budget - info.CurrentUsage)
-        return int(free_bytes // (1024 * 1024))
+        # CurrentUsage es de ESTE proceso: es lo que permite distinguir "la VRAM
+        # la retiene nuestro propio cache ocioso" de "la come un proceso externo"
+        # en la admision (DeviceSemaphores._own_idle_usage_covers_shortfall).
+        return int(free_bytes // (1024 * 1024)), int(info.CurrentUsage // (1024 * 1024))
     finally:
         _release_com(adapter3_ptr, _IDXGIADAPTER3_VTABLE_SIZE)
 
 
-def _query_adapter_free_vram_mb_dxgi(adapter_index: int) -> int | None:
+def _query_adapter_vram_info_mb_dxgi(adapter_index: int) -> tuple[int, int] | None:
     factory_ptr = _create_dxgi_factory1()
     try:
         factory_vtable = _com_vtable(factory_ptr.value, _IDXGIFACTORY1_VTABLE_SIZE)
@@ -277,18 +281,23 @@ def _query_adapter_free_vram_mb_dxgi(adapter_index: int) -> int | None:
         _release_com(factory_ptr, _IDXGIFACTORY1_VTABLE_SIZE)
 
 
-def _query_adapter_free_vram_mb(adapter_index: int) -> int | None:
-    """Live free VRAM (Budget - CurrentUsage) in MB for the hardware adapter
-    at `adapter_index` (0-based, same order dml:N ids use). Never raises:
-    non-Windows, missing DXGI, unsupported IDXGIAdapter3, or any COM error
-    all fall back to None -- same never-raises contract as
+def _query_adapter_vram_info_mb(adapter_index: int) -> tuple[int, int] | None:
+    """(VRAM libre, uso de ESTE proceso) en MB para el adapter `adapter_index`
+    (0-based, mismo orden que los ids dml:N). Libre = Budget - CurrentUsage.
+    Never raises: non-Windows, missing DXGI, unsupported IDXGIAdapter3, or any
+    COM error all fall back to None -- same never-raises contract as
     _enumerate_gpu_adapter_names above."""
     if sys.platform != "win32":
         return None
     try:
-        return _query_adapter_free_vram_mb_dxgi(adapter_index)
+        return _query_adapter_vram_info_mb_dxgi(adapter_index)
     except Exception:  # noqa: BLE001 -- this is now on the job-admission hot path; a native-call failure must fail open, never raise
         return None
+
+
+def _query_adapter_free_vram_mb(adapter_index: int) -> int | None:
+    info = _query_adapter_vram_info_mb(adapter_index)
+    return None if info is None else info[0]
 
 
 def _build_gpu_device(index: int, name: str) -> DeviceInfo:

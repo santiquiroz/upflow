@@ -50,12 +50,16 @@ def test_dxgi_vram_probe_delegates_to_devices_service_seam(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        devices_service, "_query_adapter_free_vram_mb", lambda index: 2048 if index == 1 else None
+        devices_service,
+        "_query_adapter_vram_info_mb",
+        lambda index: (2048, 512) if index == 1 else None,
     )
     probe = resource_probes.DxgiVramProbe()
 
     assert probe.free_capacity_mb("dml:1") == 2048
+    assert probe.own_usage_mb("dml:1") == 512
     assert probe.free_capacity_mb("dml:0") is None
+    assert probe.own_usage_mb("dml:0") is None
 
 
 def test_dxgi_vram_probe_returns_none_for_non_dml_device_id() -> None:

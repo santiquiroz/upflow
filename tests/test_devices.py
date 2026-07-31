@@ -337,9 +337,10 @@ def test_devices_endpoint_wired_through_app_state(monkeypatch: pytest.MonkeyPatc
 def test_query_adapter_free_vram_mb_fails_open_when_dxgi_query_raises_oserror(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def raise_oserror(adapter_index: int) -> int | None:
+    def raise_oserror(adapter_index: int) -> tuple[int, int] | None:
         raise OSError("simulated DXGI failure")
 
-    monkeypatch.setattr(devices_service, "_query_adapter_free_vram_mb_dxgi", raise_oserror)
+    monkeypatch.setattr(devices_service, "_query_adapter_vram_info_mb_dxgi", raise_oserror)
 
+    assert devices_service._query_adapter_vram_info_mb(0) is None
     assert devices_service._query_adapter_free_vram_mb(0) is None

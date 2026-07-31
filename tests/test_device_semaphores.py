@@ -274,3 +274,108 @@ async def test_acquire_treats_probe_none_as_fail_open(tmp_path: Path) -> None:
             assert semaphores.in_flight("dml:0") == 1
 
     await asyncio.wait_for(acquire_and_check(), timeout=0.5)
+
+
+# ---------------------------------------------------------------------------
+# Deadlock por cache propio (bug real 2026-07-31: jobs de generacion quedaban
+# `queued` para siempre con el GPU ocioso, porque las sesiones ONNX cacheadas
+# de NUESTRO propio proceso dejaban el "libre" bajo el umbral y nada lo iba a
+# liberar jamas. El proximo job habria REUSADO ese cache sin alocar nada.)
+# ---------------------------------------------------------------------------
+
+
+class CacheHeavyProbe:
+    """Libre bajo el umbral, pero NUESTRO proceso retiene de sobra: la firma
+    del cache de sesiones ocioso (Budget-CurrentUsage chico, CurrentUsage
+    grande). Un juego externo es lo contrario: libre chico y uso propio ~0."""
+
+    def __init__(self, free_mb: int, own_mb: int | None) -> None:
+        self._free = free_mb
+        self._own = own_mb
+
+    def free_capacity_mb(self, device_id: str) -> int | None:
+        return self._free
+
+    def own_usage_mb(self, device_id: str) -> int | None:
+        return self._own
+
+
+async def test_an_idle_device_admits_when_the_shortfall_is_our_own_cache(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path, PER_DEVICE_GPU_CONCURRENCY=1, MIN_FREE_VRAM_MB=1024)
+    semaphores = DeviceSemaphores(
+        settings, resource_probes={"gpu": CacheHeavyProbe(free_mb=100, own_mb=8000)}
+    )
+
+    async def acquire_once() -> None:
+        async with semaphores.acquire("dml:0"):
+            pass
+
+    # Sin el bypass esto espera para siempre; el timeout lo vuelve un fallo claro.
+    await asyncio.wait_for(acquire_once(), timeout=1.0)
+
+
+async def test_an_idle_device_still_waits_under_external_pressure(tmp_path: Path) -> None:
+    # Uso propio ~0 y libre bajo = un proceso EXTERNO come la VRAM (el caso que
+    # el subproyecto B queria: esperar a que el juego la suelte).
+    settings = make_settings(
+        tmp_path, PER_DEVICE_GPU_CONCURRENCY=1, MIN_FREE_VRAM_MB=1024,
+        RESOURCE_POLL_INTERVAL_SECONDS=0.05,
+    )
+    semaphores = DeviceSemaphores(
+        settings, resource_probes={"gpu": CacheHeavyProbe(free_mb=100, own_mb=0)}
+    )
+
+    async def acquire_once() -> None:
+        async with semaphores.acquire("dml:0"):
+            pass
+
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(acquire_once(), timeout=0.3)
+
+
+async def test_a_busy_device_waits_even_if_our_cache_covers_the_shortfall(tmp_path: Path) -> None:
+    # Con un job corriendo el gate conserva todo su valor: no apilar un segundo
+    # job sobre un device bajo presion.
+    settings = make_settings(
+        tmp_path, PER_DEVICE_GPU_CONCURRENCY=2, MIN_FREE_VRAM_MB=1024,
+        RESOURCE_POLL_INTERVAL_SECONDS=0.05,
+    )
+    semaphores = DeviceSemaphores(
+        settings, resource_probes={"gpu": CacheHeavyProbe(free_mb=100, own_mb=8000)}
+    )
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def hold_first() -> None:
+        async with semaphores.acquire("dml:0"):
+            entered.set()
+            await release.wait()
+
+    holder = asyncio.create_task(hold_first())
+    await entered.wait()
+
+    async def acquire_second() -> None:
+        async with semaphores.acquire("dml:0"):
+            pass
+
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(acquire_second(), timeout=0.3)
+    release.set()
+    await holder
+
+
+async def test_probes_without_own_usage_keep_the_old_behavior(tmp_path: Path) -> None:
+    # Un probe viejo (sin own_usage_mb) no habilita el bypass: fail-safe.
+    settings = make_settings(
+        tmp_path, PER_DEVICE_GPU_CONCURRENCY=1, MIN_FREE_VRAM_MB=1024,
+        RESOURCE_POLL_INTERVAL_SECONDS=0.05,
+    )
+    semaphores = DeviceSemaphores(settings, resource_probes={"gpu": ConstantProbe(100)})
+
+    async def acquire_once() -> None:
+        async with semaphores.acquire("dml:0"):
+            pass
+
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(acquire_once(), timeout=0.3)

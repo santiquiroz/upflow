@@ -120,13 +120,51 @@ class DeviceSemaphores:
             return True
         return free_mb >= threshold
 
+    def _own_idle_usage_covers_shortfall(self, device_id: str | None) -> bool:
+        """El deficit de recurso lo explica NUESTRO propio proceso ocioso.
+
+        Bug real (2026-07-31): las sesiones ONNX cacheadas de este proceso
+        dejaban `free = Budget - CurrentUsage` bajo el umbral con el device
+        ocioso, y el gate esperaba para siempre una VRAM que nadie iba a
+        soltar -- el proximo job habria REUSADO ese cache sin alocar nada.
+        Si `free + uso_propio >= umbral`, el faltante es reciclable por
+        definicion. Un proceso EXTERNO (un juego) achica el Budget con uso
+        propio ~0, asi que no habilita este bypass y se sigue esperando, que
+        es el comportamiento que el gate vino a dar."""
+        kind = _device_kind(device_id)
+        if kind is None:
+            return False
+        probe = self._resource_probes.get(kind)
+        if probe is None:
+            return False
+        threshold = self._min_free_mb.get(kind)
+        if threshold is None:
+            return False
+        free_mb = probe.free_capacity_mb(device_id)
+        if free_mb is None:
+            return False
+        own_usage = getattr(probe, "own_usage_mb", None)
+        own_mb = own_usage(device_id) if own_usage is not None else None
+        if own_mb is None:
+            # Probe sin la medicion propia: fail-safe al comportamiento previo.
+            return False
+        return free_mb + own_mb >= threshold
+
     def has_capacity(self, device_id: str | None) -> bool:
         """Non-reserving half of the admission predicate: would a reserve for
         `device_id` succeed right now (job-count slot free AND, if a probe
         applies, enough free VRAM/RAM)? Single source of truth shared by
         `_reserve_if_free` (pinned-device acquire) and DeviceRouter's
-        auto-route selection, so the two admission paths can never diverge."""
-        return self.free_capacity(device_id) > 0 and self._has_enough_resources(device_id)
+        auto-route selection, so the two admission paths can never diverge.
+
+        El bypass por cache propio corre solo con el device OCIOSO: con un job
+        en vuelo el gate conserva todo su valor de no apilar carga bajo
+        presion real."""
+        if self.free_capacity(device_id) <= 0:
+            return False
+        if self._has_enough_resources(device_id):
+            return True
+        return self.in_flight(device_id) == 0 and self._own_idle_usage_covers_shortfall(device_id)
 
     def _reserve_if_free(self, device_id: str | None) -> bool:
         if not self.has_capacity(device_id):
