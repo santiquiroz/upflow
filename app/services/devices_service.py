@@ -133,7 +133,8 @@ def _release_com(instance_ptr: ctypes.c_void_p, vtable_size: int) -> None:
     _ReleaseProto(vtable[_RELEASE_VTABLE_INDEX])(instance_ptr)
 
 
-def _hardware_adapter_name(adapter_ptr: ctypes.c_void_p) -> str | None:
+def _hardware_adapter_desc(adapter_ptr: ctypes.c_void_p) -> tuple[str, int] | None:
+    """(nombre, VendorId PCI) del adapter, o None si es software/fallo GetDesc1."""
     vtable = _com_vtable(adapter_ptr.value, _IDXGIADAPTER1_VTABLE_SIZE)
     get_desc1 = _GetDesc1Proto(vtable[_GET_DESC1_VTABLE_INDEX])
     desc = _DxgiAdapterDesc1()
@@ -141,7 +142,12 @@ def _hardware_adapter_name(adapter_ptr: ctypes.c_void_p) -> str | None:
         return None
     if desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE:
         return None
-    return desc.Description
+    return desc.Description, int(desc.VendorId)
+
+
+def _hardware_adapter_name(adapter_ptr: ctypes.c_void_p) -> str | None:
+    desc = _hardware_adapter_desc(adapter_ptr)
+    return None if desc is None else desc[0]
 
 
 def _next_adapter(factory_ptr: ctypes.c_void_p, enum_adapters1, index: int) -> ctypes.c_void_p | None:
@@ -176,6 +182,45 @@ def _enumerate_dxgi_adapter_names() -> list[str]:
         return _iter_hardware_adapter_names(factory_ptr, enum_adapters1)
     finally:
         _release_com(factory_ptr, _IDXGIFACTORY1_VTABLE_SIZE)
+
+
+def _iter_hardware_adapter_vendor_ids(factory_ptr: ctypes.c_void_p, enum_adapters1) -> list[int]:
+    vendor_ids: list[int] = []
+    index = 0
+    while True:
+        adapter_ptr = _next_adapter(factory_ptr, enum_adapters1, index)
+        if adapter_ptr is None:
+            return vendor_ids
+        try:
+            desc = _hardware_adapter_desc(adapter_ptr)
+        finally:
+            _release_com(adapter_ptr, _IDXGIADAPTER1_VTABLE_SIZE)
+        if desc is not None:
+            vendor_ids.append(desc[1])
+        index += 1
+
+
+def _enumerate_gpu_adapter_vendor_ids() -> list[int]:
+    factory_ptr = _create_dxgi_factory1()
+    try:
+        factory_vtable = _com_vtable(factory_ptr.value, _IDXGIFACTORY1_VTABLE_SIZE)
+        enum_adapters1 = _EnumAdapters1Proto(factory_vtable[_ENUM_ADAPTERS1_VTABLE_INDEX])
+        return _iter_hardware_adapter_vendor_ids(factory_ptr, enum_adapters1)
+    finally:
+        _release_com(factory_ptr, _IDXGIFACTORY1_VTABLE_SIZE)
+
+
+def enumerate_adapter_vendor_ids() -> list[int]:
+    """VendorId PCI por adaptador hardware, alineado con los ids dml:N (mismo
+    orden hardware-only sin dedup que _iter_hardware_adapter_names). Nunca
+    lanza: [] en no-Windows o cualquier fallo COM, mismo contrato que
+    _enumerate_gpu_adapter_names."""
+    if sys.platform != "win32":
+        return []
+    try:
+        return _enumerate_gpu_adapter_vendor_ids()
+    except OSError:
+        return []
 
 
 DXGI_MEMORY_SEGMENT_GROUP_LOCAL = 0

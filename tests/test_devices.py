@@ -344,3 +344,89 @@ def test_query_adapter_free_vram_mb_fails_open_when_dxgi_query_raises_oserror(
 
     assert devices_service._query_adapter_vram_info_mb(0) is None
     assert devices_service._query_adapter_free_vram_mb(0) is None
+
+
+# ---------------------------------------------------------------------------
+# enumerate_adapter_vendor_ids() (Fase 1b - gate de vendor del ep_registry)
+# ---------------------------------------------------------------------------
+
+
+def test_enumerate_adapter_vendor_ids_passes_through_dxgi_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        devices_service, "_enumerate_gpu_adapter_vendor_ids", lambda: [0x10DE, 0x1002]
+    )
+    assert devices_service.enumerate_adapter_vendor_ids() == [0x10DE, 0x1002]
+
+
+def test_enumerate_adapter_vendor_ids_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom() -> list[int]:
+        raise OSError("CreateDXGIFactory1 failed")
+
+    monkeypatch.setattr(devices_service, "_enumerate_gpu_adapter_vendor_ids", boom)
+    assert devices_service.enumerate_adapter_vendor_ids() == []
+
+
+# ---------------------------------------------------------------------------
+# API /devices: EP activo por dispositivo (Fase 1b, selector read-only)
+# ---------------------------------------------------------------------------
+
+
+async def test_devices_route_reports_baseline_ep_per_device(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    patch_onnxruntime_with_directml(monkeypatch, ["AMD Radeon RX 7800 XT"])
+    service = DevicesService(make_settings(DEFAULT_DEVICE="dml:0"))
+
+    response = await list_devices_route(devices=service)
+
+    cpu, gpu = response.devices
+    assert cpu.active_ep == "CPUExecutionProvider"
+    assert cpu.ep_state == "baseline"
+    assert gpu.active_ep == "DmlExecutionProvider"
+    assert gpu.ep_label == "DirectML"
+    assert gpu.ep_state == "baseline"
+
+
+async def test_devices_route_reports_native_ep_when_registry_says_so(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import ep_registry
+
+    patch_onnxruntime_with_directml(monkeypatch, ["NVIDIA GeForce RTX 4070"])
+
+    def fake_status(device: str, settings: object) -> ep_registry.EpStatus:
+        if device == "cpu":
+            return ep_registry.EpStatus(
+                ep_name="CPUExecutionProvider", label="CPU", state=ep_registry.EP_STATE_BASELINE
+            )
+        return ep_registry.EpStatus(
+            ep_name="NvTensorRTRTXExecutionProvider",
+            label="TensorRT-RTX",
+            state=ep_registry.EP_STATE_NATIVE,
+        )
+
+    monkeypatch.setattr(ep_registry, "active_ep_for_device", fake_status)
+    service = DevicesService(make_settings(DEFAULT_DEVICE="dml:0"))
+
+    response = await list_devices_route(devices=service)
+
+    gpu = response.devices[1]
+    assert gpu.active_ep == "NvTensorRTRTXExecutionProvider"
+    assert gpu.ep_label == "TensorRT-RTX"
+    assert gpu.ep_state == "native"
+
+
+def test_devices_endpoint_serializes_ep_fields_camel_case(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    patch_onnxruntime_with_directml(monkeypatch, ["AMD Radeon RX 7800 XT"])
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/devices")
+
+    gpu = next(d for d in response.json()["devices"] if d["id"] == "dml:0")
+    assert gpu["activeEp"] == "DmlExecutionProvider"
+    assert gpu["epLabel"] == "DirectML"
+    assert gpu["epState"] == "baseline"

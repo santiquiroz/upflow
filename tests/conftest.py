@@ -18,3 +18,15 @@ def isolated_runtime_dir(tmp_path, monkeypatch: pytest.MonkeyPatch):
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def reset_ep_registry():
+    """El ep_registry guarda estado de proceso (plugins registrados, errores
+    de sesión); sin reset, un test contaminaría la resolución de EP del
+    siguiente."""
+    from app.services import ep_registry
+
+    ep_registry.reset()
+    yield
+    ep_registry.reset()

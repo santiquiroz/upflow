@@ -496,12 +496,29 @@ async def update_check(
 
 @router.get("/devices", response_model=DevicesResponse)
 async def list_devices(devices: DevicesService = Depends(get_devices_service)) -> DevicesResponse:
-    device_list = await asyncio.to_thread(devices.list_devices)
-    default_device = devices.resolve_default(device_list)
-    return DevicesResponse(
-        devices=[DeviceInfoResponse(**item) for item in device_list],
-        default_device_id=default_device["id"],
-    )
+    from app.services import ep_registry
+
+    def snapshot() -> tuple[list[dict], list[DeviceInfoResponse]]:
+        # active_ep_for_device puede disparar la inicialización del registry
+        # (enumeración DXGI + registro de plugins): fuera del event loop.
+        raw = devices.list_devices()
+        enriched = []
+        for item in raw:
+            ep_status = ep_registry.active_ep_for_device(item["id"], devices.settings)
+            enriched.append(
+                DeviceInfoResponse(
+                    **item,
+                    active_ep=ep_status.ep_name,
+                    ep_label=ep_status.label,
+                    ep_state=ep_status.state,
+                    ep_detail=ep_status.detail,
+                )
+            )
+        return raw, enriched
+
+    raw_list, device_list = await asyncio.to_thread(snapshot)
+    default_device = devices.resolve_default(raw_list)
+    return DevicesResponse(devices=device_list, default_device_id=default_device["id"])
 
 
 @router.post(

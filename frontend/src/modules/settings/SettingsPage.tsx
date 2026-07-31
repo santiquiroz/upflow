@@ -3,6 +3,7 @@ import { Info } from "lucide-react";
 import { getEngineInfo, getHealth } from "../../lib/api";
 import type { EngineInfoResponse, HealthResponse } from "../../lib/apiTypes";
 import { DeviceDefault } from "../models/DeviceDefault";
+import { DeviceAcceleration } from "./DeviceAcceleration";
 import { EditableSettingsSection } from "./EditableSettingsSection";
 import { LanguageSection } from "./LanguageSection";
 import { OptimizationCenter } from "./OptimizationCenter";
@@ -123,6 +124,7 @@ export function SettingsPage() {
         <CapacitySectionStatus query={healthQuery} />
         <EditableSettingsSection />
         <DeviceDefault />
+        <DeviceAcceleration />
         <LanguageSection />
       </div>
       <OptimizationCenter />

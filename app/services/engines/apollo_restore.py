@@ -13,7 +13,7 @@ import numpy as np
 
 from app.config import Settings
 from app.services.engines.multichannel_restore import restore_multichannel
-from app.services.engines.onnx_upscaler import _build_providers, _parse_dml_device_id, _wrap_onnx_error
+from app.services.engines.onnx_upscaler import _parse_dml_device_id, _wrap_onnx_error
 from app.services.gpu_session_coordinator import GpuSessionCoordinator
 
 logger = logging.getLogger(__name__)
@@ -198,10 +198,11 @@ class ApolloRestorer:
     def _create_session(self, device: str) -> Any:
         # Monkeypatchable seam: unit tests override this to inject a fake numpy
         # session and never touch real onnxruntime.
-        import onnxruntime as ort
+        from app.services import ep_registry
 
-        providers = _build_providers(device)
-        return ort.InferenceSession(str(self.settings.apollo_restore_model_path), providers=providers)
+        return ep_registry.create_session(
+            str(self.settings.apollo_restore_model_path), device, self.settings
+        )
 
     @staticmethod
     def _is_non_empty_file(path: Path) -> bool:

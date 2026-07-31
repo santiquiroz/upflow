@@ -180,6 +180,14 @@ class DeviceInfoResponse(BaseModel):
     kind: Literal["cpu", "gpu", "npu"]
     name: str
     backend: Literal["cpu", "directml", "winml"]
+    # EP activo por dispositivo (Fase 1b, selector read-only): nativo si un
+    # plugin EP del vendor está registrado y sano, sino DirectML/CPU baseline.
+    active_ep: str = Field(default="", serialization_alias="activeEp")
+    ep_label: str = Field(default="", serialization_alias="epLabel")
+    ep_state: Literal["", "native", "baseline", "preparing", "error"] = Field(
+        default="", serialization_alias="epState"
+    )
+    ep_detail: str = Field(default="", serialization_alias="epDetail")
 
 
 class DevicesResponse(BaseModel):

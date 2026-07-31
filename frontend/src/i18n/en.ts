@@ -139,6 +139,13 @@ export const en = {
   "settings.language.title": "Language",
   "settings.language.description":
     "Applies right away and is remembered on this device.",
+  // --- ajustes: aceleracion por dispositivo -----------------------------
+  "settings.acceleration.title": "Acceleration",
+  "settings.acceleration.description":
+    "Execution provider per device. DirectML is always the baseline; a native provider is used automatically when its plugin and hardware are present.",
+  "settings.acceleration.native": "native",
+  "settings.acceleration.fallback": "fallback (native failed)",
+  "settings.acceleration.preparing": "Preparing acceleration for your GPU…",
   // --- catalogo de capacidades -----------------------------------------
   "capability.domain.video": "Video",
   "capability.domain.image": "Images",

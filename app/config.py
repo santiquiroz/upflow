@@ -423,6 +423,18 @@ class Settings(BaseSettings):
     # ante cualquier excepción (patrón raw-pipe). False = camino clásico siempre.
     enable_stream_pipeline: bool = Field(default=True, alias="ENABLE_STREAM_PIPELINE")
 
+    # --- Aceleración nativa por vendor (spike 2026-07-31, gate 1a PASA) ---
+    # Plugins EP de ONNX Runtime (TensorRT-RTX en NVIDIA, OpenVINO en Intel)
+    # registrados sobre el runtime DirectML existente. DirectML queda SIEMPRE
+    # como baseline: el EP nativo solo se intenta si su paquete está instalado
+    # Y el hardware del vendor está presente; ante cualquier fallo la sesión
+    # cae a DirectML→CPU sin fallar el job. False = baseline puro en todos lados.
+    native_ep_enabled: bool = Field(default=True, alias="NATIVE_EP_ENABLED")
+    # Carpeta opcional con plugins EP sueltos (DLLs extraídos de un NuGet, p.ej.
+    # Intel.ML.OnnxRuntime.EP.OpenVINO -> ep-plugins/openvino/*.dll). Vacío =
+    # solo se detectan plugins instalados por pip.
+    ep_plugins_dir: str = Field(default="", alias="EP_PLUGINS_DIR")
+
     # Log a archivo, opt-in para diagnosticar reportes de otras maquinas. En uso
     # normal es ruido y disco, asi que arranca apagado; se enciende desde
     # Settings sin reiniciar y rota con techo duro.

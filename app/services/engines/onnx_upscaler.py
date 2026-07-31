@@ -294,11 +294,10 @@ class OnnxUpscaler(UpscaleEngine):
         # numpy-based session and never touch real onnxruntime. Errors raised
         # here (including a missing onnxruntime import) are translated to a
         # clear RuntimeError by the caller, `_get_session`.
-        import onnxruntime as ort
+        from app.services import ep_registry
 
-        providers = _build_providers(device)
         model_path = self.settings.models_path / entry.file_path  # type: ignore[operator]
-        return ort.InferenceSession(str(model_path), providers=providers)
+        return ep_registry.create_session(str(model_path), device, self.settings)
 
     def _upscale_array(
         self, session: Any, image: np.ndarray, tile_size: int, job: UpscaleJob | None = None

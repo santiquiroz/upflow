@@ -236,11 +236,19 @@ export interface HealthResponse {
 export type DeviceKind = "cpu" | "gpu" | "npu" | "auto";
 export type DeviceBackend = "cpu" | "directml" | "winml" | "auto";
 
+export type DeviceEpState = "" | "native" | "baseline" | "preparing" | "error";
+
 export interface DeviceInfoResponse {
   id: string;
   kind: DeviceKind;
   name: string;
   backend: DeviceBackend;
+  // EP activo por dispositivo (Fase 1b): opcionales para tolerar backends
+  // anteriores que no los envían.
+  activeEp?: string;
+  epLabel?: string;
+  epState?: DeviceEpState;
+  epDetail?: string;
 }
 
 export interface DevicesResponse {

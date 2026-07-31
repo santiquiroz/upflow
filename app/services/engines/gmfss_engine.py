@@ -17,7 +17,7 @@ from app.config import Settings
 from app.services.engines.gmfss import softsplat_cl
 from app.services.engines.gmfss.assets import GRAPH_NAMES, GmfssAssets
 from app.services.engines.gmfss.pipeline import GmfssDriver, resize_bilinear
-from app.services.engines.onnx_upscaler import _build_providers, _wrap_onnx_error
+from app.services.engines.onnx_upscaler import _wrap_onnx_error
 from app.services.engines.onnx_video_upscaler import (
     _THREAD_JOIN_TIMEOUT_SECONDS,
     _drain_queue,
@@ -228,22 +228,31 @@ class GmfssEngine:
     def _create_sessions(self, device: str) -> dict[str, Any]:
         # Monkeypatchable seam: unit tests override this to inject fake numpy
         # sessions and never touch real onnxruntime.
-        import onnxruntime as ort
+        from app.services import ep_registry
 
-        providers = _build_providers(device)
         model_dir = self.settings.gmfss_model_dir_path
         sessions: dict[str, Any] = {}
         for name in GRAPH_NAMES:
-            sess_options = ort.SessionOptions()
-            # MUST be disabled on every graph, not just MetricNet's -- see the
-            # module docstring for the DXGI_ERROR_DEVICE_HUNG history.
-            sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
-            _tune_session_options_for_device(sess_options, device)
             graph_path = self._resolve_graph_path(model_dir, name, device)
-            sessions[name] = ort.InferenceSession(
-                str(graph_path), sess_options=sess_options, providers=providers
+            sessions[name] = ep_registry.create_session(
+                str(graph_path),
+                device,
+                self.settings,
+                sess_options_factory=lambda: self._build_session_options(device),
             )
         return sessions
+
+    def _build_session_options(self, device: str) -> Any:
+        # Factory por intento de sesión (nativo/fallback): las options no se
+        # comparten entre intentos porque add_provider_for_devices las contamina.
+        import onnxruntime as ort
+
+        sess_options = ort.SessionOptions()
+        # MUST be disabled on every graph, not just MetricNet's -- see the
+        # module docstring for the DXGI_ERROR_DEVICE_HUNG history.
+        sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
+        _tune_session_options_for_device(sess_options, device)
+        return sess_options
 
     @staticmethod
     def _resolve_graph_path(model_dir: Path, name: str, device: str) -> Path:

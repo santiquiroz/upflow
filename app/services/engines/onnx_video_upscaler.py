@@ -86,7 +86,6 @@ from app.services.devices_service import DevicesService
 from app.services.engines.onnx_upscaler import (
     SESSION_CACHE_SIZE,
     TILE_OVERLAP_PX,
-    _build_providers,
     _detect_scale,
     _finalize_uint8,
     _parse_dml_device_id,
@@ -791,9 +790,9 @@ class OnnxVideoUpscaler:
     def _create_session(self, model_path: str, device: str) -> Any:
         # Monkeypatchable seam: unit tests replace this with a numpy fake so no
         # real onnxruntime session (or GPU) is needed.
-        import onnxruntime as ort
+        from app.services import ep_registry
 
-        return ort.InferenceSession(model_path, providers=_build_providers(device))
+        return ep_registry.create_session(model_path, device, self.settings)
 
     # --- frame counting ----------------------------------------------------
 

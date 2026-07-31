@@ -15,7 +15,7 @@ from app.config import Settings
 from app.services.engines.audiosr.assets import GRAPH_NAMES, AudioSrAssets
 from app.services.engines.audiosr.driver import AudioSrDriver
 from app.services.engines.multichannel_restore import restore_multichannel
-from app.services.engines.onnx_upscaler import _build_providers, _wrap_onnx_error
+from app.services.engines.onnx_upscaler import _wrap_onnx_error
 from app.services.gpu_session_coordinator import GpuSessionCoordinator
 
 # ---------------------------------------------------------------------------
@@ -124,12 +124,13 @@ class AudioSrRestorer:
     def _create_sessions(self, device: str) -> dict[str, Any]:
         # Monkeypatchable seam: unit tests override this to inject fake numpy
         # sessions and never touch real onnxruntime.
-        import onnxruntime as ort
+        from app.services import ep_registry
 
-        providers = _build_providers(device)
         model_dir = self.settings.audiosr_model_dir_path
         return {
-            name: ort.InferenceSession(str(model_dir / f"{name}.onnx"), providers=providers)
+            name: ep_registry.create_session(
+                str(model_dir / f"{name}.onnx"), device, self.settings
+            )
             for name in GRAPH_NAMES
         }
 

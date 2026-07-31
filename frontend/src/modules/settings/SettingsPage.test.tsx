@@ -103,7 +103,8 @@ describe("SettingsPage", () => {
   it("reuses the DeviceDefault panel to show the default device", async () => {
     renderPage();
 
-    expect(await screen.findByText("AMD Radeon RX 7900")).toBeInTheDocument();
+    // El nombre aparece en DeviceDefault y también en la tabla de Acceleration.
+    expect((await screen.findAllByText("AMD Radeon RX 7900")).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText(/chosen automatically/i)).toBeInTheDocument();
   });
 
