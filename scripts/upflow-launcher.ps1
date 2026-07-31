@@ -294,6 +294,11 @@ $script:OptionalPacks = @(
         Key     = 'apollo'
         Feature = 'Restaurar los agudos que perdio un MP3 o un AAC'
         Size    = '~90 MB'
+    },
+    @{
+        Key     = 'mobilesam'
+        Feature = 'Editor: seleccionar objetos con un toque para quitarlos o reemplazarlos'
+        Size    = '~45 MB'
     }
 )
 
@@ -369,6 +374,11 @@ function Install-MissingBinaries {
     if ($selectedKeys -contains 'apollo') {
         # download-apollo.ps1 se auto-saltea si el modelo ya esta presente.
         Invoke-DownloadScript -ScriptName 'download-apollo.ps1' -Label 'Apollo (restauracion de audio por compresion, experimental)'
+    }
+
+    if ($selectedKeys -contains 'mobilesam') {
+        # download-mobilesam.ps1 se auto-saltea si los dos ONNX ya estan presentes.
+        Invoke-DownloadScript -ScriptName 'download-mobilesam.ps1' -Label 'MobileSAM (seleccion por toque del Editor)'
     }
 
     $skipped = @($script:OptionalPacks | Where-Object { $selectedKeys -notcontains $_.Key })
