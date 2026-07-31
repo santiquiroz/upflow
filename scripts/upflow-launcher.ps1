@@ -134,6 +134,29 @@ function Install-PythonEnvironment {
     }
 }
 
+function Get-WheelVersion {
+    param([string]$FileName)
+    # nombre-version-pytag-abi-plataforma.whl
+    $parts = $FileName -split '-'
+    if ($parts.Count -lt 2) { return $null }
+    try { return [version]$parts[1] } catch { return $null }
+}
+
+function Select-NewestWheelPerPackage {
+    param([System.IO.FileInfo[]]$Wheels)
+    # Una actualizacion deja las wheels viejas al lado de la nueva (el instalador
+    # copia, no reemplaza el directorio). Instalarlas todas en fila hacia que pip
+    # dejara instalada una version vieja a mitad de camino y escupiera un
+    # "requires fetchflow>=X but you have Y" que asustaba sin ser un problema real.
+    # Se instala solo la mas nueva de cada paquete.
+    if ($null -eq $Wheels -or $Wheels.Count -eq 0) { return @() }
+    return @(
+        $Wheels | Group-Object { ($_.Name -split '-')[0] } | ForEach-Object {
+            $_.Group | Sort-Object @{ Expression = { Get-WheelVersion $_.Name } }, Name | Select-Object -Last 1
+        }
+    )
+}
+
 function Install-VendoredWheels {
     # Wheels que viajan EN el instalador, instaladas ANTES de `pip install -e .` para
     # que pip las vea ya satisfechas y no salga a buscarlas.
@@ -147,7 +170,7 @@ function Install-VendoredWheels {
     # no tiene vendor\wheels, y ahi se espera que fetchflow ya este en el entorno.
     $wheelDir = Join-Path $root 'vendor\wheels'
     if (-not (Test-Path $wheelDir)) { return }
-    $wheels = @(Get-ChildItem -Path $wheelDir -Filter '*.whl' -File)
+    $wheels = @(Select-NewestWheelPerPackage (Get-ChildItem -Path $wheelDir -Filter '*.whl' -File))
     if ($wheels.Count -eq 0) { return }
 
     Write-Step "Instalando $($wheels.Count) componente(s) incluido(s)..."
@@ -155,7 +178,11 @@ function Install-VendoredWheels {
         # SIN --no-deps: la wheel trae solo fetchflow, y sus dependencias (yt-dlp,
         # curl-cffi) tienen que bajarse igual. Con --no-deps el descargador quedaria
         # instalado y sin motor, fallando recien al primer uso.
-        & $pythonExe -m pip install --quiet --force-reinstall $wheel.FullName
+        #
+        # --no-warn-script-location: los .exe de las dependencias (yt-dlp) van a
+        # Scripts\ del Python embebido, que no esta en PATH y no tiene por que
+        # estarlo -- se usan como libreria. El aviso solo asustaba.
+        & $pythonExe -m pip install --quiet --force-reinstall --no-warn-script-location $wheel.FullName
         if ($LASTEXITCODE -ne 0) {
             throw "No se pudo instalar $($wheel.Name)."
         }

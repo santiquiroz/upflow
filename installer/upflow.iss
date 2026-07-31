@@ -75,6 +75,12 @@ Name: "editor"; Description: "Editor: seleccionar objetos con un toque para quit
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 Name: "deleteuserdata"; Description: "Al desinstalar, borrar tambien los datos y descargas (~4 GB): archivos subidos, resultados y modelos de Hugging Face (runtime\), binarios de Real-ESRGAN/FFmpeg/RIFE/DeepFilterNet (vendor\) y las dependencias de Python (torch, etc.) descargadas en el primer arranque - accion irreversible"; GroupDescription: "Datos de usuario al desinstalar:"; Flags: unchecked
 
+[InstallDelete]
+; Las wheels vendorizadas se acumulaban entre versiones (0.1.0, 0.2.0 y 0.2.1
+; juntas) y el launcher terminaba instalando una vieja en el camino, con un
+; aviso de conflicto de dependencias en pantalla. Se limpian antes de copiar.
+Type: files; Name: "{app}\vendor\wheels\*.whl"
+
 [Files]
 ; El arbol de la app (allowlist: app/, scripts/, frontend/dist/, pyproject.toml,
 ; .env.example, README.md, LICENSE, Upflow.bat) ya viene armado por
