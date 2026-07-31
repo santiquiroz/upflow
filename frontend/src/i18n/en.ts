@@ -172,6 +172,8 @@ export const en = {
   "editor.submit.replace": "Replace selection",
   "editor.changeImage": "Use another image",
   "editor.useAsBase": "Keep editing this result",
+  "editor.eraser.hint":
+    "This engine fills the area by continuing the surroundings — instant, no prompt needed. To put something specific in its place, switch to Replace.",
   "editor.advanced.title": "Advanced view",
   "editor.advanced.tooltip": "Model parameters: prompts, steps, guidance, seed and strength.",
   "editor.advanced.summary": "{{steps}} steps · guidance {{guidance}}",

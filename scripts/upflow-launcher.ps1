@@ -352,6 +352,11 @@ $script:OptionalPacks = @(
         Key     = 'mobilesam'
         Feature = 'Editor: seleccionar objetos con un toque para quitarlos o reemplazarlos'
         Size    = '~45 MB'
+    },
+    @{
+        Key     = 'migan'
+        Feature = 'Editor: borrado rapido de objetos, sin esperar a la IA generativa'
+        Size    = '~28 MB'
     }
 )
 
@@ -436,6 +441,10 @@ function Install-MissingBinaries {
     if ($selectedKeys -contains 'mobilesam') {
         # download-mobilesam.ps1 se auto-saltea si los dos ONNX ya estan presentes.
         Invoke-DownloadScript -ScriptName 'download-mobilesam.ps1' -Label 'MobileSAM (seleccion por toque del Editor)'
+    }
+
+    if ($selectedKeys -contains 'migan') {
+        Invoke-DownloadScript -ScriptName 'download-migan.ps1' -Label 'MI-GAN (borrado rapido del Editor)'
     }
 
     $skipped = @($script:OptionalPacks | Where-Object { $selectedKeys -notcontains $_.Key })

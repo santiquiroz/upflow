@@ -146,13 +146,22 @@ function InpaintModelSelect({
   value,
   onChange,
   label,
+  mode,
 }: {
   models: GenerationModelSummary[];
   value: string | null;
   onChange: (id: string | null) => void;
   label: string;
+  mode: EditMode;
 }) {
-  const usable = models.filter((model) => model.status === "installed" && model.supportsInpaint !== false);
+  // Los motores de solo-borrado rellenan continuando el entorno: no saben poner
+  // algo concreto, así que en Reemplazar no se ofrecen.
+  const usable = models.filter(
+    (model) =>
+      model.status === "installed" &&
+      model.supportsInpaint !== false &&
+      (mode === "erase" || !model.eraseOnly),
+  );
   return (
     <label className="flex flex-col gap-1 text-sm text-text">
       {label}
@@ -219,6 +228,10 @@ export function EditorPanel() {
   }
 
   const models = capabilitiesQuery.data?.models ?? [];
+  const selectedModel = models.find((model) => model.id === modelId) ?? null;
+  // Un motor de solo-borrado no sabe poner algo concreto: si el usuario pasa a
+  // Reemplazar hay que soltarlo, o el job saldria con un modelo que no aplica.
+  const isEraseOnlyModel = selectedModel?.eraseOnly === true;
   const tapAvailable = editorCapabilities.data?.tapSelect ?? false;
   const busy = phase === "uploading" || phase === "queued" || phase === "running";
 
@@ -228,6 +241,12 @@ export function EditorPanel() {
       replayHistory(canvas, history, liveStrokeRef.current);
     }
   }, [history, baseInfo]);
+
+  useEffect(() => {
+    if (mode === "replace" && isEraseOnlyModel) {
+      setModelId(null);
+    }
+  }, [mode, isEraseOnlyModel]);
 
   useEffect(() => () => {
     if (baseUrl) {
@@ -465,7 +484,7 @@ export function EditorPanel() {
     Boolean(baseInfo) &&
     Boolean(modelId) &&
     maskHasContent(history) &&
-    (mode === "erase" ? erasePromptText.trim().length > 0 : prompt.trim().length > 0) &&
+    (isEraseOnlyModel || (mode === "erase" ? erasePromptText.trim().length > 0 : prompt.trim().length > 0)) &&
     !busy &&
     !segmenting;
 
@@ -674,7 +693,13 @@ export function EditorPanel() {
           )}
 
           <div className="grid grid-cols-2 gap-3 max-[700px]:grid-cols-1">
-            <InpaintModelSelect models={models} value={modelId} onChange={setModelId} label={t("editor.model.label")} />
+            <InpaintModelSelect
+              models={models}
+              value={modelId}
+              onChange={setModelId}
+              label={t("editor.model.label")}
+              mode={mode}
+            />
             <DevicePicker
               value={device}
               onChange={(selected: DeviceInfoResponse) => setDevice(selected.id)}
@@ -683,6 +708,7 @@ export function EditorPanel() {
             />
           </div>
 
+          {!isEraseOnlyModel && (
           <AccordionSection
             title={t("editor.advanced.title")}
             summary={t("editor.advanced.summary", { steps: String(steps), guidance: String(guidance) })}
@@ -770,6 +796,10 @@ export function EditorPanel() {
               </label>
             </div>
           </AccordionSection>
+          )}
+          {isEraseOnlyModel && (
+            <p className="text-xs text-text-faint">{t("editor.eraser.hint")}</p>
+          )}
 
           {uploadError && <p className="text-sm text-danger">{uploadError}</p>}
 

@@ -63,6 +63,12 @@ APP_DIR = Path(__file__).resolve().parent
 FRONTEND_DIST_DIR = APP_DIR.parent / "frontend" / "dist"
 
 
+def _build_migan_eraser(settings):
+    from app.services.engines.migan_eraser import MiganEraser
+
+    return MiganEraser(settings)
+
+
 def _build_sdcpp_engine(settings):
     # Lane experimental Fase 3: solo se construye si el flag está encendido;
     # apagado no importa ni el módulo.
@@ -119,6 +125,7 @@ async def lifespan(app: FastAPI):
         devices=devices_service,
         quota_service=quota_service,
         sdcpp_engine=_build_sdcpp_engine(settings),
+        migan_eraser=_build_migan_eraser(settings),
     )
     # Shared across both managers (like device_semaphores) so an auto-routed
     # image job and an auto-routed video job never pick the same free

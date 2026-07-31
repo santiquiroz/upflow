@@ -456,6 +456,10 @@ class Settings(BaseSettings):
     # Editor: segmentación interactiva "tocar un objeto -> máscara" (MobileSAM,
     # Acly/MobileSAM rev 0d3b4033, MIT, ~45MB total, preprocesamiento embebido
     # en el grafo del encoder). scripts/download-mobilesam.ps1 lo instala.
+    # Editor: borrado rápido con MI-GAN (rellena continuando el entorno, sin
+    # prompts). Es una opción MÁS en el selector, no reemplaza a los modelos de
+    # difusión: para poner algo concreto en el hueco sigue estando difusión.
+    migan_model: str = Field(default="vendor/migan/migan_pipeline_v2.onnx", alias="MIGAN_MODEL")
     editor_segmenter_encoder: str = Field(
         default="vendor/mobilesam/mobile_sam_image_encoder.onnx", alias="EDITOR_SEGMENTER_ENCODER"
     )
@@ -790,6 +794,13 @@ class Settings(BaseSettings):
     @property
     def editor_segmenter_decoder_path(self) -> Path:
         return resolve_against_project_root(self.editor_segmenter_decoder)
+
+    @property
+    def migan_model_path(self) -> Path:
+        return resolve_against_project_root(self.migan_model)
+
+    def migan_available(self) -> bool:
+        return self.migan_model_path.exists()
 
     def editor_segmenter_available(self) -> bool:
         return self.editor_segmenter_encoder_path.exists() and self.editor_segmenter_decoder_path.exists()

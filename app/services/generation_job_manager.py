@@ -13,6 +13,7 @@ from app.services.auth.quotas import QuotaService
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
 from app.services.engines.generation_onnx import GenerationEngine, GenerationRequest
+from app.services.engines.migan_eraser import ERASER_MODEL_ID
 from app.services.engines.sdcpp_engine import SDCPP_MODEL_ID
 from app.services.generation_img2img import supports_img2img
 from app.services.generation_inpaint import supports_inpaint
@@ -58,6 +59,7 @@ class GenerationJobManager:
         devices: DevicesService | None = None,
         quota_service: QuotaService | None = None,
         sdcpp_engine: Any | None = None,
+        migan_eraser: Any | None = None,
     ) -> None:
         self.settings = settings
         self.engine = engine
@@ -68,6 +70,7 @@ class GenerationJobManager:
         self.devices = devices
         self.quota_service = quota_service
         self.sdcpp_engine = sdcpp_engine
+        self.migan_eraser = migan_eraser
         self.jobs: dict[str, GenerationJob] = {}
         self.queue: asyncio.Queue[GenerationJob] = asyncio.Queue(maxsize=settings.max_queue_size)
         self.worker_tasks: list[asyncio.Task] = []
@@ -168,6 +171,15 @@ class GenerationJobManager:
             raise QueueFullError("Generation job queue is full; try again later") from exc
 
     def _validate_generation_model(self, model_id: str) -> None:
+        if model_id == ERASER_MODEL_ID:
+            # Motor de borrado: no vive en el registro de modelos, se gatea por
+            # su archivo en disco igual que el lane experimental.
+            if self.migan_eraser is None or not self.migan_eraser.available():
+                raise ValueError(
+                    "El borrado rápido no está instalado: instalalo desde Ajustes "
+                    "o corré scripts/download-migan.ps1"
+                )
+            return
         if model_id == SDCPP_MODEL_ID:
             # Lane experimental Fase 3: no vive en el registry, se gatea por flag.
             if self.sdcpp_engine is None or not self.settings.sdcpp_available():
@@ -222,6 +234,12 @@ class GenerationJobManager:
     def _validate_inpaint(
         self, model_id: str, init_image_path: Path | None, mask_image_path: Path, strength: float
     ) -> None:
+        if model_id == ERASER_MODEL_ID:
+            if init_image_path is None or not init_image_path.exists():
+                raise ValueError("el borrado rápido necesita la imagen base")
+            if not mask_image_path.exists():
+                raise ValueError(f"mask image not found: {mask_image_path.name}")
+            return
         """Mismo principio que _validate_img2img: rechazar al crear, no a mitad
         de la ejecución; una lectura fallida del model_index no es un veredicto."""
         if model_id == SDCPP_MODEL_ID:
@@ -319,6 +337,9 @@ class GenerationJobManager:
         self.quota_service.record_usage(job.owner_id, duration)
 
     async def _run_engine(self, job: GenerationJob) -> None:
+        if job.model_id == ERASER_MODEL_ID:
+            await self._run_eraser(job)
+            return
         if job.model_id == SDCPP_MODEL_ID:
             await self._run_sdcpp(job)
             return
@@ -360,6 +381,23 @@ class GenerationJobManager:
             job.metadata["upscaleError"] = str(exc)
             job.output_path = generated
         complete_generation_stages(job, include_upscale)
+
+    async def _run_eraser(self, job: GenerationJob) -> None:
+        # Borrado sin difusión: un solo paso, así que el progreso va de una.
+        from PIL import Image
+
+        advance_generation_stage(job, "generating", False)
+        with Image.open(job.init_image_path) as source:
+            base_image = source.convert("RGB")
+        with Image.open(job.mask_image_path) as source_mask:
+            mask_image = source_mask.convert("L")
+        device = job.device or self.settings.default_device
+        result = await self.migan_eraser.erase(base_image, mask_image, device)
+        output_path = self.settings.outputs_path / f"{job.id}.png"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        result.save(output_path)
+        job.output_path = output_path
+        complete_generation_stages(job, False)
 
     async def _run_sdcpp(self, job: GenerationJob) -> None:
         # Lane experimental: subprocess sd.cpp Vulkan, sin progreso por paso ni

@@ -29,6 +29,7 @@ PACK_SCRIPTS: dict[str, str] = {
     "audiosr": "download-audiosr-onnx.ps1",
     "ffmpeg": "download-ffmpeg.ps1",
     "mobilesam": "download-mobilesam.ps1",
+    "migan": "download-migan.ps1",
 }
 
 # Los scripts descargan cientos de MB desde GitHub releases. El techo es un

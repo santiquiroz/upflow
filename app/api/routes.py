@@ -1824,6 +1824,17 @@ async def generation_capabilities(
                 id=SDCPP_MODEL_ID, name=SDCPP_MODEL_LABEL, supports_inpaint=False
             )
         )
+    if settings.migan_available():
+        from app.services.engines.migan_eraser import ERASER_MODEL_ID, ERASER_MODEL_LABEL
+
+        # Se ofrece PRIMERO en el Editor: para sacar algo tarda menos de un segundo
+        # contra los minutos de la difusión, y no inventa nada.
+        models.insert(
+            0,
+            GenerationModelSummary(
+                id=ERASER_MODEL_ID, name=ERASER_MODEL_LABEL, supports_inpaint=True, erase_only=True
+            ),
+        )
     device_infos = devices_service.list_devices()
     return GenerationCapabilitiesResponse(
         available=True,

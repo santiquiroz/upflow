@@ -15,6 +15,11 @@ def isolated_runtime_dir(tmp_path, monkeypatch: pytest.MonkeyPatch):
     immediately on startup, ends up deleting real uploads/outputs.
     """
     monkeypatch.setenv("RUNTIME_DIR", str(tmp_path / "runtime"))
+    # Los packs opcionales se resuelven contra vendor/ del REPO, no contra
+    # RUNTIME_DIR: sin esto, un test que mira las capacidades da distinto en una
+    # maquina con el pack bajado que en una limpia (paso de verdad con el motor
+    # de borrado). Los tests que SI quieren probarlo pasan la ruta explicita.
+    monkeypatch.setenv("MIGAN_MODEL", str(tmp_path / "pack-no-instalado.onnx"))
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()

@@ -48,8 +48,14 @@ from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry
 MODEL_ID = "gen--amd--sd15"
 
 
-def make_settings(tmp_path: Path) -> Settings:
-    return Settings(RUNTIME_DIR=str(tmp_path), _env_file=None)
+def make_settings(tmp_path: Path, **overrides) -> Settings:
+    # MIGAN_MODEL apunta a un archivo inexistente a proposito: por defecto el
+    # motor de borrado se resuelve contra vendor/ del REPO, asi que en una
+    # maquina de desarrollo con el pack bajado estos tests veian un modelo extra
+    # y pasaban o fallaban segun que tuviera instalado quien los corre.
+    defaults = {"MIGAN_MODEL": str(tmp_path / "sin-migan.onnx")}
+    defaults.update(overrides)
+    return Settings(RUNTIME_DIR=str(tmp_path), _env_file=None, **defaults)
 
 
 class FakeGenerationEngine:
@@ -339,7 +345,7 @@ async def test_generation_capabilities_lists_models_and_cpu_only_flag(tmp_path: 
 
     assert response.available is True
     assert [m.model_dump() for m in response.models] == [
-        {"id": MODEL_ID, "name": "amd/sd15", "status": "installed", "supports_inpaint": True}
+        {"id": MODEL_ID, "name": "amd/sd15", "status": "installed", "supports_inpaint": True, "erase_only": False}
     ]
     assert response.cpu_only is True
 
@@ -793,7 +799,7 @@ def test_capabilities_lists_installed_models_and_cpu_only_flag(client_with_model
     payload = client_with_model.get("/api/v1/generation/capabilities").json()
     assert payload["available"] is True
     assert payload["models"] == [
-        {"id": "gen--amd--sd15", "name": "amd/sd15", "status": "installed", "supportsInpaint": True}
+        {"id": "gen--amd--sd15", "name": "amd/sd15", "status": "installed", "supportsInpaint": True, "eraseOnly": False}
     ]
     assert isinstance(payload["cpuOnly"], bool)
 

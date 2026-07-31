@@ -502,6 +502,8 @@ export interface GenerationModelSummary {
   status: string;
   /** Soporte real de inpainting (chequeado contra el mapeo de clases del backend). */
   supportsInpaint?: boolean;
+  /** Motor que solo sabe quitar (rellena continuando el entorno, sin prompt). */
+  eraseOnly?: boolean;
 }
 
 export interface GenerationCapabilities {

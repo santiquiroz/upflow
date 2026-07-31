@@ -584,6 +584,9 @@ class GenerationModelSummary(BaseModel):
     # (generation_inpaint), no contra existencia de la clase. El picker filtra
     # con esto en vez de descubrir el rechazo al crear el job.
     supports_inpaint: bool = Field(default=True, serialization_alias="supportsInpaint")
+    # Motores que solo saben QUITAR (rellenan continuando el entorno): se ofrecen
+    # en el modo Quitar y se esconden cuando hay que poner algo concreto.
+    erase_only: bool = Field(default=False, serialization_alias="eraseOnly")
 
 
 class GenerationCapabilitiesResponse(BaseModel):

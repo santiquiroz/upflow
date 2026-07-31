@@ -166,6 +166,8 @@ export const es = {
   "editor.submit.replace": "Reemplazar selección",
   "editor.changeImage": "Usar otra imagen",
   "editor.useAsBase": "Seguir editando este resultado",
+  "editor.eraser.hint":
+    "Este motor rellena continuando lo que hay alrededor — instantáneo y sin prompt. Para poner algo concreto en su lugar, pasá a Reemplazar.",
   "editor.advanced.title": "Vista avanzada",
   "editor.advanced.tooltip": "Parámetros del modelo: prompts, pasos, guía, semilla y fuerza.",
   "editor.advanced.summary": "{{steps}} pasos · guía {{guidance}}",
