@@ -490,6 +490,8 @@ export interface GenerationJob {
 export interface GenerationModelSummary {
   id: string;
   name: string;
+  /** "installed" o "converting" — el dropdown muestra las conversiones en curso. */
+  status: string;
 }
 
 export interface GenerationCapabilities {

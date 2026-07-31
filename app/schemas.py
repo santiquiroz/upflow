@@ -553,6 +553,10 @@ class GenerationJobResponse(BaseModel):
 class GenerationModelSummary(BaseModel):
     id: str
     name: str
+    # "installed" o "converting": el dropdown muestra las conversiones en curso
+    # (deshabilitadas) para que una instalacion desde el installer no parezca
+    # que "no trajo nada" durante los ~40 min de conversion.
+    status: str = "installed"
 
 
 class GenerationCapabilitiesResponse(BaseModel):

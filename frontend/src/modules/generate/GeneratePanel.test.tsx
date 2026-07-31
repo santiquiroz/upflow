@@ -69,7 +69,7 @@ const UPSCALE_MODELS: ModelsResponse = {
 const AVAILABLE_CAPABILITIES: GenerationCapabilities = {
   available: true,
   reason: null,
-  models: [{ id: "sd15-onnx", name: "SD 1.5 (ONNX)" }],
+  models: [{ id: "sd15-onnx", name: "SD 1.5 (ONNX)", status: "installed" }],
   devices: ["dml:0"],
   cpuOnly: false,
 };
@@ -77,7 +77,7 @@ const AVAILABLE_CAPABILITIES: GenerationCapabilities = {
 const CPU_ONLY_CAPABILITIES: GenerationCapabilities = {
   available: true,
   reason: null,
-  models: [{ id: "sd15-onnx", name: "SD 1.5 (ONNX)" }],
+  models: [{ id: "sd15-onnx", name: "SD 1.5 (ONNX)", status: "installed" }],
   devices: ["cpu"],
   cpuOnly: true,
 };
@@ -404,5 +404,38 @@ describe("GeneratePanel", () => {
     expect(vi.mocked(generationService.createGenerationJob).mock.calls[0][0]).toEqual(
       expect.objectContaining({ device: "dml:0" }),
     );
+  });
+});
+
+describe("GeneratePanel — conversiones visibles en el dropdown", () => {
+  it("un modelo convirtiéndose aparece deshabilitado con el aviso de demora", async () => {
+    renderPanel({
+      available: true,
+      reason: null,
+      models: [
+        { id: "sd15-onnx", name: "SD 1.5 (ONNX)", status: "installed" },
+        { id: "gen--john--anime", name: "john/anime", status: "converting" },
+      ],
+      devices: [{ id: "dml:0", kind: "gpu", name: "AMD Radeon RX 7900", backend: "directml" }],
+      cpuOnly: false,
+    });
+
+    const option = (await screen.findByRole("option", {
+      name: /john\/anime.*convirtiendo/i,
+    })) as HTMLOptionElement;
+    expect(option.disabled).toBe(true);
+  });
+
+  it("con solo conversiones en curso no se muestra el 'no hay modelos'", async () => {
+    renderPanel({
+      available: true,
+      reason: null,
+      models: [{ id: "gen--john--anime", name: "john/anime", status: "converting" }],
+      devices: [{ id: "dml:0", kind: "gpu", name: "AMD Radeon RX 7900", backend: "directml" }],
+      cpuOnly: false,
+    });
+
+    expect(await screen.findByRole("option", { name: /convirtiendo/i })).toBeInTheDocument();
+    expect(screen.queryByText(/No generation models installed/i)).not.toBeInTheDocument();
   });
 });

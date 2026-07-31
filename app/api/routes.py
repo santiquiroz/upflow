@@ -113,7 +113,7 @@ from app.services.job_manager import JobManager
 from app.services.media_tools import MediaTools
 from app.services.model_installer import ModelInstaller
 from app.services.model_preflight import preflight_upscaler
-from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry
+from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry, ModelStatus
 from app.services.pack_provisioner import PackProvisioner, ProvisionJob, UnknownPackError
 from app.services.settings_service import editable_settings_status, update_setting
 from app.services.storage import StorageService
@@ -1769,10 +1769,12 @@ async def generation_capabilities(
     available, reason = generation_dependencies_available()
     if not available:
         return GenerationCapabilitiesResponse(available=False, reason=reason, cpu_only=True)
+    # error queda afuera: una conversion fallida se ve en Models con su motivo;
+    # el dropdown de Generate no es lugar para un modelo que no existe en disco.
     models = [
-        GenerationModelSummary(id=entry.id, name=entry.name)
+        GenerationModelSummary(id=entry.id, name=entry.name, status=entry.status.value)
         for entry in registry.list()
-        if entry.kind == ModelKind.diffusion_onnx
+        if entry.kind == ModelKind.diffusion_onnx and entry.status != ModelStatus.error
     ]
     device_infos = devices_service.list_devices()
     return GenerationCapabilitiesResponse(

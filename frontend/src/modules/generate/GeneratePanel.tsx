@@ -92,8 +92,11 @@ function ModelSelect({
     >
       <option value="">Select a model…</option>
       {models.map((model) => (
-        <option key={model.id} value={model.id}>
-          {model.name}
+        // Una conversion en curso se VE (deshabilitada, con el aviso de demora):
+        // sin esto, instalar un modelo desde el installer parecia no traer nada
+        // durante los ~40 minutos que tarda la conversion.
+        <option key={model.id} value={model.id} disabled={model.status !== "installed"}>
+          {model.status === "converting" ? `${model.name} (convirtiendo… ~30-45 min)` : model.name}
         </option>
       ))}
     </select>

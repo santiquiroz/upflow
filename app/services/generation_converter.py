@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import shutil
+from dataclasses import replace
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,7 @@ from app.services.generation_variants import (
 )
 from app.services.hf_client import HfClient, HfFile
 from app.services.model_installer import _validate_repo_id
+from app.services.model_registry import ModelEntry, ModelKind, ModelStatus
 from app.services.progress import (
     advance_conversion_stage,
     complete_conversion_stages,
@@ -373,8 +375,45 @@ class GenerationModelConverter:
             checkpoint_path=checkpoint_path,
         )
         self._jobs[job.id] = job
+        self._register_converting_entry(job)
         await self._queue.put(job)
         return job.id
+
+    def _register_converting_entry(self, job: ConversionJob) -> None:
+        """La conversion existe en el registro DESDE que se encola.
+
+        Sin esto, las conversiones disparadas por los packs del instalador eran
+        invisibles: el modelo aparecia en la UI recien al promover, ~40 min
+        despues, y el usuario concluia que la instalacion no trajo nada. Un
+        modelo YA instalado nunca se degrada: sigue usable hasta que una
+        promocion nueva lo reemplace.
+        """
+        model_id = _generation_model_id(job.repo_id, job.checkpoint_path)
+        existing = self.installer.registry.get(model_id)
+        if existing is not None and existing.status == ModelStatus.installed:
+            return
+        self.installer.registry.register(
+            ModelEntry(
+                id=model_id,
+                name=job.repo_id,
+                kind=ModelKind.diffusion_onnx,
+                source=f"hf:{job.repo_id}",
+                size_bytes=0,
+                scale=None,
+                file_path=None,
+                status=ModelStatus.converting,
+            )
+        )
+
+    def _mark_entry_error(self, job: ConversionJob, error: str) -> None:
+        model_id = _generation_model_id(job.repo_id, job.checkpoint_path)
+        entry = self.installer.registry.get(model_id)
+        if entry is None or entry.status != ModelStatus.converting:
+            # Un instalado previo sigue instalado; sin entrada no hay que marcar.
+            return
+        self.installer.registry.register(
+            replace(entry, status=ModelStatus.error, error=error)
+        )
 
     def status(self, conversion_id: str) -> ConversionJob | None:
         return self._jobs.get(conversion_id)
@@ -403,9 +442,11 @@ class GenerationModelConverter:
         except OSError as exc:
             job.status = JobStatus.failed
             job.error = map_disk_full(exc) or str(exc)
+            self._mark_entry_error(job, job.error)
         except Exception as exc:  # noqa: BLE001 - el job reporta cualquier fallo
             job.status = JobStatus.failed
             job.error = str(exc)
+            self._mark_entry_error(job, job.error)
         finally:
             job.finished_at = utc_now()
 

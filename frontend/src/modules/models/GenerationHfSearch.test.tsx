@@ -143,3 +143,68 @@ describe("GenerationHfSearch", () => {
     expect(await screen.findByText("Converting — Optimizing graph")).toBeInTheDocument();
   });
 });
+
+const MIXED_RESULTS: ModelSearchResponse = {
+  results: [
+    {
+      id: "amd/listo-onnx",
+      author: "amd",
+      pipelineTag: "text-to-image",
+      downloads: 10,
+      likes: 2,
+      tags: [],
+      compat: "ready_onnx",
+      compatReasonKey: "compat.readyOnnx",
+      compatReasonParams: {},
+      availablePrecisions: [],
+    },
+    {
+      id: "john/necesita-conversion",
+      author: "john",
+      pipelineTag: "text-to-image",
+      downloads: 5,
+      likes: 1,
+      tags: [],
+      compat: "needs_conversion",
+      compatReasonKey: "compat.needsConversion",
+      compatReasonParams: {},
+      availablePrecisions: ["fp16"],
+    },
+  ],
+};
+
+describe("GenerationHfSearch — filtro por compatibilidad", () => {
+  it("'Listos' esconde los que requieren conversión", async () => {
+    vi.mocked(generationService.searchGenerationModels).mockResolvedValue(MIXED_RESULTS);
+
+    renderSearch();
+    await screen.findByText("amd/listo-onnx");
+
+    fireEvent.click(screen.getByRole("radio", { name: /Listos/i }));
+
+    expect(screen.getByText("amd/listo-onnx")).toBeInTheDocument();
+    expect(screen.queryByText("john/necesita-conversion")).not.toBeInTheDocument();
+  });
+
+  it("'Con conversión' muestra solo los que la requieren", async () => {
+    vi.mocked(generationService.searchGenerationModels).mockResolvedValue(MIXED_RESULTS);
+
+    renderSearch();
+    await screen.findByText("amd/listo-onnx");
+
+    fireEvent.click(screen.getByRole("radio", { name: /Con conversión/i }));
+
+    expect(screen.getByText("john/necesita-conversion")).toBeInTheDocument();
+    expect(screen.queryByText("amd/listo-onnx")).not.toBeInTheDocument();
+  });
+
+  it("'Todos' es el default y no esconde nada", async () => {
+    vi.mocked(generationService.searchGenerationModels).mockResolvedValue(MIXED_RESULTS);
+
+    renderSearch();
+
+    expect(await screen.findByText("amd/listo-onnx")).toBeInTheDocument();
+    expect(screen.getByText("john/necesita-conversion")).toBeInTheDocument();
+    expect((screen.getByRole("radio", { name: /Todos/i }) as HTMLInputElement).checked).toBe(true);
+  });
+});

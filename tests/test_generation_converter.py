@@ -21,7 +21,7 @@ from app.services.generation_installer import (
 )
 from app.services.gpu_session_coordinator import GpuSessionCoordinator
 from app.services.hf_client import HfFile
-from app.services.model_registry import ModelRegistry
+from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry, ModelStatus
 from test_generation_installer import (
     FakeHfClient,
     FakeValidationPipeline,
@@ -394,7 +394,11 @@ def test_convert_export_failure_leaves_no_orphans(tmp_path) -> None:
     assert job is not None
     assert job.status == JobStatus.failed
     assert "export reventó" in (job.error or "")
-    assert registry.get(_generation_model_id("amd/sdxl-torch")) is None
+    # El fallo deja rastro VISIBLE (entrada en error, reintentable) pero jamás
+    # un modelo roto como instalado.
+    entry = registry.get(_generation_model_id("amd/sdxl-torch"))
+    assert entry is not None
+    assert entry.status == ModelStatus.error
     leftovers = (
         [path for path in settings.temp_path.iterdir()]
         if settings.temp_path.exists()
@@ -418,7 +422,9 @@ def test_converted_result_goes_through_real_validation(
     job = converter.status(job_id)
     assert job is not None
     assert job.status == JobStatus.failed
-    assert registry.get(_generation_model_id("amd/sdxl-torch")) is None
+    entry = registry.get(_generation_model_id("amd/sdxl-torch"))
+    assert entry is not None
+    assert entry.status == ModelStatus.error
 
 
 def test_conversion_maps_disk_full_to_actionable_error(tmp_path: Path) -> None:
@@ -810,3 +816,78 @@ async def test_single_file_allocation_failure_mentions_checkpoint_size(
         else []
     )
     assert leftovers == []
+
+
+# ---------------------------------------------------------------------------
+# Visibilidad: la conversion existe en el registro DESDE que se encola
+#
+# Bug de UX real (2026-07-31): las conversiones disparadas por los packs del
+# instalador eran invisibles — el modelo aparecia en la UI recien al promover,
+# ~40 min despues, y el usuario concluia que "no vino".
+# ---------------------------------------------------------------------------
+
+
+async def test_enqueuing_a_conversion_registers_a_converting_entry(tmp_path: Path) -> None:
+    converter, _installer, _settings, registry = make_converter(
+        tmp_path, export_fn=fake_export_ok
+    )
+
+    await converter.convert_from_hf("amd/sdxl-torch")
+
+    entry = registry.get("gen--amd--sdxl-torch")
+    assert entry is not None
+    assert entry.status.value == "converting"
+    assert entry.kind == ModelKind.diffusion_onnx
+
+
+def test_a_failed_conversion_marks_the_entry_error(tmp_path: Path) -> None:
+    def failing_export(src_dir, out_dir, on_component, dtype=None, atol=None):
+        raise RuntimeError("export roto a proposito")
+
+    converter, _installer, _settings, registry = make_converter(
+        tmp_path, export_fn=failing_export
+    )
+
+    convert_and_drain(converter, "amd/sdxl-torch")
+
+    entry = registry.get("gen--amd--sdxl-torch")
+    assert entry is not None
+    assert entry.status.value == "error"
+    assert "export roto" in (entry.error or "")
+
+
+def test_promotion_flips_the_converting_entry_to_installed(tmp_path: Path) -> None:
+    converter, _installer, _settings, registry = make_converter(
+        tmp_path, export_fn=fake_export_ok
+    )
+
+    convert_and_drain(converter, "amd/sdxl-torch")
+
+    entry = registry.get("gen--amd--sdxl-torch")
+    assert entry is not None
+    assert entry.status.value == "installed"
+
+
+async def test_a_reconversion_never_downgrades_an_installed_entry(tmp_path: Path) -> None:
+    # Reconvertir un modelo ya instalado no debe sacarlo del dropdown mientras
+    # corre, ni marcarlo en error si la reconversion falla: el instalado sigue
+    # siendo usable hasta que una promocion NUEVA lo reemplace.
+    converter, _installer, _settings, registry = make_converter(
+        tmp_path, export_fn=fake_export_ok
+    )
+    registry.register(
+        ModelEntry(
+            id="gen--amd--sdxl-torch",
+            name="amd/sdxl-torch",
+            kind=ModelKind.diffusion_onnx,
+            source="hf:amd/sdxl-torch",
+            size_bytes=1,
+            scale=None,
+            file_path=None,
+            status=ModelStatus.installed,
+        )
+    )
+
+    await converter.convert_from_hf("amd/sdxl-torch")
+
+    assert registry.get("gen--amd--sdxl-torch").status.value == "installed"

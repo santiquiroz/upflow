@@ -337,7 +337,7 @@ async def test_generation_capabilities_lists_models_and_cpu_only_flag(tmp_path: 
     )
 
     assert response.available is True
-    assert [m.model_dump() for m in response.models] == [{"id": MODEL_ID, "name": "amd/sd15"}]
+    assert [m.model_dump() for m in response.models] == [{"id": MODEL_ID, "name": "amd/sd15", "status": "installed"}]
     assert response.cpu_only is True
 
 
@@ -788,7 +788,7 @@ def test_capabilities_reports_unavailable_without_deps(client, monkeypatch) -> N
 def test_capabilities_lists_installed_models_and_cpu_only_flag(client_with_model) -> None:
     payload = client_with_model.get("/api/v1/generation/capabilities").json()
     assert payload["available"] is True
-    assert payload["models"] == [{"id": "gen--amd--sd15", "name": "amd/sd15"}]
+    assert payload["models"] == [{"id": "gen--amd--sd15", "name": "amd/sd15", "status": "installed"}]
     assert isinstance(payload["cpuOnly"], bool)
 
 
@@ -965,3 +965,65 @@ def test_lifespan_exposes_resource_probes_for_preflight() -> None:
         assert set(probes) == {"gpu", "cpu"}
         for probe in probes.values():
             assert hasattr(probe, "free_capacity_mb")
+
+
+# ---------------------------------------------------------------------------
+# Visibilidad de conversiones en curso (bug UX real: los packs del instalador
+# convertian invisibles y el usuario creia que el modelo "no vino")
+# ---------------------------------------------------------------------------
+
+
+async def test_capabilities_include_converting_models_with_their_status(tmp_path: Path) -> None:
+    from app.services.model_registry import ModelStatus
+
+    settings = make_settings(tmp_path)
+    registry = ModelRegistry(settings)
+    register_generation_model(registry, settings)
+    registry.register(
+        ModelEntry(
+            id="gen--john--anime",
+            name="john/anime",
+            kind=ModelKind.diffusion_onnx,
+            source="hf:john/anime",
+            size_bytes=0,
+            scale=None,
+            file_path=None,
+            status=ModelStatus.converting,
+        )
+    )
+
+    response = await generation_capabilities(
+        registry=registry, devices_service=FakeDevicesService()
+    )
+
+    by_id = {model.id: model for model in response.models}
+    assert by_id["gen--john--anime"].status == "converting"
+    installed = [m for m in response.models if m.status == "installed"]
+    assert len(installed) == 1
+
+
+async def test_capabilities_never_offer_error_entries(tmp_path: Path) -> None:
+    # Una conversion fallida se ve en Models con su motivo; el dropdown de
+    # Generate no es el lugar para un modelo que no existe en disco.
+    from app.services.model_registry import ModelStatus
+
+    settings = make_settings(tmp_path)
+    registry = ModelRegistry(settings)
+    registry.register(
+        ModelEntry(
+            id="gen--john--roto",
+            name="john/roto",
+            kind=ModelKind.diffusion_onnx,
+            source="hf:john/roto",
+            size_bytes=0,
+            scale=None,
+            file_path=None,
+            status=ModelStatus.error,
+        )
+    )
+
+    response = await generation_capabilities(
+        registry=registry, devices_service=FakeDevicesService()
+    )
+
+    assert response.models == []
