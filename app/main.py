@@ -79,6 +79,14 @@ def _build_sdcpp_engine(settings):
     return SdcppEngine(settings)
 
 
+def _build_video_engine(settings):
+    if not settings.enable_sdcpp:
+        return None
+    from app.services.engines.sdcpp_video import SdcppVideoEngine
+
+    return SdcppVideoEngine(settings)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
@@ -126,6 +134,7 @@ async def lifespan(app: FastAPI):
         quota_service=quota_service,
         sdcpp_engine=_build_sdcpp_engine(settings),
         migan_eraser=_build_migan_eraser(settings),
+        video_engine=_build_video_engine(settings),
     )
     # Shared across both managers (like device_semaphores) so an auto-routed
     # image job and an auto-routed video job never pick the same free

@@ -16,6 +16,12 @@ from app.services.engines.generation_onnx import GenerationEngine, GenerationReq
 from app.services.engines.migan_eraser import ERASER_MODEL_ID
 from app.services.engines.sdcpp_engine import SDCPP_MODEL_ID
 from app.services.engines.sdcpp_models import SDCPP_MODEL_PREFIX, resolve_sdcpp_model
+from app.services.engines.sdcpp_video import (
+    VIDEO_MODEL_PREFIX,
+    SdcppVideoEngine,
+    VideoRequest,
+    resolve_video_model,
+)
 from app.services.generation_img2img import supports_img2img
 from app.services.generation_inpaint import supports_inpaint
 from app.services.job_manager import select_upscale_engine
@@ -33,6 +39,12 @@ MAX_DIMENSION = 1024
 MIN_DIMENSION = 64
 DIMENSION_MULTIPLE = 64
 UPSCALE_SCALE_RANGE = (2, 4)
+
+# 33 cuadros a 16 fps son ~2 segundos: el clip más largo que entra en 16 GB de
+# VRAM sin que el decode se caiga a CPU (medido: 116,75 s a 832x480).
+DEFAULT_VIDEO_FRAMES = 33
+DEFAULT_VIDEO_FPS = 16
+MAX_VIDEO_FRAMES = 81
 
 
 class GenerationJobManager:
@@ -61,6 +73,7 @@ class GenerationJobManager:
         quota_service: QuotaService | None = None,
         sdcpp_engine: Any | None = None,
         migan_eraser: Any | None = None,
+        video_engine: SdcppVideoEngine | None = None,
     ) -> None:
         self.settings = settings
         self.engine = engine
@@ -72,6 +85,7 @@ class GenerationJobManager:
         self.quota_service = quota_service
         self.sdcpp_engine = sdcpp_engine
         self.migan_eraser = migan_eraser
+        self.video_engine = video_engine
         self.jobs: dict[str, GenerationJob] = {}
         self.queue: asyncio.Queue[GenerationJob] = asyncio.Queue(maxsize=settings.max_queue_size)
         self.worker_tasks: list[asyncio.Task] = []
@@ -117,6 +131,8 @@ class GenerationJobManager:
         upscale_model_name: str | None = None,
         upscale_scale: int | None = None,
         upscale_model_id: str | None = None,
+        frames: int | None = None,
+        fps: int | None = None,
         job_id: str | None = None,
         owner: AuthenticatedUser | None = None,
     ) -> GenerationJob:
@@ -138,6 +154,7 @@ class GenerationJobManager:
             mask_image_path=mask_image_path,
             auto_upscale=auto_upscale, upscale_model_name=upscale_model_name,
             upscale_scale=upscale_scale, upscale_model_id=upscale_model_id,
+            frames=frames, fps=fps,
             owner_id=owner.id if owner is not None else None,
         )
         if job_id is not None:
@@ -179,6 +196,15 @@ class GenerationJobManager:
                 raise ValueError(
                     "El borrado rápido no está instalado: instalalo desde Ajustes "
                     "o corré scripts/download-migan.ps1"
+                )
+            return
+        if model_id.startswith(VIDEO_MODEL_PREFIX):
+            # Lane de video: el pack son tres archivos en disco, no una entrada
+            # del registro. Se valida contra la lista real.
+            if self.video_engine is None or resolve_video_model(model_id, self.settings) is None:
+                raise ValueError(
+                    "Ese modelo de video ya no está disponible. Instalá el pack de "
+                    "video o corré scripts/download-wan-video.ps1"
                 )
             return
         if model_id.startswith(SDCPP_MODEL_PREFIX):
@@ -356,6 +382,9 @@ class GenerationJobManager:
         self.quota_service.record_usage(job.owner_id, duration)
 
     async def _run_engine(self, job: GenerationJob) -> None:
+        if job.model_id.startswith(VIDEO_MODEL_PREFIX):
+            await self._run_video(job)
+            return
         if job.model_id.startswith(SDCPP_MODEL_PREFIX):
             await self._run_sdcpp(job, resolve_sdcpp_model(job.model_id, self.settings))
             return
@@ -431,6 +460,26 @@ class GenerationJobManager:
         )
         job.output_path = await self.sdcpp_engine.run(
             request, self.settings.outputs_path / f"{job.id}.png", checkpoint=checkpoint
+        )
+        complete_generation_stages(job, False)
+
+    async def _run_video(self, job: GenerationJob) -> None:
+        # Un video es un subprocess largo sin progreso por paso: el usuario ve
+        # la etapa, no un porcentaje. Sale .webm, que el navegador reproduce solo.
+        advance_generation_stage(job, "generating", False)
+        model = resolve_video_model(job.model_id, self.settings)
+        if model is None:
+            raise RuntimeError(f"Modelo de video no encontrado: {job.model_id!r}")
+        request = VideoRequest(
+            prompt=job.prompt, negative_prompt=job.negative_prompt,
+            steps=job.steps, guidance=job.guidance,
+            width=job.width, height=job.height, seed=job.seed,
+            frames=job.frames if job.frames is not None else DEFAULT_VIDEO_FRAMES,
+            fps=job.fps if job.fps is not None else DEFAULT_VIDEO_FPS,
+            init_image=job.init_image_path,
+        )
+        job.output_path = await self.video_engine.run(
+            request, self.settings.outputs_path / f"{job.id}.webm", model
         )
         complete_generation_stages(job, False)
 

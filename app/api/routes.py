@@ -60,6 +60,8 @@ from app.schemas import (
     GenerationJobResponse,
     GenerationJobsListResponse,
     GenerationModelSummary,
+    VideoGenerationCapabilitiesResponse,
+    VideoModelSummary,
     HealthResponse,
     HfModelSearchResultResponse,
     InstallModelRequest,
@@ -103,7 +105,12 @@ from app.services.generation_installer import (
     GenerationModelInstaller,
 )
 from app.services.generation_compat import classify
-from app.services.generation_job_manager import GenerationJobManager
+from app.services.generation_job_manager import (
+    DEFAULT_VIDEO_FPS,
+    DEFAULT_VIDEO_FRAMES,
+    MAX_VIDEO_FRAMES,
+    GenerationJobManager,
+)
 from app.services.generation_preflight import preflight
 from app.services.generation_variants import available_precisions_from_names
 from app.services.hf_client import (
@@ -1677,6 +1684,22 @@ async def upload_init_image(
     )
 
 
+def _video_aware_sampling(payload, settings: Settings) -> tuple[int, float]:
+    """Los defaults de imagen (25 pasos, CFG 7.5) queman un modelo de video
+    destilado, que se entrenó con 4 pasos y CFG 1. Si el que llama no los pidió
+    explícitamente, mandan los del modelo."""
+    from app.services.engines.sdcpp_video import resolve_video_model
+
+    model = resolve_video_model(payload.model_id, settings)
+    if model is None:
+        return payload.steps, payload.guidance
+    chosen = payload.model_fields_set
+    return (
+        payload.steps if "steps" in chosen else model.default_steps,
+        payload.guidance if "guidance" in chosen else model.default_guidance,
+    )
+
+
 @router.post(
     "/generation/jobs", response_model=GenerationJobResponse, status_code=201,
     dependencies=[Depends(require(Permission.jobs_create))],
@@ -1697,11 +1720,12 @@ async def create_generation_job(
         strength = payload.strength
     else:
         strength = 0.85 if mask_image_path is not None else 0.6
+    steps, guidance = _video_aware_sampling(payload, settings)
     try:
         job = await generation_jobs.create_job(
             prompt=payload.prompt, negative_prompt=payload.negative_prompt, model_id=payload.model_id,
-            steps=payload.steps, guidance=payload.guidance, width=payload.width, height=payload.height,
-            seed=payload.seed, device=payload.device,
+            steps=steps, guidance=guidance, width=payload.width, height=payload.height,
+            seed=payload.seed, device=payload.device, frames=payload.frames, fps=payload.fps,
             init_image_path=init_image_path, strength=strength,
             mask_image_path=mask_image_path,
             auto_upscale=payload.auto_upscale,
@@ -1830,6 +1854,33 @@ async def vulkan_install_status(
     return VulkanInstallStatusResponse(
         install_id=job.id, repo_id=job.repo_id, status=job.status.value,
         progress_pct=job.progress_pct, model_id=job.model_id, error=job.error,
+    )
+
+
+@router.get("/generation/video/capabilities", response_model=VideoGenerationCapabilitiesResponse)
+async def video_generation_capabilities(
+    settings: Settings = Depends(get_settings),
+) -> VideoGenerationCapabilitiesResponse:
+    from app.services.engines.sdcpp_video import list_video_models
+
+    # Este lane no depende de optimum ni de ningún execution provider: corre por
+    # Vulkan en cualquier GPU. Si el pack no está bajado, simplemente no hay modelos.
+    models = [
+        VideoModelSummary(
+            id=model.id,
+            name=f"{model.name} (Vulkan)",
+            fast=model.turbo,
+            default_steps=model.default_steps,
+            default_guidance=model.default_guidance,
+        )
+        for model in list_video_models(settings)
+    ]
+    return VideoGenerationCapabilitiesResponse(
+        available=bool(models),
+        models=models,
+        default_frames=DEFAULT_VIDEO_FRAMES,
+        default_fps=DEFAULT_VIDEO_FPS,
+        max_frames=MAX_VIDEO_FRAMES,
     )
 
 

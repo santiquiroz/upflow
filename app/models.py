@@ -232,6 +232,10 @@ class GenerationJob:
     upscale_model_name: str | None = None
     upscale_scale: int | None = None
     upscale_model_id: str | None = None
+    # Solo para el lane de video: cuántos cuadros y a qué ritmo. En un job de
+    # imagen quedan en None y nada los mira.
+    frames: int | None = None
+    fps: int | None = None
     id: str = field(default_factory=lambda: uuid4().hex)
     status: JobStatus = JobStatus.queued
     created_at: datetime = field(default_factory=utc_now)
