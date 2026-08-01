@@ -16,6 +16,12 @@ from app.services.engines.generation_onnx import GenerationEngine, GenerationReq
 from app.services.engines.migan_eraser import ERASER_MODEL_ID
 from app.services.engines.sdcpp_engine import SDCPP_MODEL_ID
 from app.services.engines.sdcpp_models import SDCPP_MODEL_PREFIX, resolve_sdcpp_model
+from app.services.engines.sdcpp_video import (
+    VIDEO_MODEL_PREFIX,
+    SdcppVideoEngine,
+    VideoRequest,
+    resolve_video_model,
+)
 from app.services.generation_img2img import supports_img2img
 from app.services.generation_inpaint import supports_inpaint
 from app.services.job_manager import select_upscale_engine
@@ -32,7 +38,16 @@ MAX_STEPS = 100
 MAX_DIMENSION = 1024
 MIN_DIMENSION = 64
 DIMENSION_MULTIPLE = 64
+VIDEO_DIMENSION_MULTIPLE = 32
 UPSCALE_SCALE_RANGE = (2, 4)
+
+# 17 cuadros a 16 fps es ~1 segundo. No es un límite de memoria sino de calidad:
+# con el mismo prompt y el mismo seed, a 17 cuadros el sujeto aguanta hasta el
+# último frame y a 33 se deshace pasada la mitad. Clips más largos se pueden
+# pedir, pero con ese costo.
+DEFAULT_VIDEO_FRAMES = 17
+DEFAULT_VIDEO_FPS = 16
+MAX_VIDEO_FRAMES = 81
 
 
 class GenerationJobManager:
@@ -61,6 +76,7 @@ class GenerationJobManager:
         quota_service: QuotaService | None = None,
         sdcpp_engine: Any | None = None,
         migan_eraser: Any | None = None,
+        video_engine: SdcppVideoEngine | None = None,
     ) -> None:
         self.settings = settings
         self.engine = engine
@@ -72,6 +88,7 @@ class GenerationJobManager:
         self.quota_service = quota_service
         self.sdcpp_engine = sdcpp_engine
         self.migan_eraser = migan_eraser
+        self.video_engine = video_engine
         self.jobs: dict[str, GenerationJob] = {}
         self.queue: asyncio.Queue[GenerationJob] = asyncio.Queue(maxsize=settings.max_queue_size)
         self.worker_tasks: list[asyncio.Task] = []
@@ -117,11 +134,13 @@ class GenerationJobManager:
         upscale_model_name: str | None = None,
         upscale_scale: int | None = None,
         upscale_model_id: str | None = None,
+        frames: int | None = None,
+        fps: int | None = None,
         job_id: str | None = None,
         owner: AuthenticatedUser | None = None,
     ) -> GenerationJob:
         self._validate_generation_model(model_id)
-        self._validate_params(prompt, steps, width, height)
+        self._validate_params(prompt, steps, width, height, model_id)
         await self._validate_device(device)
         if mask_image_path is not None:
             self._validate_inpaint(model_id, init_image_path, mask_image_path, strength)
@@ -138,6 +157,7 @@ class GenerationJobManager:
             mask_image_path=mask_image_path,
             auto_upscale=auto_upscale, upscale_model_name=upscale_model_name,
             upscale_scale=upscale_scale, upscale_model_id=upscale_model_id,
+            frames=frames, fps=fps,
             owner_id=owner.id if owner is not None else None,
         )
         if job_id is not None:
@@ -181,6 +201,15 @@ class GenerationJobManager:
                     "o corré scripts/download-migan.ps1"
                 )
             return
+        if model_id.startswith(VIDEO_MODEL_PREFIX):
+            # Lane de video: el pack son tres archivos en disco, no una entrada
+            # del registro. Se valida contra la lista real.
+            if self.video_engine is None or resolve_video_model(model_id, self.settings) is None:
+                raise ValueError(
+                    "Ese modelo de video ya no está disponible. Instalá el pack de "
+                    "video o corré scripts/download-wan-video.ps1"
+                )
+            return
         if model_id.startswith(SDCPP_MODEL_PREFIX):
             # Lane Vulkan: el modelo es un archivo en disco, no una entrada del
             # registro. Se valida que exista de verdad y no por el nombre.
@@ -201,15 +230,22 @@ class GenerationJobManager:
         if entry is None or entry.kind != ModelKind.diffusion_onnx:
             raise ValueError(f"Unknown generation model: {model_id!r}")
 
-    def _validate_params(self, prompt: str, steps: int, width: int, height: int) -> None:
+    def _validate_params(
+        self, prompt: str, steps: int, width: int, height: int, model_id: str = ""
+    ) -> None:
         if not prompt.strip():
             raise ValueError("prompt must not be empty")
         if not 1 <= steps <= MAX_STEPS:
             raise ValueError(f"steps must be between 1 and {MAX_STEPS}")
+        # El video usa relaciones cinematográficas (832x480 es la que Wan entrenó)
+        # y 480 no es múltiplo de 64. La grilla de 32 sigue evitando los fallos de
+        # alineación que se ven con valores arbitrarios.
+        multiple = (VIDEO_DIMENSION_MULTIPLE if model_id.startswith(VIDEO_MODEL_PREFIX)
+                    else DIMENSION_MULTIPLE)
         for label, value in (("width", width), ("height", height)):
-            if not MIN_DIMENSION <= value <= MAX_DIMENSION or value % DIMENSION_MULTIPLE:
+            if not MIN_DIMENSION <= value <= MAX_DIMENSION or value % multiple:
                 raise ValueError(
-                    f"{label} must be a multiple of {DIMENSION_MULTIPLE} between {MIN_DIMENSION} and {MAX_DIMENSION}"
+                    f"{label} must be a multiple of {multiple} between {MIN_DIMENSION} and {MAX_DIMENSION}"
                 )
 
     def _validate_img2img(
@@ -316,8 +352,22 @@ class GenerationJobManager:
                 continue
             await self._run_job(job)
 
+    def _reservation_device(self, job: GenerationJob) -> str | None:
+        """Bajo qué dispositivo pedir permiso antes de correr.
+
+        El lane de video fija su propio backend Vulkan y no acepta un device de
+        la API, así que sus jobs llegan con `device=None`. Como los permisos se
+        cuentan por device, ese None les daba un cupo aparte y podían arrancar
+        junto a un upscale en la misma placa: medido, dos difusiones a la vez
+        pasan de 24 s/it a 60 s/it y después una se queda sin avanzar. Reservan
+        la GPU por defecto para compartir cupo con el resto del trabajo de GPU.
+        """
+        if job.device is None and job.model_id.startswith(VIDEO_MODEL_PREFIX):
+            return self.settings.default_device
+        return job.device
+
     async def _run_job(self, job: GenerationJob) -> None:
-        async with self.device_semaphores.acquire(job.device):
+        async with self.device_semaphores.acquire(self._reservation_device(job)):
             await self._execute_job(job)
 
     async def _execute_job(self, job: GenerationJob) -> None:
@@ -356,6 +406,9 @@ class GenerationJobManager:
         self.quota_service.record_usage(job.owner_id, duration)
 
     async def _run_engine(self, job: GenerationJob) -> None:
+        if job.model_id.startswith(VIDEO_MODEL_PREFIX):
+            await self._run_video(job)
+            return
         if job.model_id.startswith(SDCPP_MODEL_PREFIX):
             await self._run_sdcpp(job, resolve_sdcpp_model(job.model_id, self.settings))
             return
@@ -431,6 +484,26 @@ class GenerationJobManager:
         )
         job.output_path = await self.sdcpp_engine.run(
             request, self.settings.outputs_path / f"{job.id}.png", checkpoint=checkpoint
+        )
+        complete_generation_stages(job, False)
+
+    async def _run_video(self, job: GenerationJob) -> None:
+        # Un video es un subprocess largo sin progreso por paso: el usuario ve
+        # la etapa, no un porcentaje. Sale .webm, que el navegador reproduce solo.
+        advance_generation_stage(job, "generating", False)
+        model = resolve_video_model(job.model_id, self.settings)
+        if model is None:
+            raise RuntimeError(f"Modelo de video no encontrado: {job.model_id!r}")
+        request = VideoRequest(
+            prompt=job.prompt, negative_prompt=job.negative_prompt,
+            steps=job.steps, guidance=job.guidance,
+            width=job.width, height=job.height, seed=job.seed,
+            frames=job.frames if job.frames is not None else DEFAULT_VIDEO_FRAMES,
+            fps=job.fps if job.fps is not None else DEFAULT_VIDEO_FPS,
+            init_image=job.init_image_path,
+        )
+        job.output_path = await self.video_engine.run(
+            request, self.settings.outputs_path / f"{job.id}.webm", model
         )
         complete_generation_stages(job, False)
 

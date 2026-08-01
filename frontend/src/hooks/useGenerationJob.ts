@@ -8,6 +8,7 @@ import type {
   ModelSearchResponse,
   Precision,
   PreflightResponse,
+  VideoGenerationCapabilities,
 } from "../lib/apiTypes";
 import { isTerminalInstallStatus } from "../lib/installStatus";
 import { isTerminalJobStatus } from "../lib/jobStatus";
@@ -16,6 +17,7 @@ import {
   cancelGenerationJob,
   createGenerationJob,
   fetchGenerationCapabilities,
+  fetchVideoGenerationCapabilities,
   getConversionStatus,
   getGenerationInstallStatus,
   getGenerationJob,
@@ -148,6 +150,13 @@ export function useGenerationCapabilities() {
   return useQuery<GenerationCapabilities>({
     queryKey: ["generationCapabilities"],
     queryFn: fetchGenerationCapabilities,
+  });
+}
+
+export function useVideoGenerationCapabilities() {
+  return useQuery<VideoGenerationCapabilities>({
+    queryKey: ["videoGenerationCapabilities"],
+    queryFn: fetchVideoGenerationCapabilities,
   });
 }
 

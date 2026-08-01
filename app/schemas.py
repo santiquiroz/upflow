@@ -513,8 +513,10 @@ class CreateGenerationJobRequest(BaseModel):
     model_id: str = Field(alias="modelId")
     steps: int = Field(default=25, ge=1, le=100)
     guidance: float = Field(default=7.5, ge=0, le=30)
-    width: int = Field(default=512, ge=64, le=1024, multiple_of=64)
-    height: int = Field(default=512, ge=64, le=1024, multiple_of=64)
+    # 32 y no 64: el video usa 832x480. La regla de 64 para imagenes la
+    # aplica el job manager, que sabe que modelo es.
+    width: int = Field(default=512, ge=64, le=1024, multiple_of=32)
+    height: int = Field(default=512, ge=64, le=1024, multiple_of=32)
     seed: int | None = Field(default=None, ge=0)
     device: str | None = None
     # Token de una imagen ya subida con POST /generation/init-image. Presente =
@@ -530,6 +532,10 @@ class CreateGenerationJobRequest(BaseModel):
     upscale_model_name: str | None = Field(default=None, alias="upscaleModelName")
     upscale_scale: int | None = Field(default=None, alias="upscaleScale", ge=2, le=4)
     upscale_model_id: str | None = Field(default=None, alias="upscaleModelId")
+    # Solo para modelos de video. El tope de 81 cuadros es el que entra en 16 GB
+    # de VRAM sin que el decode se caiga a CPU.
+    frames: int | None = Field(default=None, ge=1, le=81)
+    fps: int | None = Field(default=None, ge=1, le=60)
 
 
 class InitImageResponse(BaseModel):
@@ -560,6 +566,9 @@ class GenerationJobResponse(BaseModel):
     error: str | None = None
     owner_id: str | None = Field(default=None, serialization_alias="ownerId")
     download_url: str | None = Field(default=None, serialization_alias="downloadUrl")
+    # La URL de descarga no lleva extensión: sin esto la UI no sabe si el
+    # resultado es una imagen o un clip que hay que reproducir.
+    is_video: bool = Field(default=False, serialization_alias="isVideo")
 
 
 class InstallVulkanModelRequest(BaseModel):
@@ -613,6 +622,24 @@ class GenerationCapabilitiesResponse(BaseModel):
     models: list[GenerationModelSummary] = Field(default_factory=list)
     devices: list[str] = Field(default_factory=list)
     cpu_only: bool = Field(default=False, serialization_alias="cpuOnly")
+
+
+class VideoModelSummary(BaseModel):
+    id: str
+    name: str
+    # Los destilados generan en 4 pasos en vez de 20: la diferencia entre dos
+    # minutos y diez. La UI lo marca para que se elija con conocimiento.
+    fast: bool = False
+    default_steps: int = Field(serialization_alias="defaultSteps")
+    default_guidance: float = Field(serialization_alias="defaultGuidance")
+
+
+class VideoGenerationCapabilitiesResponse(BaseModel):
+    available: bool
+    models: list[VideoModelSummary] = Field(default_factory=list)
+    default_frames: int = Field(serialization_alias="defaultFrames")
+    default_fps: int = Field(serialization_alias="defaultFps")
+    max_frames: int = Field(serialization_alias="maxFrames")
 
 
 class CpuFallbackReportResponse(BaseModel):

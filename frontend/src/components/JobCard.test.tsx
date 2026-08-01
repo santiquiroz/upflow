@@ -192,6 +192,27 @@ describe("JobCard", () => {
     expect(screen.getByText("2x")).toHaveClass("font-mono-tabular");
   });
 
+  it("renders a video player instead of an image when the generation job is a video", () => {
+    const job: GenerationJob = {
+      ...BASE_GENERATION_JOB,
+      status: "completed",
+      modelId: "sdcppvid:Wan2_2-TI2V-5B-Turbo-Q8_0",
+      isVideo: true,
+      downloadUrl: "/api/v1/generation/jobs/gen-1/download",
+      width: 832,
+      height: 480,
+    };
+    const { container } = render(<JobCard phase="completed" job={job} />);
+
+    // Pintado como <img>, un .webm sale roto: el navegador no lo decodifica.
+    expect(screen.queryByRole("img", { name: /generated image/i })).not.toBeInTheDocument();
+    const video = container.querySelector("video");
+    expect(video).not.toBeNull();
+    expect(video).toHaveAttribute("src", "/api/v1/generation/jobs/gen-1/download");
+    expect(video).toHaveAttribute("controls");
+    expect(video).toHaveAttribute("loop");
+  });
+
   it("shows a preview image and dimensions for a completed generation job", () => {
     const job: GenerationJob = {
       ...BASE_GENERATION_JOB,

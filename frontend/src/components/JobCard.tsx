@@ -202,16 +202,24 @@ function AudioCompletedDetails({ job }: { job: AudioJob }) {
   );
 }
 
+function GenerationPreview({ job }: { job: GenerationJob }) {
+  if (!job.downloadUrl) {
+    return null;
+  }
+  const className = "max-h-48 w-full rounded border border-border bg-bg object-contain";
+  // Un .webm pintado como <img> sale roto: el navegador no lo decodifica. La URL
+  // de descarga no lleva extension, asi que la bandera del backend es lo unico
+  // que distingue un clip de una imagen.
+  if (job.isVideo) {
+    return <video src={job.downloadUrl} controls loop muted playsInline className={className} />;
+  }
+  return <img src={job.downloadUrl} alt="Generated image" className={className} />;
+}
+
 function GenerationCompletedDetails({ job }: { job: GenerationJob }) {
   return (
     <>
-      {job.downloadUrl && (
-        <img
-          src={job.downloadUrl}
-          alt="Generated image"
-          className="max-h-48 w-full rounded border border-border bg-bg object-contain"
-        />
-      )}
+      <GenerationPreview job={job} />
       <dl className="flex gap-4 text-xs text-text-dim">
         <div className="flex items-center gap-1">
           <dt className="sr-only">Dimensions</dt>
