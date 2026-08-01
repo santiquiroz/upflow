@@ -30,13 +30,17 @@ CHUNK_SAMPLES = TARGET_SAMPLE_RATE * CHUNK_SECONDS
 MAX_TOKENS_PER_CHUNK = 220
 
 
-def build_load_kwargs(device: str) -> dict[str, Any]:
+def build_load_kwargs(device: str, settings: Settings | None = None) -> dict[str, Any]:
     """Los kwargs con los que se carga el modelo.
 
     Se extrae de _create_model para que la bandera que decide si transcribe o
     devuelve ruido se pueda verificar sin mockear optimum ni transformers.
+
+    Los providers salen del ep_registry, no armados a mano: si no, un plugin EP
+    instalado aceleraba escalado y editor pero no transcripcion, sin avisar.
     """
-    from app.services.engines.generation_onnx import _build_providers
+    from app.config import get_settings
+    from app.services import ep_registry
 
     kwargs: dict[str, Any] = {
         # Vetado con DirectML en este repo.
@@ -47,13 +51,7 @@ def build_load_kwargs(device: str) -> dict[str, Any]:
         # docs/superpowers/specs/2026-07-29-whisper-onnx-spike-findings.md
         "use_merged": False,
     }
-    primary = _build_providers(device)[0]
-    if isinstance(primary, tuple):
-        provider_name, provider_options = primary
-        kwargs["provider"] = provider_name
-        kwargs["provider_options"] = provider_options
-    else:
-        kwargs["provider"] = primary
+    kwargs.update(ep_registry.loader_kwargs(device, settings or get_settings()))
     return kwargs
 
 
@@ -203,7 +201,7 @@ class TranscribeEngine:
         from transformers import AutoProcessor
 
         model = ORTModelForSpeechSeq2Seq.from_pretrained(
-            str(model_dir), **build_load_kwargs(device)
+            str(model_dir), **build_load_kwargs(device, self.settings)
         )
         processor = AutoProcessor.from_pretrained(str(model_dir))
         return model, processor

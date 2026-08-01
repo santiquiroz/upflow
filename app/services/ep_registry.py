@@ -155,9 +155,10 @@ def _resolve_plugin_library(spec: NativeEpSpec, settings: Settings) -> str | Non
         except ImportError:
             return None
         return str(module.get_library_path())
-    if not settings.ep_plugins_dir or spec.plugin_subdir is None or spec.dll_filename is None:
+    plugins_dir = settings.ep_plugins_dir_path
+    if plugins_dir is None or spec.plugin_subdir is None or spec.dll_filename is None:
         return None
-    candidate = Path(settings.ep_plugins_dir) / spec.plugin_subdir / spec.dll_filename
+    candidate = plugins_dir / spec.plugin_subdir / spec.dll_filename
     return str(candidate) if candidate.is_file() else None
 
 
@@ -261,12 +262,45 @@ def _dml_providers(device: str) -> list[Any]:
     return [(DML_PROVIDER, {"device_id": _parse_dml_device_id(device)}), CPU_PROVIDER]
 
 
+# Los EPs del catálogo de Windows ML se registran con vendor_id 0: el catálogo
+# no dice a qué adaptador pertenecen.
+VENDOR_UNKNOWN = 0
+
+
+def _vendor_of_adapter(device: str) -> int | None:
+    """Vendor de la placa detrás de `dml:N`, o None si no se puede saber.
+
+    `enumerate_adapter_vendor_ids` devuelve los vendors en el MISMO orden que
+    numera dml:N, así que el índice del device es el índice del adaptador.
+    """
+    try:
+        index = _parse_dml_device_id(device)
+    except RuntimeError:
+        return None
+    vendors = _adapter_vendor_ids()
+    return vendors[index] if 0 <= index < len(vendors) else None
+
+
 def _native_plugin_for(device: str) -> _PluginState | None:
+    """El plugin de la placa pedida, o None para caer a DirectML.
+
+    Antes devolvía el primer plugin con devices para CUALQUIER dml:N. En una
+    máquina con iGPU Intel y placa NVIDIA eso mandaba un trabajo fijado a la
+    iGPU a correr en la NVIDIA, en silencio y contra lo que pidió el usuario.
+    """
     if not device.startswith("dml:"):
         return None
-    for state in _plugins.values():
-        if state.devices:
+    vendor = _vendor_of_adapter(device)
+    if vendor is None:
+        return None
+    ready = [state for state in _plugins.values() if state.devices]
+    for state in ready:
+        if state.spec.vendor_id == vendor:
             return state
+    # Un EP del catálogo no declara placa. Con una sola GPU no hay ambigüedad;
+    # con varias, atribuirlo sería el mismo error que este método evita.
+    if len(_adapter_vendor_ids()) == 1:
+        return next((s for s in ready if s.spec.vendor_id == VENDOR_UNKNOWN), None)
     return None
 
 
@@ -327,6 +361,55 @@ def create_session(
         model_path,
         sess_options=_build_options(sess_options_factory),
         providers=_dml_providers(device),
+    )
+
+
+def _with_session_options(
+    kwargs: dict[str, Any], factory: Callable[[], Any] | None
+) -> dict[str, Any]:
+    sess_options = _build_options(factory)
+    if sess_options is not None:
+        kwargs["session_options"] = sess_options
+    return kwargs
+
+
+def loader_kwargs(
+    device: str,
+    settings: Settings,
+    *,
+    sess_options_factory: Callable[[], Any] | None = None,
+) -> dict[str, Any]:
+    """Argumentos de sesión para loaders que construyen la InferenceSession ellos.
+
+    optimum y transformers no aceptan una sesión ya hecha, así que `create_session`
+    no les sirve. Y un EP de plugin no se puede pedir por nombre: optimum valida el
+    provider contra `get_available_providers()`, que no ve plugins. La forma que sí
+    funciona es `providers=[]` con el EP puesto en el SessionOptions (verificado
+    contra onnxruntime real, incluida la reutilización del mismo objeto en las
+    varias sesiones que arma un pipeline de difusión).
+    """
+    import onnxruntime as ort
+
+    if device == "cpu":
+        return _with_session_options({"provider": CPU_PROVIDER}, sess_options_factory)
+    if not device.startswith("dml:"):
+        raise RuntimeError(f"Unsupported device for ONNX inference: {device!r}")
+
+    _initialize(settings)
+    plugin = _native_plugin_for(device)
+    if plugin is not None:
+        sess_options = _build_options(sess_options_factory) or ort.SessionOptions()
+        # Objeto nuevo por llamada: add_provider_for_devices dos veces sobre el
+        # mismo SessionOptions falla con "Provider has already been registered".
+        sess_options.add_provider_for_devices(plugin.devices[:1], {})
+        return {"providers": [], "provider_options": [], "session_options": sess_options}
+
+    return _with_session_options(
+        {
+            "provider": DML_PROVIDER,
+            "provider_options": {"device_id": _parse_dml_device_id(device)},
+        },
+        sess_options_factory,
     )
 
 

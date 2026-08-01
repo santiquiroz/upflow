@@ -33,7 +33,11 @@ dependencies = [
   # quien use descargas. El instalador vendoriza la wheel (ver package-release.ps1).
   "fetchflow>=0.2.1",
   "numpy>=1.26.0,<3.0.0",
-  "onnxruntime-directml>=1.19.0,<2.0.0; sys_platform == 'win32'",
+  # Piso 1.24 y no 1.19: la API de plugin EP (register_execution_provider_library,
+  # SessionOptions.add_provider_for_devices) no existe antes, y sin ella los
+  # aceleradores nativos de NVIDIA e Intel no se pueden registrar. 1.24.4 es el
+  # ultimo publicado de onnxruntime-directml.
+  "onnxruntime-directml>=1.24.0,<2.0.0; sys_platform == 'win32'",
   # SP1 Task 6 - .pth/.safetensors -> ONNX conversion (app/services/model_converter.py).
   # torch is unpinned to a CUDA index on purpose: plain PyPI already resolves
   # to a CPU-capable wheel and this only ever runs the export/inference
