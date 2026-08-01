@@ -38,11 +38,14 @@ MAX_STEPS = 100
 MAX_DIMENSION = 1024
 MIN_DIMENSION = 64
 DIMENSION_MULTIPLE = 64
+VIDEO_DIMENSION_MULTIPLE = 32
 UPSCALE_SCALE_RANGE = (2, 4)
 
-# 33 cuadros a 16 fps son ~2 segundos: el clip más largo que entra en 16 GB de
-# VRAM sin que el decode se caiga a CPU (medido: 116,75 s a 832x480).
-DEFAULT_VIDEO_FRAMES = 33
+# 17 cuadros a 16 fps es ~1 segundo. No es un límite de memoria sino de calidad:
+# con el mismo prompt y el mismo seed, a 17 cuadros el sujeto aguanta hasta el
+# último frame y a 33 se deshace pasada la mitad. Clips más largos se pueden
+# pedir, pero con ese costo.
+DEFAULT_VIDEO_FRAMES = 17
 DEFAULT_VIDEO_FPS = 16
 MAX_VIDEO_FRAMES = 81
 
@@ -137,7 +140,7 @@ class GenerationJobManager:
         owner: AuthenticatedUser | None = None,
     ) -> GenerationJob:
         self._validate_generation_model(model_id)
-        self._validate_params(prompt, steps, width, height)
+        self._validate_params(prompt, steps, width, height, model_id)
         await self._validate_device(device)
         if mask_image_path is not None:
             self._validate_inpaint(model_id, init_image_path, mask_image_path, strength)
@@ -227,15 +230,22 @@ class GenerationJobManager:
         if entry is None or entry.kind != ModelKind.diffusion_onnx:
             raise ValueError(f"Unknown generation model: {model_id!r}")
 
-    def _validate_params(self, prompt: str, steps: int, width: int, height: int) -> None:
+    def _validate_params(
+        self, prompt: str, steps: int, width: int, height: int, model_id: str = ""
+    ) -> None:
         if not prompt.strip():
             raise ValueError("prompt must not be empty")
         if not 1 <= steps <= MAX_STEPS:
             raise ValueError(f"steps must be between 1 and {MAX_STEPS}")
+        # El video usa relaciones cinematográficas (832x480 es la que Wan entrenó)
+        # y 480 no es múltiplo de 64. La grilla de 32 sigue evitando los fallos de
+        # alineación que se ven con valores arbitrarios.
+        multiple = (VIDEO_DIMENSION_MULTIPLE if model_id.startswith(VIDEO_MODEL_PREFIX)
+                    else DIMENSION_MULTIPLE)
         for label, value in (("width", width), ("height", height)):
-            if not MIN_DIMENSION <= value <= MAX_DIMENSION or value % DIMENSION_MULTIPLE:
+            if not MIN_DIMENSION <= value <= MAX_DIMENSION or value % multiple:
                 raise ValueError(
-                    f"{label} must be a multiple of {DIMENSION_MULTIPLE} between {MIN_DIMENSION} and {MAX_DIMENSION}"
+                    f"{label} must be a multiple of {multiple} between {MIN_DIMENSION} and {MAX_DIMENSION}"
                 )
 
     def _validate_img2img(
@@ -342,8 +352,22 @@ class GenerationJobManager:
                 continue
             await self._run_job(job)
 
+    def _reservation_device(self, job: GenerationJob) -> str | None:
+        """Bajo qué dispositivo pedir permiso antes de correr.
+
+        El lane de video fija su propio backend Vulkan y no acepta un device de
+        la API, así que sus jobs llegan con `device=None`. Como los permisos se
+        cuentan por device, ese None les daba un cupo aparte y podían arrancar
+        junto a un upscale en la misma placa: medido, dos difusiones a la vez
+        pasan de 24 s/it a 60 s/it y después una se queda sin avanzar. Reservan
+        la GPU por defecto para compartir cupo con el resto del trabajo de GPU.
+        """
+        if job.device is None and job.model_id.startswith(VIDEO_MODEL_PREFIX):
+            return self.settings.default_device
+        return job.device
+
     async def _run_job(self, job: GenerationJob) -> None:
-        async with self.device_semaphores.acquire(job.device):
+        async with self.device_semaphores.acquire(self._reservation_device(job)):
             await self._execute_job(job)
 
     async def _execute_job(self, job: GenerationJob) -> None:

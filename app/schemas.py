@@ -513,8 +513,10 @@ class CreateGenerationJobRequest(BaseModel):
     model_id: str = Field(alias="modelId")
     steps: int = Field(default=25, ge=1, le=100)
     guidance: float = Field(default=7.5, ge=0, le=30)
-    width: int = Field(default=512, ge=64, le=1024, multiple_of=64)
-    height: int = Field(default=512, ge=64, le=1024, multiple_of=64)
+    # 32 y no 64: el video usa 832x480. La regla de 64 para imagenes la
+    # aplica el job manager, que sabe que modelo es.
+    width: int = Field(default=512, ge=64, le=1024, multiple_of=32)
+    height: int = Field(default=512, ge=64, le=1024, multiple_of=32)
     seed: int | None = Field(default=None, ge=0)
     device: str | None = None
     # Token de una imagen ya subida con POST /generation/init-image. Presente =
@@ -564,6 +566,9 @@ class GenerationJobResponse(BaseModel):
     error: str | None = None
     owner_id: str | None = Field(default=None, serialization_alias="ownerId")
     download_url: str | None = Field(default=None, serialization_alias="downloadUrl")
+    # La URL de descarga no lleva extensión: sin esto la UI no sabe si el
+    # resultado es una imagen o un clip que hay que reproducir.
+    is_video: bool = Field(default=False, serialization_alias="isVideo")
 
 
 class InstallVulkanModelRequest(BaseModel):

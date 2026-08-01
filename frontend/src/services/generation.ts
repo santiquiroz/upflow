@@ -3,6 +3,7 @@ import type {
   ConversionStatusResponse,
   CreateInstallResponse,
   GenerationCapabilities,
+  VideoGenerationCapabilities,
   GenerationJob,
   InitImageResponse,
   InstallStatusResponse,
@@ -29,6 +30,8 @@ export interface CreateGenerationJobParams {
   strength?: number;
   // Máscara de inpainting (blanco=editar, negro=conservar); requiere initImageToken.
   maskImageToken?: string;
+  frames?: number;
+  fps?: number;
 }
 
 function buildRequestBody(params: CreateGenerationJobParams): Record<string, unknown> {
@@ -49,6 +52,8 @@ function buildRequestBody(params: CreateGenerationJobParams): Record<string, unk
     if (params.strength !== undefined) body.strength = params.strength;
     if (params.maskImageToken) body.maskImageToken = params.maskImageToken;
   }
+  if (params.frames !== undefined) body.frames = params.frames;
+  if (params.fps !== undefined) body.fps = params.fps;
   if (params.autoUpscale) {
     if (params.upscaleModelName) body.upscaleModelName = params.upscaleModelName;
     if (params.upscaleScale !== null) body.upscaleScale = params.upscaleScale;
@@ -89,6 +94,10 @@ export function listGenerationJobs(all: boolean): Promise<{ jobs: GenerationJob[
 
 export function fetchGenerationCapabilities(): Promise<GenerationCapabilities> {
   return apiGet<GenerationCapabilities>("/generation/capabilities");
+}
+
+export function fetchVideoGenerationCapabilities(): Promise<VideoGenerationCapabilities> {
+  return apiGet<VideoGenerationCapabilities>("/generation/video/capabilities");
 }
 
 export function searchGenerationModels(query: string): Promise<ModelSearchResponse> {

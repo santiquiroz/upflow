@@ -155,6 +155,143 @@ async def test_job_falls_back_to_the_default_clip_length(tmp_path: Path, monkeyp
     assert capturado["request"].fps == DEFAULT_VIDEO_FPS
 
 
+def test_response_marks_a_video_job_so_the_ui_can_render_a_player() -> None:
+    from app.api.routes import generation_job_to_response
+    from app.models import GenerationJob, JobStatus
+
+    video = GenerationJob(prompt="x", model_id=f"{VIDEO_MODEL_PREFIX}Wan", status=JobStatus.completed)
+    imagen = GenerationJob(prompt="x", model_id="gen--sd15", status=JobStatus.completed)
+    assert generation_job_to_response(video).is_video is True
+    assert generation_job_to_response(imagen).is_video is False
+
+
+@pytest.mark.asyncio
+async def test_download_serves_webm_as_video_not_as_png(tmp_path: Path) -> None:
+    """Servido como image/png, el navegador se baja el archivo en vez de reproducirlo."""
+    from app.api.routes import download_generation_job
+    from app.models import GenerationJob, JobStatus
+    from app.services.generation_job_manager import GenerationJobManager
+
+    settings = make_pack(tmp_path, "Wan2_2-TI2V-5B-Turbo-Q8_0.gguf")
+    manager = GenerationJobManager(
+        settings, engine=None, device_semaphores=None, registry=None,
+        upscale_engine=None, video_engine=SdcppVideoEngine(settings),
+    )
+    salida = tmp_path / "clip.webm"
+    salida.write_bytes(b"webm")
+    job = GenerationJob(
+        prompt="x", model_id=f"{VIDEO_MODEL_PREFIX}Wan",
+        status=JobStatus.completed, output_path=salida,
+    )
+    manager.jobs[job.id] = job
+    response = await download_generation_job(job.id, generation_jobs=manager)
+    assert response.media_type == "video/webm"
+
+
+@pytest.mark.asyncio
+async def test_download_still_serves_images_as_png(tmp_path: Path) -> None:
+    from app.api.routes import download_generation_job
+    from app.models import GenerationJob, JobStatus
+    from app.services.generation_job_manager import GenerationJobManager
+
+    settings = make_pack(tmp_path, "Wan2_2-TI2V-5B-Turbo-Q8_0.gguf")
+    manager = GenerationJobManager(
+        settings, engine=None, device_semaphores=None, registry=None,
+        upscale_engine=None, video_engine=SdcppVideoEngine(settings),
+    )
+    salida = tmp_path / "imagen.png"
+    salida.write_bytes(b"png")
+    job = GenerationJob(
+        prompt="x", model_id="gen--sd15", status=JobStatus.completed, output_path=salida,
+    )
+    manager.jobs[job.id] = job
+    response = await download_generation_job(job.id, generation_jobs=manager)
+    assert response.media_type == "image/png"
+
+
+def test_video_accepts_the_cinematic_aspect_ratio(tmp_path: Path) -> None:
+    """832x480 es la relación con la que se entrenó Wan y la que se midió mejor.
+    480 no es múltiplo de 64, que es la regla de las imágenes."""
+    from app.services.generation_job_manager import GenerationJobManager
+
+    settings = make_pack(tmp_path, "Wan2_2-TI2V-5B-Turbo-Q8_0.gguf")
+    manager = GenerationJobManager(
+        settings, engine=None, device_semaphores=None, registry=None,
+        upscale_engine=None, video_engine=SdcppVideoEngine(settings),
+    )
+    manager._validate_params(
+        "un zorro", 4, 832, 480, model_id=f"{VIDEO_MODEL_PREFIX}Wan2_2-TI2V-5B-Turbo-Q8_0"
+    )
+
+
+def test_images_still_require_multiples_of_sixty_four(tmp_path: Path) -> None:
+    from app.services.generation_job_manager import GenerationJobManager
+
+    settings = make_pack(tmp_path, "Wan2_2-TI2V-5B-Turbo-Q8_0.gguf")
+    manager = GenerationJobManager(
+        settings, engine=None, device_semaphores=None, registry=None,
+        upscale_engine=None, video_engine=SdcppVideoEngine(settings),
+    )
+    with pytest.raises(ValueError, match="64"):
+        manager._validate_params("un zorro", 25, 832, 480, model_id="gen--sd15")
+
+
+def test_video_still_rejects_dimensions_off_the_thirty_two_grid(tmp_path: Path) -> None:
+    from app.services.generation_job_manager import GenerationJobManager
+
+    settings = make_pack(tmp_path, "Wan2_2-TI2V-5B-Turbo-Q8_0.gguf")
+    manager = GenerationJobManager(
+        settings, engine=None, device_semaphores=None, registry=None,
+        upscale_engine=None, video_engine=SdcppVideoEngine(settings),
+    )
+    with pytest.raises(ValueError, match="32"):
+        manager._validate_params(
+            "un zorro", 4, 833, 480, model_id=f"{VIDEO_MODEL_PREFIX}Wan2_2-TI2V-5B-Turbo-Q8_0"
+        )
+
+
+def test_video_reserves_the_gpu_so_it_does_not_run_next_to_another_gpu_job(tmp_path: Path) -> None:
+    """Dos difusiones a la vez en la misma placa se degradan mutuamente (medido:
+    24 s/it -> 60 s/it y despues hambreado). Sin device, el job de video caía en
+    un bucket propio y corría en paralelo con un upscale en dml:0."""
+    from app.models import GenerationJob
+    from app.services.generation_job_manager import GenerationJobManager
+
+    settings = make_pack(tmp_path, "Wan2_2-TI2V-5B-Turbo-Q8_0.gguf")
+    manager = GenerationJobManager(
+        settings, engine=None, device_semaphores=None, registry=None,
+        upscale_engine=None, video_engine=SdcppVideoEngine(settings),
+    )
+    sin_device = GenerationJob(prompt="x", model_id=f"{VIDEO_MODEL_PREFIX}Wan")
+    assert manager._reservation_device(sin_device) == settings.default_device
+
+
+def test_an_explicit_device_still_wins_for_video(tmp_path: Path) -> None:
+    from app.models import GenerationJob
+    from app.services.generation_job_manager import GenerationJobManager
+
+    settings = make_pack(tmp_path, "Wan2_2-TI2V-5B-Turbo-Q8_0.gguf")
+    manager = GenerationJobManager(
+        settings, engine=None, device_semaphores=None, registry=None,
+        upscale_engine=None, video_engine=SdcppVideoEngine(settings),
+    )
+    job = GenerationJob(prompt="x", model_id=f"{VIDEO_MODEL_PREFIX}Wan", device="dml:1")
+    assert manager._reservation_device(job) == "dml:1"
+
+
+def test_image_jobs_keep_reserving_exactly_what_they_asked_for(tmp_path: Path) -> None:
+    from app.models import GenerationJob
+    from app.services.generation_job_manager import GenerationJobManager
+
+    settings = make_pack(tmp_path, "Wan2_2-TI2V-5B-Turbo-Q8_0.gguf")
+    manager = GenerationJobManager(
+        settings, engine=None, device_semaphores=None, registry=None,
+        upscale_engine=None, video_engine=SdcppVideoEngine(settings),
+    )
+    job = GenerationJob(prompt="x", model_id="gen--sd15", device=None)
+    assert manager._reservation_device(job) is None
+
+
 def test_unknown_video_model_is_rejected_at_creation(tmp_path: Path) -> None:
     from app.services.generation_job_manager import GenerationJobManager
 

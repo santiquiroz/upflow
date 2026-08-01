@@ -11,6 +11,7 @@ import type {
   GenerationCapabilities,
   GenerationJob,
   InitImageResponse,
+  VideoGenerationCapabilities,
   ModelsResponse,
 } from "../../lib/apiTypes";
 import * as generationService from "../../services/generation";
@@ -28,6 +29,7 @@ vi.mock("../../services/generation", async (importOriginal) => {
     createGenerationJob: vi.fn(),
     getGenerationJob: vi.fn(),
     fetchGenerationCapabilities: vi.fn(),
+    fetchVideoGenerationCapabilities: vi.fn(),
     uploadGenerationInitImage: vi.fn(),
   };
 });
@@ -112,13 +114,46 @@ const INIT_IMAGE: InitImageResponse = {
   height: 768,
 };
 
+const VIDEO_CAPABILITIES: VideoGenerationCapabilities = {
+  available: true,
+  models: [
+    {
+      id: "sdcppvid:Wan2_2-TI2V-5B-Turbo-Q8_0",
+      name: "Wan2_2-TI2V-5B-Turbo-Q8_0 (Vulkan)",
+      fast: true,
+      defaultSteps: 4,
+      defaultGuidance: 1.0,
+    },
+    {
+      id: "sdcppvid:Wan2.2-TI2V-5B-Q8_0",
+      name: "Wan2.2-TI2V-5B-Q8_0 (Vulkan)",
+      fast: false,
+      defaultSteps: 20,
+      defaultGuidance: 5.0,
+    },
+  ],
+  defaultFrames: 33,
+  defaultFps: 16,
+  maxFrames: 81,
+};
+
+const NO_VIDEO_CAPABILITIES: VideoGenerationCapabilities = {
+  available: false,
+  models: [],
+  defaultFrames: 33,
+  defaultFps: 16,
+  maxFrames: 81,
+};
+
 function renderPanel(
   capabilities: GenerationCapabilities = AVAILABLE_CAPABILITIES,
   devices: DevicesResponse = DEVICES,
+  videoCapabilities: VideoGenerationCapabilities = VIDEO_CAPABILITIES,
 ) {
   vi.mocked(api.getDevices).mockResolvedValue(devices);
   vi.mocked(api.getModels).mockResolvedValue(UPSCALE_MODELS);
   vi.mocked(generationService.fetchGenerationCapabilities).mockResolvedValue(capabilities);
+  vi.mocked(generationService.fetchVideoGenerationCapabilities).mockResolvedValue(videoCapabilities);
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   function Wrapper({ children }: { children: ReactNode }) {
     return (
@@ -158,6 +193,7 @@ afterEach(() => {
   vi.mocked(api.getDevices).mockReset();
   vi.mocked(api.getModels).mockReset();
   vi.mocked(generationService.fetchGenerationCapabilities).mockReset();
+  vi.mocked(generationService.fetchVideoGenerationCapabilities).mockReset();
   vi.mocked(generationService.createGenerationJob).mockReset();
   vi.mocked(generationService.getGenerationJob).mockReset();
   vi.mocked(generationService.uploadGenerationInitImage).mockReset();
@@ -437,5 +473,134 @@ describe("GeneratePanel — conversiones visibles en el dropdown", () => {
 
     expect(await screen.findByRole("option", { name: /convirtiendo/i })).toBeInTheDocument();
     expect(screen.queryByText(/No generation models installed/i)).not.toBeInTheDocument();
+  });
+});
+
+
+describe("GeneratePanel — modo video", () => {
+
+  it("switches to the video catalogue, which is a different one from the image models", async () => {
+    renderPanel();
+    await screen.findByRole("option", { name: "SD 1.5 (ONNX)" });
+    fireEvent.change(screen.getByLabelText(/^model$/i), { target: { value: "sd15-onnx" } });
+    fireEvent.change(screen.getByLabelText(/^prompt$/i), { target: { value: "un zorro" } });
+
+    fireEvent.click(screen.getByRole("radio", { name: /^video$/i }));
+
+    expect(
+      await screen.findByRole("option", { name: /Wan2_2-TI2V-5B-Turbo-Q8_0 \(Vulkan\) - rapido, 4 pasos/i }),
+    ).toBeInTheDocument();
+    // Un modelo de imagen mandado al lane de video es un 400 seguro.
+    expect(screen.queryByRole("option", { name: "SD 1.5 (ONNX)" })).not.toBeInTheDocument();
+    // El id del modelo de imagen no puede sobrevivir al cruce: si sobrevive, el
+    // boton queda habilitado y se manda a la API un modelo que ese lane no tiene.
+    // Un <select> ya reporta "" cuando su valor no esta entre las opciones, asi
+    // que lo unico que distingue de verdad es el estado del boton.
+    expect(screen.getByRole("button", { name: /^generate$/i })).toBeDisabled();
+  });
+
+  it("turns auto upscale off when entering video, even if it was on", async () => {
+    const createSpy = vi.mocked(generationService.createGenerationJob);
+    createSpy.mockResolvedValue({ ...BASE_JOB, id: "gen-video" } as GenerationJob);
+    renderPanel();
+    await screen.findByRole("option", { name: "SD 1.5 (ONNX)" });
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /escalar autom/i }));
+    fireEvent.click(screen.getByRole("radio", { name: /^video$/i }));
+    await screen.findByRole("option", { name: /Turbo/i });
+    fireEvent.change(screen.getByLabelText(/^model$/i), {
+      target: { value: "sdcppvid:Wan2_2-TI2V-5B-Turbo-Q8_0" },
+    });
+    fireEvent.change(screen.getByLabelText(/^prompt$/i), { target: { value: "un zorro" } });
+    fireEvent.click(screen.getByRole("button", { name: /^generate$/i }));
+
+    await waitFor(() => expect(createSpy).toHaveBeenCalled());
+    expect(createSpy.mock.calls[0][0].autoUpscale).toBe(false);
+  });
+
+  it("adopts the sampling defaults of the chosen video model instead of the image ones", async () => {
+    renderPanel();
+    await screen.findByRole("option", { name: "SD 1.5 (ONNX)" });
+    fireEvent.click(screen.getByRole("radio", { name: /^video$/i }));
+    await screen.findByRole("option", { name: /Turbo/i });
+
+    fireEvent.change(screen.getByLabelText(/^model$/i), {
+      target: { value: "sdcppvid:Wan2_2-TI2V-5B-Turbo-Q8_0" },
+    });
+
+    // El destilado se entreno con 4 pasos y CFG 1: con 25 y 7.5 sale quemado.
+    expect(screen.getByLabelText(/^steps$/i)).toHaveValue(4);
+    expect(screen.getByLabelText(/^guidance$/i)).toHaveValue(1);
+
+    fireEvent.change(screen.getByLabelText(/^model$/i), {
+      target: { value: "sdcppvid:Wan2.2-TI2V-5B-Q8_0" },
+    });
+    expect(screen.getByLabelText(/^steps$/i)).toHaveValue(20);
+    expect(screen.getByLabelText(/^guidance$/i)).toHaveValue(5);
+  });
+
+  it("sends frames, fps and the cinematic size, and never auto-upscales a clip", async () => {
+    const createSpy = vi.mocked(generationService.createGenerationJob);
+    createSpy.mockResolvedValue({ ...BASE_JOB, id: "gen-video" } as GenerationJob);
+    renderPanel();
+    await screen.findByRole("option", { name: "SD 1.5 (ONNX)" });
+    fireEvent.click(screen.getByRole("radio", { name: /^video$/i }));
+    await screen.findByRole("option", { name: /Turbo/i });
+
+    fireEvent.change(screen.getByLabelText(/^model$/i), {
+      target: { value: "sdcppvid:Wan2_2-TI2V-5B-Turbo-Q8_0" },
+    });
+    fireEvent.change(screen.getByLabelText(/^prompt$/i), { target: { value: "un zorro corriendo" } });
+    fireEvent.change(screen.getByLabelText(/cuadros por segundo/i), { target: { value: "24" } });
+    fireEvent.change(screen.getByLabelText(/^cuadros$/i), { target: { value: "49" } });
+    fireEvent.click(screen.getByRole("button", { name: /^generate$/i }));
+
+    await waitFor(() => expect(createSpy).toHaveBeenCalled());
+    const params = createSpy.mock.calls[0][0];
+    expect(params.modelId).toBe("sdcppvid:Wan2_2-TI2V-5B-Turbo-Q8_0");
+    expect(params.frames).toBe(49);
+    expect(params.fps).toBe(24);
+    // 832x480 es la relacion con la que Wan fue entrenado, y 480 no es multiplo de 64.
+    expect(params.width).toBe(832);
+    expect(params.height).toBe(480);
+  });
+
+  it("tells the user how long the clip will be", async () => {
+    renderPanel();
+    await screen.findByRole("option", { name: "SD 1.5 (ONNX)" });
+    fireEvent.click(screen.getByRole("radio", { name: /^video$/i }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent("1.1 s");
+  });
+
+  it("warns that longer clips fall apart, only when the clip is actually longer", async () => {
+    renderPanel();
+    await screen.findByRole("option", { name: "SD 1.5 (ONNX)" });
+    fireEvent.click(screen.getByRole("radio", { name: /^video$/i }));
+
+    // Medido con el mismo prompt y el mismo seed: a 17 cuadros el sujeto aguanta
+    // hasta el ultimo frame, a 33 se deshace pasada la mitad.
+    expect(await screen.findByRole("status")).not.toHaveTextContent(/deformando/i);
+    fireEvent.change(screen.getByLabelText(/^cuadros$/i), { target: { value: "33" } });
+    expect(screen.getByRole("status")).toHaveTextContent(/deformando/i);
+  });
+
+  it("points at the installer when the video pack is not downloaded", async () => {
+    renderPanel(AVAILABLE_CAPABILITIES, DEVICES, NO_VIDEO_CAPABILITIES);
+    await screen.findByRole("option", { name: "SD 1.5 (ONNX)" });
+
+    fireEvent.click(screen.getByRole("radio", { name: /^video$/i }));
+
+    expect(await screen.findByText(/download-wan-video/i)).toBeInTheDocument();
+  });
+
+  it("keeps the chosen model when switching between the two image modes", async () => {
+    renderPanel();
+    await screen.findByRole("option", { name: "SD 1.5 (ONNX)" });
+    fireEvent.change(screen.getByLabelText(/^model$/i), { target: { value: "sd15-onnx" } });
+
+    fireEvent.click(screen.getByRole("radio", { name: /image to image/i }));
+
+    expect(screen.getByLabelText(/^model$/i)).toHaveValue("sd15-onnx");
   });
 });

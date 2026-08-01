@@ -72,6 +72,7 @@ Name: "modelphoto"; Description: "Generar imagenes: modelo fotorrealista (epiCRe
 Name: "editor"; Description: "Editor: seleccionar objetos con un toque para quitarlos o reemplazarlos (~45 MB)"; Types: full custom
 Name: "eraser"; Description: "Editor: borrado rapido de objetos, sin esperar a la IA generativa (~28 MB)"; Types: full custom
 Name: "vulkan"; Description: "Generar imagenes: motor Vulkan, instala modelos en minutos en vez de 40 (motor ~50 MB + un modelo ~2 GB)"; Types: full custom
+Name: "video"; Description: "Generar VIDEO desde texto o desde una imagen, en tu placa y sin conversion (descarga ~15 GB; requiere el motor Vulkan)"; Types: custom
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
@@ -134,6 +135,8 @@ begin
     Selected := Selected + 'migan' + #13#10;
   if WizardIsComponentSelected('vulkan') then
     Selected := Selected + 'sdcpp' + #13#10;
+  if WizardIsComponentSelected('video') then
+    Selected := Selected + 'wan-video' + #13#10;
 
   PackPath := ExpandConstant('{app}\' + OptionalPacksFile);
   SaveStringToFile(PackPath, Selected, False);

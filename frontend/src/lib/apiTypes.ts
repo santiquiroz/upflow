@@ -493,6 +493,8 @@ export interface GenerationJob {
   error: string | null;
   ownerId: string | null;
   downloadUrl: string | null;
+  /** La URL de descarga no lleva extension: esto decide imagen vs reproductor. */
+  isVideo?: boolean;
 }
 
 export interface GenerationModelSummary {
@@ -512,6 +514,23 @@ export interface GenerationCapabilities {
   models: GenerationModelSummary[];
   devices: string[];
   cpuOnly: boolean;
+}
+
+export interface VideoModelSummary {
+  id: string;
+  name: string;
+  /** Destilado: 4 pasos en vez de 20. La diferencia entre 2 minutos y 10. */
+  fast: boolean;
+  defaultSteps: number;
+  defaultGuidance: number;
+}
+
+export interface VideoGenerationCapabilities {
+  available: boolean;
+  models: VideoModelSummary[];
+  defaultFrames: number;
+  defaultFps: number;
+  maxFrames: number;
 }
 
 export interface QuotaStatus {

@@ -30,11 +30,13 @@ Wan 2.2 TI2V-5B. Un solo modelo hace texto→video **y** imagen→video. Apache 
 
 | Archivo | Tamaño | Origen |
 |---|---|---|
-| `Wan2.2-TI2V-5B-Q8_0.gguf` | 5,40 GB | `QuantStack/Wan2.2-TI2V-5B-GGUF` |
-| `Wan2.2_VAE.safetensors` | 1,41 GB | mismo repo, carpeta `VAE/` |
+| `Wan2_2-TI2V-5B-Turbo-Q8_0.gguf` | 5,40 GB | `hum-ma/Wan2.2-TI2V-5B-Turbo-GGUF` (el que se usa) |
+| `Wan2.2-TI2V-5B-Q8_0.gguf` | 5,40 GB | `QuantStack/Wan2.2-TI2V-5B-GGUF` (base, más lento) |
 | `umt5-xxl-encoder-Q5_K_M.gguf` | 4,15 GB | `city96/umt5-xxl-encoder-gguf` |
+| `Wan2.2_VAE.safetensors` | 1,41 GB | QuantStack, carpeta `VAE/` |
+| `taew2_2.safetensors` | 0,02 GB | `Kijai/WanVideo_comfy` (decodificador chico, MIT) |
 
-Total 10,96 GB. Viven en `vendor/sdcpp/models/video/`, que **no** contamina la lista de
+Total 15,26 GB, todos con bytes verificados contra la API de Hugging Face. Viven en `vendor/sdcpp/models/video/`, que **no** contamina la lista de
 modelos de imagen: `list_sdcpp_models` recorre el directorio con `iterdir()` + `is_file()`,
 así que ignora subcarpetas.
 
@@ -82,6 +84,20 @@ Dos conclusiones que cambian el diseño:
 Punto de comparación honesto: una RX 7600 XT (misma generación) publicada con ROCm y
 el VAE en CPU tardó 27 min 15 s para 2 s de video. Acá son 116,8 s para ~2 s.
 
+### El largo del clip es un límite de calidad, no de memoria
+
+Mismo prompt, mismo seed (7), mismo modelo y mismas resolución y config; sólo cambia
+el número de cuadros. Corrido por la API real, no por CLI:
+
+| Cuadros | Tiempo | Qué se ve |
+|---|---|---|
+| 17 (~1,1 s) | 70,2 s | El cachorro aguanta nítido hasta el último cuadro |
+| 33 (~2,1 s) | ~130 s | Bien hasta la mitad; después la cara se deshace, los ojos se borronean y las orejas se duplican |
+
+No es el TAE ni el modelo: es el largo. Por eso el default son 17 cuadros y la UI
+avisa recién cuando se piden más. La salida a clips largos es generar corto y
+encadenar, o interpolar con RIFE/GMFSS, que ya están adentro de la app.
+
 ## Comando de referencia
 
 ```
@@ -108,15 +124,9 @@ herramienta para imágenes sexuales no consentidas de personas reales.
 
 ## Pendiente
 
-- **Frontend**: el lane está entero en backend (motor, cola, API, capacidades) con
-  tests, pero todavía no hay pantalla. Falta el formulario en Generate y el `<video>`
-  para reproducir el `.webm`.
-- **Serializar contra los otros jobs de GPU.** Dos difusiones a la vez en la misma
-  placa se degradan mutuamente (medido en otro contexto: 24 s/it → 60 s/it). Los jobs
-  de video deberían tomar el semáforo de dispositivo como los de upscaling.
-- **Degradación temporal**: en el clip de 33 cuadros la textura del sujeto se
-  desarma hacia el final. Falta probar si es el TAE, los 4 pasos, o el modelo.
-- **Componente del instalador** para el pack (10,9 GB) y su entrada en `upflow.iss`.
+- **Clips largos**: hoy la respuesta honesta es "generá corto". Falta encadenar
+  clips (usar el último cuadro como imagen de partida del siguiente) para pasar del
+  segundo sin que el sujeto se deshaga.
 - **LTX-2** no se probó: 22B más un Gemma-3-12B como encoder no entran cómodos en 16 GB.
 - **Generar chico y arreglar después**: Upflow ya tiene Real-ESRGAN y RIFE/GMFSS
   adentro. Generar a 480p/16 fps y subirlo a 1080p/48 fps con el pipeline propio es

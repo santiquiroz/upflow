@@ -4,13 +4,19 @@ import { Link } from "react-router-dom";
 import { DevicePicker } from "../../components/DevicePicker";
 import { JobCard } from "../../components/JobCard";
 import { ModelPicker } from "../../components/ModelPicker";
-import { useGenerationCapabilities, useGenerationJob, type GenerationJobPhase } from "../../hooks/useGenerationJob";
+import {
+  useGenerationCapabilities,
+  useGenerationJob,
+  useVideoGenerationCapabilities,
+  type GenerationJobPhase,
+} from "../../hooks/useGenerationJob";
 import { useTranslation } from "../../i18n/LocaleProvider";
 import type {
   DeviceInfoResponse,
   GenerationModelSummary,
   InitImageResponse,
   ModelResponse,
+  VideoModelSummary,
 } from "../../lib/apiTypes";
 import {
   uploadGenerationInitImage,
@@ -24,7 +30,20 @@ const STRENGTH_MIN = 0.05;
 const STRENGTH_MAX = 1;
 const STRENGTH_STEP = 0.05;
 
-type GenerationMode = "text-to-image" | "image-to-image";
+type GenerationMode = "text-to-image" | "image-to-image" | "video";
+
+// Medidos en una RX 7800 XT: 832x480 con 33 cuadros tarda ~2 minutos. Subir de
+// ahi hace que el decodificador se caiga a CPU y el trabajo pase de minutos a
+// media hora, asi que la lista no ofrece resoluciones que no entran.
+const VIDEO_SIZE_OPTIONS = [
+  { label: "832 x 480 (16:9)", width: 832, height: 480 },
+  { label: "480 x 832 (vertical)", width: 480, height: 832 },
+  { label: "640 x 640 (cuadrado)", width: 640, height: 640 },
+  { label: "480 x 480 (mas rapido)", width: 480, height: 480 },
+];
+// El decodificador comprime 4x en el tiempo: los valores validos son 4n+1.
+const VIDEO_FRAME_OPTIONS = [17, 33, 49, 81];
+const VIDEO_FPS_OPTIONS = [8, 12, 16, 24];
 
 export const CPU_ONLY_WARNING =
   "No se detectó GPU compatible (DirectX 12). Generar en CPU tarda varios minutos por imagen. ¿Continuar igual?";
@@ -97,6 +116,127 @@ function ModelSelect({
         // durante los ~40 minutos que tarda la conversion.
         <option key={model.id} value={model.id} disabled={model.status !== "installed"}>
           {model.status === "converting" ? `${model.name} (convirtiendo… ~30-45 min)` : model.name}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function VideoModelSelect({
+  models,
+  value,
+  onChange,
+}: {
+  models: VideoModelSummary[];
+  value: string | null;
+  onChange: (model: VideoModelSummary | null) => void;
+}) {
+  if (models.length === 0) {
+    return (
+      <p className="text-sm text-text-dim">
+        Todavia no hay modelos de video instalados. Instala el pack de generacion de
+        video desde el instalador, o corre <code>scripts/download-wan-video.ps1</code>.
+      </p>
+    );
+  }
+  return (
+    <select
+      id="generate-model"
+      value={value ?? ""}
+      onChange={(event) =>
+        onChange(models.find((model) => model.id === event.target.value) ?? null)
+      }
+      className="rounded border border-border bg-surface p-2 text-sm text-text"
+    >
+      <option value="">Elegi un modelo…</option>
+      {models.map((model) => (
+        <option key={model.id} value={model.id}>
+          {model.fast ? `${model.name} - rapido, 4 pasos` : model.name}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function VideoLengthControls({
+  frames,
+  fps,
+  onFramesChange,
+  onFpsChange,
+}: {
+  frames: number;
+  fps: number;
+  onFramesChange: (value: number) => void;
+  onFpsChange: (value: number) => void;
+}) {
+  const seconds = (frames / fps).toFixed(1);
+  return (
+    <>
+      <div className="flex flex-col gap-2">
+        <label htmlFor="generate-frames" className="text-xs font-medium text-text-dim">
+          Cuadros
+        </label>
+        <select
+          id="generate-frames"
+          value={frames}
+          onChange={(event) => onFramesChange(Number(event.target.value))}
+          className="rounded border border-border bg-surface p-2 text-sm text-text"
+        >
+          {VIDEO_FRAME_OPTIONS.map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="flex flex-col gap-2">
+        <label htmlFor="generate-fps" className="text-xs font-medium text-text-dim">
+          Cuadros por segundo
+        </label>
+        <select
+          id="generate-fps"
+          value={fps}
+          onChange={(event) => onFpsChange(Number(event.target.value))}
+          className="rounded border border-border bg-surface p-2 text-sm text-text"
+        >
+          {VIDEO_FPS_OPTIONS.map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+      </div>
+      <p role="status" className="col-span-2 text-xs text-text-faint">
+        Duracion: {seconds} s. Generar video tarda minutos, no segundos.
+        {frames > 17 && " Pasados los 17 cuadros el sujeto se va deformando hacia el final."}
+      </p>
+    </>
+  );
+}
+
+function VideoSizeSelect({
+  width,
+  height,
+  onChange,
+}: {
+  width: number;
+  height: number;
+  onChange: (size: { width: number; height: number }) => void;
+}) {
+  const current = `${width}x${height}`;
+  return (
+    <select
+      id="generate-video-size"
+      value={current}
+      onChange={(event) => {
+        const [nextWidth, nextHeight] = event.target.value.split("x").map(Number);
+        onChange({ width: nextWidth, height: nextHeight });
+      }}
+      className="rounded border border-border bg-surface p-2 text-sm text-text"
+    >
+      {VIDEO_SIZE_OPTIONS.map((option) => (
+        <option key={option.label} value={`${option.width}x${option.height}`}>
+          {option.label}
         </option>
       ))}
     </select>
@@ -273,9 +413,12 @@ export function GeneratePanel() {
   const [isInitImageUploading, setIsInitImageUploading] = useState(false);
   const [initImageError, setInitImageError] = useState<string | null>(null);
   const [strength, setStrength] = useState(DEFAULT_STRENGTH);
+  const [frames, setFrames] = useState(17);
+  const [fps, setFps] = useState(16);
   const initImageUploadSequence = useRef(0);
 
   const capabilitiesQuery = useGenerationCapabilities();
+  const videoCapabilitiesQuery = useVideoGenerationCapabilities();
   const { phase, job, errorMessage, submit, cancel } = useGenerationJob();
 
   const capabilities = capabilitiesQuery.data;
@@ -285,7 +428,12 @@ export function GeneratePanel() {
   }
 
   const models = capabilities?.models ?? [];
-  const needsCpuConfirm = capabilities?.cpuOnly === true && (device === null || device === "cpu");
+  const videoModels = videoCapabilitiesQuery.data?.models ?? [];
+  const isVideo = mode === "video";
+  // El lane de video corre por Vulkan en su propio subproceso: no le toca el
+  // execution provider de ONNX, asi que la advertencia de CPU no aplica.
+  const needsCpuConfirm =
+    !isVideo && capabilities?.cpuOnly === true && (device === null || device === "cpu");
 
   function buildParams(): CreateGenerationJobParams {
     const params: CreateGenerationJobParams = {
@@ -303,9 +451,17 @@ export function GeneratePanel() {
       upscaleModelId: autoUpscale ? resolveUpscaleModelId(upscaleModel) : null,
       upscaleScale: autoUpscale ? upscaleScale : null,
     };
-    if (mode === "image-to-image" && initImage) {
+    if (isVideo) {
+      params.frames = frames;
+      params.fps = fps;
+    }
+    // Wan hace imagen-a-video con el MISMO checkpoint: alcanza con mandar la
+    // imagen de partida, sin cambiar de modelo.
+    if ((mode === "image-to-image" || isVideo) && initImage) {
       params.initImageToken = initImage.initImageToken;
-      params.strength = strength;
+      if (!isVideo) {
+        params.strength = strength;
+      }
     }
     return params;
   }
@@ -328,8 +484,37 @@ export function GeneratePanel() {
   }
 
   function handleModeChange(nextMode: GenerationMode) {
+    const crossesVideoBoundary = (nextMode === "video") !== (mode === "video");
     setMode(nextMode);
     setCpuConfirmPending(false);
+    if (!crossesVideoBoundary) {
+      // Texto-a-imagen e imagen-a-imagen comparten catalogo: cambiar entre
+      // ellos no tiene por que perder el modelo ya elegido.
+      return;
+    }
+    // Imagen y video SI son catalogos distintos: arrastrar el id de uno al otro
+    // manda a la API un modelo que no existe en ese lane.
+    setModelId(null);
+    if (nextMode === "video") {
+      setWidth(832);
+      setHeight(480);
+      // Un .webm no pasa por el escalador de imagenes: entrar a video apaga el
+      // auto-escalado que hubiera quedado prendido.
+      setAutoUpscale(false);
+    } else {
+      setWidth(512);
+      setHeight(512);
+    }
+  }
+
+  // Los defaults de imagen (25 pasos, CFG 7.5) queman un modelo destilado, que
+  // se entreno con 4 pasos y CFG 1. Se muestran, no se esconden.
+  function handleVideoModelChange(model: VideoModelSummary | null) {
+    setModelId(model?.id ?? null);
+    if (model) {
+      setSteps(model.defaultSteps);
+      setGuidance(model.defaultGuidance);
+    }
   }
 
   async function handleInitImageSelected(file: File) {
@@ -379,7 +564,7 @@ export function GeneratePanel() {
           <legend className="text-xs font-medium text-text-dim">
             {t("generation.mode.label")}
           </legend>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-3 gap-2 max-[700px]:grid-cols-1">
             <label className="flex cursor-pointer items-center gap-2 rounded border border-border bg-surface p-3 text-sm text-text">
               <input
                 type="radio"
@@ -402,10 +587,27 @@ export function GeneratePanel() {
               />
               {t("generation.mode.imageToImage")}
             </label>
+            <label className="flex cursor-pointer items-center gap-2 rounded border border-border bg-surface p-3 text-sm text-text">
+              <input
+                type="radio"
+                name="generation-mode"
+                value="video"
+                checked={mode === "video"}
+                onChange={() => handleModeChange("video")}
+                className="h-3.5 w-3.5 accent-accent"
+              />
+              Video
+            </label>
           </div>
         </fieldset>
-        {mode === "image-to-image" && (
+        {(mode === "image-to-image" || isVideo) && (
           <div className="flex flex-col gap-4 rounded border border-border bg-surface-2 p-4">
+            {isVideo && (
+              <p className="text-xs text-text-faint">
+                Opcional: con una imagen de partida, el clip arranca desde ella. Sin
+                imagen, se genera solo desde el texto.
+              </p>
+            )}
             <InitImageDropzone
               image={initImage}
               pendingFileName={initImageFileName}
@@ -413,7 +615,7 @@ export function GeneratePanel() {
               errorMessage={initImageError}
               onFileSelected={(file) => void handleInitImageSelected(file)}
             />
-            <StrengthControl value={strength} onChange={setStrength} />
+            {!isVideo && <StrengthControl value={strength} onChange={setStrength} />}
           </div>
         )}
         <div className="flex flex-col gap-2">
@@ -444,7 +646,15 @@ export function GeneratePanel() {
           <label htmlFor="generate-model" className="text-xs font-medium text-text-dim">
             Model
           </label>
-          <ModelSelect models={models} value={modelId} onChange={setModelId} />
+          {isVideo ? (
+            <VideoModelSelect
+              models={videoModels}
+              value={modelId}
+              onChange={handleVideoModelChange}
+            />
+          ) : (
+            <ModelSelect models={models} value={modelId} onChange={setModelId} />
+          )}
         </div>
         <div className="grid grid-cols-2 gap-4">
           <div className="flex flex-col gap-2">
@@ -472,18 +682,44 @@ export function GeneratePanel() {
               className="rounded border border-border bg-surface p-2 text-sm text-text"
             />
           </div>
-          <div className="flex flex-col gap-2">
-            <label htmlFor="generate-width" className="text-xs font-medium text-text-dim">
-              Width
-            </label>
-            <SizeSelect id="generate-width" value={width} onChange={setWidth} />
-          </div>
-          <div className="flex flex-col gap-2">
-            <label htmlFor="generate-height" className="text-xs font-medium text-text-dim">
-              Height
-            </label>
-            <SizeSelect id="generate-height" value={height} onChange={setHeight} />
-          </div>
+          {isVideo ? (
+            <div className="col-span-2 flex flex-col gap-2">
+              <label htmlFor="generate-video-size" className="text-xs font-medium text-text-dim">
+                Resolucion
+              </label>
+              <VideoSizeSelect
+                width={width}
+                height={height}
+                onChange={(size) => {
+                  setWidth(size.width);
+                  setHeight(size.height);
+                }}
+              />
+            </div>
+          ) : (
+            <>
+              <div className="flex flex-col gap-2">
+                <label htmlFor="generate-width" className="text-xs font-medium text-text-dim">
+                  Width
+                </label>
+                <SizeSelect id="generate-width" value={width} onChange={setWidth} />
+              </div>
+              <div className="flex flex-col gap-2">
+                <label htmlFor="generate-height" className="text-xs font-medium text-text-dim">
+                  Height
+                </label>
+                <SizeSelect id="generate-height" value={height} onChange={setHeight} />
+              </div>
+            </>
+          )}
+          {isVideo && (
+            <VideoLengthControls
+              frames={frames}
+              fps={fps}
+              onFramesChange={setFrames}
+              onFpsChange={setFps}
+            />
+          )}
           <div className="flex flex-col gap-2">
             <label htmlFor="generate-seed" className="text-xs font-medium text-text-dim">
               Seed
@@ -498,8 +734,10 @@ export function GeneratePanel() {
             />
           </div>
         </div>
-        <DevicePicker value={device} onChange={handleDeviceChange} requiresGpu={false} allowAuto={false} />
-        <div className="flex flex-col gap-3 rounded border border-border bg-surface p-3">
+        {!isVideo && (
+          <DevicePicker value={device} onChange={handleDeviceChange} requiresGpu={false} allowAuto={false} />
+        )}
+        <div className={`flex flex-col gap-3 rounded border border-border bg-surface p-3 ${isVideo ? "hidden" : ""}`}>
           <label className="flex items-center gap-2 text-sm text-text">
             <input
               type="checkbox"

@@ -105,6 +105,7 @@ from app.services.generation_installer import (
     GenerationModelInstaller,
 )
 from app.services.generation_compat import classify
+from app.services.engines.sdcpp_video import VIDEO_MODEL_PREFIX
 from app.services.generation_job_manager import (
     DEFAULT_VIDEO_FPS,
     DEFAULT_VIDEO_FRAMES,
@@ -428,6 +429,9 @@ def generation_job_to_response(job: GenerationJob) -> GenerationJobResponse:
         created_at=job.created_at, started_at=job.started_at, finished_at=job.finished_at,
         progress_pct=_progress_pct_from_metadata(job.metadata), stages=job.metadata.get("stages"),
         error=job.error, download_url=download_url, owner_id=job.owner_id,
+        # La URL de descarga no lleva extensión, así que sin esta bandera la UI
+        # no puede saber si pintar una imagen o un reproductor.
+        is_video=job.model_id.startswith(VIDEO_MODEL_PREFIX),
     )
 
 
@@ -1807,7 +1811,8 @@ async def download_generation_job(
         raise HTTPException(status_code=404, detail="Generation job not found")
     if job.status != JobStatus.completed or not job.output_path:
         raise HTTPException(status_code=409, detail="Generation job is not completed yet")
-    return FileResponse(path=job.output_path, filename=job.output_path.name, media_type="image/png")
+    media_type = "video/webm" if job.output_path.suffix.lower() == ".webm" else "image/png"
+    return FileResponse(path=job.output_path, filename=job.output_path.name, media_type=media_type)
 
 
 def _entry_supports_inpaint(settings: Settings, entry: Any) -> bool:

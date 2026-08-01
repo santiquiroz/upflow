@@ -362,6 +362,11 @@ $script:OptionalPacks = @(
         Key     = 'sdcpp'
         Feature = 'Generar imagenes con el motor Vulkan: instala modelos en minutos en vez de 40'
         Size    = '~2 GB'
+    },
+    @{
+        Key     = 'wan-video'
+        Feature = 'Generar video desde texto o desde una imagen, en tu placa'
+        Size    = '~15 GB'
     }
 )
 
@@ -454,6 +459,10 @@ function Install-MissingBinaries {
 
     if ($selectedKeys -contains 'sdcpp') {
         Invoke-DownloadScript -ScriptName 'download-sdcpp.ps1' -Label 'Motor Vulkan + modelo (generacion sin conversion)'
+    }
+
+    if ($selectedKeys -contains 'wan-video') {
+        Invoke-DownloadScript -ScriptName 'download-wan-video.ps1' -Label 'Wan 2.2 (generacion de video)'
     }
 
     $skipped = @($script:OptionalPacks | Where-Object { $selectedKeys -notcontains $_.Key })
