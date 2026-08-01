@@ -36,6 +36,11 @@ export interface JobMetadata {
   framesTotal?: number | null;
   interpFramesTotal?: number | null;
   outputFps?: string;
+  /** Por que este trabajo corrio rapido o lento. Medido a 1080p->4x en una
+   *  RX 7800 XT: onnx fp16 1.58 fps, ncnn 0.72, onnx fp32 0.32. */
+  upscaleBackend?: string;
+  upscalePrecision?: string;
+  upscaleTiled?: boolean;
   [key: string]: unknown;
 }
 

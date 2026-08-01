@@ -613,9 +613,12 @@ def test_the_shipped_plugin_folder_is_found_without_configuring_anything(tmp_pat
     """El script de descarga deja los DLLs en vendor/ep-plugins/. Si el default
     de EP_PLUGINS_DIR es vacio, la app no mira ahi y el acelerador de Intel
     queda instalado pero muerto."""
-    settings = make_settings(tmp_path)
-    assert settings.ep_plugins_dir_path is not None
-    assert settings.ep_plugins_dir_path.name == "ep-plugins"
+    # Se mira el default DECLARADO y no una instancia: conftest pisa la variable
+    # de entorno justamente para que los tests no dependan de si esta maquina
+    # tiene el acelerador bajado.
+    declarado = Settings.model_fields["ep_plugins_dir"].default
+    assert declarado, "con el default vacio, los DLLs se instalan donde nadie los mira"
+    assert Path(declarado).name == "ep-plugins"
 
 
 def test_intel_plugin_is_picked_up_from_the_shipped_folder(
