@@ -1,5 +1,10 @@
 import { CheckCircle2, Download, Search } from "lucide-react";
 import { useState } from "react";
+import {
+  CompatFilterChips,
+  matchesCompatFilter,
+  type CompatFilter,
+} from "../models/compatFilter";
 import { DeterminateProgressBar } from "../../components/DeterminateProgressBar";
 import { IndeterminateProgressBar } from "../../components/IndeterminateProgressBar";
 import {
@@ -182,9 +187,11 @@ function AsrModelCard({
 function SearchResults({
   query,
   installPollIntervalMs,
+  filter,
 }: {
   query: string;
   installPollIntervalMs: number;
+  filter: CompatFilter;
 }) {
   const { t } = useTranslation();
   const searchQuery = useAsrModelSearchResults(query);
@@ -208,7 +215,9 @@ function SearchResults({
     );
   }
 
-  const results = searchQuery.data?.results ?? [];
+  const results = (searchQuery.data?.results ?? []).filter((result) =>
+    matchesCompatFilter(result, filter),
+  );
   if (results.length === 0) {
     return (
       <p className="text-sm text-text-faint">
@@ -237,6 +246,7 @@ export function AsrModelSearch({
 }: AsrModelSearchProps) {
   const { t } = useTranslation();
   const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<CompatFilter>("all");
   const debouncedQuery = useDebouncedValue(query, debounceMs).trim();
 
   return (
@@ -264,9 +274,13 @@ export function AsrModelSearch({
           className="w-full rounded border border-border bg-surface py-2 pl-9 pr-3 text-sm text-text placeholder:text-text-faint focus:border-accent focus:outline-none"
         />
       </label>
+      {debouncedQuery.length > 0 && (
+        <CompatFilterChips value={filter} onChange={setFilter} name="asr-compat-filter" />
+      )}
       <SearchResults
         query={debouncedQuery}
         installPollIntervalMs={installPollIntervalMs}
+        filter={filter}
       />
     </section>
   );

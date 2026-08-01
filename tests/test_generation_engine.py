@@ -402,3 +402,18 @@ async def test_the_two_modes_do_not_share_a_cached_pipeline(tmp_path: Path) -> N
         )
 
     assert modes == ["text2img", "img2img"]
+
+
+def test_latent_consistency_and_plain_sd_are_supported() -> None:
+    # Ambas las ejecuta optimum; sin la entrada, el repo se descargaba completo
+    # y recien al cargarlo fallaba con "Clase de pipeline no soportada"
+    # (caso real: SimianLuo/LCM_Dreamshaper_v7).
+    assert _load_pipeline_class.__module__  # import guard
+    from app.services.engines.generation_onnx import PIPELINE_CLASS_NAMES
+
+    assert PIPELINE_CLASS_NAMES["LatentConsistencyModelPipeline"] == "ORTLatentConsistencyModelPipeline"
+    assert PIPELINE_CLASS_NAMES["StableDiffusionPipeline"] == "ORTStableDiffusionPipeline"
+    import optimum.onnxruntime as ort_module
+
+    for target in PIPELINE_CLASS_NAMES.values():
+        assert hasattr(ort_module, target), target

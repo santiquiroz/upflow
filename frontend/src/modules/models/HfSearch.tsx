@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import { useHfSearchResults } from "../../hooks/useModels";
+import { CompatFilterChips, matchesCompatFilter, type CompatFilter } from "./compatFilter";
 import { HfResultCard } from "./HfResultCard";
 import {
   DEFAULT_SEARCH_DEBOUNCE_MS,
@@ -15,7 +16,7 @@ interface HfSearchProps {
   debounceMs?: number;
 }
 
-function SearchResults({ query }: { query: string }) {
+function SearchResults({ query, filter }: { query: string; filter: CompatFilter }) {
   const searchQuery = useHfSearchResults(query);
 
   if (searchQuery.isLoading) {
@@ -26,7 +27,9 @@ function SearchResults({ query }: { query: string }) {
     return <SearchErrorState />;
   }
 
-  const results = searchQuery.data?.results ?? [];
+  const results = (searchQuery.data?.results ?? []).filter((result) =>
+    matchesCompatFilter(result, filter),
+  );
 
   if (results.length === 0) {
     return <NoResultsState query={query} />;
@@ -45,16 +48,20 @@ function SearchResults({ query }: { query: string }) {
 
 export function HfSearch({ debounceMs = DEFAULT_SEARCH_DEBOUNCE_MS }: HfSearchProps) {
   const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<CompatFilter>("all");
   const debouncedQuery = useDebouncedValue(query, debounceMs);
   const trimmedQuery = debouncedQuery.trim();
 
   return (
     <div className="flex flex-col gap-4">
       <SearchInput value={query} onChange={setQuery} />
+      {trimmedQuery.length > 0 && (
+        <CompatFilterChips value={filter} onChange={setFilter} name="upscaler-compat-filter" />
+      )}
       {trimmedQuery.length === 0 ? (
         <SearchEmptyState message="Search Hugging Face for an ONNX upscaling model to install." />
       ) : (
-        <SearchResults query={trimmedQuery} />
+        <SearchResults query={trimmedQuery} filter={filter} />
       )}
     </div>
   );

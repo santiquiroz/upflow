@@ -48,8 +48,13 @@ _CUDA_TOKENS = ("cudaexecutionprovider", "cuda", "tensorrt")
 # scheduler), no una clase aparte.
 PIPELINE_CLASS_NAMES: dict[str, str] = {
     "OnnxStableDiffusionPipeline": "ORTStableDiffusionPipeline",
+    "StableDiffusionPipeline": "ORTStableDiffusionPipeline",
     "StableDiffusionXLPipeline": "ORTStableDiffusionXLPipeline",
     "StableDiffusion3Pipeline": "ORTStableDiffusion3Pipeline",
+    # Latent Consistency: genera en 4-8 pasos en vez de 25-30. optimum lo
+    # ejecuta (esta en su mapping y expone la clase), y sin esta entrada un repo
+    # LCM se descargaba entero para morir al cargarlo.
+    "LatentConsistencyModelPipeline": "ORTLatentConsistencyModelPipeline",
 }
 _KNOWN_ORT_CLASS_NAMES = frozenset(PIPELINE_CLASS_NAMES.values())
 

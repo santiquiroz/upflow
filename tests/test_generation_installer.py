@@ -22,6 +22,7 @@ from app.services.generation_installer import (
     map_disk_full,
 )
 from app.services.gpu_session_coordinator import GpuSessionCoordinator
+from app.services.generation_installer import _needs_conversion
 from app.services.hf_client import HfFile
 from app.services.model_installer import InstallStatus
 from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry
@@ -975,3 +976,39 @@ def test_a_component_with_no_alias_is_still_required(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="unet"):
         _validate_structure(root)
+
+
+# --- por que un repo CON ONNX igual se convierte (SIN resolver) -------------
+# Ver el comentario largo en tests/test_generation_compat.py. Resumen: la
+# deteccion se puede arreglar (probado: sdxl-turbo bajo sin convertir), pero la
+# validacion posterior no se pudo comprobar porque la prueba se contamino con un
+# job del usuario en la misma GPU. Revertido hasta re-probarlo con la GPU libre.
+
+
+def _files(*paths: str) -> list[HfFile]:
+    return [HfFile(path=p, size=1) for p in paths]
+
+
+def test_a_repo_shipping_onnx_beside_torch_weights_still_converts_today() -> None:
+    assert _needs_conversion(
+        _files(
+            "model_index.json",
+            "unet/model.onnx",
+            "unet/diffusion_pytorch_model.safetensors",
+            "vae_decoder/model.onnx",
+            "vae_encoder/model.onnx",
+            "vae/diffusion_pytorch_model.safetensors",
+        )
+    )
+
+
+def test_a_pure_onnx_repo_is_installed_as_is() -> None:
+    assert not _needs_conversion(
+        _files(
+            "model_index.json",
+            "unet/model.onnx",
+            "text_encoder/model.onnx",
+            "vae_decoder/model.onnx",
+            "vae_encoder/model.onnx",
+        )
+    )
