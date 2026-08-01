@@ -357,6 +357,11 @@ $script:OptionalPacks = @(
         Key     = 'migan'
         Feature = 'Editor: borrado rapido de objetos, sin esperar a la IA generativa'
         Size    = '~28 MB'
+    },
+    @{
+        Key     = 'sdcpp'
+        Feature = 'Generar imagenes con el motor Vulkan: instala modelos en minutos en vez de 40'
+        Size    = '~2 GB'
     }
 )
 
@@ -445,6 +450,10 @@ function Install-MissingBinaries {
 
     if ($selectedKeys -contains 'migan') {
         Invoke-DownloadScript -ScriptName 'download-migan.ps1' -Label 'MI-GAN (borrado rapido del Editor)'
+    }
+
+    if ($selectedKeys -contains 'sdcpp') {
+        Invoke-DownloadScript -ScriptName 'download-sdcpp.ps1' -Label 'Motor Vulkan + modelo (generacion sin conversion)'
     }
 
     $skipped = @($script:OptionalPacks | Where-Object { $selectedKeys -notcontains $_.Key })

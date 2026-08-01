@@ -71,6 +71,7 @@ Name: "modelanime"; Description: "Generar imagenes: modelo anime (Hassaku XL Ill
 Name: "modelphoto"; Description: "Generar imagenes: modelo fotorrealista (epiCRealism XL Last FAME, descarga ~6.5 GB y se prepara solo la primera vez, ~20 min)"; Types: full custom
 Name: "editor"; Description: "Editor: seleccionar objetos con un toque para quitarlos o reemplazarlos (~45 MB)"; Types: full custom
 Name: "eraser"; Description: "Editor: borrado rapido de objetos, sin esperar a la IA generativa (~28 MB)"; Types: full custom
+Name: "vulkan"; Description: "Generar imagenes: motor Vulkan, instala modelos en minutos en vez de 40 (motor ~50 MB + un modelo ~2 GB)"; Types: full custom
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
@@ -131,6 +132,8 @@ begin
     Selected := Selected + 'mobilesam' + #13#10;
   if WizardIsComponentSelected('eraser') then
     Selected := Selected + 'migan' + #13#10;
+  if WizardIsComponentSelected('vulkan') then
+    Selected := Selected + 'sdcpp' + #13#10;
 
   PackPath := ExpandConstant('{app}\' + OptionalPacksFile);
   SaveStringToFile(PackPath, Selected, False);

@@ -30,6 +30,7 @@ PACK_SCRIPTS: dict[str, str] = {
     "ffmpeg": "download-ffmpeg.ps1",
     "mobilesam": "download-mobilesam.ps1",
     "migan": "download-migan.ps1",
+    "sdcpp": "download-sdcpp.ps1",
 }
 
 # Los scripts descargan cientos de MB desde GitHub releases. El techo es un
