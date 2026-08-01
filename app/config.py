@@ -449,9 +449,16 @@ class Settings(BaseSettings):
     # para usar otro checkpoint (avanzado). Los .safetensors originales de los
     # modelos instalados no sobreviven a la conversión ONNX, por eso el pack
     # trae el suyo.
-    enable_sdcpp: bool = Field(default=False, alias="ENABLE_SDCPP")
+    # Encendido por defecto: no cuesta nada si el pack no esta (available()
+    # exige el binario en disco), y con el pack instalado da la via rapida --
+    # los checkpoints de la comunidad corren tal cual, sin los ~40 min de
+    # conversion a ONNX.
+    enable_sdcpp: bool = Field(default=True, alias="ENABLE_SDCPP")
     sdcpp_binary: str = Field(default="vendor/sdcpp/sd.exe", alias="SDCPP_BINARY")
     sdcpp_model: str = Field(default="vendor/sdcpp/model.safetensors", alias="SDCPP_MODEL")
+    # Carpeta con los checkpoints del lane Vulkan: cada archivo es un modelo
+    # elegible, y agregar uno es copiarlo ahi.
+    sdcpp_models_dir: str = Field(default="vendor/sdcpp/models", alias="SDCPP_MODELS_DIR")
 
     # Editor: segmentación interactiva "tocar un objeto -> máscara" (MobileSAM,
     # Acly/MobileSAM rev 0d3b4033, MIT, ~45MB total, preprocesamiento embebido
@@ -784,6 +791,10 @@ class Settings(BaseSettings):
         return resolve_against_project_root(self.sdcpp_binary)
 
     @property
+    def sdcpp_models_dir_path(self) -> Path:
+        return resolve_against_project_root(self.sdcpp_models_dir)
+
+    @property
     def sdcpp_model_path(self) -> Path | None:
         return resolve_against_project_root(self.sdcpp_model) if self.sdcpp_model else None
 
@@ -806,10 +817,16 @@ class Settings(BaseSettings):
         return self.editor_segmenter_encoder_path.exists() and self.editor_segmenter_decoder_path.exists()
 
     def sdcpp_available(self) -> bool:
-        if not self.enable_sdcpp:
+        """El lane Vulkan puede correr: binario presente y al menos un modelo.
+
+        El binario manda: sin el no hay motor. Los modelos se cuentan de la
+        carpeta y del ajuste legacy, asi que basta con copiar un checkpoint.
+        """
+        if not self.enable_sdcpp or not self.sdcpp_binary_path.exists():
             return False
-        model = self.sdcpp_model_path
-        return self.sdcpp_binary_path.exists() and model is not None and model.exists()
+        from app.services.engines.sdcpp_models import list_sdcpp_models
+
+        return bool(list_sdcpp_models(self))
 
     def interp_engine_available(self, engine: str) -> bool:
         if engine == RIFE_ENGINE:

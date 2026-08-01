@@ -33,6 +33,8 @@ from app.models import (
     VideoUpscaleJob,
 )
 from app.schemas import (
+    InstallVulkanModelRequest,
+    VulkanInstallStatusResponse,
     CreateDownloadJobRequest,
     DownloadJobResponse,
     MediaProbeResponse,
@@ -1795,6 +1797,42 @@ def _entry_supports_inpaint(settings: Settings, entry: Any) -> bool:
     return supports_inpaint(declared)
 
 
+def get_vulkan_installer(request: Request):
+    return request.app.state.vulkan_installer
+
+
+@router.post(
+    "/generation/models/vulkan", response_model=CreateInstallResponse, status_code=202,
+    dependencies=[Depends(require(Permission.models_install))],
+)
+async def install_vulkan_model(
+    payload: InstallVulkanModelRequest,
+    installer=Depends(get_vulkan_installer),
+) -> CreateInstallResponse:
+    """Instala un checkpoint suelto para el lane Vulkan: solo se descarga."""
+    try:
+        install_id = await installer.install(payload.repo_id, payload.filename)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return CreateInstallResponse(
+        install_id=install_id,
+        status_url=f"/api/v1/generation/models/vulkan/{install_id}",
+    )
+
+
+@router.get("/generation/models/vulkan/{install_id}", response_model=VulkanInstallStatusResponse)
+async def vulkan_install_status(
+    install_id: str, installer=Depends(get_vulkan_installer)
+) -> VulkanInstallStatusResponse:
+    job = installer.status(install_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Install not found")
+    return VulkanInstallStatusResponse(
+        install_id=job.id, repo_id=job.repo_id, status=job.status.value,
+        progress_pct=job.progress_pct, model_id=job.model_id, error=job.error,
+    )
+
+
 @router.get("/generation/capabilities", response_model=GenerationCapabilitiesResponse)
 async def generation_capabilities(
     registry: ModelRegistry = Depends(get_model_registry),
@@ -1817,12 +1855,14 @@ async def generation_capabilities(
         if entry.kind == ModelKind.diffusion_onnx and entry.status != ModelStatus.error
     ]
     if settings.sdcpp_available():
-        from app.services.engines.sdcpp_engine import SDCPP_MODEL_ID, SDCPP_MODEL_LABEL
+        from app.services.engines.sdcpp_models import list_sdcpp_models
 
-        models.append(
+        # Un modelo por checkpoint: corren tal cual, sin conversion.
+        models.extend(
             GenerationModelSummary(
-                id=SDCPP_MODEL_ID, name=SDCPP_MODEL_LABEL, supports_inpaint=False
+                id=model.id, name=f"{model.name} (Vulkan)", supports_inpaint=False
             )
+            for model in list_sdcpp_models(settings)
         )
     if settings.migan_available():
         from app.services.engines.migan_eraser import ERASER_MODEL_ID, ERASER_MODEL_LABEL

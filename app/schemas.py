@@ -562,6 +562,24 @@ class GenerationJobResponse(BaseModel):
     download_url: str | None = Field(default=None, serialization_alias="downloadUrl")
 
 
+class InstallVulkanModelRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    repo_id: str = Field(alias="repoId")
+    # Archivo suelto del repo (.safetensors/.gguf): es lo que corre el lane
+    # Vulkan tal cual, sin exportar nada.
+    filename: str
+
+
+class VulkanInstallStatusResponse(BaseModel):
+    install_id: str = Field(serialization_alias="installId")
+    repo_id: str = Field(serialization_alias="repoId")
+    status: str
+    progress_pct: float | None = Field(default=None, serialization_alias="progressPct")
+    model_id: str | None = Field(default=None, serialization_alias="modelId")
+    error: str | None = None
+
+
 class EditorSegmentRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 

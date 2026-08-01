@@ -239,6 +239,11 @@ async def lifespan(app: FastAPI):
     app.state.model_installer = model_installer
     from app.services.editor_segmenter import EditorSegmenter
 
+    from app.services.vulkan_installer import VulkanModelInstaller
+
+    vulkan_installer = VulkanModelInstaller(settings, hf_client)
+    await vulkan_installer.start()
+    app.state.vulkan_installer = vulkan_installer
     app.state.editor_segmenter = EditorSegmenter(settings)
     app.state.generation_job_manager = generation_job_manager
     app.state.generation_installer = generation_installer

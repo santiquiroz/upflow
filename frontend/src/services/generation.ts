@@ -115,6 +115,28 @@ export function installGenerationModel(
   return apiPostJson<CreateInstallResponse>("/generation/models", body);
 }
 
+// Vía rápida: el lane Vulkan corre el checkpoint tal cual, así que instalar es
+// descargar. Sin exportación a ONNX y sin los ~40 min que eso cuesta.
+export function installVulkanModel(
+  repoId: string,
+  filename: string,
+): Promise<CreateInstallResponse> {
+  return apiPostJson<CreateInstallResponse>("/generation/models/vulkan", { repoId, filename });
+}
+
+export interface VulkanInstallStatus {
+  installId: string;
+  repoId: string;
+  status: "queued" | "downloading" | "installed" | "error";
+  progressPct: number | null;
+  modelId: string | null;
+  error: string | null;
+}
+
+export function getVulkanInstallStatus(installId: string): Promise<VulkanInstallStatus> {
+  return apiGet<VulkanInstallStatus>(`/generation/models/vulkan/${installId}`);
+}
+
 export function getGenerationInstallStatus(installId: string): Promise<InstallStatusResponse> {
   return apiGet<InstallStatusResponse>(`/generation/models/install/${installId}`);
 }

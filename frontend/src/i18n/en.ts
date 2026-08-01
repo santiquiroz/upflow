@@ -10,6 +10,11 @@
 export const en = {
   // --- generation module -------------------------------------------------
   "generation.compat.readyOnnx": "ONNX ready",
+  "generation.vulkan.install": "Install for Vulkan (fast)",
+  "generation.vulkan.installing": "Downloading…",
+  "generation.vulkan.done": "Ready in Vulkan",
+  "generation.vulkan.hint":
+    "Runs the checkpoint as-is on the Vulkan engine: just a download, no ~40 min conversion.",
   "generation.compat.needsConversion": "Requires conversion",
   "generation.compat.singleFile": "Single-file",
   "generation.compat.gated": "Restricted access",

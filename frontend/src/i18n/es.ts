@@ -4,6 +4,11 @@
 export const es = {
   // --- modulo de generacion ----------------------------------------------
   "generation.compat.readyOnnx": "ONNX listo",
+  "generation.vulkan.install": "Instalar para Vulkan (rápido)",
+  "generation.vulkan.installing": "Descargando…",
+  "generation.vulkan.done": "Listo en Vulkan",
+  "generation.vulkan.hint":
+    "Corre el checkpoint tal cual en el motor Vulkan: solo se descarga, sin la conversión de ~40 min.",
   "generation.compat.needsConversion": "Requiere conversión",
   "generation.compat.singleFile": "Archivo único",
   "generation.compat.gated": "Acceso restringido",

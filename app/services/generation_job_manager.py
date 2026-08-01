@@ -15,6 +15,7 @@ from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
 from app.services.engines.generation_onnx import GenerationEngine, GenerationRequest
 from app.services.engines.migan_eraser import ERASER_MODEL_ID
 from app.services.engines.sdcpp_engine import SDCPP_MODEL_ID
+from app.services.engines.sdcpp_models import SDCPP_MODEL_PREFIX, resolve_sdcpp_model
 from app.services.generation_img2img import supports_img2img
 from app.services.generation_inpaint import supports_inpaint
 from app.services.job_manager import select_upscale_engine
@@ -180,6 +181,14 @@ class GenerationJobManager:
                     "o corré scripts/download-migan.ps1"
                 )
             return
+        if model_id.startswith(SDCPP_MODEL_PREFIX):
+            # Lane Vulkan: el modelo es un archivo en disco, no una entrada del
+            # registro. Se valida que exista de verdad y no por el nombre.
+            if self.sdcpp_engine is None or resolve_sdcpp_model(model_id, self.settings) is None:
+                raise ValueError(
+                    "Ese modelo Vulkan ya no está disponible. Instalá uno desde Models."
+                )
+            return
         if model_id == SDCPP_MODEL_ID:
             # Lane experimental Fase 3: no vive en el registry, se gatea por flag.
             if self.sdcpp_engine is None or not self.settings.sdcpp_available():
@@ -234,6 +243,8 @@ class GenerationJobManager:
     def _validate_inpaint(
         self, model_id: str, init_image_path: Path | None, mask_image_path: Path, strength: float
     ) -> None:
+        if model_id.startswith(SDCPP_MODEL_PREFIX):
+            raise ValueError("Los modelos Vulkan son solo de texto a imagen por ahora")
         if model_id == ERASER_MODEL_ID:
             if init_image_path is None or not init_image_path.exists():
                 raise ValueError("el borrado rápido necesita la imagen base")
@@ -242,6 +253,14 @@ class GenerationJobManager:
             return
         """Mismo principio que _validate_img2img: rechazar al crear, no a mitad
         de la ejecución; una lectura fallida del model_index no es un veredicto."""
+        if model_id.startswith(SDCPP_MODEL_PREFIX):
+            # Lane Vulkan: el modelo es un archivo en disco, no una entrada del
+            # registro. Se valida que exista de verdad y no por el nombre.
+            if self.sdcpp_engine is None or resolve_sdcpp_model(model_id, self.settings) is None:
+                raise ValueError(
+                    "Ese modelo Vulkan ya no está disponible. Instalá uno desde Models."
+                )
+            return
         if model_id == SDCPP_MODEL_ID:
             raise ValueError("El lane experimental sd.cpp es solo texto a imagen")
         if init_image_path is None:
@@ -337,6 +356,9 @@ class GenerationJobManager:
         self.quota_service.record_usage(job.owner_id, duration)
 
     async def _run_engine(self, job: GenerationJob) -> None:
+        if job.model_id.startswith(SDCPP_MODEL_PREFIX):
+            await self._run_sdcpp(job, resolve_sdcpp_model(job.model_id, self.settings))
+            return
         if job.model_id == ERASER_MODEL_ID:
             await self._run_eraser(job)
             return
@@ -399,7 +421,7 @@ class GenerationJobManager:
         job.output_path = output_path
         complete_generation_stages(job, False)
 
-    async def _run_sdcpp(self, job: GenerationJob) -> None:
+    async def _run_sdcpp(self, job: GenerationJob, checkpoint: Path | None = None) -> None:
         # Lane experimental: subprocess sd.cpp Vulkan, sin progreso por paso ni
         # auto-upscale en v1. La cancelación mata el proceso (run_guarded_process).
         advance_generation_stage(job, "generating", False)
@@ -408,7 +430,7 @@ class GenerationJobManager:
             guidance=job.guidance, width=job.width, height=job.height, seed=job.seed,
         )
         job.output_path = await self.sdcpp_engine.run(
-            request, self.settings.outputs_path / f"{job.id}.png"
+            request, self.settings.outputs_path / f"{job.id}.png", checkpoint=checkpoint
         )
         complete_generation_stages(job, False)
 

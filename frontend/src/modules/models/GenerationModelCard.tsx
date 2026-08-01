@@ -1,5 +1,8 @@
 import { AlertTriangle, ChevronDown, ChevronUp } from "lucide-react";
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { installVulkanModel } from "../../services/generation";
+import { fetchGenerationCapabilities } from "../../services/generation";
 import {
   useGenerationModelInstall,
   useGenerationModelPreflight,
@@ -226,6 +229,34 @@ export function GenerationModelCard({ result }: GenerationModelCardProps) {
   );
   const { phase, progressPct, stageLabel, errorMessage, install, reset } =
     useGenerationModelInstall();
+  // Via rapida: el lane Vulkan corre el checkpoint tal cual. Solo se ofrece si
+  // el motor esta instalado, y solo para repos de archivo suelto (que es lo que
+  // ese motor sabe leer).
+  const capabilitiesQuery = useQuery({
+    queryKey: ["generationCapabilities"],
+    queryFn: fetchGenerationCapabilities,
+  });
+  const vulkanReady = (capabilitiesQuery.data?.models ?? []).some((model) =>
+    model.id.startsWith("sdcpp:"),
+  );
+  const [vulkanState, setVulkanState] = useState<"idle" | "installing" | "done" | "error">("idle");
+  const [vulkanError, setVulkanError] = useState<string | null>(null);
+
+  async function handleVulkanInstall() {
+    const filename = selectedCheckpoint?.path;
+    if (!filename) {
+      return;
+    }
+    setVulkanState("installing");
+    setVulkanError(null);
+    try {
+      await installVulkanModel(result.id, filename);
+      setVulkanState("done");
+    } catch (error) {
+      setVulkanState("error");
+      setVulkanError(error instanceof Error ? error.message : String(error));
+    }
+  }
 
   const checkpoints = preflightQuery.data?.checkpoints ?? [];
   // Todavía no llegó la lista. Distinto de "llegó y ninguno sirve", que es un dato.
@@ -245,12 +276,28 @@ export function GenerationModelCard({ result }: GenerationModelCardProps) {
 
   return (
     <div className="flex flex-col gap-3 rounded border border-border bg-surface p-4">
+      {vulkanError && <p className="text-xs text-danger">{vulkanError}</p>}
       <div className="flex items-start justify-between gap-3">
         <div className="flex flex-col gap-1.5">
           <span className="text-sm font-medium text-text">{result.id}</span>
           {result.author && <span className="text-xs text-text-faint">{result.author}</span>}
           <CompatBadge verdict={result.compat} />
         </div>
+        {phase === "idle" && vulkanReady && needsCheckpointChoice && (
+          <button
+            type="button"
+            onClick={() => void handleVulkanInstall()}
+            disabled={!selectedCheckpoint || vulkanState === "installing"}
+            title={t("generation.vulkan.hint")}
+            className="rounded border border-accent px-3 py-1.5 text-sm text-text disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {vulkanState === "installing"
+              ? t("generation.vulkan.installing")
+              : vulkanState === "done"
+                ? t("generation.vulkan.done")
+                : t("generation.vulkan.install")}
+          </button>
+        )}
         {phase === "idle" && (
           <InstallButton
             onInstall={() =>

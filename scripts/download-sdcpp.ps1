@@ -17,7 +17,8 @@ $root = Split-Path -Parent $PSScriptRoot
 $vendorDir = Join-Path $root 'vendor\sdcpp'
 $tempDir = Join-Path $root 'runtime\temp'
 $binaryPath = Join-Path $vendorDir 'sd.exe'
-$modelPath = Join-Path $vendorDir 'model.safetensors'
+$modelsDir = Join-Path $vendorDir 'models'
+$modelPath = Join-Path $modelsDir 'dreamshaper_8.safetensors'
 
 if ((Test-Path $binaryPath) -and (Test-Path $modelPath)) {
     Write-Host "sd.cpp ya esta en $binaryPath (modelo incluido)"
@@ -25,6 +26,7 @@ if ((Test-Path $binaryPath) -and (Test-Path $modelPath)) {
 }
 
 New-Item -ItemType Directory -Force $vendorDir | Out-Null
+New-Item -ItemType Directory -Force $modelsDir | Out-Null
 New-Item -ItemType Directory -Force $tempDir | Out-Null
 
 if (-not (Test-Path $binaryPath)) {

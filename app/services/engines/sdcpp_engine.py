@@ -28,10 +28,11 @@ class SdcppEngine:
     def available(self) -> bool:
         return self.settings.sdcpp_available()
 
-    def build_command(self, request, output_path: Path) -> list[str]:
+    def build_command(self, request, output_path: Path, checkpoint: Path | None = None) -> list[str]:
+        model_path = checkpoint or self.settings.sdcpp_model_path
         command = [
             str(self.settings.sdcpp_binary_path),
-            "-m", str(self.settings.sdcpp_model_path),
+            "-m", str(model_path),
             "-p", request.prompt,
             "--steps", str(request.steps),
             "--cfg-scale", str(request.guidance),
@@ -45,13 +46,13 @@ class SdcppEngine:
             command += ["-s", str(request.seed)]
         return command
 
-    async def run(self, request, output_path: Path) -> Path:
+    async def run(self, request, output_path: Path, checkpoint: Path | None = None) -> Path:
         if not self.available():
             raise RuntimeError(
                 "sd.cpp lane is not available: set ENABLE_SDCPP=true, run "
                 "scripts/download-sdcpp.ps1 and point SDCPP_MODEL to a checkpoint"
             )
-        command = self.build_command(request, output_path)
+        command = self.build_command(request, output_path, checkpoint)
         stdout, stderr, returncode = await run_guarded_process(
             command, self.settings.subprocess_timeout
         )
