@@ -16,7 +16,9 @@ $modelUrl = 'https://huggingface.co/digiplay/DreamShaper_8/resolve/a5883e31f50b1
 $root = Split-Path -Parent $PSScriptRoot
 $vendorDir = Join-Path $root 'vendor\sdcpp'
 $tempDir = Join-Path $root 'runtime\temp'
-$binaryPath = Join-Path $vendorDir 'sd.exe'
+# El ejecutable del release se llama sd-cli.exe (sd.exe no existe; tambien
+# viene un sd-server.exe que no usamos).
+$binaryPath = Join-Path $vendorDir 'sd-cli.exe'
 $modelsDir = Join-Path $vendorDir 'models'
 $modelPath = Join-Path $modelsDir 'dreamshaper_8.safetensors'
 
@@ -40,8 +42,8 @@ if (-not (Test-Path $binaryPath)) {
 
     # Algunos zips traen subcarpeta: aplanar el exe al nivel del vendorDir.
     if (-not (Test-Path $binaryPath)) {
-        $found = Get-ChildItem $vendorDir -Recurse -Filter 'sd.exe' | Select-Object -First 1
-        if ($null -eq $found) { throw "sd.exe no aparecio tras extraer $assetName" }
+        $found = Get-ChildItem $vendorDir -Recurse -Filter 'sd-cli.exe' | Select-Object -First 1
+        if ($null -eq $found) { throw "sd-cli.exe no aparecio tras extraer $assetName" }
         Get-ChildItem $found.Directory.FullName | Move-Item -Destination $vendorDir -Force
     }
 }

@@ -454,7 +454,7 @@ class Settings(BaseSettings):
     # los checkpoints de la comunidad corren tal cual, sin los ~40 min de
     # conversion a ONNX.
     enable_sdcpp: bool = Field(default=True, alias="ENABLE_SDCPP")
-    sdcpp_binary: str = Field(default="vendor/sdcpp/sd.exe", alias="SDCPP_BINARY")
+    sdcpp_binary: str = Field(default="vendor/sdcpp/sd-cli.exe", alias="SDCPP_BINARY")
     sdcpp_model: str = Field(default="vendor/sdcpp/model.safetensors", alias="SDCPP_MODEL")
     # Carpeta con los checkpoints del lane Vulkan: cada archivo es un modelo
     # elegible, y agregar uno es copiarlo ahi.
