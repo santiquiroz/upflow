@@ -15,6 +15,7 @@ from app.services.generation_img2img import load_img2img_class
 from app.services.engines.gmfss_engine import _tune_session_options_for_device
 from app.services.engines.onnx_upscaler import _build_providers
 from app.services.gpu_session_coordinator import GpuSessionCoordinator
+from app.services import ep_registry
 
 logger = logging.getLogger(__name__)
 
@@ -425,20 +426,21 @@ class GenerationEngine:
             pipeline_cls = load_img2img_class(declared)
         else:
             pipeline_cls = _load_pipeline_class(declared)
-        providers = _build_providers(device)
-        sess_options = ort.SessionOptions()
-        _tune_session_options_for_device(sess_options, device)
-        primary = providers[0]
+        def build_sess_options() -> Any:
+            sess_options = ort.SessionOptions()
+            _tune_session_options_for_device(sess_options, device)
+            return sess_options
+
+        # Los providers salen del ep_registry y no armados a mano: si no, con un
+        # plugin EP instalado aceleraba todo menos generar, sin ninguna señal.
+        # optimum reusa este SessionOptions para las varias sesiones del pipeline
+        # (unet, vae, encoders), lo cual está verificado contra onnxruntime real.
         # use_io_binding=False explicito: hoy es el default para DML pero se
         # blinda ante cambios de default de optimum (IOBinding+DML vetado en este repo).
         from_pretrained_kwargs: dict[str, Any] = {
-            "session_options": sess_options,
             "use_io_binding": False,
+            **ep_registry.loader_kwargs(
+                device, self.settings, sess_options_factory=build_sess_options
+            ),
         }
-        if isinstance(primary, tuple):
-            provider_name, provider_options = primary
-            from_pretrained_kwargs["provider"] = provider_name
-            from_pretrained_kwargs["provider_options"] = provider_options
-        else:
-            from_pretrained_kwargs["provider"] = primary
         return pipeline_cls.from_pretrained(str(pipeline_dir), **from_pretrained_kwargs)

@@ -31,6 +31,16 @@ function readOutputFps(job: VideoJobResponse): string | null {
   return typeof raw === "string" ? raw : null;
 }
 
+function readUpscaleEngine(job: VideoJobResponse): string | null {
+  const backend = job.metadata.upscaleBackend;
+  if (typeof backend !== "string") {
+    return null;
+  }
+  const precision = job.metadata.upscalePrecision;
+  const label = backend === "onnx" && typeof precision === "string" ? `onnx ${precision}` : backend;
+  return job.metadata.upscaleTiled === true ? `${label} · en mosaicos` : label;
+}
+
 function readStage(job: VideoJobResponse): string | null {
   const raw = job.metadata.stage;
   return typeof raw === "string" ? raw : null;
@@ -165,6 +175,9 @@ function ImageCompletedDetails({ job }: { job: JobResponse }) {
 
 function VideoCompletedDetails({ job }: { job: VideoJobResponse }) {
   const outputFps = readOutputFps(job);
+  // Sin esto, "en mi maquina va lentisimo" no se puede diagnosticar: el motor y
+  // la precision ya se registraban, pero no se veian en ninguna parte.
+  const engine = readUpscaleEngine(job);
   return (
     <dl className="flex gap-4 text-xs text-text-dim">
       <div className="flex items-center gap-1">
@@ -179,6 +192,12 @@ function VideoCompletedDetails({ job }: { job: VideoJobResponse }) {
         <div className="flex items-center gap-1">
           <dt className="text-text-faint">FPS</dt>
           <dd className="font-mono-tabular text-text">{formatFps(outputFps)}</dd>
+        </div>
+      )}
+      {engine && (
+        <div className="flex items-center gap-1">
+          <dt className="text-text-faint">Motor</dt>
+          <dd className="text-text">{engine}</dd>
         </div>
       )}
       <DurationDetailItem job={job} />

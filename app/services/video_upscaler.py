@@ -429,6 +429,7 @@ class VideoUpscaler:
         # HF-installed ONNX models are onnx-only (arbitrary fp32 NCHW graphs) --
         # they always go through OnnxUpscaler, untouched by the runtime selector.
         if self._is_onnx_model(job.model_id):
+            self._stamp_upscale_backend(job, "onnx")
             await self._upscale_frames_onnx(job, frames_in, frames_out)
             return
         # Builtin Real-ESRGAN model: the selector decides ncnn vs the optimized
@@ -437,8 +438,10 @@ class VideoUpscaler:
         # (native DLL load) + get_available_providers, which would otherwise stall
         # every concurrent job's progress polling on the loop thread.
         if await asyncio.to_thread(self._resolve_builtin_backend, job) == UpscaleBackend.onnx:
+            self._stamp_upscale_backend(job, "onnx")
             await self._upscale_frames_onnx_builtin(job, frames_in, frames_out)
             return
+        self._stamp_upscale_backend(job, "ncnn")
         await self._upscale_frames_ncnn(job, frames_in, frames_out)
 
     def _resolve_builtin_backend(self, job: VideoUpscaleJob) -> UpscaleBackend:
@@ -931,6 +934,12 @@ class VideoUpscaler:
         if precision is not None:
             job.metadata["upscalePrecision"] = precision
         job.metadata["upscaleTiled"] = bool(getattr(engine, "last_tiled", False))
+
+    def _stamp_upscale_backend(self, job: VideoUpscaleJob, backend: str) -> None:
+        """Que motor escalo. Sin esto, un job en ncnn no dejaba ninguna huella y
+        "va lentisimo en otra maquina" seguia siendo adivinar: medido a 1080p->4x
+        en una RX 7800 XT, ONNX fp16 da 1.58 fps y ncnn 0.72."""
+        job.metadata["upscaleBackend"] = backend
 
     def _build_extract_frames_command(
         self, source_path: Path, frames_in: Path, fps: str

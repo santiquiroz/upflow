@@ -417,3 +417,49 @@ def test_latent_consistency_and_plain_sd_are_supported() -> None:
 
     for target in PIPELINE_CLASS_NAMES.values():
         assert hasattr(ort_module, target), target
+
+
+def test_generation_uses_the_native_ep_when_there_is_one(monkeypatch, tmp_path):
+    """Antes armaba providers DirectML a mano y se saltaba el ep_registry: con un
+    plugin instalado aceleraba escalado, editor y audio, pero NO generar, que es
+    justo donde mas se nota. Un EP de plugin no se puede pedir por nombre, se
+    pide con providers=[] y el EP puesto en el SessionOptions."""
+    import json as _json
+
+    from app.services import ep_registry
+
+    calls: list = []
+
+    class FakePipelineClass:
+        @staticmethod
+        def from_pretrained(path, **kwargs):
+            calls.append(kwargs)
+            return object()
+
+    (tmp_path / "model_index.json").write_text(
+        _json.dumps({"_class_name": "StableDiffusionXLPipeline"}), encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        generation_onnx_module, "_load_pipeline_class", lambda declared: FakePipelineClass
+    )
+    monkeypatch.setattr(
+        generation_onnx_module, "_tune_session_options_for_device", lambda so, device: None
+    )
+
+    afinado: list = []
+
+    def fake_loader_kwargs(device, settings, *, sess_options_factory=None):
+        # El afinado por dispositivo no se puede perder al pasar por el registry.
+        afinado.append(sess_options_factory() if sess_options_factory else None)
+        return {"providers": [], "provider_options": [], "session_options": afinado[-1]}
+
+    monkeypatch.setattr(ep_registry, "loader_kwargs", fake_loader_kwargs)
+
+    engine = GenerationEngine(make_settings(tmp_path), RecordingCoordinator())  # type: ignore[arg-type]
+    engine._create_pipeline(tmp_path, "dml:0")
+
+    kwargs = calls[0]
+    assert kwargs["providers"] == []
+    assert "provider" not in kwargs
+    assert kwargs["session_options"] is afinado[0]
+    assert kwargs["use_io_binding"] is False

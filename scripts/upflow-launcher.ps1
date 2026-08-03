@@ -367,6 +367,16 @@ $script:OptionalPacks = @(
         Key     = 'wan-video'
         Feature = 'Generar video desde texto o desde una imagen, en tu placa'
         Size    = '~15 GB'
+    },
+    @{
+        Key     = 'ep-nvidia'
+        Feature = 'Acelerador NVIDIA (TensorRT-RTX) en vez de DirectML'
+        Size    = '~93 MB'
+    },
+    @{
+        Key     = 'ep-intel'
+        Feature = 'Acelerador Intel (OpenVINO) para la grafica integrada o Arc'
+        Size    = '~116 MB'
     }
 )
 
@@ -463,6 +473,14 @@ function Install-MissingBinaries {
 
     if ($selectedKeys -contains 'wan-video') {
         Invoke-DownloadScript -ScriptName 'download-wan-video.ps1' -Label 'Wan 2.2 (generacion de video)'
+    }
+
+    if ($selectedKeys -contains 'ep-nvidia') {
+        Invoke-DownloadScript -ScriptName 'download-tensorrt-rtx-ep.ps1' -Label 'Acelerador NVIDIA (TensorRT-RTX)'
+    }
+
+    if ($selectedKeys -contains 'ep-intel') {
+        Invoke-DownloadScript -ScriptName 'download-openvino-ep.ps1' -Label 'Acelerador Intel (OpenVINO)'
     }
 
     $skipped = @($script:OptionalPacks | Where-Object { $selectedKeys -notcontains $_.Key })

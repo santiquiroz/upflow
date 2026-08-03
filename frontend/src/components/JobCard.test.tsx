@@ -325,4 +325,70 @@ describe("JobCard", () => {
     expect(screen.getByText("Cancelled")).toBeInTheDocument();
     expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
   });
+
+
+  it("shows which engine upscaled, so a slow job can be diagnosed", () => {
+    // Medido a 1080p->4x en una RX 7800 XT: onnx fp16 1.58 fps, ncnn 0.72,
+    // onnx fp32 0.32. Sin esto, "va lentisimo en otra maquina" era adivinar.
+    const job: VideoJobResponse = {
+      ...BASE_VIDEO_JOB,
+      status: "completed",
+      downloadUrl: "/api/v1/video/jobs/vid-1/download",
+      metadata: { upscaleBackend: "onnx", upscalePrecision: "fp16", upscaleTiled: false },
+    };
+    render(<JobCard phase="completed" job={job} />);
+
+    expect(screen.getByText("onnx fp16")).toBeInTheDocument();
+  });
+
+  it("flags tiling, which was measured 2.3x slower", () => {
+    const job: VideoJobResponse = {
+      ...BASE_VIDEO_JOB,
+      status: "completed",
+      downloadUrl: "/api/v1/video/jobs/vid-1/download",
+      metadata: { upscaleBackend: "onnx", upscalePrecision: "fp32", upscaleTiled: true },
+    };
+    render(<JobCard phase="completed" job={job} />);
+
+    expect(screen.getByText(/onnx fp32 · en mosaicos/)).toBeInTheDocument();
+  });
+
+  it("says ncnn plainly when that is what ran", () => {
+    const job: VideoJobResponse = {
+      ...BASE_VIDEO_JOB,
+      status: "completed",
+      downloadUrl: "/api/v1/video/jobs/vid-1/download",
+      metadata: { upscaleBackend: "ncnn" },
+    };
+    render(<JobCard phase="completed" job={job} />);
+
+    expect(screen.getByText("ncnn")).toBeInTheDocument();
+  });
+
+  it("says nothing when there is tiling info but no engine", () => {
+    // Sin el guard, esto pintaba el string "undefined · en mosaicos", que es
+    // truthy y por lo tanto se renderiza.
+    const job: VideoJobResponse = {
+      ...BASE_VIDEO_JOB,
+      status: "completed",
+      downloadUrl: "/api/v1/video/jobs/vid-1/download",
+      metadata: { upscaleTiled: true },
+    };
+    render(<JobCard phase="completed" job={job} />);
+
+    expect(screen.queryByText(/mosaicos/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/undefined/)).not.toBeInTheDocument();
+  });
+
+  it("says nothing when the job predates the diagnostic", () => {
+    const job: VideoJobResponse = {
+      ...BASE_VIDEO_JOB,
+      status: "completed",
+      downloadUrl: "/api/v1/video/jobs/vid-1/download",
+      metadata: {},
+    };
+    render(<JobCard phase="completed" job={job} />);
+
+    expect(screen.queryByText(/Motor/)).not.toBeInTheDocument();
+  });
 });

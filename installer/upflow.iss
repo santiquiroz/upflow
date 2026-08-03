@@ -73,6 +73,8 @@ Name: "editor"; Description: "Editor: seleccionar objetos con un toque para quit
 Name: "eraser"; Description: "Editor: borrado rapido de objetos, sin esperar a la IA generativa (~28 MB)"; Types: full custom
 Name: "vulkan"; Description: "Generar imagenes: motor Vulkan, instala modelos en minutos en vez de 40 (motor ~50 MB + un modelo ~2 GB)"; Types: full custom
 Name: "video"; Description: "Generar VIDEO desde texto o desde una imagen, en tu placa y sin conversion (descarga ~15 GB; requiere el motor Vulkan)"; Types: custom
+Name: "epnvidia"; Description: "Acelerador NVIDIA: usa TensorRT-RTX en vez de DirectML (descarga ~93 MB; requiere RTX 30xx o mas nueva)"; Types: custom
+Name: "epintel"; Description: "Acelerador Intel: usa OpenVINO en la grafica integrada o Arc (descarga ~116 MB, ocupa ~60 MB)"; Types: custom
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
@@ -137,6 +139,10 @@ begin
     Selected := Selected + 'sdcpp' + #13#10;
   if WizardIsComponentSelected('video') then
     Selected := Selected + 'wan-video' + #13#10;
+  if WizardIsComponentSelected('epnvidia') then
+    Selected := Selected + 'ep-nvidia' + #13#10;
+  if WizardIsComponentSelected('epintel') then
+    Selected := Selected + 'ep-intel' + #13#10;
 
   PackPath := ExpandConstant('{app}\' + OptionalPacksFile);
   SaveStringToFile(PackPath, Selected, False);

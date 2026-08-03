@@ -279,9 +279,13 @@ def test_active_ep_baseline_without_plugins(tmp_path: Path) -> None:
     assert status.state == ep_registry.EP_STATE_BASELINE
 
 
-def test_active_ep_native_when_plugin_ready(
+def test_active_ep_identifies_the_plugin_once_registered(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """Este test afirmaba EP_STATE_NATIVE apenas registrado, congelando el bug:
+    la pantalla podia anunciar el acelerador en una maquina donde despues todos
+    los trabajos caen a DirectML. El plugin se identifica igual, pero "native"
+    ahora exige que una sesion de verdad haya corrido ahi."""
     install_nvidia_plugin(monkeypatch, tmp_path)
     settings = make_settings(tmp_path)
 
@@ -289,7 +293,7 @@ def test_active_ep_native_when_plugin_ready(
 
     assert status.ep_name == "NvTensorRTRTXExecutionProvider"
     assert status.label == "TensorRT-RTX"
-    assert status.state == ep_registry.EP_STATE_NATIVE
+    assert status.state == ep_registry.EP_STATE_READY
 
 
 def test_warmup_pending_during_native_creation(
@@ -446,3 +450,371 @@ def test_winml_catalog_disabled_by_setting(
     )
 
     assert clean_registry == []
+
+# --- ruteo por placa en maquinas con mas de una GPU ----------------------
+
+
+def install_plugin_for(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, spec_index: int, vendors: list[int]
+) -> str:
+    """Instala UN plugin (por indice en NATIVE_EP_SPECS) y declara los vendors
+    de los adaptadores en el orden en que los expone dml:N."""
+    spec = ep_registry.NATIVE_EP_SPECS[spec_index]
+    lib = tmp_path / f"{spec.ep_name}.dll"
+    lib.write_bytes(b"fake")
+    module = FakePluginModule(str(lib))
+    monkeypatch.setattr(ep_registry, "_import_plugin_module", lambda name: module)
+    if spec.plugin_subdir and spec.dll_filename:
+        plugin_dir = tmp_path / "ep-plugins" / spec.plugin_subdir
+        plugin_dir.mkdir(parents=True, exist_ok=True)
+        (plugin_dir / spec.dll_filename).write_bytes(b"fake")
+    monkeypatch.setattr(ep_registry, "_adapter_vendor_ids", lambda: vendors)
+    return str(lib)
+
+
+def used_ep_names() -> list[str]:
+    (_, sess_options, providers), = FakeInferenceSession.calls
+    if providers is not None:
+        return [providers[0][0]]
+    return [d.ep_name for d in sess_options.provider_devices]
+
+
+def test_plugin_is_not_used_for_a_card_of_another_vendor(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, clean_registry: list
+) -> None:
+    """dml:0 es la iGPU Intel y dml:1 la NVIDIA. Un trabajo fijado a dml:0 NO
+    puede terminar corriendo en la NVIDIA: seria correr en otra placa en
+    silencio, ignorando el dispositivo que pidio el usuario."""
+    install_plugin_for(monkeypatch, tmp_path, 0, [INTEL, NVIDIA])  # plugin NVIDIA
+
+    ep_registry.create_session("model.onnx", "dml:0", make_settings(tmp_path))
+
+    assert used_ep_names() == ["DmlExecutionProvider"]
+
+
+def test_plugin_is_used_for_the_card_that_actually_matches(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, clean_registry: list
+) -> None:
+    install_plugin_for(monkeypatch, tmp_path, 0, [INTEL, NVIDIA])  # plugin NVIDIA
+
+    ep_registry.create_session("model.onnx", "dml:1", make_settings(tmp_path))
+
+    assert used_ep_names() == ["NvTensorRTRTXExecutionProvider"]
+
+
+def test_a_device_index_beyond_the_adapter_list_falls_back(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, clean_registry: list
+) -> None:
+    """Si no se puede saber de que placa hablamos, no se adivina."""
+    install_plugin_for(monkeypatch, tmp_path, 0, [NVIDIA])
+
+    ep_registry.create_session("model.onnx", "dml:7", make_settings(tmp_path))
+
+    assert used_ep_names() == ["DmlExecutionProvider"]
+
+
+def test_single_gpu_machines_keep_working(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, clean_registry: list
+) -> None:
+    install_plugin_for(monkeypatch, tmp_path, 0, [NVIDIA])
+
+    ep_registry.create_session("model.onnx", "dml:0", make_settings(tmp_path))
+
+    assert used_ep_names() == ["NvTensorRTRTXExecutionProvider"]
+
+
+def test_catalog_ep_is_not_attributed_to_a_card_on_a_multi_gpu_box(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, clean_registry: list
+) -> None:
+    """Un EP del catalogo no dice de que placa es. Con una sola GPU no hay
+    ambiguedad; con dos, usarlo seria adivinar."""
+    dll = tmp_path / "onnxruntime_providers_migraphx.dll"
+    dll.write_bytes(b"fake")
+    install_winml_catalog(
+        monkeypatch, [FakeCatalogProvider("MIGraphXExecutionProvider", str(dll))]
+    )
+    monkeypatch.setattr(ep_registry, "_adapter_vendor_ids", lambda: [INTEL, AMD])
+
+    ep_registry.create_session("model.onnx", "dml:0", make_settings(tmp_path))
+
+    assert used_ep_names() == ["DmlExecutionProvider"]
+
+
+# --- superficie para loaders que construyen la sesion ellos mismos --------
+# optimum y transformers no aceptan una InferenceSession ya hecha: piden
+# provider/session_options y la construyen adentro. Un EP de plugin NO se puede
+# pedir por nombre (validate_provider_availability solo mira
+# get_available_providers, que no ve plugins), asi que se pide con providers=[]
+# y el EP puesto en el SessionOptions. Verificado contra onnxruntime real.
+
+
+def test_loader_kwargs_cpu_asks_for_the_cpu_provider(tmp_path: Path) -> None:
+    kwargs = ep_registry.loader_kwargs("cpu", make_settings(tmp_path))
+    assert kwargs == {"provider": "CPUExecutionProvider"}
+
+
+def test_loader_kwargs_falls_back_to_directml_with_the_right_device_id(tmp_path: Path) -> None:
+    kwargs = ep_registry.loader_kwargs("dml:1", make_settings(tmp_path))
+    assert kwargs["provider"] == "DmlExecutionProvider"
+    assert kwargs["provider_options"] == {"device_id": 1}
+    assert "session_options" not in kwargs
+
+
+def test_loader_kwargs_uses_the_native_ep_through_session_options(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, clean_registry: list
+) -> None:
+    install_nvidia_plugin(monkeypatch, tmp_path)
+
+    kwargs = ep_registry.loader_kwargs("dml:0", make_settings(tmp_path))
+
+    # Pedirlo por nombre no sirve: optimum validaria el provider contra
+    # get_available_providers y un plugin no aparece ahi.
+    assert kwargs["providers"] == []
+    assert "provider" not in kwargs
+    names = [d.ep_name for d in kwargs["session_options"].provider_devices]
+    assert names == ["NvTensorRTRTXExecutionProvider"]
+
+
+def test_loader_kwargs_respects_the_card_the_job_was_pinned_to(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, clean_registry: list
+) -> None:
+    install_plugin_for(monkeypatch, tmp_path, 0, [INTEL, NVIDIA])  # plugin NVIDIA
+
+    de_la_intel = ep_registry.loader_kwargs("dml:0", make_settings(tmp_path))
+    de_la_nvidia = ep_registry.loader_kwargs("dml:1", make_settings(tmp_path))
+
+    assert de_la_intel["provider"] == "DmlExecutionProvider"
+    assert de_la_nvidia["providers"] == []
+
+
+def test_loader_kwargs_hands_a_fresh_session_options_each_time(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, clean_registry: list
+) -> None:
+    """add_provider_for_devices dos veces sobre el MISMO objeto falla con
+    'Provider has already been registered' (comprobado contra onnxruntime real),
+    asi que dos llamadas no pueden compartir el objeto."""
+    install_nvidia_plugin(monkeypatch, tmp_path)
+    settings = make_settings(tmp_path)
+
+    uno = ep_registry.loader_kwargs("dml:0", settings)["session_options"]
+    otro = ep_registry.loader_kwargs("dml:0", settings)["session_options"]
+
+    assert uno is not otro
+    assert len(otro.provider_devices) == 1
+
+
+def test_loader_kwargs_falls_back_when_native_is_disabled(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, clean_registry: list
+) -> None:
+    install_nvidia_plugin(monkeypatch, tmp_path)
+
+    kwargs = ep_registry.loader_kwargs("dml:0", make_settings(tmp_path, NATIVE_EP_ENABLED=False))
+
+    assert kwargs["provider"] == "DmlExecutionProvider"
+
+
+def test_the_shipped_plugin_folder_is_found_without_configuring_anything(tmp_path: Path) -> None:
+    """El script de descarga deja los DLLs en vendor/ep-plugins/. Si el default
+    de EP_PLUGINS_DIR es vacio, la app no mira ahi y el acelerador de Intel
+    queda instalado pero muerto."""
+    # Se mira el default DECLARADO y no una instancia: conftest pisa la variable
+    # de entorno justamente para que los tests no dependan de si esta maquina
+    # tiene el acelerador bajado.
+    declarado = Settings.model_fields["ep_plugins_dir"].default
+    assert declarado, "con el default vacio, los DLLs se instalan donde nadie los mira"
+    assert Path(declarado).name == "ep-plugins"
+
+
+def test_intel_plugin_is_picked_up_from_the_shipped_folder(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, clean_registry: list
+) -> None:
+    spec = next(s for s in ep_registry.NATIVE_EP_SPECS if s.vendor_id == INTEL)
+    settings = make_settings(tmp_path, EP_PLUGINS_DIR=str(tmp_path / "ep-plugins"))
+    plugin_dir = tmp_path / "ep-plugins" / spec.plugin_subdir
+    plugin_dir.mkdir(parents=True)
+    dll = plugin_dir / spec.dll_filename
+    dll.write_bytes(b"fake")
+    monkeypatch.setattr(ep_registry, "_adapter_vendor_ids", lambda: [INTEL])
+
+    ep_registry.create_session("model.onnx", "dml:0", settings)
+
+    assert clean_registry == [(spec.ep_name, str(dll))]
+
+
+# --- el estado que se muestra tiene que ser verdad ----------------------
+
+
+def test_a_plugin_that_failed_to_register_is_not_silent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, clean_registry: list
+) -> None:
+    """El caso real: se instalan 93 MB del acelerador de NVIDIA, falta el driver,
+    el registro falla. Antes se veia EXACTAMENTE igual que no tenerlo instalado."""
+    import onnxruntime as ort
+
+    install_nvidia_plugin(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        ort,
+        "register_execution_provider_library",
+        lambda name, path: (_ for _ in ()).throw(RuntimeError("falta nvml.dll (Error 126)")),
+        raising=False,
+    )
+    settings = make_settings(tmp_path)
+
+    status = ep_registry.active_ep_for_device("dml:0", settings)
+
+    assert status.state == ep_registry.EP_STATE_ERROR
+    assert "nvml" in status.detail
+    assert "TensorRT-RTX" in status.detail
+
+
+def test_a_registered_plugin_is_not_called_native_until_it_actually_ran(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, clean_registry: list
+) -> None:
+    """Decia 'native' apenas se registraba: la pantalla podia anunciar
+    TensorRT-RTX en una maquina donde todos los trabajos caen a DirectML."""
+    install_nvidia_plugin(monkeypatch, tmp_path)
+    settings = make_settings(tmp_path)
+
+    status = ep_registry.active_ep_for_device("dml:0", settings)
+
+    assert status.state == ep_registry.EP_STATE_READY
+    assert status.label == "TensorRT-RTX"
+
+
+def test_it_becomes_native_once_a_session_really_used_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, clean_registry: list
+) -> None:
+    install_nvidia_plugin(monkeypatch, tmp_path)
+    settings = make_settings(tmp_path)
+
+    ep_registry.create_session("model.onnx", "dml:0", settings)
+
+    assert ep_registry.active_ep_for_device("dml:0", settings).state == ep_registry.EP_STATE_NATIVE
+
+
+def test_a_session_that_fell_back_is_reported_as_fallback_not_native(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, clean_registry: list
+) -> None:
+    install_nvidia_plugin(monkeypatch, tmp_path)
+    FakeInferenceSession.fail_native = True
+    settings = make_settings(tmp_path)
+
+    ep_registry.create_session("model.onnx", "dml:0", settings)
+
+    status = ep_registry.active_ep_for_device("dml:0", settings)
+    assert status.state == ep_registry.EP_STATE_ERROR
+
+
+def test_a_failed_native_session_is_not_retried_forever(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, clean_registry: list
+) -> None:
+    """Con TensorRT, reintentar el camino nativo en cada trabajo paga una
+    compilacion cara para volver a caer a DirectML."""
+    install_nvidia_plugin(monkeypatch, tmp_path)
+    FakeInferenceSession.fail_native = True
+    settings = make_settings(tmp_path)
+
+    ep_registry.create_session("model.onnx", "dml:0", settings)
+    intentos_primero = len(FakeInferenceSession.calls)
+    FakeInferenceSession.calls = []
+    ep_registry.create_session("model.onnx", "dml:0", settings)
+
+    assert intentos_primero == 2  # nativo (falla) + fallback DirectML
+    assert len(FakeInferenceSession.calls) == 1  # el segundo va directo a DirectML
+
+
+def test_reset_unregisters_from_onnxruntime(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, clean_registry: list
+) -> None:
+    """Sin desregistrar, un segundo _initialize re-registra el mismo nombre en
+    ORT real. Invisible hoy porque ORT esta fakeado en todos los tests."""
+    import onnxruntime as ort
+
+    desregistrados: list[str] = []
+    monkeypatch.setattr(
+        ort, "unregister_execution_provider_library", desregistrados.append, raising=False
+    )
+    install_nvidia_plugin(monkeypatch, tmp_path)
+    ep_registry.create_session("model.onnx", "dml:0", make_settings(tmp_path))
+
+    ep_registry.reset()
+
+    assert desregistrados == ["NvTensorRTRTXExecutionProvider"]
+
+
+# --- precarga de DLLs hermanas -------------------------------------------
+# La UNICA funcion del registry que toca el sistema operativo, y la unica que
+# estaba mockeada en todos los tests. Existe para evitar el "Error 126 engañoso"
+# que da ORT cuando el plugin carga sin sus dependencias al lado.
+#
+# El fixture autouse la reemplaza por un no-op en todos los demas tests, asi que
+# se captura la de verdad al importar el modulo, antes de cualquier parche.
+_PRELOAD_REAL = ep_registry._preload_plugin_deps
+
+
+def test_preload_adds_the_plugin_folder_to_the_dll_search_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    plugin_dir = tmp_path / "plugin"
+    plugin_dir.mkdir()
+    lib = plugin_dir / "main_plugin.dll"
+    lib.write_bytes(b"fake")
+
+    agregados: list[str] = []
+    monkeypatch.setattr(ep_registry.os, "add_dll_directory", agregados.append, raising=False)
+    monkeypatch.setattr(ep_registry.ctypes, "WinDLL", lambda p: None, raising=False)
+
+    _PRELOAD_REAL(str(lib))
+
+    assert agregados == [str(plugin_dir)]
+
+
+def test_preload_loads_the_siblings_but_never_the_plugin_itself(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Cargar el plugin aca lo dejaria mapeado dos veces: lo carga ORT despues."""
+    plugin_dir = tmp_path / "plugin"
+    plugin_dir.mkdir()
+    lib = plugin_dir / "main_plugin.dll"
+    lib.write_bytes(b"fake")
+    (plugin_dir / "dep_uno.dll").write_bytes(b"fake")
+    (plugin_dir / "dep_dos.dll").write_bytes(b"fake")
+    (plugin_dir / "notas.txt").write_bytes(b"no es una dll")
+
+    cargados: list[str] = []
+    monkeypatch.setattr(ep_registry.os, "add_dll_directory", lambda d: None, raising=False)
+    monkeypatch.setattr(
+        ep_registry.ctypes, "WinDLL", lambda p: cargados.append(Path(p).name), raising=False
+    )
+
+    _PRELOAD_REAL(str(lib))
+
+    assert sorted(cargados) == ["dep_dos.dll", "dep_uno.dll"]
+
+
+def test_preload_survives_a_sibling_that_cannot_be_loaded(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Una dep opcional que no carga no puede tumbar el registro: el fallo real
+    lo tiene que reportar ORT, no esta precarga."""
+    plugin_dir = tmp_path / "plugin"
+    plugin_dir.mkdir()
+    lib = plugin_dir / "main_plugin.dll"
+    lib.write_bytes(b"fake")
+    (plugin_dir / "aaa_rota.dll").write_bytes(b"fake")
+    (plugin_dir / "zzz_buena.dll").write_bytes(b"fake")
+
+    cargados: list[str] = []
+
+    def fake_windll(path: str) -> None:
+        if "rota" in path:
+            raise OSError("no se pudo cargar")
+        cargados.append(Path(path).name)
+
+    monkeypatch.setattr(ep_registry.os, "add_dll_directory", lambda d: None, raising=False)
+    monkeypatch.setattr(ep_registry.ctypes, "WinDLL", fake_windll, raising=False)
+
+    _PRELOAD_REAL(str(lib))
+
+    # La rota va primero por orden alfabetico: si abortara, la buena no se carga.
+    assert cargados == ["zzz_buena.dll"]

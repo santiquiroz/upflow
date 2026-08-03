@@ -342,6 +342,12 @@ function Add-RealesrganOnnxModelsToInstaller {
         'realesrgan-x4plus-anime-x2-uint8.onnx',
         'realesrgan-x4plus-anime-x3-uint8.onnx'
     )
+    # Cada modelo tiene su hermano fp16 y la app lo prefiere en GPU, cayendo al
+    # fp32 EN SILENCIO si falta. Medido en una RX 7800 XT a 1080p->4x: fp16 1.58
+    # fps contra fp32 0.32, o sea 4.9x. Exigir solo los fp32 dejaba salir un
+    # release que corria casi 5 veces mas lento sin que nada lo dijera.
+    $requiredOnnx = $requiredOnnx + ($requiredOnnx | ForEach-Object { $_ -replace '\.onnx$', '-fp16.onnx' })
+
     $presentNames = @($onnxFiles | ForEach-Object { $_.Name })
     $missingOnnx = @($requiredOnnx | Where-Object { $presentNames -notcontains $_ })
     if ($missingOnnx.Count -gt 0) {

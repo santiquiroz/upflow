@@ -430,10 +430,11 @@ class Settings(BaseSettings):
     # Y el hardware del vendor está presente; ante cualquier fallo la sesión
     # cae a DirectML→CPU sin fallar el job. False = baseline puro en todos lados.
     native_ep_enabled: bool = Field(default=True, alias="NATIVE_EP_ENABLED")
-    # Carpeta opcional con plugins EP sueltos (DLLs extraídos de un NuGet, p.ej.
-    # Intel.ML.OnnxRuntime.EP.OpenVINO -> ep-plugins/openvino/*.dll). Vacío =
-    # solo se detectan plugins instalados por pip.
-    ep_plugins_dir: str = Field(default="", alias="EP_PLUGINS_DIR")
+    # Carpeta con plugins EP sueltos (DLLs extraídos de un NuGet, p.ej.
+    # Intel.ML.OnnxRuntime.EP.OpenVINO -> ep-plugins/openvino/*.dll). Apunta por
+    # defecto a donde los deja scripts/download-openvino-ep.ps1: con el default
+    # vacío el plugin se instalaba y nadie lo miraba.
+    ep_plugins_dir: str = Field(default="vendor/ep-plugins", alias="EP_PLUGINS_DIR")
     # Fase 2: catálogo de EPs de Windows ML (Win11 24H2+). Triple gate real:
     # este flag + build >= 26100 + proyección Python del catálogo importable
     # (winui3.microsoft.windows.ai.machinelearning — a 2026-07-31 NO publicada
@@ -789,6 +790,10 @@ class Settings(BaseSettings):
     @property
     def sdcpp_binary_path(self) -> Path:
         return resolve_against_project_root(self.sdcpp_binary)
+
+    @property
+    def ep_plugins_dir_path(self) -> Path | None:
+        return resolve_against_project_root(self.ep_plugins_dir) if self.ep_plugins_dir else None
 
     @property
     def sdcpp_models_dir_path(self) -> Path:

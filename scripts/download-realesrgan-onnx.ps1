@@ -32,7 +32,12 @@ $expectedOnnx = @(
     'realesrgan-x4plus-anime-x3-uint8.onnx'
 )
 
-$missingOnnx = $expectedOnnx | Where-Object { -not (Test-Path (Join-Path $vendorDir $_)) }
+# El exportador produce fp32 Y fp16 de cada modelo. Verificar solo los fp32
+# dejaba pasar un pack a medias: la app cae al fp32 EN SILENCIO cuando falta el
+# hermano fp16, y eso se midio 7.26x mas lento.
+$expectedOnnx = $expectedOnnx + ($expectedOnnx | ForEach-Object { $_ -replace '\.onnx$', '-fp16.onnx' })
+
+$missingOnnx = @($expectedOnnx | Where-Object { -not (Test-Path (Join-Path $vendorDir $_)) })
 if ($missingOnnx.Count -eq 0) {
     Write-Host 'Real-ESRGAN ONNX exports already present at:' $vendorDir
     Write-Host 'Delete vendor\realesrgan-onnx to force a re-export.'

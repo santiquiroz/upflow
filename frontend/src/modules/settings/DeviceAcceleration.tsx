@@ -26,10 +26,23 @@ function EpStatusCell({ device }: { device: DeviceInfoResponse }) {
       </span>
     );
   }
-  if (device.epState === "error") {
+  if (device.epState === "ready") {
+    // Registrado y elegible, pero todavia no lo uso ningun trabajo. Decir
+    // "native" antes de eso podia anunciar un acelerador que despues nunca entra.
     return (
-      <span className="text-xs text-text" title={device.epDetail}>
-        {`${label} · ${t("settings.acceleration.fallback")}`}
+      <span className="inline-flex items-center gap-1.5 text-xs text-text">
+        <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-text-faint" />
+        {`${label} · ${t("settings.acceleration.ready")}`}
+      </span>
+    );
+  }
+  if (device.epState === "error") {
+    // El motivo va VISIBLE, no solo en el tooltip: si alguien bajo el acelerador
+    // y fallo, tiene que enterarse sin pasar el mouse por encima.
+    return (
+      <span className="flex flex-col gap-0.5 text-xs text-text" title={device.epDetail}>
+        <span>{`${label} · ${t("settings.acceleration.fallback")}`}</span>
+        {device.epDetail && <span className="text-[11px] text-warn">{device.epDetail}</span>}
       </span>
     );
   }

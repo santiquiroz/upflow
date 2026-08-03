@@ -315,3 +315,30 @@ def test_the_gpu_device_selects_a_gpu_provider():
 
 def test_the_cpu_device_selects_the_cpu_provider():
     assert build_load_kwargs("cpu")["provider"] == "CPUExecutionProvider"
+
+
+# --- el acelerador nativo tambien tiene que llegar a la transcripcion ------
+
+
+def test_transcription_uses_the_native_ep_when_there_is_one(monkeypatch, tmp_path):
+    """Antes armaba providers DirectML a mano y se saltaba el ep_registry: con
+    un plugin instalado, todo aceleraba menos transcribir y generar."""
+    from app.config import Settings
+    from app.services import ep_registry
+
+    llamadas = []
+
+    def fake_loader_kwargs(device, settings, **kw):
+        llamadas.append(device)
+        return {"providers": [], "provider_options": [], "session_options": object()}
+
+    monkeypatch.setattr(ep_registry, "loader_kwargs", fake_loader_kwargs)
+
+    kwargs = build_load_kwargs("dml:0", Settings(_env_file=None))
+
+    assert llamadas == ["dml:0"]
+    assert kwargs["providers"] == []
+    # Las dos banderas medidas siguen puestas: sin use_merged=False Whisper
+    # devuelve basura con DirectML.
+    assert kwargs["use_merged"] is False
+    assert kwargs["use_io_binding"] is False

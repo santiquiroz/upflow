@@ -46,6 +46,10 @@ EP_STATE_NATIVE = "native"
 EP_STATE_BASELINE = "baseline"
 EP_STATE_PREPARING = "preparing"
 EP_STATE_ERROR = "error"
+# Registrado y elegible, pero todavia no lo uso ningun trabajo. Antes se decia
+# "native" apenas se registraba: la pantalla podia anunciar un acelerador en una
+# maquina donde despues todos los trabajos caian a DirectML.
+EP_STATE_READY = "ready"
 
 VENDOR_NVIDIA = 0x10DE
 VENDOR_INTEL = 0x8086
@@ -110,15 +114,36 @@ _initialized = False
 _plugins: dict[str, _PluginState] = {}
 _session_errors: dict[str, str] = {}
 _warmup: set[str] = set()
+# Dispositivos donde una sesion nativa REALMENTE se creo, y donde ya fallo. Sin
+# lo segundo, cada trabajo posterior repetia el intento nativo y pagaba el
+# fallback: con TensorRT eso es una compilacion cara para nada.
+_native_ok: set[str] = set()
+_native_failed: set[str] = set()
 
 
 def reset() -> None:
     global _initialized
     with _lock:
+        # Desregistrar en ORT: sin esto un segundo _initialize re-registra el
+        # mismo nombre. Nunca se vio porque ORT esta fakeado en los tests.
+        for ep_name, state in _plugins.items():
+            if state.devices:
+                _unregister_plugin(ep_name)
         _initialized = False
         _plugins.clear()
         _session_errors.clear()
         _warmup.clear()
+        _native_ok.clear()
+        _native_failed.clear()
+
+
+def _unregister_plugin(ep_name: str) -> None:
+    import onnxruntime as ort
+
+    try:
+        ort.unregister_execution_provider_library(ep_name)
+    except Exception as exc:  # noqa: BLE001 -- limpiar jamas puede tumbar nada
+        logger.debug("ep_registry: no se pudo desregistrar %s: %s", ep_name, exc)
 
 
 def _import_plugin_module(name: str) -> Any:
@@ -155,9 +180,10 @@ def _resolve_plugin_library(spec: NativeEpSpec, settings: Settings) -> str | Non
         except ImportError:
             return None
         return str(module.get_library_path())
-    if not settings.ep_plugins_dir or spec.plugin_subdir is None or spec.dll_filename is None:
+    plugins_dir = settings.ep_plugins_dir_path
+    if plugins_dir is None or spec.plugin_subdir is None or spec.dll_filename is None:
         return None
-    candidate = Path(settings.ep_plugins_dir) / spec.plugin_subdir / spec.dll_filename
+    candidate = plugins_dir / spec.plugin_subdir / spec.dll_filename
     return str(candidate) if candidate.is_file() else None
 
 
@@ -261,12 +287,56 @@ def _dml_providers(device: str) -> list[Any]:
     return [(DML_PROVIDER, {"device_id": _parse_dml_device_id(device)}), CPU_PROVIDER]
 
 
-def _native_plugin_for(device: str) -> _PluginState | None:
-    if not device.startswith("dml:"):
+# Los EPs del catálogo de Windows ML se registran con vendor_id 0: el catálogo
+# no dice a qué adaptador pertenecen.
+VENDOR_UNKNOWN = 0
+
+
+def _vendor_of_adapter(device: str) -> int | None:
+    """Vendor de la placa detrás de `dml:N`, o None si no se puede saber.
+
+    `enumerate_adapter_vendor_ids` devuelve los vendors en el MISMO orden que
+    numera dml:N, así que el índice del device es el índice del adaptador.
+    """
+    try:
+        index = _parse_dml_device_id(device)
+    except RuntimeError:
+        return None
+    vendors = _adapter_vendor_ids()
+    return vendors[index] if 0 <= index < len(vendors) else None
+
+
+def _failed_plugin_for(device: str) -> _PluginState | None:
+    """El plugin de ESTA placa que se intento registrar y no pudo."""
+    vendor = _vendor_of_adapter(device)
+    if vendor is None:
         return None
     for state in _plugins.values():
-        if state.devices:
+        if not state.devices and state.error and state.spec.vendor_id == vendor:
             return state
+    return None
+
+
+def _native_plugin_for(device: str) -> _PluginState | None:
+    """El plugin de la placa pedida, o None para caer a DirectML.
+
+    Antes devolvía el primer plugin con devices para CUALQUIER dml:N. En una
+    máquina con iGPU Intel y placa NVIDIA eso mandaba un trabajo fijado a la
+    iGPU a correr en la NVIDIA, en silencio y contra lo que pidió el usuario.
+    """
+    if not device.startswith("dml:"):
+        return None
+    vendor = _vendor_of_adapter(device)
+    if vendor is None:
+        return None
+    ready = [state for state in _plugins.values() if state.devices]
+    for state in ready:
+        if state.spec.vendor_id == vendor:
+            return state
+    # Un EP del catálogo no declara placa. Con una sola GPU no hay ambigüedad;
+    # con varias, atribuirlo sería el mismo error que este método evita.
+    if len(_adapter_vendor_ids()) == 1:
+        return next((s for s in ready if s.spec.vendor_id == VENDOR_UNKNOWN), None)
     return None
 
 
@@ -285,9 +355,11 @@ def _create_native_session(
     sess_options.add_provider_for_devices(plugin.devices[:1], {})
     _warmup.add(device)
     try:
-        return ort.InferenceSession(model_path, sess_options=sess_options)
+        session = ort.InferenceSession(model_path, sess_options=sess_options)
     finally:
         _warmup.discard(device)
+    _native_ok.add(device)
+    return session
 
 
 def warmup_pending(device: str) -> bool:
@@ -312,10 +384,13 @@ def create_session(
 
     _initialize(settings)
     plugin = _native_plugin_for(device)
-    if plugin is not None:
+    if plugin is not None and device not in _native_failed:
         try:
             return _create_native_session(model_path, device, plugin, sess_options_factory)
         except Exception as exc:  # noqa: BLE001 -- fallback garantizado: el job nunca falla por el EP nativo
+            # Una sola vez: reintentarlo en cada trabajo paga el intento y el
+            # fallback, y con TensorRT ese intento es una compilacion cara.
+            _native_failed.add(device)
             _session_errors[device] = f"{plugin.spec.label}: {exc}"
             logger.warning(
                 "ep_registry: sesión %s falló en %s, cayendo a DirectML: %s",
@@ -327,6 +402,55 @@ def create_session(
         model_path,
         sess_options=_build_options(sess_options_factory),
         providers=_dml_providers(device),
+    )
+
+
+def _with_session_options(
+    kwargs: dict[str, Any], factory: Callable[[], Any] | None
+) -> dict[str, Any]:
+    sess_options = _build_options(factory)
+    if sess_options is not None:
+        kwargs["session_options"] = sess_options
+    return kwargs
+
+
+def loader_kwargs(
+    device: str,
+    settings: Settings,
+    *,
+    sess_options_factory: Callable[[], Any] | None = None,
+) -> dict[str, Any]:
+    """Argumentos de sesión para loaders que construyen la InferenceSession ellos.
+
+    optimum y transformers no aceptan una sesión ya hecha, así que `create_session`
+    no les sirve. Y un EP de plugin no se puede pedir por nombre: optimum valida el
+    provider contra `get_available_providers()`, que no ve plugins. La forma que sí
+    funciona es `providers=[]` con el EP puesto en el SessionOptions (verificado
+    contra onnxruntime real, incluida la reutilización del mismo objeto en las
+    varias sesiones que arma un pipeline de difusión).
+    """
+    import onnxruntime as ort
+
+    if device == "cpu":
+        return _with_session_options({"provider": CPU_PROVIDER}, sess_options_factory)
+    if not device.startswith("dml:"):
+        raise RuntimeError(f"Unsupported device for ONNX inference: {device!r}")
+
+    _initialize(settings)
+    plugin = _native_plugin_for(device)
+    if plugin is not None and device not in _native_failed:
+        sess_options = _build_options(sess_options_factory) or ort.SessionOptions()
+        # Objeto nuevo por llamada: add_provider_for_devices dos veces sobre el
+        # mismo SessionOptions falla con "Provider has already been registered".
+        sess_options.add_provider_for_devices(plugin.devices[:1], {})
+        return {"providers": [], "provider_options": [], "session_options": sess_options}
+
+    return _with_session_options(
+        {
+            "provider": DML_PROVIDER,
+            "provider_options": {"device_id": _parse_dml_device_id(device)},
+        },
+        sess_options_factory,
     )
 
 
@@ -348,5 +472,19 @@ def active_ep_for_device(device: str, settings: Settings) -> EpStatus:
         )
     plugin = _native_plugin_for(device)
     if plugin is not None:
-        return EpStatus(ep_name=plugin.spec.ep_name, label=plugin.spec.label, state=EP_STATE_NATIVE)
+        # "native" solo cuando una sesion de verdad corrio ahi. Registrado pero
+        # sin usar todavia es "ready": anunciar el acelerador antes de eso podia
+        # ser mentira en una maquina donde despues todo cae a DirectML.
+        state = EP_STATE_NATIVE if device in _native_ok else EP_STATE_READY
+        return EpStatus(ep_name=plugin.spec.ep_name, label=plugin.spec.label, state=state)
+    failed = _failed_plugin_for(device)
+    if failed is not None:
+        # Un plugin instalado que no pudo registrarse se veia EXACTAMENTE igual
+        # que no tenerlo: el usuario bajaba el acelerador y no se enteraba.
+        return EpStatus(
+            ep_name=DML_PROVIDER,
+            label="DirectML",
+            state=EP_STATE_ERROR,
+            detail=f"{failed.spec.label}: {failed.error}",
+        )
     return EpStatus(ep_name=DML_PROVIDER, label="DirectML", state=EP_STATE_BASELINE)

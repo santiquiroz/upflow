@@ -25,6 +25,10 @@ def isolated_runtime_dir(tmp_path, monkeypatch: pytest.MonkeyPatch):
     # fallan solo en la maquina del que lo instalo.
     monkeypatch.setenv("SDCPP_MODEL", str(tmp_path / "pack-no-instalado.safetensors"))
     monkeypatch.setenv("SDCPP_MODELS_DIR", str(tmp_path / "vulkan-no-instalado"))
+    # Y lo mismo con los plugins EP: desde que el default apunta a
+    # vendor/ep-plugins, una maquina con el acelerador de Intel bajado hacia
+    # fallar tests que en una limpia pasaban.
+    monkeypatch.setenv("EP_PLUGINS_DIR", str(tmp_path / "ep-plugins-no-instalado"))
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
