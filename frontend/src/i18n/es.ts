@@ -190,6 +190,7 @@ export const es = {
   "settings.acceleration.title": "Aceleración",
   "settings.acceleration.description":
     "Execution provider por dispositivo. DirectML es siempre el baseline; el proveedor nativo se usa solo cuando su plugin y su hardware están presentes.",
+  "settings.acceleration.ready": "listo — lo usará el próximo trabajo",
   "settings.acceleration.native": "nativa",
   "settings.acceleration.fallback": "fallback (la nativa falló)",
   "settings.acceleration.preparing": "Preparando aceleración para tu GPU…",

@@ -60,7 +60,34 @@ describe("DeviceAcceleration", () => {
     expect(await screen.findByText("Preparing acceleration for your GPU…")).toBeInTheDocument();
   });
 
-  it("surfaces a native failure as fallback with the detail as tooltip", async () => {
+  it("shows a registered-but-unused accelerator as ready, not as native", async () => {
+    // Decir "native" antes de que corriera un solo trabajo podia ser mentira:
+    // el acelerador esta registrado, pero todavia no lo uso nadie.
+    renderWith({
+      devices: [
+        { id: "dml:0", kind: "gpu", name: "NVIDIA GeForce RTX 4070", backend: "directml", activeEp: "NvTensorRTRTXExecutionProvider", epLabel: "TensorRT-RTX", epState: "ready" },
+      ],
+      defaultDeviceId: "dml:0",
+    });
+
+    expect(await screen.findByText(/TensorRT-RTX · ready/)).toBeInTheDocument();
+    expect(screen.queryByText(/· native/)).not.toBeInTheDocument();
+  });
+
+  it("shows WHY the accelerator failed, without needing to hover", async () => {
+    // El caso real: se bajan 93 MB del acelerador, falta el driver, falla. Con
+    // el motivo solo en un tooltip, el usuario no se entera de por que.
+    renderWith({
+      devices: [
+        { id: "dml:0", kind: "gpu", name: "NVIDIA GeForce RTX 4070", backend: "directml", activeEp: "DmlExecutionProvider", epLabel: "DirectML", epState: "error", epDetail: "TensorRT-RTX: falta nvml.dll (Error 126)" },
+      ],
+      defaultDeviceId: "dml:0",
+    });
+
+    expect(await screen.findByText(/falta nvml\.dll/)).toBeInTheDocument();
+  });
+
+  it("keeps the detail reachable as a tooltip too", async () => {
     renderWith({
       devices: [
         { id: "dml:0", kind: "gpu", name: "NVIDIA GeForce RTX 4070", backend: "directml", activeEp: "DmlExecutionProvider", epLabel: "DirectML", epState: "error", epDetail: "TensorRT-RTX: unsupported op" },
@@ -68,8 +95,11 @@ describe("DeviceAcceleration", () => {
       defaultDeviceId: "dml:0",
     });
 
+    // El motivo ahora se pinta visible, asi que el texto vive en un span interno;
+    // el tooltip sigue estando en el contenedor.
     const row = await screen.findByText("DirectML · fallback (native failed)");
-    expect(row).toHaveAttribute("title", "TensorRT-RTX: unsupported op");
+    expect(row.closest("[title]")).toHaveAttribute("title", "TensorRT-RTX: unsupported op");
+    expect(screen.getByText("TensorRT-RTX: unsupported op")).toBeInTheDocument();
   });
 
   it("tolerates devices without EP fields (older backend)", async () => {

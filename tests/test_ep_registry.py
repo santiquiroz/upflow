@@ -279,9 +279,13 @@ def test_active_ep_baseline_without_plugins(tmp_path: Path) -> None:
     assert status.state == ep_registry.EP_STATE_BASELINE
 
 
-def test_active_ep_native_when_plugin_ready(
+def test_active_ep_identifies_the_plugin_once_registered(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """Este test afirmaba EP_STATE_NATIVE apenas registrado, congelando el bug:
+    la pantalla podia anunciar el acelerador en una maquina donde despues todos
+    los trabajos caen a DirectML. El plugin se identifica igual, pero "native"
+    ahora exige que una sesion de verdad haya corrido ahi."""
     install_nvidia_plugin(monkeypatch, tmp_path)
     settings = make_settings(tmp_path)
 
@@ -289,7 +293,7 @@ def test_active_ep_native_when_plugin_ready(
 
     assert status.ep_name == "NvTensorRTRTXExecutionProvider"
     assert status.label == "TensorRT-RTX"
-    assert status.state == ep_registry.EP_STATE_NATIVE
+    assert status.state == ep_registry.EP_STATE_READY
 
 
 def test_warmup_pending_during_native_creation(
@@ -635,3 +639,182 @@ def test_intel_plugin_is_picked_up_from_the_shipped_folder(
     ep_registry.create_session("model.onnx", "dml:0", settings)
 
     assert clean_registry == [(spec.ep_name, str(dll))]
+
+
+# --- el estado que se muestra tiene que ser verdad ----------------------
+
+
+def test_a_plugin_that_failed_to_register_is_not_silent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, clean_registry: list
+) -> None:
+    """El caso real: se instalan 93 MB del acelerador de NVIDIA, falta el driver,
+    el registro falla. Antes se veia EXACTAMENTE igual que no tenerlo instalado."""
+    import onnxruntime as ort
+
+    install_nvidia_plugin(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        ort,
+        "register_execution_provider_library",
+        lambda name, path: (_ for _ in ()).throw(RuntimeError("falta nvml.dll (Error 126)")),
+        raising=False,
+    )
+    settings = make_settings(tmp_path)
+
+    status = ep_registry.active_ep_for_device("dml:0", settings)
+
+    assert status.state == ep_registry.EP_STATE_ERROR
+    assert "nvml" in status.detail
+    assert "TensorRT-RTX" in status.detail
+
+
+def test_a_registered_plugin_is_not_called_native_until_it_actually_ran(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, clean_registry: list
+) -> None:
+    """Decia 'native' apenas se registraba: la pantalla podia anunciar
+    TensorRT-RTX en una maquina donde todos los trabajos caen a DirectML."""
+    install_nvidia_plugin(monkeypatch, tmp_path)
+    settings = make_settings(tmp_path)
+
+    status = ep_registry.active_ep_for_device("dml:0", settings)
+
+    assert status.state == ep_registry.EP_STATE_READY
+    assert status.label == "TensorRT-RTX"
+
+
+def test_it_becomes_native_once_a_session_really_used_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, clean_registry: list
+) -> None:
+    install_nvidia_plugin(monkeypatch, tmp_path)
+    settings = make_settings(tmp_path)
+
+    ep_registry.create_session("model.onnx", "dml:0", settings)
+
+    assert ep_registry.active_ep_for_device("dml:0", settings).state == ep_registry.EP_STATE_NATIVE
+
+
+def test_a_session_that_fell_back_is_reported_as_fallback_not_native(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, clean_registry: list
+) -> None:
+    install_nvidia_plugin(monkeypatch, tmp_path)
+    FakeInferenceSession.fail_native = True
+    settings = make_settings(tmp_path)
+
+    ep_registry.create_session("model.onnx", "dml:0", settings)
+
+    status = ep_registry.active_ep_for_device("dml:0", settings)
+    assert status.state == ep_registry.EP_STATE_ERROR
+
+
+def test_a_failed_native_session_is_not_retried_forever(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, clean_registry: list
+) -> None:
+    """Con TensorRT, reintentar el camino nativo en cada trabajo paga una
+    compilacion cara para volver a caer a DirectML."""
+    install_nvidia_plugin(monkeypatch, tmp_path)
+    FakeInferenceSession.fail_native = True
+    settings = make_settings(tmp_path)
+
+    ep_registry.create_session("model.onnx", "dml:0", settings)
+    intentos_primero = len(FakeInferenceSession.calls)
+    FakeInferenceSession.calls = []
+    ep_registry.create_session("model.onnx", "dml:0", settings)
+
+    assert intentos_primero == 2  # nativo (falla) + fallback DirectML
+    assert len(FakeInferenceSession.calls) == 1  # el segundo va directo a DirectML
+
+
+def test_reset_unregisters_from_onnxruntime(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, clean_registry: list
+) -> None:
+    """Sin desregistrar, un segundo _initialize re-registra el mismo nombre en
+    ORT real. Invisible hoy porque ORT esta fakeado en todos los tests."""
+    import onnxruntime as ort
+
+    desregistrados: list[str] = []
+    monkeypatch.setattr(
+        ort, "unregister_execution_provider_library", desregistrados.append, raising=False
+    )
+    install_nvidia_plugin(monkeypatch, tmp_path)
+    ep_registry.create_session("model.onnx", "dml:0", make_settings(tmp_path))
+
+    ep_registry.reset()
+
+    assert desregistrados == ["NvTensorRTRTXExecutionProvider"]
+
+
+# --- precarga de DLLs hermanas -------------------------------------------
+# La UNICA funcion del registry que toca el sistema operativo, y la unica que
+# estaba mockeada en todos los tests. Existe para evitar el "Error 126 engañoso"
+# que da ORT cuando el plugin carga sin sus dependencias al lado.
+#
+# El fixture autouse la reemplaza por un no-op en todos los demas tests, asi que
+# se captura la de verdad al importar el modulo, antes de cualquier parche.
+_PRELOAD_REAL = ep_registry._preload_plugin_deps
+
+
+def test_preload_adds_the_plugin_folder_to_the_dll_search_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    plugin_dir = tmp_path / "plugin"
+    plugin_dir.mkdir()
+    lib = plugin_dir / "main_plugin.dll"
+    lib.write_bytes(b"fake")
+
+    agregados: list[str] = []
+    monkeypatch.setattr(ep_registry.os, "add_dll_directory", agregados.append, raising=False)
+    monkeypatch.setattr(ep_registry.ctypes, "WinDLL", lambda p: None, raising=False)
+
+    _PRELOAD_REAL(str(lib))
+
+    assert agregados == [str(plugin_dir)]
+
+
+def test_preload_loads_the_siblings_but_never_the_plugin_itself(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Cargar el plugin aca lo dejaria mapeado dos veces: lo carga ORT despues."""
+    plugin_dir = tmp_path / "plugin"
+    plugin_dir.mkdir()
+    lib = plugin_dir / "main_plugin.dll"
+    lib.write_bytes(b"fake")
+    (plugin_dir / "dep_uno.dll").write_bytes(b"fake")
+    (plugin_dir / "dep_dos.dll").write_bytes(b"fake")
+    (plugin_dir / "notas.txt").write_bytes(b"no es una dll")
+
+    cargados: list[str] = []
+    monkeypatch.setattr(ep_registry.os, "add_dll_directory", lambda d: None, raising=False)
+    monkeypatch.setattr(
+        ep_registry.ctypes, "WinDLL", lambda p: cargados.append(Path(p).name), raising=False
+    )
+
+    _PRELOAD_REAL(str(lib))
+
+    assert sorted(cargados) == ["dep_dos.dll", "dep_uno.dll"]
+
+
+def test_preload_survives_a_sibling_that_cannot_be_loaded(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Una dep opcional que no carga no puede tumbar el registro: el fallo real
+    lo tiene que reportar ORT, no esta precarga."""
+    plugin_dir = tmp_path / "plugin"
+    plugin_dir.mkdir()
+    lib = plugin_dir / "main_plugin.dll"
+    lib.write_bytes(b"fake")
+    (plugin_dir / "aaa_rota.dll").write_bytes(b"fake")
+    (plugin_dir / "zzz_buena.dll").write_bytes(b"fake")
+
+    cargados: list[str] = []
+
+    def fake_windll(path: str) -> None:
+        if "rota" in path:
+            raise OSError("no se pudo cargar")
+        cargados.append(Path(path).name)
+
+    monkeypatch.setattr(ep_registry.os, "add_dll_directory", lambda d: None, raising=False)
+    monkeypatch.setattr(ep_registry.ctypes, "WinDLL", fake_windll, raising=False)
+
+    _PRELOAD_REAL(str(lib))
+
+    # La rota va primero por orden alfabetico: si abortara, la buena no se carga.
+    assert cargados == ["zzz_buena.dll"]

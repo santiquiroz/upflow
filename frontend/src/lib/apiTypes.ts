@@ -241,7 +241,7 @@ export interface HealthResponse {
 export type DeviceKind = "cpu" | "gpu" | "npu" | "auto";
 export type DeviceBackend = "cpu" | "directml" | "winml" | "auto";
 
-export type DeviceEpState = "" | "native" | "baseline" | "preparing" | "error";
+export type DeviceEpState = "" | "native" | "ready" | "baseline" | "preparing" | "error";
 
 export interface DeviceInfoResponse {
   id: string;
