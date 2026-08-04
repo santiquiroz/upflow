@@ -75,6 +75,7 @@ Name: "vulkan"; Description: "Generar imagenes: motor Vulkan, instala modelos en
 Name: "video"; Description: "Generar VIDEO desde texto o desde una imagen, en tu placa y sin conversion (descarga ~15 GB; requiere el motor Vulkan)"; Types: custom
 Name: "epnvidia"; Description: "Acelerador NVIDIA: usa TensorRT-RTX en vez de DirectML (descarga ~93 MB; requiere RTX 30xx o mas nueva)"; Types: custom
 Name: "epintel"; Description: "Acelerador Intel: usa OpenVINO en la grafica integrada o Arc (descarga ~116 MB, ocupa ~60 MB)"; Types: custom
+Name: "realtime"; Description: "Tiempo real: reescalar en vivo juegos y video en una ventana superpuesta (descarga ~10 MB, no necesita drivers)"; Types: full custom
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
@@ -143,6 +144,8 @@ begin
     Selected := Selected + 'ep-nvidia' + #13#10;
   if WizardIsComponentSelected('epintel') then
     Selected := Selected + 'ep-intel' + #13#10;
+  if WizardIsComponentSelected('realtime') then
+    Selected := Selected + 'magpie' + #13#10;
 
   PackPath := ExpandConstant('{app}\' + OptionalPacksFile);
   SaveStringToFile(PackPath, Selected, False);

@@ -60,6 +60,10 @@ from app.schemas import (
     GenerationJobResponse,
     GenerationJobsListResponse,
     GenerationModelSummary,
+    RealtimeCapabilitiesResponse,
+    RealtimePresetResponse,
+    RealtimeStartedResponse,
+    StartRealtimeRequest,
     VideoGenerationCapabilitiesResponse,
     VideoModelSummary,
     HealthResponse,
@@ -1860,6 +1864,51 @@ async def vulkan_install_status(
         install_id=job.id, repo_id=job.repo_id, status=job.status.value,
         progress_pct=job.progress_pct, model_id=job.model_id, error=job.error,
     )
+
+
+@router.get("/realtime/capabilities", response_model=RealtimeCapabilitiesResponse)
+async def realtime_capabilities(
+    settings: Settings = Depends(get_settings),
+) -> RealtimeCapabilitiesResponse:
+    from app.services.realtime_service import RealtimeService, available_presets
+
+    service = RealtimeService(settings)
+    if not service.available():
+        return RealtimeCapabilitiesResponse(
+            available=False,
+            reason=(
+                "El overlay de tiempo real no está instalado. Se baja aparte porque "
+                "usa Magpie, que es software libre con licencia GPL y corre como "
+                "programa separado."
+            ),
+        )
+    return RealtimeCapabilitiesResponse(
+        available=True,
+        presets=[
+            RealtimePresetResponse(id=p.id, label=p.label, description=p.description)
+            for p in available_presets()
+        ],
+    )
+
+
+@router.post(
+    "/realtime/start", response_model=RealtimeStartedResponse,
+    dependencies=[Depends(require(Permission.jobs_create))],
+)
+async def start_realtime(
+    payload: StartRealtimeRequest, settings: Settings = Depends(get_settings)
+) -> RealtimeStartedResponse:
+    from app.services.realtime_service import RealtimeService
+
+    try:
+        pid = RealtimeService(settings).start(
+            preset=payload.preset, max_frame_rate=payload.max_frame_rate
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return RealtimeStartedResponse(pid=pid, preset=payload.preset)
 
 
 @router.get("/generation/video/capabilities", response_model=VideoGenerationCapabilitiesResponse)

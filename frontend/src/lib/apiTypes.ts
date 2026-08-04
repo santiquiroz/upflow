@@ -538,6 +538,23 @@ export interface VideoGenerationCapabilities {
   maxFrames: number;
 }
 
+export interface RealtimePreset {
+  id: string;
+  label: string;
+  description: string;
+}
+
+export interface RealtimeCapabilities {
+  available: boolean;
+  presets: RealtimePreset[];
+  reason: string | null;
+}
+
+export interface RealtimeStarted {
+  pid: number;
+  preset: string;
+}
+
 export interface QuotaStatus {
   maxConcurrent: number;
   maxQueued: number;

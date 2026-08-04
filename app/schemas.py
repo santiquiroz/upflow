@@ -642,6 +642,31 @@ class VideoGenerationCapabilitiesResponse(BaseModel):
     max_frames: int = Field(serialization_alias="maxFrames")
 
 
+class RealtimePresetResponse(BaseModel):
+    id: str
+    label: str
+    description: str
+
+
+class RealtimeCapabilitiesResponse(BaseModel):
+    available: bool
+    presets: list[RealtimePresetResponse] = Field(default_factory=list)
+    # Magpie es GPL-3.0 y corre aparte; no viaja en el instalador.
+    reason: str | None = None
+
+
+class StartRealtimeRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    preset: str
+    max_frame_rate: int | None = Field(default=None, alias="maxFrameRate", ge=24, le=480)
+
+
+class RealtimeStartedResponse(BaseModel):
+    pid: int
+    preset: str
+
+
 class CpuFallbackReportResponse(BaseModel):
     model_id: str = Field(serialization_alias="modelId")
     device_id: str = Field(serialization_alias="deviceId")

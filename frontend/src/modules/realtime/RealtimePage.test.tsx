@@ -1,41 +1,126 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { RealtimeCapabilities } from "../../lib/apiTypes";
+import * as realtimeService from "../../services/realtime";
 import { RealtimePage } from "./RealtimePage";
+
+// El modulo dejo de ser una pagina de roadmap: ahora configura y abre el overlay
+// de verdad. Magpie corre como proceso aparte (es GPL-3.0) y no necesita drivers.
+
+vi.mock("../../services/realtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../services/realtime")>();
+  return { ...actual, fetchRealtimeCapabilities: vi.fn(), startRealtime: vi.fn() };
+});
+
+const INSTALADO: RealtimeCapabilities = {
+  available: true,
+  reason: null,
+  presets: [
+    { id: "anime4k", label: "Anime4K", description: "Para anime y dibujo." },
+    { id: "fsr", label: "FSR", description: "Para imagen real y juegos." },
+  ],
+};
+
+const NO_INSTALADO: RealtimeCapabilities = {
+  available: false,
+  reason: "El overlay de tiempo real no está instalado.",
+  presets: [],
+};
+
+function renderPage(capabilities: RealtimeCapabilities = INSTALADO) {
+  vi.mocked(realtimeService.fetchRealtimeCapabilities).mockResolvedValue(capabilities);
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  function Wrapper({ children }: { children: ReactNode }) {
+    return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+  }
+  return render(<RealtimePage />, { wrapper: Wrapper });
+}
+
+afterEach(() => {
+  vi.mocked(realtimeService.fetchRealtimeCapabilities).mockReset();
+  vi.mocked(realtimeService.startRealtime).mockReset();
+});
 
 describe("RealtimePage", () => {
   it("renders without crashing", () => {
-    render(<RealtimePage />);
-
-    expect(screen.getByRole("heading", { level: 1, name: "Realtime" })).toBeInTheDocument();
+    renderPage();
+    expect(screen.getByRole("heading", { level: 1, name: /tiempo real/i })).toBeInTheDocument();
   });
 
-  it("is honest that the module is not functional yet", () => {
-    render(<RealtimePage />);
-
-    expect(screen.getByText(/coming soon/i)).toBeInTheDocument();
-    expect(screen.getByText(/doesn't launch, configure, or control any process/i)).toBeInTheDocument();
+  it("says plainly that no driver is needed", async () => {
+    // El overlay es una ventana normal, no engancha el swapchain del juego. Por
+    // eso no hay nada que firmar ni que instalar a nivel sistema.
+    renderPage();
+    expect(await screen.findByText(/no hace falta instalar ningún driver/i)).toBeInTheDocument();
   });
 
-  it("links to the module's design roadmap in a new tab", () => {
-    render(<RealtimePage />);
-
-    const link = screen.getByRole("link", { name: /full design vision/i });
-    expect(link).toHaveAttribute("href", expect.stringContaining("REALTIME_MODULE.md"));
-    expect(link).toHaveAttribute("target", "_blank");
-    expect(link).toHaveAttribute("rel", expect.stringContaining("noreferrer"));
+  it("offers the presets returned by the backend", async () => {
+    renderPage();
+    expect(await screen.findByRole("radio", { name: /Anime4K/ })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /FSR/ })).toBeInTheDocument();
   });
 
-  it("summarizes the MVP scope and what is not viable yet", () => {
-    render(<RealtimePage />);
+  it("starts the overlay with the chosen preset and frame cap", async () => {
+    const startSpy = vi.mocked(realtimeService.startRealtime);
+    startSpy.mockResolvedValue({ pid: 777, preset: "fsr" });
+    renderPage();
+    await screen.findByRole("radio", { name: /FSR/ });
 
-    expect(screen.getByText(/MVP \(Phase 7\.1\)/i)).toBeInTheDocument();
-    expect(screen.getByText(/Not viable yet/i)).toBeInTheDocument();
-    expect(screen.getByText(/Fork\/vendor Magpie/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("radio", { name: /FSR/ }));
+    fireEvent.change(screen.getByLabelText(/límite de cuadros/i), { target: { value: "120" } });
+    fireEvent.click(screen.getByRole("button", { name: /abrir overlay/i }));
+
+    await waitFor(() => expect(startSpy).toHaveBeenCalledWith("fsr", 120));
+    expect(await screen.findByRole("status")).toHaveTextContent(/overlay abierto/i);
   });
 
-  it("does not offer any launch, configure or stop controls", () => {
-    render(<RealtimePage />);
+  it("sends no cap when the user leaves it unlimited", async () => {
+    const startSpy = vi.mocked(realtimeService.startRealtime);
+    startSpy.mockResolvedValue({ pid: 1, preset: "anime4k" });
+    renderPage();
+    await screen.findByRole("radio", { name: /Anime4K/ });
 
-    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /abrir overlay/i }));
+
+    await waitFor(() => expect(startSpy).toHaveBeenCalledWith("anime4k", null));
+  });
+
+  it("never invents a keyboard shortcut", async () => {
+    // Magpie guarda el atajo como un codigo empaquetado y su propia ventana lo
+    // muestra. Nombrar uno concreto aca seria inventarlo.
+    vi.mocked(realtimeService.startRealtime).mockResolvedValue({ pid: 1, preset: "anime4k" });
+    renderPage();
+    await screen.findByRole("radio", { name: /Anime4K/ });
+    fireEvent.click(screen.getByRole("button", { name: /abrir overlay/i }));
+
+    const aviso = await screen.findByRole("status");
+    expect(aviso).toHaveTextContent(/atajo que muestra la ventana de magpie/i);
+    expect(aviso.textContent).not.toMatch(/win\s*\+|ctrl\s*\+|alt\s*\+/i);
+  });
+
+  it("shows the real error when the overlay fails to open", async () => {
+    vi.mocked(realtimeService.startRealtime).mockRejectedValue(new Error("Magpie no arrancó"));
+    renderPage();
+    await screen.findByRole("radio", { name: /Anime4K/ });
+
+    fireEvent.click(screen.getByRole("button", { name: /abrir overlay/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Magpie no arrancó");
+  });
+
+  it("explains how to install it when it is missing, instead of offering a dead button", async () => {
+    renderPage(NO_INSTALADO);
+
+    expect(await screen.findByText(/no está instalado/i)).toBeInTheDocument();
+    expect(screen.getByText(/download-magpie/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /abrir overlay/i })).not.toBeInTheDocument();
+  });
+
+  it("is still honest about what frame generation cannot do", async () => {
+    renderPage();
+    expect(await screen.findByText(/Lossless Scaling/i)).toBeInTheDocument();
+    expect(screen.getByText(/AFMF/i)).toBeInTheDocument();
   });
 });
