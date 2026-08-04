@@ -1408,7 +1408,10 @@ async def audio_capabilities(settings: Settings = Depends(get_settings)) -> Audi
         restore_modes=restore_modes,
         mastering_presets=[
             MasteringPresetResponse(
-                id=p.id, label=p.label, description=p.description, target_lufs=p.target_lufs
+                id=p.id,
+                label_key=p.label_key,
+                description_key=p.description_key,
+                target_lufs=p.target_lufs,
             )
             for p in MASTERING_PRESETS
         ],
@@ -1896,7 +1899,9 @@ async def realtime_capabilities(
     return RealtimeCapabilitiesResponse(
         available=True,
         presets=[
-            RealtimePresetResponse(id=p.id, label=p.label, description=p.description)
+            RealtimePresetResponse(
+                id=p.id, label_key=p.label_key, description_key=p.description_key
+            )
             for p in available_presets()
         ],
     )

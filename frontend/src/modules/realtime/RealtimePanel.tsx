@@ -27,6 +27,7 @@ function PresetOption({
   checked: boolean;
   onSelect: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <label className="flex cursor-pointer items-start gap-3 rounded border border-border bg-surface p-3 transition-[border-color] duration-fast hover:border-accent">
       <input
@@ -38,8 +39,8 @@ function PresetOption({
         className="mt-0.5 h-3.5 w-3.5 accent-accent"
       />
       <span className="flex flex-col gap-0.5">
-        <span className="text-sm font-medium text-text">{preset.label}</span>
-        <span className="text-xs text-text-dim">{preset.description}</span>
+        <span className="text-sm font-medium text-text">{t(preset.labelKey)}</span>
+        <span className="text-xs text-text-dim">{t(preset.descriptionKey)}</span>
       </span>
     </label>
   );

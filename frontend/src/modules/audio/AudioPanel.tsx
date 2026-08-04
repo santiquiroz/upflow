@@ -8,7 +8,7 @@ import { useAudioCapabilities, useAudioJob, type AudioJobPhase } from "../../hoo
 import { useVoiceCatalog } from "../../hooks/useVoiceCatalog";
 import { useTranslation } from "../../i18n/LocaleProvider";
 import { denoiseLabel, restoreLabel } from "../../lib/audioLabels";
-import type { DeviceInfoResponse } from "../../lib/apiTypes";
+import type { DeviceInfoResponse, MasteringPreset } from "../../lib/apiTypes";
 import { formatDeviceSummary } from "../enhance/accordionSummaries";
 import { VoiceChainPanel, voiceSummaryKey } from "./VoiceChainPanel";
 import { joinAsChoices, selectableSectionKeys } from "./selectionHint";
@@ -131,6 +131,16 @@ function buildRestoreOptions(restoreModes: string[]): ModeOption[] {
   ];
 }
 
+function useMasteringCopy() {
+  const { t } = useTranslation();
+  return {
+    masteringLabel: (preset: MasteringPreset | undefined) =>
+      preset ? t(preset.labelKey) : null,
+    masteringDescription: (preset: MasteringPreset | undefined) =>
+      preset ? t(preset.descriptionKey) : null,
+  };
+}
+
 export function AudioPanel() {
   const [file, setFile] = useState<File | null>(null);
   const [denoise, setDenoise] = useState<string | null>(null);
@@ -144,6 +154,7 @@ export function AudioPanel() {
   const voice = useVoiceSelection(voiceCatalogQuery.data);
   const { phase, job, errorMessage, submit, cancel, reset } = useAudioJob();
   const { t, locale } = useTranslation();
+  const { masteringLabel, masteringDescription } = useMasteringCopy();
 
   const denoiseModes = capabilitiesQuery.data?.denoiseModes ?? [];
   const restoreModes = capabilitiesQuery.data?.restoreModes ?? [];
@@ -203,7 +214,7 @@ export function AudioPanel() {
           <AccordionSection
             title={t("audio.section.mastering")}
             summary={
-              masteringPresets.find((p) => p.id === master)?.label ?? t("audio.mastering.none")
+              masteringLabel(masteringPresets.find((p) => p.id === master)) ?? t("audio.mastering.none")
             }
             tooltip={t("audio.mastering.tooltip")}
           >
@@ -213,7 +224,7 @@ export function AudioPanel() {
                 { value: null, label: t("audio.mastering.none") },
                 ...masteringPresets.map((preset) => ({
                   value: preset.id,
-                  label: preset.label,
+                  label: t(preset.labelKey),
                 })),
               ]}
               value={master}
@@ -221,7 +232,7 @@ export function AudioPanel() {
             />
             {master !== null && (
               <p role="status" className="mt-2 text-xs text-text-dim">
-                {masteringPresets.find((p) => p.id === master)?.description}{" "}
+                {masteringDescription(masteringPresets.find((p) => p.id === master))}{" "}
                 {t("audio.mastering.target", {
                   lufs: masteringPresets.find((p) => p.id === master)?.targetLufs ?? "",
                 })}

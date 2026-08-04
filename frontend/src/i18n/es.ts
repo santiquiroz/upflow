@@ -130,6 +130,24 @@ export const es = {
   "nav.users": "Usuarios",
   "nav.mainLabel": "Navegación principal",
   "nav.queueLabel": "Cola de trabajos",
+  "realtime.preset.anime4k.label": "Anime4K",
+  "realtime.preset.anime4k.description": "Para anime y dibujo. Shader puro, el más liviano de todos.",
+  "realtime.preset.cunny.label": "CuNNy",
+  "realtime.preset.cunny.description":
+    "Red chica para anime, más detalle que Anime4K y todavía en tiempo real.",
+  "realtime.preset.fsr.label": "FSR",
+  "realtime.preset.fsr.description": "Para imagen real y juegos. Escala y afila, muy barato.",
+  "realtime.preset.lanczos.label": "Lanczos",
+  "realtime.preset.lanczos.description": "Sin IA. El más rápido y el que menos inventa.",
+  "audio.mastering.preset.streaming.label": "Streaming",
+  "audio.mastering.preset.streaming.description":
+    "El volumen que piden Spotify y YouTube. Para música y video en general.",
+  "audio.mastering.preset.broadcast.label": "Televisión y radio",
+  "audio.mastering.preset.broadcast.description":
+    "El estándar europeo de emisión (EBU R128). Más margen dinámico.",
+  "audio.mastering.preset.voice.label": "Voz",
+  "audio.mastering.preset.voice.description":
+    "Para podcast o narración: suaviza las eses y empareja el nivel.",
   "realtime.title": "Tiempo real",
   "realtime.subtitle":
     "Reescala en vivo lo que estés mirando o jugando, en una ventana superpuesta. El " +

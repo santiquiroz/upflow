@@ -44,7 +44,7 @@ def test_every_preset_targets_a_real_standard() -> None:
     assert por_id["broadcast"].target_lufs == -23.0
     for preset in MASTERING_PRESETS:
         assert preset.true_peak <= -1.0, "un pico real sobre -1 dBTP clipea al recodificar"
-        assert preset.label and preset.description
+        assert preset.label_key and preset.description_key
 
 
 def test_an_unknown_preset_is_rejected() -> None:

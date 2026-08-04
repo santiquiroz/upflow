@@ -43,8 +43,10 @@ MAGPIE_CONFIG_RELATIVE = Path("Magpie") / "config" / "v4" / "config.json"
 @dataclass(frozen=True, slots=True)
 class RealtimePreset:
     id: str
-    label: str
-    description: str
+    # Claves, no copia: el texto que se ve lo traduce el frontend. Mandar la
+    # frase desde aca dejaba la pantalla sin traducir en el otro idioma.
+    label_key: str
+    description_key: str
     # Efectos tal como los nombra Magpie dentro de su carpeta effects/.
     effects: tuple[dict[str, Any], ...]
 
@@ -54,20 +56,20 @@ class RealtimePreset:
 PRESETS: tuple[RealtimePreset, ...] = (
     RealtimePreset(
         id="anime4k",
-        label="Anime4K",
-        description="Para anime y dibujo. Shader puro, el más liviano de todos.",
+        label_key="realtime.preset.anime4k.label",
+        description_key="realtime.preset.anime4k.description",
         effects=({"name": "Anime4K\\Anime4K_Upscale_Denoise_L"},),
     ),
     RealtimePreset(
         id="cunny",
-        label="CuNNy",
-        description="Red chica para anime, más detalle que Anime4K y todavía en tiempo real.",
+        label_key="realtime.preset.cunny.label",
+        description_key="realtime.preset.cunny.description",
         effects=({"name": "CuNNy2\\CuNNy-4x12-NVL"},),
     ),
     RealtimePreset(
         id="fsr",
-        label="FSR",
-        description="Para imagen real y juegos. Escala y afila, muy barato.",
+        label_key="realtime.preset.fsr.label",
+        description_key="realtime.preset.fsr.description",
         effects=(
             {"name": "FSR\\FSR_EASU", "scalingType": 1, "scale": {"x": 1.0, "y": 1.0}},
             {"name": "FSR\\FSR_RCAS", "parameters": {"sharpness": 0.87}},
@@ -75,8 +77,8 @@ PRESETS: tuple[RealtimePreset, ...] = (
     ),
     RealtimePreset(
         id="lanczos",
-        label="Lanczos",
-        description="Sin IA. El más rápido y el que menos inventa.",
+        label_key="realtime.preset.lanczos.label",
+        description_key="realtime.preset.lanczos.description",
         effects=({"name": "Lanczos", "scalingType": 1, "scale": {"x": 1.0, "y": 1.0}},),
     ),
 )

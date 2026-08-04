@@ -155,10 +155,12 @@ export interface AudioJob {
   downloadUrl: string | null;
 }
 
+// Mirrors app/schemas.py::MasteringPresetResponse. La copia viaja como clave
+// de traduccion: el backend no decide en que idioma se lee la pantalla.
 export interface MasteringPreset {
   id: string;
-  label: string;
-  description: string;
+  labelKey: string;
+  descriptionKey: string;
   targetLufs: number;
 }
 
@@ -547,10 +549,11 @@ export interface VideoGenerationCapabilities {
   maxFrames: number;
 }
 
+// Mirrors app/schemas.py::RealtimePresetResponse.
 export interface RealtimePreset {
   id: string;
-  label: string;
-  description: string;
+  labelKey: string;
+  descriptionKey: string;
 }
 
 export interface RealtimeCapabilities {

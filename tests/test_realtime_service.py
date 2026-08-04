@@ -109,8 +109,11 @@ def test_a_frame_rate_cap_is_optional_and_wired_when_asked() -> None:
 def test_presets_are_named_for_humans_not_for_magpie() -> None:
     presets = {p.id: p for p in available_presets()}
     assert "anime4k" in presets
-    assert presets["anime4k"].label
-    assert presets["anime4k"].description
+    # La copia dejo de vivir en Python: el preset declara la clave y el frontend
+    # la traduce. test_display_copy_lives_in_the_catalog verifica que la clave
+    # exista de verdad en los dos catalogos.
+    assert presets["anime4k"].label_key
+    assert presets["anime4k"].description_key
 
 
 # --- disponibilidad y arranque -------------------------------------------

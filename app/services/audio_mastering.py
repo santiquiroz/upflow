@@ -23,8 +23,9 @@ from pathlib import Path
 @dataclass(frozen=True, slots=True)
 class MasteringPreset:
     id: str
-    label: str
-    description: str
+    # Claves, no copia: ver realtime_service.RealtimePreset.
+    label_key: str
+    description_key: str
     target_lufs: float
     # Techo de pico real. Sobre -1 dBTP, recodificar a un formato con pérdida
     # clipea: el códec reconstruye picos por encima de la muestra original.
@@ -38,24 +39,24 @@ class MasteringPreset:
 MASTERING_PRESETS: tuple[MasteringPreset, ...] = (
     MasteringPreset(
         id="streaming",
-        label="Streaming",
-        description="El volumen que piden Spotify y YouTube. Para música y video en general.",
+        label_key="audio.mastering.preset.streaming.label",
+        description_key="audio.mastering.preset.streaming.description",
         target_lufs=-14.0,
         true_peak=-1.0,
         loudness_range=11.0,
     ),
     MasteringPreset(
         id="broadcast",
-        label="Televisión y radio",
-        description="El estándar europeo de emisión (EBU R128). Más margen dinámico.",
+        label_key="audio.mastering.preset.broadcast.label",
+        description_key="audio.mastering.preset.broadcast.description",
         target_lufs=-23.0,
         true_peak=-1.0,
         loudness_range=7.0,
     ),
     MasteringPreset(
         id="voice",
-        label="Voz",
-        description="Para podcast o narración: suaviza las eses y empareja el nivel.",
+        label_key="audio.mastering.preset.voice.label",
+        description_key="audio.mastering.preset.voice.description",
         target_lufs=-16.0,
         true_peak=-1.5,
         loudness_range=7.0,

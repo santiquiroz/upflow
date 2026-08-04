@@ -70,8 +70,18 @@ const FULL_CAPABILITIES: AudioCapabilities = {
   restoreAvailable: true,
   restoreModes: ["apollo", "audiosr"],
   masteringPresets: [
-    { id: "streaming", label: "Streaming", description: "Para música y video.", targetLufs: -14 },
-    { id: "voice", label: "Voz", description: "Para podcast.", targetLufs: -16 },
+    {
+      id: "streaming",
+      labelKey: "audio.mastering.preset.streaming.label",
+      descriptionKey: "audio.mastering.preset.streaming.description",
+      targetLufs: -14,
+    },
+    {
+      id: "voice",
+      labelKey: "audio.mastering.preset.voice.label",
+      descriptionKey: "audio.mastering.preset.voice.description",
+      targetLufs: -16,
+    },
   ],
 };
 

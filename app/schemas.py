@@ -90,8 +90,8 @@ class AudioJobResponse(BaseModel):
 
 class MasteringPresetResponse(BaseModel):
     id: str
-    label: str
-    description: str
+    label_key: str = Field(serialization_alias="labelKey")
+    description_key: str = Field(serialization_alias="descriptionKey")
     target_lufs: float = Field(serialization_alias="targetLufs")
 
 
@@ -656,8 +656,8 @@ class VideoGenerationCapabilitiesResponse(BaseModel):
 
 class RealtimePresetResponse(BaseModel):
     id: str
-    label: str
-    description: str
+    label_key: str = Field(serialization_alias="labelKey")
+    description_key: str = Field(serialization_alias="descriptionKey")
 
 
 class RealtimeCapabilitiesResponse(BaseModel):

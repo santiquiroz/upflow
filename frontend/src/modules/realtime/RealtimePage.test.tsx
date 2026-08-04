@@ -18,8 +18,16 @@ const INSTALADO: RealtimeCapabilities = {
   available: true,
   reason: null,
   presets: [
-    { id: "anime4k", label: "Anime4K", description: "Para anime y dibujo." },
-    { id: "fsr", label: "FSR", description: "Para imagen real y juegos." },
+    {
+      id: "anime4k",
+      labelKey: "realtime.preset.anime4k.label",
+      descriptionKey: "realtime.preset.anime4k.description",
+    },
+    {
+      id: "fsr",
+      labelKey: "realtime.preset.fsr.label",
+      descriptionKey: "realtime.preset.fsr.description",
+    },
   ],
 };
 

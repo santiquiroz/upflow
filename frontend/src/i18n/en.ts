@@ -135,6 +135,24 @@ export const en = {
   "nav.users": "Users",
   "nav.mainLabel": "Main navigation",
   "nav.queueLabel": "Job queue",
+  "realtime.preset.anime4k.label": "Anime4K",
+  "realtime.preset.anime4k.description": "For anime and cartoons. Pure shader, the lightest of them all.",
+  "realtime.preset.cunny.label": "CuNNy",
+  "realtime.preset.cunny.description":
+    "A small network for anime, more detail than Anime4K and still realtime.",
+  "realtime.preset.fsr.label": "FSR",
+  "realtime.preset.fsr.description": "For live action and games. Scales and sharpens, very cheap.",
+  "realtime.preset.lanczos.label": "Lanczos",
+  "realtime.preset.lanczos.description": "No AI. The fastest, and the one that invents the least.",
+  "audio.mastering.preset.streaming.label": "Streaming",
+  "audio.mastering.preset.streaming.description":
+    "The volume Spotify and YouTube ask for. For music and video in general.",
+  "audio.mastering.preset.broadcast.label": "Television and radio",
+  "audio.mastering.preset.broadcast.description":
+    "The European broadcast standard (EBU R128). More dynamic headroom.",
+  "audio.mastering.preset.voice.label": "Voice",
+  "audio.mastering.preset.voice.description":
+    "For podcast or narration: softens the S sounds and evens out the level.",
   "realtime.title": "Realtime",
   "realtime.subtitle":
     "Upscale what you are watching or playing, live, in an overlay window. The overlay " +
