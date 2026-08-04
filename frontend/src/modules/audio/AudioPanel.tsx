@@ -16,11 +16,21 @@ import { useVoiceSelection } from "./useVoiceSelection";
 
 type AudioOutputFormat = "flac" | "wav" | "mp3";
 
-const OUTPUT_FORMAT_OPTIONS: readonly FormatOption<AudioOutputFormat>[] = [
-  { value: "flac", label: "FLAC (recommended)", description: "Lossless quality, about 50% smaller than WAV." },
-  { value: "wav", label: "WAV", description: "Lossless, uncompressed. Universal compatibility." },
-  { value: "mp3", label: "MP3", description: "Lossy, smallest file — only if size matters more than quality." },
+const OUTPUT_FORMAT_KEYS: readonly { value: AudioOutputFormat; labelKey: string; descriptionKey: string }[] = [
+  { value: "flac", labelKey: "audio.format.flac", descriptionKey: "audio.format.flac.description" },
+  { value: "wav", labelKey: "audio.format.wav", descriptionKey: "audio.format.wav.description" },
+  { value: "mp3", labelKey: "audio.format.mp3", descriptionKey: "audio.format.mp3.description" },
 ];
+
+function outputFormatOptions(
+  t: (key: string) => string,
+): readonly FormatOption<AudioOutputFormat>[] {
+  return OUTPUT_FORMAT_KEYS.map((option) => ({
+    value: option.value,
+    label: t(option.labelKey),
+    description: t(option.descriptionKey),
+  }));
+}
 
 const DENOISE_TOOLTIP =
   "Remove background noise with an AI denoiser. DeepFilterNet is stronger; RNNoise is lighter. Runs before restoration.";
@@ -90,6 +100,7 @@ function ModeSegmentedControl({
 }
 
 function Dropzone({ file, onFileSelected }: { file: File | null; onFileSelected: (file: File) => void }) {
+  const { t } = useTranslation();
   function handleDrop(event: DragEvent<HTMLLabelElement>) {
     event.preventDefault();
     const dropped = event.dataTransfer.files[0];
@@ -113,20 +124,23 @@ function Dropzone({ file, onFileSelected }: { file: File | null; onFileSelected:
       className="flex cursor-pointer flex-col items-center gap-2 rounded border border-dashed border-border bg-surface px-6 py-10 text-center transition-[border-color] duration-fast hover:border-accent"
     >
       <UploadCloud aria-hidden="true" className="h-6 w-6 text-text-faint" strokeWidth={1.5} />
-      <span className="text-sm text-text">{file ? file.name : "Drop an audio file here or click to browse"}</span>
+      <span className="text-sm text-text">{file ? file.name : t("audio.dropzone")}</span>
       <span className="text-xs text-text-faint">WAV, MP3, FLAC, M4A, OGG, OPUS</span>
       <input id="audio-file-input" type="file" accept="audio/*" className="sr-only" onChange={handleInputChange} />
     </label>
   );
 }
 
-function buildDenoiseOptions(denoiseModes: string[]): ModeOption[] {
-  return [{ value: null, label: "None" }, ...denoiseModes.map((mode) => ({ value: mode, label: denoiseLabel(mode) }))];
+function buildDenoiseOptions(denoiseModes: string[], noneLabel: string): ModeOption[] {
+  return [
+    { value: null, label: noneLabel },
+    ...denoiseModes.map((mode) => ({ value: mode, label: denoiseLabel(mode) })),
+  ];
 }
 
-function buildRestoreOptions(restoreModes: string[]): ModeOption[] {
+function buildRestoreOptions(restoreModes: string[], noneLabel: string): ModeOption[] {
   return [
-    { value: null, label: "None" },
+    { value: null, label: noneLabel },
     ...restoreModes.map((mode) => ({ value: mode, label: restoreLabel(mode), experimental: true })),
   ];
 }
@@ -205,7 +219,7 @@ export function AudioPanel() {
         >
           <ModeSegmentedControl
             legend={t("audio.section.denoise")}
-            options={buildDenoiseOptions(denoiseModes)}
+            options={buildDenoiseOptions(denoiseModes, t("audio.mode.none"))}
             value={denoise}
             onChange={setDenoise}
           />
@@ -248,7 +262,7 @@ export function AudioPanel() {
           >
             <ModeSegmentedControl
               legend={t("audio.section.restore")}
-              options={buildRestoreOptions(restoreModes)}
+              options={buildRestoreOptions(restoreModes, t("audio.mode.none"))}
               value={restore}
               onChange={setRestore}
             />
@@ -284,7 +298,7 @@ export function AudioPanel() {
         <FormatOptionFieldset
           legend={t("audio.section.outputFormat")}
           name="audio-output-format"
-          options={OUTPUT_FORMAT_OPTIONS}
+          options={outputFormatOptions(t)}
           value={outputFormat}
           onChange={setOutputFormat}
         />

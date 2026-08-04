@@ -1,6 +1,7 @@
 import { AlertTriangle, Ban, CheckCircle2, Clock, Download, Loader2, X } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useAllJobsView, type AllJobsEntry } from "../hooks/useAllJobs";
+import { useTranslation } from "../i18n/LocaleProvider";
 import { useAuth } from "../hooks/useAuth";
 import { type JobQueueEntry, useJobQueue } from "../hooks/useJobQueue";
 import { rehydrateJobQueue } from "../lib/jobQueueRehydrate";
@@ -10,45 +11,48 @@ import { IndeterminateProgressBar } from "./IndeterminateProgressBar";
 import { JobDetailModal } from "./JobDetailModal";
 
 function QueuedStatus() {
+  const { t } = useTranslation();
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-center gap-1.5 text-xs text-text">
         <Clock aria-hidden="true" className="h-3.5 w-3.5 text-accent" strokeWidth={1.75} />
-        <span>Queued</span>
+        <span>{t("job.status.queued")}</span>
       </div>
-      <IndeterminateProgressBar label="Queued" />
+      <IndeterminateProgressBar label={t("job.status.queued")} />
     </div>
   );
 }
 
 function RunningStatus() {
+  const { t } = useTranslation();
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-center gap-1.5 text-xs text-text">
         <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin text-accent" strokeWidth={1.75} />
-        <span>Processing</span>
+        <span>{t("job.status.processing")}</span>
       </div>
-      <IndeterminateProgressBar label="Processing" />
+      <IndeterminateProgressBar label={t("job.status.processing")} />
     </div>
   );
 }
 
 function CompletedStatus({ entry }: { entry: JobQueueEntry }) {
+  const { t } = useTranslation();
   return (
     <div className="flex items-center justify-between gap-2">
       <span className="flex items-center gap-1.5 text-xs text-ok">
         <CheckCircle2 aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.75} />
-        Completed
+        {t("job.status.completed")}
       </span>
       {entry.downloadUrl && (
         <a
           href={entry.downloadUrl}
           download
-          aria-label={`Download ${entry.fileName}`}
+          aria-label={t("job.download.aria", { name: entry.fileName })}
           className="inline-flex items-center gap-1 rounded-sm border border-accent px-2 py-1 text-xs font-medium text-accent transition-[background-color,color] duration-fast hover:bg-accent hover:text-bg focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
         >
           <Download aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.75} />
-          Download
+          {t("job.download")}
         </a>
       )}
     </div>
@@ -56,19 +60,21 @@ function CompletedStatus({ entry }: { entry: JobQueueEntry }) {
 }
 
 function FailedStatus({ entry }: { entry: JobQueueEntry }) {
+  const { t } = useTranslation();
   return (
     <p role="alert" className="flex items-start gap-1.5 text-xs text-danger">
       <AlertTriangle aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
-      <span>{entry.errorMessage ?? "The job failed."}</span>
+      <span>{entry.errorMessage ?? t("job.failed")}</span>
     </p>
   );
 }
 
 function CancelledStatus() {
+  const { t } = useTranslation();
   return (
     <span className="flex items-center gap-1.5 text-xs text-text-dim">
       <Ban aria-hidden="true" className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
-      Cancelled
+      {t("job.status.cancelled")}
     </span>
   );
 }
@@ -90,10 +96,11 @@ function QueueEntryStatus({ entry }: { entry: JobQueueEntry }) {
 }
 
 function DismissButton({ entry, onDismiss }: { entry: JobQueueEntry; onDismiss: (id: string) => void }) {
+  const { t } = useTranslation();
   return (
     <button
       type="button"
-      aria-label={`Dismiss ${entry.fileName}`}
+      aria-label={t("job.dismiss.aria", { name: entry.fileName })}
       onClick={() => onDismiss(entry.id)}
       className="shrink-0 rounded-sm p-1 text-text-faint transition-colors duration-fast hover:text-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
     >
@@ -103,10 +110,11 @@ function DismissButton({ entry, onDismiss }: { entry: JobQueueEntry; onDismiss: 
 }
 
 function CancelButton({ entry, onCancel }: { entry: JobQueueEntry; onCancel: (id: string) => void }) {
+  const { t } = useTranslation();
   return (
     <button
       type="button"
-      aria-label={`Cancel ${entry.fileName}`}
+      aria-label={t("job.cancel.aria", { name: entry.fileName })}
       onClick={() => onCancel(entry.id)}
       className="shrink-0 rounded-sm p-1 text-text-faint transition-colors duration-fast hover:text-danger focus-visible:outline focus-visible:outline-2 focus-visible:outline-danger"
     >
@@ -144,13 +152,14 @@ function QueueEntryRow({
   onCancel: (id: string) => void;
   onOpenDetail: (id: string) => void;
 }) {
+  const { t } = useTranslation();
   return (
     <li className="flex flex-col gap-2 rounded border border-border bg-surface-2 p-3">
       <div className="flex items-start justify-between gap-2">
         <button
           type="button"
           onClick={() => onOpenDetail(entry.id)}
-          aria-label={`View details for ${entry.fileName}`}
+          aria-label={t("job.viewDetails.aria", { name: entry.fileName })}
           className="flex min-w-0 flex-col text-left transition-colors duration-fast hover:text-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
         >
           <span className="truncate text-xs text-text" title={entry.fileName}>
@@ -175,10 +184,12 @@ function QueueCount({ count }: { count: number }) {
 }
 
 function EmptyQueueState() {
-  return <p className="text-sm text-text-faint">No active jobs.</p>;
+  const { t } = useTranslation();
+  return <p className="text-sm text-text-faint">{t("job.queue.empty")}</p>;
 }
 
 function AllJobsRow({ entry }: { entry: AllJobsEntry }) {
+  const { t } = useTranslation();
   return (
     <li className="flex flex-col gap-1 rounded border border-border bg-surface-2 p-3">
       <div className="flex items-start justify-between gap-2">
@@ -188,7 +199,7 @@ function AllJobsRow({ entry }: { entry: AllJobsEntry }) {
         <span className="text-[10px] uppercase tracking-wide text-text-faint">{jobKindLabel(entry.kind)}</span>
       </div>
       <div className="flex items-center justify-between text-[10px] text-text-faint">
-        <span>owner: {entry.ownerId ?? "—"}</span>
+        <span>{t("job.owner", { owner: entry.ownerId ?? "—" })}</span>
         <span>{entry.status}</span>
       </div>
     </li>
@@ -203,6 +214,7 @@ export function JobQueue() {
     void rehydrateJobQueue(jobQueueStore);
   }, []);
 
+  const { t } = useTranslation();
   const { entries, dismiss, cancel, clearCompleted } = useJobQueue();
   const { hasPermission } = useAuth();
   const [viewAll, setViewAll] = useState(false);
@@ -215,13 +227,13 @@ export function JobQueue() {
   return (
     <div className="flex h-full flex-col gap-3">
       <div className="flex items-center justify-between gap-2">
-        <h2 className="font-heading text-xs font-semibold uppercase tracking-wide text-text-dim">Job Queue</h2>
+        <h2 className="font-heading text-xs font-semibold uppercase tracking-wide text-text-dim">{t("job.queue.title")}</h2>
         <QueueCount count={viewAll ? allJobsEntries.length : entries.length} />
       </div>
       {canViewAll && (
         <label className="flex items-center gap-1.5 text-xs text-text-dim">
           <input type="checkbox" checked={viewAll} onChange={(event) => setViewAll(event.target.checked)} />
-          Ver todos
+          {t("job.queue.showAll")}
         </label>
       )}
       {viewAll ? (
@@ -255,7 +267,7 @@ export function JobQueue() {
           onClick={clearCompleted}
           className="mt-auto text-left text-xs text-text-dim transition-colors duration-fast hover:text-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
         >
-          Clear completed
+          {t("job.queue.clearCompleted")}
         </button>
       )}
       {detailEntry && <JobDetailModal entry={detailEntry} onClose={() => setDetailJobId(null)} onCancel={cancel} />}

@@ -334,7 +334,7 @@ describe("JobQueue", () => {
     vi.mocked(api.listVideoJobs).mockResolvedValue({ jobs: [] } as never);
 
     renderQueue();
-    const toggle = await screen.findByRole("checkbox", { name: /ver todos/i });
+    const toggle = await screen.findByRole("checkbox", { name: /show all/i });
     fireEvent.click(toggle);
 
     expect(await screen.findByText(/bob/)).toBeInTheDocument();
