@@ -1,8 +1,10 @@
 import { AlertTriangle, Ban, CheckCircle2, Clock, Download, Loader2, X } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useAllJobsView, type AllJobsEntry } from "../hooks/useAllJobs";
 import { useAuth } from "../hooks/useAuth";
 import { type JobQueueEntry, useJobQueue } from "../hooks/useJobQueue";
+import { rehydrateJobQueue } from "../lib/jobQueueRehydrate";
+import { jobQueueStore } from "../lib/jobQueueStore";
 import { isCancellableJobStatus, isTerminalJobStatus, jobKindLabel } from "../lib/jobStatus";
 import { IndeterminateProgressBar } from "./IndeterminateProgressBar";
 import { JobDetailModal } from "./JobDetailModal";
@@ -194,6 +196,13 @@ function AllJobsRow({ entry }: { entry: AllJobsEntry }) {
 }
 
 export function JobQueue() {
+  // Recargar el navegador borraba la cola aunque los trabajos siguieran vivos en
+  // el servidor. Se rehidrata desde el servidor una sola vez al montar: es la
+  // fuente real, asi que no puede mostrar trabajos que ya no existen.
+  useEffect(() => {
+    void rehydrateJobQueue(jobQueueStore);
+  }, []);
+
   const { entries, dismiss, cancel, clearCompleted } = useJobQueue();
   const { hasPermission } = useAuth();
   const [viewAll, setViewAll] = useState(false);
