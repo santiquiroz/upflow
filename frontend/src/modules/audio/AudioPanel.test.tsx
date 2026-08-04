@@ -69,6 +69,10 @@ const FULL_CAPABILITIES: AudioCapabilities = {
   denoiseModes: ["deepfilter", "rnnoise"],
   restoreAvailable: true,
   restoreModes: ["apollo", "audiosr"],
+  masteringPresets: [
+    { id: "streaming", label: "Streaming", description: "Para música y video.", targetLufs: -14 },
+    { id: "voice", label: "Voz", description: "Para podcast.", targetLufs: -16 },
+  ],
 };
 
 function renderPanel(capabilities: AudioCapabilities = FULL_CAPABILITIES) {
@@ -288,5 +292,32 @@ describe("AudioPanel", () => {
     expect(sent.voiceSteps).toEqual([]);
     expect(sent.voiceDelivery).toBeNull();
     expect(sent.voicePresenceDb).toBeNull();
+  });
+
+
+  it("offers the mastering presets and sends the chosen one", async () => {
+    // Nivelar el volumen a un estandar es lo que separa un audio procesado de uno
+    // entregable: dos archivos tratados igual sonaban a distinto volumen.
+    const submitSpy = vi.mocked(audioService.createAudioJob);
+    submitSpy.mockResolvedValue({ jobId: "a1", status: "queued", statusUrl: "", downloadUrl: null });
+    renderPanel();
+    fireEvent.click(await screen.findByRole("button", { name: /^Acabado/ }));
+
+    selectFile();
+    fireEvent.click(screen.getByRole("button", { name: "Streaming" }));
+    fireEvent.click(screen.getByRole("button", { name: /enhance audio/i }));
+
+    await waitFor(() => expect(submitSpy).toHaveBeenCalled());
+    expect(submitSpy.mock.calls[0][0].master).toBe("streaming");
+  });
+
+  it("lets levelling be the only thing asked for", async () => {
+    renderPanel();
+    fireEvent.click(await screen.findByRole("button", { name: /^Acabado/ }));
+
+    selectFile();
+    fireEvent.click(screen.getByRole("button", { name: "Streaming" }));
+
+    expect(screen.getByRole("button", { name: /enhance audio/i })).toBeEnabled();
   });
 });

@@ -98,6 +98,12 @@ class AudioPipeline:
             )
             current = voiced
 
+        if job.master:
+            advance_audio_stage(job, "mastering")
+            mastered = work_dir / "mastered.wav"
+            if await self._master(job, current, mastered):
+                current = mastered
+
         advance_audio_stage(job, "finalizing")
         output_path = self.settings.outputs_path / f"{job.id}.{job.output_format}"
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -105,6 +111,38 @@ class AudioPipeline:
         self._validate_output(output_path)
         complete_audio_stages(job)
         return output_path
+
+    async def _master(self, job: AudioJob, source: Path, destination: Path) -> bool:
+        """Normaliza la sonoridad en dos pasadas y deja lo medido en el job.
+
+        Devuelve False si no se pudo medir: sin medicion se entrega el audio sin
+        masterizar en vez de fallar el trabajo entero por el paso de acabado, y
+        el motivo queda registrado para que no sea un silencio.
+        """
+        from app.services.audio_mastering import (
+            build_master_command,
+            build_measure_command,
+            mastering_preset,
+            parse_loudness_measurement,
+        )
+
+        ffmpeg = self.settings.ffmpeg_binary_path
+        measure_output = await self._run_process_capturing(
+            build_measure_command(ffmpeg, source, job.master)
+        )
+        measurement = parse_loudness_measurement(measure_output)
+        if measurement is None:
+            job.metadata["masteringSkipped"] = "no se pudo medir la sonoridad"
+            return False
+
+        await self._run_process(
+            build_master_command(ffmpeg, source, destination, job.master, measurement),
+            "Audio mastering failed",
+        )
+        # Lo medido viaja al job: el usuario ve de cuanto a cuanto se movio.
+        job.metadata["loudnessBefore"] = measurement.input_i
+        job.metadata["loudnessTarget"] = mastering_preset(job.master).target_lufs
+        return True
 
     async def _write_output(self, current: Path, output_path: Path, output_format: str) -> None:
         if output_format == "wav":
@@ -155,6 +193,15 @@ class AudioPipeline:
         if returncode != 0:
             detail = stderr.decode("utf-8", errors="ignore").strip()
             raise RuntimeError(detail.splitlines()[-1] if detail else failure_message)
+
+    async def _run_process_capturing(self, command: list[str]) -> str:
+        """Corre y devuelve stderr. loudnorm imprime su medicion AHI, no en stdout,
+        y un exit distinto de cero se trata como "no se pudo medir": el paso de
+        acabado nunca puede tumbar un trabajo que ya proceso el audio."""
+        _, stderr, _returncode = await run_guarded_process(
+            command, self.settings.subprocess_timeout
+        )
+        return stderr.decode("utf-8", errors="ignore")
 
     def _validate_output(self, output_path: Path) -> None:
         if not (output_path.exists() and output_path.stat().st_size > 0):

@@ -15,6 +15,7 @@ export interface CreateAudioJobParams {
   voiceSteps?: string[];
   voiceDelivery?: string | null;
   voicePresenceDb?: number | null;
+  master?: string | null;
 }
 
 function buildAudioJobFormData(params: CreateAudioJobParams): FormData {
@@ -29,6 +30,9 @@ function buildAudioJobFormData(params: CreateAudioJobParams): FormData {
   }
   if (params.device) {
     formData.append("device", params.device);
+  }
+  if (params.master) {
+    formData.append("master", params.master);
   }
   appendVoiceFields(formData, params);
   return formData;

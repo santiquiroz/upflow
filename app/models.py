@@ -132,6 +132,9 @@ class AudioJob:
     voice_steps: list[str] = field(default_factory=list)
     voice_delivery: str | None = None
     voice_presence_db: float | None = None
+    # Acabado profesional: normaliza la sonoridad al estandar elegido (EBU R128).
+    # None = no se toca el volumen, que es el comportamiento de siempre.
+    master: str | None = None
     # Standalone-module output format (Fase C Task 9): "wav" (lossless, no
     # re-encode -- current is already PCM from decode/denoise/restore),
     # "flac" (lossless, ~50% smaller, default), "mp3" (lossy, smallest). See

@@ -60,6 +60,7 @@ from app.schemas import (
     GenerationJobResponse,
     GenerationJobsListResponse,
     GenerationModelSummary,
+    MasteringPresetResponse,
     RealtimeCapabilitiesResponse,
     RealtimePresetResponse,
     RealtimeStartedResponse,
@@ -960,6 +961,7 @@ async def create_audio_job(
     output_format: str = Form(default="flac"),
     voice_steps: str | None = Form(default=None),
     voice_delivery: str | None = Form(default=None),
+    master: str | None = Form(default=None),
     voice_presence_db: float | None = Form(default=None),
     audio_jobs: AudioJobManager = Depends(get_audio_job_manager),
     storage: StorageService = Depends(get_storage),
@@ -983,6 +985,7 @@ async def create_audio_job(
             output_format=output_format,
             voice_steps=_parse_voice_steps(voice_steps),
             voice_delivery=voice_delivery if isinstance(voice_delivery, str) else None,
+            master=master if isinstance(master, str) and master else None,
             voice_presence_db=(
                 voice_presence_db if isinstance(voice_presence_db, (int, float)) else None
             ),
@@ -1397,10 +1400,18 @@ async def audio_capabilities(settings: Settings = Depends(get_settings)) -> Audi
     restore_modes = [
         mode for mode in sorted(AUDIO_RESTORE_MODES) if settings.audio_restore_mode_available(mode)
     ]
+    from app.services.audio_mastering import MASTERING_PRESETS
+
     return AudioCapabilitiesResponse(
         denoise_modes=denoise_modes,
         restore_available=bool(restore_modes),
         restore_modes=restore_modes,
+        mastering_presets=[
+            MasteringPresetResponse(
+                id=p.id, label=p.label, description=p.description, target_lufs=p.target_lufs
+            )
+            for p in MASTERING_PRESETS
+        ],
     )
 
 

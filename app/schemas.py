@@ -88,10 +88,22 @@ class AudioJobResponse(BaseModel):
     download_url: str | None = Field(default=None, serialization_alias="downloadUrl")
 
 
+class MasteringPresetResponse(BaseModel):
+    id: str
+    label: str
+    description: str
+    target_lufs: float = Field(serialization_alias="targetLufs")
+
+
 class AudioCapabilitiesResponse(BaseModel):
     denoise_modes: list[str] = Field(serialization_alias="denoiseModes")
     restore_available: bool = Field(serialization_alias="restoreAvailable")
     restore_modes: list[str] = Field(default_factory=list, serialization_alias="restoreModes")
+    # Acabado profesional (EBU R128). Siempre disponible: lo hace ffmpeg, que ya
+    # viene con la app, sin descargar nada.
+    mastering_presets: list[MasteringPresetResponse] = Field(
+        default_factory=list, serialization_alias="masteringPresets"
+    )
 
 
 class VideoCapabilitiesResponse(BaseModel):
