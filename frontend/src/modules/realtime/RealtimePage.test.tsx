@@ -46,14 +46,14 @@ afterEach(() => {
 describe("RealtimePage", () => {
   it("renders without crashing", () => {
     renderPage();
-    expect(screen.getByRole("heading", { level: 1, name: /tiempo real/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: /Realtime/i })).toBeInTheDocument();
   });
 
   it("says plainly that no driver is needed", async () => {
     // El overlay es una ventana normal, no engancha el swapchain del juego. Por
     // eso no hay nada que firmar ni que instalar a nivel sistema.
     renderPage();
-    expect(await screen.findByText(/no hace falta instalar ningún driver/i)).toBeInTheDocument();
+    expect(await screen.findByText(/No driver needed/i)).toBeInTheDocument();
   });
 
   it("offers the presets returned by the backend", async () => {
@@ -69,11 +69,11 @@ describe("RealtimePage", () => {
     await screen.findByRole("radio", { name: /FSR/ });
 
     fireEvent.click(screen.getByRole("radio", { name: /FSR/ }));
-    fireEvent.change(screen.getByLabelText(/límite de cuadros/i), { target: { value: "120" } });
-    fireEvent.click(screen.getByRole("button", { name: /abrir overlay/i }));
+    fireEvent.change(screen.getByLabelText(/Frame cap/i), { target: { value: "120" } });
+    fireEvent.click(screen.getByRole("button", { name: /Open overlay/i }));
 
     await waitFor(() => expect(startSpy).toHaveBeenCalledWith("fsr", 120));
-    expect(await screen.findByRole("status")).toHaveTextContent(/overlay abierto/i);
+    expect(await screen.findByRole("status")).toHaveTextContent(/Overlay open/i);
   });
 
   it("sends no cap when the user leaves it unlimited", async () => {
@@ -82,7 +82,7 @@ describe("RealtimePage", () => {
     renderPage();
     await screen.findByRole("radio", { name: /Anime4K/ });
 
-    fireEvent.click(screen.getByRole("button", { name: /abrir overlay/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Open overlay/i }));
 
     await waitFor(() => expect(startSpy).toHaveBeenCalledWith("anime4k", null));
   });
@@ -93,10 +93,10 @@ describe("RealtimePage", () => {
     vi.mocked(realtimeService.startRealtime).mockResolvedValue({ pid: 1, preset: "anime4k" });
     renderPage();
     await screen.findByRole("radio", { name: /Anime4K/ });
-    fireEvent.click(screen.getByRole("button", { name: /abrir overlay/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Open overlay/i }));
 
     const aviso = await screen.findByRole("status");
-    expect(aviso).toHaveTextContent(/atajo que muestra la ventana de magpie/i);
+    expect(aviso).toHaveTextContent(/shortcut shown in the Magpie window/i);
     expect(aviso.textContent).not.toMatch(/win\s*\+|ctrl\s*\+|alt\s*\+/i);
   });
 
@@ -105,7 +105,7 @@ describe("RealtimePage", () => {
     renderPage();
     await screen.findByRole("radio", { name: /Anime4K/ });
 
-    fireEvent.click(screen.getByRole("button", { name: /abrir overlay/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Open overlay/i }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Magpie no arrancó");
   });
@@ -115,7 +115,7 @@ describe("RealtimePage", () => {
 
     expect(await screen.findByText(/no está instalado/i)).toBeInTheDocument();
     expect(screen.getByText(/download-magpie/i)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /abrir overlay/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Open overlay/i })).not.toBeInTheDocument();
   });
 
   it("is still honest about what frame generation cannot do", async () => {

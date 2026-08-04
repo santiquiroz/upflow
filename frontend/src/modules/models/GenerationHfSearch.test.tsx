@@ -180,7 +180,7 @@ describe("GenerationHfSearch — filtro por compatibilidad", () => {
     renderSearch();
     await screen.findByText("amd/listo-onnx");
 
-    fireEvent.click(screen.getByRole("radio", { name: /Listos/i }));
+    fireEvent.click(screen.getByRole("radio", { name: /Ready to use/i }));
 
     expect(screen.getByText("amd/listo-onnx")).toBeInTheDocument();
     expect(screen.queryByText("john/necesita-conversion")).not.toBeInTheDocument();
@@ -192,7 +192,7 @@ describe("GenerationHfSearch — filtro por compatibilidad", () => {
     renderSearch();
     await screen.findByText("amd/listo-onnx");
 
-    fireEvent.click(screen.getByRole("radio", { name: /Con conversión/i }));
+    fireEvent.click(screen.getByRole("radio", { name: /Needs conversion/i }));
 
     expect(screen.getByText("john/necesita-conversion")).toBeInTheDocument();
     expect(screen.queryByText("amd/listo-onnx")).not.toBeInTheDocument();
@@ -205,6 +205,6 @@ describe("GenerationHfSearch — filtro por compatibilidad", () => {
 
     expect(await screen.findByText("amd/listo-onnx")).toBeInTheDocument();
     expect(screen.getByText("john/necesita-conversion")).toBeInTheDocument();
-    expect((screen.getByRole("radio", { name: /Todos/i }) as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByRole("radio", { name: /All/i }) as HTMLInputElement).checked).toBe(true);
   });
 });

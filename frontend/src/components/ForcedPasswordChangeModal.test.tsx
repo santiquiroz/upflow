@@ -28,9 +28,9 @@ describe("ForcedPasswordChangeModal", () => {
     vi.mocked(authService.changePassword).mockResolvedValue({ ok: true });
     renderModal();
 
-    fireEvent.change(screen.getByLabelText(/contraseña actual/i), { target: { value: "temp123456" } });
-    fireEvent.change(screen.getByLabelText(/contraseña nueva/i), { target: { value: "newpassword1" } });
-    fireEvent.click(screen.getByRole("button", { name: /guardar/i }));
+    fireEvent.change(screen.getByLabelText(/Current password/i), { target: { value: "temp123456" } });
+    fireEvent.change(screen.getByLabelText(/New password/i), { target: { value: "newpassword1" } });
+    fireEvent.click(screen.getByRole("button", { name: /Save/i }));
 
     await waitFor(() =>
       expect(authService.changePassword).toHaveBeenCalledWith("temp123456", "newpassword1"),
@@ -41,9 +41,9 @@ describe("ForcedPasswordChangeModal", () => {
     vi.mocked(authService.changePassword).mockRejectedValue(new ApiError(401, "Contraseña actual incorrecta"));
     renderModal();
 
-    fireEvent.change(screen.getByLabelText(/contraseña actual/i), { target: { value: "wrong" } });
-    fireEvent.change(screen.getByLabelText(/contraseña nueva/i), { target: { value: "newpassword1" } });
-    fireEvent.click(screen.getByRole("button", { name: /guardar/i }));
+    fireEvent.change(screen.getByLabelText(/Current password/i), { target: { value: "wrong" } });
+    fireEvent.change(screen.getByLabelText(/New password/i), { target: { value: "newpassword1" } });
+    fireEvent.click(screen.getByRole("button", { name: /Save/i }));
 
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Contraseña actual incorrecta"));
   });

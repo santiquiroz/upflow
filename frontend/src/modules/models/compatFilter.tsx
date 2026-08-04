@@ -1,3 +1,4 @@
+import { useTranslation } from "../../i18n/LocaleProvider";
 import type { HfModelSearchResultResponse } from "../../lib/apiTypes";
 
 // Filtro de compatibilidad compartido por TODOS los buscadores de la app
@@ -7,10 +8,10 @@ import type { HfModelSearchResultResponse } from "../../lib/apiTypes";
 
 export type CompatFilter = "all" | "ready" | "conversion";
 
-const COMPAT_FILTERS: { value: CompatFilter; label: string }[] = [
-  { value: "all", label: "Todos" },
-  { value: "ready", label: "Listos para usar" },
-  { value: "conversion", label: "Con conversión" },
+const COMPAT_FILTERS: { value: CompatFilter; labelKey: string }[] = [
+  { value: "all", labelKey: "models.compat.all" },
+  { value: "ready", labelKey: "models.compat.ready" },
+  { value: "conversion", labelKey: "models.compat.conversion" },
 ];
 
 // ready_onnx corre tal cual; needs_conversion y single_file pasan por la
@@ -40,9 +41,10 @@ export function CompatFilterChips({
   // cuando conviven en la misma pantalla.
   name: string;
 }) {
+  const { t } = useTranslation();
   return (
     <fieldset className="flex flex-wrap gap-2">
-      <legend className="sr-only">Filtrar por compatibilidad</legend>
+      <legend className="sr-only">{t("models.compat.legend")}</legend>
       {COMPAT_FILTERS.map((option) => (
         <label
           key={option.value}
@@ -59,7 +61,7 @@ export function CompatFilterChips({
             checked={value === option.value}
             onChange={() => onChange(option.value)}
           />
-          {option.label}
+          {t(option.labelKey)}
         </label>
       ))}
     </fieldset>

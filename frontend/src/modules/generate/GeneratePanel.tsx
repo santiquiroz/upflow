@@ -36,17 +36,15 @@ type GenerationMode = "text-to-image" | "image-to-image" | "video";
 // ahi hace que el decodificador se caiga a CPU y el trabajo pase de minutos a
 // media hora, asi que la lista no ofrece resoluciones que no entran.
 const VIDEO_SIZE_OPTIONS = [
-  { label: "832 x 480 (16:9)", width: 832, height: 480 },
-  { label: "480 x 832 (vertical)", width: 480, height: 832 },
-  { label: "640 x 640 (cuadrado)", width: 640, height: 640 },
-  { label: "480 x 480 (mas rapido)", width: 480, height: 480 },
+  // La proporcion se lee sola en los numeros; solo la aclaracion se traduce.
+  { label: "832 x 480 (16:9)", labelKey: null, width: 832, height: 480 },
+  { label: null, labelKey: "generate.video.size.vertical", width: 480, height: 832 },
+  { label: null, labelKey: "generate.video.size.square", width: 640, height: 640 },
+  { label: null, labelKey: "generate.video.size.fastest", width: 480, height: 480 },
 ];
 // El decodificador comprime 4x en el tiempo: los valores validos son 4n+1.
 const VIDEO_FRAME_OPTIONS = [17, 33, 49, 81];
 const VIDEO_FPS_OPTIONS = [8, 12, 16, 24];
-
-export const CPU_ONLY_WARNING =
-  "No se detectó GPU compatible (DirectX 12). Generar en CPU tarda varios minutos por imagen. ¿Continuar igual?";
 
 function isJobBusy(phase: GenerationJobPhase): boolean {
   return phase === "uploading" || phase === "queued" || phase === "running";
@@ -99,6 +97,7 @@ function ModelSelect({
   value: string | null;
   onChange: (modelId: string | null) => void;
 }) {
+  const { t } = useTranslation();
   if (models.length === 0) {
     return <NoModelsHint />;
   }
@@ -109,13 +108,15 @@ function ModelSelect({
       onChange={(event) => onChange(event.target.value || null)}
       className="rounded border border-border bg-surface p-2 text-sm text-text"
     >
-      <option value="">Select a model…</option>
+      <option value="">{t("generate.model.select")}</option>
       {models.map((model) => (
         // Una conversion en curso se VE (deshabilitada, con el aviso de demora):
         // sin esto, instalar un modelo desde el installer parecia no traer nada
         // durante los ~40 minutos que tarda la conversion.
         <option key={model.id} value={model.id} disabled={model.status !== "installed"}>
-          {model.status === "converting" ? `${model.name} (convirtiendo… ~30-45 min)` : model.name}
+          {model.status === "converting"
+            ? t("generate.model.converting", { name: model.name })
+            : model.name}
         </option>
       ))}
     </select>
@@ -131,11 +132,11 @@ function VideoModelSelect({
   value: string | null;
   onChange: (model: VideoModelSummary | null) => void;
 }) {
+  const { t } = useTranslation();
   if (models.length === 0) {
     return (
       <p className="text-sm text-text-dim">
-        Todavia no hay modelos de video instalados. Instala el pack de generacion de
-        video desde el instalador, o corre <code>scripts/download-wan-video.ps1</code>.
+        {t("generate.video.noModels", { script: "scripts/download-wan-video.ps1" })}
       </p>
     );
   }
@@ -148,10 +149,10 @@ function VideoModelSelect({
       }
       className="rounded border border-border bg-surface p-2 text-sm text-text"
     >
-      <option value="">Elegi un modelo…</option>
+      <option value="">{t("generate.model.select")}</option>
       {models.map((model) => (
         <option key={model.id} value={model.id}>
-          {model.fast ? `${model.name} - rapido, 4 pasos` : model.name}
+          {model.fast ? t("generate.video.fastModel", { name: model.name }) : model.name}
         </option>
       ))}
     </select>
@@ -169,12 +170,13 @@ function VideoLengthControls({
   onFramesChange: (value: number) => void;
   onFpsChange: (value: number) => void;
 }) {
+  const { t } = useTranslation();
   const seconds = (frames / fps).toFixed(1);
   return (
     <>
       <div className="flex flex-col gap-2">
         <label htmlFor="generate-frames" className="text-xs font-medium text-text-dim">
-          Cuadros
+          {t("generate.video.frames")}
         </label>
         <select
           id="generate-frames"
@@ -191,7 +193,7 @@ function VideoLengthControls({
       </div>
       <div className="flex flex-col gap-2">
         <label htmlFor="generate-fps" className="text-xs font-medium text-text-dim">
-          Cuadros por segundo
+          {t("generate.video.fps")}
         </label>
         <select
           id="generate-fps"
@@ -207,8 +209,8 @@ function VideoLengthControls({
         </select>
       </div>
       <p role="status" className="col-span-2 text-xs text-text-faint">
-        Duracion: {seconds} s. Generar video tarda minutos, no segundos.
-        {frames > 17 && " Pasados los 17 cuadros el sujeto se va deformando hacia el final."}
+        {t("generate.video.duration", { seconds })}
+        {frames > 17 && t("generate.video.driftWarning")}
       </p>
     </>
   );
@@ -223,6 +225,7 @@ function VideoSizeSelect({
   height: number;
   onChange: (size: { width: number; height: number }) => void;
 }) {
+  const { t } = useTranslation();
   const current = `${width}x${height}`;
   return (
     <select
@@ -235,8 +238,11 @@ function VideoSizeSelect({
       className="rounded border border-border bg-surface p-2 text-sm text-text"
     >
       {VIDEO_SIZE_OPTIONS.map((option) => (
-        <option key={option.label} value={`${option.width}x${option.height}`}>
-          {option.label}
+        <option
+          key={`${option.width}x${option.height}`}
+          value={`${option.width}x${option.height}`}
+        >
+          {option.labelKey ? t(option.labelKey) : option.label}
         </option>
       ))}
     </select>
@@ -244,23 +250,24 @@ function VideoSizeSelect({
 }
 
 function CpuConfirmBanner({ onConfirm, onCancel }: { onConfirm: () => void; onCancel: () => void }) {
+  const { t } = useTranslation();
   return (
     <div role="alert" className="flex flex-col gap-2 rounded border border-warn bg-surface-2 p-3 text-sm text-text">
-      <p>{CPU_ONLY_WARNING}</p>
+      <p>{t("generate.cpuConfirm")}</p>
       <div className="flex gap-2">
         <button
           type="button"
           onClick={onConfirm}
           className="inline-flex w-fit items-center rounded bg-accent px-3 py-1.5 text-sm font-medium text-bg"
         >
-          Continuar igual
+          {t("generate.continueAnyway")}
         </button>
         <button
           type="button"
           onClick={onCancel}
           className="inline-flex w-fit items-center rounded border border-border px-3 py-1.5 text-sm text-text-dim"
         >
-          Cancelar
+          {t("common.cancel")}
         </button>
       </div>
     </div>
@@ -603,10 +610,7 @@ export function GeneratePanel() {
         {(mode === "image-to-image" || isVideo) && (
           <div className="flex flex-col gap-4 rounded border border-border bg-surface-2 p-4">
             {isVideo && (
-              <p className="text-xs text-text-faint">
-                Opcional: con una imagen de partida, el clip arranca desde ella. Sin
-                imagen, se genera solo desde el texto.
-              </p>
+              <p className="text-xs text-text-faint">{t("generate.video.initImageHint")}</p>
             )}
             <InitImageDropzone
               image={initImage}
@@ -745,7 +749,7 @@ export function GeneratePanel() {
               onChange={handleAutoUpscaleChange}
               className="h-3.5 w-3.5 accent-accent"
             />
-            Escalar automáticamente al terminar
+            {t("generate.upscaleOnFinish")}
           </label>
           {autoUpscale && (
             <div className="flex flex-col gap-3">

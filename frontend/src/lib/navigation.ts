@@ -2,22 +2,22 @@ import type { LucideIcon } from "lucide-react";
 import { AudioLines, AudioWaveform, Boxes, Download, Eraser, LayoutGrid, Sliders, Sparkles, Users as UsersIcon, Wand2, Zap } from "lucide-react";
 
 export interface NavEntry {
-  label: string;
+  labelKey: string;
   path: string;
   icon: LucideIcon;
   requiredPermission?: string;
 }
 
 export const NAV_ENTRIES: readonly NavEntry[] = [
-  { label: "Tasks", path: "/", icon: LayoutGrid },
-  { label: "Enhance", path: "/enhance", icon: Wand2 },
-  { label: "Audio", path: "/audio", icon: AudioWaveform },
-  { label: "Transcribe", path: "/transcribe", icon: AudioLines },
-  { label: "Download", path: "/download", icon: Download },
-  { label: "Generate", path: "/generate", icon: Sparkles },
-  { label: "Editor", path: "/editor", icon: Eraser },
-  { label: "Models", path: "/models", icon: Boxes },
-  { label: "Realtime", path: "/realtime", icon: Zap },
-  { label: "Settings", path: "/settings", icon: Sliders },
-  { label: "Users", path: "/users", icon: UsersIcon, requiredPermission: "users:manage" },
+  { labelKey: "nav.tasks", path: "/", icon: LayoutGrid },
+  { labelKey: "nav.enhance", path: "/enhance", icon: Wand2 },
+  { labelKey: "nav.audio", path: "/audio", icon: AudioWaveform },
+  { labelKey: "nav.transcribe", path: "/transcribe", icon: AudioLines },
+  { labelKey: "nav.download", path: "/download", icon: Download },
+  { labelKey: "nav.generate", path: "/generate", icon: Sparkles },
+  { labelKey: "nav.editor", path: "/editor", icon: Eraser },
+  { labelKey: "nav.models", path: "/models", icon: Boxes },
+  { labelKey: "nav.realtime", path: "/realtime", icon: Zap },
+  { labelKey: "nav.settings", path: "/settings", icon: Sliders },
+  { labelKey: "nav.users", path: "/users", icon: UsersIcon, requiredPermission: "users:manage" },
 ];

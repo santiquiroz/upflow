@@ -126,6 +126,31 @@ describe("AudioPanel", () => {
     await waitFor(() => expect(submitButton).not.toBeDisabled());
   });
 
+  // El mensaje que explica por que el boton esta apagado tiene que nombrar las
+  // MISMAS secciones que hay en pantalla. Nombrar una que no esta deja al
+  // usuario buscando un control que no existe, y omitir una que si esta le
+  // esconde una forma valida de habilitar el envio.
+  it("names the mastering section as a valid choice, because choosing it alone enables the CTA", async () => {
+    renderPanel(FULL_CAPABILITIES);
+    // El mensaje se pinta antes de que lleguen las capabilities, y ahi todavia
+    // no hay secciones opcionales: esperar a que la seccion exista es esperar al
+    // estado que el mensaje tiene que describir.
+    await screen.findByRole("button", { name: /^Mastering/ });
+    selectFile();
+
+    expect(screen.getByText(/at least one/i)).toHaveTextContent(/mastering/i);
+  });
+
+  it("does not name Restore when there are no restore models installed", async () => {
+    renderPanel({ denoiseModes: ["deepfilter"], restoreAvailable: false, restoreModes: [] });
+    selectFile();
+
+    const hint = await screen.findByText(/at least one/i);
+
+    expect(screen.queryByRole("button", { name: /^Restore/ })).not.toBeInTheDocument();
+    expect(hint).not.toHaveTextContent(/restore/i);
+  });
+
   it("shows the Apollo restore option with an Experimental badge when restore is available", async () => {
     renderPanel(FULL_CAPABILITIES);
 
@@ -301,7 +326,7 @@ describe("AudioPanel", () => {
     const submitSpy = vi.mocked(audioService.createAudioJob);
     submitSpy.mockResolvedValue({ jobId: "a1", status: "queued", statusUrl: "", downloadUrl: null });
     renderPanel();
-    fireEvent.click(await screen.findByRole("button", { name: /^Acabado/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /^Mastering/ }));
 
     selectFile();
     fireEvent.click(screen.getByRole("button", { name: "Streaming" }));
@@ -313,7 +338,7 @@ describe("AudioPanel", () => {
 
   it("lets levelling be the only thing asked for", async () => {
     renderPanel();
-    fireEvent.click(await screen.findByRole("button", { name: /^Acabado/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /^Mastering/ }));
 
     selectFile();
     fireEvent.click(screen.getByRole("button", { name: "Streaming" }));

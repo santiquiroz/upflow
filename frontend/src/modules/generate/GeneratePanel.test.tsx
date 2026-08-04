@@ -362,10 +362,10 @@ describe("GeneratePanel", () => {
 
     expect(generationService.createGenerationJob).not.toHaveBeenCalled();
     expect(
-      await screen.findByText("No se detectó GPU compatible (DirectX 12). Generar en CPU tarda varios minutos por imagen. ¿Continuar igual?"),
+      await screen.findByText("No compatible GPU detected (DirectX 12). Generating on CPU takes several minutes per image. Continue anyway?"),
     ).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: /continuar igual/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^Continue anyway$/i }));
 
     await waitFor(() => expect(generationService.createGenerationJob).toHaveBeenCalled());
   });
@@ -388,11 +388,11 @@ describe("GeneratePanel", () => {
 
     expect(screen.queryByRole("radio", { name: /RealESRGAN x4plus/ })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("checkbox", { name: /escalar automáticamente/i }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /Upscale automatically when it finishes/i }));
 
     const upscaleRadio = await screen.findByRole("radio", { name: /RealESRGAN x4plus/ });
     fireEvent.click(upscaleRadio);
-    fireEvent.change(screen.getByLabelText(/scale/i), { target: { value: "3" } });
+    fireEvent.change(screen.getByLabelText(/^scale$/i), { target: { value: "3" } });
 
     await waitFor(() => expect(submitButton).not.toBeDisabled());
     fireEvent.click(submitButton);
@@ -424,14 +424,14 @@ describe("GeneratePanel", () => {
     fireEvent.click(submitButton);
 
     expect(
-      await screen.findByText("No se detectó GPU compatible (DirectX 12). Generar en CPU tarda varios minutos por imagen. ¿Continuar igual?"),
+      await screen.findByText("No compatible GPU detected (DirectX 12). Generating on CPU takes several minutes per image. Continue anyway?"),
     ).toBeInTheDocument();
     expect(generationService.createGenerationJob).not.toHaveBeenCalled();
 
     fireEvent.click(await screen.findByRole("radio", { name: /AMD Radeon RX 7900/ }));
 
     expect(
-      screen.queryByText("No se detectó GPU compatible (DirectX 12). Generar en CPU tarda varios minutos por imagen. ¿Continuar igual?"),
+      screen.queryByText("No compatible GPU detected (DirectX 12). Generating on CPU takes several minutes per image. Continue anyway?"),
     ).not.toBeInTheDocument();
 
     fireEvent.click(submitButton);
@@ -457,7 +457,7 @@ describe("GeneratePanel — conversiones visibles en el dropdown", () => {
     });
 
     const option = (await screen.findByRole("option", {
-      name: /john\/anime.*convirtiendo/i,
+      name: /john\/anime.*Converting…/i,
     })) as HTMLOptionElement;
     expect(option.disabled).toBe(true);
   });
@@ -471,7 +471,7 @@ describe("GeneratePanel — conversiones visibles en el dropdown", () => {
       cpuOnly: false,
     });
 
-    expect(await screen.findByRole("option", { name: /convirtiendo/i })).toBeInTheDocument();
+    expect(await screen.findByRole("option", { name: /Converting…/i })).toBeInTheDocument();
     expect(screen.queryByText(/No generation models installed/i)).not.toBeInTheDocument();
   });
 });
@@ -488,7 +488,7 @@ describe("GeneratePanel — modo video", () => {
     fireEvent.click(screen.getByRole("radio", { name: /^video$/i }));
 
     expect(
-      await screen.findByRole("option", { name: /Wan2_2-TI2V-5B-Turbo-Q8_0 \(Vulkan\) - rapido, 4 pasos/i }),
+      await screen.findByRole("option", { name: /Wan2_2-TI2V-5B-Turbo-Q8_0 \(Vulkan\) - fast, 4 steps/i }),
     ).toBeInTheDocument();
     // Un modelo de imagen mandado al lane de video es un 400 seguro.
     expect(screen.queryByRole("option", { name: "SD 1.5 (ONNX)" })).not.toBeInTheDocument();
@@ -502,10 +502,11 @@ describe("GeneratePanel — modo video", () => {
   it("turns auto upscale off when entering video, even if it was on", async () => {
     const createSpy = vi.mocked(generationService.createGenerationJob);
     createSpy.mockResolvedValue({ ...BASE_JOB, id: "gen-video" } as GenerationJob);
+    vi.mocked(generationService.getGenerationJob).mockResolvedValue({ ...BASE_JOB, id: "gen-video" } as GenerationJob);
     renderPanel();
     await screen.findByRole("option", { name: "SD 1.5 (ONNX)" });
 
-    fireEvent.click(screen.getByRole("checkbox", { name: /escalar autom/i }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /Upscale automatically when it finishes/i }));
     fireEvent.click(screen.getByRole("radio", { name: /^video$/i }));
     await screen.findByRole("option", { name: /Turbo/i });
     fireEvent.change(screen.getByLabelText(/^model$/i), {
@@ -542,6 +543,7 @@ describe("GeneratePanel — modo video", () => {
   it("sends frames, fps and the cinematic size, and never auto-upscales a clip", async () => {
     const createSpy = vi.mocked(generationService.createGenerationJob);
     createSpy.mockResolvedValue({ ...BASE_JOB, id: "gen-video" } as GenerationJob);
+    vi.mocked(generationService.getGenerationJob).mockResolvedValue({ ...BASE_JOB, id: "gen-video" } as GenerationJob);
     renderPanel();
     await screen.findByRole("option", { name: "SD 1.5 (ONNX)" });
     fireEvent.click(screen.getByRole("radio", { name: /^video$/i }));
@@ -551,8 +553,8 @@ describe("GeneratePanel — modo video", () => {
       target: { value: "sdcppvid:Wan2_2-TI2V-5B-Turbo-Q8_0" },
     });
     fireEvent.change(screen.getByLabelText(/^prompt$/i), { target: { value: "un zorro corriendo" } });
-    fireEvent.change(screen.getByLabelText(/cuadros por segundo/i), { target: { value: "24" } });
-    fireEvent.change(screen.getByLabelText(/^cuadros$/i), { target: { value: "49" } });
+    fireEvent.change(screen.getByLabelText(/Frames per second/i), { target: { value: "24" } });
+    fireEvent.change(screen.getByLabelText(/^Frames$/i), { target: { value: "49" } });
     fireEvent.click(screen.getByRole("button", { name: /^generate$/i }));
 
     await waitFor(() => expect(createSpy).toHaveBeenCalled());
@@ -580,9 +582,9 @@ describe("GeneratePanel — modo video", () => {
 
     // Medido con el mismo prompt y el mismo seed: a 17 cuadros el sujeto aguanta
     // hasta el ultimo frame, a 33 se deshace pasada la mitad.
-    expect(await screen.findByRole("status")).not.toHaveTextContent(/deformando/i);
-    fireEvent.change(screen.getByLabelText(/^cuadros$/i), { target: { value: "33" } });
-    expect(screen.getByRole("status")).toHaveTextContent(/deformando/i);
+    expect(await screen.findByRole("status")).not.toHaveTextContent(/drifts out of shape/i);
+    fireEvent.change(screen.getByLabelText(/^Frames$/i), { target: { value: "33" } });
+    expect(screen.getByRole("status")).toHaveTextContent(/drifts out of shape/i);
   });
 
   it("points at the installer when the video pack is not downloaded", async () => {

@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Zap } from "lucide-react";
 import { useState } from "react";
+import { useTranslation } from "../../i18n/LocaleProvider";
 import type { RealtimePreset } from "../../lib/apiTypes";
 import { fetchRealtimeCapabilities, startRealtime } from "../../services/realtime";
 
@@ -9,11 +10,12 @@ import { fetchRealtimeCapabilities, startRealtime } from "../../services/realtim
 // No hace falta ningún driver: el overlay es una ventana normal, no engancha el
 // swapchain del juego.
 
+// Solo el "sin tope" se traduce: "60 fps" es la misma cadena en los dos idiomas.
 const FRAME_RATE_OPTIONS = [
-  { value: null, label: "Sin límite" },
-  { value: 60, label: "60 fps" },
-  { value: 120, label: "120 fps" },
-  { value: 144, label: "144 fps" },
+  { value: null, labelKey: "realtime.frameCap.none" },
+  { value: 60, labelKey: null },
+  { value: 120, labelKey: null },
+  { value: 144, labelKey: null },
 ] as const;
 
 function PresetOption({
@@ -44,6 +46,7 @@ function PresetOption({
 }
 
 export function RealtimePanel() {
+  const { t } = useTranslation();
   const [preset, setPreset] = useState<string | null>(null);
   const [maxFrameRate, setMaxFrameRate] = useState<number | null>(null);
   const [launched, setLaunched] = useState<number | null>(null);
@@ -60,8 +63,7 @@ export function RealtimePanel() {
       <div role="alert" className="flex flex-col gap-2 rounded border border-border bg-surface p-4">
         <p className="text-sm text-text-dim">{capabilities.data.reason}</p>
         <p className="text-xs text-text-faint">
-          Instalalo tildando <strong>Tiempo real</strong> en el instalador, o corriendo{" "}
-          <code>scripts/download-magpie.ps1</code>.
+          {t("realtime.install", { script: "scripts/download-magpie.ps1" })}
         </p>
       </div>
     );
@@ -80,7 +82,7 @@ export function RealtimePanel() {
       const started = await startRealtime(selected, maxFrameRate);
       setLaunched(started.pid);
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "No se pudo iniciar el overlay.");
+      setErrorMessage(error instanceof Error ? error.message : t("realtime.startFailed"));
     } finally {
       setIsStarting(false);
     }
@@ -89,7 +91,7 @@ export function RealtimePanel() {
   return (
     <div className="flex flex-col gap-6">
       <fieldset className="flex flex-col gap-2">
-        <legend className="text-xs font-medium text-text-dim">Modo de reescalado</legend>
+        <legend className="text-xs font-medium text-text-dim">{t("realtime.mode")}</legend>
         <div className="grid grid-cols-2 gap-2 max-[700px]:grid-cols-1">
           {presets.map((item) => (
             <PresetOption
@@ -104,7 +106,7 @@ export function RealtimePanel() {
 
       <div className="flex flex-col gap-2">
         <label htmlFor="realtime-fps" className="text-xs font-medium text-text-dim">
-          Límite de cuadros
+          {t("realtime.frameCap")}
         </label>
         <select
           id="realtime-fps"
@@ -115,8 +117,11 @@ export function RealtimePanel() {
           className="w-fit rounded border border-border bg-surface p-2 text-sm text-text"
         >
           {FRAME_RATE_OPTIONS.map((option) => (
-            <option key={option.label} value={option.value === null ? "" : String(option.value)}>
-              {option.label}
+            <option
+              key={option.value ?? "none"}
+              value={option.value === null ? "" : String(option.value)}
+            >
+              {option.labelKey ? t(option.labelKey) : `${option.value} fps`}
             </option>
           ))}
         </select>
@@ -130,15 +135,14 @@ export function RealtimePanel() {
           className="inline-flex w-fit items-center gap-2 rounded bg-accent px-4 py-2 text-sm font-medium text-bg transition-[background-color,opacity] duration-fast hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
         >
           <Zap aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />
-          {isStarting ? "Abriendo…" : "Abrir overlay"}
+          {isStarting ? t("realtime.opening") : t("realtime.open")}
         </button>
         {launched !== null && (
           // No se nombra un atajo concreto: Magpie lo guarda como un codigo
           // empaquetado y su ventana ya lo muestra. Inventarlo seria peor que
           // mandar a mirarlo donde de verdad esta.
           <p role="status" className="text-xs text-ok">
-            Overlay abierto. Poné el foco en la ventana que querés escalar y usá el atajo que
-            muestra la ventana de Magpie. El mismo atajo lo cierra.
+            {t("realtime.opened")}
           </p>
         )}
         {errorMessage && (

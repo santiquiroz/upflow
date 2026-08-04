@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { ApiError } from "../lib/api";
 import { setup } from "../services/auth";
+import { useTranslation } from "../i18n/LocaleProvider";
 
 export function SetupPage() {
   const [username, setUsername] = useState("");
@@ -8,6 +9,7 @@ export function SetupPage() {
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const { t } = useTranslation();
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -17,7 +19,7 @@ export function SetupPage() {
       await setup(username, password);
       setDone(true);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "No se pudo crear el administrador");
+      setError(err instanceof ApiError ? err.message : t("auth.setup.failed"));
     } finally {
       setSubmitting(false);
     }
@@ -26,7 +28,7 @@ export function SetupPage() {
   if (done) {
     return (
       <div className="flex h-screen items-center justify-center bg-bg">
-        <p className="text-sm text-text">Administrador creado. Recargá la página para iniciar sesión.</p>
+        <p className="text-sm text-text">{t("auth.setup.done")}</p>
       </div>
     );
   }
@@ -34,10 +36,10 @@ export function SetupPage() {
   return (
     <div className="flex h-screen items-center justify-center bg-bg">
       <form onSubmit={handleSubmit} className="flex w-full max-w-sm flex-col gap-4 rounded border border-border bg-surface p-6">
-        <h1 className="font-heading text-lg font-semibold text-text">Configuración inicial</h1>
-        <p className="text-xs text-text-dim">Creá la cuenta de administrador de Upflow.</p>
+        <h1 className="font-heading text-lg font-semibold text-text">{t("auth.setup.title")}</h1>
+        <p className="text-xs text-text-dim">{t("auth.setup.subtitle")}</p>
         <label className="flex flex-col gap-1 text-xs text-text-dim">
-          Usuario
+          {t("auth.username")}
           <input
             required
             minLength={3}
@@ -47,7 +49,7 @@ export function SetupPage() {
           />
         </label>
         <label className="flex flex-col gap-1 text-xs text-text-dim">
-          Contraseña
+          {t("auth.password")}
           <input
             type="password"
             required
@@ -63,7 +65,7 @@ export function SetupPage() {
           disabled={submitting}
           className="rounded bg-accent px-3 py-1.5 text-sm font-medium text-bg disabled:opacity-50"
         >
-          Crear administrador
+          {t("auth.setup.submit")}
         </button>
       </form>
     </div>

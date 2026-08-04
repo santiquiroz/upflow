@@ -67,21 +67,21 @@ describe("App auth gate", () => {
     vi.mocked(authService.getMe).mockRejectedValue(new ApiError(401, "not_authenticated"));
     renderApp();
 
-    await waitFor(() => expect(screen.getByRole("button", { name: /ingresar/i })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("button", { name: /Sign in/i })).toBeInTheDocument());
   });
 
   it("renders SetupPage when GET /auth/me returns setup_required", async () => {
     vi.mocked(authService.getMe).mockRejectedValue(new ApiError(401, "setup_required"));
     renderApp();
 
-    await waitFor(() => expect(screen.getByRole("button", { name: /crear/i })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("button", { name: /Create administrator/i })).toBeInTheDocument());
   });
 
   it("shows the forced password change modal when mustChangePassword is true", async () => {
     vi.mocked(authService.getMe).mockResolvedValue({ ...OFF_MODE_ME, authMode: "multi", mustChangePassword: true });
     renderApp();
 
-    await waitFor(() => expect(screen.getByRole("heading", { name: /cambiá tu contraseña/i })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("heading", { name: /Change your password/i })).toBeInTheDocument());
   });
 
   it("renders the transcription page at /transcribe", async () => {
@@ -117,18 +117,18 @@ describe("App — las pestañas de trabajo no pierden su estado", () => {
     vi.mocked(authService.getMe).mockResolvedValue(OFF_MODE_ME);
     renderApp("/download");
 
-    const input = await screen.findByLabelText(/Dirección del video/i);
+    const input = await screen.findByLabelText(/Video address/i);
     const { fireEvent } = await import("@testing-library/react");
     fireEvent.change(input, { target: { value: "https://youtube.com/watch?v=persistente" } });
 
     fireEvent.click(screen.getByRole("link", { name: /Settings/i }));
     await waitFor(() =>
-      expect(screen.queryByLabelText(/Dirección del video/i)).not.toBeVisible(),
+      expect(screen.queryByLabelText(/Video address/i)).not.toBeVisible(),
     );
 
     fireEvent.click(screen.getByRole("link", { name: /Download/i }));
 
-    const restored = await screen.findByLabelText(/Dirección del video/i);
+    const restored = await screen.findByLabelText(/Video address/i);
     expect(restored).toHaveValue("https://youtube.com/watch?v=persistente");
   });
 
@@ -140,6 +140,6 @@ describe("App — las pestañas de trabajo no pierden su estado", () => {
     await waitFor(() =>
       expect(screen.getByRole("heading", { name: /what do you want to do/i })).toBeInTheDocument(),
     );
-    expect(screen.queryByLabelText(/Dirección del video/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Video address/i)).not.toBeInTheDocument();
   });
 });

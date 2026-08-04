@@ -2,9 +2,11 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 import { ApiError } from "../lib/api";
 import { login } from "../services/auth";
+import { useTranslation } from "../i18n/LocaleProvider";
 
 export function LoginPage() {
   const queryClient = useQueryClient();
+  const { t } = useTranslation();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -18,7 +20,7 @@ export function LoginPage() {
       await login(username, password);
       await queryClient.invalidateQueries({ queryKey: ["me"] });
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "No se pudo iniciar sesión");
+      setError(err instanceof ApiError ? err.message : t("auth.login.failed"));
     } finally {
       setSubmitting(false);
     }
@@ -29,7 +31,7 @@ export function LoginPage() {
       <form onSubmit={handleSubmit} className="flex w-full max-w-sm flex-col gap-4 rounded border border-border bg-surface p-6">
         <h1 className="font-heading text-lg font-semibold text-text">Upflow</h1>
         <label className="flex flex-col gap-1 text-xs text-text-dim">
-          Usuario
+          {t("auth.username")}
           <input
             required
             value={username}
@@ -38,7 +40,7 @@ export function LoginPage() {
           />
         </label>
         <label className="flex flex-col gap-1 text-xs text-text-dim">
-          Contraseña
+          {t("auth.password")}
           <input
             type="password"
             required
@@ -53,7 +55,7 @@ export function LoginPage() {
           disabled={submitting}
           className="rounded bg-accent px-3 py-1.5 text-sm font-medium text-bg disabled:opacity-50"
         >
-          Ingresar
+          {t("auth.signIn")}
         </button>
       </form>
     </div>

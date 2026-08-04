@@ -67,7 +67,7 @@ function renderPage() {
 }
 
 function typeUrl(value: string) {
-  fireEvent.change(screen.getByLabelText(/Dirección del video/i), { target: { value } });
+  fireEvent.change(screen.getByLabelText(/Video address/i), { target: { value } });
 }
 
 afterEach(() => {
@@ -81,11 +81,11 @@ describe("DownloadPage", () => {
   it("no deja pedir nada hasta que hay una URL que parece una URL", () => {
     renderPage();
 
-    expect(screen.getByRole("button", { name: /Descargar/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Download/i })).toBeDisabled();
 
     typeUrl("https://youtube.com/watch?v=x");
 
-    expect(screen.getByRole("button", { name: /Descargar/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /Download/i })).toBeEnabled();
   });
 
   it("consulta la URL sola, sin que haya que tocar nada", async () => {
@@ -107,8 +107,8 @@ describe("DownloadPage", () => {
     renderPage();
     typeUrl("https://youtube.com/playlist?list=x");
 
-    expect(await screen.findByText(/lista de 200 elementos/i)).toBeInTheDocument();
-    expect(screen.getByText("1")).toBeInTheDocument();
+    expect(await screen.findByText(/list of 200 items/i)).toBeInTheDocument();
+    expect(screen.getByText(/1 will be downloaded/i)).toBeInTheDocument();
   });
 
   it("no ofrece calidades que el video no tiene", async () => {
@@ -137,7 +137,7 @@ describe("DownloadPage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Solo audio/i }));
 
-    expect(screen.queryByText("Calidad máxima")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Max quality/i)).not.toBeInTheDocument();
   });
 
   it("manda lo que se eligió al crear el trabajo", async () => {
@@ -147,7 +147,7 @@ describe("DownloadPage", () => {
     typeUrl("https://youtube.com/watch?v=x");
     fireEvent.click(screen.getByRole("radio", { name: /720p/ }));
 
-    fireEvent.click(screen.getByRole("button", { name: /Descargar/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Download/i }));
 
     await waitFor(() =>
       expect(downloadService.createDownloadJob).toHaveBeenCalledWith(
@@ -175,9 +175,9 @@ describe("DownloadPage", () => {
     );
     renderPage();
     typeUrl("https://youtube.com/watch?v=x");
-    fireEvent.click(screen.getByRole("button", { name: /Descargar/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Download/i }));
 
-    const bar = await screen.findByRole("progressbar", { name: /Descargando/i });
+    const bar = await screen.findByRole("progressbar", { name: /Downloading/i });
     expect(bar).toHaveAttribute("aria-busy", "true");
   });
 
@@ -189,7 +189,7 @@ describe("DownloadPage", () => {
     );
     renderPage();
     typeUrl("https://youtube.com/watch?v=x");
-    fireEvent.click(screen.getByRole("button", { name: /Descargar/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Download/i }));
 
     expect(await screen.findByText(/bunny\.mp4/)).toBeInTheDocument();
     expect(screen.getByText(/Enhance/)).toBeInTheDocument();
@@ -203,9 +203,9 @@ describe("DownloadPage", () => {
     );
     renderPage();
     typeUrl("https://youtube.com/watch?v=x");
-    fireEvent.click(screen.getByRole("button", { name: /Descargar/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Download/i }));
 
-    const cancelButton = await screen.findByRole("button", { name: /Cancelar/i });
+    const cancelButton = await screen.findByRole("button", { name: /Cancel/i });
     fireEvent.click(cancelButton);
 
     await waitFor(() => expect(downloadService.cancelDownloadJob).toHaveBeenCalled());
@@ -226,7 +226,7 @@ describe("DownloadPage — lo que faltaba", () => {
     );
     renderPage();
     typeUrl("https://youtube.com/watch?v=x");
-    fireEvent.click(screen.getByRole("button", { name: /Descargar/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Download/i }));
 
     expect(await screen.findByText(/litellm/)).toBeInTheDocument();
   });
@@ -282,7 +282,7 @@ describe("DownloadPage — formato y calidad de salida", () => {
     fireEvent.click(screen.getByRole("button", { name: /Solo audio/i }));
     fireEvent.click(screen.getByRole("radio", { name: /FLAC/i }));
 
-    fireEvent.click(screen.getByRole("button", { name: /Descargar/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Download/i }));
 
     await waitFor(() =>
       expect(downloadService.createDownloadJob).toHaveBeenCalledWith(
@@ -299,7 +299,7 @@ describe("DownloadPage — formato y calidad de salida", () => {
     fireEvent.click(screen.getByRole("button", { name: /Solo audio/i }));
     fireEvent.click(screen.getByRole("radio", { name: /192/ }));
 
-    fireEvent.click(screen.getByRole("button", { name: /Descargar/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Download/i }));
 
     await waitFor(() =>
       expect(downloadService.createDownloadJob).toHaveBeenCalledWith(
@@ -317,7 +317,7 @@ describe("DownloadPage — formato y calidad de salida", () => {
     expect(screen.getByRole("radio", { name: /MP4/i })).toBeChecked();
     fireEvent.click(screen.getByRole("radio", { name: /MKV/i }));
 
-    fireEvent.click(screen.getByRole("button", { name: /Descargar/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Download/i }));
 
     await waitFor(() =>
       expect(downloadService.createDownloadJob).toHaveBeenCalledWith(
@@ -337,7 +337,7 @@ describe("DownloadPage — bajar el resultado por HTTP", () => {
     );
     renderPage();
     typeUrl("https://youtube.com/watch?v=x");
-    fireEvent.click(screen.getByRole("button", { name: /Descargar/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Download/i }));
 
     const first = await screen.findByRole("link", { name: /a\.mp4/ });
     const second = screen.getByRole("link", { name: /b\.mp4/ });
@@ -352,7 +352,7 @@ describe("DownloadPage — la miniatura del preview", () => {
     renderPage();
     typeUrl("https://youtube.com/watch?v=x");
 
-    const img = await screen.findByAltText(/miniatura/i);
+    const img = await screen.findByAltText(/Thumbnail/i);
     expect(img).toHaveAttribute("src", "https://i.ytimg.com/vi/x/max.jpg");
   });
 
@@ -364,6 +364,6 @@ describe("DownloadPage — la miniatura del preview", () => {
     typeUrl("https://youtube.com/watch?v=x");
 
     await screen.findByText("Big Buck Bunny");
-    expect(screen.queryByAltText(/miniatura/i)).not.toBeInTheDocument();
+    expect(screen.queryByAltText(/Thumbnail/i)).not.toBeInTheDocument();
   });
 });

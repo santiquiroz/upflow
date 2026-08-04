@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { NavLink } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
+import { useTranslation } from "../i18n/LocaleProvider";
 import { NAV_ENTRIES } from "../lib/navigation";
 import { Header } from "./Header";
 import { JobQueue } from "./JobQueue";
@@ -23,6 +24,7 @@ function navLinkClassName({ isActive }: { isActive: boolean }): string {
 
 export function AppShell({ children }: AppShellProps) {
   const { hasPermission } = useAuth();
+  const { t } = useTranslation();
   const visibleEntries = NAV_ENTRIES.filter(
     (entry) => !entry.requiredPermission || hasPermission(entry.requiredPermission),
   );
@@ -30,7 +32,10 @@ export function AppShell({ children }: AppShellProps) {
     <div className="flex h-screen flex-col">
       <UpdateBanner />
       <div className="grid min-h-0 flex-1 grid-cols-[240px_1fr_320px] max-[900px]:grid-cols-[72px_1fr_320px]">
-        <aside aria-label="Main navigation" className="flex flex-col gap-1 border-r border-border bg-surface p-2">
+        <aside
+          aria-label={t("nav.mainLabel")}
+          className="flex flex-col gap-1 border-r border-border bg-surface p-2"
+        >
           <div className="flex items-center justify-between px-2 py-4 max-[900px]:hidden">
             <span className="font-heading text-lg font-semibold tracking-tight text-text">Upflow</span>
             <Header />
@@ -38,10 +43,20 @@ export function AppShell({ children }: AppShellProps) {
           <nav className="flex flex-col gap-1">
             {visibleEntries.map((entry) => {
               const Icon = entry.icon;
+              const label = t(entry.labelKey);
               return (
-                <NavLink key={entry.path} to={entry.path} end={entry.path === "/"} className={navLinkClassName}>
+                // El `title` es lo unico que le queda al usuario con mouse bajo
+                // los 900px, donde la etiqueta pasa a sr-only y quedan once
+                // iconos parecidos entre si (Audio y Transcribe casi identicos).
+                <NavLink
+                  key={entry.path}
+                  to={entry.path}
+                  end={entry.path === "/"}
+                  title={label}
+                  className={navLinkClassName}
+                >
                   <Icon aria-hidden="true" className="h-[18px] w-[18px] shrink-0" strokeWidth={1.75} />
-                  <span className="max-[900px]:sr-only">{entry.label}</span>
+                  <span className="max-[900px]:sr-only">{label}</span>
                 </NavLink>
               );
             })}
@@ -50,7 +65,7 @@ export function AppShell({ children }: AppShellProps) {
         <main className="overflow-y-auto p-6">
           <div className="mx-auto w-full max-w-[1200px]">{children}</div>
         </main>
-        <aside aria-label="Job queue" className="border-l border-border bg-surface p-4">
+        <aside aria-label={t("nav.queueLabel")} className="border-l border-border bg-surface p-4">
           <JobQueue />
         </aside>
       </div>

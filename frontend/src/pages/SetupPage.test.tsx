@@ -27,9 +27,9 @@ describe("SetupPage", () => {
     vi.mocked(authService.setup).mockResolvedValue({ ok: true });
     renderPage();
 
-    fireEvent.change(screen.getByLabelText(/usuario/i), { target: { value: "admin" } });
-    fireEvent.change(screen.getByLabelText(/contraseña/i), { target: { value: "adminpass1" } });
-    fireEvent.click(screen.getByRole("button", { name: /crear/i }));
+    fireEvent.change(screen.getByLabelText(/Username/i), { target: { value: "admin" } });
+        fireEvent.change(screen.getByLabelText(/Password/i), { target: { value: "adminpass1" } });
+        fireEvent.click(screen.getByRole("button", { name: /Create administrator/i }));
 
     await waitFor(() => expect(authService.setup).toHaveBeenCalledWith("admin", "adminpass1"));
   });

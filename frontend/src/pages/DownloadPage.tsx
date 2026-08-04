@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Download as DownloadIcon, FolderOpen, Loader2, Music, Video } from "lucide-react";
 import { useState } from "react";
 import { useDebouncedValue } from "../hooks/useDebouncedValue";
+import { useTranslation } from "../i18n/LocaleProvider";
 import { DeterminateProgressBar } from "../components/DeterminateProgressBar";
 import { IndeterminateProgressBar } from "../components/IndeterminateProgressBar";
 import type { DownloadJob, MediaProbe } from "../lib/apiTypes";
@@ -31,12 +32,13 @@ import {
 const TERMINAL = new Set(["completed", "failed", "cancelled"]);
 
 function ProbeSummary({ probe }: { probe: MediaProbe }) {
+  const { t } = useTranslation();
   return (
     <div className="flex items-center gap-3 rounded border border-border bg-surface-2 px-3 py-2">
       {probe.thumbnailUrl && (
         <img
           src={probe.thumbnailUrl}
-          alt={`Miniatura de ${probe.title}`}
+          alt={t("download.thumbnailAlt", { title: probe.title })}
           className="h-14 w-24 shrink-0 rounded object-cover"
         />
       )}
@@ -51,6 +53,7 @@ function ProbeSummary({ probe }: { probe: MediaProbe }) {
 }
 
 function JobProgress({ job, onCancel }: { job: DownloadJob; onCancel: () => void }) {
+  const { t } = useTranslation();
   const done = TERMINAL.has(job.status);
   return (
     <div className="flex flex-col gap-2 rounded border border-border bg-surface px-3 py-2">
@@ -64,9 +67,9 @@ function JobProgress({ job, onCancel }: { job: DownloadJob; onCancel: () => void
           {/* Sin total conocido la barra va indeterminada: algunos sitios no publican el
               tamaño, y dibujar un porcentaje inventado sería mentir sobre lo que falta. */}
           {job.progressPct === null ? (
-            <IndeterminateProgressBar label="Descargando" />
+            <IndeterminateProgressBar label={t("download.downloading")} />
           ) : (
-            <DeterminateProgressBar label="Descargando" percent={job.progressPct} />
+            <DeterminateProgressBar label={t("download.downloading")} percent={job.progressPct} />
           )}
           <span className="font-mono-tabular text-xs text-text-dim">
             {formatBytes(job.downloadedBytes)} / {formatBytes(job.totalBytes)}
@@ -91,7 +94,7 @@ function JobProgress({ job, onCancel }: { job: DownloadJob; onCancel: () => void
             ))}
           </div>
           <span className="text-xs text-text-dim">
-            Ya podés escalarlo o limpiarle el audio desde Enhance.
+            {t("download.readyForEnhance")}
           </span>
           {/* La carpeta, no solo el nombre: decir el nombre sin decir donde quedo
               obliga a salir a buscarlo. */}
@@ -106,13 +109,14 @@ function JobProgress({ job, onCancel }: { job: DownloadJob; onCancel: () => void
       {job.error && <span className="text-xs text-danger">{job.error}</span>}
 
       {!done && (
-        <button type="button" onClick={onCancel} className="self-start rounded border border-border bg-surface px-3 py-1.5 text-sm text-text-dim hover:border-text-faint">Cancelar</button>
+        <button type="button" onClick={onCancel} className="self-start rounded border border-border bg-surface px-3 py-1.5 text-sm text-text-dim hover:border-text-faint">{t("download.cancel")}</button>
       )}
     </div>
   );
 }
 
 export function DownloadPage() {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [url, setUrl] = useState("");
   const [maxHeight, setMaxHeight] = useState(DEFAULT_HEIGHT);
@@ -176,7 +180,7 @@ export function DownloadPage() {
         <div className="flex flex-col gap-4">
           <div className="flex flex-col gap-2">
             <label htmlFor="download-url" className="text-xs font-medium text-text-dim">
-              Dirección del video
+              {t("download.url")}
             </label>
             <div className="flex gap-2">
               <input
@@ -190,7 +194,7 @@ export function DownloadPage() {
             </div>
             {probe.isFetching && (
               <span className="flex items-center gap-1.5 text-xs text-text-dim">
-                <Loader2 className="h-3 w-3 animate-spin" /> Viendo qué hay…
+                <Loader2 className="h-3 w-3 animate-spin" /> {t("download.probing")}
               </span>
             )}
             {probe.isError && (
@@ -202,14 +206,16 @@ export function DownloadPage() {
 
           {notice && (
             <div className="rounded border border-warn bg-surface-2 px-3 py-2 text-xs text-warn">
-              Es una lista de {notice.entryCount} elementos. Se van a descargar{" "}
-              <strong>{notice.willDownload}</strong>.
-              {notice.needsConfirmation && " Revisá el límite antes de seguir."}
+              {t("download.playlistNotice", {
+                count: notice.entryCount,
+                willDownload: notice.willDownload,
+              })}
+              {notice.needsConfirmation && t("download.playlistOverLimit")}
             </div>
           )}
 
           <fieldset className="flex flex-col gap-2">
-            <legend className="text-xs font-medium text-text-dim">Qué traer</legend>
+            <legend className="text-xs font-medium text-text-dim">{t("download.whatToFetch")}</legend>
             <div className="flex gap-2">
               <button
                 type="button"
@@ -286,7 +292,7 @@ export function DownloadPage() {
 
           {!audioOnly && (
             <fieldset className="flex flex-col gap-2">
-              <legend className="text-xs font-medium text-text-dim">Calidad máxima</legend>
+              <legend className="text-xs font-medium text-text-dim">{t("download.maxQuality")}</legend>
               <div className="flex flex-wrap gap-2">
                 {heights.map((height) => (
                   <label
@@ -347,11 +353,11 @@ export function DownloadPage() {
                   onChange={(event) => setIncludePlaylist(event.target.checked)}
                   className="h-3.5 w-3.5 accent-accent"
                 />
-                Bajar la lista completa
+                {t("download.wholeList")}
               </label>
               {includePlaylist && (
                 <label className="flex items-center gap-2 text-xs text-text-dim">
-                  Máximo
+                  {t("download.listMax")}
                   <input
                     type="number"
                     min={1}
@@ -371,7 +377,7 @@ export function DownloadPage() {
             disabled={!urlLooksValid || create.isPending}
             className="self-start flex items-center gap-1.5 rounded border px-3 py-1.5 text-sm transition-[background-color,border-color] duration-fast disabled:opacity-50 disabled:cursor-not-allowed border-accent bg-surface-2 text-text"
           >
-            <DownloadIcon className="h-4 w-4" /> Descargar
+            <DownloadIcon className="h-4 w-4" /> {t("download.submit")}
           </button>
           {create.isError && (
             <span className="text-xs text-danger">{(create.error as Error).message}</span>

@@ -2,10 +2,12 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 import { ApiError } from "../lib/api";
 import { changePassword } from "../services/auth";
+import { useTranslation } from "../i18n/LocaleProvider";
 import { Modal } from "./Modal";
 
 export function ForcedPasswordChangeModal() {
   const queryClient = useQueryClient();
+  const { t } = useTranslation();
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -19,7 +21,7 @@ export function ForcedPasswordChangeModal() {
       await changePassword(currentPassword, newPassword);
       await queryClient.invalidateQueries({ queryKey: ["me"] });
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "No se pudo cambiar la contraseña");
+      setError(err instanceof ApiError ? err.message : t("auth.password.change.failed"));
     } finally {
       setSubmitting(false);
     }
@@ -28,11 +30,11 @@ export function ForcedPasswordChangeModal() {
   return (
     <Modal titleId="forced-password-change-title" onClose={() => undefined}>
       <h2 id="forced-password-change-title" className="font-heading text-base font-semibold text-text">
-        Cambiá tu contraseña
+        {t("auth.password.change.title")}
       </h2>
       <form onSubmit={handleSubmit} className="flex flex-col gap-3">
         <label className="flex flex-col gap-1 text-xs text-text-dim">
-          Contraseña actual
+          {t("auth.password.current")}
           <input
             type="password"
             required
@@ -42,7 +44,7 @@ export function ForcedPasswordChangeModal() {
           />
         </label>
         <label className="flex flex-col gap-1 text-xs text-text-dim">
-          Contraseña nueva
+          {t("auth.password.new")}
           <input
             type="password"
             required
@@ -58,7 +60,7 @@ export function ForcedPasswordChangeModal() {
           disabled={submitting}
           className="rounded bg-accent px-3 py-1.5 text-sm font-medium text-bg disabled:opacity-50"
         >
-          Guardar
+          {t("auth.password.change.submit")}
         </button>
       </form>
     </Modal>

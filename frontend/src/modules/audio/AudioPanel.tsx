@@ -11,6 +11,7 @@ import { denoiseLabel, restoreLabel } from "../../lib/audioLabels";
 import type { DeviceInfoResponse } from "../../lib/apiTypes";
 import { formatDeviceSummary } from "../enhance/accordionSummaries";
 import { VoiceChainPanel, voiceSummaryKey } from "./VoiceChainPanel";
+import { joinAsChoices, selectableSectionKeys } from "./selectionHint";
 import { useVoiceSelection } from "./useVoiceSelection";
 
 type AudioOutputFormat = "flac" | "wav" | "mp3";
@@ -23,9 +24,6 @@ const OUTPUT_FORMAT_OPTIONS: readonly FormatOption<AudioOutputFormat>[] = [
 
 const DENOISE_TOOLTIP =
   "Remove background noise with an AI denoiser. DeepFilterNet is stronger; RNNoise is lighter. Runs before restoration.";
-const MASTERING_TOOLTIP =
-  "Deja el audio al volumen que piden las plataformas, medido segun el estandar EBU R128. Se mide primero y se corrige despues con esa medicion, que es como se hace un master de verdad: en una sola pasada el volumen bombea.";
-
 const RESTORE_TOOLTIP =
   "Reconstruct high frequencies lost to lossy compression (MP3/AAC). Apollo is fast band-restore; AudioSR is diffusion super-resolution — much higher quality ceiling but far slower (minutes per minute of audio on GPU). Experimental — quality varies by source.";
 const DEVICE_TOOLTIP = "Pick the compute device that runs the restoration model (CPU or a DirectML GPU).";
@@ -145,7 +143,7 @@ export function AudioPanel() {
   const voiceCatalogQuery = useVoiceCatalog();
   const voice = useVoiceSelection(voiceCatalogQuery.data);
   const { phase, job, errorMessage, submit, cancel, reset } = useAudioJob();
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
 
   const denoiseModes = capabilitiesQuery.data?.denoiseModes ?? [];
   const restoreModes = capabilitiesQuery.data?.restoreModes ?? [];
@@ -188,9 +186,14 @@ export function AudioPanel() {
     <div className="grid grid-cols-[1fr_320px] gap-6 max-[900px]:grid-cols-1">
       <div className="flex flex-col gap-6">
         <Dropzone file={file} onFileSelected={handleFileSelected} />
-        <AccordionSection title="Denoise" summary={denoiseLabel(denoise)} tooltip={DENOISE_TOOLTIP} defaultOpen>
+        <AccordionSection
+          title={t("audio.section.denoise")}
+          summary={denoiseLabel(denoise)}
+          tooltip={DENOISE_TOOLTIP}
+          defaultOpen
+        >
           <ModeSegmentedControl
-            legend="Denoise"
+            legend={t("audio.section.denoise")}
             options={buildDenoiseOptions(denoiseModes)}
             value={denoise}
             onChange={setDenoise}
@@ -198,16 +201,16 @@ export function AudioPanel() {
         </AccordionSection>
         {masteringPresets.length > 0 && (
           <AccordionSection
-            title="Acabado"
+            title={t("audio.section.mastering")}
             summary={
-              masteringPresets.find((p) => p.id === master)?.label ?? "Sin nivelar"
+              masteringPresets.find((p) => p.id === master)?.label ?? t("audio.mastering.none")
             }
-            tooltip={MASTERING_TOOLTIP}
+            tooltip={t("audio.mastering.tooltip")}
           >
             <ModeSegmentedControl
-              legend="Acabado"
+              legend={t("audio.section.mastering")}
               options={[
-                { value: null, label: "Sin nivelar" },
+                { value: null, label: t("audio.mastering.none") },
                 ...masteringPresets.map((preset) => ({
                   value: preset.id,
                   label: preset.label,
@@ -219,15 +222,21 @@ export function AudioPanel() {
             {master !== null && (
               <p role="status" className="mt-2 text-xs text-text-dim">
                 {masteringPresets.find((p) => p.id === master)?.description}{" "}
-                Objetivo: {masteringPresets.find((p) => p.id === master)?.targetLufs} LUFS.
+                {t("audio.mastering.target", {
+                  lufs: masteringPresets.find((p) => p.id === master)?.targetLufs ?? "",
+                })}
               </p>
             )}
           </AccordionSection>
         )}
         {restoreAvailable && (
-          <AccordionSection title="Restore" summary={restoreLabel(restore)} tooltip={RESTORE_TOOLTIP}>
+          <AccordionSection
+            title={t("audio.section.restore")}
+            summary={restoreLabel(restore)}
+            tooltip={RESTORE_TOOLTIP}
+          >
             <ModeSegmentedControl
-              legend="Restore"
+              legend={t("audio.section.restore")}
               options={buildRestoreOptions(restoreModes)}
               value={restore}
               onChange={setRestore}
@@ -254,11 +263,15 @@ export function AudioPanel() {
             selection={voice}
           />
         </AccordionSection>
-        <AccordionSection title="Device" summary={formatDeviceSummary(device)} tooltip={DEVICE_TOOLTIP}>
+        <AccordionSection
+          title={t("audio.section.device")}
+          summary={formatDeviceSummary(device)}
+          tooltip={DEVICE_TOOLTIP}
+        >
           <DevicePicker value={device?.id ?? null} onChange={setDevice} requiresGpu={false} allowAuto={false} />
         </AccordionSection>
         <FormatOptionFieldset
-          legend="Output format"
+          legend={t("audio.section.outputFormat")}
           name="audio-output-format"
           options={OUTPUT_FORMAT_OPTIONS}
           value={outputFormat}
@@ -267,7 +280,15 @@ export function AudioPanel() {
         <div className="flex flex-col gap-2">
           {!hasSelection && (
             <p role="status" className="text-xs text-text-faint">
-              Pick at least one of Denoise, Restore or Voice.
+              {t("audio.hint.pickOne", {
+                options: joinAsChoices(
+                  selectableSectionKeys({
+                    masteringAvailable: masteringPresets.length > 0,
+                    restoreAvailable,
+                  }).map((key) => t(key)),
+                  locale,
+                ),
+              })}
             </p>
           )}
           <button

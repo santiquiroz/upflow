@@ -28,9 +28,9 @@ describe("LoginPage", () => {
     vi.mocked(authService.login).mockResolvedValue({ ok: true });
     renderPage();
 
-    fireEvent.change(screen.getByLabelText(/usuario/i), { target: { value: "alice" } });
-    fireEvent.change(screen.getByLabelText(/contraseña/i), { target: { value: "hunter22" } });
-    fireEvent.click(screen.getByRole("button", { name: /ingresar/i }));
+    fireEvent.change(screen.getByLabelText(/Username/i), { target: { value: "alice" } });
+    fireEvent.change(screen.getByLabelText(/Password/i), { target: { value: "hunter22" } });
+    fireEvent.click(screen.getByRole("button", { name: /Sign in/i }));
 
     await waitFor(() => expect(authService.login).toHaveBeenCalledWith("alice", "hunter22"));
   });
@@ -39,10 +39,10 @@ describe("LoginPage", () => {
     vi.mocked(authService.login).mockRejectedValue(new ApiError(401, "Usuario o contraseña incorrectos"));
     renderPage();
 
-    fireEvent.change(screen.getByLabelText(/usuario/i), { target: { value: "alice" } });
-    fireEvent.change(screen.getByLabelText(/contraseña/i), { target: { value: "wrong" } });
-    fireEvent.click(screen.getByRole("button", { name: /ingresar/i }));
+    fireEvent.change(screen.getByLabelText(/Username/i), { target: { value: "alice" } });
+        fireEvent.change(screen.getByLabelText(/Password/i), { target: { value: "wrong" } });
+        fireEvent.click(screen.getByRole("button", { name: /Sign in/i }));
 
-    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Usuario o contraseña incorrectos"));
+        await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Usuario o contraseña incorrectos"));
   });
 });
