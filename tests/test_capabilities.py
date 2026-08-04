@@ -261,10 +261,12 @@ def test_grouping_separates_the_roadmap_from_the_live_capabilities(tmp_path: Pat
     grouped = group_by_domain(resolve_capabilities(make_settings(tmp_path), FakeRegistry()))
     generate = next(group for group in grouped if group.domain == "generate")
 
+    # textToVideo salio del roadmap al enviarse en la v0.27.0; dejarlo aca
+    # congelaba una mentira en la pantalla de entrada.
     assert {item.id for item in generate.roadmap} >= {
-        "generate.textToVideo",
         "generate.imageTo3d",
     }
+    assert "generate.textToVideo" not in {item.id for item in generate.roadmap}
     for item in generate.capabilities:
         assert item.status != "not_implemented"
     for item in generate.roadmap:
@@ -285,3 +287,17 @@ def test_every_domain_carries_its_own_label_key(tmp_path: Path):
     keys = [group.label_key for group in grouped]
     assert keys == [f"capability.domain.{domain}" for domain in DOMAIN_ORDER]
     assert len(set(keys)) == len(keys)
+
+
+def test_text_to_video_is_not_advertised_as_impossible(tmp_path) -> None:
+    """La generación de video por Vulkan está en produccion desde la v0.27.0:
+    motor, endpoint, componente del instalador y modo en la pantalla de Generate.
+    El arbol seguia diciendo que no habia camino, o sea que la pantalla de
+    entrada le mentia al usuario sobre una feature ya enviada."""
+    from app.services.capabilities import CATALOG
+
+    cap = next(c for c in CATALOG if c.id == "generate.textToVideo")
+    assert cap.job_kind == "generation"
+    assert cap.provisioning != "none"
+    assert cap.unavailable_reason_key is None
+    assert cap.requirements, "sin requisitos, el estado no se puede derivar del disco"

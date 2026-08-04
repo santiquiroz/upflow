@@ -204,10 +204,14 @@ CATALOG: tuple[Capability, ...] = (
         id="generate.textToVideo",
         domain="generate",
         label_key="capability.generate.textToVideo",
-        provisioning="none",
-        job_kind=None,
+        # Enviada en la v0.27.0. Corre por el lane Vulkan de sd.cpp, NO por ONNX:
+        # el motivo viejo ("no hay camino a un ONNX ejecutable") describia una
+        # ruta que nunca fue la de esta feature, y dejaba la pantalla de entrada
+        # diciendo que algo ya enviado no existia.
+        provisioning="vendored_pack",
+        job_kind="generation",
         strategies=("model",),
-        unavailable_reason_key="capability.reason.noOnnxPath",
+        requirements=(PathRequirement("sdcpp_binary", "wan-video"),),
     ),
     Capability(
         id="generate.videoToVideo",
