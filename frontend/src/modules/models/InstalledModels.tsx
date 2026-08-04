@@ -1,4 +1,5 @@
 import { Lock, Trash2 } from "lucide-react";
+import { useTranslation } from "../../i18n/LocaleProvider";
 import { useState, type ReactNode } from "react";
 import { useDeleteModel, useInstalledModels } from "../../hooks/useModels";
 import type { ModelResponse } from "../../lib/apiTypes";
@@ -28,17 +29,19 @@ function statusTextClassName(status: string): string {
 }
 
 function ModelStatusNote({ model }: { model: ModelResponse }) {
+  const { t } = useTranslation();
   if (model.status === "installed") {
     return null;
   }
-  const label = model.status === "converting" ? "Converting…" : (model.error ?? model.status);
+  const label = model.status === "converting" ? t("models.status.converting") : (model.error ?? model.status);
   return <span className={`text-xs ${statusTextClassName(model.status)}`}>{label}</span>;
 }
 
 function BuiltinBadge() {
+  const { t } = useTranslation();
   return (
     <span
-      title="Built-in models cannot be removed"
+      title={t("models.builtin.cannotRemove")}
       className="flex shrink-0 items-center gap-1.5 rounded-sm bg-surface-2 px-2 py-1 text-xs text-text-faint"
     >
       <Lock aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.75} />
@@ -48,10 +51,11 @@ function BuiltinBadge() {
 }
 
 function DeleteButton({ model, onRequestDelete }: { model: ModelResponse; onRequestDelete: (model: ModelResponse) => void }) {
+  const { t } = useTranslation();
   return (
     <button
       type="button"
-      aria-label={`Delete ${model.name}`}
+      aria-label={t("models.delete.aria", { name: model.name })}
       onClick={() => onRequestDelete(model)}
       className="shrink-0 rounded-sm border border-border bg-surface p-2 text-text-faint transition-[border-color,color] duration-fast hover:border-danger hover:text-danger focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
     >
@@ -80,7 +84,8 @@ function ModelRow({
 }
 
 function OnnxEmptyState() {
-  return <p className="text-sm text-text-faint">No custom ONNX models installed yet — search above to add one.</p>;
+  const { t } = useTranslation();
+  return <p className="text-sm text-text-faint">{t("models.onnx.empty")}</p>;
 }
 
 function ModelGroup({
@@ -110,7 +115,8 @@ function ModelGroup({
 }
 
 function DeleteFailedNote({ error }: { error: unknown }) {
-  const message = error instanceof Error ? error.message : "Could not delete the model.";
+  const { t } = useTranslation();
+  const message = error instanceof Error ? error.message : t("models.delete.failed");
   return (
     <p role="alert" className="text-sm text-danger">
       {message}
@@ -119,6 +125,7 @@ function DeleteFailedNote({ error }: { error: unknown }) {
 }
 
 export function InstalledModels() {
+  const { t } = useTranslation();
   const modelsQuery = useInstalledModels();
   const deleteMutation = useDeleteModel();
   const [pendingDelete, setPendingDelete] = useState<ModelResponse | null>(null);
@@ -131,11 +138,11 @@ export function InstalledModels() {
   }
 
   if (modelsQuery.isLoading) {
-    return <p className="text-sm text-text-dim">Loading installed models…</p>;
+    return <p className="text-sm text-text-dim">{t("models.installed.loading")}</p>;
   }
 
   if (modelsQuery.isError) {
-    return <p className="text-sm text-danger">Could not load installed models.</p>;
+    return <p className="text-sm text-danger">{t("models.installed.loadError")}</p>;
   }
 
   const models = modelsQuery.data?.models ?? [];
@@ -144,7 +151,7 @@ export function InstalledModels() {
 
   return (
     <div className="flex flex-col gap-6">
-      <ModelGroup label="Built-in" models={builtinModels} onRequestDelete={setPendingDelete} />
+      <ModelGroup label={t("models.builtin.group")} models={builtinModels} onRequestDelete={setPendingDelete} />
       <ModelGroup label="ONNX" models={onnxModels} emptyState={<OnnxEmptyState />} onRequestDelete={setPendingDelete} />
       {deleteMutation.isError && <DeleteFailedNote error={deleteMutation.error} />}
       {pendingDelete && (

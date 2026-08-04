@@ -2,6 +2,7 @@ import { AlertTriangle, Loader2 } from "lucide-react";
 import { DeterminateProgressBar } from "../../components/DeterminateProgressBar";
 import { IndeterminateProgressBar } from "../../components/IndeterminateProgressBar";
 import type { ModelInstallPhase } from "../../hooks/useModels";
+import { useTranslation } from "../../i18n/LocaleProvider";
 
 const IN_FLIGHT_PHASES: readonly ModelInstallPhase[] = ["starting", "downloading", "validating", "converting"];
 
@@ -9,19 +10,19 @@ export function isInstallInFlight(phase: ModelInstallPhase): boolean {
   return IN_FLIGHT_PHASES.includes(phase);
 }
 
-export function installPhaseLabel(phase: ModelInstallPhase): string {
-  switch (phase) {
-    case "starting":
-      return "Starting install…";
-    case "downloading":
-      return "Downloading…";
-    case "validating":
-      return "Validating…";
-    case "converting":
-      return "Converting…";
-    default:
-      return "Working…";
-  }
+const PHASE_KEYS: Record<string, string> = {
+  starting: "models.install.starting",
+  downloading: "models.install.downloading",
+  validating: "models.install.validating",
+  converting: "models.install.converting",
+};
+
+// Toma `t` en vez de llamar al hook: es una funcion pura, no un componente.
+export function installPhaseLabel(
+  phase: ModelInstallPhase,
+  t: (key: string) => string,
+): string {
+  return t(PHASE_KEYS[phase] ?? "models.install.working");
 }
 
 export function InstallProgress({
@@ -33,10 +34,11 @@ export function InstallProgress({
   progressPct: number | null;
   stageLabel?: string | null;
 }) {
+  const { t } = useTranslation();
   const label =
     phase === "converting" && stageLabel
-      ? `Converting — ${stageLabel}`
-      : installPhaseLabel(phase);
+      ? t("models.install.convertingStage", { stage: stageLabel })
+      : installPhaseLabel(phase, t);
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-center gap-2 text-sm text-text">
@@ -56,6 +58,7 @@ export function InstallProgress({
 }
 
 export function InstallError({ message, onRetry }: { message: string; onRetry: () => void }) {
+  const { t } = useTranslation();
   return (
     <div className="flex flex-col gap-2">
       <div
@@ -70,7 +73,7 @@ export function InstallError({ message, onRetry }: { message: string; onRetry: (
         onClick={onRetry}
         className="w-fit rounded-sm border border-border bg-surface px-3 py-1.5 text-sm text-text-dim transition-[border-color,color] duration-fast hover:border-text-faint hover:text-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
       >
-        Try again
+        {t("models.install.retry")}
       </button>
     </div>
   );

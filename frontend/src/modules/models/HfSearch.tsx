@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "../../i18n/LocaleProvider";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import { useHfSearchResults } from "../../hooks/useModels";
 import { CompatFilterChips, matchesCompatFilter, type CompatFilter } from "./compatFilter";
@@ -47,6 +48,7 @@ function SearchResults({ query, filter }: { query: string; filter: CompatFilter 
 }
 
 export function HfSearch({ debounceMs = DEFAULT_SEARCH_DEBOUNCE_MS }: HfSearchProps) {
+  const { t } = useTranslation();
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<CompatFilter>("all");
   const debouncedQuery = useDebouncedValue(query, debounceMs);
@@ -59,7 +61,7 @@ export function HfSearch({ debounceMs = DEFAULT_SEARCH_DEBOUNCE_MS }: HfSearchPr
         <CompatFilterChips value={filter} onChange={setFilter} name="upscaler-compat-filter" />
       )}
       {trimmedQuery.length === 0 ? (
-        <SearchEmptyState message="Search Hugging Face for an ONNX upscaling model to install." />
+        <SearchEmptyState message={t("models.hfSearch.empty")} />
       ) : (
         <SearchResults query={trimmedQuery} filter={filter} />
       )}

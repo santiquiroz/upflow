@@ -1,4 +1,5 @@
 import { Download, Trash2 } from "lucide-react";
+import { useTranslation } from "../../i18n/LocaleProvider";
 import { useState } from "react";
 import { useGenerationModelInstall } from "../../hooks/useGenerationJob";
 import { DEFAULT_INSTALL_POLL_INTERVAL_MS, useDeleteModel, useInstalledModels } from "../../hooks/useModels";
@@ -64,6 +65,7 @@ function DiffusionModelRow({
   model: ModelResponse;
   onRequestDelete: (model: ModelResponse) => void;
 }) {
+  const { t } = useTranslation();
   return (
     <li className="flex items-center justify-between gap-4 rounded border border-border bg-surface px-4 py-3">
       <div className="flex flex-col gap-1">
@@ -72,7 +74,7 @@ function DiffusionModelRow({
       </div>
       <button
         type="button"
-        aria-label={`Delete ${model.name}`}
+        aria-label={t("models.delete.aria", { name: model.name })}
         onClick={() => onRequestDelete(model)}
         className="shrink-0 rounded-sm border border-border bg-surface p-2 text-text-faint transition-[border-color,color] duration-fast hover:border-danger hover:text-danger focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
       >
@@ -83,7 +85,8 @@ function DiffusionModelRow({
 }
 
 function DiffusionModelsEmptyState() {
-  return <p className="text-sm text-text-faint">No generation models installed yet.</p>;
+  const { t } = useTranslation();
+  return <p className="text-sm text-text-faint">{t("models.generation.empty")}</p>;
 }
 
 function DiffusionModelsList({
@@ -106,7 +109,8 @@ function DiffusionModelsList({
 }
 
 function DeleteFailedNote({ error }: { error: unknown }) {
-  const message = error instanceof Error ? error.message : "Could not delete the model.";
+  const { t } = useTranslation();
+  const message = error instanceof Error ? error.message : t("models.delete.failed");
   return (
     <p role="alert" className="text-sm text-danger">
       {message}
