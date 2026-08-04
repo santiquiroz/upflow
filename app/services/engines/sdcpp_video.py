@@ -35,6 +35,58 @@ ENCODER_MARKER = "umt5"
 # entran 832x480 en 16 GB. El nombre no contiene "vae", así que no se confunden.
 TAE_MARKER = "taew"
 
+
+@dataclass(frozen=True, slots=True)
+class SupportFile:
+    """Un archivo que acompaña al difusor, y con qué flag se lo pasa a sd.cpp."""
+    marker: str
+    flag: str
+    required: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class VideoFamily:
+    """Cómo se arma un pack de una familia de modelos.
+
+    El descubrimiento estaba atado a la forma de Wan (un archivo con "umt5" y
+    otro con "vae"): bajar LTX-2 y dejarlo en la carpeta no hacía nada, ni
+    siquiera aparecía. Cada familia declara qué archivos necesita y con qué flag
+    viajan, así agregar una nueva es una entrada acá y no tocar el motor.
+    """
+    name: str
+    # Los marcadores son deliberadamente especificos (`audio_vae` y `video_vae`,
+    # no `vae`) para que NO se pisen entre si: asi el orden de esta tupla y el de
+    # FAMILIES son irrelevantes, y agregar una familia no puede romper otra.
+    # Comprobado mutando ambos ordenes: ningun test cambia.
+    support: tuple[SupportFile, ...]
+    scheduler: str | None = None
+    # Marcador que identifica a la familia dentro del nombre del difusor.
+    diffusion_marker: str | None = None
+
+
+WAN_FAMILY = VideoFamily(
+    name="wan",
+    support=(
+        SupportFile(marker=ENCODER_MARKER, flag="--t5xxl"),
+        SupportFile(marker=TAE_MARKER, flag="--tae", required=False),
+        SupportFile(marker=VAE_MARKER, flag="--vae"),
+    ),
+)
+
+LTX2_FAMILY = VideoFamily(
+    name="ltx2",
+    support=(
+        SupportFile(marker="gemma", flag="--llm"),
+        SupportFile(marker="connectors", flag="--embeddings-connectors"),
+        SupportFile(marker="audio_vae", flag="--audio-vae", required=False),
+        SupportFile(marker="video_vae", flag="--vae"),
+    ),
+    scheduler="ltx2",
+    diffusion_marker="ltx",
+)
+
+FAMILIES: tuple[VideoFamily, ...] = (LTX2_FAMILY, WAN_FAMILY)
+
 # El encoder umt5-xxl pide un único buffer de ~4,2 GB y el driver Vulkan de AMD
 # topea el buffer individual en 4 GiB: revienta con 16 GB de VRAM libres. Va a
 # CPU siempre. Cuesta ~17 s por prompt contra minutos de difusión.
@@ -67,10 +119,15 @@ class VideoModel:
     id: str
     name: str
     diffusion: Path
-    vae: Path
-    encoder: Path
     turbo: bool
-    tae: Path | None = None
+    family: str
+    # flag de sd.cpp -> archivo, ya resuelto para esta familia.
+    support: tuple[tuple[str, Path], ...] = ()
+    scheduler: str | None = None
+
+    @property
+    def uses_tiny_decoder(self) -> bool:
+        return any(flag == "--tae" for flag, _ in self.support)
 
     @property
     def default_steps(self) -> int:
@@ -126,9 +183,35 @@ def _find_support_file(files: list[Path], marker: str) -> Path | None:
     return None
 
 
-def _is_support_file(path: Path) -> bool:
-    name = path.name.lower()
-    return any(marker in name for marker in (VAE_MARKER, ENCODER_MARKER, TAE_MARKER))
+def _match(files: list[Path], marker: str) -> Path | None:
+    for path in files:
+        if marker in path.name.lower():
+            return path
+    return None
+
+
+def _resolve_family(files: list[Path]) -> tuple[VideoFamily, dict[str, Path]] | None:
+    """La primera familia cuyos archivos obligatorios estan TODOS presentes.
+
+    Media familia en la carpeta no ofrece nada: un modelo que aparece y despues
+    falla al generar es peor que uno que no aparece.
+    """
+    for family in FAMILIES:
+        resolved: dict[str, Path] = {}
+        for support in family.support:
+            match = _match(files, support.marker)
+            if match is not None:
+                resolved[support.flag] = match
+            elif support.required:
+                resolved.clear()
+                break
+        else:
+            return family, resolved
+    return None
+
+
+def _support_paths(resolved: dict[str, Path]) -> set[Path]:
+    return set(resolved.values())
 
 
 def list_video_models(settings: Settings) -> list[VideoModel]:
@@ -138,23 +221,25 @@ def list_video_models(settings: Settings) -> list[VideoModel]:
 
     files = [p for p in sorted(directory.iterdir())
              if p.is_file() and p.suffix.lower() in CHECKPOINT_SUFFIXES]
-    vae = _find_support_file(files, VAE_MARKER)
-    encoder = _find_support_file(files, ENCODER_MARKER)
-    if vae is None or encoder is None:
+    match = _resolve_family(files)
+    if match is None:
         return []
+    family, resolved = match
+    usados = _support_paths(resolved)
 
     return [
         VideoModel(
             id=video_model_id(path),
             name=path.stem,
             diffusion=path,
-            vae=vae,
-            encoder=encoder,
             turbo=TURBO_MARKER in path.name.lower(),
-            tae=_find_support_file(files, TAE_MARKER),
+            family=family.name,
+            support=tuple(sorted(resolved.items())),
+            scheduler=family.scheduler,
         )
         for path in files
-        if not _is_support_file(path)
+        if path not in usados
+        and (family.diffusion_marker is None or family.diffusion_marker in path.name.lower())
     ]
 
 
@@ -180,14 +265,22 @@ class SdcppVideoEngine:
     def build_command(self, request: VideoRequest, output_path: Path, model: VideoModel) -> list[str]:
         steps = request.steps if request.steps is not None else model.default_steps
         guidance = request.guidance if request.guidance is not None else model.default_guidance
-        decoder = (["--tae", str(model.tae)] if model.tae is not None
-                   else ["--vae", str(model.vae), VAE_TILING_FLAG])
+        support: list[str] = []
+        for flag, path in model.support:
+            # Con el decodificador chico el VAE grande no se usa: pasar los dos
+            # haria que sd.cpp cargue 1 GB que no va a mirar.
+            if flag == "--vae" and model.uses_tiny_decoder:
+                continue
+            support += [flag, str(path)]
+        if not model.uses_tiny_decoder:
+            support.append(VAE_TILING_FLAG)
+        if model.scheduler:
+            support += ["--scheduler", model.scheduler]
         command = [
             str(self.settings.sdcpp_binary_path),
             "-M", "vid_gen",
             "--diffusion-model", str(model.diffusion),
-            *decoder,
-            "--t5xxl", str(model.encoder),
+            *support,
             "--backend", BACKEND_ASSIGNMENT,
             "-p", request.prompt,
             "--steps", str(steps),

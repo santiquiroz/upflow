@@ -266,8 +266,10 @@ def test_tae_is_not_mistaken_for_the_vae_or_a_diffusion_model(tmp_path: Path) ->
     settings = make_settings(tmp_path)
     models = list_video_models(settings)
     assert [m.name for m in models] == ["Wan2.2-TI2V-5B-Q8_0"]
-    assert models[0].vae.name == "Wan2.2_VAE.safetensors"
-    assert models[0].tae is not None and models[0].tae.name == "taew2_2.safetensors"
+    por_flag = dict(models[0].support)
+    assert por_flag["--vae"].name == "Wan2.2_VAE.safetensors"
+    assert por_flag["--tae"].name == "taew2_2.safetensors"
+    assert models[0].uses_tiny_decoder is True
 
 
 # --- disponibilidad ------------------------------------------------------------
@@ -285,3 +287,83 @@ def test_engine_unavailable_when_flag_off(tmp_path: Path) -> None:
 def test_engine_available_with_a_full_pack(tmp_path: Path) -> None:
     make_video_dir(tmp_path, "Wan2.2-TI2V-5B-Q8_0.gguf")
     assert SdcppVideoEngine(make_settings(tmp_path)).available() is True
+
+
+# --- familias de modelos ------------------------------------------------
+# El descubrimiento exigia un archivo con "umt5" y otro con "vae": la forma de
+# Wan. LTX-2 usa Gemma como encoder, conectores de embeddings y un VAE de audio
+# aparte, asi que bajarlo y dejarlo en la carpeta no hacia NADA: no aparecia.
+
+
+def make_ltx_pack(tmp_path: Path) -> Path:
+    video = tmp_path / "models" / "video"
+    video.mkdir(parents=True, exist_ok=True)
+    for name in (
+        "ltx-2.3-22b-distilled-Q4_K_M.gguf",
+        "ltx-2.3-22b-dev_video_vae.safetensors",
+        "ltx-2.3-22b-dev_audio_vae.safetensors",
+        "ltx-2.3-22b-dev_embeddings_connectors.safetensors",
+        "gemma-3-12b-it-qat-UD-Q4_K_XL.gguf",
+    ):
+        (video / name).write_bytes(b"fake")
+    return video
+
+
+def test_an_ltx_pack_is_discovered(tmp_path: Path) -> None:
+    make_ltx_pack(tmp_path)
+    models = list_video_models(make_settings(tmp_path))
+    assert [m.name for m in models] == ["ltx-2.3-22b-distilled-Q4_K_M"]
+    assert models[0].family == "ltx2"
+
+
+def test_ltx_support_files_are_not_offered_as_models(tmp_path: Path) -> None:
+    make_ltx_pack(tmp_path)
+    nombres = [m.name for m in list_video_models(make_settings(tmp_path))]
+    assert not any("vae" in n or "gemma" in n or "connectors" in n for n in nombres)
+
+
+def test_ltx_command_wires_its_own_flags(tmp_path: Path) -> None:
+    video = make_ltx_pack(tmp_path)
+    settings = make_settings(tmp_path)
+    model = list_video_models(settings)[0]
+    command = SdcppVideoEngine(settings).build_command(make_request(), tmp_path / "o.webm", model)
+    assert command[command.index("--llm") + 1] == str(video / "gemma-3-12b-it-qat-UD-Q4_K_XL.gguf")
+    assert command[command.index("--embeddings-connectors") + 1] == str(
+        video / "ltx-2.3-22b-dev_embeddings_connectors.safetensors"
+    )
+    assert command[command.index("--audio-vae") + 1] == str(
+        video / "ltx-2.3-22b-dev_audio_vae.safetensors"
+    )
+    # El VAE de video, no el de audio: los dos llevan "vae" en el nombre.
+    assert command[command.index("--vae") + 1] == str(video / "ltx-2.3-22b-dev_video_vae.safetensors")
+    # Un pack de LTX no tiene que arrastrar el flag de Wan.
+    assert "--t5xxl" not in command
+
+
+def test_ltx_uses_its_own_scheduler(tmp_path: Path) -> None:
+    make_ltx_pack(tmp_path)
+    settings = make_settings(tmp_path)
+    model = list_video_models(settings)[0]
+    command = SdcppVideoEngine(settings).build_command(make_request(), tmp_path / "o.webm", model)
+    assert command[command.index("--scheduler") + 1] == "ltx2"
+
+
+def test_a_wan_pack_keeps_working_exactly_as_before(tmp_path: Path) -> None:
+    video = make_video_dir(tmp_path, "Wan2.2-TI2V-5B-Q8_0.gguf")
+    settings = make_settings(tmp_path)
+    model = list_video_models(settings)[0]
+    assert model.family == "wan"
+    command = SdcppVideoEngine(settings).build_command(make_request(), tmp_path / "o.webm", model)
+    assert command[command.index("--t5xxl") + 1] == str(video / "umt5-xxl-encoder-Q5_K_M.gguf")
+    assert "--llm" not in command
+    assert "--scheduler" not in command
+
+
+def test_an_incomplete_pack_offers_nothing(tmp_path: Path) -> None:
+    """Media familia en la carpeta no puede ofrecer un modelo que va a fallar."""
+    video = tmp_path / "models" / "video"
+    video.mkdir(parents=True)
+    (video / "ltx-2.3-22b-distilled-Q4_K_M.gguf").write_bytes(b"fake")
+    (video / "ltx-2.3-22b-dev_video_vae.safetensors").write_bytes(b"fake")
+    # falta gemma y los conectores
+    assert list_video_models(make_settings(tmp_path)) == []
