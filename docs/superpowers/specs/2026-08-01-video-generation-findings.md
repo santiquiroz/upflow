@@ -127,7 +127,15 @@ herramienta para imágenes sexuales no consentidas de personas reales.
 - **Clips largos**: hoy la respuesta honesta es "generá corto". Falta encadenar
   clips (usar el último cuadro como imagen de partida del siguiente) para pasar del
   segundo sin que el sujeto se deshaga.
-- **LTX-2** no se probó: 22B más un Gemma-3-12B como encoder no entran cómodos en 16 GB.
+- **LTX-2 está declarado pero NO disponible.** El descubrimiento ya entiende su
+  forma (Gemma como encoder, conectores de embeddings, VAE de audio, scheduler
+  propio), así que si alguien pone esos archivos en la carpeta, aparece y corre.
+  Pero **no hay script que los baje, ni componente en el instalador, ni mención en
+  la UI**, y es a propósito: son 22B más un Gemma-3-12B que no entran cómodos en
+  16 GB. Agregar un botón para bajar 30 GB que después no andan sería peor que no
+  tenerlo. Lo que se gana con la familia declarada es que el motor dejó de estar
+  atado a Wan; el día que exista un LTX que entre, es una entrada en `FAMILIES`.
+  **No anunciarlo como soportado hasta que se pruebe en hardware real.**
 - **Generar chico y arreglar después**: Upflow ya tiene Real-ESRGAN y RIFE/GMFSS
   adentro. Generar a 480p/16 fps y subirlo a 1080p/48 fps con el pipeline propio es
   mucho más barato que pedirle la resolución final al modelo. Es el diferencial real

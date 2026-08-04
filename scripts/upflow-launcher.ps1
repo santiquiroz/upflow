@@ -377,6 +377,11 @@ $script:OptionalPacks = @(
         Key     = 'ep-intel'
         Feature = 'Acelerador Intel (OpenVINO) para la grafica integrada o Arc'
         Size    = '~116 MB'
+    },
+    @{
+        Key     = 'magpie'
+        Feature = 'Tiempo real: reescalar en vivo juegos y video en una ventana superpuesta'
+        Size    = '~10 MB'
     }
 )
 
@@ -481,6 +486,10 @@ function Install-MissingBinaries {
 
     if ($selectedKeys -contains 'ep-intel') {
         Invoke-DownloadScript -ScriptName 'download-openvino-ep.ps1' -Label 'Acelerador Intel (OpenVINO)'
+    }
+
+    if ($selectedKeys -contains 'magpie') {
+        Invoke-DownloadScript -ScriptName 'download-magpie.ps1' -Label 'Magpie (overlay de tiempo real)'
     }
 
     $skipped = @($script:OptionalPacks | Where-Object { $selectedKeys -notcontains $_.Key })

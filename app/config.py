@@ -455,6 +455,11 @@ class Settings(BaseSettings):
     # los checkpoints de la comunidad corren tal cual, sin los ~40 min de
     # conversion a ONNX.
     enable_sdcpp: bool = Field(default=True, alias="ENABLE_SDCPP")
+    # Fase 7.1 - overlay de tiempo real. Magpie corre como proceso APARTE (es
+    # GPL-3.0: linkearlo volveria GPL a Upflow) y no se redistribuye, se baja en
+    # la maquina del usuario. Config vacio = la ruta donde Magpie lo deja solo.
+    magpie_binary: str = Field(default="vendor/magpie/Magpie.exe", alias="MAGPIE_BINARY")
+    magpie_config: str = Field(default="", alias="MAGPIE_CONFIG")
     sdcpp_binary: str = Field(default="vendor/sdcpp/sd-cli.exe", alias="SDCPP_BINARY")
     sdcpp_model: str = Field(default="vendor/sdcpp/model.safetensors", alias="SDCPP_MODEL")
     # Carpeta con los checkpoints del lane Vulkan: cada archivo es un modelo
@@ -786,6 +791,10 @@ class Settings(BaseSettings):
         from app.services.engines.gmfss.assets import GmfssAssets
 
         return GmfssAssets.is_complete(self.gmfss_model_dir_path)
+
+    @property
+    def magpie_binary_path(self) -> Path:
+        return resolve_against_project_root(self.magpie_binary)
 
     @property
     def sdcpp_binary_path(self) -> Path:

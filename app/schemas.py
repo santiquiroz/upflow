@@ -88,10 +88,22 @@ class AudioJobResponse(BaseModel):
     download_url: str | None = Field(default=None, serialization_alias="downloadUrl")
 
 
+class MasteringPresetResponse(BaseModel):
+    id: str
+    label: str
+    description: str
+    target_lufs: float = Field(serialization_alias="targetLufs")
+
+
 class AudioCapabilitiesResponse(BaseModel):
     denoise_modes: list[str] = Field(serialization_alias="denoiseModes")
     restore_available: bool = Field(serialization_alias="restoreAvailable")
     restore_modes: list[str] = Field(default_factory=list, serialization_alias="restoreModes")
+    # Acabado profesional (EBU R128). Siempre disponible: lo hace ffmpeg, que ya
+    # viene con la app, sin descargar nada.
+    mastering_presets: list[MasteringPresetResponse] = Field(
+        default_factory=list, serialization_alias="masteringPresets"
+    )
 
 
 class VideoCapabilitiesResponse(BaseModel):
@@ -640,6 +652,31 @@ class VideoGenerationCapabilitiesResponse(BaseModel):
     default_frames: int = Field(serialization_alias="defaultFrames")
     default_fps: int = Field(serialization_alias="defaultFps")
     max_frames: int = Field(serialization_alias="maxFrames")
+
+
+class RealtimePresetResponse(BaseModel):
+    id: str
+    label: str
+    description: str
+
+
+class RealtimeCapabilitiesResponse(BaseModel):
+    available: bool
+    presets: list[RealtimePresetResponse] = Field(default_factory=list)
+    # Magpie es GPL-3.0 y corre aparte; no viaja en el instalador.
+    reason: str | None = None
+
+
+class StartRealtimeRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    preset: str
+    max_frame_rate: int | None = Field(default=None, alias="maxFrameRate", ge=24, le=480)
+
+
+class RealtimeStartedResponse(BaseModel):
+    pid: int
+    preset: str
 
 
 class CpuFallbackReportResponse(BaseModel):

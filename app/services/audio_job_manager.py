@@ -78,6 +78,7 @@ class AudioJobManager:
         voice_steps: list[str] | None = None,
         voice_delivery: str | None = None,
         voice_presence_db: float | None = None,
+        master: str | None = None,
         job_id: str | None = None,
         owner: AuthenticatedUser | None = None,
     ) -> AudioJob:
@@ -101,6 +102,7 @@ class AudioJobManager:
             voice_steps=selected_voice_steps,
             voice_delivery=voice_delivery,
             voice_presence_db=voice_presence_db,
+            master=master,
             owner_id=owner.id if owner is not None else None,
         )
         if job_id is not None:

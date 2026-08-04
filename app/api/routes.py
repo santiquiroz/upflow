@@ -60,6 +60,11 @@ from app.schemas import (
     GenerationJobResponse,
     GenerationJobsListResponse,
     GenerationModelSummary,
+    MasteringPresetResponse,
+    RealtimeCapabilitiesResponse,
+    RealtimePresetResponse,
+    RealtimeStartedResponse,
+    StartRealtimeRequest,
     VideoGenerationCapabilitiesResponse,
     VideoModelSummary,
     HealthResponse,
@@ -956,6 +961,7 @@ async def create_audio_job(
     output_format: str = Form(default="flac"),
     voice_steps: str | None = Form(default=None),
     voice_delivery: str | None = Form(default=None),
+    master: str | None = Form(default=None),
     voice_presence_db: float | None = Form(default=None),
     audio_jobs: AudioJobManager = Depends(get_audio_job_manager),
     storage: StorageService = Depends(get_storage),
@@ -979,6 +985,7 @@ async def create_audio_job(
             output_format=output_format,
             voice_steps=_parse_voice_steps(voice_steps),
             voice_delivery=voice_delivery if isinstance(voice_delivery, str) else None,
+            master=master if isinstance(master, str) and master else None,
             voice_presence_db=(
                 voice_presence_db if isinstance(voice_presence_db, (int, float)) else None
             ),
@@ -1393,10 +1400,18 @@ async def audio_capabilities(settings: Settings = Depends(get_settings)) -> Audi
     restore_modes = [
         mode for mode in sorted(AUDIO_RESTORE_MODES) if settings.audio_restore_mode_available(mode)
     ]
+    from app.services.audio_mastering import MASTERING_PRESETS
+
     return AudioCapabilitiesResponse(
         denoise_modes=denoise_modes,
         restore_available=bool(restore_modes),
         restore_modes=restore_modes,
+        mastering_presets=[
+            MasteringPresetResponse(
+                id=p.id, label=p.label, description=p.description, target_lufs=p.target_lufs
+            )
+            for p in MASTERING_PRESETS
+        ],
     )
 
 
@@ -1860,6 +1875,51 @@ async def vulkan_install_status(
         install_id=job.id, repo_id=job.repo_id, status=job.status.value,
         progress_pct=job.progress_pct, model_id=job.model_id, error=job.error,
     )
+
+
+@router.get("/realtime/capabilities", response_model=RealtimeCapabilitiesResponse)
+async def realtime_capabilities(
+    settings: Settings = Depends(get_settings),
+) -> RealtimeCapabilitiesResponse:
+    from app.services.realtime_service import RealtimeService, available_presets
+
+    service = RealtimeService(settings)
+    if not service.available():
+        return RealtimeCapabilitiesResponse(
+            available=False,
+            reason=(
+                "El overlay de tiempo real no está instalado. Se baja aparte porque "
+                "usa Magpie, que es software libre con licencia GPL y corre como "
+                "programa separado."
+            ),
+        )
+    return RealtimeCapabilitiesResponse(
+        available=True,
+        presets=[
+            RealtimePresetResponse(id=p.id, label=p.label, description=p.description)
+            for p in available_presets()
+        ],
+    )
+
+
+@router.post(
+    "/realtime/start", response_model=RealtimeStartedResponse,
+    dependencies=[Depends(require(Permission.jobs_create))],
+)
+async def start_realtime(
+    payload: StartRealtimeRequest, settings: Settings = Depends(get_settings)
+) -> RealtimeStartedResponse:
+    from app.services.realtime_service import RealtimeService
+
+    try:
+        pid = RealtimeService(settings).start(
+            preset=payload.preset, max_frame_rate=payload.max_frame_rate
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return RealtimeStartedResponse(pid=pid, preset=payload.preset)
 
 
 @router.get("/generation/video/capabilities", response_model=VideoGenerationCapabilitiesResponse)

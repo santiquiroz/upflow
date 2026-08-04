@@ -12,6 +12,7 @@ const SURFACE_BY_CAPABILITY: Record<string, string> = {
   "audio.voice": "/audio",
   "audio.transcribe": "/transcribe",
   "generate.textToImage": "/generate",
+  "generate.textToVideo": "/generate",
 };
 
 export function surfaceFor(capability: CapabilityResponse): string | null {

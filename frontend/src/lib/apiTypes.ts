@@ -155,7 +155,16 @@ export interface AudioJob {
   downloadUrl: string | null;
 }
 
+export interface MasteringPreset {
+  id: string;
+  label: string;
+  description: string;
+  targetLufs: number;
+}
+
 export interface AudioCapabilities {
+  /** Acabado profesional (EBU R128). Siempre presente: lo hace ffmpeg. */
+  masteringPresets?: MasteringPreset[];
   denoiseModes: string[];
   restoreAvailable: boolean;
   restoreModes: string[];
@@ -536,6 +545,23 @@ export interface VideoGenerationCapabilities {
   defaultFrames: number;
   defaultFps: number;
   maxFrames: number;
+}
+
+export interface RealtimePreset {
+  id: string;
+  label: string;
+  description: string;
+}
+
+export interface RealtimeCapabilities {
+  available: boolean;
+  presets: RealtimePreset[];
+  reason: string | null;
+}
+
+export interface RealtimeStarted {
+  pid: number;
+  preset: string;
 }
 
 export interface QuotaStatus {

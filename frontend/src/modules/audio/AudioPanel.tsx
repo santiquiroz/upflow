@@ -23,6 +23,9 @@ const OUTPUT_FORMAT_OPTIONS: readonly FormatOption<AudioOutputFormat>[] = [
 
 const DENOISE_TOOLTIP =
   "Remove background noise with an AI denoiser. DeepFilterNet is stronger; RNNoise is lighter. Runs before restoration.";
+const MASTERING_TOOLTIP =
+  "Deja el audio al volumen que piden las plataformas, medido segun el estandar EBU R128. Se mide primero y se corrige despues con esa medicion, que es como se hace un master de verdad: en una sola pasada el volumen bombea.";
+
 const RESTORE_TOOLTIP =
   "Reconstruct high frequencies lost to lossy compression (MP3/AAC). Apollo is fast band-restore; AudioSR is diffusion super-resolution — much higher quality ceiling but far slower (minutes per minute of audio on GPU). Experimental — quality varies by source.";
 const DEVICE_TOOLTIP = "Pick the compute device that runs the restoration model (CPU or a DirectML GPU).";
@@ -136,6 +139,7 @@ export function AudioPanel() {
   const [restore, setRestore] = useState<string | null>(null);
   const [outputFormat, setOutputFormat] = useState<AudioOutputFormat>("flac");
   const [device, setDevice] = useState<DeviceInfoResponse | null>(CPU_DEVICE);
+  const [master, setMaster] = useState<string | null>(null);
 
   const capabilitiesQuery = useAudioCapabilities();
   const voiceCatalogQuery = useVoiceCatalog();
@@ -146,6 +150,8 @@ export function AudioPanel() {
   const denoiseModes = capabilitiesQuery.data?.denoiseModes ?? [];
   const restoreModes = capabilitiesQuery.data?.restoreModes ?? [];
   const restoreAvailable = restoreModes.length > 0;
+  // Siempre disponible: lo hace ffmpeg, que ya viene con la app.
+  const masteringPresets = capabilitiesQuery.data?.masteringPresets ?? [];
 
   function handleFileSelected(selected: File) {
     setFile(selected);
@@ -165,13 +171,16 @@ export function AudioPanel() {
       voiceSteps: voice.enabledIds,
       voiceDelivery: voice.delivery,
       voicePresenceDb: voice.isEnabled("presence") ? voice.presenceDb : null,
+      master,
     });
   }
 
   // La mejora de voz cuenta como seleccion: alguien que solo quiere enfocar el
   // dialogo no tiene por que encender denoise ni restore para poder enviar.
+  // Nivelar el volumen es una entrega valida por si sola: alguien puede querer
+  // solo dejar el archivo al volumen del estandar, sin tocarle nada mas.
   const hasSelection =
-    denoise !== null || restore !== null || voice.enabledIds.length > 0;
+    denoise !== null || restore !== null || master !== null || voice.enabledIds.length > 0;
   const canSubmit =
     file !== null && hasSelection && !voice.needsDelivery && !isJobBusy(phase);
 
@@ -187,6 +196,34 @@ export function AudioPanel() {
             onChange={setDenoise}
           />
         </AccordionSection>
+        {masteringPresets.length > 0 && (
+          <AccordionSection
+            title="Acabado"
+            summary={
+              masteringPresets.find((p) => p.id === master)?.label ?? "Sin nivelar"
+            }
+            tooltip={MASTERING_TOOLTIP}
+          >
+            <ModeSegmentedControl
+              legend="Acabado"
+              options={[
+                { value: null, label: "Sin nivelar" },
+                ...masteringPresets.map((preset) => ({
+                  value: preset.id,
+                  label: preset.label,
+                })),
+              ]}
+              value={master}
+              onChange={setMaster}
+            />
+            {master !== null && (
+              <p role="status" className="mt-2 text-xs text-text-dim">
+                {masteringPresets.find((p) => p.id === master)?.description}{" "}
+                Objetivo: {masteringPresets.find((p) => p.id === master)?.targetLufs} LUFS.
+              </p>
+            )}
+          </AccordionSection>
+        )}
         {restoreAvailable && (
           <AccordionSection title="Restore" summary={restoreLabel(restore)} tooltip={RESTORE_TOOLTIP}>
             <ModeSegmentedControl
