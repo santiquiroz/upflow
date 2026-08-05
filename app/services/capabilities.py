@@ -111,6 +111,15 @@ _PRINT_CAPABILITIES: tuple[Capability, ...] = (
         strategies=("dsp",),
     ),
     Capability(
+        id="print.parts",
+        domain="print",
+        label_key="capability.print.parts",
+        # Geometria construida por formula: numpy en proceso, nada que instalar.
+        provisioning="builtin",
+        job_kind=None,
+        strategies=("dsp",),
+    ),
+    Capability(
         id="print.slice",
         domain="print",
         label_key="capability.print.slice",

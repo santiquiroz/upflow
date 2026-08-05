@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, Box, CheckCircle2, Download, Lightbulb, UploadCloud, Wrench } from "lucide-react";
+import { PartBuilder } from "./PartBuilder";
 import { useState, type ChangeEvent, type DragEvent } from "react";
 import { useTranslation } from "../../i18n/LocaleProvider";
 import {
@@ -109,6 +110,7 @@ function Measurements({ result }: { result: PrintCheckResult }) {
 
 export function PrintPage() {
   const { t } = useTranslation();
+  const [lane, setLane] = useState<"check" | "build">("check");
   const [file, setFile] = useState<File | null>(null);
   const [printer, setPrinter] = useState("ender-3");
   const [targetAxis, setTargetAxis] = useState("");
@@ -171,7 +173,34 @@ export function PrintPage() {
         <p className="text-sm text-text-dim">{t("print.subtitle")}</p>
       </header>
 
-      <div className="grid grid-cols-[1fr_360px] gap-6 max-[900px]:grid-cols-1">
+      {/* Los dos carriles con nombre: es el hallazgo de la investigación, no una
+          decisión de diseño. Una malla generada no tiene cotas; una pieza que
+          tiene que encajar las necesita. Esconder la diferencia sería mentir. */}
+      <div role="tablist" className="flex gap-2 border-b border-border">
+        {(["check", "build"] as const).map((id) => (
+          <button
+            key={id}
+            role="tab"
+            type="button"
+            aria-selected={lane === id}
+            onClick={() => setLane(id)}
+            className={`px-3 py-2 text-sm ${
+              lane === id
+                ? "border-b-2 border-accent font-medium text-text"
+                : "text-text-dim hover:text-text"
+            }`}
+          >
+            {t(id === "check" ? "print.lane.check" : "print.lane.build")}
+          </button>
+        ))}
+      </div>
+
+      {lane === "build" && <PartBuilder printer={printer} />}
+
+      <div
+        className="grid grid-cols-[1fr_360px] gap-6 max-[900px]:grid-cols-1"
+        hidden={lane !== "check"}
+      >
         <div className="flex flex-col gap-4">
           <Dropzone file={file} onFileSelected={(f) => { setFile(f); setResult(null); }} />
 

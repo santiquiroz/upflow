@@ -1,4 +1,4 @@
-import { apiGet, apiPostForm } from "../lib/api";
+import { apiGet, apiPostForm, apiPostJson } from "../lib/api";
 import type { UploadOptions } from "../lib/uploadRequest";
 
 export interface Printer {
@@ -64,4 +64,42 @@ export function repairMesh(
   const formData = new FormData();
   formData.append("file", file);
   return apiPostForm<MeshRepairResult>("/print/repair", formData, options);
+}
+
+export interface PartParam {
+  name: string;
+  labelKey: string;
+  default: number;
+  minimum: number;
+}
+
+export interface PartKind {
+  id: string;
+  labelKey: string;
+  descriptionKey: string;
+  params: PartParam[];
+}
+
+export interface GeneratedPart {
+  canPrint: boolean;
+  sizeMm: [number, number, number];
+  volumeMm3: number | null;
+  triangleCount: number;
+  overhangRatio: number;
+  blockers: string[];
+  advice: string[];
+  /** Se entrega siempre: si no entra en esa cama, la pieza igual está bien hecha. */
+  downloadUrl: string;
+}
+
+export function fetchPartKinds(): Promise<{ kinds: PartKind[] }> {
+  return apiGet<{ kinds: PartKind[] }>("/print/parts");
+}
+
+export function generatePart(body: {
+  kind: string;
+  params: Record<string, number>;
+  printer: string;
+}): Promise<GeneratedPart> {
+  return apiPostJson<GeneratedPart>("/print/parts", body);
 }
