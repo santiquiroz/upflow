@@ -70,6 +70,9 @@ from app.schemas import (
     TranslationPairResponse,
     TranslationPairsResponse,
     TtsCapabilitiesResponse,
+    PrintCheckResponse,
+    PrinterResponse,
+    PrintersResponse,
     VoiceConversionCapabilitiesResponse,
     RealtimeCapabilitiesResponse,
     RealtimePresetResponse,
@@ -173,6 +176,8 @@ from app.services.media_decode import build_decode_to_wav_command, needs_decodin
 from app.services.prompt_presets import PROMPT_PRESETS
 from app.services.saved_prompts import SavedPromptStore
 from app.services.subtitles import SUBTITLE_FORMATS, TranscriptSegment, render_segments
+from app.services.mesh_fit import PRINTER_BEDS
+from app.services.print_check import PrintCheckUnavailable, check_stl_for_printing
 from app.services.vendor_paths import kokoro_dir, translation_dir
 from app.services.translate import (
     TranslationEngine,
@@ -2593,6 +2598,60 @@ async def convert_voice(
         content=buffer.getvalue(),
         media_type="audio/wav",
         headers={"Content-Disposition": 'attachment; filename="voz-convertida.wav"'},
+    )
+
+
+@router.get("/print/printers", response_model=PrintersResponse)
+async def list_printers() -> PrintersResponse:
+    return PrintersResponse(
+        printers=[
+            PrinterResponse(id=nombre, bed_mm=cama)
+            for nombre, cama in sorted(PRINTER_BEDS.items())
+        ]
+    )
+
+
+@router.post("/print/check", response_model=PrintCheckResponse)
+async def check_print(
+    file: UploadFile = File(...),
+    printer: str = Form(default="ender-3"),
+    target_axis: str | None = Form(default=None),
+    target_mm: float | None = Form(default=None),
+    settings_dep: Settings = Depends(get_settings),
+    storage: StorageService = Depends(get_storage),
+) -> PrintCheckResponse:
+    """Dice si un STL se imprime en esa maquina, y que arreglarle.
+
+    No hace falta ningun modelo: sirve para cualquier STL, venga de donde venga.
+    """
+    safe_name = sanitize_filename(Path(file.filename or "pieza.stl").name, default="pieza.stl")
+    destino = settings_dep.uploads_path / f"{uuid4().hex}-{safe_name}"
+    try:
+        await storage.save_upload(file, destino, max_mb=settings_dep.max_upload_mb)
+        reporte = await asyncio.to_thread(
+            check_stl_for_printing,
+            destino,
+            printer=printer,
+            target_axis=target_axis if isinstance(target_axis, str) and target_axis else None,
+            target_mm=target_mm if isinstance(target_mm, (int, float)) else None,
+        )
+    except PrintCheckUnavailable as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        # El archivo no queda: un STL de 50 MB por consulta llenaria el disco en
+        # una tarde, y el veredicto ya no lo necesita.
+        destino.unlink(missing_ok=True)
+
+    return PrintCheckResponse(
+        can_print=reporte.can_print,
+        size_mm=reporte.size,
+        triangle_count=reporte.mesh.triangle_count,
+        watertight=reporte.mesh.is_watertight,
+        manifold=reporte.mesh.is_manifold,
+        volume_mm3=reporte.mesh.volume,
+        overhang_ratio=reporte.overhang_ratio,
+        blockers=reporte.blockers,
+        advice=reporte.advice,
     )
 
 

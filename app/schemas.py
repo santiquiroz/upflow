@@ -103,6 +103,29 @@ class VoiceConversionCapabilitiesResponse(BaseModel):
     max_seconds: int = Field(serialization_alias="maxSeconds")
 
 
+class PrinterResponse(BaseModel):
+    id: str
+    bed_mm: tuple[float, float, float] = Field(serialization_alias="bedMm")
+
+
+class PrintersResponse(BaseModel):
+    printers: list[PrinterResponse]
+
+
+class PrintCheckResponse(BaseModel):
+    can_print: bool = Field(serialization_alias="canPrint")
+    size_mm: tuple[float, float, float] = Field(serialization_alias="sizeMm")
+    triangle_count: int = Field(serialization_alias="triangleCount")
+    watertight: bool
+    manifold: bool
+    volume_mm3: float | None = Field(default=None, serialization_alias="volumeMm3")
+    overhang_ratio: float = Field(serialization_alias="overhangRatio")
+    # Lo que impide imprimir. Vacio = se puede.
+    blockers: list[str] = Field(default_factory=list)
+    # Lo que se imprime igual pero saldria mejor de otra forma.
+    advice: list[str] = Field(default_factory=list)
+
+
 class SavedPromptResponse(BaseModel):
     id: str
     name: str
