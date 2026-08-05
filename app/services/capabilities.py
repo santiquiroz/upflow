@@ -15,14 +15,17 @@ CapabilityStatus = Literal["available", "needs_setup", "not_implemented"]
 # De donde sale lo que la capacidad necesita. Son los dos regimenes que ya
 # coexisten en el repo: el registro con su instalador, y los paquetes
 # vendorizados que hasta ahora se bajaban a mano con un script.
-Provisioning = Literal["registry", "vendored_pack", "none"]
+# "builtin" = anda sin bajar nada, y es distinto de "none". `none` significa NO
+# IMPLEMENTADA: el status ni se calcula contra la maquina. Sin esta distincion,
+# una capacidad que funciona perfecto aparecia en el mapa de ruta.
+Provisioning = Literal["registry", "vendored_pack", "builtin", "none"]
 
 # Una capacidad puede resolverse por DSP (rapido, determinista, sin descarga) o
 # por modelo (mejor calidad, hay que instalarlo), y no son excluyentes: lo
 # interesante es encadenarlas. Ver voice_chain.plan_stages.
 Strategy = Literal["dsp", "model"]
 
-Domain = Literal["video", "image", "audio", "generate"]
+Domain = Literal["video", "image", "audio", "generate", "print"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +88,52 @@ _UPSCALE_REQUIREMENTS: tuple[Requirement, ...] = (
     # las entradas builtin se siembran solas aunque el binario no este.
     PathRequirement("engine_binary", "realesrgan"),
     RegistryRequirement((ModelKind.builtin_ncnn, ModelKind.onnx)),
+)
+
+
+_PRINT_CAPABILITIES: tuple[Capability, ...] = (
+    Capability(
+        id="print.check",
+        domain="print",
+        label_key="capability.print.check",
+        # numpy en proceso: no hay pack que bajar ni modelo que instalar.
+        provisioning="builtin",
+        job_kind=None,
+        strategies=("dsp",),
+    ),
+    Capability(
+        id="print.repair",
+        domain="print",
+        label_key="capability.print.repair",
+        provisioning="none",
+        job_kind=None,
+        strategies=("dsp",),
+        unavailable_reason_key="capability.reason.printRepairPending",
+    ),
+    Capability(
+        id="print.slice",
+        domain="print",
+        label_key="capability.print.slice",
+        provisioning="none",
+        job_kind=None,
+        strategies=("dsp",),
+        unavailable_reason_key="capability.reason.noSlicerPack",
+    ),
+    Capability(
+        id="print.generate",
+        domain="print",
+        label_key="capability.print.generate",
+        provisioning="none",
+        job_kind=None,
+        strategies=("model",),
+        # Medido el 2026-08-05: de los motores imagen-a-malla publicados, TRELLIS
+        # y Pixal3D exigen kernels CUDA y arrastran nvdiffrast (NVIDIA no
+        # comercial), y toda la familia Hunyuan3D esta bajo la Tencent Hunyuan 3D
+        # Community License, que no es comercial limpia. El unico con licencia MIT
+        # en codigo y pesos es TripoSR, y su camino sin CUDA verificado es torch
+        # en CPU, no DirectML.
+        unavailable_reason_key="capability.reason.noCleanLicenseMeshEngine",
+    ),
 )
 
 
@@ -258,9 +307,10 @@ CATALOG: tuple[Capability, ...] = (
         strategies=("model",),
         unavailable_reason_key="capability.reason.noOnnxPath",
     ),
+    *_PRINT_CAPABILITIES,
 )
 
-DOMAIN_ORDER: tuple[Domain, ...] = ("video", "image", "audio", "generate")
+DOMAIN_ORDER: tuple[Domain, ...] = ("video", "image", "audio", "generate", "print")
 
 
 def _path_exists(settings: Settings, requirement: PathRequirement) -> bool:
@@ -309,6 +359,10 @@ def _resolve_one(
     settings: Settings,
     installed_kinds: frozenset[ModelKind],
 ) -> ResolvedCapability:
+    if capability.provisioning == "builtin":
+        # Anda sin bajar nada: es codigo en proceso, no un pack en disco.
+        return _as_resolved(capability, "available")
+
     if capability.provisioning == "none":
         # No implementada: el status no se calcula contra la maquina. Que existan
         # archivos sueltos no la vuelve disponible.

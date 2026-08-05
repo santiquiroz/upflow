@@ -83,9 +83,12 @@ def test_no_unimplemented_capability_declares_a_job_kind():
             assert capability.job_kind is None, capability.id
 
 
-def test_every_implemented_capability_declares_a_job_kind():
+def test_every_queued_capability_declares_a_job_kind():
+    # `builtin` queda afuera a proposito: es codigo sincronico en proceso, no
+    # trabajo que se encole, y exigirle un job_kind seria pedirle una cola que no
+    # tiene.
     for capability in CATALOG:
-        if capability.provisioning != "none":
+        if capability.provisioning in ("registry", "vendored_pack"):
             assert capability.job_kind, capability.id
 
 
@@ -94,12 +97,25 @@ def test_every_capability_declares_at_least_one_strategy():
         assert capability.strategies, capability.id
 
 
-def test_implemented_capabilities_declare_what_they_need():
-    # Una capacidad implementada sin requisitos seria `available` siempre, que es
-    # justamente la clase de mentira que este modulo existe para evitar.
+def test_capabilities_that_depend_on_disk_declare_what_they_need():
+    # Una capacidad que depende del disco y no declara requisitos seria
+    # `available` siempre, que es justamente la clase de mentira que este modulo
+    # existe para evitar.
+    #
+    # `builtin` es la unica excepcion, y no es una mentira: es codigo en proceso,
+    # asi que "siempre disponible" es la verdad. Por eso se exige lo contrario —
+    # que NO declare requisitos — en vez de dejar el hueco abierto.
     for capability in CATALOG:
-        if capability.provisioning != "none":
+        if capability.provisioning in ("registry", "vendored_pack"):
             assert capability.requirements, capability.id
+
+
+def test_builtin_capabilities_declare_nothing_to_install():
+    # El hueco que abre la excepcion de arriba, cerrado: si una capacidad builtin
+    # necesitara algo del disco, esta mal clasificada.
+    for capability in CATALOG:
+        if capability.provisioning == "builtin":
+            assert capability.requirements == (), capability.id
 
 
 def test_path_requirements_point_at_real_settings(tmp_path: Path):
@@ -301,3 +317,45 @@ def test_text_to_video_is_not_advertised_as_impossible(tmp_path) -> None:
     assert cap.provisioning != "none"
     assert cap.unavailable_reason_key is None
     assert cap.requirements, "sin requisitos, el estado no se puede derivar del disco"
+
+
+# ---------------------------------------------------------------------------
+# El chequeo de impresion no baja nada ni instala nada: es numpy en proceso.
+# El catalogo no tenia como decir eso — `provisioning="none"` significa NO
+# IMPLEMENTADA, no "funciona sin bajar nada". Sin una forma de expresarlo, una
+# capacidad que anda perfecto aparecia en el mapa de ruta.
+# ---------------------------------------------------------------------------
+
+
+class TestPrintDomain:
+    def test_the_print_check_is_available_out_of_the_box(self, tmp_path) -> None:
+        from app.config import Settings
+        from app.services.capabilities import resolve_capabilities
+        from app.services.model_registry import ModelRegistry
+
+        settings = Settings(RUNTIME_DIR=str(tmp_path), _env_file=None)
+        resueltas = resolve_capabilities(settings, ModelRegistry(settings))
+
+        chequeo = next(c for c in resueltas if c.id == "print.check")
+        assert chequeo.status == "available"
+        assert chequeo.missing_packs == ()
+
+    def test_the_print_domain_is_in_the_order(self) -> None:
+        from app.services.capabilities import DOMAIN_ORDER
+
+        assert "print" in DOMAIN_ORDER
+
+    def test_the_lanes_that_do_not_exist_yet_say_so(self) -> None:
+        # Prometer lo que no esta hecho es peor que no listarlo.
+        from app.config import Settings
+        from app.services.capabilities import resolve_capabilities
+        from app.services.model_registry import ModelRegistry
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = Settings(RUNTIME_DIR=tmp, _env_file=None)
+            resueltas = resolve_capabilities(settings, ModelRegistry(settings))
+
+        por_id = {c.id: c for c in resueltas}
+        assert por_id["print.slice"].status == "not_implemented"
+        assert por_id["print.generate"].status == "not_implemented"

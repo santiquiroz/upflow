@@ -446,7 +446,8 @@ export interface ScanOnnxDiagnosticResponse {
 
 export type CapabilityDomainId = "video" | "image" | "audio" | "generate";
 export type CapabilityStatus = "available" | "needs_setup" | "not_implemented";
-export type CapabilityProvisioning = "registry" | "vendored_pack" | "none";
+/** `builtin` anda sin bajar nada; `none` significa NO implementada todavía. */
+export type CapabilityProvisioning = "registry" | "vendored_pack" | "builtin" | "none";
 export type CapabilityStrategy = "dsp" | "model";
 
 export interface CapabilityResponse {
