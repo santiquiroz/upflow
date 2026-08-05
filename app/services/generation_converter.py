@@ -6,8 +6,10 @@ import json
 import logging
 import re
 import shutil
+import warnings
+from contextlib import contextmanager
 from dataclasses import replace
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch as _patch
@@ -67,7 +69,10 @@ _ALLOCATION_ERROR_MARKERS = (
     "cannot allocate",
     "can't allocate",
     "allocation",
-    "bad alloc",
+    # Con guion bajo: asi lo escribe el runtime de C++ (`std::bad_alloc`), que
+    # es como muere el export en Windows cuando no hay RAM. La variante con
+    # espacio no aparece nunca en la practica.
+    "bad_alloc",
 )
 
 
@@ -226,6 +231,35 @@ def _allocation_message(checkpoint: HfFile) -> str:
     )
 
 
+# Lo que `torch.onnx.export` escupe por cada modelo: decenas de TracerWarning
+# que son esperadas y no significan nada. En la consola del instalador se leen
+# como un volcado de errores — reporte real (2026-08-05): un usuario dio la
+# instalacion por fallida viendo solo esas lineas.
+_EXPORT_NOISE_PATTERNS = (
+    "Converting a tensor to a Python",
+    "Exporting aten::index operator",
+    "torch.onnx.export",
+)
+
+
+@contextmanager
+def silence_export_noise() -> Iterator[None]:
+    """Calla las advertencias esperadas del export, y solo esas."""
+    with warnings.catch_warnings():
+        for patron in _EXPORT_NOISE_PATTERNS:
+            warnings.filterwarnings("ignore", message=f".*{re.escape(patron)}.*")
+        yield
+
+
+def _allocation_message_for_export(component: str | None) -> str:
+    donde = f" del componente {component!r}" if component else ""
+    return (
+        f"No hay RAM suficiente para convertir el modelo{donde}. "
+        "La conversion de un SDXL corre en CPU y pide varios GB de una sola vez. "
+        "Cerra otras aplicaciones y volve a intentar, o elegi un modelo mas chico."
+    )
+
+
 def _is_allocation_runtime_error(exc: RuntimeError) -> bool:
     message = str(exc).lower()
     return any(marker in message for marker in _ALLOCATION_ERROR_MARKERS)
@@ -273,10 +307,14 @@ def _export_with_optimum(
         extra["atol"] = atol
     try:
         optimum_logging.set_verbosity_info()
+        # El ruido se calla y los fallos de memoria se traducen: sin esto la
+        # consola parece un volcado de errores mientras todo va bien, y cuando
+        # de verdad falla por RAM muere con un mensaje de C++ que no dice que
+        # hacer.
         # onnxruntime-directml no es detectado como "onnxruntime" por Optimum.
         # El spike verificó que este guard debe parchearse sólo durante export:
         # docs/superpowers/specs/2026-07-25-third-party-spike-findings.md.
-        with _patch(
+        with silence_export_noise(), _patch(
             "optimum.exporters.onnx.base.is_onnxruntime_available",
             return_value=True,
         ):
@@ -299,6 +337,14 @@ def _export_with_optimum(
                 do_validation=False,
                 **extra,
             )
+    except MemoryError as exc:
+        raise RuntimeError(_allocation_message_for_export(seen[-1] if seen else None)) from exc
+    except RuntimeError as exc:
+        if _is_allocation_runtime_error(exc):
+            raise RuntimeError(
+                _allocation_message_for_export(seen[-1] if seen else None)
+            ) from exc
+        raise
     finally:
         optimum_logger.removeHandler(handler)
         optimum_logging.set_verbosity(previous_verbosity)
