@@ -37,6 +37,12 @@ FLOAT32_RELATIVE_STEP = 1e-6
 # Piso para un modelo pegado al origen, donde no hay magnitud de la que colgarse.
 MIN_WELD_TOLERANCE_MM = 1e-9
 
+# Una malla cerrada tiene que encerrar ALGO. La relacion entre el volumen y la
+# superficie da el espesor medio del solido; por debajo de esto no hay pieza,
+# hay una superficie que se cerro sobre si misma. Un micrometro: mil veces mas
+# fino que lo que cualquier boquilla deposita.
+MIN_MEAN_THICKNESS_MM = 1e-3
+
 # Un triangulo con menos area que esto no aporta superficie. Se descarta ANTES
 # de contar aristas: si no, sus dos aristas coincidentes ensucian el conteo y
 # abren un solido que estaba cerrado.
@@ -50,6 +56,7 @@ class MeshReport:
     boundary_edges: int
     non_manifold_edges: int
     degenerate_triangles: int
+    surface_area: float
     # `None` cuando la malla esta abierta: el volumen de algo sin adentro no
     # significa nada, y devolver un numero igual seria inventar una medida.
     volume: float | None
@@ -65,8 +72,21 @@ class MeshReport:
         return self.non_manifold_edges == 0
 
     @property
+    def is_solid(self) -> bool:
+        """Cerrada Y con algo adentro.
+
+        Cerrada no alcanza: una superficie plana que se cierra sobre si misma
+        cumple que cada arista tenga dos caras y encierra volumen cero. El
+        laminador la convierte en nada, y decir "estanca, sin problemas" sobre
+        eso es la peor clase de falso positivo — el que da confianza.
+        """
+        if not self.is_watertight or self.volume is None:
+            return False
+        return self.volume / self.surface_area > MIN_MEAN_THICKNESS_MM if self.surface_area else False
+
+    @property
     def printable(self) -> bool:
-        return self.is_watertight and self.is_manifold
+        return self.is_watertight and self.is_manifold and self.is_solid
 
 
 def weld_tolerance_for(triangles: np.ndarray) -> float:
@@ -138,8 +158,15 @@ def _signed_volume(triangles: np.ndarray) -> float:
     return float(np.sum(np.einsum("ij,ij->i", a, np.cross(b, c))) / 6.0)
 
 
-def _describe_problems(boundary: int, non_manifold: int, degenerate: int) -> list[str]:
+def _describe_problems(
+    boundary: int, non_manifold: int, degenerate: int, hollow: bool = False
+) -> list[str]:
     problemas: list[str] = []
+    if hollow:
+        problemas.append(
+            "La malla cierra pero no encierra volumen: es una superficie plegada "
+            "sobre si misma, no un solido, y el laminador no imprime nada."
+        )
     if boundary:
         problemas.append(
             f"{boundary} aristas de borde: la malla no es estanca y el laminador "
@@ -174,8 +201,23 @@ def inspect_mesh(triangles: np.ndarray) -> MeshReport:
     degenerados += colapsadas
     borde, bifurcadas = _edge_counts(caras) if caras.size else (0, 0)
 
-    esquina_min = triangles.reshape(-1, 3).min(axis=0)
-    esquina_max = triangles.reshape(-1, 3).max(axis=0)
+    if triangles.size:
+        puntos = triangles.reshape(-1, 3)
+        medidas = tuple(float(v) for v in (puntos.max(axis=0) - puntos.min(axis=0)))
+    else:
+        # Una malla sin triangulos no tiene caja envolvente, y pedirle el minimo
+        # a un arreglo vacio revienta. Cero no es una medida inventada: es que no
+        # hay nada que medir.
+        medidas = (0.0, 0.0, 0.0)
+
+    superficie = float(areas.sum())
+    volumen = abs(_signed_volume(utiles)) if borde == 0 and utiles.size else None
+    hueca = (
+        borde == 0
+        and volumen is not None
+        and superficie > 0
+        and volumen / superficie <= MIN_MEAN_THICKNESS_MM
+    )
 
     return MeshReport(
         triangle_count=int(triangles.shape[0]),
@@ -183,9 +225,10 @@ def inspect_mesh(triangles: np.ndarray) -> MeshReport:
         boundary_edges=borde,
         non_manifold_edges=bifurcadas,
         degenerate_triangles=degenerados,
+        surface_area=superficie,
         # El valor absoluto porque una malla con las normales invertidas mide lo
         # mismo: el signo es orientacion, no tamano.
-        volume=abs(_signed_volume(utiles)) if borde == 0 and utiles.size else None,
-        size=tuple(float(v) for v in (esquina_max - esquina_min)),
-        problems=_describe_problems(borde, bifurcadas, degenerados),
+        volume=volumen,
+        size=medidas,
+        problems=_describe_problems(borde, bifurcadas, degenerados, hueca),
     )

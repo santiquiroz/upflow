@@ -273,3 +273,60 @@ def _uv_sphere(*, segments: int, rings: int, radius: float = 10.0) -> np.ndarray
                 triangulos.append([a, b, d])
                 triangulos.append([b, c, d])
     return np.asarray(triangulos, dtype=np.float64)
+
+
+class TestEmptyMesh:
+    def test_an_empty_mesh_reports_zeros_instead_of_exploding(self) -> None:
+        # Pedirle el minimo a un arreglo vacio revienta. Cero no es una medida
+        # inventada: es que no hay nada que medir.
+        reporte = inspect_mesh(np.empty((0, 3, 3)))
+
+        assert reporte.triangle_count == 0
+        assert reporte.size == (0.0, 0.0, 0.0)
+        assert reporte.volume is None
+
+
+class TestClosedButHollow:
+    """Cerrada NO es lo mismo que solida.
+
+    Encontrado midiendo el reparador: un triangulo suelto, tapado con un abanico,
+    queda topologicamente cerrado —cada arista con dos caras— y con volumen cero.
+    El verificador decia "estanca, sin problemas" sobre algo que el laminador
+    convierte en nada. Es la peor clase de falso positivo: el que da confianza.
+    """
+
+    def test_a_flat_sheet_that_closes_on_itself_is_not_a_solid(self) -> None:
+        centro = np.array([10 / 3, 10 / 3, 0.0])
+        a, b, c = (0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (0.0, 10.0, 0.0)
+        # El triangulo y su tapa de abanico: cerrado, plano, sin nada adentro.
+        plana = np.array(
+            [[a, b, c], [b, a, centro], [c, b, centro], [a, c, centro]],
+            dtype=np.float64,
+        )
+
+        reporte = inspect_mesh(plana)
+
+        assert not reporte.printable
+        assert any("volumen" in p or "solido" in p for p in reporte.problems)
+
+    def test_a_real_solid_is_not_flagged(self) -> None:
+        assert inspect_mesh(tetrahedron()).printable
+
+    def test_a_thin_but_real_part_is_not_flagged(self) -> None:
+        # Una lamina de 0,4 mm es una pieza legitima: no puede confundirse con
+        # una superficie sin volumen.
+        e = np.array(
+            [
+                [0, 0, 0], [50, 0, 0], [50, 50, 0], [0, 50, 0],
+                [0, 0, 0.4], [50, 0, 0.4], [50, 50, 0.4], [0, 50, 0.4],
+            ],
+            dtype=np.float64,
+        )
+        caras = [
+            (0, 2, 1), (0, 3, 2), (4, 5, 6), (4, 6, 7),
+            (0, 1, 5), (0, 5, 4), (2, 3, 7), (2, 7, 6),
+            (1, 2, 6), (1, 6, 5), (0, 4, 7), (0, 7, 3),
+        ]
+        delgada = np.array([[e[i] for i in c] for c in caras], dtype=np.float64)
+
+        assert inspect_mesh(delgada).printable
