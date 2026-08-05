@@ -63,6 +63,8 @@ from app.schemas import (
     MasteringPresetResponse,
     PromptPresetResponse,
     PromptPresetsResponse,
+    SynthesizeSpeechRequest,
+    TtsCapabilitiesResponse,
     RealtimeCapabilitiesResponse,
     RealtimePresetResponse,
     RealtimeStartedResponse,
@@ -140,6 +142,17 @@ from app.services.download_job_manager import (
     validate_url,
 )
 from fetchflow import engine as fetch_engine
+import io
+
+import soundfile
+
+from app.services.engines.tts_kokoro import (
+    SAMPLE_RATE as TTS_SAMPLE_RATE,
+    KokoroTtsEngine,
+    TtsUnavailable,
+    available_voices,
+)
+from app.services.phonemize import text_to_phonemes
 from app.services.prompt_presets import PROMPT_PRESETS
 from app.services.subtitles import SUBTITLE_FORMATS, render_segments
 from app.services.transcribe_job_manager import TranscribeJobManager
@@ -1345,6 +1358,71 @@ async def download_transcribe_job(
         content=body.encode("utf-8"),
         media_type=spec.media_type,
         headers={"Content-Disposition": f'attachment; filename="{stem}{spec.extension}"'},
+    )
+
+
+# --- generacion de voz -----------------------------------------------------
+# La sintesis devuelve el WAV directo y no crea un job: 1,90 s de audio salen en
+# menos de medio segundo (medido 2026-08-04), asi que encolarlo costaria mas que
+# hacerlo.
+
+_TTS_ENGINE = KokoroTtsEngine(get_settings())
+
+
+def get_tts_engine() -> KokoroTtsEngine:
+    return _TTS_ENGINE
+
+
+def tts_model_dir(settings: Settings) -> Path:
+    return Path(settings.runtime_dir).parent / "vendor" / "kokoro"
+
+
+@router.get("/tts/capabilities", response_model=TtsCapabilitiesResponse)
+async def tts_capabilities(
+    engine: KokoroTtsEngine = Depends(get_tts_engine),
+    settings_dep: Settings = Depends(get_settings),
+    model_dir: Path | None = None,
+) -> TtsCapabilitiesResponse:
+    directory = model_dir or tts_model_dir(settings_dep)
+    if not engine.available(directory):
+        return TtsCapabilitiesResponse(
+            available=False,
+            reason="Falta el modelo de voz. Instalalo con scripts/download-kokoro-tts.ps1",
+        )
+    return TtsCapabilitiesResponse(available=True, voices=available_voices(directory))
+
+
+@router.post("/tts/synthesize")
+async def synthesize_speech(
+    payload: SynthesizeSpeechRequest,
+    engine: KokoroTtsEngine = Depends(get_tts_engine),
+    settings_dep: Settings = Depends(get_settings),
+    model_dir: Path | None = None,
+) -> Response:
+    if not payload.text.strip():
+        raise HTTPException(status_code=400, detail="No hay texto que sintetizar.")
+    directory = model_dir or tts_model_dir(settings_dep)
+    if not engine.available(directory):
+        raise HTTPException(
+            status_code=409,
+            detail="El modelo de voz no esta instalado. Corre scripts/download-kokoro-tts.ps1",
+        )
+    phonemes = text_to_phonemes(payload.text, payload.language)
+    if not phonemes:
+        raise HTTPException(status_code=400, detail="No se pudo convertir ese texto a fonemas.")
+    try:
+        audio = await asyncio.to_thread(
+            engine.synthesize, model_dir=directory, phonemes=phonemes, voice=payload.voice
+        )
+    except (TtsUnavailable, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    buffer = io.BytesIO()
+    soundfile.write(buffer, audio, TTS_SAMPLE_RATE, format="WAV", subtype="PCM_16")
+    return Response(
+        content=buffer.getvalue(),
+        media_type="audio/wav",
+        headers={"Content-Disposition": 'attachment; filename="voz.wav"'},
     )
 
 

@@ -88,6 +88,18 @@ class AudioJobResponse(BaseModel):
     download_url: str | None = Field(default=None, serialization_alias="downloadUrl")
 
 
+class TtsCapabilitiesResponse(BaseModel):
+    available: bool
+    voices: list[str] = Field(default_factory=list)
+    reason: str | None = None
+
+
+class SynthesizeSpeechRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=2000)
+    voice: str = Field(min_length=1)
+    language: str | None = None
+
+
 class PromptPresetResponse(BaseModel):
     id: str
     mode: str
