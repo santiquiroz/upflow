@@ -11,6 +11,7 @@ import { TranscribePage } from "./modules/transcribe/TranscribePage";
 import { EnhanceRoute } from "./pages/EnhanceRoute";
 import { LoginPage } from "./pages/LoginPage";
 import { ModelsPage } from "./pages/ModelsPage";
+import { PrintPage } from "./modules/print/PrintPage";
 import { VoicePage } from "./modules/voice/VoicePage";
 import { RealtimePage } from "./pages/RealtimePage";
 import { SettingsPage } from "./pages/SettingsPage";
@@ -89,6 +90,7 @@ export function App() {
           <Route path="/editor" element={null} />
           <Route path="/models" element={<ModelsPage />} />
           <Route path="/voice" element={<VoicePage />} />
+          <Route path="/print" element={<PrintPage />} />
           <Route path="/realtime" element={<RealtimePage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/users" element={<UsersPage />} />
