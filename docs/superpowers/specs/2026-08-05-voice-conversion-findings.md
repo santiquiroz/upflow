@@ -181,3 +181,62 @@ es el camino que ya usa la app.
 La conversión de voz **es posible** y las piezas existen con licencia limpia.
 Pero **todavía no clona una muestra**, y hasta que lo haga no es la feature que
 se pidió. No se implementa.
+
+
+---
+
+# TERCERA MEDICIÓN: SpeechT5 SÍ clona. El problema era el embedding, confirmado
+
+La sospecha de la corrección anterior queda **confirmada midiendo**, no razonando.
+
+## El experimento decisivo
+
+Se usaron x-vectors del dataset `Matthijs/cmu-arctic-xvectors` (7931 vectores de
+512, calculados con el encoder de speechbrain — o sea, EN DISTRIBUCIÓN para
+SpeechT5). Se convirtió la MISMA frase hacia dos hablantes distintos.
+
+Voz de origen: Kokoro `af_heart` (femenina).
+
+| Medición | Resultado | Qué significa |
+|---|---|---|
+| Similitud entre las DOS salidas | **0,582** | El modelo RESPONDE al embedding: no ignora el hablante |
+| Salida hacia `bdl` (masculino) vs origen | **0,632** | Se alejó de la voz original ✅ |
+| Salida hacia `slt` (femenino) vs origen | **0,889** | Se quedó cerca ✅ — correcto, mismo género |
+| Contenido | **94% y 95%** | Las palabras sobreviven |
+
+Ese patrón es exactamente el de una conversión que funciona: alejarse cuando el
+destino es de otro género y quedarse cerca cuando coincide.
+
+**Con WavLM daba 0,609 al destino y 0,673 al origen — peor que no convertir. Con
+el embedding correcto, funciona.**
+
+## Lo único que falta, y es de plomería
+
+Sacar un x-vector EN ESE ESPACIO desde una grabación cualquiera del usuario.
+Necesita el encoder de speechbrain, y ahí está el bloqueo REAL, que no es de
+modelos sino de dependencias:
+
+| Versión | Qué pasa |
+|---|---|
+| `speechbrain 1.1.0` | Falla al importar `Xvector` por un lazy import roto (`speechbrain.integrations.k2_fsa`) |
+| `speechbrain 1.0.2` | `AttributeError: module 'torchaudio' has no attribute 'list_audio_backends'` — API vieja contra torchaudio 2.11 |
+
+No se forzó ninguna de las dos: bajar torchaudio para acomodar speechbrain
+arriesga el resto de la app, y este repo ya usa torch para otras cosas. El
+entorno se dejó como estaba (speechbrain desinstalado, suite en verde).
+
+## Cómo se cierra
+
+1. **Exportar el encoder de x-vector a ONNX una sola vez** y versionarlo con los
+   otros modelos. Es la opción que encaja con la app: sin dependencia de
+   speechbrain en runtime, y por el mismo camino ONNX que todo lo demás.
+2. Pinear `speechbrain` + `torchaudio` a un par compatible. Más rápido, pero
+   ata la app a versiones viejas de algo que ya usa.
+
+La 1 es la correcta. Es trabajo acotado y conocido, no investigación.
+
+## Estado
+
+- Conversión de voz: **mecanismo verificado y funcionando.**
+- Clonar desde una muestra del usuario: falta el exportador del encoder.
+- No se implementó UI ni job: sin ese paso, la feature no está completa.
