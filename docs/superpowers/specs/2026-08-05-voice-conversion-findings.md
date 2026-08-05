@@ -240,3 +240,56 @@ La 1 es la correcta. Es trabajo acotado y conocido, no investigación.
 - Conversión de voz: **mecanismo verificado y funcionando.**
 - Clonar desde una muestra del usuario: falta el exportador del encoder.
 - No se implementó UI ni job: sin ese paso, la feature no está completa.
+
+
+---
+
+# CUARTA ENTRADA: el encoder ya está exportado a ONNX
+
+`scripts/export_xvector_onnx.py`. Corre en un venv APARTE y deja
+`vendor/xvector/tdnn.onnx` (16,1 MB), que la app puede usar con onnxruntime a
+secas — sin arrastrar speechbrain a producción.
+
+**Diferencia contra el modelo original: 2,4e-4.** El script verifica eso solo y
+se niega a dar por bueno un export que no coincida.
+
+## Lo que NO se pudo exportar, y por qué importa
+
+El pipeline completo (Fbank + TDNN) **no exporta por ninguna de las dos rutas**:
+
+| Exportador | Qué pasa |
+|---|---|
+| Clásico (TorchScript) | Revienta trazando el `Reshape` del STFT de speechbrain |
+| dynamo | Falla al convertir el grafo a ONNX |
+
+El TDNN solo, en cambio, sale limpio. La consecuencia es que **el Fbank hay que
+calcularlo del lado de la app**, con estos parámetros exactos, leídos del modelo
+cargado y no de la documentación:
+
+```
+sample_rate 16000 · n_mels 24 · n_fft 400 · win_length 400 ms · hop_length 160 ms
+```
+
+Y después, normalización **por oración**: restar la media, **sin** dividir por el
+desvío (`norm_type="sentence"`, `std_norm=False`).
+
+Si esos números no se reproducen igual, los embeddings caen fuera del espacio y
+la conversión deja de clonar — que es exactamente el fallo que ya se midió con
+WavLM.
+
+## Los exports de terceros no sirven
+
+Probados el 2026-08-05, los dos Apache 2.0:
+
+| Repo | Qué pasa |
+|---|---|
+| `arneyjfs/spkrec-xvect-voxceleb-onnx` | La sesión de onnxruntime no inicializa |
+| `t-neethesh/spkrec-xvect-voxceleb-onnx` | Carga y corre, devuelve 512 valores, y la conversión sale **NaN con 52 s de audio en vez de 3** |
+
+El segundo es otro caso del mismo patrón: carga, corre, produce algo con la
+forma correcta, y es basura. Por eso se exporta desde el modelo real.
+
+## Estado
+
+- Encoder de x-vector: **exportado y verificado**.
+- Falta: reproducir el Fbank en la app, y recién ahí engine + job + UI.
