@@ -426,10 +426,10 @@ export function VideoPanel() {
     const limitMb = engineQuery.data?.maxVideoUploadMb ?? null;
     if (exceedsUploadLimit(selected.size, limitMb)) {
       setRejectedUpload(
-        t("upload.tooLarge", {
+        `${t("upload.tooLarge", {
           size: formatMegabytes(selected.size),
           limit: `${limitMb} MB`,
-        }),
+        })} ${t("upload.tooLarge.admin")}`,
       );
       setFile(null);
       return;

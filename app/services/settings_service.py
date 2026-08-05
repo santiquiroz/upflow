@@ -11,7 +11,14 @@ from app.services.json_store import write_text_atomically
 
 # Primer campo real de la whitelist. Crece en subproyectos futuros sin tocar
 # el mecanismo (spec 2026-07-25-generation-third-party-models-design.md §5).
-EDITABLE_SETTINGS_WHITELIST = frozenset({"hf_token", "rebar_confirmed", "enable_file_logging"})
+EDITABLE_SETTINGS_WHITELIST = frozenset(
+    {"hf_token", "rebar_confirmed", "enable_file_logging", "max_video_upload_mb"}
+)
+
+# Settings cuyo valor NO es texto. El .env guarda strings, pero la app usa el
+# numero: `"4096" * 1024 * 1024` en Python REPITE el string en vez de
+# multiplicar, y el limite quedaria roto sin que nada falle.
+_POSITIVE_INT_SETTINGS = frozenset({"max_video_upload_mb"})
 
 # Serializa read-modify-write del .env entre requests concurrentes.
 _ENV_WRITE_LOCK = threading.Lock()
@@ -46,7 +53,27 @@ def _env_alias(key: str) -> str:
     return field.alias or key.upper()
 
 
+def _coerce_value(key: str, value: str) -> str | int:
+    return int(value) if key in _POSITIVE_INT_SETTINGS else value
+
+
+def _validate_positive_int(key: str, value: str) -> None:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise SettingValueError(
+            f"Valor inválido para {key}: tiene que ser un número entero."
+        ) from exc
+    if parsed <= 0:
+        raise SettingValueError(
+            f"Valor inválido para {key}: tiene que ser mayor que cero. Un cero o un "
+            "negativo dejaría la app rechazando cualquier archivo."
+        )
+
+
 def _validate_value(key: str, value: str) -> None:
+    if key in _POSITIVE_INT_SETTINGS:
+        _validate_positive_int(key, value)
     if any(ch in value for ch in ("\n", "\r", "\x00")):
         raise SettingValueError(
             f"Valor inválido para {key}: no puede contener saltos de línea ni caracteres de control."
@@ -88,9 +115,10 @@ def update_setting(key: str, value: str) -> None:
         # Los servicios de vida larga (HfClient, installers) guardan la
         # instancia registrada por el lifespan. Se muta directamente sin
         # depender de qué instancia esté cacheada después de updates previos.
+        coerced = _coerce_value(key, value)
         for live in _LIVE_SETTINGS:
-            setattr(live, key, value)
-        setattr(get_settings(), key, value)
+            setattr(live, key, coerced)
+        setattr(get_settings(), key, coerced)
         get_settings.cache_clear()
     # Fuera del lock: el log a archivo se engancha/desengancha en el acto para
     # que un tester pueda encenderlo y reproducir sin reiniciar el servidor.
