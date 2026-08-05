@@ -2,6 +2,7 @@ import { useState } from "react";
 import { ApiError } from "../lib/api";
 import { useCreateUser, useUpdateUser, useUserJobs, useUsers } from "../hooks/useUsers";
 import { useTranslation } from "../i18n/LocaleProvider";
+import { jobKindLabel, type JobKind } from "../lib/jobStatus";
 
 function CreateUserForm() {
   const createUserMutation = useCreateUser();
@@ -77,7 +78,8 @@ function UserJobsPanel({ userId, onClose }: { userId: string; onClose: () => voi
       <ul className="mt-2 flex flex-col gap-1">
         {(data?.jobs ?? []).map((job) => (
           <li key={job.id} className="text-xs text-text">
-            {job.kind} — {job.originalFilename ?? job.id} — {job.status}
+            {jobKindLabel(job.kind as JobKind)} — {job.originalFilename ?? job.id} —{" "}
+            {t(`job.status.${job.status}`)}
           </li>
         ))}
         {data && data.jobs.length === 0 && <li className="text-xs text-text-faint">{t("users.jobs.empty")}</li>}

@@ -5,6 +5,7 @@ import { useDeleteModel, useInstalledModels } from "../../hooks/useModels";
 import type { ModelResponse } from "../../lib/apiTypes";
 import { formatModelSize } from "../../lib/sizeFormat";
 import { DeleteConfirmDialog } from "./DeleteConfirmDialog";
+import { modelKindLabel } from "../../lib/modelKindLabel";
 
 function isBuiltinModel(model: ModelResponse): boolean {
   return model.kind === "builtin-ncnn";
@@ -18,7 +19,7 @@ function isUpscaleOnnxModel(model: ModelResponse): boolean {
 
 function formatModelMeta(model: ModelResponse): string {
   const scale = model.scale ? `${model.scale}x` : "—";
-  return `${scale} · ${model.arch ?? model.kind} · ${formatModelSize(model.sizeBytes)}`;
+  return `${scale} · ${model.arch ?? modelKindLabel(model.kind)} · ${formatModelSize(model.sizeBytes)}`;
 }
 
 function statusTextClassName(status: string): string {
