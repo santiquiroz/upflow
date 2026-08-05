@@ -19,6 +19,14 @@ export interface UseImageJobResult {
   // dibujar un porcentaje inventado seria mentir sobre lo que falta.
   uploadPercent: number | null;
   submit: (params: CreateImageJobParams) => void;
+  /** Un trabajo por archivo, subidos de a uno. La tarjeta sigue al primero —
+   *  es el que termina primero — y el resto se ve en la cola global. */
+  submitMany: (paramsList: CreateImageJobParams[]) => void;
+  /** Cuantos archivos del lote todavia no se subieron. */
+  pendingUploads: number;
+  /** Cuantos del lote no llegaron al servidor. Se cuentan para decirlo: un lote
+   *  al que le faltan tres archivos y no avisa es una falla silenciosa. */
+  failedUploads: number;
   cancel: () => void;
   reset: () => void;
 }
@@ -69,6 +77,8 @@ export function useImageJob(
   const queryClient = useQueryClient();
 
   const [uploadPercent, setUploadPercent] = useState<number | null>(null);
+  const [pendingUploads, setPendingUploads] = useState(0);
+  const [failedUploads, setFailedUploads] = useState(0);
   const uploadMutation = useMutation({
     mutationFn: (params: Parameters<typeof createImageJob>[0]) =>
       createImageJob(params, { onProgress: setUploadPercent }),
@@ -96,6 +106,40 @@ export function useImageJob(
     uploadMutation.mutate(params);
   }
 
+  // De a uno y no todos juntos: en paralelo compiten por el ancho de banda, el
+  // porcentaje de subida deja de significar algo y la cola del servidor
+  // (acotada) responde 429 a los ultimos.
+  async function submitMany(paramsList: CreateImageJobParams[]): Promise<void> {
+    if (paramsList.length === 0) {
+      return;
+    }
+    const [primero, ...resto] = paramsList;
+    setPendingUploads(resto.length);
+    setFailedUploads(0);
+    setJobId(null);
+    pendingFileNameRef.current = primero.file.name;
+    // Se espera al primero antes de arrancar el resto: sin esto los archivos
+    // llegan al servidor en un orden distinto del que eligio el usuario.
+    await uploadMutation.mutateAsync(primero).catch(() => undefined);
+    for (const params of resto) {
+      try {
+        const creado = await createImageJob(params);
+        queue.addTrackedJob({
+          id: creado.jobId,
+          kind: "image",
+          fileName: params.file.name,
+          createdAt: Date.now(),
+        });
+      } catch {
+        // No se corta el lote: que un archivo no entre no es razon para no
+        // intentar los que siguen. Se cuenta y se dice al final.
+        setFailedUploads((fallados) => fallados + 1);
+      } finally {
+        setPendingUploads((quedan) => Math.max(0, quedan - 1));
+      }
+    }
+  }
+
   // Best-effort: a 409 (job already finished) needs no surfaced error since the
   // running poll is the source of truth and reconciles the status on refetch.
   function cancel(): void {
@@ -118,6 +162,9 @@ export function useImageJob(
     job: jobQuery.data,
     errorMessage: resolveErrorMessage(uploadMutation.error, jobQuery.error, jobQuery.data, t),
     submit,
+    submitMany: (paramsList) => void submitMany(paramsList),
+    pendingUploads,
+    failedUploads,
     cancel,
     reset,
   };

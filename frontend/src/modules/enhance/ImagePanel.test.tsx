@@ -129,6 +129,89 @@ afterEach(() => {
   vi.mocked(api.getJob).mockReset();
 });
 
+describe("ImagePanel en lote", () => {
+  async function selectFilesAndModel(nombres: string[]) {
+    const fileInput = document.getElementById("image-file-input") as HTMLInputElement;
+    fireEvent.change(fileInput, {
+      target: {
+        files: nombres.map((n) => new File(["binary"], n, { type: "image/png" })),
+      },
+    });
+    const modelRadio = await screen.findByRole("radio", { name: /RealESRGAN x4plus/ });
+    fireEvent.click(modelRadio);
+  }
+
+  it("creates one job per file instead of only the first", async () => {
+    renderPanel();
+    await selectFilesAndModel(["uno.png", "dos.png", "tres.png"]);
+    fireEvent.click(await screen.findByRole("button", { name: /upscale/i }));
+
+    await waitFor(() =>
+      expect(vi.mocked(api.createImageJob)).toHaveBeenCalledTimes(3),
+    );
+    const enviados = vi
+      .mocked(api.createImageJob)
+      .mock.calls.map((call) => call[0].file.name);
+    expect(enviados).toEqual(["uno.png", "dos.png", "tres.png"]);
+  });
+
+  it("applies the same settings to every file", async () => {
+    renderPanel();
+    await selectFilesAndModel(["uno.png", "dos.png"]);
+    fireEvent.click(await screen.findByRole("button", { name: /upscale/i }));
+
+    await waitFor(() =>
+      expect(vi.mocked(api.createImageJob)).toHaveBeenCalledTimes(2),
+    );
+    const [primero, segundo] = vi
+      .mocked(api.createImageJob)
+      .mock.calls.map((call) => call[0]);
+    expect(segundo.modelId).toBe(primero.modelId);
+    expect(segundo.scale).toBe(primero.scale);
+  });
+
+  it("says how many files are queued up", async () => {
+    renderPanel();
+    await selectFilesAndModel(["uno.png", "dos.png", "tres.png"]);
+
+    expect(screen.getByText("3 files selected")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Upscale 3 files" }),
+    ).toBeInTheDocument();
+  });
+
+  it("says how many of the batch never made it", async () => {
+    // Que el servidor rechace tres de cinco y la pantalla no diga nada es la
+    // misma falla silenciosa que los avisos del trabajo vienen a tapar.
+    vi.mocked(api.createImageJob).mockImplementation(async (params) => {
+      if (params.file.name === "dos.png") {
+        throw new Error("Job queue is full");
+      }
+      return {
+        jobId: `job-${params.file.name}`,
+        status: "queued" as const,
+        statusUrl: `/api/v1/jobs/job-${params.file.name}`,
+        downloadUrl: null,
+      };
+    });
+    renderPanel();
+    await selectFilesAndModel(["uno.png", "dos.png", "tres.png"]);
+    fireEvent.click(await screen.findByRole("button", { name: /upscale/i }));
+
+    expect(await screen.findByText("1 file could not be sent")).toBeInTheDocument();
+  });
+
+  it("still works with a single file", async () => {
+    renderPanel();
+    await selectFilesAndModel(["solo.png"]);
+    fireEvent.click(await screen.findByRole("button", { name: /upscale/i }));
+
+    await waitFor(() =>
+      expect(vi.mocked(api.createImageJob)).toHaveBeenCalledTimes(1),
+    );
+  });
+});
+
 describe("ImagePanel", () => {
   it("keeps the Model section expanded by default while Device and Scale & format start collapsed", async () => {
     renderPanel();
