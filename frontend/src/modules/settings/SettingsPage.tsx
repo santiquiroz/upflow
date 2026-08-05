@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { useTranslation } from "../../i18n/LocaleProvider";
 import { Info } from "lucide-react";
 import { getEngineInfo, getHealth } from "../../lib/api";
 import type { EngineInfoResponse, HealthResponse } from "../../lib/apiTypes";
@@ -22,23 +23,24 @@ function AvailabilityRow({ label, available }: { label: string; available: boole
 }
 
 function EngineSection({ engine }: { engine: EngineInfoResponse }) {
+  const { t } = useTranslation();
   return (
     <div className="flex flex-col gap-3 rounded border border-border bg-surface p-4">
-      <h2 className="font-heading text-xs font-semibold uppercase tracking-wide text-text-dim">Engine</h2>
+      <h2 className="font-heading text-xs font-semibold uppercase tracking-wide text-text-dim">{t("settings.section.engine")}</h2>
       <dl className="flex flex-col gap-2 text-sm">
         <div className="flex items-center justify-between gap-4">
-          <dt className="text-text-dim">Engine</dt>
+          <dt className="text-text-dim">{t("settings.engine.name")}</dt>
           <dd className="text-text">{engine.engine}</dd>
         </div>
         <div className="flex items-center justify-between gap-4">
-          <dt className="text-text-dim">Default model</dt>
+          <dt className="text-text-dim">{t("settings.engine.defaultModel")}</dt>
           <dd className="text-text">{engine.defaultModel}</dd>
         </div>
         <div className="flex items-center justify-between gap-4">
-          <dt className="text-text-dim">Allowed scales</dt>
+          <dt className="text-text-dim">{t("settings.engine.allowedScales")}</dt>
           <dd className="font-mono-tabular text-text">{engine.allowedScales.map((scale) => `${scale}x`).join(", ")}</dd>
         </div>
-        <AvailabilityRow label="Engine binary" available={engine.available} />
+        <AvailabilityRow label={t("settings.engine.binary")} available={engine.available} />
         <AvailabilityRow label="ffmpeg" available={engine.ffmpegAvailable} />
       </dl>
     </div>
@@ -46,20 +48,21 @@ function EngineSection({ engine }: { engine: EngineInfoResponse }) {
 }
 
 function CapacitySection({ health }: { health: HealthResponse }) {
+  const { t } = useTranslation();
   return (
     <div className="flex flex-col gap-3 rounded border border-border bg-surface p-4">
-      <h2 className="font-heading text-xs font-semibold uppercase tracking-wide text-text-dim">Capacity</h2>
+      <h2 className="font-heading text-xs font-semibold uppercase tracking-wide text-text-dim">{t("settings.section.capacity")}</h2>
       <dl className="flex flex-col gap-2 text-sm">
         <div className="flex items-center justify-between gap-4">
-          <dt className="text-text-dim">GPU concurrency</dt>
+          <dt className="text-text-dim">{t("settings.engine.gpuConcurrency")}</dt>
           <dd className="font-mono-tabular text-text">{health.gpuConcurrency}</dd>
         </div>
         <div className="flex items-center justify-between gap-4">
-          <dt className="text-text-dim">Image queue depth</dt>
+          <dt className="text-text-dim">{t("settings.engine.imageQueueDepth")}</dt>
           <dd className="font-mono-tabular text-text">{health.queueDepth}</dd>
         </div>
         <div className="flex items-center justify-between gap-4">
-          <dt className="text-text-dim">Video queue depth</dt>
+          <dt className="text-text-dim">{t("settings.engine.videoQueueDepth")}</dt>
           <dd className="font-mono-tabular text-text">{health.videoQueueDepth}</dd>
         </div>
       </dl>
@@ -83,11 +86,12 @@ function EnvExplanationNote() {
 }
 
 function EngineSectionStatus({ query }: { query: ReturnType<typeof useQuery<EngineInfoResponse>> }) {
+  const { t } = useTranslation();
   if (query.isLoading) {
-    return <p className="text-sm text-text-dim">Loading engine info…</p>;
+    return <p className="text-sm text-text-dim">{t("settings.engine.loading")}</p>;
   }
   if (query.isError) {
-    return <p className="text-sm text-danger">Could not load engine info.</p>;
+    return <p className="text-sm text-danger">{t("settings.engine.loadError")}</p>;
   }
   if (!query.data) {
     return null;
@@ -96,11 +100,12 @@ function EngineSectionStatus({ query }: { query: ReturnType<typeof useQuery<Engi
 }
 
 function CapacitySectionStatus({ query }: { query: ReturnType<typeof useQuery<HealthResponse>> }) {
+  const { t } = useTranslation();
   if (query.isLoading) {
-    return <p className="text-sm text-text-dim">Loading capacity info…</p>;
+    return <p className="text-sm text-text-dim">{t("settings.capacity.loading")}</p>;
   }
   if (query.isError) {
-    return <p className="text-sm text-danger">Could not load capacity info.</p>;
+    return <p className="text-sm text-danger">{t("settings.capacity.loadError")}</p>;
   }
   if (!query.data) {
     return null;
@@ -109,6 +114,7 @@ function CapacitySectionStatus({ query }: { query: ReturnType<typeof useQuery<He
 }
 
 export function SettingsPage() {
+  const { t } = useTranslation();
   const engineQuery = useQuery({ queryKey: ["engine"], queryFn: getEngineInfo });
   const healthQuery = useQuery({ queryKey: ["health"], queryFn: getHealth });
 
@@ -116,7 +122,7 @@ export function SettingsPage() {
     <div className="flex flex-col gap-6">
       <div>
         <h1 className="font-heading text-2xl font-semibold text-text">Settings</h1>
-        <p className="mt-1 text-sm text-text-dim">Current engine, device and capacity configuration.</p>
+        <p className="mt-1 text-sm text-text-dim">{t("settings.page.subtitle")}</p>
       </div>
       <EnvExplanationNote />
       <div className="grid grid-cols-2 gap-4 max-[900px]:grid-cols-1">

@@ -1,9 +1,11 @@
 import { useState, type FormEvent } from "react";
+import { useTranslation } from "../../i18n/LocaleProvider";
 import { useEditableSettings } from "../../hooks/useEditableSettings";
 
 const HF_TOKEN_KEY = "hf_token";
 
 function ConfigurationBadge({ configured }: { configured: boolean }) {
+  const { t } = useTranslation();
   const toneClassName = configured ? "text-ok" : "text-danger";
   return (
     <span className={`flex items-center gap-1.5 text-xs ${toneClassName}`}>
@@ -11,12 +13,13 @@ function ConfigurationBadge({ configured }: { configured: boolean }) {
         aria-hidden="true"
         className={`h-1.5 w-1.5 rounded-full ${configured ? "bg-ok" : "bg-danger"}`}
       />
-      {configured ? "Configured" : "Not configured"}
+      {configured ? "Configured" : t("settings.token.notConfigured")}
     </span>
   );
 }
 
 export function EditableSettingsSection() {
+  const { t } = useTranslation();
   const [token, setToken] = useState("");
   const { settingsQuery, patchMutation } = useEditableSettings();
   const configured = settingsQuery.data?.settings.find((setting) => setting.key === HF_TOKEN_KEY)?.configured ?? false;
@@ -57,7 +60,7 @@ export function EditableSettingsSection() {
             setToken(event.target.value);
             patchMutation.reset();
           }}
-          placeholder="Enter a new token"
+          placeholder={t("settings.token.placeholder")}
           className="w-full rounded border border-border bg-surface px-3 py-2 text-sm text-text placeholder:text-text-faint focus:border-accent focus:outline-none disabled:opacity-60"
         />
         <button
@@ -72,7 +75,7 @@ export function EditableSettingsSection() {
       {patchMutation.isSuccess && <p className="text-xs text-ok">Saved</p>}
       {patchMutation.isError && (
         <p role="alert" className="text-xs text-danger">
-          {patchMutation.error instanceof Error ? patchMutation.error.message : "Could not save the token."}
+          {patchMutation.error instanceof Error ? patchMutation.error.message : t("settings.token.saveError")}
         </p>
       )}
     </div>

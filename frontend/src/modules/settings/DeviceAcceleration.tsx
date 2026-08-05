@@ -59,10 +59,10 @@ export function DeviceAcceleration() {
   });
 
   if (devicesQuery.isLoading) {
-    return <p className="text-sm text-text-dim">Loading device info…</p>;
+    return <p className="text-sm text-text-dim">{t("settings.device.loading")}</p>;
   }
   if (devicesQuery.isError) {
-    return <p className="text-sm text-danger">Could not load device info.</p>;
+    return <p className="text-sm text-danger">{t("settings.device.loadError")}</p>;
   }
 
   const devices = devicesQuery.data?.devices ?? [];

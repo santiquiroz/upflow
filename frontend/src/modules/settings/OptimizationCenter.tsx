@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useTranslation } from "../../i18n/LocaleProvider";
 import { AlertTriangle, Ban, CheckCircle2, Loader2, Lock, type LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useCapabilities } from "../../hooks/useCapabilities";
@@ -17,11 +18,13 @@ const STATUS_ICON: Record<LeverStatus, LucideIcon> = {
   needs_admin: Lock,
 };
 
-const STATUS_LABEL: Record<LeverStatus, string> = {
-  ok: "OK",
-  unavailable: "Unavailable",
-  not_applicable: "Not applicable",
-  needs_admin: "Needs admin",
+// Claves y no texto: este mapa vive a nivel de modulo, donde no hay hook que
+// llamar. La traduccion ocurre al pintar la insignia.
+const STATUS_LABEL_KEY: Record<LeverStatus, string> = {
+  ok: "settings.levers.ok",
+  unavailable: "settings.levers.unavailable",
+  not_applicable: "settings.levers.notApplicable",
+  needs_admin: "settings.levers.needsAdmin",
 };
 
 const STATUS_TEXT_CLASS: Record<LeverStatus, string> = {
@@ -32,11 +35,12 @@ const STATUS_TEXT_CLASS: Record<LeverStatus, string> = {
 };
 
 function LeverStatusBadge({ status }: { status: LeverStatus }) {
+  const { t } = useTranslation();
   const Icon = STATUS_ICON[status];
   return (
     <span className={`flex items-center gap-1.5 text-xs ${STATUS_TEXT_CLASS[status]}`}>
       <Icon aria-hidden="true" className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
-      {STATUS_LABEL[status]}
+      {t(STATUS_LABEL_KEY[status])}
     </span>
   );
 }
@@ -103,15 +107,17 @@ function RescanButton({ onRescan, isRescanning }: { onRescan: () => void; isResc
 }
 
 function LeversEmptyState() {
-  return <p className="text-sm text-text-faint">No capability levers detected on this system.</p>;
+  const { t } = useTranslation();
+  return <p className="text-sm text-text-faint">{t("settings.levers.none")}</p>;
 }
 
 function LeversSectionStatus({ isLoading, isError }: { isLoading: boolean; isError: boolean }) {
+  const { t } = useTranslation();
   if (isLoading) {
-    return <p className="text-sm text-text-dim">Loading capability levers…</p>;
+    return <p className="text-sm text-text-dim">{t("settings.levers.loading")}</p>;
   }
   if (isError) {
-    return <p className="text-sm text-danger">Could not load capability levers.</p>;
+    return <p className="text-sm text-danger">{t("settings.levers.loadError")}</p>;
   }
   return null;
 }
@@ -154,17 +160,24 @@ function LeversSection() {
   );
 }
 
-function diagnosticSummaryLabel(entry: OnnxDiagnosticEntryResponse): string | null {
+// Recibe `t`: es una funcion pura, no un componente.
+function diagnosticSummaryLabel(
+  entry: OnnxDiagnosticEntryResponse,
+  t: (key: string) => string,
+): string | null {
   if (!entry.report) {
     return null;
   }
-  return entry.report.clean ? "No CPU fallback" : `${entry.report.hotOps.length} op(s) on CPU`;
+  return entry.report.clean
+    ? t("settings.levers.noCpuFallback")
+    : `${entry.report.hotOps.length} op(s) on CPU`;
 }
 
 function DiagnosticSummary({ entry }: { entry: OnnxDiagnosticEntryResponse }) {
-  const label = diagnosticSummaryLabel(entry);
+  const { t } = useTranslation();
+  const label = diagnosticSummaryLabel(entry, t);
   if (!label) {
-    return <span className="text-xs text-text-faint">Not scanned yet</span>;
+    return <span className="text-xs text-text-faint">{t("settings.diagnostics.notScanned")}</span>;
   }
   const toneClassName = entry.report?.clean ? "text-ok" : "text-warn";
   return <span className={`text-xs ${toneClassName}`}>{label}</span>;
@@ -199,15 +212,17 @@ function DiagnosticEntryRow({ entry }: { entry: OnnxDiagnosticEntryResponse }) {
 }
 
 function DiagnosticsEmptyState() {
-  return <p className="text-sm text-text-faint">No ONNX model/device combinations have been scanned yet.</p>;
+  const { t } = useTranslation();
+  return <p className="text-sm text-text-faint">{t("settings.diagnostics.none")}</p>;
 }
 
 function DiagnosticsSectionStatus({ isLoading, isError }: { isLoading: boolean; isError: boolean }) {
+  const { t } = useTranslation();
   if (isLoading) {
-    return <p className="text-sm text-text-dim">Loading diagnostics…</p>;
+    return <p className="text-sm text-text-dim">{t("settings.diagnostics.loading")}</p>;
   }
   if (isError) {
-    return <p className="text-sm text-danger">Could not load diagnostics.</p>;
+    return <p className="text-sm text-danger">{t("settings.diagnostics.loadError")}</p>;
   }
   return null;
 }
