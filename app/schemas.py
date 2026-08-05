@@ -88,6 +88,28 @@ class AudioJobResponse(BaseModel):
     download_url: str | None = Field(default=None, serialization_alias="downloadUrl")
 
 
+class SavedPromptResponse(BaseModel):
+    id: str
+    name: str
+    # Dato del usuario, no copia: viaja literal y no lleva clave de traduccion.
+    prompt: str
+    negative_prompt: str = Field(default="", serialization_alias="negativePrompt")
+    mode: str
+
+
+class SavedPromptsResponse(BaseModel):
+    prompts: list[SavedPromptResponse]
+
+
+class CreateSavedPromptRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    prompt: str = Field(min_length=1, max_length=4000)
+    negative_prompt: str = Field(default="", max_length=4000, alias="negativePrompt")
+    mode: str = "text-to-image"
+
+    model_config = {"populate_by_name": True}
+
+
 class TtsCapabilitiesResponse(BaseModel):
     available: bool
     voices: list[str] = Field(default_factory=list)

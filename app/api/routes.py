@@ -63,6 +63,9 @@ from app.schemas import (
     MasteringPresetResponse,
     PromptPresetResponse,
     PromptPresetsResponse,
+    CreateSavedPromptRequest,
+    SavedPromptResponse,
+    SavedPromptsResponse,
     SynthesizeSpeechRequest,
     TtsCapabilitiesResponse,
     RealtimeCapabilitiesResponse,
@@ -154,6 +157,7 @@ from app.services.engines.tts_kokoro import (
 )
 from app.services.phonemize import text_to_phonemes
 from app.services.prompt_presets import PROMPT_PRESETS
+from app.services.saved_prompts import SavedPromptStore
 from app.services.subtitles import SUBTITLE_FORMATS, render_segments
 from app.services.transcribe_job_manager import TranscribeJobManager
 from app.services.stream_analysis import parse_audio_tracks, parse_subtitle_tracks
@@ -2353,6 +2357,75 @@ async def list_prompt_presets() -> PromptPresetsResponse:
             for preset in PROMPT_PRESETS
         ]
     )
+
+
+# --- prompts guardados por el usuario --------------------------------------
+# Son DATO del usuario y no copia de la app: se guardan tal cual y no se
+# traducen. Los presets de fabrica viven en /generation/prompt-presets.
+
+_SAVED_PROMPTS = SavedPromptStore(get_settings())
+
+
+def get_saved_prompts() -> SavedPromptStore:
+    return _SAVED_PROMPTS
+
+
+def _owner_id(request: Request | None) -> str:
+    user = current_user_from_request(request) if request is not None else None
+    # Sin auth encendida sigue habiendo un dueño: la instalacion local.
+    return user.id if user is not None else "local"
+
+
+def _to_response(saved: Any) -> SavedPromptResponse:
+    return SavedPromptResponse(
+        id=saved.id,
+        name=saved.name,
+        prompt=saved.prompt,
+        negative_prompt=saved.negative_prompt,
+        mode=saved.mode,
+    )
+
+
+@router.get("/generation/saved-prompts", response_model=SavedPromptsResponse)
+async def list_saved_prompts(
+    request: Request = None,
+    store: SavedPromptStore = Depends(get_saved_prompts),
+) -> SavedPromptsResponse:
+    return SavedPromptsResponse(
+        prompts=[_to_response(p) for p in store.list_for(_owner_id(request))]
+    )
+
+
+@router.post("/generation/saved-prompts", response_model=SavedPromptResponse, status_code=201)
+async def create_saved_prompt(
+    payload: CreateSavedPromptRequest,
+    request: Request = None,
+    store: SavedPromptStore = Depends(get_saved_prompts),
+) -> SavedPromptResponse:
+    try:
+        saved = store.save(
+            owner_id=_owner_id(request),
+            name=payload.name,
+            prompt=payload.prompt,
+            negative_prompt=payload.negative_prompt,
+            mode=payload.mode,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _to_response(saved)
+
+
+@router.delete("/generation/saved-prompts/{prompt_id}", status_code=204)
+async def delete_saved_prompt(
+    prompt_id: str,
+    request: Request = None,
+    store: SavedPromptStore = Depends(get_saved_prompts),
+) -> Response:
+    if not store.delete(owner_id=_owner_id(request), prompt_id=prompt_id):
+        # 404 y no 403 a proposito: quien no es dueño no tiene por que saber
+        # que ese prompt existe.
+        raise HTTPException(status_code=404, detail="Saved prompt not found")
+    return Response(status_code=204)
 
 
 @router.patch(

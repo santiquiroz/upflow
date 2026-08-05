@@ -12,6 +12,7 @@ import {
 } from "../../hooks/useGenerationJob";
 import { useTranslation } from "../../i18n/LocaleProvider";
 import { PromptPresetChips } from "./PromptPresetChips";
+import { SavedPrompts } from "./SavedPrompts";
 import type {
   DeviceInfoResponse,
   GenerationModelSummary,
@@ -624,6 +625,15 @@ export function GeneratePanel() {
             {!isVideo && <StrengthControl value={strength} onChange={setStrength} />}
           </div>
         )}
+        <SavedPrompts
+          mode={mode}
+          currentPrompt={prompt}
+          currentNegativePrompt={negativePrompt}
+          onApply={(saved) => {
+            setPrompt(saved.prompt);
+            setNegativePrompt(saved.negativePrompt);
+          }}
+        />
         <PromptPresetChips
           mode={mode}
           onApply={(preset) => {
