@@ -293,3 +293,51 @@ forma correcta, y es basura. Por eso se exporta desde el modelo real.
 
 - Encoder de x-vector: **exportado y verificado**.
 - Falta: reproducir el Fbank en la app, y recién ahí engine + job + UI.
+
+
+---
+
+# QUINTA ENTRADA: clonar desde una muestra FUNCIONA
+
+Con el Fbank reproducido en `app/services/xvector.py` y el TDNN exportado, la
+cadena completa anda de punta a punta.
+
+**Prueba:** clonar una muestra de voz masculina sobre una frase dicha con voz
+femenina.
+
+| Medición | Con WavLM (mal) | Con este frontend |
+|---|---|---|
+| Salida vs voz DESTINO | 0,609 | **0,777** |
+| Salida vs voz ORIGEN | 0,673 | **0,446** |
+| Dirección | ❌ al revés | ✅ correcta |
+| Contenido | 95% | 90% |
+
+Pasó de "peor que no convertir" a clonar con margen claro: la salida se parece
+mucho más a la muestra que se le dio que a la voz original.
+
+## Lo que hubo que copiar exacto
+
+```
+sample_rate 16000 · n_mels 24 · n_fft 400 · win 400 · hop 160 · f_max 8000
+magnitud del espectro (NO potencia) · log con epsilon 1e-10
+normalización por oración: restar la media, SIN dividir por el desvío
+```
+
+Cada uno de esos números corre el embedding si se cambia, y el fallo es
+silencioso: sale audio, con la duración correcta, que simplemente no clona.
+
+## Resumen del camino, cinco correcciones después
+
+1. "No hay modelo con licencia limpia" → **falso**, la búsqueda fue mala.
+2. "Convierte" → **incompleto**, medía el espectro y eso no prueba clonación.
+3. "No clona" → **falso**, el embedding estaba fuera de espacio.
+4. Los exports de terceros → **los dos rotos**, uno no carga y el otro da NaN.
+5. El pipeline completo no exporta → se exportó el TDNN y se reprodujo el resto.
+
+Lo que sostuvo todo fue la verificación funcional: comparar la salida contra
+**las dos** voces, la de destino y la de origen. Ninguna métrica sola alcanzaba.
+
+## Estado
+
+- Extracción de x-vector desde una grabación: **funcionando y con tests**.
+- Falta: engine de conversión, job y UI. Ya es implementación, no investigación.
