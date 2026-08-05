@@ -138,6 +138,43 @@ class MeshRepairResponse(BaseModel):
     download_url: str = Field(serialization_alias="downloadUrl")
 
 
+class PartParamResponse(BaseModel):
+    name: str
+    label_key: str = Field(serialization_alias="labelKey")
+    default: float
+    minimum: float
+
+
+class PartKindResponse(BaseModel):
+    id: str
+    label_key: str = Field(serialization_alias="labelKey")
+    description_key: str = Field(serialization_alias="descriptionKey")
+    params: list[PartParamResponse]
+
+
+class PartKindsResponse(BaseModel):
+    kinds: list[PartKindResponse]
+
+
+class GeneratePartRequest(BaseModel):
+    kind: str
+    params: dict[str, float]
+    printer: str = "ender-3"
+
+
+class GeneratedPartResponse(BaseModel):
+    can_print: bool = Field(serialization_alias="canPrint")
+    size_mm: tuple[float, float, float] = Field(serialization_alias="sizeMm")
+    volume_mm3: float | None = Field(default=None, serialization_alias="volumeMm3")
+    triangle_count: int = Field(serialization_alias="triangleCount")
+    overhang_ratio: float = Field(serialization_alias="overhangRatio")
+    blockers: list[str] = Field(default_factory=list)
+    advice: list[str] = Field(default_factory=list)
+    # El archivo se entrega SIEMPRE: si no entra en esa cama, la pieza igual esta
+    # bien hecha y el usuario capaz tiene otra impresora.
+    download_url: str = Field(serialization_alias="downloadUrl")
+
+
 class SavedPromptResponse(BaseModel):
     id: str
     name: str

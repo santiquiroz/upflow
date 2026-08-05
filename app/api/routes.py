@@ -71,7 +71,12 @@ from app.schemas import (
     TranslationPairResponse,
     TranslationPairsResponse,
     TtsCapabilitiesResponse,
+    GeneratePartRequest,
+    GeneratedPartResponse,
     MeshRepairResponse,
+    PartKindResponse,
+    PartKindsResponse,
+    PartParamResponse,
     PrintCheckResponse,
     PrinterResponse,
     PrintersResponse,
@@ -180,6 +185,8 @@ from app.services.saved_prompts import SavedPromptStore
 from app.services.subtitles import SUBTITLE_FORMATS, TranscriptSegment, render_segments
 from app.services.mesh_fit import PRINTER_BEDS
 from app.services.mesh_repair import repair_mesh
+from app.services.parametric_parts import PartError
+from app.services.part_catalog import PART_KINDS, build_part
 from app.services.stl_reader import StlUnreadable, read_stl
 from app.services.stl_writer import write_stl
 from app.services.print_check import PrintCheckUnavailable, check_stl_for_printing
@@ -2710,6 +2717,78 @@ async def download_repaired_mesh(
     return FileResponse(
         path=archivo, filename="pieza-reparada.stl", media_type="model/stl"
     )
+
+
+@router.get("/print/parts", response_model=PartKindsResponse)
+async def list_part_kinds() -> PartKindsResponse:
+    return PartKindsResponse(
+        kinds=[
+            PartKindResponse(
+                id=kind.id,
+                label_key=kind.label_key,
+                description_key=kind.description_key,
+                params=[
+                    PartParamResponse(
+                        name=p.name, label_key=p.label_key, default=p.default, minimum=p.minimum
+                    )
+                    for p in kind.params
+                ],
+            )
+            for kind in PART_KINDS
+        ]
+    )
+
+
+@router.post("/print/parts", response_model=GeneratedPartResponse)
+async def generate_part(
+    payload: GeneratePartRequest,
+    settings_dep: Settings = Depends(get_settings),
+) -> GeneratedPartResponse:
+    """Construye una pieza con cotas EXACTAS y la devuelve ya verificada.
+
+    Lo que sale de aca pasa por el mismo banco que verifica un STL ajeno. Generar
+    y verificar con la misma herramienta no probaria nada; que el verificador sea
+    independiente del generador es lo que hace que la verificacion signifique algo.
+    """
+    try:
+        triangulos = await asyncio.to_thread(build_part, payload.kind, payload.params)
+    except PartError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    token = uuid4().hex
+    destino = settings_dep.outputs_path / f"{token}.part.stl"
+    await asyncio.to_thread(write_stl, destino, triangulos)
+
+    try:
+        reporte = await asyncio.to_thread(
+            check_stl_for_printing, destino, printer=payload.printer
+        )
+    except PrintCheckUnavailable as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return GeneratedPartResponse(
+        can_print=reporte.can_print,
+        size_mm=reporte.size,
+        volume_mm3=reporte.mesh.volume,
+        triangle_count=reporte.mesh.triangle_count,
+        overhang_ratio=reporte.overhang_ratio,
+        blockers=reporte.blockers,
+        advice=reporte.advice,
+        download_url=f"/api/v1/print/parts/{token}",
+    )
+
+
+@router.get("/print/parts/{token}")
+async def download_generated_part(
+    token: str,
+    settings_dep: Settings = Depends(get_settings),
+) -> FileResponse:
+    if not re.fullmatch(r"[0-9a-f]{32}", token):
+        raise HTTPException(status_code=404, detail="Pieza no encontrada")
+    archivo = settings_dep.outputs_path / f"{token}.part.stl"
+    if not archivo.exists():
+        raise HTTPException(status_code=404, detail="Pieza no encontrada")
+    return FileResponse(path=archivo, filename="pieza.stl", media_type="model/stl")
 
 
 @router.patch(
