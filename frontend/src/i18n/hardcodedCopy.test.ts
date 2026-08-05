@@ -83,4 +83,5 @@ describe("la copia de la interfaz vive en el catalogo, no en los componentes", (
 
     expect(offenders).toEqual([]);
   });
+
 });

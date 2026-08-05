@@ -570,10 +570,10 @@ export function VideoPanel() {
           onRemove={handleRemoveVideoStep}
           onAdd={handleAddVideoStep}
         />
-        <AccordionSection title="Model" summary={formatModelSummary(model)} tooltip={t(MODEL_TOOLTIP)}>
+        <AccordionSection title={t("enhance.summary.model")} summary={formatModelSummary(model, t)} tooltip={t(MODEL_TOOLTIP)}>
           <ModelPicker value={model?.id ?? null} onChange={setModel} allowNoAi />
         </AccordionSection>
-        <AccordionSection title="Device" summary={formatDeviceSummary(device)} tooltip={t(DEVICE_TOOLTIP)}>
+        <AccordionSection title={t("enhance.summary.device")} summary={formatDeviceSummary(device, t)} tooltip={t(DEVICE_TOOLTIP)}>
           <DevicePicker value={device?.id ?? null} onChange={setDevice} requiresGpu={requiresGpu} />
         </AccordionSection>
         <AccordionSection title="Runtime" summary={formatRuntimeSummary(backend)} tooltip={t(RUNTIME_TOOLTIP)}>

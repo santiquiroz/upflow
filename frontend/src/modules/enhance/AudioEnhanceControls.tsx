@@ -1,3 +1,4 @@
+import { useTranslation } from "../../i18n/LocaleProvider";
 interface AudioEnhanceControlsProps {
   value: string | null;
   onChange: (mode: string | null) => void;
@@ -28,6 +29,7 @@ function segmentButtonClassName(isActive: boolean, isDisabled: boolean): string 
 }
 
 export function AudioEnhanceControls({ value, onChange, keepAudio }: AudioEnhanceControlsProps) {
+  const { t } = useTranslation();
   const disabled = !keepAudio;
 
   return (
@@ -49,7 +51,7 @@ export function AudioEnhanceControls({ value, onChange, keepAudio }: AudioEnhanc
           </button>
         ))}
       </div>
-      {disabled && <p className="text-xs text-text-faint">Requires "Keep original audio" to be enabled.</p>}
+      {disabled && <p className="text-xs text-text-faint">{t("enhance.audio.requiresKeep")}</p>}
     </fieldset>
   );
 }

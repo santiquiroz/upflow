@@ -1,10 +1,12 @@
 import { useQueryClient } from "@tanstack/react-query";
+import { useTranslation } from "../i18n/LocaleProvider";
 import { LogOut, User } from "lucide-react";
 import { useState } from "react";
 import { useAuth } from "../hooks/useAuth";
 import { logout } from "../services/auth";
 
 export function Header() {
+  const { t } = useTranslation();
   const { me } = useAuth();
   const queryClient = useQueryClient();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -23,7 +25,7 @@ export function Header() {
       <button
         type="button"
         onClick={() => setMenuOpen((open) => !open)}
-        aria-label="User menu"
+        aria-label={t("common.userMenu")}
         className="flex items-center gap-1.5 rounded-sm px-2 py-1 text-xs text-text-dim transition-colors duration-fast hover:text-text"
       >
         <User aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />

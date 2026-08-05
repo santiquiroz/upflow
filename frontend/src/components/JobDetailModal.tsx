@@ -1,4 +1,5 @@
 import { AlertTriangle, Ban, CheckCircle2, Circle, Loader2 } from "lucide-react";
+import { useTranslation } from "../i18n/LocaleProvider";
 import { Fragment, useEffect, useState } from "react";
 import type { JobQueueEntry } from "../hooks/useJobQueue";
 import type { AudioJob, JobStage, VideoJobResponse } from "../lib/apiTypes";
@@ -136,6 +137,7 @@ interface DetailItem {
 }
 
 function JobTypeSummary({ entry, job }: { entry: JobQueueEntry; job: AnyJobResponse | undefined }) {
+  const { t } = useTranslation();
   const items: DetailItem[] = [{ label: "Type", value: jobKindLabel(entry.kind) }];
   if (!job) {
     return <DetailList items={items} />;
@@ -152,7 +154,7 @@ function JobTypeSummary({ entry, job }: { entry: JobQueueEntry; job: AnyJobRespo
   if (isGenerationJob(job)) {
     items.push({ label: "Prompt", value: job.prompt });
     if (job.negativePrompt) {
-      items.push({ label: "Negative prompt", value: job.negativePrompt });
+      items.push({ label: t("job.detail.negativePrompt"), value: job.negativePrompt });
     }
     items.push({ label: "Model", value: job.modelId });
     items.push({ label: "Steps", value: String(job.steps), isNumeric: true });

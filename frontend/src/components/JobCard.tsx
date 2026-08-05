@@ -1,4 +1,5 @@
 import { AlertTriangle, Ban, CheckCircle2, Clock, Download, ImageIcon, Loader2, UploadCloud } from "lucide-react";
+import { useTranslation } from "../i18n/LocaleProvider";
 import type { AudioJob, GenerationJob, JobResponse, VideoJobResponse } from "../lib/apiTypes";
 import { denoiseLabel, restoreLabel } from "../lib/audioLabels";
 import { formatDuration } from "../lib/formatDuration";
@@ -51,10 +52,11 @@ function humanizeStage(stage: string): string {
 }
 
 function IdleState() {
+  const { t } = useTranslation();
   return (
     <div className="flex flex-col items-center gap-2 py-8 text-center">
       <ImageIcon aria-hidden="true" className="h-6 w-6 text-text-faint" strokeWidth={1.5} />
-      <p className="text-sm text-text-faint">Select a file to begin.</p>
+      <p className="text-sm text-text-faint">{t("job.card.selectFile")}</p>
     </div>
   );
 }
@@ -222,6 +224,7 @@ function AudioCompletedDetails({ job }: { job: AudioJob }) {
 }
 
 function GenerationPreview({ job }: { job: GenerationJob }) {
+  const { t } = useTranslation();
   if (!job.downloadUrl) {
     return null;
   }
@@ -232,7 +235,7 @@ function GenerationPreview({ job }: { job: GenerationJob }) {
   if (job.isVideo) {
     return <video src={job.downloadUrl} controls loop muted playsInline className={className} />;
   }
-  return <img src={job.downloadUrl} alt="Generated image" className={className} />;
+  return <img src={job.downloadUrl} alt={t("job.card.generatedImage")} className={className} />;
 }
 
 function GenerationCompletedDetails({ job }: { job: GenerationJob }) {
@@ -296,14 +299,19 @@ function FailedState({ message }: { message: string }) {
   );
 }
 
-function resolveErrorMessage(job: AnyJobResponse | null | undefined, errorMessage?: string | null): string {
+// Recibe `t`: es una funcion pura, no un componente.
+function resolveErrorMessage(
+  job: AnyJobResponse | null | undefined,
+  errorMessage: string | null | undefined,
+  t: (key: string) => string,
+): string {
   if (errorMessage) {
     return errorMessage;
   }
   if (job?.error) {
     return job.error;
   }
-  return "The job failed.";
+  return t("job.failed");
 }
 
 // An upload-level rejection (400/429/500 from POST /jobs) never produces a
@@ -317,6 +325,7 @@ function resolveDisplayPhase(phase: JobCardPhase, errorMessage?: string | null):
 }
 
 export function JobCard({ phase, job, fileName, errorMessage, onCancel }: JobCardProps) {
+  const { t } = useTranslation();
   const displayPhase = resolveDisplayPhase(phase, errorMessage);
 
   return (
@@ -326,7 +335,7 @@ export function JobCard({ phase, job, fileName, errorMessage, onCancel }: JobCar
       {displayPhase === "queued" && <QueuedState job={job} onCancel={onCancel} />}
       {displayPhase === "running" && <RunningState job={job} onCancel={onCancel} />}
       {displayPhase === "completed" && job && <CompletedState job={job} />}
-      {displayPhase === "failed" && <FailedState message={resolveErrorMessage(job, errorMessage)} />}
+      {displayPhase === "failed" && <FailedState message={resolveErrorMessage(job, errorMessage, t)} />}
       {displayPhase === "cancelled" && <CancelledState />}
     </div>
   );

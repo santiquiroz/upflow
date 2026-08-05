@@ -1,4 +1,5 @@
 import { ArrowUpCircle, X } from "lucide-react";
+import { useTranslation } from "../i18n/LocaleProvider";
 import { useState } from "react";
 import { useUpdateCheck } from "../hooks/useUpdateCheck";
 
@@ -25,6 +26,7 @@ function persistDismissedVersion(version: string): void {
 }
 
 export function UpdateBanner() {
+  const { t } = useTranslation();
   const { data } = useUpdateCheck();
   const [dismissedVersion, setDismissedVersion] = useState<string | null>(readDismissedVersion);
 
@@ -45,7 +47,7 @@ export function UpdateBanner() {
   return (
     <div
       role="status"
-      aria-label="Update available"
+      aria-label={t("common.update.available")}
       className="flex items-center gap-3 border-b border-border bg-surface-2 px-4 py-2 text-sm font-body text-text"
     >
       <ArrowUpCircle aria-hidden="true" className="h-4 w-4 shrink-0 text-accent" strokeWidth={1.75} />
@@ -64,7 +66,7 @@ export function UpdateBanner() {
       )}
       <button
         type="button"
-        aria-label="Dismiss update notification"
+        aria-label={t("common.update.dismiss")}
         onClick={dismiss}
         className="flex h-6 w-6 shrink-0 items-center justify-center rounded-sm text-text-faint transition-colors duration-fast hover:text-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
       >

@@ -1,10 +1,16 @@
-const INTERP_ENGINE_LABELS: Record<string, string> = {
-  rife: "RIFE",
-  gmfss: "GMFSS (max quality, very slow)",
+import { useTranslation } from "../../i18n/LocaleProvider";
+// "RIFE" es el nombre del motor y no se traduce; el de GMFSS lleva una
+// aclaracion que si. El mapa vive a nivel de modulo, asi que guarda claves.
+const INTERP_ENGINE_LABEL_KEYS: Record<string, string> = {
+  gmfss: "enhance.interp.gmfss",
 };
 
-export function interpEngineLabel(engine: string): string {
-  return INTERP_ENGINE_LABELS[engine] ?? engine;
+export function interpEngineLabel(engine: string, t: (key: string) => string): string {
+  if (engine === "rife") {
+    return "RIFE";
+  }
+  const key = INTERP_ENGINE_LABEL_KEYS[engine];
+  return key ? t(key) : engine;
 }
 
 interface InterpEngineControlsProps {
@@ -23,6 +29,7 @@ function segmentButtonClassName(isActive: boolean): string {
 }
 
 export function InterpEngineControls({ engines, value, onChange }: InterpEngineControlsProps) {
+  const { t } = useTranslation();
   return (
     <fieldset className="flex flex-col gap-2">
       <legend className="font-heading text-xs font-semibold uppercase tracking-wide text-text-dim">
@@ -37,7 +44,7 @@ export function InterpEngineControls({ engines, value, onChange }: InterpEngineC
             className={segmentButtonClassName(value === engine)}
             onClick={() => onChange(engine)}
           >
-            {interpEngineLabel(engine)}
+            {interpEngineLabel(engine, t)}
           </button>
         ))}
       </div>

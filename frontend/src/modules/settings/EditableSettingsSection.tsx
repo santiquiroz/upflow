@@ -71,7 +71,7 @@ export function EditableSettingsSection() {
           {patchMutation.isPending ? "Saving…" : "Save"}
         </button>
       </form>
-      {settingsQuery.isError && <p className="text-xs text-danger">Could not load credential status.</p>}
+      {settingsQuery.isError && <p className="text-xs text-danger">{t("settings.token.loadError")}</p>}
       {patchMutation.isSuccess && <p className="text-xs text-ok">Saved</p>}
       {patchMutation.isError && (
         <p role="alert" className="text-xs text-danger">

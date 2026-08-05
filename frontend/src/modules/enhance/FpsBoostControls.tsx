@@ -1,3 +1,4 @@
+import { useTranslation } from "../../i18n/LocaleProvider";
 export interface FpsBoostValue {
   fpsMultiplier: number;
   targetFps: string | null;
@@ -45,6 +46,7 @@ function segmentButtonClassName(isActive: boolean, isDisabled: boolean): string 
 }
 
 export function FpsBoostControls({ value, onChange }: FpsBoostControlsProps) {
+  const { t } = useTranslation();
   const multiplierDisabled = isTargetActive(value);
   const targetDisabled = isMultiplierActive(value);
 
@@ -62,7 +64,7 @@ export function FpsBoostControls({ value, onChange }: FpsBoostControlsProps) {
 
   return (
     <fieldset className="flex flex-col gap-3">
-      <legend className="font-heading text-xs font-semibold uppercase tracking-wide text-text-dim">FPS boost</legend>
+      <legend className="font-heading text-xs font-semibold uppercase tracking-wide text-text-dim">{t("enhance.fpsBoost.title")}</legend>
       <div role="group" aria-label="FPS multiplier" className="flex flex-wrap gap-2">
         <button
           type="button"

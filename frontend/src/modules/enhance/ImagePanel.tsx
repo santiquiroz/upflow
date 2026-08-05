@@ -158,10 +158,10 @@ export function ImagePanel() {
     <div className="grid grid-cols-[1fr_320px] gap-6 max-[900px]:grid-cols-1">
       <div className="flex flex-col gap-6">
         <Dropzone file={file} onFileSelected={handleFileSelected} />
-        <AccordionSection title="Model" summary={formatModelSummary(model)} tooltip={t(MODEL_TOOLTIP)} defaultOpen>
+        <AccordionSection title={t("enhance.summary.model")} summary={formatModelSummary(model, t)} tooltip={t(MODEL_TOOLTIP)} defaultOpen>
           <ModelPicker value={model?.id ?? null} onChange={setModel} />
         </AccordionSection>
-        <AccordionSection title="Device" summary={formatDeviceSummary(device)} tooltip={t(DEVICE_TOOLTIP)}>
+        <AccordionSection title={t("enhance.summary.device")} summary={formatDeviceSummary(device, t)} tooltip={t(DEVICE_TOOLTIP)}>
           <DevicePicker value={device?.id ?? null} onChange={setDevice} requiresGpu={requiresGpu} />
         </AccordionSection>
         <AccordionSection

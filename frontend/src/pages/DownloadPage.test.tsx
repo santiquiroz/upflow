@@ -261,7 +261,7 @@ describe("DownloadPage — formato y calidad de salida", () => {
     fireEvent.click(screen.getByRole("button", { name: /Solo audio/i }));
 
     expect(screen.getByRole("radio", { name: /MP3/i })).toBeChecked();
-    expect(screen.getByRole("radio", { name: /Mejor \(VBR\)/i })).toBeChecked();
+    expect(screen.getByRole("radio", { name: /Best \(VBR\)/i })).toBeChecked();
   });
 
   it("un formato sin pérdida esconde la calidad", () => {

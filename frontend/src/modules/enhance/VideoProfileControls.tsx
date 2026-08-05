@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { useTranslation } from "../../i18n/LocaleProvider";
 import { getEngineInfo } from "../../lib/api";
 import type { VideoProfileResponse } from "../../lib/apiTypes";
 
@@ -66,14 +67,15 @@ function ProfileOption({
 }
 
 export function VideoProfileControls({ value, onChange }: VideoProfileControlsProps) {
+  const { t } = useTranslation();
   const engineQuery = useQuery({ queryKey: ["engine"], queryFn: getEngineInfo });
 
   if (engineQuery.isLoading) {
-    return <p className="text-sm text-text-dim">Loading video profiles…</p>;
+    return <p className="text-sm text-text-dim">{t("enhance.profile.loading")}</p>;
   }
 
   if (engineQuery.isError) {
-    return <p className="text-sm text-danger">Could not load video profiles.</p>;
+    return <p className="text-sm text-danger">{t("enhance.profile.loadError")}</p>;
   }
 
   const groups = groupProfiles(engineQuery.data?.videoProfiles ?? []);

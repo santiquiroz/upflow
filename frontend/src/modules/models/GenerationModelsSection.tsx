@@ -119,6 +119,7 @@ function DeleteFailedNote({ error }: { error: unknown }) {
 }
 
 export function GenerationModelsSection({ pollIntervalMs = DEFAULT_INSTALL_POLL_INTERVAL_MS }: GenerationModelsSectionProps) {
+  const { t } = useTranslation();
   const [repoId, setRepoId] = useState("");
   const [pendingDelete, setPendingDelete] = useState<ModelResponse | null>(null);
   const { phase, progressPct, stageLabel, errorMessage, install, reset } =
@@ -146,7 +147,7 @@ export function GenerationModelsSection({ pollIntervalMs = DEFAULT_INSTALL_POLL_
 
   return (
     <div className="flex flex-col gap-4 rounded border border-border bg-surface p-4">
-      <h2 className="font-heading text-sm font-semibold text-text">Generation models (Stable Diffusion)</h2>
+      <h2 className="font-heading text-sm font-semibold text-text">{t("models.generation.sectionTitle")}</h2>
       <GenerationHfSearch />
       <RepoIdForm repoId={repoId} onRepoIdChange={setRepoId} onSubmit={handleSubmit} disabled={installInFlight} />
       {installInFlight && (

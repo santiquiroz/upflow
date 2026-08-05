@@ -69,9 +69,10 @@ function resolveUpscaleModelId(model: ModelResponse | null): string | null {
 }
 
 function UnavailableBanner({ reason }: { reason: string | null }) {
+  const { t } = useTranslation();
   return (
     <div role="alert" className="rounded border border-border bg-surface p-4 text-sm text-text-dim">
-      {reason ?? "Generation is not available on this machine."}
+      {reason ?? t("generate.unavailable")}
     </div>
   );
 }

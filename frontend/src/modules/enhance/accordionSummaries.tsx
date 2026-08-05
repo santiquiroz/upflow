@@ -1,11 +1,12 @@
 import type { DeviceInfoResponse, ModelResponse } from "../../lib/apiTypes";
 
-export const SELECT_MODEL_PLACEHOLDER = "Select a model…";
-export const SELECT_DEVICE_PLACEHOLDER = "Select a device…";
+// Funciones puras: reciben `t` en vez de llamar al hook.
+export const SELECT_MODEL_PLACEHOLDER_KEY = "enhance.summary.selectModel";
+export const SELECT_DEVICE_PLACEHOLDER_KEY = "enhance.summary.selectDevice";
 
-export function formatModelSummary(model: ModelResponse | null) {
+export function formatModelSummary(model: ModelResponse | null, t: (key: string) => string) {
   if (!model) {
-    return SELECT_MODEL_PLACEHOLDER;
+    return t(SELECT_MODEL_PLACEHOLDER_KEY);
   }
   if (!model.scale) {
     return model.name;
@@ -17,6 +18,6 @@ export function formatModelSummary(model: ModelResponse | null) {
   );
 }
 
-export function formatDeviceSummary(device: DeviceInfoResponse | null) {
-  return device ? device.name : SELECT_DEVICE_PLACEHOLDER;
+export function formatDeviceSummary(device: DeviceInfoResponse | null, t: (key: string) => string) {
+  return device ? device.name : t(SELECT_DEVICE_PLACEHOLDER_KEY);
 }

@@ -1,6 +1,10 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { en } from "../../i18n/en";
 import { InterpEngineControls, interpEngineLabel } from "./InterpEngineControls";
+
+// El catalogo real: si la clave desaparece, el test lo nota.
+const t = (key: string) => en[key as keyof typeof en] ?? key;
 
 describe("InterpEngineControls", () => {
   it("renders one button per available engine", () => {
@@ -45,15 +49,15 @@ describe("InterpEngineControls", () => {
 
 describe("interpEngineLabel", () => {
   it("returns a plain label for rife", () => {
-    expect(interpEngineLabel("rife")).toBe("RIFE");
+    expect(interpEngineLabel("rife", t)).toBe("RIFE");
   });
 
   it("returns a very-slow-qualified label for gmfss", () => {
-    expect(interpEngineLabel("gmfss")).toMatch(/GMFSS/);
-    expect(interpEngineLabel("gmfss")).toMatch(/very slow/i);
+    expect(interpEngineLabel("gmfss", t)).toMatch(/GMFSS/);
+    expect(interpEngineLabel("gmfss", t)).toMatch(/very slow/i);
   });
 
   it("falls back to the raw engine id for an unknown engine", () => {
-    expect(interpEngineLabel("mystery")).toBe("mystery");
+    expect(interpEngineLabel("mystery", t)).toBe("mystery");
   });
 });

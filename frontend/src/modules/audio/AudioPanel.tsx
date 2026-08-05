@@ -37,8 +37,7 @@ const DENOISE_TOOLTIP =
 const RESTORE_TOOLTIP =
   "Reconstruct high frequencies lost to lossy compression (MP3/AAC). Apollo is fast band-restore; AudioSR is diffusion super-resolution — much higher quality ceiling but far slower (minutes per minute of audio on GPU). Experimental — quality varies by source.";
 const DEVICE_TOOLTIP = "Pick the compute device that runs the restoration model (CPU or a DirectML GPU).";
-const VOICE_TOOLTIP =
-  "Shape the voice itself: remove noise, even out the volume, focus the dialogue, tame sibilance and match the loudness the destination platform expects. The steps run in a fixed order because each one works better on what the previous one left.";
+const VOICE_TOOLTIP = "audio.voice.tooltip";
 
 interface ModeOption {
   value: string | null;
@@ -279,7 +278,7 @@ export function AudioPanel() {
           summary={t(voiceSummaryKey(voice.enabledIds.length), {
             count: voice.enabledIds.length,
           })}
-          tooltip={VOICE_TOOLTIP}
+          tooltip={t(VOICE_TOOLTIP)}
         >
           <VoiceChainPanel
             catalog={voiceCatalogQuery.data}
@@ -290,7 +289,7 @@ export function AudioPanel() {
         </AccordionSection>
         <AccordionSection
           title={t("audio.section.device")}
-          summary={formatDeviceSummary(device)}
+          summary={formatDeviceSummary(device, t)}
           tooltip={DEVICE_TOOLTIP}
         >
           <DevicePicker value={device?.id ?? null} onChange={setDevice} requiresGpu={false} allowAuto={false} />

@@ -263,7 +263,7 @@ export function DownloadPage() {
 
           {audioOnly && bitrateSelectable(audioFormat) && (
             <fieldset className="flex flex-col gap-2">
-              <legend className="text-xs font-medium text-text-dim">Calidad de audio</legend>
+              <legend className="text-xs font-medium text-text-dim">{t("download.audioQuality")}</legend>
               <div className="flex flex-wrap gap-2">
                 {AUDIO_BITRATE_OPTIONS.map((bitrate) => (
                   <label
@@ -282,7 +282,7 @@ export function DownloadPage() {
                       onChange={() => setAudioBitrate(bitrate)}
                     />
                     <span className="font-mono-tabular">
-                      {bitrate === null ? "Mejor (VBR)" : `${bitrate} kbps`}
+                      {bitrate === null ? t("download.audioQuality.best") : `${bitrate} kbps`}
                     </span>
                   </label>
                 ))}

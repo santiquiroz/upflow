@@ -1,4 +1,5 @@
 import type { AudioTrackInfo, SubtitleTrackInfo } from "../../lib/apiTypes";
+import { useTranslation } from "../../i18n/LocaleProvider";
 
 interface TrackSelectorProps {
   audioTracks: AudioTrackInfo[];
@@ -75,6 +76,7 @@ export function TrackSelector({
   keepSubtitles,
   onChangeKeepSubtitles,
 }: TrackSelectorProps) {
+  const { t } = useTranslation();
   function handleToggleAudio(index: number) {
     onChangeAudioIndices(toggleTrackIndex(selectedAudioIndices, index));
   }
@@ -102,7 +104,7 @@ export function TrackSelector({
             type="checkbox"
             checked={keepSubtitles}
             onChange={(event) => onChangeKeepSubtitles(event.target.checked)}
-            aria-label="Keep embedded subtitles"
+            aria-label={t("enhance.subtitles.keep")}
             className="h-3.5 w-3.5 accent-accent"
           />
           Keep embedded subtitles ({subtitleTracks.length})
