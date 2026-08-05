@@ -648,6 +648,9 @@ class GenerationJobResponse(BaseModel):
     error: str | None = None
     owner_id: str | None = Field(default=None, serialization_alias="ownerId")
     download_url: str | None = Field(default=None, serialization_alias="downloadUrl")
+    # El job termina COMPLETO aunque el agrandado falle: la imagen generada sirve
+    # igual. Sin este campo el usuario recibe una imagen mas chica sin enterarse.
+    upscale_error: str | None = Field(default=None, serialization_alias="upscaleError")
     # La URL de descarga no lleva extensión: sin esto la UI no sabe si el
     # resultado es una imagen o un clip que hay que reproducir.
     is_video: bool = Field(default=False, serialization_alias="isVideo")

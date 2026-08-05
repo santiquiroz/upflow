@@ -474,6 +474,7 @@ def generation_job_to_response(job: GenerationJob) -> GenerationJobResponse:
         created_at=job.created_at, started_at=job.started_at, finished_at=job.finished_at,
         progress_pct=_progress_pct_from_metadata(job.metadata), stages=job.metadata.get("stages"),
         error=job.error, download_url=download_url, owner_id=job.owner_id,
+        upscale_error=job.metadata.get("upscaleError"),
         # La URL de descarga no lleva extensión, así que sin esta bandera la UI
         # no puede saber si pintar una imagen o un reproductor.
         is_video=job.model_id.startswith(VIDEO_MODEL_PREFIX),

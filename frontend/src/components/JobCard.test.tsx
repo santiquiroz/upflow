@@ -135,6 +135,59 @@ describe("JobCard", () => {
     expect(screen.getByText(/processing/i)).toBeInTheDocument();
   });
 
+  it("warns that the image could not be enlarged instead of shipping it silently", () => {
+    // El job termina COMPLETO: la imagen sirve, pero salio del tamaño generado
+    // y no del pedido. Callarlo es entregar otra cosa sin avisar.
+    const job: GenerationJob = {
+      ...BASE_GENERATION_JOB,
+      status: "completed",
+      downloadUrl: "/api/v1/generation/jobs/gen-1/download",
+      upscaleError: "no installed upscale model",
+    };
+    render(<JobCard phase="completed" job={job} />);
+
+    expect(screen.getByRole("status")).toHaveTextContent(/could not be enlarged/i);
+    expect(screen.getByText(/no installed upscale model/i)).toBeInTheDocument();
+  });
+
+  it("says nothing when the generation had no trouble", () => {
+    const job: GenerationJob = {
+      ...BASE_GENERATION_JOB,
+      status: "completed",
+      downloadUrl: "/api/v1/generation/jobs/gen-1/download",
+    };
+    render(<JobCard phase="completed" job={job} />);
+
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("says when the GPU encoder failed and the CPU finished the job", () => {
+    const job: VideoJobResponse = {
+      ...BASE_VIDEO_JOB,
+      status: "completed",
+      downloadUrl: "/api/v1/video/jobs/vid-1/download",
+      metadata: { videoEncoderFallback: "h264_amf" },
+    };
+    render(<JobCard phase="completed" job={job} />);
+
+    expect(screen.getByRole("status")).toHaveTextContent(/h264_amf/);
+  });
+
+  it("says when the container had to be changed", () => {
+    const job: VideoJobResponse = {
+      ...BASE_VIDEO_JOB,
+      status: "completed",
+      downloadUrl: "/api/v1/video/jobs/vid-1/download",
+      metadata: { containerUpgradedReason: "mp4 cannot hold this subtitle track" },
+    };
+    render(<JobCard phase="completed" job={job} />);
+
+    expect(screen.getByRole("status")).toHaveTextContent(/container/i);
+    expect(
+      screen.getByText(/mp4 cannot hold this subtitle track/i),
+    ).toBeInTheDocument();
+  });
+
   it("shows a preview and a download link when completed", () => {
     const job: JobResponse = { ...BASE_JOB, status: "completed", downloadUrl: "/api/v1/jobs/job-1/download" };
     render(<JobCard phase="completed" job={job} />);

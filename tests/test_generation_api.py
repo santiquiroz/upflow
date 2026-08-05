@@ -136,6 +136,24 @@ def test_generation_job_to_response_maps_fields() -> None:
     assert response.download_url is None
 
 
+def test_a_failed_upscale_travels_to_the_client() -> None:
+    """El job termina COMPLETO con la imagen sin agrandar: si el aviso no sale
+    del backend, el usuario recibe una imagen mas chica y nadie se lo dice."""
+    job = make_generation_job()
+    job.status = JobStatus.completed
+    job.metadata["upscaleError"] = "no hay modelo de escalado instalado"
+
+    response = generation_job_to_response(job)
+
+    assert response.upscale_error == "no hay modelo de escalado instalado"
+
+
+def test_a_job_without_upscale_trouble_carries_no_warning() -> None:
+    response = generation_job_to_response(make_generation_job())
+
+    assert response.upscale_error is None
+
+
 def test_generation_job_to_response_sets_download_url_only_when_completed() -> None:
     job = make_generation_job()
     job.status = JobStatus.completed

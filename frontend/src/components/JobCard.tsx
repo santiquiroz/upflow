@@ -342,6 +342,55 @@ function resolveDisplayPhase(phase: JobCardPhase, errorMessage?: string | null):
   return phase;
 }
 
+// Decisiones que el backend tomo SOLO y que cambian lo que el usuario recibe.
+// Quedaban anotadas en la metadata y no salian a ningun lado: el trabajo
+// terminaba "bien" con un resultado distinto del pedido.
+const SILENT_DECISIONS: { key: string; labelKey: string }[] = [
+  { key: "videoEncoderFallback", labelKey: "job.notice.encoderFallback" },
+  { key: "containerUpgradedReason", labelKey: "job.notice.containerUpgraded" },
+  { key: "streamPipelineFallback", labelKey: "job.notice.slowerPipeline" },
+  { key: "rawPipeFallback", labelKey: "job.notice.slowerPipeline" },
+  { key: "masteringSkipped", labelKey: "job.notice.masteringSkipped" },
+];
+
+function readNotices(job: AnyJobResponse): { labelKey: string; detail: string }[] {
+  const avisos: { labelKey: string; detail: string }[] = [];
+  const upscaleError = isGenerationJob(job) ? job.upscaleError : null;
+  if (typeof upscaleError === "string" && upscaleError) {
+    avisos.push({ labelKey: "job.notice.upscaleFailed", detail: upscaleError });
+  }
+  const metadata = "metadata" in job ? job.metadata : undefined;
+  if (metadata) {
+    for (const { key, labelKey } of SILENT_DECISIONS) {
+      const valor = metadata[key];
+      if (typeof valor === "string" && valor) {
+        avisos.push({ labelKey, detail: valor });
+      }
+    }
+  }
+  return avisos;
+}
+
+function JobNotices({ job }: { job: AnyJobResponse }) {
+  const { t } = useTranslation();
+  const avisos = readNotices(job);
+  if (avisos.length === 0) {
+    return null;
+  }
+  return (
+    <div role="status" className="flex flex-col gap-1 rounded border border-warn bg-surface-2 p-2">
+      {avisos.map(({ labelKey, detail }) => (
+        <div key={`${labelKey}-${detail}`} className="flex flex-col">
+          <span className="text-sm text-text">{t(labelKey)}</span>
+          {/* El detalle viene tal cual de ffmpeg o del motor: es diagnostico,
+              no copia, y traducirlo lo volveria irrastreable. */}
+          <span className="text-xs text-text-dim">{detail}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function JobCard({
   phase,
   job,
@@ -359,7 +408,12 @@ export function JobCard({
       {displayPhase === "uploading" && <UploadingState fileName={fileName} percent={uploadPercent} />}
       {displayPhase === "queued" && <QueuedState job={job} onCancel={onCancel} />}
       {displayPhase === "running" && <RunningState job={job} onCancel={onCancel} />}
-      {displayPhase === "completed" && job && <CompletedState job={job} />}
+      {displayPhase === "completed" && job && (
+        <div className="flex flex-col gap-3">
+          <CompletedState job={job} />
+          <JobNotices job={job} />
+        </div>
+      )}
       {displayPhase === "failed" && <FailedState message={resolveErrorMessage(job, errorMessage, t)} />}
       {displayPhase === "cancelled" && <CancelledState />}
     </div>

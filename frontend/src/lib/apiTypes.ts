@@ -515,6 +515,9 @@ export interface GenerationJob {
   downloadUrl: string | null;
   /** La URL de descarga no lleva extension: esto decide imagen vs reproductor. */
   isVideo?: boolean;
+  /** El job termina COMPLETO aunque el agrandado falle: la imagen generada
+   *  sirve igual, pero salio del tamaño generado y no del pedido. */
+  upscaleError?: string | null;
 }
 
 export interface GenerationModelSummary {
