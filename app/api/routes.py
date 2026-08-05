@@ -1249,6 +1249,11 @@ def transcribe_job_to_response(job: TranscribeJob) -> TranscribeJobResponse:
             if job.status == JobStatus.completed and job.output_path
             else None
         ),
+        video_url=(
+            f"/api/v1/transcribe/jobs/{job.id}/download?fmt=video"
+            if job.subtitled_video_path is not None
+            else None
+        ),
     )
 
 
@@ -1262,6 +1267,7 @@ async def create_transcribe_job(
     model_id: str = Form(...),
     language: str | None = Form(default=None),
     device: str | None = Form(default=None),
+    output_mode: str = Form(default="text"),
     transcribe_jobs: TranscribeJobManager = Depends(get_transcribe_job_manager),
     storage: StorageService = Depends(get_storage),
     settings: Settings = Depends(get_settings),
@@ -1285,6 +1291,7 @@ async def create_transcribe_job(
             device=device if isinstance(device, str) and device else None,
             job_id=token,
             owner=current_user,
+            output_mode=output_mode if isinstance(output_mode, str) and output_mode else "text",
         )
     except QueueFullError as exc:
         raise HTTPException(status_code=429, detail=str(exc)) from exc
@@ -1389,6 +1396,18 @@ async def download_transcribe_job(
         raise HTTPException(status_code=409, detail="Transcribe job is not completed yet")
     if translate_to and fmt == "txt" and not job.segments:
         raise HTTPException(status_code=409, detail="This job has no segments to translate")
+    if fmt == "video":
+        # El video con subtitulos no se rinde al vuelo: lo dejo ffmpeg al
+        # terminar el job, y solo si se pidio ese modo de salida.
+        if job.subtitled_video_path is None or not job.subtitled_video_path.exists():
+            raise HTTPException(
+                status_code=409, detail="This job has no subtitled video"
+            )
+        return FileResponse(
+            path=job.subtitled_video_path,
+            filename=Path(job.original_filename).name,
+            media_type="video/mp4",
+        )
     if fmt not in SUBTITLE_FORMATS:
         raise HTTPException(status_code=400, detail=f"Unknown subtitle format: {fmt}")
     spec = SUBTITLE_FORMATS[fmt]

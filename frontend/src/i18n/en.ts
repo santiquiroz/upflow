@@ -714,6 +714,13 @@ export const en = {
   "transcribe.result.copied": "Copied",
   "transcribe.result.copyFailed": "Could not copy the text.",
   "transcribe.result.download": "Download .txt",
+  "transcribe.result.downloadSubtitles": "Download .srt",
+  "transcribe.result.downloadVideo": "Download video with subtitles",
+  "transcribe.output.label": "Output",
+  "transcribe.output.text": "Transcript only",
+  "transcribe.output.video": "Video with a subtitle track",
+  "transcribe.output.videoBurned": "Video with the subtitles burned in",
+  "transcribe.output.hint": "Burning re-encodes the whole video: slower, but it shows anywhere.",
   "transcribe.models.loadingInstalled":
     "Loading installed speech recognition models…",
   "transcribe.models.loadInstalledFailed":

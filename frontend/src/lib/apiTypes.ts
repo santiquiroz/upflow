@@ -655,6 +655,8 @@ export interface TranscribeJob {
   error: string | null;
   ownerId: string | null;
   downloadUrl: string | null;
+  // Solo cuando el job pidio el video con subtitulos y ffmpeg ya lo dejo listo.
+  videoUrl?: string | null;
 }
 
 export type AsrInstallStatus = "queued" | "downloading" | "installed" | "error";

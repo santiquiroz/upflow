@@ -709,6 +709,13 @@ export const es = {
   "transcribe.result.copied": "Copiado",
   "transcribe.result.copyFailed": "No se pudo copiar el texto.",
   "transcribe.result.download": "Descargar .txt",
+  "transcribe.result.downloadSubtitles": "Descargar .srt",
+  "transcribe.result.downloadVideo": "Descargar video con subtítulos",
+  "transcribe.output.label": "Salida",
+  "transcribe.output.text": "Solo la transcripción",
+  "transcribe.output.video": "Video con pista de subtítulos",
+  "transcribe.output.videoBurned": "Video con los subtítulos quemados",
+  "transcribe.output.hint": "Quemar re-encodea el video entero: más lento, pero se ve en cualquier lado.",
   "transcribe.models.loadingInstalled":
     "Cargando modelos de reconocimiento de voz instalados…",
   "transcribe.models.loadInstalledFailed":

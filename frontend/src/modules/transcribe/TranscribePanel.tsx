@@ -24,7 +24,10 @@ import {
 } from "../../hooks/useTranscribeJob";
 import { useTranslation } from "../../i18n/LocaleProvider";
 import type { TranscribeJob } from "../../lib/apiTypes";
-import type { CreateTranscribeJobParams } from "../../services/transcribe";
+import type {
+  CreateTranscribeJobParams,
+  TranscribeOutputMode,
+} from "../../services/transcribe";
 import { AsrModelSearch } from "./AsrModelSearch";
 
 interface TranscribePanelProps {
@@ -91,6 +94,18 @@ function AudioDropzone({
       />
     </label>
   );
+}
+
+// Un contenedor de video es lo unico a lo que se le pueden pegar subtitulos.
+// La lista es de contenedores, no de codecs: es lo que se ve en el nombre.
+const VIDEO_EXTENSIONS = [".mp4", ".mkv", ".mov", ".webm", ".avi", ".m4v", ".mpg", ".mpeg", ".wmv", ".ts"];
+
+function hasPicture(file: File | null): boolean {
+  if (file === null) {
+    return false;
+  }
+  const nombre = file.name.toLowerCase();
+  return VIDEO_EXTENSIONS.some((extension) => nombre.endsWith(extension));
 }
 
 function phaseLabelKey(phase: TranscribeJobPhase): string {
@@ -251,6 +266,26 @@ function TranscriptionResult({
             </button>
             {job.downloadUrl && (
               <a
+                href={`/api/v1/transcribe/jobs/${job.id}/download?fmt=srt`}
+                download
+                className="inline-flex items-center gap-2 rounded border border-border bg-surface px-3 py-1.5 text-sm text-text hover:border-text-faint focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+              >
+                <Download aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />
+                {t("transcribe.result.downloadSubtitles")}
+              </a>
+            )}
+            {job.videoUrl && (
+              <a
+                href={job.videoUrl}
+                download
+                className="inline-flex items-center gap-2 rounded border border-border bg-surface px-3 py-1.5 text-sm text-text hover:border-text-faint focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+              >
+                <Download aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />
+                {t("transcribe.result.downloadVideo")}
+              </a>
+            )}
+            {job.downloadUrl && (
+              <a
                 href={job.downloadUrl}
                 download
                 className="inline-flex items-center gap-2 rounded bg-accent px-3 py-1.5 text-sm font-medium text-bg hover:bg-accent-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
@@ -284,6 +319,7 @@ export function TranscribePanel({
   const [file, setFile] = useState<File | null>(null);
   const [modelId, setModelId] = useState("");
   const [language, setLanguage] = useState("");
+  const [outputMode, setOutputMode] = useState<TranscribeOutputMode>("text");
   const [deviceId, setDeviceId] = useState("cpu");
   const modelsQuery = useInstalledAsrModels();
   const devicesQuery = useTranscribeDevices();
@@ -321,6 +357,11 @@ export function TranscribePanel({
     }
     if (selectedDeviceId) {
       params.device = selectedDeviceId;
+    }
+    // Un audio no tiene imagen: pedir video ahi seria mandar al backend a
+    // fallar por algo que la pantalla ya sabe.
+    if (outputMode !== "text" && hasPicture(file)) {
+      params.outputMode = outputMode;
     }
     submit(params);
   }
@@ -401,6 +442,32 @@ export function TranscribePanel({
                   ))}
                 </select>
               </label>
+
+              {hasPicture(file) && (
+                <label className="flex flex-col gap-2">
+                  <span className="font-heading text-xs font-semibold uppercase tracking-wide text-text-dim">
+                    {t("transcribe.output.label")}
+                  </span>
+                  <select
+                    value={outputMode}
+                    onChange={(event) =>
+                      setOutputMode(event.target.value as TranscribeOutputMode)
+                    }
+                    className="rounded border border-border bg-surface px-3 py-2 text-sm text-text focus:border-accent focus:outline-none"
+                  >
+                    <option value="text">{t("transcribe.output.text")}</option>
+                    <option value="video">{t("transcribe.output.video")}</option>
+                    <option value="video_burned">
+                      {t("transcribe.output.videoBurned")}
+                    </option>
+                  </select>
+                  {outputMode === "video_burned" && (
+                    <span className="text-xs text-text-faint">
+                      {t("transcribe.output.hint")}
+                    </span>
+                  )}
+                </label>
+              )}
 
               <label className="flex flex-col gap-2">
                 <span className="font-heading text-xs font-semibold uppercase tracking-wide text-text-dim">

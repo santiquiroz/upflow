@@ -422,6 +422,39 @@ async def test_a_video_output_mode_muxes_before_the_source_is_deleted(tmp_path: 
 
 
 @pytest.mark.asyncio
+async def test_the_burned_mode_repaints_the_picture_instead_of_muxing(tmp_path: Path, monkeypatch):
+    """Quemar y muxear no son lo mismo: el muxeo copia el video y suma una pista,
+    quemar lo re-encodea con el texto pintado. Pedir uno no puede correr el otro."""
+    manager, settings, _r = make_manager(tmp_path)
+    llamados: list[str] = []
+
+    async def fake_mux(job):
+        llamados.append("mux")
+        return settings.outputs_path / "no.mp4"
+
+    async def fake_burn(job):
+        llamados.append("burn")
+        destination = settings.outputs_path / f"{job.id}.subtitled.mp4"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"video con subs quemados")
+        return destination
+
+    monkeypatch.setattr(manager, "_mux_subtitles_into_video", fake_mux)
+    monkeypatch.setattr(manager, "_burn_subtitles_into_video", fake_burn)
+    job = await manager.create_job(
+        source_path=make_audio(settings, "clip.mp4"),
+        original_filename="clip.mp4",
+        model_id=MODEL_ID,
+        output_mode="video_burned",
+    )
+    await manager._process_next()
+
+    assert job.status is JobStatus.completed
+    assert llamados == ["burn"]
+    assert job.subtitled_video_path is not None
+
+
+@pytest.mark.asyncio
 async def test_the_default_mode_does_not_touch_ffmpeg(tmp_path: Path, monkeypatch):
     manager, settings, _r = make_manager(tmp_path)
     called = False

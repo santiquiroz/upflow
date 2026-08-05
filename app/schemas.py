@@ -517,6 +517,8 @@ class TranscribeJobResponse(BaseModel):
     error: str | None = None
     owner_id: str | None = Field(default=None, serialization_alias="ownerId")
     download_url: str | None = Field(default=None, serialization_alias="downloadUrl")
+    # Solo cuando el job pidio el video con subtitulos y ffmpeg ya lo dejo listo.
+    video_url: str | None = Field(default=None, serialization_alias="videoUrl")
 
 
 class TranscribeJobsListResponse(BaseModel):

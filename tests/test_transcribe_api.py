@@ -97,6 +97,32 @@ async def test_creating_a_job_accepts_the_upload(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_the_chosen_output_reaches_the_job(tmp_path: Path):
+    # Sin esto el modo de salida es un campo muerto: el manager lo sabe manejar
+    # pero nadie se lo puede pedir desde afuera.
+    manager, settings = make_manager(tmp_path)
+    response = await create(manager, settings, file=upload("clip.mp4"), output_mode="video")
+
+    assert manager.get_job(response.job_id).output_mode == "video"
+
+
+@pytest.mark.asyncio
+async def test_the_output_defaults_to_text(tmp_path: Path):
+    manager, settings = make_manager(tmp_path)
+    response = await create(manager, settings)
+
+    assert manager.get_job(response.job_id).output_mode == "text"
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_output_mode_is_a_400(tmp_path: Path):
+    manager, settings = make_manager(tmp_path)
+    with pytest.raises(HTTPException) as exc_info:
+        await create(manager, settings, output_mode="holograma")
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
 async def test_an_unknown_model_is_a_400(tmp_path: Path):
     manager, settings = make_manager(tmp_path)
     with pytest.raises(HTTPException) as exc_info:
@@ -199,6 +225,52 @@ async def test_the_download_is_named_after_the_original_audio(tmp_path: Path):
 
     response = await download_transcribe_job(created.job_id, manager)
     assert response.filename == "entrevista.txt"
+
+
+@pytest.mark.asyncio
+async def test_the_subtitled_video_is_offered_only_when_it_exists(tmp_path: Path):
+    manager, settings = make_manager(tmp_path)
+    created = await create(manager, settings)
+    await manager._process_next()
+    job = manager.get_job(created.job_id)
+
+    assert transcribe_job_to_response(job).video_url is None
+
+    video = settings.outputs_path / f"{job.id}.subtitled.mp4"
+    video.write_bytes(b"video con subs")
+    job.subtitled_video_path = video
+
+    assert transcribe_job_to_response(job).video_url is not None
+
+
+@pytest.mark.asyncio
+async def test_downloading_the_video_serves_the_subtitled_file(tmp_path: Path):
+    manager, settings = make_manager(tmp_path)
+    created = await create(manager, settings, file=upload("clip.mp4"))
+    await manager._process_next()
+    job = manager.get_job(created.job_id)
+    video = settings.outputs_path / f"{job.id}.subtitled.mp4"
+    video.write_bytes(b"video con subs")
+    job.subtitled_video_path = video
+
+    response = await download_transcribe_job(created.job_id, manager, fmt="video")
+
+    assert Path(response.path) == video
+    assert response.filename == "clip.mp4"
+
+
+@pytest.mark.asyncio
+async def test_asking_for_a_video_that_was_never_made_is_a_409(tmp_path: Path):
+    # Pedir el video de un job que se hizo en modo texto no es un formato
+    # desconocido: es un archivo que no existe.
+    manager, settings = make_manager(tmp_path)
+    created = await create(manager, settings)
+    await manager._process_next()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await download_transcribe_job(created.job_id, manager, fmt="video")
+
+    assert exc_info.value.status_code == 409
 
 
 @pytest.mark.asyncio

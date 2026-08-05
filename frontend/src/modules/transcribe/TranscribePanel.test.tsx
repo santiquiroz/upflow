@@ -130,6 +130,17 @@ async function selectAudioFile(): Promise<void> {
   });
 }
 
+async function selectVideoFile(): Promise<void> {
+  const input = await screen.findByLabelText(
+    en["transcribe.file.inputLabel"],
+  );
+  fireEvent.change(input, {
+    target: {
+      files: [new File(["video"], "charla.mp4", { type: "video/mp4" })],
+    },
+  });
+}
+
 async function submitAudio(): Promise<void> {
   await selectAudioFile();
   const button = screen.getByRole("button", {
@@ -220,6 +231,71 @@ describe("TranscribePanel", () => {
     expect(
       vi.mocked(transcribeService.createTranscribeJob).mock.calls[0][0],
     ).toEqual(expect.objectContaining({ modelId: MODEL_B.id }));
+  });
+
+  it("offers the video outputs only when the input is a video", async () => {
+    // Pedir "video con subtitulos" para un .wav no tiene sentido: no hay imagen
+    // a la que pegarle nada.
+    renderPanel();
+    await selectAudioFile();
+
+    expect(
+      screen.queryByLabelText(en["transcribe.output.label"]),
+    ).not.toBeInTheDocument();
+
+    await selectVideoFile();
+
+    expect(
+      await screen.findByLabelText(en["transcribe.output.label"]),
+    ).toBeInTheDocument();
+  });
+
+  it("sends the chosen output mode", async () => {
+    renderPanel();
+    await selectVideoFile();
+    const select = await screen.findByLabelText(en["transcribe.output.label"]);
+    fireEvent.change(select, { target: { value: "video_burned" } });
+    const button = screen.getByRole("button", { name: en["transcribe.submit"] });
+    await waitFor(() => expect(button).toBeEnabled());
+    fireEvent.click(button);
+
+    await waitFor(() =>
+      expect(transcribeService.createTranscribeJob).toHaveBeenCalled(),
+    );
+    expect(
+      vi.mocked(transcribeService.createTranscribeJob).mock.calls[0][0],
+    ).toEqual(expect.objectContaining({ outputMode: "video_burned" }));
+  });
+
+  it("offers the subtitle file and the video when the job produced them", async () => {
+    vi.mocked(transcribeService.getTranscribeJob).mockResolvedValue(
+      job({ videoUrl: "/api/v1/transcribe/jobs/tr-1/download?fmt=video" }),
+    );
+    renderPanel();
+    await submitAudio();
+
+    const subtitles = await screen.findByRole("link", {
+      name: en["transcribe.result.downloadSubtitles"],
+    });
+    expect(subtitles).toHaveAttribute(
+      "href",
+      "/api/v1/transcribe/jobs/tr-1/download?fmt=srt",
+    );
+    expect(
+      screen.getByRole("link", { name: en["transcribe.result.downloadVideo"] }),
+    ).toHaveAttribute("href", "/api/v1/transcribe/jobs/tr-1/download?fmt=video");
+  });
+
+  it("hides the video download when the job never made one", async () => {
+    renderPanel();
+    await submitAudio();
+
+    await screen.findByRole("link", {
+      name: en["transcribe.result.downloadSubtitles"],
+    });
+    expect(
+      screen.queryByRole("link", { name: en["transcribe.result.downloadVideo"] }),
+    ).not.toBeInTheDocument();
   });
 
   it("shows how much of the file has been uploaded", async () => {

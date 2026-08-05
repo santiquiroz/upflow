@@ -7,6 +7,7 @@ from typing import Any
 
 from app.config import Settings
 from app.exceptions import QueueFullError
+from app.services.subtitle_burn import build_subtitle_burn_command
 from app.services.subtitle_mux import build_subtitle_mux_command
 from app.services.subtitles import render_segments, segments_to_text
 from app.models import JobStatus, TranscribeJob, utc_now
@@ -16,6 +17,10 @@ from app.services.device_semaphores import DeviceSemaphores
 from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
 from app.services.engines.transcribe_onnx import TranscribeRequest
 from app.services.model_registry import ModelKind, ModelRegistry
+
+# Los tres destinos que puede tener un trabajo: solo el texto, el video con la
+# pista de subtitulos sumada, o el video con el texto pintado en la imagen.
+OUTPUT_MODES = ("text", "video", "video_burned")
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +106,7 @@ class TranscribeJobManager:
     def _validate_output_mode(output_mode: str) -> None:
         # Un modo desconocido se rechaza al crear el job y no al terminarlo:
         # descubrirlo despues de transcribir seria tirar todo el trabajo.
-        if output_mode not in {"text", "video"}:
+        if output_mode not in OUTPUT_MODES:
             raise ValueError(f"Modo de salida desconocido: {output_mode!r}")
 
     def get_job(self, job_id: str) -> TranscribeJob | None:
@@ -239,6 +244,8 @@ class TranscribeJobManager:
         job.output_path = self._write_transcript(job, job.text)
         if job.output_mode == "video":
             job.subtitled_video_path = await self._mux_subtitles_into_video(job)
+        elif job.output_mode == "video_burned":
+            job.subtitled_video_path = await self._burn_subtitles_into_video(job)
 
     async def _mux_subtitles_into_video(self, job: TranscribeJob) -> Path:
         """Suma la pista de subtitulos al contenedor SIN re-encodear el video.
@@ -246,8 +253,7 @@ class TranscribeJobManager:
         Se hace aca y no al descargar porque el fuente se borra al terminar el
         job: despues ya no habria video al que sumarle nada.
         """
-        subtitle_path = self.settings.outputs_path / f"{job.id}.srt"
-        subtitle_path.write_text(render_segments(list(job.segments), "srt"), encoding="utf-8")
+        subtitle_path = self._write_subtitle_file(job)
         container = job.source_path.suffix.lstrip(".").lower() or "mkv"
         destination = self.settings.outputs_path / f"{job.id}.subtitled.{container}"
         command = build_subtitle_mux_command(
@@ -258,16 +264,43 @@ class TranscribeJobManager:
             container=container,
             language=job.language,
         )
+        await self._run_ffmpeg(command, destination, "pegar los subtitulos al video")
+        return destination
+
+    async def _burn_subtitles_into_video(self, job: TranscribeJob) -> Path:
+        """Re-encodea el video con los subtitulos pintados en la imagen.
+
+        Se ve en cualquier reproductor, incluidas las redes que descartan las
+        pistas de texto. Cuesta el re-encode entero, por eso no es el default.
+        """
+        subtitle_path = self._write_subtitle_file(job)
+        container = job.source_path.suffix.lstrip(".").lower() or "mp4"
+        destination = self.settings.outputs_path / f"{job.id}.subtitled.{container}"
+        command = build_subtitle_burn_command(
+            ffmpeg=str(self.settings.ffmpeg_binary_path),
+            video=job.source_path,
+            subtitles=subtitle_path,
+            destination=destination,
+        )
+        await self._run_ffmpeg(command, destination, "quemar los subtitulos en el video")
+        return destination
+
+    def _write_subtitle_file(self, job: TranscribeJob) -> Path:
+        subtitle_path = self.settings.outputs_path / f"{job.id}.srt"
+        subtitle_path.parent.mkdir(parents=True, exist_ok=True)
+        subtitle_path.write_text(render_segments(list(job.segments), "srt"), encoding="utf-8")
+        return subtitle_path
+
+    async def _run_ffmpeg(self, command: list[str], destination: Path, que_hacia: str) -> None:
         process = await asyncio.create_subprocess_exec(
             *command, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE
         )
         _stdout, stderr = await process.communicate()
         if process.returncode != 0 or not destination.exists():
             raise RuntimeError(
-                "No se pudieron pegar los subtitulos al video. "
+                f"No se pudo {que_hacia}. "
                 f"ffmpeg dijo: {(stderr or b'').decode('utf-8', 'replace').strip()[-300:]}"
             )
-        return destination
 
     def _write_transcript(self, job: TranscribeJob, text: str) -> Path:
         # El texto ya vive en el job; el .txt existe para que la descarga use el

@@ -11,11 +11,16 @@ import type {
   TranscribeJob,
 } from "../lib/apiTypes";
 
+// "text" deja solo la transcripcion; "video" suma la pista de subtitulos al
+// contenedor sin re-encodear; "video_burned" la pinta en la imagen.
+export type TranscribeOutputMode = "text" | "video" | "video_burned";
+
 export interface CreateTranscribeJobParams {
   file: File;
   modelId: string;
   language?: string;
   device?: string;
+  outputMode?: TranscribeOutputMode;
 }
 
 function buildTranscribeJobFormData(params: CreateTranscribeJobParams): FormData {
@@ -27,6 +32,9 @@ function buildTranscribeJobFormData(params: CreateTranscribeJobParams): FormData
   }
   if (params.device) {
     formData.append("device", params.device);
+  }
+  if (params.outputMode) {
+    formData.append("output_mode", params.outputMode);
   }
   return formData;
 }
