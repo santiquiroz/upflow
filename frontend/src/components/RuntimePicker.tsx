@@ -1,10 +1,11 @@
 import { Cpu, Sparkles, Zap, type LucideIcon } from "lucide-react";
+import { useTranslation } from "../i18n/LocaleProvider";
 import type { UpscaleBackend } from "../lib/apiTypes";
 
 interface RuntimeOption {
   value: UpscaleBackend;
   label: string;
-  subtitle: string;
+  subtitleKey: string;
   Icon: LucideIcon;
 }
 
@@ -15,19 +16,19 @@ export const RUNTIME_OPTIONS: readonly RuntimeOption[] = [
   {
     value: "auto",
     label: "Auto",
-    subtitle: "Best backend for your device",
+    subtitleKey: "enhance.runtime.best",
     Icon: Sparkles,
   },
   {
     value: "ncnn",
     label: "NCNN Vulkan",
-    subtitle: "Portable fallback — runs on any Vulkan GPU",
+    subtitleKey: "enhance.runtime.ncnnHint",
     Icon: Cpu,
   },
   {
     value: "onnx",
     label: "ONNX DirectML",
-    subtitle: "~2× faster on modern GPUs for video",
+    subtitleKey: "enhance.runtime.onnxHint",
     Icon: Zap,
   },
 ];
@@ -54,6 +55,7 @@ function RuntimeOptionRow({
   isSelected: boolean;
   onChange: (value: UpscaleBackend) => void;
 }) {
+  const { t } = useTranslation();
   const { Icon } = option;
   return (
     <label className={runtimeOptionClassName(isSelected)}>
@@ -69,7 +71,7 @@ function RuntimeOptionRow({
         <Icon aria-hidden="true" className="h-4 w-4 text-text-faint" strokeWidth={1.75} />
         <span className="text-sm text-text">{option.label}</span>
       </span>
-      <span className="pl-[26px] text-xs text-text-faint">{option.subtitle}</span>
+      <span className="pl-[26px] text-xs text-text-faint">{t(option.subtitleKey)}</span>
     </label>
   );
 }

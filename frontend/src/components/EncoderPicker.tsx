@@ -1,10 +1,11 @@
 import { Cpu, Zap, type LucideIcon } from "lucide-react";
+import { useTranslation } from "../i18n/LocaleProvider";
 import type { VideoEncoder } from "../lib/apiTypes";
 
 interface EncoderOption {
   value: VideoEncoder;
   label: string;
-  subtitle: string;
+  subtitleKey: string;
   Icon: LucideIcon;
 }
 
@@ -15,13 +16,13 @@ export const ENCODER_OPTIONS: readonly EncoderOption[] = [
   {
     value: "software",
     label: "Software (x264/x265)",
-    subtitle: "Always compatible — best quality per bit",
+    subtitleKey: "enhance.encoder.softwareHint",
     Icon: Cpu,
   },
   {
     value: "auto",
     label: "Auto (GPU)",
-    subtitle: "Uses the GPU encoder — far faster in 4K (NVENC/AMF/QSV)",
+    subtitleKey: "enhance.encoder.autoGpuHint",
     Icon: Zap,
   },
 ];
@@ -48,6 +49,7 @@ function EncoderOptionRow({
   isSelected: boolean;
   onChange: (value: VideoEncoder) => void;
 }) {
+  const { t } = useTranslation();
   const { Icon } = option;
   return (
     <label className={encoderOptionClassName(isSelected)}>
@@ -63,7 +65,7 @@ function EncoderOptionRow({
         <Icon aria-hidden="true" className="h-4 w-4 text-text-faint" strokeWidth={1.75} />
         <span className="text-sm text-text">{option.label}</span>
       </span>
-      <span className="pl-[26px] text-xs text-text-faint">{option.subtitle}</span>
+      <span className="pl-[26px] text-xs text-text-faint">{t(option.subtitleKey)}</span>
     </label>
   );
 }

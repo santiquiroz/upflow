@@ -73,18 +73,21 @@ function isInterpEngineSelectorVisible(engines: string[]): boolean {
 
 type AudioOutputFormat = "auto" | "aac";
 
-const AUDIO_OUTPUT_FORMAT_OPTIONS: readonly FormatOption<AudioOutputFormat>[] = [
-  {
-    value: "auto",
-    label: "Auto",
-    description: "Recommended — lossless FLAC automatically when audio restoration is on.",
-  },
-  {
-    value: "aac",
-    label: "AAC",
-    description: "Standard, smaller files, slight quality loss if restoration is active.",
-  },
+// Vive a nivel de modulo: guarda claves y se traduce al construir las opciones.
+const AUDIO_OUTPUT_FORMAT_KEYS = [
+  { value: "auto" as const, label: "Auto", descriptionKey: "enhance.audio.flacHint" },
+  { value: "aac" as const, label: "AAC", descriptionKey: "enhance.audio.aacHint" },
 ];
+
+function audioOutputFormatOptions(
+  t: (key: string) => string,
+): readonly FormatOption<AudioOutputFormat>[] {
+  return AUDIO_OUTPUT_FORMAT_KEYS.map((option) => ({
+    value: option.value,
+    label: option.label,
+    description: t(option.descriptionKey),
+  }));
+}
 
 const OUTPUT_CONTAINERS = ["mp4", "mkv"] as const;
 const VIDEO_CODECS = [
@@ -93,25 +96,21 @@ const VIDEO_CODECS = [
 ] as const;
 const VIDEO_PRESETS = ["medium", "slow", "veryslow"] as const;
 
-const PROFILE_TOOLTIP =
-  "A profile is a preset combining model, scale, codec and quality tuned for a content type. Picking one fills in the fields below; you can still override them.";
-const MODEL_TOOLTIP =
-  "Pick the AI model that upscales the video. Builtin models run on ncnn/Vulkan; ONNX models can run on CPU or GPU.";
-const DEVICE_TOOLTIP =
-  "Pick the compute device that runs the job. A CPU device can't run a builtin (ncnn) model — that needs a Vulkan GPU.";
-const RUNTIME_TOOLTIP =
-  "Choose which backend runs the model. Auto picks the fastest backend for your GPU (ONNX/DirectML is ~2x faster on modern GPUs for video); NCNN Vulkan is the portable fallback that runs on any GPU.";
-const ENCODER_TOOLTIP =
-  "How the final video is encoded. Software (x264/x265) is best quality per bit. Auto (GPU) uses your GPU's hardware encoder (NVENC/AMF/QSV) — far faster in 4K at a small quality/size cost, with automatic fallback to software.";
-const FPS_BOOST_TOOLTIP =
-  "Interpolate extra frames to raise the video's frame rate, either by a fixed multiplier or by targeting a specific frame rate. Only one mode can be active at a time.";
-const AUDIO_TOOLTIP =
-  "Keep the original audio track, optionally cleaned up with noise reduction. Enhancement requires audio to be kept.";
-const ADVANCED_TOOLTIP =
-  "Fine-tune the output container, video codec, encoder preset and quality (CRF). A lower CRF means higher quality and a larger file.";
+const PROFILE_TOOLTIP = "enhance.profile.tooltip";
+const MODEL_TOOLTIP = "enhance.model.tooltip.video";
+const DEVICE_TOOLTIP = "enhance.device.tooltip";
+const RUNTIME_TOOLTIP = "enhance.runtime.tooltip";
+const ENCODER_TOOLTIP = "enhance.encoder.tooltip";
+const FPS_BOOST_TOOLTIP = "enhance.interp.tooltip";
+const AUDIO_TOOLTIP = "enhance.audio.tooltip";
+const ADVANCED_TOOLTIP = "enhance.output.tooltip";
 
-function formatProfileSummary(profile: VideoProfileResponse | null) {
-  return profile ? profile.label : "Select a profile…";
+// Recibe `t`: funcion pura, no componente.
+function formatProfileSummary(
+  profile: VideoProfileResponse | null,
+  t: (key: string) => string,
+) {
+  return profile ? profile.label : t("enhance.profile.select");
 }
 
 function formatFpsBoostSummary(value: FpsBoostValue) {
@@ -271,6 +270,7 @@ function AdvancedVideoControls({
 }
 
 function Dropzone({ file, onFileSelected }: { file: File | null; onFileSelected: (file: File) => void }) {
+  const { t } = useTranslation();
   function handleDrop(event: DragEvent<HTMLLabelElement>) {
     event.preventDefault();
     const dropped = event.dataTransfer.files[0];
@@ -294,7 +294,7 @@ function Dropzone({ file, onFileSelected }: { file: File | null; onFileSelected:
       className="flex cursor-pointer flex-col items-center gap-2 rounded border border-dashed border-border bg-surface px-6 py-10 text-center transition-[border-color] duration-fast hover:border-accent"
     >
       <UploadCloud aria-hidden="true" className="h-6 w-6 text-text-faint" strokeWidth={1.5} />
-      <span className="text-sm text-text">{file ? file.name : "Drop a video here or click to browse"}</span>
+      <span className="text-sm text-text">{file ? file.name : t("enhance.video.dropzone")}</span>
       <span className="text-xs text-text-faint">MP4, MKV, MOV</span>
       <input id="video-file-input" type="file" accept="video/*" className="sr-only" onChange={handleInputChange} />
     </label>
@@ -323,11 +323,11 @@ function resolveModelForProfile(
 }
 
 export function VideoPanel() {
+  const { t } = useTranslation();
   const [file, setFile] = useState<File | null>(null);
   const [profile, setProfile] = useState<VideoProfileResponse | null>(null);
   const [model, setModel] = useState<ModelResponse | null>(null);
   const [device, setDevice] = useState<DeviceInfoResponse | null>(null);
-  const { t } = useTranslation();
   const [backend, setBackend] = useState<UpscaleBackend>("auto");
   const [videoEncoder, setVideoEncoder] = useState<VideoEncoder>("auto");
   const [scale, setScale] = useState<number | null>(null);
@@ -550,8 +550,8 @@ export function VideoPanel() {
         )}
         <AccordionSection
           title="Profile"
-          summary={formatProfileSummary(profile)}
-          tooltip={PROFILE_TOOLTIP}
+          summary={formatProfileSummary(profile, t)}
+          tooltip={t(PROFILE_TOOLTIP)}
           defaultOpen
         >
           <VideoProfileControls value={profile?.key ?? null} onChange={handleProfileChange} />
@@ -570,23 +570,23 @@ export function VideoPanel() {
           onRemove={handleRemoveVideoStep}
           onAdd={handleAddVideoStep}
         />
-        <AccordionSection title="Model" summary={formatModelSummary(model)} tooltip={MODEL_TOOLTIP}>
+        <AccordionSection title="Model" summary={formatModelSummary(model)} tooltip={t(MODEL_TOOLTIP)}>
           <ModelPicker value={model?.id ?? null} onChange={setModel} allowNoAi />
         </AccordionSection>
-        <AccordionSection title="Device" summary={formatDeviceSummary(device)} tooltip={DEVICE_TOOLTIP}>
+        <AccordionSection title="Device" summary={formatDeviceSummary(device)} tooltip={t(DEVICE_TOOLTIP)}>
           <DevicePicker value={device?.id ?? null} onChange={setDevice} requiresGpu={requiresGpu} />
         </AccordionSection>
-        <AccordionSection title="Runtime" summary={formatRuntimeSummary(backend)} tooltip={RUNTIME_TOOLTIP}>
+        <AccordionSection title="Runtime" summary={formatRuntimeSummary(backend)} tooltip={t(RUNTIME_TOOLTIP)}>
           <RuntimePicker value={backend} onChange={setBackend} />
         </AccordionSection>
-        <AccordionSection title="Encoder" summary={formatEncoderSummary(videoEncoder)} tooltip={ENCODER_TOOLTIP}>
+        <AccordionSection title="Encoder" summary={formatEncoderSummary(videoEncoder)} tooltip={t(ENCODER_TOOLTIP)}>
           <EncoderPicker value={videoEncoder} onChange={setVideoEncoder} />
           <SlowPresetCostHint encoder={videoEncoder} preset={videoPreset} scale={scale} />
         </AccordionSection>
         <AccordionSection
           title="FPS boost"
           summary={formatFpsBoostSummary(fpsBoost)}
-          tooltip={FPS_BOOST_TOOLTIP}
+          tooltip={t(FPS_BOOST_TOOLTIP)}
         >
           <div className="flex flex-col gap-4">
             <FpsBoostControls value={fpsBoost} onChange={setFpsBoost} />
@@ -598,7 +598,7 @@ export function VideoPanel() {
         <AccordionSection
           title="Audio"
           summary={formatAudioSummary(keepAudio, audioEnhance)}
-          tooltip={AUDIO_TOOLTIP}
+          tooltip={t(AUDIO_TOOLTIP)}
         >
           <div className="flex flex-col gap-3">
             <label className="flex items-center gap-2 text-sm text-text">
@@ -637,7 +637,7 @@ export function VideoPanel() {
               <FormatOptionFieldset
                 legend="Output format"
                 name="video-audio-output-format"
-                options={AUDIO_OUTPUT_FORMAT_OPTIONS}
+                options={audioOutputFormatOptions(t)}
                 value={audioOutputFormat}
                 onChange={setAudioOutputFormat}
               />
@@ -647,7 +647,7 @@ export function VideoPanel() {
         <AccordionSection
           title="Advanced"
           summary={formatAdvancedSummary(outputContainer, videoCodec, videoPreset, crf)}
-          tooltip={ADVANCED_TOOLTIP}
+          tooltip={t(ADVANCED_TOOLTIP)}
         >
           <AdvancedVideoControls
             outputContainer={outputContainer}

@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { useTranslation } from "../../i18n/LocaleProvider";
 import { UploadCloud, Wand2 } from "lucide-react";
 import { useEffect, useState, type ChangeEvent, type DragEvent } from "react";
 import { AccordionSection } from "../../components/AccordionSection";
@@ -11,11 +12,9 @@ import type { DeviceInfoResponse, DevicesResponse, ModelResponse } from "../../l
 import { formatDeviceSummary, formatModelSummary } from "./accordionSummaries";
 import { ScaleFormatControls } from "./ScaleFormatControls";
 
-const MODEL_TOOLTIP =
-  "Pick the AI model that upscales the image. Builtin models run on ncnn/Vulkan; ONNX models can run on CPU or GPU.";
-const DEVICE_TOOLTIP =
-  "Pick the compute device that runs the job. A CPU device can't run a builtin (ncnn) model — that needs a Vulkan GPU.";
-const SCALE_FORMAT_TOOLTIP = "Choose the output resolution multiplier and the image file format.";
+const MODEL_TOOLTIP = "enhance.model.tooltip.image";
+const DEVICE_TOOLTIP = "enhance.device.tooltip";
+const SCALE_FORMAT_TOOLTIP = "enhance.image.scaleAndFormat.tooltip";
 
 function formatScaleFormatSummary(scale: number | null, format: string) {
   const scaleLabel = scale !== null ? `${scale}x` : "—";
@@ -68,6 +67,7 @@ function resolvePreferredDevice(
 }
 
 function Dropzone({ file, onFileSelected }: { file: File | null; onFileSelected: (file: File) => void }) {
+  const { t } = useTranslation();
   function handleDrop(event: DragEvent<HTMLLabelElement>) {
     event.preventDefault();
     const dropped = event.dataTransfer.files[0];
@@ -91,7 +91,7 @@ function Dropzone({ file, onFileSelected }: { file: File | null; onFileSelected:
       className="flex cursor-pointer flex-col items-center gap-2 rounded border border-dashed border-border bg-surface px-6 py-10 text-center transition-[border-color] duration-fast hover:border-accent"
     >
       <UploadCloud aria-hidden="true" className="h-6 w-6 text-text-faint" strokeWidth={1.5} />
-      <span className="text-sm text-text">{file ? file.name : "Drop an image here or click to browse"}</span>
+      <span className="text-sm text-text">{file ? file.name : t("enhance.image.dropzone")}</span>
       <span className="text-xs text-text-faint">PNG, JPG, WEBP</span>
       <input id="image-file-input" type="file" accept="image/*" className="sr-only" onChange={handleInputChange} />
     </label>
@@ -99,6 +99,7 @@ function Dropzone({ file, onFileSelected }: { file: File | null; onFileSelected:
 }
 
 export function ImagePanel() {
+  const { t } = useTranslation();
   const [file, setFile] = useState<File | null>(null);
   const [model, setModel] = useState<ModelResponse | null>(null);
   const [device, setDevice] = useState<DeviceInfoResponse | null>(null);
@@ -157,16 +158,16 @@ export function ImagePanel() {
     <div className="grid grid-cols-[1fr_320px] gap-6 max-[900px]:grid-cols-1">
       <div className="flex flex-col gap-6">
         <Dropzone file={file} onFileSelected={handleFileSelected} />
-        <AccordionSection title="Model" summary={formatModelSummary(model)} tooltip={MODEL_TOOLTIP} defaultOpen>
+        <AccordionSection title="Model" summary={formatModelSummary(model)} tooltip={t(MODEL_TOOLTIP)} defaultOpen>
           <ModelPicker value={model?.id ?? null} onChange={setModel} />
         </AccordionSection>
-        <AccordionSection title="Device" summary={formatDeviceSummary(device)} tooltip={DEVICE_TOOLTIP}>
+        <AccordionSection title="Device" summary={formatDeviceSummary(device)} tooltip={t(DEVICE_TOOLTIP)}>
           <DevicePicker value={device?.id ?? null} onChange={setDevice} requiresGpu={requiresGpu} />
         </AccordionSection>
         <AccordionSection
-          title="Scale & format"
+          title={t("enhance.image.scaleAndFormat")}
           summary={formatScaleFormatSummary(scale, format)}
-          tooltip={SCALE_FORMAT_TOOLTIP}
+          tooltip={t(SCALE_FORMAT_TOOLTIP)}
         >
           <ScaleFormatControls
             allowedScales={allowedScales}

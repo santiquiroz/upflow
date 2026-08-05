@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { useTranslation } from "../i18n/LocaleProvider";
 import { getModels } from "../lib/api";
 import type { ModelResponse } from "../lib/apiTypes";
 
@@ -21,12 +22,17 @@ interface ModelGroup {
 //
 // "No AI" goes LAST and named for what it is, not for how it works: someone who picks
 // it must know no model runs, and someone who wants AI must not land on it by accident.
-function groupModels(models: ModelResponse[], allowNoAi: boolean): ModelGroup[] {
+// Recibe el rotulo ya traducido: es una funcion pura, no un componente.
+function groupModels(
+  models: ModelResponse[],
+  allowNoAi: boolean,
+  noAiLabel: string,
+): ModelGroup[] {
   const groups: ModelGroup[] = [
     { label: "Builtin", models: models.filter((model) => model.kind === "builtin-ncnn") },
     { label: "ONNX", models: models.filter((model) => model.kind === "onnx") },
     {
-      label: "No AI (classic resize)",
+      label: noAiLabel,
       models: allowNoAi ? models.filter((model) => model.kind === "classic") : [],
     },
   ];
@@ -69,6 +75,7 @@ function ModelOption({
   isSelected: boolean;
   onChange: (model: ModelResponse) => void;
 }) {
+  const { t } = useTranslation();
   const isDisabled = !isModelSelectable(model);
   return (
     <label className={modelOptionClassName(isSelected, isDisabled)}>
@@ -87,7 +94,7 @@ function ModelOption({
       <span className="font-mono-tabular pl-[22px] text-xs text-text-dim">{formatModelMeta(model)}</span>
       {isDisabled && (
         <span className="pl-[22px] text-xs text-warn">
-          {model.status === "converting" ? "Converting…" : (model.error ?? "Not ready")}
+          {model.status === "converting" ? t("models.status.converting") : (model.error ?? t("enhance.model.notReady"))}
         </span>
       )}
     </label>
@@ -95,17 +102,18 @@ function ModelOption({
 }
 
 export function ModelPicker({ value, onChange, allowNoAi = false }: ModelPickerProps) {
+  const { t } = useTranslation();
   const modelsQuery = useQuery({ queryKey: ["models"], queryFn: getModels });
 
   if (modelsQuery.isLoading) {
-    return <p className="text-sm text-text-dim">Loading models…</p>;
+    return <p className="text-sm text-text-dim">{t("enhance.model.loading")}</p>;
   }
 
   if (modelsQuery.isError) {
-    return <p className="text-sm text-danger">Could not load models.</p>;
+    return <p className="text-sm text-danger">{t("enhance.model.loadError")}</p>;
   }
 
-  const groups = groupModels(modelsQuery.data?.models ?? [], allowNoAi);
+  const groups = groupModels(modelsQuery.data?.models ?? [], allowNoAi, t("enhance.model.noAi"));
 
   return (
     <fieldset className="flex flex-col gap-4">

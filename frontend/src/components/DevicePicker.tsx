@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { useTranslation } from "../i18n/LocaleProvider";
 import { getDevices } from "../lib/api";
 import type { DeviceInfoResponse } from "../lib/apiTypes";
 
@@ -61,6 +62,7 @@ function DeviceOption({
   isDisabled: boolean;
   onChange: (device: DeviceInfoResponse) => void;
 }) {
+  const { t } = useTranslation();
   return (
     <label className={deviceOptionClassName(isSelected, isDisabled)}>
       <span className="flex items-center gap-2">
@@ -81,24 +83,25 @@ function DeviceOption({
         )}
       </span>
       {isDisabled && (
-        <span className="pl-[22px] text-xs text-warn">Requires a Vulkan GPU for this model (ncnn)</span>
+        <span className="pl-[22px] text-xs text-warn">{t("enhance.device.requiresVulkan")}</span>
       )}
       {device.id === AUTO_DEVICE_ID && (
-        <span className="pl-[22px] text-xs text-text-faint">Routes to the least busy compatible device</span>
+        <span className="pl-[22px] text-xs text-text-faint">{t("enhance.device.autoRoutes")}</span>
       )}
     </label>
   );
 }
 
 export function DevicePicker({ value, onChange, requiresGpu, allowAuto = true }: DevicePickerProps) {
+  const { t } = useTranslation();
   const devicesQuery = useQuery({ queryKey: ["devices"], queryFn: getDevices });
 
   if (devicesQuery.isLoading) {
-    return <p className="text-sm text-text-dim">Loading devices…</p>;
+    return <p className="text-sm text-text-dim">{t("enhance.device.loading")}</p>;
   }
 
   if (devicesQuery.isError) {
-    return <p className="text-sm text-danger">Could not load devices.</p>;
+    return <p className="text-sm text-danger">{t("enhance.device.loadError")}</p>;
   }
 
   const devices = devicesQuery.data?.devices ?? [];
