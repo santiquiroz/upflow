@@ -93,6 +93,6 @@ exactamente el mismo patrón que el decoder merged de Whisper sobre DirectML.
 
 - **Conversión de voz desde una muestra** ("que suene como esta grabación") no se
   midió. Es un problema distinto del TTS y necesita su propio spike.
-- Kokoro y Piper no se corrieron: sin phonemizador instalado no se les puede
-  pasar texto. Antes de elegir uno hay que medirlo igual que a MMS.
+- Piper no se corrió: con Kokoro verificado y andando no hizo falta. Si algún día
+  se lo evalúa, tiene que pasar por la misma verificación de ida y vuelta.
 - No se midió calidad subjetiva ni voces en español.
