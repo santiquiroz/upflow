@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useTranslation } from "../i18n/LocaleProvider";
 import { useEffect, useState } from "react";
 import { deleteModel, getInstallStatus, getModels, installModel, searchHfModels } from "../lib/api";
 import type { InstallStatusResponse, ModelsResponse, ModelSearchResponse } from "../lib/apiTypes";
@@ -47,6 +48,7 @@ export function resolveInstallErrorMessage(
   startError: unknown,
   statusError: unknown,
   statusData: InstallStatusResponse | undefined,
+  t: (key: string) => string,
 ): string | null {
   if (startError instanceof Error) {
     return startError.message;
@@ -55,12 +57,13 @@ export function resolveInstallErrorMessage(
     return statusError.message;
   }
   if (statusData?.status === "error") {
-    return statusData.error ?? "The install failed.";
+    return statusData.error ?? t("job.install.failed");
   }
   return null;
 }
 
 export function useModelInstall(pollIntervalMs: number = DEFAULT_INSTALL_POLL_INTERVAL_MS): UseModelInstallResult {
+  const { t } = useTranslation();
   const [installId, setInstallId] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
@@ -100,7 +103,7 @@ export function useModelInstall(pollIntervalMs: number = DEFAULT_INSTALL_POLL_IN
       statusQuery.data?.status as InstallState | undefined,
     ),
     progressPct: statusQuery.data?.progressPct ?? null,
-    errorMessage: resolveInstallErrorMessage(startMutation.error, statusQuery.error, statusQuery.data),
+    errorMessage: resolveInstallErrorMessage(startMutation.error, statusQuery.error, statusQuery.data, t),
     modelId: statusQuery.data?.modelId ?? null,
     install,
     reset,

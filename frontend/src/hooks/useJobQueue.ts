@@ -1,4 +1,5 @@
 import { useQueries, useQueryClient } from "@tanstack/react-query";
+import { useTranslation } from "../i18n/LocaleProvider";
 import { useSyncExternalStore } from "react";
 import { cancelJob, cancelVideoJob, getJob, getVideoJob } from "../lib/api";
 import type { AudioJob, GenerationJob, JobResponse, JobStatus, VideoJobResponse } from "../lib/apiTypes";
@@ -56,12 +57,14 @@ function fetchTrackedJob(tracked: TrackedJob): Promise<TrackedJobResponse> {
   return getVideoJob(tracked.id);
 }
 
-function resolveEntryError(data: TrackedJobResponse | undefined, queryError: unknown): string | null {
+function resolveEntryError(data: TrackedJobResponse | undefined, queryError: unknown,
+  t: (key: string) => string,
+): string | null {
   if (queryError instanceof Error) {
     return queryError.message;
   }
   if (data?.status === "failed") {
-    return data.error ?? "The job failed.";
+    return data.error ?? t("job.failed");
   }
   return null;
 }
@@ -70,6 +73,7 @@ function toQueueEntry(
   tracked: TrackedJob,
   data: TrackedJobResponse | undefined,
   queryError: unknown,
+  t: (key: string) => string,
 ): JobQueueEntry {
   return {
     id: tracked.id,
@@ -78,7 +82,7 @@ function toQueueEntry(
     createdAt: tracked.createdAt,
     status: data?.status ?? "queued",
     downloadUrl: data?.downloadUrl ?? null,
-    errorMessage: resolveEntryError(data, queryError),
+    errorMessage: resolveEntryError(data, queryError, t),
     job: data,
   };
 }
@@ -91,6 +95,7 @@ export function useJobQueue(
   store: JobQueueStore = jobQueueStore,
   pollIntervalMs: number = DEFAULT_QUEUE_POLL_INTERVAL_MS,
 ): UseJobQueueResult {
+  const { t } = useTranslation();
   const trackedJobs = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
   const queryClient = useQueryClient();
 
@@ -104,7 +109,7 @@ export function useJobQueue(
   });
 
   const entries = trackedJobs
-    .map((tracked, index) => toQueueEntry(tracked, results[index]?.data, results[index]?.error))
+    .map((tracked, index) => toQueueEntry(tracked, results[index]?.data, results[index]?.error, t))
     .sort(byNewestFirst);
 
   function dismiss(id: string): void {

@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useTranslation } from "../i18n/LocaleProvider";
 import { useRef, useState } from "react";
 import type { AudioCapabilities, AudioJob, JobStatus } from "../lib/apiTypes";
 import { isTerminalJobStatus } from "../lib/jobStatus";
@@ -45,6 +46,8 @@ function resolveErrorMessage(
   uploadError: unknown,
   jobError: unknown,
   job: AudioJob | undefined,
+
+  t: (key: string) => string,
 ): string | null {
   if (uploadError instanceof Error) {
     return uploadError.message;
@@ -53,7 +56,7 @@ function resolveErrorMessage(
     return jobError.message;
   }
   if (job?.status === "failed") {
-    return job.error ?? "The job failed.";
+    return job.error ?? t("job.failed");
   }
   return null;
 }
@@ -62,6 +65,7 @@ export function useAudioJob(
   pollIntervalMs: number = DEFAULT_POLL_INTERVAL_MS,
   queue: JobQueueStore = jobQueueStore,
 ): UseAudioJobResult {
+  const { t } = useTranslation();
   const [jobId, setJobId] = useState<string | null>(null);
   const pendingFileNameRef = useRef<string>("audio");
   const queryClient = useQueryClient();
@@ -111,7 +115,7 @@ export function useAudioJob(
   return {
     phase: resolvePhase(uploadMutation.isPending, uploadMutation.data?.status, jobQuery.data),
     job: jobQuery.data,
-    errorMessage: resolveErrorMessage(uploadMutation.error, jobQuery.error, jobQuery.data),
+    errorMessage: resolveErrorMessage(uploadMutation.error, jobQuery.error, jobQuery.data, t),
     submit,
     cancel,
     reset,

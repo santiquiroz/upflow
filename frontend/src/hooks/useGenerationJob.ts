@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useTranslation } from "../i18n/LocaleProvider";
 import { useEffect, useRef, useState } from "react";
 import type {
   ConversionStatusResponse,
@@ -70,6 +71,8 @@ function resolveErrorMessage(
   uploadError: unknown,
   jobError: unknown,
   job: GenerationJob | undefined,
+
+  t: (key: string) => string,
 ): string | null {
   if (uploadError instanceof Error) {
     return uploadError.message;
@@ -78,7 +81,7 @@ function resolveErrorMessage(
     return jobError.message;
   }
   if (job?.status === "failed") {
-    return job.error ?? "The job failed.";
+    return job.error ?? t("job.failed");
   }
   return null;
 }
@@ -87,6 +90,7 @@ export function useGenerationJob(
   pollIntervalMs: number = DEFAULT_POLL_INTERVAL_MS,
   queue: JobQueueStore = jobQueueStore,
 ): UseGenerationJobResult {
+  const { t } = useTranslation();
   const [jobId, setJobId] = useState<string | null>(null);
   const pendingPromptRef = useRef<string>("generation");
   const queryClient = useQueryClient();
@@ -139,7 +143,7 @@ export function useGenerationJob(
   return {
     phase: resolvePhase(uploadMutation.isPending, uploadMutation.data?.status, jobQuery.data),
     job: jobQuery.data,
-    errorMessage: resolveErrorMessage(uploadMutation.error, jobQuery.error, jobQuery.data),
+    errorMessage: resolveErrorMessage(uploadMutation.error, jobQuery.error, jobQuery.data, t),
     submit,
     cancel,
     reset,
@@ -207,15 +211,16 @@ function resolveConversionPhase(
 function resolveConversionErrorMessage(
   queryError: unknown,
   conversion: ConversionStatusResponse | undefined,
+  t: (key: string) => string,
 ): string | null {
   if (queryError instanceof Error) {
     return queryError.message;
   }
   if (conversion?.status === "failed") {
-    return conversion.error ?? "The model conversion failed.";
+    return conversion.error ?? t("generate.conversion.failed");
   }
   if (conversion?.status === "cancelled") {
-    return conversion.error ?? "The model conversion was cancelled.";
+    return conversion.error ?? t("generate.conversion.cancelled");
   }
   return null;
 }
@@ -227,6 +232,7 @@ function resolveConversionErrorMessage(
 export function useGenerationModelInstall(
   pollIntervalMs: number = DEFAULT_INSTALL_POLL_INTERVAL_MS,
 ): UseGenerationModelInstallResult {
+  const { t } = useTranslation();
   const [installId, setInstallId] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
@@ -315,8 +321,8 @@ export function useGenerationModelInstall(
     progressPct: conversionQuery.data?.progressPct ?? statusQuery.data?.progressPct ?? null,
     stageLabel,
     errorMessage:
-      resolveInstallErrorMessage(startMutation.error, statusQuery.error, statusQuery.data) ??
-      resolveConversionErrorMessage(conversionQuery.error, conversionQuery.data),
+      resolveInstallErrorMessage(startMutation.error, statusQuery.error, statusQuery.data, t) ??
+      resolveConversionErrorMessage(conversionQuery.error, conversionQuery.data, t),
     modelId: conversionQuery.data?.modelId ?? statusQuery.data?.modelId ?? null,
     install,
     reset,
