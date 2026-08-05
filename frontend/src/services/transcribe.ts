@@ -50,6 +50,15 @@ export function createTranscribeJob(
   );
 }
 
+export interface TranslationPair {
+  source: string;
+  target: string;
+}
+
+export function fetchTranslationPairs(): Promise<{ pairs: TranslationPair[] }> {
+  return apiGet<{ pairs: TranslationPair[] }>("/translation/pairs");
+}
+
 export function getTranscribeJob(jobId: string): Promise<TranscribeJob> {
   return apiGet<TranscribeJob>(`/transcribe/jobs/${jobId}`);
 }

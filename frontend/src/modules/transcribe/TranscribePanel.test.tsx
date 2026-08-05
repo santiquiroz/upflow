@@ -26,6 +26,7 @@ vi.mock("../../services/transcribe", async (importOriginal) => {
     getAsrInstallStatus: vi.fn(),
     fetchInstalledAsrModels: vi.fn(),
     fetchTranscribeDevices: vi.fn(),
+    fetchTranslationPairs: vi.fn(),
   };
 });
 
@@ -170,6 +171,7 @@ beforeEach(() => {
     downloadUrl: null,
   });
   vi.mocked(transcribeService.getTranscribeJob).mockResolvedValue(job());
+  vi.mocked(transcribeService.fetchTranslationPairs).mockResolvedValue({ pairs: [] });
   vi.mocked(transcribeService.cancelTranscribeJob).mockResolvedValue(
     job({ status: "cancelled", text: null, downloadUrl: null }),
   );
@@ -295,6 +297,43 @@ describe("TranscribePanel", () => {
     });
     expect(
       screen.queryByRole("link", { name: en["transcribe.result.downloadVideo"] }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("offers to translate the subtitles when a language pair is installed", async () => {
+    vi.mocked(transcribeService.fetchTranslationPairs).mockResolvedValue({
+      pairs: [{ source: "en", target: "es" }],
+    });
+    renderPanel();
+    await submitAudio();
+
+    const select = await screen.findByLabelText(
+      en["transcribe.translate.label"],
+    );
+    fireEvent.change(select, { target: { value: "es" } });
+
+    expect(
+      screen.getByRole("link", {
+        name: en["transcribe.result.downloadSubtitles"],
+      }),
+    ).toHaveAttribute(
+      "href",
+      "/api/v1/transcribe/jobs/tr-1/download?fmt=srt&translate_to=es",
+    );
+  });
+
+  it("hides the translation picker when no pair is installed", async () => {
+    vi.mocked(transcribeService.fetchTranslationPairs).mockResolvedValue({
+      pairs: [],
+    });
+    renderPanel();
+    await submitAudio();
+
+    await screen.findByRole("link", {
+      name: en["transcribe.result.downloadSubtitles"],
+    });
+    expect(
+      screen.queryByLabelText(en["transcribe.translate.label"]),
     ).not.toBeInTheDocument();
   });
 

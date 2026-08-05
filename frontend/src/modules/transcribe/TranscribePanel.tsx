@@ -22,8 +22,10 @@ import {
   useTranscribeJob,
   type TranscribeJobPhase,
 } from "../../hooks/useTranscribeJob";
+import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "../../i18n/LocaleProvider";
 import type { TranscribeJob } from "../../lib/apiTypes";
+import { fetchTranslationPairs } from "../../services/transcribe";
 import type {
   CreateTranscribeJobParams,
   TranscribeOutputMode,
@@ -121,12 +123,18 @@ function phaseLabelKey(phase: TranscribeJobPhase): string {
   }
 }
 
+function subtitleHref(jobId: string, translateTo: string): string {
+  const base = `/api/v1/transcribe/jobs/${jobId}/download?fmt=srt`;
+  return translateTo ? `${base}&translate_to=${translateTo}` : base;
+}
+
 function TranscriptionResult({
   phase,
   job,
   errorMessage,
   onCancel,
   uploadPercent,
+  translationTargets,
 }: {
   phase: TranscribeJobPhase;
   job: TranscribeJob | undefined;
@@ -134,7 +142,9 @@ function TranscriptionResult({
   onCancel: () => void;
   // `null` cuando el navegador no puede saber el total del envio.
   uploadPercent: number | null;
+  translationTargets: string[];
 }) {
+  const [translateTo, setTranslateTo] = useState("");
   const { t } = useTranslation();
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">(
     "idle",
@@ -264,9 +274,26 @@ function TranscriptionResult({
                 ? t("transcribe.result.copied")
                 : t("transcribe.result.copy")}
             </button>
+            {translationTargets.length > 0 && (
+              <label className="flex items-center gap-2 text-sm text-text-dim">
+                {t("transcribe.translate.label")}
+                <select
+                  value={translateTo}
+                  onChange={(event) => setTranslateTo(event.target.value)}
+                  className="rounded border border-border bg-surface px-2 py-1 text-sm text-text focus:border-accent focus:outline-none"
+                >
+                  <option value="">{t("transcribe.translate.none")}</option>
+                  {translationTargets.map((code) => (
+                    <option key={code} value={code}>
+                      {code}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             {job.downloadUrl && (
               <a
-                href={`/api/v1/transcribe/jobs/${job.id}/download?fmt=srt`}
+                href={subtitleHref(job.id, translateTo)}
                 download
                 className="inline-flex items-center gap-2 rounded border border-border bg-surface px-3 py-1.5 text-sm text-text hover:border-text-faint focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
               >
@@ -323,6 +350,10 @@ export function TranscribePanel({
   const [deviceId, setDeviceId] = useState("cpu");
   const modelsQuery = useInstalledAsrModels();
   const devicesQuery = useTranscribeDevices();
+  const translationPairsQuery = useQuery({
+    queryKey: ["translation-pairs"],
+    queryFn: fetchTranslationPairs,
+  });
   const { phase, job, errorMessage, submit, cancel, reset, uploadPercent } =
     useTranscribeJob(pollIntervalMs);
 
@@ -519,6 +550,11 @@ export function TranscribePanel({
           errorMessage={errorMessage}
           onCancel={cancel}
           uploadPercent={uploadPercent}
+          translationTargets={[
+            ...new Set(
+              (translationPairsQuery.data?.pairs ?? []).map((pair) => pair.target),
+            ),
+          ]}
         />
       </div>
 

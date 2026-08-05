@@ -711,6 +711,8 @@ export const es = {
   "transcribe.result.download": "Descargar .txt",
   "transcribe.result.downloadSubtitles": "Descargar .srt",
   "transcribe.result.downloadVideo": "Descargar video con subtítulos",
+  "transcribe.translate.label": "Traducir los subtítulos a",
+  "transcribe.translate.none": "Dejarlos en el idioma original",
   "transcribe.output.label": "Salida",
   "transcribe.output.text": "Solo la transcripción",
   "transcribe.output.video": "Video con pista de subtítulos",
