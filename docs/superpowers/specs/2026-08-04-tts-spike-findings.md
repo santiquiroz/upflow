@@ -49,10 +49,45 @@ le puede pasar una frase.
 3. **Buscar un modelo char-level con licencia limpia.** No se encontró uno
    verificado en este spike; sería más búsqueda.
 
-**Recomendación: la opción 1.** Encaja con la arquitectura que ya existe (ONNX,
+**Decisión tomada: la opción 1.** (Confirmada por el usuario y ya verificada — ver abajo.)
+
+**Recomendación original: la opción 1.** Encaja con la arquitectura que ya existe (ONNX,
 instalable desde Hugging Face, buscable) y no le agrega condiciones legales a la
 app. El costo es un binario más, que es el mismo trato que ya se aceptó por
 ffmpeg.
+
+## Segunda medición: Kokoro verificado (2026-08-04, mismo día)
+
+Con la decisión tomada de sumar espeak-ng, se midió Kokoro igual que a MMS.
+`scripts/spike_kokoro_tts.py`.
+
+| Medición | Resultado |
+|---|---|
+| Fonemas de espeak-ng | `ðə kwˈɪk bɹˈaʊn fˈɑːks dʒˈʌmps ˌoʊvɚ ðə lˈeɪzi dˈɑːɡ` |
+| Símbolos fuera del vocabulario | ninguno |
+| Audio generado | 3,30 s en 0,53 s → **0,16x tiempo real** |
+| Transcripción de vuelta | `"The Quick Brown Fox jumps over the lazy dog."` |
+| Parecido | **100%** |
+
+**Kokoro sirve: Apache 2.0, corre por ONNX y habla inteligible.** espeak-ng
+resuelve la fonemización sin quedarse corto: cero símbolos fuera del vocabulario.
+
+### Dos trampas medidas en el mismo repo de modelos
+
+El repo publica seis variantes ONNX y **dos de ellas fallan, cada una a su
+manera, y ninguna avisa bien**:
+
+| Variante | Qué pasa |
+|---|---|
+| `model_q8f16.onnx` | **Segfault** al crear la sesión. No tira excepción: se lleva el proceso entero. |
+| `model_fp16.onnx` | Carga, corre, devuelve audio de la duración CORRECTA — y ese audio es **todo NaN**. Whisper lo lee como `!!!!!!`. |
+| `model.onnx` (fp32) | Audio real: rms 0,069, pico 0,52. ✅ |
+
+La de fp16 es el modo de fallo más caro que hay: nada falla, la duración es
+plausible, y solo escuchando (o transcribiendo de vuelta) se descubre. Es
+exactamente el mismo patrón que el decoder merged de Whisper sobre DirectML.
+
+**Por eso la verificación de ida y vuelta no es opcional en este repo.**
 
 ## Lo que este spike NO responde
 
