@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react";
-import { AudioLines, AudioWaveform, Boxes, Download, Eraser, LayoutGrid, Sliders, Sparkles, Users as UsersIcon, Wand2, Zap } from "lucide-react";
+import { AudioLines, AudioWaveform, Boxes, Download, Eraser, LayoutGrid, Mic, Sliders, Sparkles, Users as UsersIcon, Wand2, Zap } from "lucide-react";
 
 export interface NavEntry {
   labelKey: string;
@@ -17,6 +17,7 @@ export const NAV_ENTRIES: readonly NavEntry[] = [
   { labelKey: "nav.generate", path: "/generate", icon: Sparkles },
   { labelKey: "nav.editor", path: "/editor", icon: Eraser },
   { labelKey: "nav.models", path: "/models", icon: Boxes },
+  { labelKey: "nav.voice", path: "/voice", icon: Mic },
   { labelKey: "nav.realtime", path: "/realtime", icon: Zap },
   { labelKey: "nav.settings", path: "/settings", icon: Sliders },
   { labelKey: "nav.users", path: "/users", icon: UsersIcon, requiredPermission: "users:manage" },
