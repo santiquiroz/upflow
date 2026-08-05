@@ -111,11 +111,14 @@ function TranscriptionResult({
   job,
   errorMessage,
   onCancel,
+  uploadPercent,
 }: {
   phase: TranscribeJobPhase;
   job: TranscribeJob | undefined;
   errorMessage: string | null;
   onCancel: () => void;
+  // `null` cuando el navegador no puede saber el total del envio.
+  uploadPercent: number | null;
 }) {
   const { t } = useTranslation();
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">(
@@ -154,10 +157,21 @@ function TranscriptionResult({
 
       {phase === "uploading" && (
         <div className="flex flex-col gap-2">
-          <p role="status" className="text-sm text-text">
-            {phaseLabel}
-          </p>
-          <IndeterminateProgressBar label={phaseLabel} />
+          <div className="flex items-center justify-between gap-2">
+            <p role="status" className="text-sm text-text">
+              {phaseLabel}
+            </p>
+            {uploadPercent !== null && (
+              <span className="font-mono-tabular text-sm text-text-dim">
+                {uploadPercent}%
+              </span>
+            )}
+          </div>
+          {uploadPercent !== null ? (
+            <DeterminateProgressBar label={phaseLabel} percent={uploadPercent} />
+          ) : (
+            <IndeterminateProgressBar label={phaseLabel} />
+          )}
         </div>
       )}
 
@@ -273,7 +287,7 @@ export function TranscribePanel({
   const [deviceId, setDeviceId] = useState("cpu");
   const modelsQuery = useInstalledAsrModels();
   const devicesQuery = useTranscribeDevices();
-  const { phase, job, errorMessage, submit, cancel, reset } =
+  const { phase, job, errorMessage, submit, cancel, reset, uploadPercent } =
     useTranscribeJob(pollIntervalMs);
 
   const models = modelsQuery.data ?? [];
@@ -437,6 +451,7 @@ export function TranscribePanel({
           job={job}
           errorMessage={errorMessage}
           onCancel={cancel}
+          uploadPercent={uploadPercent}
         />
       </div>
 

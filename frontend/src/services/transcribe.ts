@@ -1,4 +1,5 @@
 import { apiGet, apiPost, apiPostForm, apiPostJson } from "../lib/api";
+import type { UploadOptions } from "../lib/uploadRequest";
 import type {
   AsrInstallStatusResponse,
   CreateInstallResponse,
@@ -32,10 +33,12 @@ function buildTranscribeJobFormData(params: CreateTranscribeJobParams): FormData
 
 export function createTranscribeJob(
   params: CreateTranscribeJobParams,
+  options: UploadOptions = {},
 ): Promise<CreateJobResponse> {
   return apiPostForm<CreateJobResponse>(
     "/transcribe/jobs",
     buildTranscribeJobFormData(params),
+    options,
   );
 }
 

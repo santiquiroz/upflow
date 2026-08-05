@@ -222,6 +222,26 @@ describe("TranscribePanel", () => {
     ).toEqual(expect.objectContaining({ modelId: MODEL_B.id }));
   });
 
+  it("shows how much of the file has been uploaded", async () => {
+    // La subida se queda colgada a proposito: sin resolver, la pantalla no
+    // pasa a "en cola" y se puede mirar lo que muestra mientras sube.
+    vi.mocked(transcribeService.createTranscribeJob).mockImplementation(
+      (_params, options) => {
+        options?.onProgress?.(37);
+        return new Promise(() => {});
+      },
+    );
+    renderPanel();
+    await submitAudio();
+
+    expect(
+      await screen.findByRole("progressbar", {
+        name: en["transcribe.job.uploading"],
+      }),
+    ).toHaveAttribute("aria-valuenow", "37");
+    expect(screen.getByText("37%")).toBeInTheDocument();
+  });
+
   it("shows live job progress and can cancel the running job", async () => {
     vi.mocked(transcribeService.getTranscribeJob).mockResolvedValue(
       job({

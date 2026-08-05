@@ -35,6 +35,9 @@ export interface UseTranscribeJobResult {
   phase: TranscribeJobPhase;
   job: TranscribeJob | undefined;
   errorMessage: string | null;
+  // `null` mientras no se este subiendo, o cuando el total no es computable:
+  // dibujar un porcentaje inventado seria mentir sobre lo que falta.
+  uploadPercent: number | null;
   submit: (params: CreateTranscribeJobParams) => void;
   cancel: () => void;
   reset: () => void;
@@ -74,8 +77,10 @@ export function useTranscribeJob(
   const [jobId, setJobId] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
+  const [uploadPercent, setUploadPercent] = useState<number | null>(null);
   const createMutation = useMutation({
-    mutationFn: createTranscribeJob,
+    mutationFn: (params: Parameters<typeof createTranscribeJob>[0]) =>
+      createTranscribeJob(params, { onProgress: setUploadPercent }),
     onSuccess: (response) => setJobId(response.jobId),
   });
 
@@ -113,6 +118,7 @@ export function useTranscribeJob(
   }
 
   return {
+    uploadPercent,
     phase: resolveJobPhase(
       createMutation.isPending,
       createMutation.data?.status,

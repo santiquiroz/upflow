@@ -111,7 +111,7 @@ export function ImagePanel() {
 
   const engineQuery = useQuery({ queryKey: ["engine"], queryFn: getEngineInfo });
   const devicesQuery = useQuery({ queryKey: ["devices"], queryFn: getDevices });
-  const { phase, job, errorMessage, submit, cancel, reset } = useImageJob();
+  const { phase, job, errorMessage, submit, cancel, reset, uploadPercent } = useImageJob();
 
   // Las escalas que se ofrecen son las del MODELO elegido, no las del motor: el
   // backend rechaza el job si no coinciden, y hasta ahora eso se descubria
@@ -231,7 +231,14 @@ export function ImagePanel() {
           </button>
         </div>
       </div>
-      <JobCard phase={phase} job={job} fileName={file?.name} errorMessage={errorMessage} onCancel={cancel} />
+      <JobCard
+        phase={phase}
+        job={job}
+        fileName={file?.name}
+        errorMessage={errorMessage}
+        onCancel={cancel}
+        uploadPercent={uploadPercent}
+      />
     </div>
   );
 }

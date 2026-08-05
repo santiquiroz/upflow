@@ -165,7 +165,7 @@ export function AudioPanel() {
   const capabilitiesQuery = useAudioCapabilities();
   const voiceCatalogQuery = useVoiceCatalog();
   const voice = useVoiceSelection(voiceCatalogQuery.data);
-  const { phase, job, errorMessage, submit, cancel, reset } = useAudioJob();
+  const { phase, job, errorMessage, submit, cancel, reset, uploadPercent } = useAudioJob();
   const { t, locale } = useTranslation();
   const { masteringLabel, masteringDescription } = useMasteringCopy();
 
@@ -326,7 +326,14 @@ export function AudioPanel() {
           </button>
         </div>
       </div>
-      <JobCard phase={phase} job={job} fileName={file?.name} errorMessage={errorMessage} onCancel={cancel} />
+      <JobCard
+        phase={phase}
+        job={job}
+        fileName={file?.name}
+        errorMessage={errorMessage}
+        onCancel={cancel}
+        uploadPercent={uploadPercent}
+      />
     </div>
   );
 }

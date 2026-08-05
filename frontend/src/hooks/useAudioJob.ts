@@ -20,6 +20,9 @@ export interface UseAudioJobResult {
   phase: AudioJobPhase;
   job: AudioJob | undefined;
   errorMessage: string | null;
+  // `null` mientras no se este subiendo, o cuando el total no es computable:
+  // dibujar un porcentaje inventado seria mentir sobre lo que falta.
+  uploadPercent: number | null;
   submit: (params: CreateAudioJobParams) => void;
   cancel: () => void;
   reset: () => void;
@@ -70,8 +73,10 @@ export function useAudioJob(
   const pendingFileNameRef = useRef<string>("audio");
   const queryClient = useQueryClient();
 
+  const [uploadPercent, setUploadPercent] = useState<number | null>(null);
   const uploadMutation = useMutation({
-    mutationFn: createAudioJob,
+    mutationFn: (params: Parameters<typeof createAudioJob>[0]) =>
+      createAudioJob(params, { onProgress: setUploadPercent }),
     onSuccess: (data) => {
       setJobId(data.jobId);
       queue.addTrackedJob({
@@ -113,6 +118,7 @@ export function useAudioJob(
   }
 
   return {
+    uploadPercent,
     phase: resolvePhase(uploadMutation.isPending, uploadMutation.data?.status, jobQuery.data),
     job: jobQuery.data,
     errorMessage: resolveErrorMessage(uploadMutation.error, jobQuery.error, jobQuery.data, t),

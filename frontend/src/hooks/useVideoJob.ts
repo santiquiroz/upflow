@@ -15,6 +15,9 @@ export interface UseVideoJobResult {
   phase: VideoJobPhase;
   job: VideoJobResponse | undefined;
   errorMessage: string | null;
+  // `null` mientras no se este subiendo, o cuando el total no es computable:
+  // dibujar un porcentaje inventado seria mentir sobre lo que falta.
+  uploadPercent: number | null;
   submit: (params: CreateVideoJobParams) => void;
   cancel: () => void;
   reset: () => void;
@@ -65,8 +68,10 @@ export function useVideoJob(
   const pendingFileNameRef = useRef<string>("video");
   const queryClient = useQueryClient();
 
+  const [uploadPercent, setUploadPercent] = useState<number | null>(null);
   const uploadMutation = useMutation({
-    mutationFn: createVideoJob,
+    mutationFn: (params: Parameters<typeof createVideoJob>[0]) =>
+      createVideoJob(params, { onProgress: setUploadPercent }),
     onSuccess: (data) => {
       setJobId(data.jobId);
       queue.addTrackedJob({
@@ -108,6 +113,7 @@ export function useVideoJob(
   }
 
   return {
+    uploadPercent,
     phase: resolvePhase(uploadMutation.isPending, uploadMutation.data?.status, jobQuery.data),
     job: jobQuery.data,
     errorMessage: resolveErrorMessage(uploadMutation.error, jobQuery.error, jobQuery.data, t),

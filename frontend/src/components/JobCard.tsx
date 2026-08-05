@@ -15,6 +15,7 @@ interface JobCardProps {
   phase: JobCardPhase;
   job?: AnyJobResponse | null;
   fileName?: string | null;
+  uploadPercent?: number | null;
   errorMessage?: string | null;
   onCancel?: () => void;
 }
@@ -61,15 +62,32 @@ function IdleState() {
   );
 }
 
-function UploadingState({ fileName }: { fileName?: string | null }) {
+function UploadingState({
+  fileName,
+  percent,
+}: {
+  fileName?: string | null;
+  // `null` cuando el navegador no puede saber el total. Ahi va la barra
+  // indeterminada, en vez de un porcentaje inventado.
+  percent?: number | null;
+}) {
+  const { t } = useTranslation();
+  const label = t("job.card.uploading");
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center gap-2 text-sm text-text">
         <UploadCloud aria-hidden="true" className="h-4 w-4 text-accent" strokeWidth={1.75} />
-        <span>Uploading</span>
+        <span>{label}</span>
         {fileName && <span className="text-text-dim">{fileName}</span>}
+        {percent !== null && percent !== undefined && (
+          <span className="font-mono-tabular text-text-dim">{percent}%</span>
+        )}
       </div>
-      <IndeterminateProgressBar label="Uploading" />
+      {percent !== null && percent !== undefined ? (
+        <DeterminateProgressBar label={label} percent={percent} />
+      ) : (
+        <IndeterminateProgressBar label={label} />
+      )}
     </div>
   );
 }
@@ -324,14 +342,21 @@ function resolveDisplayPhase(phase: JobCardPhase, errorMessage?: string | null):
   return phase;
 }
 
-export function JobCard({ phase, job, fileName, errorMessage, onCancel }: JobCardProps) {
+export function JobCard({
+  phase,
+  job,
+  fileName,
+  errorMessage,
+  onCancel,
+  uploadPercent,
+}: JobCardProps) {
   const { t } = useTranslation();
   const displayPhase = resolveDisplayPhase(phase, errorMessage);
 
   return (
     <div aria-live="polite" className="rounded border border-border bg-surface p-4">
       {displayPhase === "idle" && <IdleState />}
-      {displayPhase === "uploading" && <UploadingState fileName={fileName} />}
+      {displayPhase === "uploading" && <UploadingState fileName={fileName} percent={uploadPercent} />}
       {displayPhase === "queued" && <QueuedState job={job} onCancel={onCancel} />}
       {displayPhase === "running" && <RunningState job={job} onCancel={onCancel} />}
       {displayPhase === "completed" && job && <CompletedState job={job} />}

@@ -1,4 +1,5 @@
 import { apiGet, apiPost, apiPostForm } from "../lib/api";
+import type { UploadOptions } from "../lib/uploadRequest";
 import type {
   AudioCapabilities,
   AudioJob,
@@ -53,8 +54,11 @@ function appendVoiceFields(formData: FormData, params: CreateAudioJobParams): vo
   }
 }
 
-export function createAudioJob(params: CreateAudioJobParams): Promise<CreateJobResponse> {
-  return apiPostForm<CreateJobResponse>("/audio/jobs", buildAudioJobFormData(params));
+export function createAudioJob(
+  params: CreateAudioJobParams,
+  options: UploadOptions = {},
+): Promise<CreateJobResponse> {
+  return apiPostForm<CreateJobResponse>("/audio/jobs", buildAudioJobFormData(params), options);
 }
 
 export function getAudioJob(jobId: string): Promise<AudioJob> {

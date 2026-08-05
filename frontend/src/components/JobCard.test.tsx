@@ -89,6 +89,20 @@ describe("JobCard", () => {
     expect(screen.getByText("photo.png")).toBeInTheDocument();
   });
 
+  it("shows how much of the upload is done when the browser can measure it", () => {
+    render(<JobCard phase="uploading" fileName="photo.png" uploadPercent={42} />);
+
+    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "42");
+    expect(screen.getByText("42%")).toBeInTheDocument();
+  });
+
+  it("keeps the indeterminate bar when the upload total is not computable", () => {
+    render(<JobCard phase="uploading" fileName="photo.png" uploadPercent={null} />);
+
+    expect(screen.getByRole("progressbar")).not.toHaveAttribute("aria-valuenow");
+    expect(screen.queryByText(/%/)).not.toBeInTheDocument();
+  });
+
   it("shows a queued state with a progress indicator", () => {
     render(<JobCard phase="queued" job={BASE_JOB} />);
 

@@ -223,6 +223,7 @@ export const es = {
   "enhance.runtime.best": "El mejor backend para tu dispositivo",
   "enhance.runtime.ncnnHint": "Respaldo portátil — corre en cualquier GPU con Vulkan",
   "common.userMenu": "Menú de usuario",
+  "job.card.uploading": "Subiendo",
   "job.card.generatedImage": "Imagen generada",
   "job.card.selectFile": "Elige un archivo para empezar.",
   "job.detail.negativePrompt": "Prompt negativo",

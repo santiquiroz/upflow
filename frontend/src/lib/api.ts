@@ -140,8 +140,11 @@ function buildImageJobFormData(params: CreateImageJobParams): FormData {
   return formData;
 }
 
-export function createImageJob(params: CreateImageJobParams): Promise<CreateJobResponse> {
-  return apiPostForm<CreateJobResponse>("/jobs", buildImageJobFormData(params));
+export function createImageJob(
+  params: CreateImageJobParams,
+  options: UploadOptions = {},
+): Promise<CreateJobResponse> {
+  return apiPostForm<CreateJobResponse>("/jobs", buildImageJobFormData(params), options);
 }
 
 export function getJob(jobId: string): Promise<JobResponse> {
@@ -248,8 +251,11 @@ function buildVideoJobFormData(params: CreateVideoJobParams): FormData {
   return formData;
 }
 
-export function createVideoJob(params: CreateVideoJobParams): Promise<CreateJobResponse> {
-  return apiPostForm<CreateJobResponse>("/video/jobs", buildVideoJobFormData(params));
+export function createVideoJob(
+  params: CreateVideoJobParams,
+  options: UploadOptions = {},
+): Promise<CreateJobResponse> {
+  return apiPostForm<CreateJobResponse>("/video/jobs", buildVideoJobFormData(params), options);
 }
 
 export function analyzeVideo(file: File): Promise<AnalyzeVideoResponse> {
