@@ -88,6 +88,15 @@ class AudioJobResponse(BaseModel):
     download_url: str | None = Field(default=None, serialization_alias="downloadUrl")
 
 
+class TranslationPairResponse(BaseModel):
+    source: str
+    target: str
+
+
+class TranslationPairsResponse(BaseModel):
+    pairs: list[TranslationPairResponse]
+
+
 class VoiceConversionCapabilitiesResponse(BaseModel):
     available: bool
     reason: str | None = None

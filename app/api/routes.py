@@ -67,6 +67,8 @@ from app.schemas import (
     SavedPromptResponse,
     SavedPromptsResponse,
     SynthesizeSpeechRequest,
+    TranslationPairResponse,
+    TranslationPairsResponse,
     TtsCapabilitiesResponse,
     VoiceConversionCapabilitiesResponse,
     RealtimeCapabilitiesResponse,
@@ -170,7 +172,12 @@ from app.services.engines.voice_convert import (
 from app.services.media_decode import build_decode_to_wav_command, needs_decoding
 from app.services.prompt_presets import PROMPT_PRESETS
 from app.services.saved_prompts import SavedPromptStore
-from app.services.subtitles import SUBTITLE_FORMATS, render_segments
+from app.services.subtitles import SUBTITLE_FORMATS, TranscriptSegment, render_segments
+from app.services.translate import (
+    TranslationEngine,
+    TranslationUnavailable,
+    parse_pair,
+)
 from app.services.transcribe_job_manager import TranscribeJobManager
 from app.services.stream_analysis import parse_audio_tracks, parse_subtitle_tracks
 from app.services.update_service import UpdateService
@@ -1343,6 +1350,25 @@ async def cancel_transcribe_job(
     return transcribe_job_to_response(job)
 
 
+_TRANSLATION = TranslationEngine(Path(get_settings().runtime_dir).parent / "vendor" / "translation")
+
+
+def get_translation() -> TranslationEngine:
+    return _TRANSLATION
+
+
+@router.get("/translation/pairs", response_model=TranslationPairsResponse)
+async def list_translation_pairs(
+    engine: TranslationEngine = Depends(get_translation),
+) -> TranslationPairsResponse:
+    return TranslationPairsResponse(
+        pairs=[
+            TranslationPairResponse(source=p.source, target=p.target)
+            for p in engine.available_pairs()
+        ]
+    )
+
+
 @router.get(
     "/transcribe/jobs/{job_id}/download",
     dependencies=[Depends(require(Permission.jobs_read_own))],
@@ -1352,6 +1378,8 @@ async def download_transcribe_job(
     transcribe_jobs: TranscribeJobManager = Depends(get_transcribe_job_manager),
     request: Request = None,
     fmt: str = "txt",
+    translate_to: str | None = None,
+    translation: TranslationEngine = Depends(get_translation),
 ) -> Response:
     job = transcribe_jobs.get_job(job_id)
     current_user = current_user_from_request(request)
@@ -1359,6 +1387,8 @@ async def download_transcribe_job(
         raise HTTPException(status_code=404, detail="Transcribe job not found")
     if job.status != JobStatus.completed or not job.output_path:
         raise HTTPException(status_code=409, detail="Transcribe job is not completed yet")
+    if translate_to and fmt == "txt" and not job.segments:
+        raise HTTPException(status_code=409, detail="This job has no segments to translate")
     if fmt not in SUBTITLE_FORMATS:
         raise HTTPException(status_code=400, detail=f"Unknown subtitle format: {fmt}")
     spec = SUBTITLE_FORMATS[fmt]
@@ -1369,7 +1399,18 @@ async def download_transcribe_job(
         )
     # Los subtitulos se rinden al vuelo desde los segmentos: el job ya los tiene,
     # asi que no hace falta escribir un archivo por formato al terminar.
-    body = render_segments(list(job.segments), fmt)
+    segments = list(job.segments)
+    if translate_to:
+        # Se traduce SEGMENTO POR SEGMENTO y se emparejan por indice: los
+        # tiempos pertenecen a cada segmento y traducir el texto corrido los
+        # perderia.
+        pair = parse_pair(job.language or "en", translate_to)
+        traducidos = translation.translate([s.text for s in segments], pair)
+        segments = [
+            TranscriptSegment(start=s.start, end=s.end, text=t)
+            for s, t in zip(segments, traducidos)
+        ]
+    body = render_segments(segments, fmt)
     return Response(
         content=body.encode("utf-8"),
         media_type=spec.media_type,
