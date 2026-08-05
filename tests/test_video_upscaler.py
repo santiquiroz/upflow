@@ -1095,3 +1095,105 @@ async def test_gate_routes_multi_audio_job_through_the_stream_pipeline(tmp_path:
     job = make_stream_job(tmp_path, keep_audio=True, audio_track_indices=[1, 2, 3])
 
     assert await upscaler._resolve_stream_pipeline_mode(job, 1) == STREAM_MODE_FULL
+
+
+# ---------------------------------------------------------------------------
+# Cortes de escena en la interpolacion
+#
+# Medido (`scripts/spike_scenecut.py`): en un corte duro, RIFE inventa un cuadro
+# que es mezcla de las dos escenas — queda a 144 de un color y a 26 del otro,
+# cuando los limpios quedan a menos de 1,2. En anime, donde los cortes son duros
+# y frecuentes, eso es un fundido de un fotograma en cada corte.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_ghost_frames_of_a_cut_are_repaired_after_interpolating(
+    tmp_path: Path, monkeypatch
+) -> None:
+    upscaler = make_stream_upscaler(tmp_path)
+    job = make_stream_job(tmp_path)
+    frames = tmp_path / "frames-interp"
+    frames.mkdir(parents=True, exist_ok=True)
+    llamados: list[dict] = []
+
+    async def fake_detect(video, fps):
+        return [2]
+
+    def fake_repair(frames_dir, **kwargs):
+        llamados.append({"dir": frames_dir, **kwargs})
+        return 1
+
+    monkeypatch.setattr(upscaler, "_detect_scene_cuts", fake_detect)
+    monkeypatch.setattr("app.services.video_upscaler.repair_interpolated_cuts", fake_repair)
+
+    await upscaler._repair_scene_cuts(job, frames, source_frame_count=4, output_frame_count=7)
+
+    assert llamados == [
+        {"dir": frames, "cut_indices": [2], "source_count": 4, "output_count": 7}
+    ]
+    assert job.metadata["sceneCutsRepaired"] == 1
+
+
+@pytest.mark.asyncio
+async def test_a_video_without_cuts_records_nothing(tmp_path: Path, monkeypatch) -> None:
+    upscaler = make_stream_upscaler(tmp_path)
+    job = make_stream_job(tmp_path)
+
+    async def fake_detect(video, fps):
+        return []
+
+    monkeypatch.setattr(upscaler, "_detect_scene_cuts", fake_detect)
+
+    await upscaler._repair_scene_cuts(
+        job, tmp_path / "frames-interp", source_frame_count=4, output_frame_count=7
+    )
+
+    assert "sceneCutsRepaired" not in job.metadata
+
+
+@pytest.mark.asyncio
+async def test_a_failed_detection_does_not_kill_the_job(tmp_path: Path, monkeypatch) -> None:
+    """Un video sin cortes reparados sigue siendo un video: perderlo entero
+    porque ffmpeg no supo detectar seria cambiar una molestia por un desastre."""
+    upscaler = make_stream_upscaler(tmp_path)
+    job = make_stream_job(tmp_path)
+
+    async def boom(video, fps):
+        raise RuntimeError("ffmpeg se cayo")
+
+    monkeypatch.setattr(upscaler, "_detect_scene_cuts", boom)
+
+    await upscaler._repair_scene_cuts(
+        job, tmp_path / "frames-interp", source_frame_count=4, output_frame_count=7
+    )
+
+    assert "sceneCutsRepaired" not in job.metadata
+
+
+@pytest.mark.asyncio
+async def test_interpolating_always_runs_the_cut_repair(tmp_path: Path, monkeypatch) -> None:
+    """El fantasma lo produce cualquier interpolador, no solo RIFE: la
+    reparacion tiene que correr siempre que se interpole."""
+    upscaler = make_stream_upscaler(tmp_path)
+    job = make_stream_job(tmp_path)
+    frames = tmp_path / "frames"
+    frames.mkdir(parents=True, exist_ok=True)
+    reparaciones: list[tuple] = []
+
+    async def fake_interp(engine, frames_out, frames_interp, source_frame_count, fps, mult, device=None):
+        return frames_interp, fps
+
+    async def fake_repair(job_, frames_dir, *, source_frame_count, output_frame_count):
+        reparaciones.append((frames_dir, source_frame_count, output_frame_count))
+
+    monkeypatch.setattr(upscaler, "_resolve_interpolation_engine", lambda job_: object())
+    monkeypatch.setattr(upscaler, "_count_frames", lambda _dir: 4)
+    monkeypatch.setattr(upscaler, "_interpolate_by_multiplier", fake_interp)
+    monkeypatch.setattr(upscaler, "_repair_scene_cuts", fake_repair)
+
+    await upscaler._maybe_interpolate(job, frames, "24/1", 2)
+
+    assert len(reparaciones) == 1
+    _dir, origen, salida = reparaciones[0]
+    assert (origen, salida) == (4, 8)

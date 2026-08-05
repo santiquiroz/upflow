@@ -44,6 +44,7 @@ from app.services.media_tools import (
     compute_interpolated_fps,
     compute_target_frame_count,
     format_fps_fraction,
+    parse_fps_fraction,
     resolve_video_fps,
 )
 from app.services.model_registry import ModelKind, ModelRegistry
@@ -59,6 +60,13 @@ from app.services.progress import (
     resolve_frames_total,
 )
 from app.services.restorer_registry import AudioRestorer
+from app.services.scene_cuts import (
+    DEFAULT_THRESHOLD as SCENE_CUT_THRESHOLD,
+    build_scene_detect_command,
+    parse_scene_cut_times,
+    repair_interpolated_cuts,
+    source_index_at_time,
+)
 from app.services.stall_watchdog import StallWatchdog
 
 logger = logging.getLogger(__name__)
@@ -663,13 +671,75 @@ class VideoUpscaler:
             job, frames_interp, "interpolating_frames", frames_total=interp_frames_total
         ):
             if target_fps is not None:
-                return await self._interpolate_to_target_fps(
+                resultado = await self._interpolate_to_target_fps(
                     engine, frames_out, frames_interp, source_frame_count, fps, target_fps, job.device
                 )
+            else:
+                resultado = await self._interpolate_by_multiplier(
+                    engine, frames_out, frames_interp, source_frame_count, fps, fps_multiplier, job.device
+                )
 
-            return await self._interpolate_by_multiplier(
-                engine, frames_out, frames_interp, source_frame_count, fps, fps_multiplier, job.device
+        # Fuera del bloque de progreso: la reparacion no produce cuadros y
+        # contarla como avance mentiria sobre lo que falta.
+        await self._repair_scene_cuts(
+            job,
+            resultado[0],
+            source_frame_count=source_frame_count,
+            output_frame_count=interp_frames_total or source_frame_count,
+        )
+        return resultado
+
+    async def _repair_scene_cuts(
+        self,
+        job: VideoUpscaleJob,
+        frames_dir: Path,
+        *,
+        source_frame_count: int,
+        output_frame_count: int,
+    ) -> None:
+        """Cambia por una copia los cuadros que la interpolacion invento a
+        caballo de un corte.
+
+        En un corte NO hay movimiento que estimar: las dos imagenes no comparten
+        nada, y lo que sale es una mezcla. Duplicar el ultimo cuadro de la escena
+        que termina es lo que hace cualquier interpolador serio.
+        """
+        try:
+            cortes = await self._detect_scene_cuts(job.source_path, job.metadata.get("fps"))
+            if not cortes:
+                return
+            reparados = await asyncio.to_thread(
+                repair_interpolated_cuts,
+                frames_dir,
+                cut_indices=cortes,
+                source_count=source_frame_count,
+                output_count=output_frame_count,
             )
+        except Exception:  # noqa: BLE001
+            # Un video con fantasmas sigue siendo un video: perderlo entero
+            # porque la deteccion fallo seria cambiar una molestia por un
+            # desastre.
+            logger.warning("scene-cut repair failed; leaving the interpolated frames as they are")
+            return
+        if reparados:
+            job.metadata["sceneCutsRepaired"] = reparados
+
+    async def _detect_scene_cuts(self, video: Path, fps: object) -> list[int]:
+        fraccion = parse_fps_fraction(str(fps)) if fps is not None else None
+        if not fraccion:
+            return []
+        cuadros_por_segundo = float(fraccion)
+        command = build_scene_detect_command(
+            ffmpeg=str(self.settings.ffmpeg_binary_path),
+            video=video,
+            threshold=SCENE_CUT_THRESHOLD,
+        )
+        process = await asyncio.create_subprocess_exec(
+            *command, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE
+        )
+        _stdout, stderr = await process.communicate()
+        tiempos = parse_scene_cut_times(stderr.decode("utf-8", "replace"))
+        return [source_index_at_time(t, fps=cuadros_por_segundo) for t in tiempos]
 
     def _resolve_interpolation_engine(self, job: VideoUpscaleJob) -> RifeNcnnEngine | GmfssEngine:
         if job.interp_engine == GMFSS_ENGINE:

@@ -188,6 +188,20 @@ describe("JobCard", () => {
     ).toBeInTheDocument();
   });
 
+  it("says how many ghost frames of a scene cut were replaced", () => {
+    // La app cambió cuadros que el interpolador había inventado: es una
+    // decisión que tomó sola y que cambia lo que el usuario recibe.
+    const job: VideoJobResponse = {
+      ...BASE_VIDEO_JOB,
+      status: "completed",
+      downloadUrl: "/api/v1/video/jobs/vid-1/download",
+      metadata: { sceneCutsRepaired: 12 },
+    };
+    render(<JobCard phase="completed" job={job} />);
+
+    expect(screen.getByRole("status")).toHaveTextContent(/12/);
+  });
+
   it("shows a preview and a download link when completed", () => {
     const job: JobResponse = { ...BASE_JOB, status: "completed", downloadUrl: "/api/v1/jobs/job-1/download" };
     render(<JobCard phase="completed" job={job} />);

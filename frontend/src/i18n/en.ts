@@ -240,6 +240,7 @@ export const en = {
   "job.notice.containerUpgraded": "The container had to be changed.",
   "job.notice.slowerPipeline": "The fast path failed and the slower one finished the job.",
   "job.notice.masteringSkipped": "Mastering was skipped.",
+  "job.notice.sceneCuts": "Frames invented across a scene cut were replaced with a copy (there is no motion to estimate at a cut). Frames replaced:",
   "job.card.generatedImage": "Generated image",
   "job.card.selectFile": "Select a file to begin.",
   "job.detail.negativePrompt": "Negative prompt",

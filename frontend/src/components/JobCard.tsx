@@ -367,6 +367,10 @@ function readNotices(job: AnyJobResponse): { labelKey: string; detail: string }[
         avisos.push({ labelKey, detail: valor });
       }
     }
+    const reparados = metadata.sceneCutsRepaired;
+    if (typeof reparados === "number" && reparados > 0) {
+      avisos.push({ labelKey: "job.notice.sceneCuts", detail: String(reparados) });
+    }
   }
   return avisos;
 }

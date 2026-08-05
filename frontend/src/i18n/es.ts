@@ -235,6 +235,7 @@ export const es = {
   "job.notice.containerUpgraded": "Hubo que cambiar el contenedor.",
   "job.notice.slowerPipeline": "El camino rápido falló y lo terminó el lento.",
   "job.notice.masteringSkipped": "Se saltó la masterización.",
+  "job.notice.sceneCuts": "Se reemplazaron por una copia los cuadros que la interpolación inventó en un corte de escena (en un corte no hay movimiento que estimar). Cuadros reemplazados:",
   "job.card.generatedImage": "Imagen generada",
   "job.card.selectFile": "Elige un archivo para empezar.",
   "job.detail.negativePrompt": "Prompt negativo",
