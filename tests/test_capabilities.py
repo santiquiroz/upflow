@@ -336,9 +336,11 @@ class TestPrintDomain:
         settings = Settings(RUNTIME_DIR=str(tmp_path), _env_file=None)
         resueltas = resolve_capabilities(settings, ModelRegistry(settings))
 
-        chequeo = next(c for c in resueltas if c.id == "print.check")
-        assert chequeo.status == "available"
-        assert chequeo.missing_packs == ()
+        por_id = {c.id: c for c in resueltas}
+        assert por_id["print.check"].status == "available"
+        assert por_id["print.check"].missing_packs == ()
+        # La reparacion tambien: es numpy en proceso, no baja nada.
+        assert por_id["print.repair"].status == "available"
 
     def test_the_print_domain_is_in_the_order(self) -> None:
         from app.services.capabilities import DOMAIN_ORDER

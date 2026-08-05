@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import subprocess
 from dataclasses import asdict
 from pathlib import Path
@@ -70,6 +71,7 @@ from app.schemas import (
     TranslationPairResponse,
     TranslationPairsResponse,
     TtsCapabilitiesResponse,
+    MeshRepairResponse,
     PrintCheckResponse,
     PrinterResponse,
     PrintersResponse,
@@ -177,6 +179,9 @@ from app.services.prompt_presets import PROMPT_PRESETS
 from app.services.saved_prompts import SavedPromptStore
 from app.services.subtitles import SUBTITLE_FORMATS, TranscriptSegment, render_segments
 from app.services.mesh_fit import PRINTER_BEDS
+from app.services.mesh_repair import repair_mesh
+from app.services.stl_reader import StlUnreadable, read_stl
+from app.services.stl_writer import write_stl
 from app.services.print_check import PrintCheckUnavailable, check_stl_for_printing
 from app.services.vendor_paths import kokoro_dir, translation_dir
 from app.services.translate import (
@@ -2652,6 +2657,58 @@ async def check_print(
         overhang_ratio=reporte.overhang_ratio,
         blockers=reporte.blockers,
         advice=reporte.advice,
+    )
+
+
+@router.post("/print/repair", response_model=MeshRepairResponse)
+async def repair_print_mesh(
+    file: UploadFile = File(...),
+    settings_dep: Settings = Depends(get_settings),
+    storage: StorageService = Depends(get_storage),
+) -> MeshRepairResponse:
+    """Tapa los agujeros de la malla y devuelve como quedo, medido.
+
+    El archivo se entrega aunque NO haya quedado cerrada: el reporte dice la
+    verdad y el usuario decide si le sirve.
+    """
+    safe_name = sanitize_filename(Path(file.filename or "pieza.stl").name, default="pieza.stl")
+    origen = settings_dep.uploads_path / f"{uuid4().hex}-{safe_name}"
+    token = uuid4().hex
+    destino = settings_dep.outputs_path / f"{token}.repaired.stl"
+    try:
+        await storage.save_upload(file, origen, max_mb=settings_dep.max_upload_mb)
+        triangulos = await asyncio.to_thread(read_stl, origen)
+        reparada, reporte = await asyncio.to_thread(repair_mesh, triangulos)
+        await asyncio.to_thread(write_stl, destino, reparada)
+    except (StlUnreadable, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        origen.unlink(missing_ok=True)
+
+    return MeshRepairResponse(
+        can_print=reporte.printable,
+        watertight=reporte.is_watertight,
+        manifold=reporte.is_manifold,
+        triangle_count=reporte.triangle_count,
+        volume_mm3=reporte.volume,
+        blockers=reporte.problems,
+        download_url=f"/api/v1/print/repaired/{token}",
+    )
+
+
+@router.get("/print/repaired/{token}")
+async def download_repaired_mesh(
+    token: str,
+    settings_dep: Settings = Depends(get_settings),
+) -> FileResponse:
+    # Solo hexadecimal: cualquier otra cosa podria salirse de la carpeta.
+    if not re.fullmatch(r"[0-9a-f]{32}", token):
+        raise HTTPException(status_code=404, detail="Malla reparada no encontrada")
+    archivo = settings_dep.outputs_path / f"{token}.repaired.stl"
+    if not archivo.exists():
+        raise HTTPException(status_code=404, detail="Malla reparada no encontrada")
+    return FileResponse(
+        path=archivo, filename="pieza-reparada.stl", media_type="model/stl"
     )
 
 

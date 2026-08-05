@@ -105,10 +105,10 @@ _PRINT_CAPABILITIES: tuple[Capability, ...] = (
         id="print.repair",
         domain="print",
         label_key="capability.print.repair",
-        provisioning="none",
+        # numpy en proceso, igual que el chequeo.
+        provisioning="builtin",
         job_kind=None,
         strategies=("dsp",),
-        unavailable_reason_key="capability.reason.printRepairPending",
     ),
     Capability(
         id="print.slice",

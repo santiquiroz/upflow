@@ -9,7 +9,7 @@ import { PrintPage } from "./PrintPage";
 
 vi.mock("../../services/print", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../services/print")>();
-  return { ...actual, fetchPrinters: vi.fn(), checkPrint: vi.fn() };
+  return { ...actual, fetchPrinters: vi.fn(), checkPrint: vi.fn(), repairMesh: vi.fn() };
 });
 
 const RESULTADO_OK: printService.PrintCheckResult = {
@@ -158,5 +158,81 @@ describe("PrintPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: en["print.check"] }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(/no es un STL/);
+  });
+
+  it("offers to close a mesh that is not watertight", async () => {
+    vi.mocked(printService.checkPrint).mockResolvedValue({
+      ...RESULTADO_OK,
+      canPrint: false,
+      watertight: false,
+      blockers: ["12 aristas de borde."],
+    });
+    renderPage();
+    selectFile();
+    fireEvent.click(await screen.findByRole("button", { name: en["print.check"] }));
+
+    expect(await screen.findByRole("button", { name: en["print.repair"] })).toBeInTheDocument();
+  });
+
+  it("does not offer to close a mesh that is already watertight", async () => {
+    // Un boton que no hace nada util entrena a ignorar los botones.
+    renderPage();
+    selectFile();
+    fireEvent.click(await screen.findByRole("button", { name: en["print.check"] }));
+
+    await screen.findByText(en["print.verdict.yes"]);
+    expect(screen.queryByRole("button", { name: en["print.repair"] })).not.toBeInTheDocument();
+  });
+
+  it("says plainly when the repair did not close it, and offers the file anyway", async () => {
+    vi.mocked(printService.checkPrint).mockResolvedValue({
+      ...RESULTADO_OK,
+      canPrint: false,
+      watertight: false,
+      blockers: ["muchas aristas de borde."],
+    });
+    vi.mocked(printService.repairMesh).mockResolvedValue({
+      canPrint: false,
+      watertight: false,
+      manifold: true,
+      triangleCount: 900,
+      volumeMm3: null,
+      blockers: ["Siguen quedando 40 aristas de borde."],
+      downloadUrl: "/api/v1/print/repaired/abc",
+    });
+    renderPage();
+    selectFile();
+    fireEvent.click(await screen.findByRole("button", { name: en["print.check"] }));
+    fireEvent.click(await screen.findByRole("button", { name: en["print.repair"] }));
+
+    expect(await screen.findByText(en["print.repair.stillOpen"])).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: en["print.repair.download"] }),
+    ).toHaveAttribute("href", "/api/v1/print/repaired/abc");
+  });
+
+  it("warns that the caps are flat when it did close", async () => {
+    // "Reparada" a secas haria creer que volvio la forma que faltaba.
+    vi.mocked(printService.checkPrint).mockResolvedValue({
+      ...RESULTADO_OK,
+      canPrint: false,
+      watertight: false,
+      blockers: ["3 aristas de borde."],
+    });
+    vi.mocked(printService.repairMesh).mockResolvedValue({
+      canPrint: true,
+      watertight: true,
+      manifold: true,
+      triangleCount: 1203,
+      volumeMm3: 12000,
+      blockers: [],
+      downloadUrl: "/api/v1/print/repaired/def",
+    });
+    renderPage();
+    selectFile();
+    fireEvent.click(await screen.findByRole("button", { name: en["print.check"] }));
+    fireEvent.click(await screen.findByRole("button", { name: en["print.repair"] }));
+
+    expect(await screen.findByText(en["print.repair.closed"])).toBeInTheDocument();
   });
 });

@@ -1,8 +1,14 @@
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, Box, CheckCircle2, Lightbulb, UploadCloud } from "lucide-react";
+import { AlertTriangle, Box, CheckCircle2, Download, Lightbulb, UploadCloud, Wrench } from "lucide-react";
 import { useState, type ChangeEvent, type DragEvent } from "react";
 import { useTranslation } from "../../i18n/LocaleProvider";
-import { checkPrint, fetchPrinters, type PrintCheckResult } from "../../services/print";
+import {
+  checkPrint,
+  fetchPrinters,
+  repairMesh,
+  type MeshRepairResult,
+  type PrintCheckResult,
+} from "../../services/print";
 
 const AXES = ["x", "y", "z"] as const;
 
@@ -108,6 +114,7 @@ export function PrintPage() {
   const [targetAxis, setTargetAxis] = useState("");
   const [targetMm, setTargetMm] = useState("");
   const [result, setResult] = useState<PrintCheckResult | null>(null);
+  const [repair, setRepair] = useState<MeshRepairResult | null>(null);
   const [isBusy, setIsBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -123,6 +130,7 @@ export function PrintPage() {
     setResult(null);
     try {
       const medida = Number(targetMm);
+      setRepair(null);
       setResult(
         await checkPrint({
           file,
@@ -131,6 +139,21 @@ export function PrintPage() {
           targetMm: targetAxis && medida > 0 ? medida : undefined,
         }),
       );
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function handleRepair() {
+    if (!file) {
+      return;
+    }
+    setIsBusy(true);
+    setError(null);
+    try {
+      setRepair(await repairMesh(file));
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
     } finally {
@@ -227,6 +250,39 @@ export function PrintPage() {
             <>
               <Verdict result={result} />
               <Measurements result={result} />
+
+              {!result.watertight && repair === null && (
+                <button
+                  type="button"
+                  onClick={() => void handleRepair()}
+                  disabled={isBusy}
+                  className="inline-flex w-fit items-center gap-2 rounded border border-border bg-surface px-3 py-1.5 text-sm text-text hover:border-text-faint disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                >
+                  <Wrench aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />
+                  {t("print.repair")}
+                </button>
+              )}
+
+              {repair !== null && (
+                <div className="flex flex-col gap-2 rounded border border-border bg-surface-2 p-2">
+                  <p role="status" className="text-sm text-text">
+                    {repair.watertight ? t("print.repair.closed") : t("print.repair.stillOpen")}
+                  </p>
+                  {repair.blockers.map((b) => (
+                    <p key={b} className="text-xs text-text-dim">
+                      {b}
+                    </p>
+                  ))}
+                  <a
+                    href={repair.downloadUrl}
+                    download
+                    className="inline-flex w-fit items-center gap-2 rounded bg-accent px-3 py-1.5 text-sm font-medium text-bg hover:bg-accent-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                  >
+                    <Download aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />
+                    {t("print.repair.download")}
+                  </a>
+                </div>
+              )}
 
               {result.blockers.length > 0 && (
                 <div className="flex flex-col gap-1">

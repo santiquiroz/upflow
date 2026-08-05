@@ -126,6 +126,18 @@ class PrintCheckResponse(BaseModel):
     advice: list[str] = Field(default_factory=list)
 
 
+class MeshRepairResponse(BaseModel):
+    can_print: bool = Field(serialization_alias="canPrint")
+    watertight: bool
+    manifold: bool
+    triangle_count: int = Field(serialization_alias="triangleCount")
+    volume_mm3: float | None = Field(default=None, serialization_alias="volumeMm3")
+    blockers: list[str] = Field(default_factory=list)
+    # La malla reparada, para bajarla. Se entrega igual cuando NO quedo cerrada:
+    # el usuario decide si le sirve, y el reporte le dice la verdad.
+    download_url: str = Field(serialization_alias="downloadUrl")
+
+
 class SavedPromptResponse(BaseModel):
     id: str
     name: str

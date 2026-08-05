@@ -45,3 +45,23 @@ export function checkPrint(
   }
   return apiPostForm<PrintCheckResult>("/print/check", formData, options);
 }
+
+export interface MeshRepairResult {
+  canPrint: boolean;
+  watertight: boolean;
+  manifold: boolean;
+  triangleCount: number;
+  volumeMm3: number | null;
+  blockers: string[];
+  /** La malla reparada. Se entrega aunque NO haya quedado cerrada. */
+  downloadUrl: string;
+}
+
+export function repairMesh(
+  file: File,
+  options: UploadOptions = {},
+): Promise<MeshRepairResult> {
+  const formData = new FormData();
+  formData.append("file", file);
+  return apiPostForm<MeshRepairResult>("/print/repair", formData, options);
+}
