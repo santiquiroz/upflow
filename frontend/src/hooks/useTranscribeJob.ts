@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   AsrInstallStatus,
   JobStatus,
@@ -78,9 +78,18 @@ export function useTranscribeJob(
   const queryClient = useQueryClient();
 
   const [uploadPercent, setUploadPercent] = useState<number | null>(null);
+  // Mientras se sube todavia no hay jobId: cortar el envio es lo unico que
+  // "cancelar" puede significar en ese momento.
+  const uploadAbortRef = useRef<AbortController | null>(null);
   const createMutation = useMutation({
-    mutationFn: (params: Parameters<typeof createTranscribeJob>[0]) =>
-      createTranscribeJob(params, { onProgress: setUploadPercent }),
+    mutationFn: (params: Parameters<typeof createTranscribeJob>[0]) => {
+      const controller = new AbortController();
+      uploadAbortRef.current = controller;
+      return createTranscribeJob(params, {
+        onProgress: setUploadPercent,
+        signal: controller.signal,
+      });
+    },
     onSuccess: (response) => setJobId(response.jobId),
   });
 
@@ -101,6 +110,11 @@ export function useTranscribeJob(
 
   function cancel(): void {
     if (jobId === null) {
+      // Cortar la subida no es un error: el usuario pidio que se cortara.
+      uploadAbortRef.current?.abort();
+      uploadAbortRef.current = null;
+      createMutation.reset();
+      setUploadPercent(null);
       return;
     }
     void cancelTranscribeJob(jobId)

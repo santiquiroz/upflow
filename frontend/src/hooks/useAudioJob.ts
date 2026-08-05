@@ -74,9 +74,18 @@ export function useAudioJob(
   const queryClient = useQueryClient();
 
   const [uploadPercent, setUploadPercent] = useState<number | null>(null);
+  // Mientras se sube todavia no hay jobId: cortar el envio es lo unico que
+  // "cancelar" puede significar en ese momento.
+  const uploadAbortRef = useRef<AbortController | null>(null);
   const uploadMutation = useMutation({
-    mutationFn: (params: Parameters<typeof createAudioJob>[0]) =>
-      createAudioJob(params, { onProgress: setUploadPercent }),
+    mutationFn: (params: Parameters<typeof createAudioJob>[0]) => {
+      const controller = new AbortController();
+      uploadAbortRef.current = controller;
+      return createAudioJob(params, {
+        onProgress: setUploadPercent,
+        signal: controller.signal,
+      });
+    },
     onSuccess: (data) => {
       setJobId(data.jobId);
       queue.addTrackedJob({
@@ -105,6 +114,11 @@ export function useAudioJob(
   // running poll is the source of truth and reconciles the status on refetch.
   function cancel(): void {
     if (jobId === null) {
+      // Cortar la subida no es un error: el usuario pidio que se cortara.
+      uploadAbortRef.current?.abort();
+      uploadAbortRef.current = null;
+      uploadMutation.reset();
+      setUploadPercent(null);
       return;
     }
     void cancelAudioJob(jobId)

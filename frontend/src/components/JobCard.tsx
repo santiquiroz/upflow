@@ -65,8 +65,10 @@ function IdleState() {
 function UploadingState({
   fileName,
   percent,
+  onCancel,
 }: {
   fileName?: string | null;
+  onCancel?: () => void;
   // `null` cuando el navegador no puede saber el total. Ahi va la barra
   // indeterminada, en vez de un porcentaje inventado.
   percent?: number | null;
@@ -82,6 +84,7 @@ function UploadingState({
         {percent !== null && percent !== undefined && (
           <span className="font-mono-tabular text-text-dim">{percent}%</span>
         )}
+        {onCancel && <CancelButton onCancel={onCancel} />}
       </div>
       {percent !== null && percent !== undefined ? (
         <DeterminateProgressBar label={label} percent={percent} />
@@ -409,7 +412,7 @@ export function JobCard({
   return (
     <div aria-live="polite" className="rounded border border-border bg-surface p-4">
       {displayPhase === "idle" && <IdleState />}
-      {displayPhase === "uploading" && <UploadingState fileName={fileName} percent={uploadPercent} />}
+      {displayPhase === "uploading" && <UploadingState fileName={fileName} percent={uploadPercent} onCancel={onCancel} />}
       {displayPhase === "queued" && <QueuedState job={job} onCancel={onCancel} />}
       {displayPhase === "running" && <RunningState job={job} onCancel={onCancel} />}
       {displayPhase === "completed" && job && (

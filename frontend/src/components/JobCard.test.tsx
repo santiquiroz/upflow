@@ -89,6 +89,15 @@ describe("JobCard", () => {
     expect(screen.getByText("photo.png")).toBeInTheDocument();
   });
 
+  it("lets the user cut an upload in progress", () => {
+    const onCancel = vi.fn();
+    render(<JobCard phase="uploading" fileName="photo.png" onCancel={onCancel} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
+
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
   it("shows how much of the upload is done when the browser can measure it", () => {
     render(<JobCard phase="uploading" fileName="photo.png" uploadPercent={42} />);
 

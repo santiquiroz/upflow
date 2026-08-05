@@ -200,3 +200,51 @@ describe("useImageJob", () => {
     expect(queue.getSnapshot()[0]).toMatchObject({ id: "job-1", kind: "image", fileName: "photo.png" });
   });
 });
+
+describe("useImageJob: cortar la subida", () => {
+  it("aborts the request when cancelling before the job exists", async () => {
+    // Durante la subida todavia no hay jobId: cancelar tiene que cortar el
+    // envio, no quedarse esperando a que termine para recien ahi pedirle al
+    // servidor que lo cancele.
+    let recibido: AbortSignal | undefined;
+    vi.mocked(api.createImageJob).mockImplementation((_params, options) => {
+      recibido = options?.signal;
+      return new Promise(() => {});
+    });
+
+    const { result } = renderHook(() => useImageJob(POLL_INTERVAL_MS), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => result.current.submit(submitParams()));
+    await waitFor(() => expect(recibido).toBeDefined());
+    expect(recibido!.aborted).toBe(false);
+
+    act(() => result.current.cancel());
+
+    expect(recibido!.aborted).toBe(true);
+  });
+
+  it("goes back to idle after cutting the upload", async () => {
+    vi.mocked(api.createImageJob).mockImplementation(
+      (_params, options) =>
+        new Promise((_resolve, reject) => {
+          options?.signal?.addEventListener("abort", () =>
+            reject(new api.ApiError(0, "Upload cancelled")),
+          );
+        }),
+    );
+
+    const { result } = renderHook(() => useImageJob(POLL_INTERVAL_MS), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => result.current.submit(submitParams()));
+    await waitFor(() => expect(result.current.phase).toBe("uploading"));
+
+    act(() => result.current.cancel());
+
+    await waitFor(() => expect(result.current.phase).toBe("idle"));
+    expect(result.current.errorMessage).toBeNull();
+  });
+});

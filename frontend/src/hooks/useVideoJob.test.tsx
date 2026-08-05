@@ -251,3 +251,26 @@ describe("useVideoJob", () => {
     expect(queue.getSnapshot()[0]).toMatchObject({ id: "vid-1", kind: "video", fileName: "clip.mp4" });
   });
 });
+
+describe("useVideoJob: cortar la subida", () => {
+  it("aborts the request when cancelling before the job exists", async () => {
+    // Un video pesado es donde mas duele: sin esto, arrepentirse a los 3 GB
+    // significa esperar a que termine de subir igual.
+    let recibido: AbortSignal | undefined;
+    vi.mocked(api.createVideoJob).mockImplementation((_params, options) => {
+      recibido = options?.signal;
+      return new Promise(() => {});
+    });
+
+    const { result } = renderHook(() => useVideoJob(POLL_INTERVAL_MS), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => result.current.submit(submitParams()));
+    await waitFor(() => expect(recibido).toBeDefined());
+
+    act(() => result.current.cancel());
+
+    expect(recibido!.aborted).toBe(true);
+  });
+});
