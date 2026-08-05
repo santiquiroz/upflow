@@ -356,3 +356,39 @@ describe("AudioPanel", () => {
     expect(screen.getByRole("button", { name: /enhance audio/i })).toBeEnabled();
   });
 });
+
+describe("AudioPanel en lote", () => {
+  it("creates one job per file with the same settings", async () => {
+    vi.mocked(audioService.createAudioJob).mockResolvedValue({
+      jobId: "aud-1",
+      status: "queued",
+      statusUrl: "/api/v1/audio/jobs/aud-1",
+      downloadUrl: null,
+    });
+    renderPanel(FULL_CAPABILITIES);
+
+    const fileInput = document.getElementById("audio-file-input") as HTMLInputElement;
+    fireEvent.change(fileInput, {
+      target: {
+        files: [
+          new File(["a"], "uno.wav", { type: "audio/wav" }),
+          new File(["b"], "dos.wav", { type: "audio/wav" }),
+        ],
+      },
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "DeepFilterNet" }));
+
+    const submitButton = screen.getByRole("button", { name: /enhance audio/i });
+    await waitFor(() => expect(submitButton).not.toBeDisabled());
+    fireEvent.click(submitButton);
+
+    await waitFor(() =>
+      expect(vi.mocked(audioService.createAudioJob)).toHaveBeenCalledTimes(2),
+    );
+    const enviados = vi
+      .mocked(audioService.createAudioJob)
+      .mock.calls.map((call) => call[0]);
+    expect(enviados.map((p) => p.file.name)).toEqual(["uno.wav", "dos.wav"]);
+    expect(enviados[1].denoise).toBe(enviados[0].denoise);
+  });
+});

@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import type { AudioCapabilities, AudioJob, JobStatus } from "../lib/apiTypes";
 import { isTerminalJobStatus } from "../lib/jobStatus";
 import { jobQueueStore, type JobQueueStore } from "../lib/jobQueueStore";
+import { uploadSequentially } from "../lib/sequentialUploads";
 import {
   cancelAudioJob,
   createAudioJob,
@@ -24,6 +25,10 @@ export interface UseAudioJobResult {
   // dibujar un porcentaje inventado seria mentir sobre lo que falta.
   uploadPercent: number | null;
   submit: (params: CreateAudioJobParams) => void;
+  /** Un trabajo por archivo, subidos de a uno. La tarjeta sigue al primero. */
+  submitMany: (paramsList: CreateAudioJobParams[]) => void;
+  pendingUploads: number;
+  failedUploads: number;
   cancel: () => void;
   reset: () => void;
 }
@@ -77,6 +82,8 @@ export function useAudioJob(
   // Mientras se sube todavia no hay jobId: cortar el envio es lo unico que
   // "cancelar" puede significar en ese momento.
   const uploadAbortRef = useRef<AbortController | null>(null);
+  const [pendingUploads, setPendingUploads] = useState(0);
+  const [failedUploads, setFailedUploads] = useState(0);
   const uploadMutation = useMutation({
     mutationFn: (params: Parameters<typeof createAudioJob>[0]) => {
       const controller = new AbortController();
@@ -110,6 +117,35 @@ export function useAudioJob(
     uploadMutation.mutate(params);
   }
 
+  async function submitMany(paramsList: CreateAudioJobParams[]): Promise<void> {
+    if (paramsList.length === 0) {
+      return;
+    }
+    const [primero, ...resto] = paramsList;
+    setPendingUploads(resto.length);
+    setFailedUploads(0);
+    setJobId(null);
+    pendingFileNameRef.current = primero.file.name;
+    // Se espera al primero: sin esto los archivos llegan al servidor en un
+    // orden distinto del que eligio el usuario.
+    await uploadMutation.mutateAsync(primero).catch(() => undefined);
+
+    const { failed } = await uploadSequentially(
+      resto,
+      async (params) => {
+        const creado = await createAudioJob(params);
+        queue.addTrackedJob({
+          id: creado.jobId,
+          kind: "audio",
+          fileName: params.file.name,
+          createdAt: Date.now(),
+        });
+      },
+      setPendingUploads,
+    );
+    setFailedUploads(failed);
+  }
+
   // Best-effort: a 409 (job already finished) needs no surfaced error since the
   // running poll is the source of truth and reconciles the status on refetch.
   function cancel(): void {
@@ -137,6 +173,9 @@ export function useAudioJob(
     job: jobQuery.data,
     errorMessage: resolveErrorMessage(uploadMutation.error, jobQuery.error, jobQuery.data, t),
     submit,
+    submitMany: (paramsList) => void submitMany(paramsList),
+    pendingUploads,
+    failedUploads,
     cancel,
     reset,
   };

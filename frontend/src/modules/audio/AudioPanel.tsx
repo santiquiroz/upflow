@@ -98,22 +98,35 @@ function ModeSegmentedControl({
   );
 }
 
-function Dropzone({ file, onFileSelected }: { file: File | null; onFileSelected: (file: File) => void }) {
+function Dropzone({
+  files,
+  onFilesSelected,
+}: {
+  files: File[];
+  onFilesSelected: (files: File[]) => void;
+}) {
   const { t } = useTranslation();
   function handleDrop(event: DragEvent<HTMLLabelElement>) {
     event.preventDefault();
-    const dropped = event.dataTransfer.files[0];
-    if (dropped) {
-      onFileSelected(dropped);
+    const dropped = Array.from(event.dataTransfer.files);
+    if (dropped.length > 0) {
+      onFilesSelected(dropped);
     }
   }
 
   function handleInputChange(event: ChangeEvent<HTMLInputElement>) {
-    const selected = event.target.files?.[0];
-    if (selected) {
-      onFileSelected(selected);
+    const selected = Array.from(event.target.files ?? []);
+    if (selected.length > 0) {
+      onFilesSelected(selected);
     }
   }
+
+  const label =
+    files.length === 0
+      ? t("audio.dropzone")
+      : files.length === 1
+        ? files[0].name
+        : t("enhance.batch.selected", { count: files.length });
 
   return (
     <label
@@ -123,9 +136,16 @@ function Dropzone({ file, onFileSelected }: { file: File | null; onFileSelected:
       className="flex cursor-pointer flex-col items-center gap-2 rounded border border-dashed border-border bg-surface px-6 py-10 text-center transition-[border-color] duration-fast hover:border-accent"
     >
       <UploadCloud aria-hidden="true" className="h-6 w-6 text-text-faint" strokeWidth={1.5} />
-      <span className="text-sm text-text">{file ? file.name : t("audio.dropzone")}</span>
+      <span className="text-sm text-text">{label}</span>
       <span className="text-xs text-text-faint">WAV, MP3, FLAC, M4A, OGG, OPUS</span>
-      <input id="audio-file-input" type="file" accept="audio/*" className="sr-only" onChange={handleInputChange} />
+      <input
+        id="audio-file-input"
+        type="file"
+        accept="audio/*"
+        multiple
+        className="sr-only"
+        onChange={handleInputChange}
+      />
     </label>
   );
 }
@@ -155,7 +175,7 @@ function useMasteringCopy() {
 }
 
 export function AudioPanel() {
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [denoise, setDenoise] = useState<string | null>(null);
   const [restore, setRestore] = useState<string | null>(null);
   const [outputFormat, setOutputFormat] = useState<AudioOutputFormat>("flac");
@@ -165,7 +185,17 @@ export function AudioPanel() {
   const capabilitiesQuery = useAudioCapabilities();
   const voiceCatalogQuery = useVoiceCatalog();
   const voice = useVoiceSelection(voiceCatalogQuery.data);
-  const { phase, job, errorMessage, submit, cancel, reset, uploadPercent } = useAudioJob();
+  const {
+    phase,
+    job,
+    errorMessage,
+    submitMany,
+    cancel,
+    reset,
+    uploadPercent,
+    pendingUploads,
+    failedUploads,
+  } = useAudioJob();
   const { t, locale } = useTranslation();
   const { masteringLabel, masteringDescription } = useMasteringCopy();
 
@@ -175,17 +205,16 @@ export function AudioPanel() {
   // Siempre disponible: lo hace ffmpeg, que ya viene con la app.
   const masteringPresets = capabilitiesQuery.data?.masteringPresets ?? [];
 
-  function handleFileSelected(selected: File) {
-    setFile(selected);
+  function handleFilesSelected(selected: File[]) {
+    setFiles(selected);
     reset();
   }
 
   function handleSubmit() {
-    if (!canSubmit || !file) {
+    if (!canSubmit || files.length === 0) {
       return;
     }
-    submit({
-      file,
+    const comunes = {
       denoise,
       restore,
       outputFormat,
@@ -194,7 +223,8 @@ export function AudioPanel() {
       voiceDelivery: voice.delivery,
       voicePresenceDb: voice.isEnabled("presence") ? voice.presenceDb : null,
       master,
-    });
+    };
+    submitMany(files.map((file) => ({ file, ...comunes })));
   }
 
   // La mejora de voz cuenta como seleccion: alguien que solo quiere enfocar el
@@ -204,12 +234,12 @@ export function AudioPanel() {
   const hasSelection =
     denoise !== null || restore !== null || master !== null || voice.enabledIds.length > 0;
   const canSubmit =
-    file !== null && hasSelection && !voice.needsDelivery && !isJobBusy(phase);
+    files.length > 0 && hasSelection && !voice.needsDelivery && !isJobBusy(phase);
 
   return (
     <div className="grid grid-cols-[1fr_320px] gap-6 max-[900px]:grid-cols-1">
       <div className="flex flex-col gap-6">
-        <Dropzone file={file} onFileSelected={handleFileSelected} />
+        <Dropzone files={files} onFilesSelected={handleFilesSelected} />
         <AccordionSection
           title={t("audio.section.denoise")}
           summary={denoiseLabel(denoise)}
@@ -329,11 +359,23 @@ export function AudioPanel() {
       <JobCard
         phase={phase}
         job={job}
-        fileName={file?.name}
+        fileName={files[0]?.name}
         errorMessage={errorMessage}
         onCancel={cancel}
         uploadPercent={uploadPercent}
       />
+      {pendingUploads > 0 && (
+        <p role="status" className="text-xs text-text-dim">
+          {t("enhance.batch.pending", { count: pendingUploads })}
+        </p>
+      )}
+      {pendingUploads === 0 && failedUploads > 0 && (
+        <p role="alert" className="text-xs text-danger">
+          {t(failedUploads === 1 ? "enhance.batch.failedOne" : "enhance.batch.failed", {
+            count: failedUploads,
+          })}
+        </p>
+      )}
     </div>
   );
 }

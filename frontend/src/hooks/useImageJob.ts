@@ -6,6 +6,7 @@ import { cancelJob, createImageJob, getJob } from "../lib/api";
 import type { JobResponse, JobStatus } from "../lib/apiTypes";
 import { isTerminalJobStatus } from "../lib/jobStatus";
 import { jobQueueStore, type JobQueueStore } from "../lib/jobQueueStore";
+import { uploadSequentially } from "../lib/sequentialUploads";
 
 export const DEFAULT_POLL_INTERVAL_MS = 1500;
 
@@ -115,9 +116,6 @@ export function useImageJob(
     uploadMutation.mutate(params);
   }
 
-  // De a uno y no todos juntos: en paralelo compiten por el ancho de banda, el
-  // porcentaje de subida deja de significar algo y la cola del servidor
-  // (acotada) responde 429 a los ultimos.
   async function submitMany(paramsList: CreateImageJobParams[]): Promise<void> {
     if (paramsList.length === 0) {
       return;
@@ -130,8 +128,10 @@ export function useImageJob(
     // Se espera al primero antes de arrancar el resto: sin esto los archivos
     // llegan al servidor en un orden distinto del que eligio el usuario.
     await uploadMutation.mutateAsync(primero).catch(() => undefined);
-    for (const params of resto) {
-      try {
+
+    const { failed } = await uploadSequentially(
+      resto,
+      async (params) => {
         const creado = await createImageJob(params);
         queue.addTrackedJob({
           id: creado.jobId,
@@ -139,14 +139,10 @@ export function useImageJob(
           fileName: params.file.name,
           createdAt: Date.now(),
         });
-      } catch {
-        // No se corta el lote: que un archivo no entre no es razon para no
-        // intentar los que siguen. Se cuenta y se dice al final.
-        setFailedUploads((fallados) => fallados + 1);
-      } finally {
-        setPendingUploads((quedan) => Math.max(0, quedan - 1));
-      }
-    }
+      },
+      setPendingUploads,
+    );
+    setFailedUploads(failed);
   }
 
   // Best-effort: a 409 (job already finished) needs no surfaced error since the
