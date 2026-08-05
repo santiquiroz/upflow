@@ -22,6 +22,9 @@ import type {
 
 const DEFAULT_SEARCH_DEBOUNCE_MS = 300;
 
+// El unico modelo ASR verificado end-to-end en esta app, con voz real.
+const VERIFIED_ASR_REPO = "onnx-community/whisper-tiny.en";
+
 interface AsrModelSearchProps {
   debounceMs?: number;
   installPollIntervalMs?: number;
@@ -274,6 +277,24 @@ export function AsrModelSearch({
           className="w-full rounded border border-border bg-surface py-2 pl-9 pr-3 text-sm text-text placeholder:text-text-faint focus:border-accent focus:outline-none"
         />
       </label>
+      {debouncedQuery.length === 0 && (
+        // Sin modelo instalado la transcripcion no hace nada, y el buscador en
+        // blanco no dice cual buscar. Este es el unico que esta VERIFICADO con
+        // voz real en esta app (spike 2026-07-29 y 2026-08-04).
+        <button
+          type="button"
+          onClick={() => setQuery(VERIFIED_ASR_REPO)}
+          className="flex w-fit flex-col gap-0.5 rounded border border-border bg-surface-2 px-3 py-2 text-left transition-[border-color] duration-fast hover:border-accent"
+        >
+          <span className="text-xs font-medium text-text">
+            {t("transcribe.models.verified.title")}
+          </span>
+          <span className="text-xs text-text-dim">{t("transcribe.models.verified.hint")}</span>
+          <span className="font-mono-tabular text-xs text-accent">
+            {t("transcribe.models.verified.action", { repo: VERIFIED_ASR_REPO })}
+          </span>
+        </button>
+      )}
       {debouncedQuery.length > 0 && (
         <CompatFilterChips value={filter} onChange={setFilter} name="asr-compat-filter" />
       )}
