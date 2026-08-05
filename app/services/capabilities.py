@@ -126,12 +126,14 @@ _PRINT_CAPABILITIES: tuple[Capability, ...] = (
         provisioning="none",
         job_kind=None,
         strategies=("model",),
-        # Medido el 2026-08-05: de los motores imagen-a-malla publicados, TRELLIS
-        # y Pixal3D exigen kernels CUDA y arrastran nvdiffrast (NVIDIA no
-        # comercial), y toda la familia Hunyuan3D esta bajo la Tencent Hunyuan 3D
-        # Community License, que no es comercial limpia. El unico con licencia MIT
-        # en codigo y pesos es TripoSR, y su camino sin CUDA verificado es torch
-        # en CPU, no DirectML.
+        # Verificado el 2026-08-05 contra las fuentes primarias, con revision
+        # adversarial (docs/superpowers/specs/2026-08-05-3d-engines-license-findings.md).
+        # La distincion importa: TRELLIS es MIT en codigo Y pesos — lo bloquea de
+        # que DEPENDE (kernels CUDA y nvdiffrast, que si es NVIDIA no comercial),
+        # no su propia licencia, asi que un puerto sin nvdiffrast lo devolveria a
+        # la mesa. Hunyuan3D no vuelve: ahi el problema es la licencia del modelo.
+        # TripoSR resistio el intento de refutacion: MIT en codigo y pesos, y su
+        # camino sin CUDA verificado es torch en CPU, o sea lento, no imposible.
         unavailable_reason_key="capability.reason.noCleanLicenseMeshEngine",
     ),
 )

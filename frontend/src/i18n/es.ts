@@ -572,7 +572,7 @@ export const es = {
   "capability.print.generate": "De foto a malla",
   "capability.reason.printRepairPending": "Todavía no está hecho: cerrar una malla sin inventar geometría que nunca estuvo.",
   "capability.reason.noSlicerPack": "Necesita un laminador que viaje con la app, como viaja ffmpeg.",
-  "capability.reason.noCleanLicenseMeshEngine": "Medido el 2026-08-05: los motores de imagen a malla publicados o exigen kernels CUDA o traen licencia no comercial. El único MIT en código y pesos es TripoSR, y su camino sin CUDA verificado es CPU, no DirectML.",
+  "capability.reason.noCleanLicenseMeshEngine": "Medido el 2026-08-05: TRELLIS es MIT pero depende de kernels CUDA y de nvdiffrast, que sí es no comercial; la familia Hunyuan3D está bloqueada por su propia licencia. TripoSR es MIT en código y pesos y su camino sin CUDA verificado es CPU, así que es lento, no imposible.",
 
   "capability.video.upscale": "Reescalar video",
   "capability.video.interpolate": "Generar fotogramas",

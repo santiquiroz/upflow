@@ -577,7 +577,7 @@ export const en = {
   "capability.print.generate": "Photo to mesh",
   "capability.reason.printRepairPending": "Not built yet: closing a mesh without inventing geometry that was never there.",
   "capability.reason.noSlicerPack": "Needs a slicer that ships with the app, the way ffmpeg does.",
-  "capability.reason.noCleanLicenseMeshEngine": "Measured on 2026-08-05: the published image-to-mesh engines either require CUDA kernels or ship a non-commercial licence. Only TripoSR is MIT in both code and weights, and its verified CUDA-free path is CPU, not DirectML.",
+  "capability.reason.noCleanLicenseMeshEngine": "Measured on 2026-08-05: TRELLIS is MIT but depends on CUDA kernels and on nvdiffrast, which is non-commercial; the Hunyuan3D family is blocked by its own licence. TripoSR is MIT in code and weights, and its verified CUDA-free path is CPU, so it is slow rather than impossible.",
 
   "capability.video.upscale": "Upscale video",
   "capability.video.interpolate": "Generate frames",
