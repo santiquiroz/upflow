@@ -519,6 +519,11 @@ class TranscribeJobResponse(BaseModel):
     download_url: str | None = Field(default=None, serialization_alias="downloadUrl")
     # Solo cuando el job pidio el video con subtitulos y ffmpeg ya lo dejo listo.
     video_url: str | None = Field(default=None, serialization_alias="videoUrl")
+    # Cuantas lineas del doblaje no entraron en su hueco ni al maximo de
+    # velocidad: se avisa en vez de entregar un doblaje corrido en silencio.
+    dub_overflow_segments: int | None = Field(
+        default=None, serialization_alias="dubOverflowSegments"
+    )
 
 
 class TranscribeJobsListResponse(BaseModel):

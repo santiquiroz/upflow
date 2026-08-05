@@ -79,7 +79,11 @@ class KokoroTtsEngine:
     def available(self, model_dir: Path) -> bool:
         return (model_dir / MODEL_FILENAME).exists() and (model_dir / TOKENIZER_FILENAME).exists()
 
-    def synthesize(self, *, model_dir: Path, phonemes: str, voice: str) -> Any:
+    def synthesize(
+        self, *, model_dir: Path, phonemes: str, voice: str, speed: float = 1.0
+    ) -> Any:
+        if speed <= 0:
+            raise ValueError(f"La velocidad tiene que ser mayor que cero, no {speed!r}.")
         session, vocab = self._session_for(model_dir)
         tokens = phonemes_to_tokens(phonemes, vocab)
         input_ids = build_input_ids(tokens)
@@ -91,7 +95,7 @@ class KokoroTtsEngine:
             {
                 "input_ids": input_ids,
                 "style": style,
-                "speed": np.array([1.0], dtype=np.float32),
+                "speed": np.array([speed], dtype=np.float32),
             },
         )[0]
         audio = np.asarray(raw).squeeze()

@@ -174,6 +174,15 @@ function TranscriptionResult({
         {t("transcribe.result.title")}
       </h2>
 
+      {job?.dubOverflowSegments ? (
+        <p
+          role="status"
+          className="rounded border border-warn bg-surface-2 px-3 py-2 text-xs text-text-dim"
+        >
+          {t("transcribe.dub.overflow", { count: job.dubOverflowSegments })}
+        </p>
+      ) : null}
+
       {phase === "idle" && (
         <p className="text-sm text-text-faint">
           {t("transcribe.result.waiting")}
@@ -347,6 +356,7 @@ export function TranscribePanel({
   const [modelId, setModelId] = useState("");
   const [language, setLanguage] = useState("");
   const [outputMode, setOutputMode] = useState<TranscribeOutputMode>("text");
+  const [dubLanguage, setDubLanguage] = useState("");
   const [deviceId, setDeviceId] = useState("cpu");
   const modelsQuery = useInstalledAsrModels();
   const devicesQuery = useTranscribeDevices();
@@ -354,6 +364,9 @@ export function TranscribePanel({
     queryKey: ["translation-pairs"],
     queryFn: fetchTranslationPairs,
   });
+  const translationTargets = [
+    ...new Set((translationPairsQuery.data?.pairs ?? []).map((pair) => pair.target)),
+  ];
   const { phase, job, errorMessage, submit, cancel, reset, uploadPercent } =
     useTranscribeJob(pollIntervalMs);
 
@@ -393,6 +406,9 @@ export function TranscribePanel({
     // fallar por algo que la pantalla ya sabe.
     if (outputMode !== "text" && hasPicture(file)) {
       params.outputMode = outputMode;
+    }
+    if (params.outputMode === "dubbed_video") {
+      params.targetLanguage = dubLanguage || translationTargets[0] || "";
     }
     submit(params);
   }
@@ -491,12 +507,41 @@ export function TranscribePanel({
                     <option value="video_burned">
                       {t("transcribe.output.videoBurned")}
                     </option>
+                    {translationTargets.length > 0 && (
+                      <option value="dubbed_video">
+                        {t("transcribe.output.dubbed")}
+                      </option>
+                    )}
                   </select>
                   {outputMode === "video_burned" && (
                     <span className="text-xs text-text-faint">
                       {t("transcribe.output.hint")}
                     </span>
                   )}
+                  {outputMode === "dubbed_video" && (
+                    <span className="text-xs text-text-faint">
+                      {t("transcribe.dub.hint")}
+                    </span>
+                  )}
+                </label>
+              )}
+
+              {hasPicture(file) && outputMode === "dubbed_video" && (
+                <label className="flex flex-col gap-2">
+                  <span className="font-heading text-xs font-semibold uppercase tracking-wide text-text-dim">
+                    {t("transcribe.dub.language")}
+                  </span>
+                  <select
+                    value={dubLanguage}
+                    onChange={(event) => setDubLanguage(event.target.value)}
+                    className="rounded border border-border bg-surface px-3 py-2 text-sm text-text focus:border-accent focus:outline-none"
+                  >
+                    {translationTargets.map((code) => (
+                      <option key={code} value={code}>
+                        {code}
+                      </option>
+                    ))}
+                  </select>
                 </label>
               )}
 
@@ -550,11 +595,7 @@ export function TranscribePanel({
           errorMessage={errorMessage}
           onCancel={cancel}
           uploadPercent={uploadPercent}
-          translationTargets={[
-            ...new Set(
-              (translationPairsQuery.data?.pairs ?? []).map((pair) => pair.target),
-            ),
-          ]}
+          translationTargets={translationTargets}
         />
       </div>
 

@@ -455,6 +455,50 @@ async def test_the_burned_mode_repaints_the_picture_instead_of_muxing(tmp_path: 
 
 
 @pytest.mark.asyncio
+async def test_the_dubbed_mode_builds_a_voice_track_and_muxes_it(tmp_path: Path, monkeypatch):
+    manager, settings, _r = make_manager(tmp_path)
+    llamados: list[str] = []
+
+    async def fake_dub(job):
+        llamados.append("dub")
+        assert job.source_path.exists(), "el fuente se borro antes de doblar"
+        destination = settings.outputs_path / f"{job.id}.dubbed.mp4"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"video doblado")
+        return destination
+
+    monkeypatch.setattr(manager, "_dub_video", fake_dub)
+    job = await manager.create_job(
+        source_path=make_audio(settings, "clip.mp4"),
+        original_filename="clip.mp4",
+        model_id=MODEL_ID,
+        output_mode="dubbed_video",
+        target_language="es",
+    )
+    await manager._process_next()
+
+    assert job.status is JobStatus.completed
+    assert llamados == ["dub"]
+    assert job.subtitled_video_path is not None
+
+
+@pytest.mark.asyncio
+async def test_dubbing_without_a_target_language_is_refused_when_the_job_is_created(
+    tmp_path: Path,
+):
+    """Descubrirlo al terminar de transcribir seria tirar todo ese trabajo."""
+    manager, settings, _r = make_manager(tmp_path)
+
+    with pytest.raises(ValueError):
+        await manager.create_job(
+            source_path=make_audio(settings, "clip.mp4"),
+            original_filename="clip.mp4",
+            model_id=MODEL_ID,
+            output_mode="dubbed_video",
+        )
+
+
+@pytest.mark.asyncio
 async def test_the_default_mode_does_not_touch_ffmpeg(tmp_path: Path, monkeypatch):
     manager, settings, _r = make_manager(tmp_path)
     called = False

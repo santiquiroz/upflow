@@ -7,7 +7,13 @@ from typing import Any
 
 from app.config import Settings
 from app.exceptions import QueueFullError
+from app.services.dub_mux import build_dub_mux_command
+from app.services.dubbing_pipeline import DubbingPipeline, DubbingUnavailable
+from app.services.engines.tts_kokoro import SAMPLE_RATE as TTS_SAMPLE_RATE
+from app.services.engines.tts_kokoro import KokoroTtsEngine, available_voices
 from app.services.subtitle_burn import build_subtitle_burn_command
+from app.services.translate import TranslationEngine
+from app.services.vendor_paths import kokoro_dir, translation_dir
 from app.services.subtitle_mux import build_subtitle_mux_command
 from app.services.subtitles import render_segments, segments_to_text
 from app.models import JobStatus, TranscribeJob, utc_now
@@ -20,7 +26,7 @@ from app.services.model_registry import ModelKind, ModelRegistry
 
 # Los tres destinos que puede tener un trabajo: solo el texto, el video con la
 # pista de subtitulos sumada, o el video con el texto pintado en la imagen.
-OUTPUT_MODES = ("text", "video", "video_burned")
+OUTPUT_MODES = ("text", "video", "video_burned", "dubbed_video")
 
 logger = logging.getLogger(__name__)
 
@@ -79,9 +85,11 @@ class TranscribeJobManager:
         job_id: str | None = None,
         owner: AuthenticatedUser | None = None,
         output_mode: str = "text",
+        target_language: str | None = None,
     ) -> TranscribeJob:
         self._validate_model(model_id)
         self._validate_output_mode(output_mode)
+        self._validate_dubbing(output_mode, target_language)
         self._validate_language(language)
         await self._validate_device(device)
         if owner is not None and self.quota_service is not None:
@@ -95,6 +103,7 @@ class TranscribeJobManager:
             device=device,
             owner_id=owner.id if owner is not None else None,
             output_mode=output_mode,
+            target_language=target_language,
         )
         if job_id is not None:
             job.id = job_id
@@ -108,6 +117,13 @@ class TranscribeJobManager:
         # descubrirlo despues de transcribir seria tirar todo el trabajo.
         if output_mode not in OUTPUT_MODES:
             raise ValueError(f"Modo de salida desconocido: {output_mode!r}")
+
+    @staticmethod
+    def _validate_dubbing(output_mode: str, target_language: str | None) -> None:
+        # Se rechaza al CREAR el job: descubrirlo despues de transcribir seria
+        # tirar todo ese trabajo.
+        if output_mode == "dubbed_video" and not (target_language or "").strip():
+            raise ValueError("Hace falta el idioma al que doblar.")
 
     def get_job(self, job_id: str) -> TranscribeJob | None:
         return self.jobs.get(job_id)
@@ -246,6 +262,8 @@ class TranscribeJobManager:
             job.subtitled_video_path = await self._mux_subtitles_into_video(job)
         elif job.output_mode == "video_burned":
             job.subtitled_video_path = await self._burn_subtitles_into_video(job)
+        elif job.output_mode == "dubbed_video":
+            job.subtitled_video_path = await self._dub_video(job)
 
     async def _mux_subtitles_into_video(self, job: TranscribeJob) -> Path:
         """Suma la pista de subtitulos al contenedor SIN re-encodear el video.
@@ -284,6 +302,61 @@ class TranscribeJobManager:
         )
         await self._run_ffmpeg(command, destination, "quemar los subtitulos en el video")
         return destination
+
+    async def _dub_video(self, job: TranscribeJob) -> Path:
+        """Traduce, sintetiza y suma la voz doblada al video.
+
+        La pista se arma en un hilo aparte: sintetizar es CPU pura y bloquearia
+        el loop durante minutos en un video largo.
+        """
+        pipeline = self._dubbing_pipeline()
+        total = max((float(s.end) for s in job.segments), default=0.0)
+
+        def on_progress(done: int, total_lineas: int) -> None:
+            job.progress_pct = round(done / max(total_lineas, 1) * 100, 1)
+
+        try:
+            resultado = await asyncio.to_thread(
+                pipeline.build_track,
+                list(job.segments),
+                source_language=job.language,
+                target_language=job.target_language or "",
+                total_seconds=total,
+                progress_cb=on_progress,
+            )
+        except DubbingUnavailable as exc:
+            raise RuntimeError(str(exc)) from exc
+
+        job.dub_overflow_segments = resultado.overflowing
+        voz = self.settings.outputs_path / f"{job.id}.dub.wav"
+        voz.parent.mkdir(parents=True, exist_ok=True)
+        import soundfile
+
+        soundfile.write(voz, resultado.track, TTS_SAMPLE_RATE, format="WAV", subtype="PCM_16")
+
+        container = job.source_path.suffix.lstrip(".").lower() or "mkv"
+        destination = self.settings.outputs_path / f"{job.id}.dubbed.{container}"
+        command = build_dub_mux_command(
+            ffmpeg=str(self.settings.ffmpeg_binary_path),
+            video=job.source_path,
+            dubbed_audio=voz,
+            destination=destination,
+            language=job.target_language,
+        )
+        await self._run_ffmpeg(command, destination, "pegar la voz doblada al video")
+        return destination
+
+    def _dubbing_pipeline(self) -> DubbingPipeline:
+        from app.services.phonemize import text_to_phonemes
+
+        return DubbingPipeline(
+            translation=TranslationEngine(translation_dir(self.settings)),
+            tts=KokoroTtsEngine(self.settings),
+            tts_model_dir=kokoro_dir(self.settings),
+            phonemize=text_to_phonemes,
+            sample_rate=TTS_SAMPLE_RATE,
+            available_voices=available_voices(kokoro_dir(self.settings)),
+        )
 
     def _write_subtitle_file(self, job: TranscribeJob) -> Path:
         subtitle_path = self.settings.outputs_path / f"{job.id}.srt"

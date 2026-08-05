@@ -22,15 +22,22 @@ $base = "https://huggingface.co/$repo/resolve/main"
 
 # Voces incluidas por defecto: dos en ingles (una de cada genero) para no bajar
 # las 50 y pico que trae el repo.
-$voices = @('af_heart', 'am_michael')
+# Una voz por idioma al que se puede doblar: Kokoro nombra cada voz con la
+# inicial del idioma, y doblar al espanol con voz inglesa suena a extranjero
+# leyendo.
+$voices = @('af_heart', 'am_michael', 'ef_dora', 'em_alex', 'ff_siwis', 'if_sara', 'pf_dora')
 
 $modelPath = Join-Path $destDir 'model.onnx'
-if (Test-Path $modelPath) {
+New-Item -ItemType Directory -Force -Path (Join-Path $destDir 'voices') | Out-Null
+
+# Se revisa el modelo Y las voces, no solo el modelo: una instalacion vieja tiene
+# el modelo pero le faltan las voces de los idiomas que se agregaron despues, y
+# salir temprano la dejaria doblando espanol con voz inglesa para siempre.
+$faltantes = @($voices | Where-Object { -not (Test-Path (Join-Path $destDir "voices\$_.bin")) })
+if ((Test-Path $modelPath) -and $faltantes.Count -eq 0) {
     Write-Host "ya esta: Kokoro en $destDir"
     exit 0
 }
-
-New-Item -ItemType Directory -Force -Path (Join-Path $destDir 'voices') | Out-Null
 
 function Get-File($relative, $destination) {
     $url = "$base/$relative"
@@ -42,9 +49,11 @@ function Get-File($relative, $destination) {
 }
 
 try {
-    Get-File 'onnx/model.onnx' $modelPath
-    Get-File 'tokenizer.json' (Join-Path $destDir 'tokenizer.json')
-    foreach ($voice in $voices) {
+    if (-not (Test-Path $modelPath)) {
+        Get-File 'onnx/model.onnx' $modelPath
+        Get-File 'tokenizer.json' (Join-Path $destDir 'tokenizer.json')
+    }
+    foreach ($voice in $faltantes) {
         Get-File "voices/$voice.bin" (Join-Path $destDir "voices\$voice.bin")
     }
 

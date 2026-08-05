@@ -660,6 +660,9 @@ export interface TranscribeJob {
   downloadUrl: string | null;
   // Solo cuando el job pidio el video con subtitulos y ffmpeg ya lo dejo listo.
   videoUrl?: string | null;
+  /** Cuantas lineas del doblaje no entraron en su hueco ni al maximo de
+   *  velocidad. Se avisa en vez de entregar un doblaje corrido en silencio. */
+  dubOverflowSegments?: number | null;
 }
 
 export type AsrInstallStatus = "queued" | "downloading" | "installed" | "error";

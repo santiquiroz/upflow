@@ -173,6 +173,7 @@ from app.services.media_decode import build_decode_to_wav_command, needs_decodin
 from app.services.prompt_presets import PROMPT_PRESETS
 from app.services.saved_prompts import SavedPromptStore
 from app.services.subtitles import SUBTITLE_FORMATS, TranscriptSegment, render_segments
+from app.services.vendor_paths import kokoro_dir, translation_dir
 from app.services.translate import (
     TranslationEngine,
     TranslationUnavailable,
@@ -1255,6 +1256,7 @@ def transcribe_job_to_response(job: TranscribeJob) -> TranscribeJobResponse:
             if job.subtitled_video_path is not None
             else None
         ),
+        dub_overflow_segments=job.dub_overflow_segments,
     )
 
 
@@ -1269,6 +1271,7 @@ async def create_transcribe_job(
     language: str | None = Form(default=None),
     device: str | None = Form(default=None),
     output_mode: str = Form(default="text"),
+    target_language: str | None = Form(default=None),
     transcribe_jobs: TranscribeJobManager = Depends(get_transcribe_job_manager),
     storage: StorageService = Depends(get_storage),
     settings: Settings = Depends(get_settings),
@@ -1293,6 +1296,9 @@ async def create_transcribe_job(
             job_id=token,
             owner=current_user,
             output_mode=output_mode if isinstance(output_mode, str) and output_mode else "text",
+            target_language=(
+                target_language if isinstance(target_language, str) and target_language else None
+            ),
         )
     except QueueFullError as exc:
         raise HTTPException(status_code=429, detail=str(exc)) from exc
@@ -1358,7 +1364,7 @@ async def cancel_transcribe_job(
     return transcribe_job_to_response(job)
 
 
-_TRANSLATION = TranslationEngine(Path(get_settings().runtime_dir).parent / "vendor" / "translation")
+_TRANSLATION = TranslationEngine(translation_dir(get_settings()))
 
 
 def get_translation() -> TranslationEngine:
@@ -1451,7 +1457,7 @@ def get_tts_engine() -> KokoroTtsEngine:
 
 
 def tts_model_dir(settings: Settings) -> Path:
-    return Path(settings.runtime_dir).parent / "vendor" / "kokoro"
+    return kokoro_dir(settings)
 
 
 @router.get("/tts/capabilities", response_model=TtsCapabilitiesResponse)

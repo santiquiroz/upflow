@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { en } from "../../i18n/en";
@@ -298,6 +298,72 @@ describe("TranscribePanel", () => {
     expect(
       screen.queryByRole("link", { name: en["transcribe.result.downloadVideo"] }),
     ).not.toBeInTheDocument();
+  });
+
+  it("asks into which language to dub, and only when dubbing is chosen", async () => {
+    vi.mocked(transcribeService.fetchTranslationPairs).mockResolvedValue({
+      pairs: [{ source: "en", target: "es" }],
+    });
+    renderPanel();
+    await selectVideoFile();
+    const salida = await screen.findByLabelText(en["transcribe.output.label"]);
+
+    expect(
+      screen.queryByLabelText(en["transcribe.dub.language"]),
+    ).not.toBeInTheDocument();
+
+    fireEvent.change(salida, { target: { value: "dubbed_video" } });
+
+    expect(
+      await screen.findByLabelText(en["transcribe.dub.language"]),
+    ).toBeInTheDocument();
+  });
+
+  it("sends the language to dub into", async () => {
+    vi.mocked(transcribeService.fetchTranslationPairs).mockResolvedValue({
+      pairs: [{ source: "en", target: "es" }],
+    });
+    renderPanel();
+    await selectVideoFile();
+    fireEvent.change(await screen.findByLabelText(en["transcribe.output.label"]), {
+      target: { value: "dubbed_video" },
+    });
+    const button = screen.getByRole("button", { name: en["transcribe.submit"] });
+    await waitFor(() => expect(button).toBeEnabled());
+    fireEvent.click(button);
+
+    await waitFor(() =>
+      expect(transcribeService.createTranscribeJob).toHaveBeenCalled(),
+    );
+    expect(
+      vi.mocked(transcribeService.createTranscribeJob).mock.calls[0][0],
+    ).toEqual(
+      expect.objectContaining({ outputMode: "dubbed_video", targetLanguage: "es" }),
+    );
+  });
+
+  it("cannot dub without an installed language pair", async () => {
+    // Sin par instalado no hay a que idioma doblar: la opcion no se ofrece.
+    vi.mocked(transcribeService.fetchTranslationPairs).mockResolvedValue({
+      pairs: [],
+    });
+    renderPanel();
+    await selectVideoFile();
+    const salida = await screen.findByLabelText(en["transcribe.output.label"]);
+
+    expect(
+      within(salida).queryByText(en["transcribe.output.dubbed"]),
+    ).not.toBeInTheDocument();
+  });
+
+  it("says how many lines had to run past their slot", async () => {
+    vi.mocked(transcribeService.getTranscribeJob).mockResolvedValue(
+      job({ dubOverflowSegments: 4 }),
+    );
+    renderPanel();
+    await submitAudio();
+
+    expect(await screen.findByRole("status")).toHaveTextContent(/4/);
   });
 
   it("offers to translate the subtitles when a language pair is installed", async () => {

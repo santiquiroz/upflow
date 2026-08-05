@@ -13,7 +13,11 @@ import type {
 
 // "text" deja solo la transcripcion; "video" suma la pista de subtitulos al
 // contenedor sin re-encodear; "video_burned" la pinta en la imagen.
-export type TranscribeOutputMode = "text" | "video" | "video_burned";
+export type TranscribeOutputMode =
+  | "text"
+  | "video"
+  | "video_burned"
+  | "dubbed_video";
 
 export interface CreateTranscribeJobParams {
   file: File;
@@ -21,6 +25,8 @@ export interface CreateTranscribeJobParams {
   language?: string;
   device?: string;
   outputMode?: TranscribeOutputMode;
+  // Solo en doblaje: sin esto no hay a que idioma hablar.
+  targetLanguage?: string;
 }
 
 function buildTranscribeJobFormData(params: CreateTranscribeJobParams): FormData {
@@ -35,6 +41,9 @@ function buildTranscribeJobFormData(params: CreateTranscribeJobParams): FormData
   }
   if (params.outputMode) {
     formData.append("output_mode", params.outputMode);
+  }
+  if (params.targetLanguage) {
+    formData.append("target_language", params.targetLanguage);
   }
   return formData;
 }

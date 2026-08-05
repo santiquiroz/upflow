@@ -123,6 +123,38 @@ async def test_an_unknown_output_mode_is_a_400(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_the_dubbing_language_reaches_the_job(tmp_path: Path):
+    manager, settings = make_manager(tmp_path)
+    response = await create(
+        manager, settings, file=upload("clip.mp4"), output_mode="dubbed_video", target_language="es"
+    )
+
+    job = manager.get_job(response.job_id)
+    assert job.output_mode == "dubbed_video"
+    assert job.target_language == "es"
+
+
+@pytest.mark.asyncio
+async def test_asking_to_dub_without_saying_into_what_is_a_400(tmp_path: Path):
+    manager, settings = make_manager(tmp_path)
+    with pytest.raises(HTTPException) as exc_info:
+        await create(manager, settings, file=upload("clip.mp4"), output_mode="dubbed_video")
+
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_the_lines_that_did_not_fit_are_reported_to_the_client(tmp_path: Path):
+    manager, settings = make_manager(tmp_path)
+    created = await create(manager, settings)
+    await manager._process_next()
+    job = manager.get_job(created.job_id)
+    job.dub_overflow_segments = 3
+
+    assert transcribe_job_to_response(job).dub_overflow_segments == 3
+
+
+@pytest.mark.asyncio
 async def test_an_unknown_model_is_a_400(tmp_path: Path):
     manager, settings = make_manager(tmp_path)
     with pytest.raises(HTTPException) as exc_info:

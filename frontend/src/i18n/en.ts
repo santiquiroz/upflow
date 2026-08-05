@@ -727,6 +727,10 @@ export const en = {
   "transcribe.output.text": "Transcript only",
   "transcribe.output.video": "Video with a subtitle track",
   "transcribe.output.videoBurned": "Video with the subtitles burned in",
+  "transcribe.output.dubbed": "Video dubbed into another language",
+  "transcribe.dub.language": "Dub into",
+  "transcribe.dub.hint": "Each line is translated and spoken in its own slot. Needs the installed language pair.",
+  "transcribe.dub.overflow": "{{count}} lines ran past their slot: they were said as fast as they could still be understood.",
   "transcribe.output.hint": "Burning re-encodes the whole video: slower, but it shows anywhere.",
   "transcribe.models.loadingInstalled":
     "Loading installed speech recognition models…",

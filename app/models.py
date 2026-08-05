@@ -173,6 +173,11 @@ class TranscribeJob:
     # original con la pista de subtitulos adentro. El modo decide si el fuente
     # se conserva hasta el final o se borra apenas termina de transcribirse.
     output_mode: str = "text"
+    # Solo en modo doblaje: a que idioma hablar. Sin esto no hay nada que doblar.
+    target_language: str | None = None
+    # Cuantas lineas del doblaje no entraron en su hueco ni al maximo de
+    # velocidad. Se cuenta para avisarlo en vez de entregar un doblaje corrido.
+    dub_overflow_segments: int | None = None
     subtitled_video_path: Path | None = None
     device: str | None = None
     id: str = field(default_factory=lambda: uuid4().hex)

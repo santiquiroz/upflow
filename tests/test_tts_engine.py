@@ -84,3 +84,49 @@ class TestAvailability:
     def test_reports_available_once_the_model_is_there(self, tmp_path: Path) -> None:
         engine = KokoroTtsEngine(Settings(_env_file=None, RUNTIME_DIR=str(tmp_path)))
         assert engine.available(make_model_dir(tmp_path)) is True
+
+
+class FakeSession:
+    """Devuelve audio de largo proporcional a 1/velocidad, como el modelo real:
+    pedir mas velocidad da menos muestras."""
+
+    def __init__(self) -> None:
+        self.last_speed: float | None = None
+
+    def run(self, _outputs, feeds):
+        self.last_speed = float(feeds["speed"][0])
+        return [np.ones(int(1000 / self.last_speed), dtype=np.float32)]
+
+
+class TestSynthesisSpeed:
+    def make_engine(self, tmp_path: Path) -> tuple[KokoroTtsEngine, Path, FakeSession]:
+        model_dir = make_model_dir(tmp_path)
+        engine = KokoroTtsEngine(Settings(RUNTIME_DIR=str(tmp_path), _env_file=None))
+        session = FakeSession()
+        engine._cache[str(model_dir)] = (session, load_vocab(model_dir))
+        return engine, model_dir, session
+
+    def test_the_default_speed_is_normal(self, tmp_path: Path) -> None:
+        engine, model_dir, session = self.make_engine(tmp_path)
+
+        engine.synthesize(model_dir=model_dir, phonemes="a", voice="af_heart")
+
+        assert session.last_speed == 1.0
+
+    def test_the_requested_speed_reaches_the_model(self, tmp_path: Path) -> None:
+        # El doblaje sintetiza a la velocidad que hace falta para entrar en el
+        # hueco del original: sin esto cada linea sale a destiempo.
+        engine, model_dir, session = self.make_engine(tmp_path)
+
+        audio = engine.synthesize(
+            model_dir=model_dir, phonemes="a", voice="af_heart", speed=1.5
+        )
+
+        assert session.last_speed == 1.5
+        assert len(audio) < 1000
+
+    def test_an_impossible_speed_is_refused_instead_of_making_noise(self, tmp_path: Path) -> None:
+        engine, model_dir, _session = self.make_engine(tmp_path)
+
+        with pytest.raises(ValueError):
+            engine.synthesize(model_dir=model_dir, phonemes="a", voice="af_heart", speed=0.0)

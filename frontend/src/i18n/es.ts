@@ -722,6 +722,10 @@ export const es = {
   "transcribe.output.text": "Solo la transcripción",
   "transcribe.output.video": "Video con pista de subtítulos",
   "transcribe.output.videoBurned": "Video con los subtítulos quemados",
+  "transcribe.output.dubbed": "Video doblado a otro idioma",
+  "transcribe.dub.language": "Doblar a",
+  "transcribe.dub.hint": "Cada línea se traduce y se dice en su propio hueco. Necesita el par de idiomas instalado.",
+  "transcribe.dub.overflow": "{{count}} líneas se salieron de su hueco: se dijeron tan rápido como todavía se entienden.",
   "transcribe.output.hint": "Quemar re-encodea el video entero: más lento, pero se ve en cualquier lado.",
   "transcribe.models.loadingInstalled":
     "Cargando modelos de reconocimiento de voz instalados…",
