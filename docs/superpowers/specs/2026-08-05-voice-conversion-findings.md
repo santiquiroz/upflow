@@ -119,3 +119,65 @@ Una búsqueda negativa vale menos que una positiva y hay que sospecharla más. E
 un solo día este repo dio dos veredictos "no se puede" que resultaron falsos: el
 de los timestamps de Whisper (que bloqueaba subtítulos) y este. Los dos cayeron
 con menos de una hora de medición.
+
+
+---
+
+# SEGUNDA CORRECCIÓN: convierte, pero NO clona la muestra
+
+La medición de arriba ("CONVIERTE") se quedó corta, y una prueba más exigente lo
+mostró el mismo día.
+
+## Qué se midió de más
+
+La cadena completa que pedía el usuario: **muestra de referencia → x-vector →
+conversión**. El x-vector se saca con `microsoft/wavlm-base-plus-sv` (MIT,
+transformers nativo), que devuelve los 512 valores que SpeechT5 espera y
+distingue voces (0,49 de similitud entre dos voces distintas).
+
+| Medición | Resultado |
+|---|---|
+| Contenido sobrevive | **95%** ✅ |
+| Parecido del resultado a la voz **DESTINO** | 0,609 |
+| Parecido del resultado a la voz **ORIGEN** | **0,673** |
+
+**El audio convertido se parece MÁS al origen que al destino.** Cambia el
+timbre, pero no se mueve hacia la voz de referencia. Eso no es clonar.
+
+## Por qué la primera medición no lo vio
+
+Medía "¿cambió el espectro?" y la respuesta era sí (0,754). Pero un espectro
+distinto no prueba que se haya movido hacia la voz pedida — solo que se movió.
+
+La prueba correcta compara la voz resultante contra **las dos**: la de destino y
+la de origen. Si se parece más al origen, no convirtió a lo que se le pidió.
+
+Es la misma trampa de siempre en otra forma: una métrica que sube no es lo mismo
+que el resultado que se quería.
+
+## Causa probable
+
+SpeechT5 VC fue entrenado con x-vectors del encoder de **speechbrain**
+(`spkrec-xvect-voxceleb`), no de WavLM. Son espacios de embedding distintos: el
+vector que se le pasa está fuera de la distribución que aprendió, así que lo
+usa como un ruido cualquiera en vez de como "esta voz".
+
+Intentar la ruta correcta chocó con un bug de instalación: `speechbrain 1.1.0`
+falla al importar `speechbrain.lobes.models.Xvector` por un lazy import roto
+(`speechbrain.integrations.k2_fsa`).
+
+## Qué falta para cerrarlo
+
+1. **Resolver el encoder correcto** — otra versión de speechbrain, o un export
+   del mismo x-vector que no dependa de la librería.
+2. **O medir CosyVoice2** (Apache 2.0, con ONNX), que hace clonación zero-shot
+   por diseño y no necesita casar dos modelos de distinta familia.
+
+La opción 2 es más prometedora: menos piezas que hacer encajar, y trae ONNX, que
+es el camino que ya usa la app.
+
+## Estado honesto
+
+La conversión de voz **es posible** y las piezas existen con licencia limpia.
+Pero **todavía no clona una muestra**, y hasta que lo haga no es la feature que
+se pidió. No se implementa.
