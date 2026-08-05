@@ -61,6 +61,8 @@ from app.schemas import (
     GenerationJobsListResponse,
     GenerationModelSummary,
     MasteringPresetResponse,
+    PromptPresetResponse,
+    PromptPresetsResponse,
     RealtimeCapabilitiesResponse,
     RealtimePresetResponse,
     RealtimeStartedResponse,
@@ -138,6 +140,7 @@ from app.services.download_job_manager import (
     validate_url,
 )
 from fetchflow import engine as fetch_engine
+from app.services.prompt_presets import PROMPT_PRESETS
 from app.services.subtitles import SUBTITLE_FORMATS, render_segments
 from app.services.transcribe_job_manager import TranscribeJobManager
 from app.services.stream_analysis import parse_audio_tracks, parse_subtitle_tracks
@@ -2254,6 +2257,22 @@ async def get_editable_settings(
         settings=[
             EditableSettingStatusResponse(**item)
             for item in editable_settings_status(settings)
+        ]
+    )
+
+
+@router.get("/generation/prompt-presets", response_model=PromptPresetsResponse)
+async def list_prompt_presets() -> PromptPresetsResponse:
+    return PromptPresetsResponse(
+        presets=[
+            PromptPresetResponse(
+                id=preset.id,
+                mode=preset.mode,
+                label_key=preset.label_key,
+                prompt=preset.prompt,
+                negative_prompt=preset.negative_prompt,
+            )
+            for preset in PROMPT_PRESETS
         ]
     )
 

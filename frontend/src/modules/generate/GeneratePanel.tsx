@@ -11,6 +11,7 @@ import {
   type GenerationJobPhase,
 } from "../../hooks/useGenerationJob";
 import { useTranslation } from "../../i18n/LocaleProvider";
+import { PromptPresetChips } from "./PromptPresetChips";
 import type {
   DeviceInfoResponse,
   GenerationModelSummary,
@@ -623,6 +624,15 @@ export function GeneratePanel() {
             {!isVideo && <StrengthControl value={strength} onChange={setStrength} />}
           </div>
         )}
+        <PromptPresetChips
+          mode={mode}
+          onApply={(preset) => {
+            setPrompt(preset.prompt);
+            if (preset.negativePrompt) {
+              setNegativePrompt(preset.negativePrompt);
+            }
+          }}
+        />
         <div className="flex flex-col gap-2">
           <label htmlFor="generate-prompt" className="text-xs font-medium text-text-dim">
             Prompt

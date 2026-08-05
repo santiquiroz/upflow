@@ -88,6 +88,20 @@ class AudioJobResponse(BaseModel):
     download_url: str | None = Field(default=None, serialization_alias="downloadUrl")
 
 
+class PromptPresetResponse(BaseModel):
+    id: str
+    mode: str
+    # El NOMBRE es copia y viaja como clave; el PROMPT es el texto que va al
+    # modelo y se manda literal, porque traducirlo cambiaria lo que genera.
+    label_key: str = Field(serialization_alias="labelKey")
+    prompt: str
+    negative_prompt: str = Field(default="", serialization_alias="negativePrompt")
+
+
+class PromptPresetsResponse(BaseModel):
+    presets: list[PromptPresetResponse]
+
+
 class MasteringPresetResponse(BaseModel):
     id: str
     label_key: str = Field(serialization_alias="labelKey")
