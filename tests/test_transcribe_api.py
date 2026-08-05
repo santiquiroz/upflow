@@ -19,15 +19,21 @@ from app.models import JobStatus
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry
 from app.services.storage import StorageService
+from app.services.subtitles import TranscriptSegment
 from app.services.transcribe_job_manager import TranscribeJobManager
 
 MODEL_ID = "asr--onnx-community--whisper-tiny.en"
 
 
 class FakeEngine:
-    async def run(self, **kwargs) -> str:
+    async def run(self, **kwargs) -> list[TranscriptSegment]:
         kwargs["progress_cb"](1, 1)
-        return "texto transcripto"
+        # Segmentos con tiempo: es lo que devuelve el motor real desde que los
+        # subtitulos existen. Su concatenacion da "texto transcripto".
+        return [
+            TranscriptSegment(start=0.0, end=1.0, text="texto"),
+            TranscriptSegment(start=1.0, end=2.0, text="transcripto"),
+        ]
 
 
 def make_settings(tmp_path: Path) -> Settings:

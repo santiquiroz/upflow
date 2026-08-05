@@ -7,6 +7,7 @@ from typing import Any
 
 from app.config import Settings
 from app.exceptions import QueueFullError
+from app.services.subtitles import segments_to_text
 from app.models import JobStatus, TranscribeJob, utc_now
 from app.services.auth.identity import AuthenticatedUser
 from app.services.auth.quotas import QuotaService
@@ -214,7 +215,7 @@ class TranscribeJobManager:
         def on_progress(done: int, total: int) -> None:
             job.progress_pct = round(done / max(total, 1) * 100, 1)
 
-        text = await self.engine.run(
+        segments = await self.engine.run(
             model_id=job.model_id,
             model_dir=model_dir,
             audio_path=job.source_path,
@@ -222,8 +223,9 @@ class TranscribeJobManager:
             device=device,
             progress_cb=on_progress,
         )
-        job.text = text
-        job.output_path = self._write_transcript(job, text)
+        job.segments = segments
+        job.text = segments_to_text(segments)
+        job.output_path = self._write_transcript(job, job.text)
 
     def _write_transcript(self, job: TranscribeJob, text: str) -> Path:
         # El texto ya vive en el job; el .txt existe para que la descarga use el

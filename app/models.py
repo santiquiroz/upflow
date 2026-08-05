@@ -166,6 +166,9 @@ class TranscribeJob:
     model_id: str
     # None deja que el modelo detecte el idioma.
     language: str | None = None
+    # Segmentos con tiempo. `text` es su concatenacion; los segmentos son lo que
+    # permite escribir un .srt, que sin tiempos no existiria.
+    segments: list[Any] = field(default_factory=list)
     device: str | None = None
     id: str = field(default_factory=lambda: uuid4().hex)
     status: JobStatus = JobStatus.queued

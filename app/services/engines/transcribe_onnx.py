@@ -11,6 +11,12 @@ from pathlib import Path
 from typing import Any
 
 from app.config import Settings
+from app.services.media_decode import build_decode_to_wav_command, needs_decoding
+from app.services.subtitles import (
+    TranscriptSegment,
+    merge_chunk_segments,
+    segments_from_offsets,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +85,27 @@ def _resample_linear(audio: Any, source_rate: int) -> Any:
     ).astype("float32")
 
 
+def _decoded_copy(path: Path, ffmpeg: str) -> Path:
+    """Deja un WAV al lado del original y devuelve su ruta.
+
+    Se hace ANTES de tocar el modelo: si el contenedor no sirve, el error sale
+    de ffmpeg con un mensaje entendible y sin haber tomado la GPU.
+    """
+    import subprocess
+
+    destination = path.with_suffix(".decoded.wav")
+    command = build_decode_to_wav_command(
+        ffmpeg=ffmpeg, source=path, destination=destination, sample_rate=TARGET_SAMPLE_RATE
+    )
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0 or not destination.exists():
+        raise RuntimeError(
+            "No se pudo leer el audio de este archivo. "
+            f"ffmpeg dijo: {(result.stderr or '').strip()[-300:]}"
+        )
+    return destination
+
+
 def load_audio_mono_16k(path: Path) -> Any:
     """Deja el audio como espera Whisper: mono, float32, 16 kHz."""
     import soundfile as sf
@@ -91,10 +118,14 @@ def load_audio_mono_16k(path: Path) -> Any:
 def split_into_chunks(audio: Any) -> list[Any]:
     """Trozos de 30 segundos, SIN solape.
 
-    El solape mejoraria los cortes a mitad de palabra, pero deduplicar lo repetido
-    necesita timestamps por token, y en este camino `return_timestamps=True` no
-    devuelve marcas (medido 2026-07-29). Preferimos un corte visible en un borde
-    antes que texto duplicado que nadie puede limpiar.
+    Nota historica: el docstring anterior decia que `return_timestamps=True` no
+    devuelve marcas en este camino (medido 2026-07-29). Eso quedo DESMENTIDO el
+    2026-08-04 (`scripts/spike_whisper_timestamps.py`): las marcas existen, lo
+    que las borraba era decodificar con `skip_special_tokens=True`. Ver
+    docs/superpowers/specs/2026-08-04-whisper-timestamps-correccion.md.
+
+    El solape sigue sin usarse porque no hace falta para subtitulos: los
+    segmentos ya vienen cortados por frase.
     """
     if len(audio) == 0:
         return []
@@ -122,7 +153,7 @@ class TranscribeEngine:
         request: TranscribeRequest,
         device: str,
         progress_cb: Callable[[int, int], None],
-    ) -> str:
+    ) -> list[TranscriptSegment]:
         cancel_event = threading.Event()
         worker = asyncio.ensure_future(
             asyncio.to_thread(
@@ -153,32 +184,55 @@ class TranscribeEngine:
         device: str,
         cancel_event: threading.Event,
         progress_cb: Callable[[int, int], None],
-    ) -> str:
-        model, processor = self._get_model(model_id, model_dir, device)
-        chunks = split_into_chunks(load_audio_mono_16k(audio_path))
-        if not chunks:
-            return ""
+    ) -> list[TranscriptSegment]:
+        # Decodificar ANTES de pedir el modelo: un contenedor de video que no se
+        # puede leer tiene que fallar sin haber tomado el dispositivo.
+        decoded: Path | None = None
+        if needs_decoding(audio_path):
+            decoded = _decoded_copy(audio_path, str(self.settings.ffmpeg_binary_path))
+        try:
+            model, processor = self._get_model(model_id, model_dir, device)
+            chunks = split_into_chunks(load_audio_mono_16k(decoded or audio_path))
+            if not chunks:
+                return []
 
-        pieces: list[str] = []
-        for index, chunk in enumerate(chunks):
-            if cancel_event.is_set():
-                raise TranscribeCancelled()
-            pieces.append(self._transcribe_chunk(model, processor, chunk, request))
-            progress_cb(index + 1, len(chunks))
+            per_chunk: list[list[TranscriptSegment]] = []
+            for index, chunk in enumerate(chunks):
+                if cancel_event.is_set():
+                    raise TranscribeCancelled()
+                per_chunk.append(self._transcribe_chunk(model, processor, chunk, request))
+                progress_cb(index + 1, len(chunks))
 
-        return " ".join(piece for piece in pieces if piece).strip()
+            return merge_chunk_segments(per_chunk, chunk_seconds=CHUNK_SECONDS)
+        finally:
+            if decoded is not None:
+                decoded.unlink(missing_ok=True)
 
     def _transcribe_chunk(
         self, model: Any, processor: Any, chunk: Any, request: TranscribeRequest
-    ) -> str:
+    ) -> list[TranscriptSegment]:
         features = processor(
             chunk, sampling_rate=TARGET_SAMPLE_RATE, return_tensors="pt"
         ).input_features
-        kwargs: dict[str, Any] = {"max_new_tokens": MAX_TOKENS_PER_CHUNK}
+        kwargs: dict[str, Any] = {
+            "max_new_tokens": MAX_TOKENS_PER_CHUNK,
+            # Sin esto el modelo no emite los tokens de tiempo y no hay
+            # subtitulos posibles, solo texto corrido.
+            "return_timestamps": True,
+        }
         if request.language:
             kwargs["language"] = request.language
         tokens = model.generate(input_features=features, **kwargs)
-        return processor.batch_decode(tokens, skip_special_tokens=True)[0].strip()
+        decoded = processor.batch_decode(
+            tokens, skip_special_tokens=True, output_offsets=True
+        )[0]
+        offsets = decoded.get("offsets") if isinstance(decoded, dict) else None
+        if offsets:
+            return segments_from_offsets(list(offsets), chunk_seconds=CHUNK_SECONDS)
+        # Sin offsets todavia se puede entregar la transcripcion: el chunk entero
+        # pasa a ser un solo segmento. Peor granularidad, nunca texto perdido.
+        text = decoded.get("text") if isinstance(decoded, dict) else decoded
+        return [TranscriptSegment(start=0.0, end=float(CHUNK_SECONDS), text=str(text or ""))]
 
     def _get_model(self, model_id: str, model_dir: Path, device: str) -> tuple[Any, Any]:
         self.gpu_coordinator.acquire(device, self)

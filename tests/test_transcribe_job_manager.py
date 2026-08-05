@@ -7,6 +7,7 @@ import pytest
 
 from app.config import Settings
 from app.exceptions import QueueFullError
+from app.services.subtitles import TranscriptSegment
 from app.models import JobStatus
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry
@@ -22,23 +23,29 @@ class FakeEngine:
         self.fail = fail
         self.calls: list[dict] = []
 
-    async def run(self, **kwargs) -> str:
+    async def run(self, **kwargs) -> list[TranscriptSegment]:
         self.calls.append(kwargs)
         if self.fail is not None:
             raise self.fail
         kwargs["progress_cb"](1, 2)
         kwargs["progress_cb"](2, 2)
-        return self.text
+        # Un segmento por palabra, con tiempos: es la forma REAL que devuelve el
+        # motor desde que los subtitulos existen.
+        words = self.text.split()
+        return [
+            TranscriptSegment(start=float(i), end=float(i + 1), text=word)
+            for i, word in enumerate(words)
+        ]
 
 
 class SlowEngine:
     def __init__(self) -> None:
         self.started = asyncio.Event()
 
-    async def run(self, **_kwargs) -> str:
+    async def run(self, **_kwargs) -> list[TranscriptSegment]:
         self.started.set()
         await asyncio.sleep(30)
-        return "nunca"
+        return []
 
 
 class FakeDevices:

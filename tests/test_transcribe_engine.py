@@ -8,6 +8,7 @@ import pytest
 import soundfile as sf
 
 from app.config import Settings
+from app.services.subtitles import segments_to_text
 from app.services.engines.transcribe_onnx import (
     CHUNK_SAMPLES,
     CHUNK_SECONDS,
@@ -56,7 +57,12 @@ class FakeProcessor:
         assert sampling_rate == TARGET_SAMPLE_RATE
         return type("Features", (), {"input_features": f"features-{len(self.chunk_lengths)}"})()
 
-    def batch_decode(self, tokens, skip_special_tokens: bool):
+    def batch_decode(self, tokens, skip_special_tokens: bool, output_offsets: bool = False):
+        # El procesador real devuelve {"text": ..., "offsets": [...]} cuando se
+        # le pide `output_offsets`. Cada trozo se modela como un solo segmento
+        # que ocupa los primeros 5 segundos del chunk.
+        if output_offsets:
+            return [{"text": tokens, "offsets": [{"text": tokens, "timestamp": (0.0, 5.0)}]}]
         return [tokens]
 
 
@@ -96,7 +102,7 @@ def make_engine(
 async def transcribe(
     engine: TranscribeEngine, tmp_path: Path, audio: Path, language: str | None = None
 ) -> str:
-    return await engine.run(
+    segments = await engine.run(
         model_id="asr--whisper-tiny",
         model_dir=tmp_path,
         audio_path=audio,
@@ -104,6 +110,7 @@ async def transcribe(
         device="cpu",
         progress_cb=lambda _done, _total: None,
     )
+    return segments_to_text(segments)
 
 
 # ---------------------------------------------------------------------------
