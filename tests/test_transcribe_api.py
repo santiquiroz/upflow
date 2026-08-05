@@ -431,3 +431,32 @@ def test_off_mode_is_a_single_admin_user(tmp_path: Path, monkeypatch: pytest.Mon
 
     user = off_mode_user()
     assert Permission.jobs_read_all in user.permissions
+
+
+@pytest.mark.asyncio
+async def test_the_download_can_be_asked_for_a_subtitle_file(tmp_path: Path):
+    """El mismo job entrega transcripcion o subtitulos: los segmentos ya estan,
+    asi que el formato se elige al descargar y no al crear el trabajo."""
+    manager, settings = make_manager(tmp_path)
+    created = await create(manager, settings)
+    await manager._process_next()
+
+    response = await download_transcribe_job(created.job_id, manager, request=None, fmt="srt")
+
+    body = response.body.decode("utf-8")
+    assert "-->" in body
+    assert "texto" in body
+    assert response.media_type == "application/x-subrip"
+    assert ".srt" in response.headers["content-disposition"]
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_download_format_is_refused(tmp_path: Path):
+    manager, settings = make_manager(tmp_path)
+    created = await create(manager, settings)
+    await manager._process_next()
+
+    with pytest.raises(HTTPException) as excinfo:
+        await download_transcribe_job(created.job_id, manager, request=None, fmt="doc")
+
+    assert excinfo.value.status_code == 400

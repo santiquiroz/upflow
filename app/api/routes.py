@@ -138,6 +138,7 @@ from app.services.download_job_manager import (
     validate_url,
 )
 from fetchflow import engine as fetch_engine
+from app.services.subtitles import SUBTITLE_FORMATS, render_segments
 from app.services.transcribe_job_manager import TranscribeJobManager
 from app.services.stream_analysis import parse_audio_tracks, parse_subtitle_tracks
 from app.services.update_service import UpdateService
@@ -1318,17 +1319,29 @@ async def download_transcribe_job(
     job_id: str,
     transcribe_jobs: TranscribeJobManager = Depends(get_transcribe_job_manager),
     request: Request = None,
-) -> FileResponse:
+    fmt: str = "txt",
+) -> Response:
     job = transcribe_jobs.get_job(job_id)
     current_user = current_user_from_request(request)
     if not job or (current_user is not None and not _can_view_job(job, current_user)):
         raise HTTPException(status_code=404, detail="Transcribe job not found")
     if job.status != JobStatus.completed or not job.output_path:
         raise HTTPException(status_code=409, detail="Transcribe job is not completed yet")
-    return FileResponse(
-        path=job.output_path,
-        filename=f"{Path(job.original_filename).stem}.txt",
-        media_type="text/plain; charset=utf-8",
+    if fmt not in SUBTITLE_FORMATS:
+        raise HTTPException(status_code=400, detail=f"Unknown subtitle format: {fmt}")
+    spec = SUBTITLE_FORMATS[fmt]
+    stem = Path(job.original_filename).stem
+    if fmt == "txt":
+        return FileResponse(
+            path=job.output_path, filename=f"{stem}{spec.extension}", media_type=spec.media_type
+        )
+    # Los subtitulos se rinden al vuelo desde los segmentos: el job ya los tiene,
+    # asi que no hace falta escribir un archivo por formato al terminar.
+    body = render_segments(list(job.segments), fmt)
+    return Response(
+        content=body.encode("utf-8"),
+        media_type=spec.media_type,
+        headers={"Content-Disposition": f'attachment; filename="{stem}{spec.extension}"'},
     )
 
 

@@ -137,3 +137,39 @@ class TestSegmentsFromOffsets:
         from app.services.subtitles import segments_from_offsets
 
         assert segments_from_offsets([{"text": "x", "timestamp": (None, 3.0)}], chunk_seconds=30) == []
+
+
+# ---------------------------------------------------------------------------
+# La descarga puede pedir la transcripcion o el archivo de subtitulos. El nombre
+# y el tipo MIME tienen que corresponder al formato pedido: un .srt servido como
+# text/plain lo abre el navegador en vez de bajarlo.
+# ---------------------------------------------------------------------------
+
+
+class TestSubtitleFormats:
+    def test_knows_the_three_deliverables(self) -> None:
+        from app.services.subtitles import SUBTITLE_FORMATS
+
+        assert set(SUBTITLE_FORMATS) == {"txt", "srt", "vtt"}
+
+    def test_each_format_carries_its_extension_and_media_type(self) -> None:
+        from app.services.subtitles import SUBTITLE_FORMATS
+
+        assert SUBTITLE_FORMATS["srt"].extension == ".srt"
+        assert SUBTITLE_FORMATS["srt"].media_type == "application/x-subrip"
+        assert SUBTITLE_FORMATS["vtt"].media_type == "text/vtt"
+        assert SUBTITLE_FORMATS["txt"].extension == ".txt"
+
+    def test_renders_each_format_from_the_same_segments(self) -> None:
+        from app.services.subtitles import render_segments
+
+        segments = [seg(0.0, 1.5, "hola")]
+        assert "-->" in render_segments(segments, "srt")
+        assert render_segments(segments, "vtt").startswith("WEBVTT")
+        assert render_segments(segments, "txt") == "hola"
+
+    def test_an_unknown_format_is_refused_instead_of_guessed(self) -> None:
+        from app.services.subtitles import render_segments
+
+        with pytest.raises(ValueError, match="doc"):
+            render_segments([], "doc")

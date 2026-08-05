@@ -107,3 +107,31 @@ def segments_to_vtt(segments: list[TranscriptSegment]) -> str:
 
 def segments_to_text(segments: list[TranscriptSegment]) -> str:
     return " ".join(segment.text for segment in segments if segment.text).strip()
+
+
+@dataclass(frozen=True, slots=True)
+class SubtitleFormat:
+    extension: str
+    media_type: str
+
+
+# Un .srt servido como text/plain lo abre el navegador en vez de bajarlo, asi
+# que el tipo MIME es parte del contrato y no un detalle.
+SUBTITLE_FORMATS: dict[str, SubtitleFormat] = {
+    "txt": SubtitleFormat(extension=".txt", media_type="text/plain; charset=utf-8"),
+    "srt": SubtitleFormat(extension=".srt", media_type="application/x-subrip"),
+    "vtt": SubtitleFormat(extension=".vtt", media_type="text/vtt"),
+}
+
+_RENDERERS = {
+    "txt": segments_to_text,
+    "srt": segments_to_srt,
+    "vtt": segments_to_vtt,
+}
+
+
+def render_segments(segments: list[TranscriptSegment], fmt: str) -> str:
+    renderer = _RENDERERS.get(fmt)
+    if renderer is None:
+        raise ValueError(f"Formato de subtitulo desconocido: {fmt!r}")
+    return renderer(segments)
