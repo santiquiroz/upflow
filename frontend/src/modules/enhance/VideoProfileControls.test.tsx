@@ -46,6 +46,8 @@ function engineInfo(videoProfiles: VideoProfileResponse[]): EngineInfoResponse {
     defaultModel: "realesrgan-x4plus",
     allowedScales: [2, 3, 4],
     supportedModels: [],
+    maxUploadMb: 50,
+    maxVideoUploadMb: 2048,
     videoProfiles,
     ffmpegAvailable: true,
   };

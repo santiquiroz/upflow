@@ -87,6 +87,8 @@ const ENGINE_INFO: EngineInfoResponse = {
       scales: [2],
     },
   ],
+  maxUploadMb: 50,
+  maxVideoUploadMb: 2048,
   videoProfiles: [],
   ffmpegAvailable: true,
 };
@@ -308,5 +310,20 @@ describe("ImagePanel", () => {
     expect(await screen.findByRole("button", { name: "2x" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "4x" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "3x" })).not.toBeInTheDocument();
+  });
+
+  // El servidor corta la subida mientras la recibe, asi que sin este chequeo un
+  // archivo demasiado grande se sube ENTERO antes de que alguien avise.
+  it("refuses a file over the published limit without uploading it", async () => {
+    renderPanel();
+    await screen.findByRole("radio", { name: /RealESRGAN x4plus/ });
+
+    const huge = new File(["x"], "enorme.png", { type: "image/png" });
+    Object.defineProperty(huge, "size", { value: 3 * 1024 * 1024 * 1024 });
+    const fileInput = document.getElementById("image-file-input") as HTMLInputElement;
+    fireEvent.change(fileInput, { target: { files: [huge] } });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/50 MB/);
+    expect(vi.mocked(api.createImageJob)).not.toHaveBeenCalled();
   });
 });

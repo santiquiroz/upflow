@@ -117,6 +117,8 @@ const ENGINE_INFO: EngineInfoResponse = {
   defaultModel: "realesrgan-x4plus",
   allowedScales: [2, 3, 4],
   supportedModels: [],
+  maxUploadMb: 50,
+  maxVideoUploadMb: 2048,
   videoProfiles: [GENERAL_PROFILE, ANIME_PROFILE],
   ffmpegAvailable: true,
 };

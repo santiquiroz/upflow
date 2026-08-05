@@ -12,6 +12,7 @@ import type { DeviceInfoResponse, DevicesResponse, ModelResponse } from "../../l
 import { formatDeviceSummary, formatModelSummary } from "./accordionSummaries";
 import { ScaleFormatControls } from "./ScaleFormatControls";
 import { correctScaleFor, scalesForModel } from "./scalesForModel";
+import { exceedsUploadLimit, formatMegabytes } from "./uploadLimit";
 
 const MODEL_TOOLTIP = "enhance.model.tooltip.image";
 const DEVICE_TOOLTIP = "enhance.device.tooltip";
@@ -102,6 +103,7 @@ function Dropzone({ file, onFileSelected }: { file: File | null; onFileSelected:
 export function ImagePanel() {
   const { t } = useTranslation();
   const [file, setFile] = useState<File | null>(null);
+  const [rejectedUpload, setRejectedUpload] = useState<string | null>(null);
   const [model, setModel] = useState<ModelResponse | null>(null);
   const [device, setDevice] = useState<DeviceInfoResponse | null>(null);
   const [scale, setScale] = useState<number | null>(null);
@@ -154,6 +156,20 @@ export function ImagePanel() {
   }, [devicesQuery.data, requiresGpu, device]);
 
   function handleFileSelected(selected: File) {
+    // Antes de tocar la red: el servidor corta la subida mientras la recibe, y
+    // enterarse al final de un archivo grande es la peor forma de enterarse.
+    const limitMb = engineQuery.data?.maxUploadMb ?? null;
+    if (exceedsUploadLimit(selected.size, limitMb)) {
+      setRejectedUpload(
+        t("upload.tooLarge", {
+          size: formatMegabytes(selected.size),
+          limit: `${limitMb} MB`,
+        }),
+      );
+      setFile(null);
+      return;
+    }
+    setRejectedUpload(null);
     setFile(selected);
     reset();
   }
@@ -174,6 +190,11 @@ export function ImagePanel() {
     <div className="grid grid-cols-[1fr_320px] gap-6 max-[900px]:grid-cols-1">
       <div className="flex flex-col gap-6">
         <Dropzone file={file} onFileSelected={handleFileSelected} />
+        {rejectedUpload && (
+          <p role="alert" className="text-xs text-danger">
+            {rejectedUpload}
+          </p>
+        )}
         <AccordionSection title={t("enhance.summary.model")} summary={formatModelSummary(model, t)} tooltip={t(MODEL_TOOLTIP)} defaultOpen>
           <ModelPicker value={model?.id ?? null} onChange={setModel} />
         </AccordionSection>

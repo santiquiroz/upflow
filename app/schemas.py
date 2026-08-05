@@ -177,6 +177,11 @@ class EngineInfoResponse(BaseModel):
     supported_models: list[SupportedModelResponse] = Field(serialization_alias="supportedModels")
     video_profiles: list[VideoProfileResponse] = Field(serialization_alias="videoProfiles")
     ffmpeg_available: bool = Field(serialization_alias="ffmpegAvailable")
+    # El navegador necesita el limite para poder avisar ANTES de subir. Se manda
+    # el del servidor y no una copia en el frontend, que se desincroniza en
+    # cuanto alguien toca el .env.
+    max_upload_mb: int = Field(serialization_alias="maxUploadMb")
+    max_video_upload_mb: int = Field(serialization_alias="maxVideoUploadMb")
 
 
 class HealthResponse(BaseModel):

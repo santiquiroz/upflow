@@ -498,6 +498,8 @@ async def engine_info(request: Request, settings: Settings = Depends(get_setting
         default_model=settings.default_model,
         allowed_scales=settings.allowed_scale_values,
         supported_models=[SupportedModelResponse(**item) for item in settings.model_catalog],
+        max_upload_mb=settings.max_upload_mb,
+        max_video_upload_mb=settings.max_video_upload_mb,
         video_profiles=[VideoProfileResponse(**item) for item in settings.video_profile_catalog],
         ffmpeg_available=media_tools.available(),
     )

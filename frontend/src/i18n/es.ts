@@ -235,6 +235,7 @@ export const es = {
   "models.generation.sectionTitle": "Modelos de generación (Stable Diffusion)",
   "download.audioQuality": "Calidad de audio",
   "download.audioQuality.best": "Mejor (VBR)",
+  "upload.tooLarge": "Ese archivo pesa {{size}}. El límite es {{limit}}.",
   "job.queue.title": "Cola de trabajos",
   "job.queue.showAll": "Ver todos",
   "job.queue.empty": "No hay trabajos activos.",

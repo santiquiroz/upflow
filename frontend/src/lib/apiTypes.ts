@@ -234,6 +234,10 @@ export interface EngineInfoResponse {
   defaultModel: string;
   allowedScales: number[];
   supportedModels: SupportedModelResponse[];
+  // Publicados por el backend para poder avisar ANTES de subir; una copia
+  // escrita a mano en el frontend se desincroniza con el .env del servidor.
+  maxUploadMb: number;
+  maxVideoUploadMb: number;
   videoProfiles: VideoProfileResponse[];
   ffmpegAvailable: boolean;
 }

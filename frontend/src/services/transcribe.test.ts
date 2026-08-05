@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { capturedUploads as uploads, mockUploadOnce } from "../lib/uploadTestStub";
 import type {
   AsrInstallStatusResponse,
   CreateJobResponse,
@@ -55,7 +56,7 @@ describe("createTranscribeJob", () => {
       statusUrl: "/api/v1/transcribe/jobs/tr-1",
       downloadUrl: null,
     };
-    mockFetchOnce(response, { status: 202 });
+    mockUploadOnce(response, 202);
     const file = new File(["audio"], "interview.wav", {
       type: "audio/wav",
     });
@@ -66,11 +67,8 @@ describe("createTranscribeJob", () => {
       device: "cpu",
     });
 
-    expect(fetch).toHaveBeenCalledWith(
-      "/api/v1/transcribe/jobs",
-      expect.objectContaining({ method: "POST" }),
-    );
-    const body = vi.mocked(fetch).mock.calls[0][1]?.body as FormData;
+    expect(uploads[0].url).toBe("/api/v1/transcribe/jobs");
+    const body = uploads[0].body;
     expect(body.get("file")).toBe(file);
     expect(body.get("model_id")).toBe("asr-1");
     expect(body.has("language")).toBe(false);
@@ -78,14 +76,14 @@ describe("createTranscribeJob", () => {
   });
 
   it("sends a selected two-letter language code", async () => {
-    mockFetchOnce(
+    mockUploadOnce(
       {
         jobId: "tr-2",
         status: "queued",
         statusUrl: "/api/v1/transcribe/jobs/tr-2",
         downloadUrl: null,
       },
-      { status: 202 },
+      202,
     );
 
     await createTranscribeJob({
@@ -95,7 +93,7 @@ describe("createTranscribeJob", () => {
       device: "dml:0",
     });
 
-    const body = vi.mocked(fetch).mock.calls[0][1]?.body as FormData;
+    const body = uploads[0].body;
     expect(body.get("language")).toBe("es");
     expect(body.get("device")).toBe("dml:0");
   });

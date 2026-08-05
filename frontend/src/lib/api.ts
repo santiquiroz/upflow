@@ -19,8 +19,10 @@ import type {
   VideoEncoder,
   VideoJobResponse,
 } from "./apiTypes";
+import { postFormWithProgress, type UploadOptions } from "./uploadRequest";
 
 const API_BASE = "/api/v1";
+
 
 export class ApiError extends Error {
   readonly status: number;
@@ -52,12 +54,14 @@ export async function apiGet<T>(path: string): Promise<T> {
   return (await response.json()) as T;
 }
 
-export async function apiPostForm<T>(path: string, formData: FormData): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, { method: "POST", body: formData });
-  if (!response.ok) {
-    throw new ApiError(response.status, await extractErrorMessage(response));
-  }
-  return (await response.json()) as T;
+// Toda subida pasa por XHR y no por fetch: fetch no expone el progreso de
+// subida. Ver `uploadRequest.ts`.
+export function apiPostForm<T>(
+  path: string,
+  formData: FormData,
+  options: UploadOptions = {},
+): Promise<T> {
+  return postFormWithProgress<T>(path, formData, options);
 }
 
 export async function apiPostJson<T>(path: string, body: unknown): Promise<T> {

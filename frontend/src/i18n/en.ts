@@ -240,6 +240,7 @@ export const en = {
   "models.generation.sectionTitle": "Generation models (Stable Diffusion)",
   "download.audioQuality": "Audio quality",
   "download.audioQuality.best": "Best (VBR)",
+  "upload.tooLarge": "That file is {{size}}. The limit is {{limit}}.",
   "job.queue.title": "Job Queue",
   "job.queue.showAll": "Show all",
   "job.queue.empty": "No active jobs.",

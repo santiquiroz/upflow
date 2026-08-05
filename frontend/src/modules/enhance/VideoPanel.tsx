@@ -12,7 +12,7 @@ import { SlowPresetCostHint } from "../../components/SlowPresetCostHint";
 import { useAudioCapabilities } from "../../hooks/useAudioJob";
 import { useTranslation } from "../../i18n/LocaleProvider";
 import { useVideoCapabilities, useVideoJob, type VideoJobPhase } from "../../hooks/useVideoJob";
-import { analyzeVideo, getDevices, getModels } from "../../lib/api";
+import { analyzeVideo, getDevices, getEngineInfo, getModels } from "../../lib/api";
 import type {
   AnalyzeVideoResponse,
   AudioTrackInfo,
@@ -32,6 +32,7 @@ import { TrackSelector } from "./TrackSelector";
 import { VideoOutputControls } from "./VideoOutputControls";
 import { VideoProfileControls } from "./VideoProfileControls";
 import { VideoStepStack } from "./VideoStepStack";
+import { exceedsUploadLimit, formatMegabytes } from "./uploadLimit";
 import {
   readVideoDimensions,
   type VideoDimensions,
@@ -325,6 +326,7 @@ function resolveModelForProfile(
 export function VideoPanel() {
   const { t } = useTranslation();
   const [file, setFile] = useState<File | null>(null);
+  const [rejectedUpload, setRejectedUpload] = useState<string | null>(null);
   const [profile, setProfile] = useState<VideoProfileResponse | null>(null);
   const [model, setModel] = useState<ModelResponse | null>(null);
   const [device, setDevice] = useState<DeviceInfoResponse | null>(null);
@@ -350,6 +352,7 @@ export function VideoPanel() {
 
   const modelsQuery = useQuery({ queryKey: ["models"], queryFn: getModels });
   const devicesQuery = useQuery({ queryKey: ["devices"], queryFn: getDevices });
+  const engineQuery = useQuery({ queryKey: ["engine"], queryFn: getEngineInfo });
   const capabilitiesQuery = useAudioCapabilities();
   const videoCapabilitiesQuery = useVideoCapabilities();
   const { phase, job, errorMessage, submit, cancel, reset } = useVideoJob();
@@ -418,6 +421,20 @@ export function VideoPanel() {
   }, [interpEngines, interpEngine]);
 
   async function handleFileSelected(selected: File) {
+    // El limite de video es de 2 GB: dejar que se suba entero para recien ahi
+    // rechazarlo es minutos de espera tirados.
+    const limitMb = engineQuery.data?.maxVideoUploadMb ?? null;
+    if (exceedsUploadLimit(selected.size, limitMb)) {
+      setRejectedUpload(
+        t("upload.tooLarge", {
+          size: formatMegabytes(selected.size),
+          limit: `${limitMb} MB`,
+        }),
+      );
+      setFile(null);
+      return;
+    }
+    setRejectedUpload(null);
     const selectionId = ++fileSelectionIdRef.current;
     setFile(selected);
     reset();
@@ -538,6 +555,11 @@ export function VideoPanel() {
     <div className="grid grid-cols-[1fr_320px] gap-6 max-[900px]:grid-cols-1">
       <div className="flex flex-col gap-6">
         <Dropzone file={file} onFileSelected={handleFileSelected} />
+        {rejectedUpload && (
+          <p role="alert" className="text-xs text-danger">
+            {rejectedUpload}
+          </p>
+        )}
         {analyzeResult && (
           <TrackSelector
             audioTracks={analyzeResult.audioTracks}
