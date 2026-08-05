@@ -22,6 +22,11 @@ dependencies = [
   # flagged the scrypt cost parameter as weak by current OWASP standards.
   # Approved exception to this project's zero-new-dependencies default.
   "argon2-cffi>=23.1.0,<24.0.0",
+  # Generacion de voz (Kokoro): el modelo no recibe texto sino FONEMAS IPA, y
+  # estas dos traen el paso texto->fonemas. `espeakng-loader` empaqueta la DLL y
+  # los datos de espeak-ng como wheel, asi que el usuario no instala nada aparte.
+  "espeakng-loader>=0.2.4",
+  "phonemizer-fork>=3.3.2",
   "httpx>=0.27.0,<1.0.0",
   # Motor del apartado de descargas: github.com/santiquiroz/fetchflow, nuestro.
   # Ahi vive TODA la logica de descarga y ahi se hacen los ajustes; Upflow solo la
