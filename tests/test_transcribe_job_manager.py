@@ -389,3 +389,54 @@ def test_the_manager_is_wired_into_the_app_state():
         # Y comparte el registro con el resto: un modelo instalado por el instalador
         # de ASR tiene que ser visible para el manager sin nada mas en el medio.
         assert app.state.transcribe_jobs.registry is app.state.model_registry
+
+
+@pytest.mark.asyncio
+async def test_a_video_output_mode_muxes_before_the_source_is_deleted(tmp_path: Path, monkeypatch):
+    """El fuente se borra al terminar el job, asi que el muxeo tiene que pasar
+    ANTES: despues ya no habria video al que pegarle los subtitulos."""
+    manager, settings, _r = make_manager(tmp_path)
+    muxed: list[Path] = []
+
+    async def fake_mux(job):
+        # El fuente todavia tiene que existir en este punto.
+        assert job.source_path.exists()
+        destination = settings.outputs_path / f"{job.id}.subtitled.mp4"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"video con subs")
+        muxed.append(destination)
+        return destination
+
+    monkeypatch.setattr(manager, "_mux_subtitles_into_video", fake_mux)
+    job = await manager.create_job(
+        source_path=make_audio(settings, "clip.mp4"),
+        original_filename="clip.mp4",
+        model_id=MODEL_ID,
+        output_mode="video",
+    )
+    await manager._process_next()
+
+    assert job.status is JobStatus.completed
+    assert muxed, "no se muxeo nada"
+    assert job.subtitled_video_path == muxed[0]
+
+
+@pytest.mark.asyncio
+async def test_the_default_mode_does_not_touch_ffmpeg(tmp_path: Path, monkeypatch):
+    manager, settings, _r = make_manager(tmp_path)
+    called = False
+
+    async def fake_mux(job):
+        nonlocal called
+        called = True
+        return job.source_path
+
+    monkeypatch.setattr(manager, "_mux_subtitles_into_video", fake_mux)
+    await manager.create_job(
+        source_path=make_audio(settings),
+        original_filename="charla.wav",
+        model_id=MODEL_ID,
+    )
+    await manager._process_next()
+
+    assert called is False

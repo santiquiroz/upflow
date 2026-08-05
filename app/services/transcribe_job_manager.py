@@ -7,7 +7,8 @@ from typing import Any
 
 from app.config import Settings
 from app.exceptions import QueueFullError
-from app.services.subtitles import segments_to_text
+from app.services.subtitle_mux import build_subtitle_mux_command
+from app.services.subtitles import render_segments, segments_to_text
 from app.models import JobStatus, TranscribeJob, utc_now
 from app.services.auth.identity import AuthenticatedUser
 from app.services.auth.quotas import QuotaService
@@ -72,8 +73,10 @@ class TranscribeJobManager:
         device: str | None = None,
         job_id: str | None = None,
         owner: AuthenticatedUser | None = None,
+        output_mode: str = "text",
     ) -> TranscribeJob:
         self._validate_model(model_id)
+        self._validate_output_mode(output_mode)
         self._validate_language(language)
         await self._validate_device(device)
         if owner is not None and self.quota_service is not None:
@@ -86,12 +89,20 @@ class TranscribeJobManager:
             language=language,
             device=device,
             owner_id=owner.id if owner is not None else None,
+            output_mode=output_mode,
         )
         if job_id is not None:
             job.id = job_id
         self.jobs[job.id] = job
         self._enqueue(job)
         return job
+
+    @staticmethod
+    def _validate_output_mode(output_mode: str) -> None:
+        # Un modo desconocido se rechaza al crear el job y no al terminarlo:
+        # descubrirlo despues de transcribir seria tirar todo el trabajo.
+        if output_mode not in {"text", "video"}:
+            raise ValueError(f"Modo de salida desconocido: {output_mode!r}")
 
     def get_job(self, job_id: str) -> TranscribeJob | None:
         return self.jobs.get(job_id)
@@ -226,6 +237,37 @@ class TranscribeJobManager:
         job.segments = segments
         job.text = segments_to_text(segments)
         job.output_path = self._write_transcript(job, job.text)
+        if job.output_mode == "video":
+            job.subtitled_video_path = await self._mux_subtitles_into_video(job)
+
+    async def _mux_subtitles_into_video(self, job: TranscribeJob) -> Path:
+        """Suma la pista de subtitulos al contenedor SIN re-encodear el video.
+
+        Se hace aca y no al descargar porque el fuente se borra al terminar el
+        job: despues ya no habria video al que sumarle nada.
+        """
+        subtitle_path = self.settings.outputs_path / f"{job.id}.srt"
+        subtitle_path.write_text(render_segments(list(job.segments), "srt"), encoding="utf-8")
+        container = job.source_path.suffix.lstrip(".").lower() or "mkv"
+        destination = self.settings.outputs_path / f"{job.id}.subtitled.{container}"
+        command = build_subtitle_mux_command(
+            ffmpeg=str(self.settings.ffmpeg_binary_path),
+            video=job.source_path,
+            subtitles=subtitle_path,
+            destination=destination,
+            container=container,
+            language=job.language,
+        )
+        process = await asyncio.create_subprocess_exec(
+            *command, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE
+        )
+        _stdout, stderr = await process.communicate()
+        if process.returncode != 0 or not destination.exists():
+            raise RuntimeError(
+                "No se pudieron pegar los subtitulos al video. "
+                f"ffmpeg dijo: {(stderr or b'').decode('utf-8', 'replace').strip()[-300:]}"
+            )
+        return destination
 
     def _write_transcript(self, job: TranscribeJob, text: str) -> Path:
         # El texto ya vive en el job; el .txt existe para que la descarga use el

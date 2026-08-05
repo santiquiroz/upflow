@@ -169,6 +169,11 @@ class TranscribeJob:
     # Segmentos con tiempo. `text` es su concatenacion; los segmentos son lo que
     # permite escribir un .srt, que sin tiempos no existiria.
     segments: list[Any] = field(default_factory=list)
+    # "text" entrega solo la transcripcion; "video" ademas devuelve el archivo
+    # original con la pista de subtitulos adentro. El modo decide si el fuente
+    # se conserva hasta el final o se borra apenas termina de transcribirse.
+    output_mode: str = "text"
+    subtitled_video_path: Path | None = None
     device: str | None = None
     id: str = field(default_factory=lambda: uuid4().hex)
     status: JobStatus = JobStatus.queued
