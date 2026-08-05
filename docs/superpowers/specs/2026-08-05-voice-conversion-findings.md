@@ -1,7 +1,9 @@
 # Conversión de voz desde una muestra: por qué todavía no
 
 **Fecha:** 2026-08-05
-**Veredicto: no hay un camino listo como el que sí tuvo el TTS. No se implementa hasta que lo haya.**
+**Veredicto ORIGINAL (equivocado): "no hay camino listo".**
+**Veredicto CORREGIDO el mismo día: SÍ lo hay. `microsoft/speecht5_vc`, licencia
+MIT, medido y funcionando.** Ver la corrección al final.
 
 ## Qué se pedía
 
@@ -58,3 +60,62 @@ fp16 de Kokoro devuelve audio NaN sin fallar, y el decoder merged de Whisper
 sobre DirectML devuelve texto fluido pero equivocado.
 
 Un modelo sin medir no es una feature, es una promesa.
+
+
+---
+
+# CORRECCIÓN (2026-08-05, mismo día)
+
+**El veredicto de arriba estaba mal, y lo destapó una pregunta del usuario:
+"¿no hay otra manera? ¿no hay modelos en Hugging Face?".**
+
+## Qué estuvo mal en el método
+
+Se buscó por el NOMBRE `voice-conversion` y se miraron cuatro repos elegidos de
+memoria. Eso no es una búsqueda: es confirmar una corazonada. Nunca se buscó por
+tarea, ni se probaron los modelos que transformers ya soporta nativo.
+
+## Lo que aparece cuando se busca bien
+
+| Candidato | Licencia | ONNX | Sirve |
+|---|---|---|---|
+| **`microsoft/speecht5_vc`** | **MIT** ✅ | 0, pero transformers lo corre nativo | **Sí, medido** |
+| `FunAudioLLM/CosyVoice2-0.5B` | Apache 2.0 ✅ | **4 archivos** | Sin medir |
+| `coqui/XTTS-v2` | Coqui PML (no comercial) ⛔ | 0 | No |
+| `SWivid/F5-TTS` | CC-BY-NC-4.0 ⛔ | 0 | No |
+
+## Medición de SpeechT5 VC
+
+`scripts/spike_voice_conversion.py`. Voz de origen generada con Kokoro, voz
+destino con un x-vector fijo.
+
+| Medición | Resultado |
+|---|---|
+| Contenido tras convertir | `"The quick bound fox jumps over the lazy dog."` — **95%** |
+| Timbre cambió | diferencia espectral **0,754** (0 sería audio idéntico) |
+| Velocidad | 3,26 s de audio en 2,31 s → **0,71x tiempo real** |
+| Audio finito | sí |
+
+### Por qué se miden DOS cosas y no una
+
+En TTS alcanza con preguntar "¿dice lo que le pedí?". En conversión no: un modelo
+que devolviera el audio de entrada intacto pasaría esa prueba con 100% y no
+habría convertido nada. Por eso se mide también que el timbre haya cambiado.
+
+## Lo que sigue sin estar resuelto
+
+- **No hay ONNX de SpeechT5 VC**, así que corre por PyTorch. Sería el primer
+  camino PyTorch de la app y esa decisión de arquitectura sigue en pie — pero
+  ahora es una decisión sobre CÓMO integrarlo, no sobre si se puede.
+- **Clonar una voz concreta desde una muestra** necesita sacar el x-vector de esa
+  grabación. Acá se usó uno sintético: alcanza para probar que la conversión
+  corre y cambia el timbre, no para clonar a alguien puntual.
+- CosyVoice2 (Apache 2.0, CON ONNX) no se midió y podría ser mejor encaje que
+  SpeechT5, justamente por traer ONNX.
+
+## La lección
+
+Una búsqueda negativa vale menos que una positiva y hay que sospecharla más. En
+un solo día este repo dio dos veredictos "no se puede" que resultaron falsos: el
+de los timestamps de Whisper (que bloqueaba subtítulos) y este. Los dos cayeron
+con menos de una hora de medición.
