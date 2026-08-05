@@ -3,6 +3,7 @@ import { Mic, Download } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "../../i18n/LocaleProvider";
 import { apiGet } from "../../lib/api";
+import { VoiceConvertPanel } from "./VoiceConvertPanel";
 
 interface TtsCapabilities {
   available: boolean;
@@ -12,8 +13,11 @@ interface TtsCapabilities {
 
 const MAX_CHARS = 2000;
 
+type VoiceMode = "tts" | "convert";
+
 export function VoicePage() {
   const { t } = useTranslation();
+  const [mode, setMode] = useState<VoiceMode>("tts");
   const [text, setText] = useState("");
   const [voice, setVoice] = useState<string | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
@@ -75,6 +79,27 @@ export function VoicePage() {
   return (
     <div className="flex flex-col gap-6">
       <Header />
+      <div role="group" aria-label={t("voice.tts.title")} className="flex gap-2">
+        {(["tts", "convert"] as const).map((option) => (
+          <button
+            key={option}
+            type="button"
+            aria-pressed={mode === option}
+            onClick={() => setMode(option)}
+            className={`rounded-sm border px-3 py-1.5 text-sm transition-[background-color,border-color,color] duration-fast ${
+              mode === option
+                ? "border-accent bg-accent text-bg"
+                : "border-border bg-surface text-text-dim hover:border-text-faint hover:text-text"
+            }`}
+          >
+            {t(option === "tts" ? "voice.tab.tts" : "voice.tab.convert")}
+          </button>
+        ))}
+      </div>
+
+      {mode === "convert" && <VoiceConvertPanel />}
+
+      {mode === "tts" && (
       <div className="flex flex-col gap-2">
         <label htmlFor="tts-text" className="text-xs font-medium text-text-dim">
           {t("voice.tts.text")}
@@ -91,8 +116,9 @@ export function VoicePage() {
           {text.length} / {MAX_CHARS}
         </span>
       </div>
+      )}
 
-      {voices.length > 0 && (
+      {mode === "tts" && voices.length > 0 && (
         <div className="flex flex-col gap-2">
           <label htmlFor="tts-voice" className="text-xs font-medium text-text-dim">
             {t("voice.tts.voice")}
@@ -112,6 +138,7 @@ export function VoicePage() {
         </div>
       )}
 
+      {mode === "tts" && (
       <button
         type="button"
         onClick={() => void handleSynthesize()}
@@ -121,14 +148,15 @@ export function VoicePage() {
         <Mic aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />
         {isBusy ? t("voice.tts.working") : t("voice.tts.speak")}
       </button>
+      )}
 
-      {error && (
+      {mode === "tts" && error && (
         <p role="alert" className="text-xs text-danger">
           {error}
         </p>
       )}
 
-      {audioUrl && (
+      {mode === "tts" && audioUrl && (
         <div className="flex flex-col gap-2 rounded border border-border bg-surface-2 p-4">
           {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
           <audio controls src={audioUrl} className="w-full" />

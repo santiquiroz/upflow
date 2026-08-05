@@ -68,6 +68,7 @@ from app.schemas import (
     SavedPromptsResponse,
     SynthesizeSpeechRequest,
     TtsCapabilitiesResponse,
+    VoiceConversionCapabilitiesResponse,
     RealtimeCapabilitiesResponse,
     RealtimePresetResponse,
     RealtimeStartedResponse,
@@ -156,6 +157,17 @@ from app.services.engines.tts_kokoro import (
     available_voices,
 )
 from app.services.phonemize import text_to_phonemes
+import tempfile
+
+import numpy
+
+from app.services.engines.voice_convert import (
+    MAX_SECONDS as VOICE_MAX_SECONDS,
+    SAMPLE_RATE as VOICE_SAMPLE_RATE,
+    VoiceConversionEngine,
+    VoiceConversionUnavailable,
+)
+from app.services.media_decode import build_decode_to_wav_command, needs_decoding
 from app.services.prompt_presets import PROMPT_PRESETS
 from app.services.saved_prompts import SavedPromptStore
 from app.services.subtitles import SUBTITLE_FORMATS, render_segments
@@ -2426,6 +2438,95 @@ async def delete_saved_prompt(
         # que ese prompt existe.
         raise HTTPException(status_code=404, detail="Saved prompt not found")
     return Response(status_code=204)
+
+
+# --- conversion de voz -----------------------------------------------------
+# Convierte una grabacion para que suene como otra. Devuelve el WAV directo, sin
+# job: el maximo son 60 s de audio y la conversion tarda menos que eso.
+
+_VOICE_CONVERSION = VoiceConversionEngine(Path(get_settings().runtime_dir).parent / "vendor")
+
+
+def get_voice_conversion() -> VoiceConversionEngine:
+    return _VOICE_CONVERSION
+
+
+@router.get("/voice/conversion/capabilities", response_model=VoiceConversionCapabilitiesResponse)
+async def voice_conversion_capabilities(
+    engine: VoiceConversionEngine = Depends(get_voice_conversion),
+) -> VoiceConversionCapabilitiesResponse:
+    if not engine.available():
+        return VoiceConversionCapabilitiesResponse(
+            available=False,
+            reason="Falta el modelo de conversion de voz. Instalalo con scripts/download-voice-conversion.ps1",
+            max_seconds=VOICE_MAX_SECONDS,
+        )
+    return VoiceConversionCapabilitiesResponse(available=True, max_seconds=VOICE_MAX_SECONDS)
+
+
+async def _decoded_upload(upload: UploadFile, settings: Settings) -> Any:
+    """Deja el audio en mono 16 kHz, que es lo unico que el modelo entiende."""
+    import soundfile
+
+    suffix = Path(upload.filename or "audio").suffix or ".wav"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as handle:
+        handle.write(await upload.read())
+        origen = Path(handle.name)
+    try:
+        if needs_decoding(origen):
+            destino = origen.with_suffix(".decoded.wav")
+            command = build_decode_to_wav_command(
+                ffmpeg=str(settings.ffmpeg_binary_path),
+                source=origen,
+                destination=destino,
+                sample_rate=VOICE_SAMPLE_RATE,
+            )
+            process = await asyncio.create_subprocess_exec(
+                *command, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL
+            )
+            await process.communicate()
+            if process.returncode != 0 or not destino.exists():
+                raise HTTPException(status_code=400, detail="No se pudo leer ese archivo de audio.")
+            origen.unlink(missing_ok=True)
+            origen = destino
+        data, rate = soundfile.read(str(origen), dtype="float32", always_2d=True)
+        mono = data.mean(axis=1)
+        if rate != VOICE_SAMPLE_RATE:
+            objetivo = int(len(mono) * VOICE_SAMPLE_RATE / rate)
+            mono = numpy.interp(
+                numpy.linspace(0, len(mono) - 1, objetivo), numpy.arange(len(mono)), mono
+            ).astype("float32")
+        return mono
+    finally:
+        origen.unlink(missing_ok=True)
+
+
+@router.post("/voice/conversion")
+async def convert_voice(
+    source: UploadFile = File(...),
+    reference: UploadFile = File(...),
+    engine: VoiceConversionEngine = Depends(get_voice_conversion),
+    settings_dep: Settings = Depends(get_settings),
+) -> Response:
+    if not engine.available():
+        raise HTTPException(
+            status_code=409,
+            detail="El modelo de conversion de voz no esta instalado. Corre scripts/download-voice-conversion.ps1",
+        )
+    origen = await _decoded_upload(source, settings_dep)
+    muestra = await _decoded_upload(reference, settings_dep)
+    try:
+        convertido = await asyncio.to_thread(engine.convert, source=origen, reference=muestra)
+    except VoiceConversionUnavailable as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    buffer = io.BytesIO()
+    soundfile.write(buffer, convertido, VOICE_SAMPLE_RATE, format="WAV", subtype="PCM_16")
+    return Response(
+        content=buffer.getvalue(),
+        media_type="audio/wav",
+        headers={"Content-Disposition": 'attachment; filename="voz-convertida.wav"'},
+    )
 
 
 @router.patch(

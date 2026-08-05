@@ -88,6 +88,12 @@ class AudioJobResponse(BaseModel):
     download_url: str | None = Field(default=None, serialization_alias="downloadUrl")
 
 
+class VoiceConversionCapabilitiesResponse(BaseModel):
+    available: bool
+    reason: str | None = None
+    max_seconds: int = Field(serialization_alias="maxSeconds")
+
+
 class SavedPromptResponse(BaseModel):
     id: str
     name: str
