@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "../../i18n/LocaleProvider";
 import { UploadCloud, Wand2 } from "lucide-react";
-import { useEffect, useState, type ChangeEvent, type DragEvent } from "react";
+import { useEffect, useMemo, useState, type ChangeEvent, type DragEvent } from "react";
 import { AccordionSection } from "../../components/AccordionSection";
 import { DevicePicker } from "../../components/DevicePicker";
 import { JobCard } from "../../components/JobCard";
@@ -11,6 +11,7 @@ import { getDevices, getEngineInfo } from "../../lib/api";
 import type { DeviceInfoResponse, DevicesResponse, ModelResponse } from "../../lib/apiTypes";
 import { formatDeviceSummary, formatModelSummary } from "./accordionSummaries";
 import { ScaleFormatControls } from "./ScaleFormatControls";
+import { correctScaleFor, scalesForModel } from "./scalesForModel";
 
 const MODEL_TOOLTIP = "enhance.model.tooltip.image";
 const DEVICE_TOOLTIP = "enhance.device.tooltip";
@@ -110,18 +111,33 @@ export function ImagePanel() {
   const devicesQuery = useQuery({ queryKey: ["devices"], queryFn: getDevices });
   const { phase, job, errorMessage, submit, cancel, reset } = useImageJob();
 
-  const allowedScales = engineQuery.data?.allowedScales ?? [];
+  // Las escalas que se ofrecen son las del MODELO elegido, no las del motor: el
+  // backend rechaza el job si no coinciden, y hasta ahora eso se descubria
+  // despues de subir el archivo.
+  // Memoizado: devuelve un array nuevo en cada llamada y sin esto el efecto de
+  // abajo se dispararia en cada render.
+  const supportedModels = engineQuery.data?.supportedModels;
+  const allowedScales = engineQuery.data?.allowedScales;
+  const offeredScales = useMemo(
+    () => scalesForModel(model, supportedModels ?? [], allowedScales ?? []),
+    [model, supportedModels, allowedScales],
+  );
   const requiresGpu = resolveRequiresGpu(model);
 
   useEffect(() => {
-    if (scale !== null) {
+    if (scale === null) {
+      const defaultScale = resolveDefaultScale(offeredScales);
+      if (defaultScale !== null) {
+        setScale(defaultScale);
+      }
       return;
     }
-    const defaultScale = resolveDefaultScale(allowedScales);
-    if (defaultScale !== null) {
-      setScale(defaultScale);
+    // Cambiar de modelo puede dejar seleccionada una escala que el nuevo no hace.
+    const corrected = correctScaleFor(scale, offeredScales);
+    if (corrected !== null && corrected !== scale) {
+      setScale(corrected);
     }
-  }, [allowedScales, scale]);
+  }, [offeredScales, scale]);
 
   useEffect(() => {
     if (!devicesQuery.data) {
@@ -170,8 +186,8 @@ export function ImagePanel() {
           tooltip={t(SCALE_FORMAT_TOOLTIP)}
         >
           <ScaleFormatControls
-            allowedScales={allowedScales}
-            scale={scale ?? allowedScales[0] ?? 4}
+            allowedScales={offeredScales}
+            scale={scale ?? offeredScales[0] ?? 4}
             onScaleChange={setScale}
             format={format}
             onFormatChange={setFormat}

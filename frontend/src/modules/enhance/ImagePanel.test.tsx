@@ -40,6 +40,22 @@ const MODELS: ModelsResponse = {
   ],
 };
 
+const ANIME_X2_MODELS: ModelsResponse = {
+  models: [
+    {
+      id: "realesr-animevideov3-x2",
+      name: "RealESR AnimeVideo v3 x2",
+      kind: "builtin-ncnn",
+      source: "builtin",
+      scale: 2,
+      arch: "esrgan",
+      sizeBytes: 0,
+      status: "installed",
+      error: null,
+    },
+  ],
+};
+
 const DEVICES: DevicesResponse = {
   devices: [
     { id: "cpu", kind: "cpu", name: "CPU", backend: "cpu" },
@@ -55,7 +71,22 @@ const ENGINE_INFO: EngineInfoResponse = {
   available: true,
   defaultModel: "realesrgan-x4plus",
   allowedScales: [2, 3, 4],
-  supportedModels: [],
+  supportedModels: [
+    {
+      key: "realesrgan-x4plus",
+      label: "RealESRGAN x4plus",
+      category: "general",
+      description: "",
+      scales: [2, 3, 4],
+    },
+    {
+      key: "realesr-animevideov3-x2",
+      label: "RealESR AnimeVideo v3 x2",
+      category: "anime",
+      description: "",
+      scales: [2],
+    },
+  ],
   videoProfiles: [],
   ffmpegAvailable: true,
 };
@@ -65,8 +96,8 @@ const CPU_ONLY_DEVICES: DevicesResponse = {
   defaultDeviceId: "cpu",
 };
 
-function renderPanel(devices: DevicesResponse = DEVICES) {
-  vi.mocked(api.getModels).mockResolvedValue(MODELS);
+function renderPanel(devices: DevicesResponse = DEVICES, models: ModelsResponse = MODELS) {
+  vi.mocked(api.getModels).mockResolvedValue(models);
   vi.mocked(api.getDevices).mockResolvedValue(devices);
   vi.mocked(api.getEngineInfo).mockResolvedValue(ENGINE_INFO);
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -262,5 +293,20 @@ describe("ImagePanel", () => {
     fireEvent.click(submitButton);
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Job queue is full; try again later");
+  });
+
+  // El backend rechaza esta combinacion despues de subir el archivo entero
+  // ("Model ... supports only scales [2]"). La pantalla ya tiene el dato para
+  // no ofrecerla nunca.
+  it("does not offer a scale the chosen model cannot do", async () => {
+    renderPanel(DEVICES, ANIME_X2_MODELS);
+
+    fireEvent.click(await screen.findByRole("radio", { name: /AnimeVideo/ }));
+    const [scaleSection] = screen.getAllByRole("button", { name: /Scale & format/i });
+    fireEvent.click(scaleSection);
+
+    expect(await screen.findByRole("button", { name: "2x" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "4x" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "3x" })).not.toBeInTheDocument();
   });
 });
