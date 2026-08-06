@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from app.config import Settings
+from app.services.missing_pack import PACK_LABELS
 from app.services.realtime_service import (
     UPFLOW_MODE_NAME,
     RealtimeService,
@@ -131,10 +132,18 @@ def test_available_once_the_binary_is_there(tmp_path: Path) -> None:
     assert RealtimeService(settings).available() is True
 
 
-def test_starting_without_the_binary_says_how_to_get_it(tmp_path: Path) -> None:
+def test_starting_without_the_binary_dice_que_paquete_falta_sin_dictar_comandos(
+    tmp_path: Path,
+) -> None:
     settings = make_settings(tmp_path, MAGPIE_BINARY=str(tmp_path / "no-esta.exe"))
-    with pytest.raises(RuntimeError, match="download-magpie"):
+    with pytest.raises(RuntimeError) as error:
         RealtimeService(settings).start(preset="anime4k")
+
+    mensaje = str(error.value)
+    # Importa que identifique QUE falta, no la redaccion exacta.
+    assert PACK_LABELS["magpie"] in mensaje
+    # La regresion a evitar: el mensaje no manda al usuario a una terminal.
+    assert ".ps1" not in mensaje
 
 
 def test_starting_writes_the_config_and_launches(tmp_path: Path, monkeypatch) -> None:

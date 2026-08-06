@@ -45,8 +45,13 @@ def _configure_once() -> None:
             import espeakng_loader
             from phonemizer.backend.espeak.wrapper import EspeakWrapper
         except ImportError as exc:  # pragma: no cover - depende del entorno
+            # Esto NO es un paquete descargable: espeak-ng viaja dentro de las
+            # dependencias de Python de la app. El mensaje anterior mandaba a
+            # correr el script del modelo de voz, que jamas lo hubiera
+            # arreglado — bajaba pesos, no dependencias.
             raise PhonemizerUnavailable(
-                "Falta espeak-ng. Instalalo con scripts/download-kokoro-tts.ps1"
+                "Falta el conversor de texto a fonemas, que viene con la "
+                "instalacion. Reinstalar la app lo repone."
             ) from exc
         EspeakWrapper.set_library(espeakng_loader.get_library_path())
         EspeakWrapper.set_data_path(espeakng_loader.get_data_path())

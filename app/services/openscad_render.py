@@ -24,6 +24,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.services.missing_pack import missing_pack_message
+
 # Un modelo que se va por las ramas puede escribir un bucle que no termina nunca.
 # Noventa segundos alcanzan de sobra para cualquier pieza de esta escala.
 RENDER_TIMEOUT_S = 90
@@ -104,7 +106,7 @@ def render_to_stl(
     openscad = Path(openscad)
     if not openscad.exists():
         raise OpenScadError(
-            f"Falta OpenSCAD en {openscad}. Instalalo con scripts/download-openscad.ps1"
+            missing_pack_message("openscad", detail=f"Se esperaba en {openscad}.")
         )
 
     destination = Path(destination)

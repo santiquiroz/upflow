@@ -8,6 +8,7 @@ import numpy as np
 
 from app.config import Settings
 from app.services.inpaint_mask import dilate_mask, feather_mask, mask_bbox, soft_composite
+from app.services.missing_pack import missing_pack_message
 
 # ---------------------------------------------------------------------------
 # Borrado rápido con MI-GAN (Picsart, migan_pipeline_v2.onnx, 28 MB).
@@ -75,9 +76,7 @@ class MiganEraser:
         feather_px: int = DEFAULT_FEATHER_PX,
     ) -> Any:
         if not self.available():
-            raise MiganUnavailableError(
-                "El borrado rápido no está instalado: corré scripts/download-migan.ps1"
-            )
+            raise MiganUnavailableError(missing_pack_message("migan"))
         return await asyncio.to_thread(
             self._erase_blocking, base_image, mask_image, device, dilate_px, feather_px
         )

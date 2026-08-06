@@ -13,6 +13,7 @@ from app.services.engines.voice_convert import (
     assert_convertible,
     assert_usable_audio,
 )
+from app.services.missing_pack import PACK_LABELS
 
 # ---------------------------------------------------------------------------
 # El fallo caro de estos modelos no es una excepcion: es audio con la duracion
@@ -67,16 +68,21 @@ class TestAvailability:
     def test_available_with_every_piece_in_place(self, tmp_path: Path) -> None:
         assert VoiceConversionEngine(make_models(tmp_path)).available() is True
 
-    def test_says_how_to_install_when_the_model_is_missing(self, tmp_path: Path) -> None:
+    def test_dice_que_paquete_falta_sin_dictar_comandos(self, tmp_path: Path) -> None:
+        # Identificar QUE falta es el contrato; la redaccion exacta no lo es.
+        # Nombrar un script es la regresion que hay que evitar: el usuario no
+        # tiene por que ir a una terminal, la app baja el paquete sola.
         engine = VoiceConversionEngine(tmp_path / "vacio")
-        with pytest.raises(VoiceConversionUnavailable, match="download-voice-conversion"):
+        with pytest.raises(VoiceConversionUnavailable) as error:
             engine._load()
+        assert PACK_LABELS["voice-conversion"] in str(error.value)
+        assert ".ps1" not in str(error.value)
 
 
 # --- API -------------------------------------------------------------------
 
 
-def test_capabilities_say_how_to_install_when_it_is_missing() -> None:
+def test_capabilities_name_the_missing_pack() -> None:
     from fastapi.testclient import TestClient
 
     from app.main import app
@@ -84,14 +90,16 @@ def test_capabilities_say_how_to_install_when_it_is_missing() -> None:
     with TestClient(app) as client:
         body = client.get("/api/v1/voice/conversion/capabilities").json()
 
-    # En una maquina sin el modelo bajado, la respuesta tiene que decir COMO
-    # instalarlo y no solo negar.
+    # En una maquina sin el modelo bajado, la respuesta tiene que decir QUE
+    # paquete falta — no solo negar, y tampoco dictar un comando: con el nombre
+    # del paquete la pantalla puede ofrecer el boton de descarga.
     assert "maxSeconds" in body
     if not body["available"]:
-        assert "download-voice-conversion" in (body["reason"] or "")
+        assert body["missingPack"] == "voice-conversion"
+        assert ".ps1" not in (body["reason"] or "")
 
 
-def test_converting_without_the_model_is_a_409_with_instructions(tmp_path) -> None:
+def test_converting_without_the_model_is_a_409_naming_the_pack(tmp_path) -> None:
     import io as _io
 
     import soundfile
@@ -114,6 +122,8 @@ def test_converting_without_the_model_is_a_409_with_instructions(tmp_path) -> No
                 },
             )
         assert response.status_code == 409
-        assert "download-voice-conversion" in response.json()["detail"]
+        detalle = response.json()["detail"]
+        assert detalle["missingPack"] == "voice-conversion"
+        assert ".ps1" not in detalle["reason"]
     finally:
         app.dependency_overrides.pop(get_voice_conversion, None)

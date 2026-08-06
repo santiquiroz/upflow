@@ -6,6 +6,7 @@ import pytest
 
 from app.config import AUDIO_ENHANCE_MODES, Settings
 from app.services.engines.audio_enhance import AudioEnhancer
+from app.services.missing_pack import PACK_LABELS
 from app.services.process_runner import SubprocessTimeoutError
 
 # ---------------------------------------------------------------------------
@@ -474,20 +475,28 @@ async def test_rnnoise_engine_run_raises_when_output_missing(
 # ---------------------------------------------------------------------------
 
 
-async def test_audio_enhancer_run_raises_when_not_available_for_deepfilter(tmp_path: Path) -> None:
+async def test_deepfilter_run_dice_que_paquete_falta_sin_dictar_comandos(tmp_path: Path) -> None:
     settings = make_settings(tmp_path, DEEPFILTER_BINARY=str(tmp_path / "missing.exe"))
     engine = AudioEnhancer(settings, mode="deepfilter")
 
-    with pytest.raises(RuntimeError, match="not available"):
+    with pytest.raises(RuntimeError) as error:
         await engine.run(tmp_path / "in.wav", tmp_path / "out.wav")
 
+    message = str(error.value)
+    assert PACK_LABELS["deepfilternet"] in message
+    assert ".ps1" not in message
 
-async def test_audio_enhancer_run_raises_when_not_available_for_rnnoise(tmp_path: Path) -> None:
+
+async def test_rnnoise_run_dice_que_paquete_falta_sin_dictar_comandos(tmp_path: Path) -> None:
     settings = make_settings(tmp_path, RNNOISE_MODEL=str(tmp_path / "missing.rnnn"))
     engine = AudioEnhancer(settings, mode="rnnoise")
 
-    with pytest.raises(RuntimeError, match="not available"):
+    with pytest.raises(RuntimeError) as error:
         await engine.run(tmp_path / "in.wav", tmp_path / "out.wav")
+
+    message = str(error.value)
+    assert PACK_LABELS["deepfilternet"] in message
+    assert ".ps1" not in message
 
 
 async def test_deepfilter_engine_run_raises_clear_error_on_nonzero_exit(

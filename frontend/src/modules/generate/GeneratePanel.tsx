@@ -10,6 +10,7 @@ import {
   useVideoGenerationCapabilities,
   type GenerationJobPhase,
 } from "../../hooks/useGenerationJob";
+import { PackDownload } from "../../components/PackDownload";
 import { useTranslation } from "../../i18n/LocaleProvider";
 import { PromptPresetChips } from "./PromptPresetChips";
 import { SavedPrompts } from "./SavedPrompts";
@@ -138,9 +139,7 @@ function VideoModelSelect({
   const { t } = useTranslation();
   if (models.length === 0) {
     return (
-      <p className="text-sm text-text-dim">
-        {t("generate.video.noModels", { script: "scripts/download-wan-video.ps1" })}
-      </p>
+      <PackDownload pack="wan-video" reason={t("generate.video.noModels")} />
     );
   }
   return (

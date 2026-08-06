@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 
 from app.config import Settings
+from app.services.missing_pack import missing_pack_message
 from app.services.process_runner import run_guarded_process
 
 # ---------------------------------------------------------------------------
@@ -49,8 +50,10 @@ class SdcppEngine:
     async def run(self, request, output_path: Path, checkpoint: Path | None = None) -> Path:
         if not self.available():
             raise RuntimeError(
-                "sd.cpp lane is not available: set ENABLE_SDCPP=true, run "
-                "scripts/download-sdcpp.ps1 and point SDCPP_MODEL to a checkpoint"
+                missing_pack_message(
+                    "sdcpp",
+                    detail="Ademas hay que prender ENABLE_SDCPP=true y apuntar SDCPP_MODEL a un checkpoint.",
+                )
             )
         command = self.build_command(request, output_path, checkpoint)
         stdout, stderr, returncode = await run_guarded_process(

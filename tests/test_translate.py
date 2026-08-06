@@ -53,10 +53,14 @@ class TestAvailability:
         (tmp_path / "opus-mt-en-fr").mkdir(parents=True)
         assert TranslationEngine(tmp_path).available_pairs() == []
 
-    def test_says_how_to_install_the_missing_pair(self, tmp_path: Path) -> None:
+    def test_names_the_missing_pair_without_dictating_a_command(self, tmp_path: Path) -> None:
+        # El par tiene que aparecer: la traduccion no es UN modelo sino uno por
+        # par de idiomas, y sin saber cual el boton no sabria que bajar.
         engine = TranslationEngine(tmp_path)
-        with pytest.raises(TranslationUnavailable, match="download-translation"):
+        with pytest.raises(TranslationUnavailable, match="en-fr") as capturado:
             engine.translate(["hola"], LanguagePair(source="en", target="fr"))
+
+        assert ".ps1" not in str(capturado.value)
 
 
 class TestBatchShape:
@@ -105,7 +109,7 @@ def test_the_api_lists_the_installed_pairs() -> None:
 
 
 @pytest.mark.asyncio
-async def test_asking_for_a_translation_without_the_model_says_how_to_install_it(tmp_path: Path):
+async def test_asking_for_a_translation_without_the_model_names_the_pair(tmp_path: Path):
     from fastapi import HTTPException
 
     from app.api.routes import download_transcribe_job
@@ -114,7 +118,8 @@ async def test_asking_for_a_translation_without_the_model_says_how_to_install_it
     # Se prueba el engine directo: la ruta delega en el, y el mensaje que
     # importa es el que le llega al usuario.
     engine = TranslationEngine(tmp_path)
-    with pytest.raises(TranslationUnavailable, match="download-translation"):
+    with pytest.raises(TranslationUnavailable, match="en-ja") as capturado:
         engine.translate(["hola"], LanguagePair(source="en", target="ja"))
+    assert ".ps1" not in str(capturado.value)
     assert download_transcribe_job is not None
     assert HTTPException is not None

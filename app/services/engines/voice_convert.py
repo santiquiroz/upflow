@@ -19,6 +19,7 @@ from typing import Any
 
 import numpy as np
 
+from app.services.missing_pack import missing_pack_message
 from app.services.xvector import XvectorEncoder, XvectorUnavailable
 
 SAMPLE_RATE = 16000
@@ -104,7 +105,9 @@ class VoiceConversionEngine:
             vocoder_dir = self.models_root / VOCODER_DIRNAME
             if not vc_dir.is_dir():
                 raise VoiceConversionUnavailable(
-                    f"Falta el modelo en {vc_dir}. Instalalo con scripts/download-voice-conversion.ps1"
+                    missing_pack_message(
+                        "voice-conversion", detail=f"Se esperaba en {vc_dir}."
+                    )
                 )
             self._loaded = (
                 SpeechT5Processor.from_pretrained(str(vc_dir)),

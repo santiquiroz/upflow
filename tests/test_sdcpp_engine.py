@@ -8,6 +8,7 @@ import app.services.engines.sdcpp_engine as sdcpp_module
 from app.config import Settings
 from app.services.engines.generation_onnx import GenerationRequest
 from app.services.engines.sdcpp_engine import SDCPP_MODEL_ID, SdcppEngine
+from app.services.missing_pack import PACK_LABELS
 
 
 def make_settings(tmp_path: Path, enabled: bool = True, with_files: bool = True) -> Settings:
@@ -60,10 +61,17 @@ def test_build_command_includes_all_parameters(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_fails_clearly_when_lane_is_off(tmp_path: Path) -> None:
+async def test_run_with_lane_off_names_the_missing_pack_without_dictating_commands(
+    tmp_path: Path,
+) -> None:
     engine = SdcppEngine(make_settings(tmp_path, enabled=False))
-    with pytest.raises(RuntimeError, match="download-sdcpp"):
+
+    with pytest.raises(RuntimeError) as error:
         await engine.run(make_request(), tmp_path / "out.png")
+
+    message = str(error.value)
+    assert PACK_LABELS["sdcpp"] in message
+    assert ".ps1" not in message
 
 
 @pytest.mark.asyncio

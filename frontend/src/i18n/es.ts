@@ -89,8 +89,7 @@ export const es = {
   "generate.cpuConfirm":
     "No se detectó GPU compatible (DirectX 12). Generar en CPU tarda varios minutos " +
     "por imagen. ¿Continuar igual?",
-  "generate.video.noModels":
-    "Todavía no hay modelos de video instalados. Instalá el pack de generación de " +
+  "generate.video.noModels": "Todavia no hay modelos de video instalados." +
     "video desde el instalador, o corré {{script}}.",
   "generate.video.duration": "Duración: {{seconds}} s. Generar video tarda minutos, no segundos.",
   "generate.video.driftWarning":
@@ -456,7 +455,6 @@ export const es = {
   "realtime.opened":
     "Overlay abierto. Poné el foco en la ventana que querés escalar y usá el atajo que " +
     "muestra la ventana de Magpie. El mismo atajo lo cierra.",
-  "realtime.install": "Instalalo tildando Tiempo real en el instalador, o corriendo {{script}}.",
   "realtime.notViable.title": "Lo que todavía no se puede",
   "realtime.notViable.frameGen":
     "Generar cuadros intermedios como hace Lossless Scaling: hoy no existe una opción " +
@@ -678,6 +676,10 @@ export const es = {
     "chocó con el mismo techo ya medido para FLUX.2 y Z-Image.",
 
   "capability.setup.missingSetting": "Falta configurarla: no hay nada que descargar, lo ponés vos en los ajustes.",
+  "pack.download": "Descargar",
+  "pack.downloading": "Descargando…",
+  "pack.done": "Listo. Ya podés usarlo.",
+  "pack.takesAWhile": "Son varios cientos de MB. Podés seguir usando el resto mientras tanto.",
   "capability.setup.missingPack": "Falta descargar el paquete que necesita.",
   "capability.setup.missingModel": "Todavía no hay ningún modelo compatible instalado.",
   "capability.tree.loading": "Cargando capacidades…",

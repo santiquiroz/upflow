@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from app.config import Settings
+from app.services.missing_pack import missing_pack_message
 
 FFPROBE_TIMEOUT_SECONDS = 30
 DEFAULT_FPS = Fraction(30, 1)
@@ -86,7 +87,7 @@ class MediaTools:
 
     async def ffprobe_json(self, source_path: Path) -> dict[str, Any]:
         if not self.available():
-            raise RuntimeError("FFmpeg/FFprobe not available. Run scripts/download-ffmpeg.ps1 first.")
+            raise RuntimeError(missing_pack_message("ffmpeg"))
 
         stdout = await self._run_ffprobe(source_path)
         return json.loads(stdout)

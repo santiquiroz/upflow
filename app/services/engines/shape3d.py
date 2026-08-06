@@ -25,6 +25,8 @@ from typing import Any
 
 import numpy as np
 
+from app.services.missing_pack import missing_pack_message
+
 # 16 pasos alcanzaron en la medicion. Mas pasos cuestan minutos de CPU y la malla
 # no mejora lo suficiente como para notarlo despues de escalar e imprimir.
 DEFAULT_STEPS = 16
@@ -128,8 +130,9 @@ class Shape3dEngine:
     def _build(self, clase: str) -> Any:
         if not self.available():
             raise Shape3dUnavailable(
-                f"El modelo 3D no esta instalado en {self.model_dir}. "
-                "Bajalo con scripts/download-shap-e.ps1"
+                missing_pack_message(
+                    "shap-e", detail=f"Se esperaba en {self.model_dir}."
+                )
             )
         import diffusers
         import torch

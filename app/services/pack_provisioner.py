@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import sys
 from dataclasses import dataclass
 from enum import Enum
@@ -38,7 +39,22 @@ PACK_SCRIPTS: dict[str, str] = {
     "wan-video": "download-wan-video.ps1",
     "magpie": "download-magpie.ps1",
     "shap-e": "download-shap-e.ps1",
+    # El nombre sigue al directorio vendorizado (vendor/kokoro), no al script:
+    # es la convencion que ya usan gmfss y audiosr.
+    "kokoro": "download-kokoro-tts.ps1",
+    "voice-conversion": "download-voice-conversion.ps1",
+    "translation": "download-translation.ps1",
 }
+
+# Packs que no son UN modelo sino una familia. La traduccion es uno por par de
+# idiomas, que es como OPUS-MT los publica, y el script lo recibe por parametro.
+PACK_PARAMETERS: dict[str, str] = {
+    "translation": "-Pair",
+}
+
+# La variante llega desde una peticion HTTP y termina en una linea de comandos:
+# se acepta la forma exacta que el script declara, y nada mas.
+VARIANT_PATTERN = re.compile(r"^[a-z]{2,3}-[a-z]{2,3}$")
 
 # Los scripts descargan cientos de MB desde GitHub releases. El techo es un
 # limite de seguridad contra un proceso colgado, no una expectativa de duracion.
@@ -58,6 +74,8 @@ class ProvisionStatus(str, Enum):
 class ProvisionJob:
     id: str
     pack: str
+    # Cual del pack, cuando el pack es una familia (un modelo por par de idiomas).
+    variant: str | None = None
     status: ProvisionStatus = ProvisionStatus.queued
     error: str | None = None
 
@@ -98,8 +116,8 @@ def provisioning_supported(platform: str = sys.platform) -> bool:
     return platform == "win32"
 
 
-def build_command(pack: str) -> list[str]:
-    return [
+def build_command(pack: str, variant: str | None = None) -> list[str]:
+    comando = [
         "powershell",
         "-NoProfile",
         "-ExecutionPolicy",
@@ -107,6 +125,24 @@ def build_command(pack: str) -> list[str]:
         "-File",
         str(script_path(pack)),
     ]
+    if variant is None:
+        return comando
+    return comando + [_parameter_for(pack), _checked_variant(variant)]
+
+
+def _parameter_for(pack: str) -> str:
+    try:
+        return PACK_PARAMETERS[pack]
+    except KeyError as exc:
+        raise ValueError(
+            f"El paquete '{pack}' no acepta variantes."
+        ) from exc
+
+
+def _checked_variant(variant: str) -> str:
+    if not VARIANT_PATTERN.match(variant):
+        raise ValueError(f"La variante tiene que verse como 'en-es'. Recibido: {variant!r}")
+    return variant
 
 
 def _tail(raw: bytes, limit: int = 600) -> str:
@@ -138,11 +174,13 @@ class PackProvisioner:
             pass
         self._worker_task = None
 
-    async def provision(self, pack: str) -> str:
-        # Se valida ANTES de encolar: un pack desconocido tiene que fallar la
-        # request, no aparecer como un job que despues se muere solo.
+    async def provision(self, pack: str, variant: str | None = None) -> str:
+        # Se valida ANTES de encolar: un pack desconocido, o una variante con
+        # forma rara, tienen que fallar la request y no aparecer como un job que
+        # despues se muere solo.
         script_for(pack)
-        job = ProvisionJob(id=uuid4().hex, pack=pack)
+        build_command(pack, variant)
+        job = ProvisionJob(id=uuid4().hex, pack=pack, variant=variant)
         self._jobs[job.id] = job
         await self._queue.put(job.id)
         return job.id
@@ -189,7 +227,7 @@ class PackProvisioner:
 
         job.status = ProvisionStatus.running
         _stdout, stderr, returncode = await run_guarded_process(
-            build_command(job.pack), timeout=PROVISION_TIMEOUT_SECONDS
+            build_command(job.pack, job.variant), timeout=PROVISION_TIMEOUT_SECONDS
         )
         if returncode != 0:
             detail = _tail(stderr)

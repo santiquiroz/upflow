@@ -9,6 +9,7 @@ from app.config import Settings
 from app.exceptions import QueueFullError
 from app.models import JobStatus
 from app.services.engines.shape3d import Shape3dUnavailable
+from app.services.missing_pack import PACK_LABELS
 from app.services.shape3d_job_manager import Shape3dJobManager
 from app.services.storage import StorageService
 
@@ -154,10 +155,16 @@ class TestValidation:
             await manager.create_job(prompt="algo", target_mm=-5.0)
 
     @pytest.mark.asyncio
-    async def test_without_the_model_it_says_how_to_install_it(self, tmp_path: Path):
+    async def test_dice_que_paquete_falta_sin_dictar_comandos(self, tmp_path: Path):
+        # El usuario tiene que saber QUE falta; como se baja es asunto de la app,
+        # no un comando que le toque copiar a una terminal.
         manager, _settings = make_manager(tmp_path, MissingEngine())
-        with pytest.raises(Shape3dUnavailable, match="download-shap-e"):
+        with pytest.raises(Shape3dUnavailable) as excinfo:
             await manager.create_job(prompt="algo")
+
+        mensaje = str(excinfo.value)
+        assert PACK_LABELS["shap-e"] in mensaje
+        assert ".ps1" not in mensaje
 
     @pytest.mark.asyncio
     async def test_a_full_queue_is_refused_not_dropped(self, tmp_path: Path):

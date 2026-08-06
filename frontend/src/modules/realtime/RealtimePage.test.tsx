@@ -118,11 +118,15 @@ describe("RealtimePage", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Magpie no arrancó");
   });
 
-  it("explains how to install it when it is missing, instead of offering a dead button", async () => {
+  it("ofrece bajarlo en vez de dictar un comando", async () => {
+    // Antes esta prueba EXIGIA ver el nombre del script en pantalla, o sea que
+    // codificaba como contrato justo lo que sacamos: mandar al usuario a una
+    // terminal. Ahora lo que tiene que haber es el boton.
     renderPage(NO_INSTALADO);
 
     expect(await screen.findByText(/no está instalado/i)).toBeInTheDocument();
-    expect(screen.getByText(/download-magpie/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /descargar|download/i })).toBeInTheDocument();
+    expect(screen.queryByText(/\.ps1/)).toBeNull();
     expect(screen.queryByRole("button", { name: /Open overlay/i })).not.toBeInTheDocument();
   });
 

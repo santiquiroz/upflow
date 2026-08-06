@@ -17,6 +17,7 @@ from app.services.engines.audiosr.driver import AudioSrDriver
 from app.services.engines.multichannel_restore import restore_multichannel
 from app.services.engines.onnx_upscaler import _wrap_onnx_error
 from app.services.gpu_session_coordinator import GpuSessionCoordinator
+from app.services.missing_pack import missing_pack_message
 
 # ---------------------------------------------------------------------------
 # AudioSR restoration (ONNX, in-process). Second restore engine next to
@@ -74,8 +75,10 @@ class AudioSrRestorer:
     ) -> None:
         if not self.available():
             raise RuntimeError(
-                "AudioSR restoration is not available. Enable ENABLE_AUDIOSR and install the models "
-                "(scripts/download-audiosr-onnx.ps1)."
+                missing_pack_message(
+                    "audiosr",
+                    detail="Ademas hay que prender ENABLE_AUDIOSR para usar la restauracion AudioSR.",
+                )
             )
         audio = _load_audio_48k(input_wav)
         if audio.shape[0] == 0:

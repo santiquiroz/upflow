@@ -10,6 +10,7 @@ from uuid import uuid4
 from app.config import Settings
 from app.services.engines.sdcpp_models import CHECKPOINT_SUFFIXES, sdcpp_model_id
 from app.services.hf_client import HfClient
+from app.services.missing_pack import missing_pack_message
 
 logger = logging.getLogger(__name__)
 
@@ -73,10 +74,7 @@ class VulkanModelInstaller:
         if not self.settings.enable_sdcpp:
             raise ValueError("El lane Vulkan está apagado (ENABLE_SDCPP).")
         if not self.settings.sdcpp_binary_path.exists():
-            raise ValueError(
-                "Falta el motor Vulkan: instalá el componente desde Ajustes o corré "
-                "scripts/download-sdcpp.ps1"
-            )
+            raise ValueError(missing_pack_message("sdcpp"))
         if Path(filename).suffix.lower() not in CHECKPOINT_SUFFIXES:
             raise ValueError(f"{filename} no es un checkpoint ({', '.join(CHECKPOINT_SUFFIXES)}).")
         # El nombre viene del repo remoto: sin esto, un "../../x" escribiría

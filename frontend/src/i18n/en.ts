@@ -95,8 +95,7 @@ export const en = {
   "generate.cpuConfirm":
     "No compatible GPU detected (DirectX 12). Generating on CPU takes several minutes " +
     "per image. Continue anyway?",
-  "generate.video.noModels":
-    "There are no video models installed yet. Install the video generation pack from " +
+  "generate.video.noModels": "No video models installed yet." +
     "the installer, or run {{script}}.",
   "generate.video.duration": "Length: {{seconds}} s. Generating video takes minutes, not seconds.",
   "generate.video.driftWarning":
@@ -461,7 +460,6 @@ export const en = {
   "realtime.opened":
     "Overlay open. Focus the window you want to upscale and use the shortcut shown in " +
     "the Magpie window. The same shortcut closes it.",
-  "realtime.install": "Install it by ticking Realtime in the installer, or by running {{script}}.",
   "realtime.notViable.title": "What is still not possible",
   "realtime.notViable.frameGen":
     "Generating intermediate frames the way Lossless Scaling does: there is no open " +
@@ -683,6 +681,10 @@ export const en = {
     "ceiling already measured for FLUX.2 and Z-Image.",
 
   "capability.setup.missingSetting": "It needs to be configured: nothing to download, you set it in Settings.",
+  "pack.download": "Download",
+  "pack.downloading": "Downloading…",
+  "pack.done": "Done. You can use it now.",
+  "pack.takesAWhile": "It is a few hundred MB. You can keep using the rest meanwhile.",
   "capability.setup.missingPack": "The package it needs is not downloaded yet.",
   "capability.setup.missingModel": "No compatible model is installed yet.",
   "capability.tree.loading": "Loading capabilities…",

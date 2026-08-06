@@ -587,13 +587,16 @@ describe("GeneratePanel — modo video", () => {
     expect(screen.getByRole("status")).toHaveTextContent(/drifts out of shape/i);
   });
 
-  it("points at the installer when the video pack is not downloaded", async () => {
+  it("ofrece bajar el pack de video en vez de nombrar un script", async () => {
     renderPanel(AVAILABLE_CAPABILITIES, DEVICES, NO_VIDEO_CAPABILITIES);
     await screen.findByRole("option", { name: "SD 1.5 (ONNX)" });
 
     fireEvent.click(screen.getByRole("radio", { name: /^video$/i }));
 
-    expect(await screen.findByText(/download-wan-video/i)).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: /descargar|download/i }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/\.ps1/)).toBeNull();
   });
 
   it("keeps the chosen model when switching between the two image modes", async () => {

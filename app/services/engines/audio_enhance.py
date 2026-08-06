@@ -5,6 +5,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.config import AUDIO_ENHANCE_MODES, DEEPFILTER_MODE, Settings
+from app.services.missing_pack import missing_pack_message
 from app.services.process_runner import run_guarded_process
 
 
@@ -25,8 +26,10 @@ class AudioEnhancer:
     async def run(self, input_wav: Path, output_wav: Path) -> None:
         if not self.available():
             raise RuntimeError(
-                f"Audio enhance mode {self.mode!r} is not available. "
-                "Run scripts/download-deepfilternet.ps1 first."
+                missing_pack_message(
+                    "deepfilternet",
+                    detail=f"El modo de mejora de audio {self.mode!r} no esta disponible.",
+                )
             )
 
         output_wav.parent.mkdir(parents=True, exist_ok=True)

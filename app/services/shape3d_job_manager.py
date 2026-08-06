@@ -25,6 +25,7 @@ from app.services.auth.identity import AuthenticatedUser
 from app.services.engines.shape3d import Shape3dEngine, Shape3dUnavailable
 from app.services.openscad_llm import LlmUnavailable, describe_to_stl
 from app.services.mesh_fit import PRINTER_BEDS
+from app.services.missing_pack import missing_pack_message
 from app.services.print_check import check_stl_for_printing
 from app.services.stl_writer import write_stl
 
@@ -97,9 +98,7 @@ class Shape3dJobManager:
         if source not in ("mesh", "cad"):
             raise ValueError(f"Origen desconocido: {source!r}. Son 'mesh' o 'cad'.")
         if source == "mesh" and not self.engine.available():
-            raise Shape3dUnavailable(
-                "El modelo 3D no esta instalado. Bajalo con scripts/download-shap-e.ps1"
-            )
+            raise Shape3dUnavailable(missing_pack_message("shap-e"))
         if source == "cad":
             if self.cad_client is None:
                 raise Shape3dUnavailable(

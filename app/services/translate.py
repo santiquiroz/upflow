@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from app.services.missing_pack import missing_pack_message
+
 # Los subtitulos se traducen SEGMENTO POR SEGMENTO y no como un texto corrido:
 # los tiempos pertenecen a cada segmento, y traducir todo junto los perderia.
 MAX_TOKENS = 512
@@ -88,8 +90,11 @@ class TranslationEngine:
             directorio = self.models_root / pair.directory
             if not directorio.is_dir():
                 raise TranslationUnavailable(
-                    f"No hay modelo para traducir de {pair.source} a {pair.target}. "
-                    f"Instalalo con scripts/download-translation.ps1 -Pair {pair.source}-{pair.target}"
+                    missing_pack_message(
+                        "translation",
+                        variant=f"{pair.source}-{pair.target}",
+                        detail=f"Es el que traduce de {pair.source} a {pair.target}.",
+                    )
                 )
             from optimum.onnxruntime import ORTModelForSeq2SeqLM
             from transformers import AutoTokenizer

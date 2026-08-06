@@ -13,6 +13,7 @@ from app.config import GMFSS_ENGINE, INTERP_ENGINES, RIFE_ENGINE, Settings
 from app.models import VideoUpscaleJob
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.engines.gmfss.assets import GRAPH_NAMES
+from app.services.missing_pack import PACK_LABELS
 from app.services.storage import StorageService
 from app.services.video_job_manager import VideoJobManager
 
@@ -326,7 +327,7 @@ async def test_job_manager_rejects_gmfss_when_models_not_installed(tmp_path: Pat
     source_path.parent.mkdir(parents=True, exist_ok=True)
     source_path.write_bytes(b"fake-video-bytes")
 
-    with pytest.raises(ValueError, match="(?i)not installed"):
+    with pytest.raises(ValueError) as exc_info:
         await video_jobs.create_job(
             source_path=source_path,
             original_filename="clip.mp4",
@@ -340,6 +341,11 @@ async def test_job_manager_rejects_gmfss_when_models_not_installed(tmp_path: Pat
             fps_multiplier=2,
             interp_engine="gmfss",
         )
+
+    # El mensaje tiene que nombrar QUE falta (no su redaccion exacta: eso se
+    # retoca) y NO puede mandar al usuario a correr un script en la terminal.
+    assert PACK_LABELS["gmfss"] in str(exc_info.value)
+    assert ".ps1" not in str(exc_info.value)
 
 
 async def test_gmfss_disabled_and_not_installed_messages_are_distinct(tmp_path: Path) -> None:

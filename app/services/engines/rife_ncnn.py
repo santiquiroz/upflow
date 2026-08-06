@@ -6,6 +6,7 @@ from pathlib import Path
 
 from app.config import Settings
 from app.services.engines.realesrgan_ncnn import gpu_index_for_device
+from app.services.missing_pack import missing_pack_message
 from app.services.process_runner import run_guarded_process
 
 OUTPUT_FRAME_PATTERN = "%08d.png"
@@ -36,9 +37,7 @@ class RifeNcnnEngine:
         device: str | None = None,
     ) -> Path:
         if not self.available():
-            raise RuntimeError(
-                "RIFE NCNN interpolation engine is not available. Run scripts/download-rife.ps1 first."
-            )
+            raise RuntimeError(missing_pack_message("rife"))
 
         resolved_target_frame_count = self._resolve_target_frame_count(
             source_frame_count, multiplier, target_frame_count

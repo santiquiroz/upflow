@@ -13,6 +13,7 @@ from app.api.routes import create_video_job, resolve_video_job_fields, video_job
 from app.config import Settings
 from app.models import VideoUpscaleJob
 from app.services.device_semaphores import DeviceSemaphores
+from app.services.missing_pack import PACK_LABELS
 from app.services.storage import StorageService
 from app.services.video_job_manager import VideoJobManager
 
@@ -251,15 +252,20 @@ async def test_video_job_manager_rejects_target_fps_when_interpolation_disabled_
         await create_job_with_target_fps(video_jobs, source_path, target_fps="60")
 
 
-async def test_video_job_manager_rejects_target_fps_when_rife_not_installed(tmp_path: Path) -> None:
+async def test_target_fps_without_rife_names_the_missing_pack_without_dictating_commands(
+    tmp_path: Path,
+) -> None:
     settings = make_settings(
         tmp_path, ENABLE_INTERPOLATION=True, RIFE_BINARY=str(tmp_path / "missing-rife.exe")
     )
     video_jobs = VideoJobManager(settings, FakeUpscaler(), FakeMediaTools(), DeviceSemaphores(settings))
     source_path = make_source(settings)
 
-    with pytest.raises(ValueError, match="(?i)not installed"):
+    with pytest.raises(ValueError) as exc_info:
         await create_job_with_target_fps(video_jobs, source_path, target_fps="60")
+
+    assert PACK_LABELS["rife"] in str(exc_info.value)
+    assert ".ps1" not in str(exc_info.value)
 
 
 def test_target_fps_disabled_and_not_installed_messages_are_distinct(tmp_path: Path) -> None:

@@ -101,6 +101,7 @@ class VoiceConversionCapabilitiesResponse(BaseModel):
     available: bool
     reason: str | None = None
     max_seconds: int = Field(serialization_alias="maxSeconds")
+    missing_pack: str | None = Field(default=None, serialization_alias="missingPack")
 
 
 class PrinterResponse(BaseModel):
@@ -236,6 +237,9 @@ class TtsCapabilitiesResponse(BaseModel):
     available: bool
     voices: list[str] = Field(default_factory=list)
     reason: str | None = None
+    # Que paquete hay que bajar. Sin esto la pantalla puede explicar el problema
+    # pero no ofrecer el boton, que es lo unico que le sirve al usuario.
+    missing_pack: str | None = Field(default=None, serialization_alias="missingPack")
 
 
 class SynthesizeSpeechRequest(BaseModel):

@@ -5,6 +5,7 @@ from typing import Protocol
 
 from app.config import APOLLO_MODE, AUDIOSR_MODE, Settings
 from app.services.gpu_session_coordinator import GpuSessionCoordinator
+from app.services.missing_pack import missing_pack_message
 
 
 class AudioRestorer(Protocol):
@@ -25,8 +26,9 @@ def validate_restore_mode_ready(settings: Settings, mode: str) -> None:
             )
         if not settings.apollo_restore_model_path.exists():
             raise ValueError(
-                f"restore mode {mode!r} requested but the Apollo model is not installed "
-                "(run scripts/download-apollo.ps1)"
+                missing_pack_message(
+                    "apollo", detail=f"Lo pide el modo de restauracion {mode!r}."
+                )
             )
         return
     if mode == AUDIOSR_MODE:
@@ -36,8 +38,9 @@ def validate_restore_mode_ready(settings: Settings, mode: str) -> None:
             )
         if not settings.audiosr_available():
             raise ValueError(
-                f"restore mode {mode!r} requested but the AudioSR models are not installed "
-                "(run scripts/download-audiosr-onnx.ps1)"
+                missing_pack_message(
+                    "audiosr", detail=f"Lo pide el modo de restauracion {mode!r}."
+                )
             )
         return
     raise ValueError(f"Unknown restore mode: {mode!r}")

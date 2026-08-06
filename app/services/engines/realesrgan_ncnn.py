@@ -5,6 +5,7 @@ from pathlib import Path
 from app.config import Settings
 from app.models import UpscaleJob
 from app.services.engines.base import UpscaleEngine
+from app.services.missing_pack import missing_pack_message
 from app.services.process_runner import run_guarded_process
 
 
@@ -51,9 +52,7 @@ class RealEsrganNcnnEngine(UpscaleEngine):
 
     async def run(self, job: UpscaleJob) -> Path:
         if not self.available():
-            raise RuntimeError(
-                "Real-ESRGAN NCNN engine is not available. Run scripts/download-realesrgan.ps1 first."
-            )
+            raise RuntimeError(missing_pack_message("realesrgan"))
 
         output_suffix = f".{job.output_format.lower()}"
         output_path = self.settings.outputs_path / f"{job.id}{output_suffix}"

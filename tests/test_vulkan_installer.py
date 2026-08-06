@@ -7,6 +7,7 @@ import pytest
 
 from app.config import Settings
 from app.services.engines.sdcpp_models import SDCPP_MODEL_PREFIX
+from app.services.missing_pack import PACK_LABELS
 from app.services.vulkan_installer import VulkanInstallStatus, VulkanModelInstaller
 
 
@@ -98,11 +99,16 @@ async def test_a_path_in_the_filename_is_rejected(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_without_the_engine_it_says_what_falta(tmp_path: Path) -> None:
+async def test_sin_el_motor_dice_que_paquete_falta_sin_dictar_comandos(tmp_path: Path) -> None:
     installer = VulkanModelInstaller(make_settings(tmp_path, with_binary=False), FakeHfClient())
 
-    with pytest.raises(ValueError, match="download-sdcpp|motor Vulkan"):
+    with pytest.raises(ValueError) as excinfo:
         await installer.install("algun/repo", "modelo.safetensors")
+
+    mensaje = str(excinfo.value)
+    assert PACK_LABELS["sdcpp"] in mensaje
+    # La regresion a evitar: volver a mandar al usuario a la terminal.
+    assert ".ps1" not in mensaje
 
 
 @pytest.mark.asyncio

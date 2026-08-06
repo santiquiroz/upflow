@@ -2,12 +2,14 @@ import { useQuery } from "@tanstack/react-query";
 import { Download, Wand2 } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "../../i18n/LocaleProvider";
+import { PackDownload } from "../../components/PackDownload";
 import { apiGet } from "../../lib/api";
 
 interface ConversionCapabilities {
   available: boolean;
   reason: string | null;
   maxSeconds: number;
+  missingPack: string | null;
 }
 
 function FilePicker({
@@ -90,9 +92,17 @@ export function VoiceConvertPanel() {
 
   if (capabilities.data && !capabilities.data.available) {
     return (
-      <div role="alert" className="rounded border border-border bg-surface p-4">
-        <p className="text-sm text-text-dim">{capabilities.data.reason}</p>
-      </div>
+      capabilities.data.missingPack ? (
+        <PackDownload
+          pack={capabilities.data.missingPack}
+          reason={capabilities.data.reason}
+          onDone={() => void capabilities.refetch()}
+        />
+      ) : (
+        <div role="alert" className="rounded border border-border bg-surface p-4">
+          <p className="text-sm text-text-dim">{capabilities.data.reason}</p>
+        </div>
+      )
     );
   }
 

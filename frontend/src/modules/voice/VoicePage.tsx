@@ -3,12 +3,15 @@ import { Mic, Download } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "../../i18n/LocaleProvider";
 import { apiGet } from "../../lib/api";
+import { PackDownload } from "../../components/PackDownload";
 import { VoiceConvertPanel } from "./VoiceConvertPanel";
 
 interface TtsCapabilities {
   available: boolean;
   voices: string[];
   reason: string | null;
+  /** Que paquete falta. Es lo que le permite a la pantalla ofrecer el boton. */
+  missingPack: string | null;
 }
 
 const MAX_CHARS = 2000;
@@ -69,9 +72,17 @@ export function VoicePage() {
     return (
       <div className="flex flex-col gap-4">
         <Header />
-        <div role="alert" className="flex flex-col gap-2 rounded border border-border bg-surface p-4">
-          <p className="text-sm text-text-dim">{capabilities.data.reason}</p>
-        </div>
+        {capabilities.data.missingPack ? (
+          <PackDownload
+            pack={capabilities.data.missingPack}
+            reason={capabilities.data.reason}
+            onDone={() => void capabilities.refetch()}
+          />
+        ) : (
+          <div role="alert" className="rounded border border-border bg-surface p-4">
+            <p className="text-sm text-text-dim">{capabilities.data.reason}</p>
+          </div>
+        )}
       </div>
     );
   }

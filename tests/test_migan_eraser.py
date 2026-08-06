@@ -13,6 +13,7 @@ from app.services.engines.migan_eraser import (
     MiganUnavailableError,
     build_migan_inputs,
 )
+from app.services.missing_pack import PACK_LABELS
 
 
 def make_settings(tmp_path: Path, installed: bool = True) -> Settings:
@@ -146,11 +147,15 @@ async def test_an_empty_mask_short_circuits(tmp_path: Path, monkeypatch: pytest.
 
 
 @pytest.mark.asyncio
-async def test_missing_model_gives_an_actionable_error(tmp_path: Path) -> None:
+async def test_missing_model_names_the_pack_without_dictating_commands(tmp_path: Path) -> None:
+    # Lo que le importa al usuario es QUÉ falta, no cómo se llama nuestro script.
     eraser = MiganEraser(make_settings(tmp_path, installed=False))
 
-    with pytest.raises(MiganUnavailableError, match="download-migan"):
+    with pytest.raises(MiganUnavailableError) as error:
         await eraser.erase(photo(), mask_box((200, 120), (10, 10, 20, 20)), "cpu")
+
+    assert PACK_LABELS["migan"] in str(error.value)
+    assert ".ps1" not in str(error.value)  # la app lo baja sola; nadie abre una terminal
 
 
 def test_available_reflects_the_model_on_disk(tmp_path: Path) -> None:
@@ -209,5 +214,8 @@ async def test_job_manager_rejects_the_eraser_when_not_installed(tmp_path: Path)
         migan_eraser=MiganEraser(settings),
     )
 
-    with pytest.raises(ValueError, match="download-migan|no está instalado"):
+    with pytest.raises(ValueError) as error:
         await manager.create_job(prompt="x", model_id=ERASER_MODEL_ID)
+
+    assert PACK_LABELS["migan"] in str(error.value)
+    assert ".ps1" not in str(error.value)

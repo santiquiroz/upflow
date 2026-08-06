@@ -23,6 +23,7 @@ from app.services.restorer_registry import validate_restore_mode_ready
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
 from app.services.media_tools import MediaTools, parse_fps_fraction, resolve_video_fps
+from app.services.missing_pack import missing_pack_message
 from app.services.classic_upscalers import (
     CLASSIC_SCALES,
     is_classic_upscaler,
@@ -379,9 +380,13 @@ class VideoJobManager:
         if onnx_model is not None and (self.settings.builtin_onnx_path / onnx_model.filename).exists():
             return
         raise ValueError(
-            f"El modelo {model_id} solo puede hacer {scale}x con el runtime ONNX, y su "
-            f"export no esta instalado. Usa escala 4, elegi otro modelo, o instala los "
-            f"exports ONNX (scripts/download-realesrgan-onnx.ps1)."
+            missing_pack_message(
+                "realesrgan-onnx",
+                detail=(
+                    f"El modelo {model_id} solo puede hacer {scale}x con el runtime ONNX. "
+                    f"Tambien podes usar escala 4 o elegir otro modelo."
+                ),
+            )
         )
 
     def _resolve_onnx_model(self, model_id: str) -> VideoModelResolution:
@@ -505,8 +510,7 @@ class VideoJobManager:
             )
         if not self.settings.interpolation_available():
             raise ValueError(
-                "Frame interpolation requested but RIFE is not installed "
-                "(run scripts/download-rife.ps1)"
+                missing_pack_message("rife", detail="Se pidio interpolacion de cuadros.")
             )
 
     def _validate_gmfss_ready(self) -> None:
@@ -516,8 +520,7 @@ class VideoJobManager:
             )
         if not self.settings.gmfss_available():
             raise ValueError(
-                "GMFSS interpolation requested but the models are not installed "
-                "(run scripts/download-gmfss-onnx.ps1)"
+                missing_pack_message("gmfss", detail="Se pidio interpolacion GMFSS.")
             )
 
     def _validate_audio_enhance_mode(self, audio_enhance: str | None, keep_audio: bool) -> None:
@@ -536,8 +539,10 @@ class VideoJobManager:
             )
         if not self.settings.audio_enhance_available(audio_enhance):
             raise ValueError(
-                f"Audio enhance mode {audio_enhance!r} requested but not installed "
-                "(run scripts/download-deepfilternet.ps1)"
+                missing_pack_message(
+                    "deepfilternet",
+                    detail=f"Se pidio el modo de mejora de audio {audio_enhance!r}.",
+                )
             )
 
     def _validate_audio_restore_mode(self, audio_restore: str | None, keep_audio: bool) -> None:

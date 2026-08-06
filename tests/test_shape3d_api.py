@@ -16,6 +16,7 @@ from app.api.routes import (
 from app.config import Settings
 from app.models import JobStatus
 from app.schemas import Shape3dJobRequest
+from app.services.missing_pack import PACK_LABELS
 from app.services.shape3d_job_manager import Shape3dJobManager
 from app.services.storage import StorageService
 
@@ -78,7 +79,9 @@ async def test_a_finished_job_carries_the_verdict_and_the_file(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_without_the_model_it_is_a_409_with_the_command(tmp_path: Path):
+async def test_sin_el_modelo_es_409_que_dice_que_falta_sin_dictar_comandos(tmp_path: Path):
+    # El 409 tiene que nombrar lo que falta para que la pantalla ofrezca el boton;
+    # mandar al usuario a correr un .ps1 es la regresion que este test frena.
     manager = make_manager(tmp_path, MissingEngine())
 
     with pytest.raises(HTTPException) as exc_info:
@@ -87,7 +90,8 @@ async def test_without_the_model_it_is_a_409_with_the_command(tmp_path: Path):
         )
 
     assert exc_info.value.status_code == 409
-    assert "download-shap-e" in str(exc_info.value.detail)
+    assert PACK_LABELS["shap-e"] in str(exc_info.value.detail)
+    assert ".ps1" not in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio

@@ -24,6 +24,7 @@ from app.services.engines.onnx_video_upscaler import (
     _put_until_cancelled,
 )
 from app.services.gpu_session_coordinator import GpuSessionCoordinator
+from app.services.missing_pack import missing_pack_message
 
 logger = logging.getLogger(__name__)
 
@@ -97,8 +98,7 @@ class GmfssEngine:
     ) -> Path:
         if not self.available():
             raise RuntimeError(
-                "GMFSS interpolation engine is not available. Enable ENABLE_GMFSS and install the "
-                "models (scripts/download-gmfss-onnx.ps1)."
+                missing_pack_message("gmfss", detail="Ademas hay que activar ENABLE_GMFSS.")
             )
 
         resolved_target_frame_count = self._resolve_target_frame_count(
@@ -147,8 +147,7 @@ class GmfssEngine:
         exige framesTotal conocido para elegir este camino)."""
         if not self.available():
             raise RuntimeError(
-                "GMFSS interpolation engine is not available. Enable ENABLE_GMFSS and install the "
-                "models (scripts/download-gmfss-onnx.ps1)."
+                missing_pack_message("gmfss", detail="Ademas hay que activar ENABLE_GMFSS.")
             )
         plan = _build_interpolation_plan(source_frame_count, target_frame_count)
         driver, padded_hw = self._build_driver(device)

@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Zap } from "lucide-react";
 import { useState } from "react";
+import { PackDownload } from "../../components/PackDownload";
 import { useTranslation } from "../../i18n/LocaleProvider";
 import type { RealtimePreset } from "../../lib/apiTypes";
 import { fetchRealtimeCapabilities, startRealtime } from "../../services/realtime";
@@ -61,12 +62,11 @@ export function RealtimePanel() {
 
   if (capabilities.data && !capabilities.data.available) {
     return (
-      <div role="alert" className="flex flex-col gap-2 rounded border border-border bg-surface p-4">
-        <p className="text-sm text-text-dim">{capabilities.data.reason}</p>
-        <p className="text-xs text-text-faint">
-          {t("realtime.install", { script: "scripts/download-magpie.ps1" })}
-        </p>
-      </div>
+      <PackDownload
+        pack="magpie"
+        reason={capabilities.data.reason}
+        onDone={() => void capabilities.refetch()}
+      />
     );
   }
 

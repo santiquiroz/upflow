@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from app.config import Settings
+from app.services.missing_pack import missing_pack_message
 
 # ---------------------------------------------------------------------------
 # Fase 7.1 - overlay de reescalado en tiempo real.
@@ -163,10 +164,7 @@ class RealtimeService:
 
     def start(self, *, preset: str, max_frame_rate: int | None = None) -> int:
         if not self.available():
-            raise RuntimeError(
-                "El overlay de tiempo real no está instalado: corré "
-                "scripts/download-magpie.ps1 o instalá el componente desde el instalador."
-            )
+            raise RuntimeError(missing_pack_message("magpie"))
         path = magpie_config_path(self.settings)
         config = apply_upflow_mode(
             self._load_config(path), preset=preset, max_frame_rate=max_frame_rate

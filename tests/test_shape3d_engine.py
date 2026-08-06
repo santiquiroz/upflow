@@ -13,6 +13,7 @@ from app.services.engines.shape3d import (
     _as_triangles,
     assert_usable_mesh,
 )
+from app.services.missing_pack import PACK_LABELS
 
 # ---------------------------------------------------------------------------
 # El fallo caro de estos modelos NO es una excepcion: es una salida con la forma
@@ -71,9 +72,18 @@ class TestAvailability:
 
         assert Shape3dEngine(tmp_path).available()
 
-    def test_generating_without_the_model_says_how_to_install_it(self, tmp_path: Path) -> None:
-        with pytest.raises(Shape3dUnavailable, match="download-shap-e"):
+    def test_generating_without_the_model_says_what_is_missing_without_dictating_commands(
+        self, tmp_path: Path
+    ) -> None:
+        with pytest.raises(Shape3dUnavailable) as error:
             Shape3dEngine(tmp_path).generate_from_text("una pieza")
+
+        # Identificar lo que falta, no la redaccion exacta: el mensaje se puede
+        # retocar sin que nada este mal.
+        assert PACK_LABELS["shap-e"] in str(error.value)
+        # La regresion que hay que evitar: mandar al usuario a una terminal
+        # cuando la app baja el paquete sola.
+        assert ".ps1" not in str(error.value)
 
     def test_an_empty_prompt_is_refused_before_loading_anything(self, tmp_path: Path) -> None:
         # Cargar el modelo cuesta 80 segundos: rechazar antes es la diferencia

@@ -10,6 +10,7 @@ from typing import Any
 import numpy as np
 
 from app.config import Settings
+from app.services.missing_pack import missing_pack_message
 
 # ---------------------------------------------------------------------------
 # Editor - "tocar un objeto -> máscara" con MobileSAM (Acly/MobileSAM rev
@@ -100,9 +101,7 @@ class EditorSegmenter:
 
     async def segment(self, image_path: Path, x: float, y: float, device: str) -> bytes:
         if not self.available():
-            raise SegmenterUnavailableError(
-                "La selección por toque no está instalada: corré scripts/download-mobilesam.ps1"
-            )
+            raise SegmenterUnavailableError(missing_pack_message("mobilesam"))
         return await asyncio.to_thread(self._segment_blocking, image_path, x, y, device)
 
     def _segment_blocking(self, image_path: Path, x: float, y: float, device: str) -> bytes:

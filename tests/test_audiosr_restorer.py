@@ -12,6 +12,7 @@ import soundfile as sf
 from app.config import Settings
 from app.services.engines.audiosr_restore import AudioSrRestorer
 from app.services.gpu_session_coordinator import GpuSessionCoordinator
+from app.services.missing_pack import PACK_LABELS
 from app.services.restorer_registry import build_restorers, validate_restore_mode_ready
 
 # ---------------------------------------------------------------------------
@@ -202,8 +203,11 @@ def test_validate_restore_mode_ready_messages(tmp_path: Path) -> None:
     enabled_missing = Settings(
         _env_file=None, ENABLE_AUDIOSR=True, AUDIOSR_MODEL_DIR=str(tmp_path / "missing")
     )
-    with pytest.raises(ValueError, match="download-audiosr-onnx"):
+    with pytest.raises(ValueError) as missing_models:
         validate_restore_mode_ready(enabled_missing, "audiosr")
+    # Identifica QUE falta, sin dictarle un comando: la app baja el pack sola.
+    assert PACK_LABELS["audiosr"] in str(missing_models.value)
+    assert ".ps1" not in str(missing_models.value)
 
     with pytest.raises(ValueError, match="Unknown restore mode"):
         validate_restore_mode_ready(disabled, "nope")

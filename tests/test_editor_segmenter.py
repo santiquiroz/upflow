@@ -17,6 +17,7 @@ from app.services.editor_segmenter import (
     mask_to_png_bytes,
     prepare_encoder_input,
 )
+from app.services.missing_pack import PACK_LABELS
 
 
 def make_settings(tmp_path: Path, installed: bool = True) -> Settings:
@@ -137,8 +138,11 @@ async def test_embeddings_are_cached_per_image(tmp_path: Path, monkeypatch: pyte
 
 
 @pytest.mark.asyncio
-async def test_segment_without_models_raises_clear_error(tmp_path: Path) -> None:
+async def test_segment_sin_modelos_dice_que_paquete_falta_sin_dictar_comandos(tmp_path: Path) -> None:
     segmenter = EditorSegmenter(make_settings(tmp_path, installed=False))
 
-    with pytest.raises(SegmenterUnavailableError, match="download-mobilesam"):
+    with pytest.raises(SegmenterUnavailableError) as error:
         await segmenter.segment(tmp_path / "x.png", 1.0, 1.0, "cpu")
+
+    assert PACK_LABELS["mobilesam"] in str(error.value)
+    assert ".ps1" not in str(error.value)

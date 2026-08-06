@@ -12,6 +12,7 @@ from app.services.auth.quotas import QuotaService
 from app.services.audio_pipeline import AudioPipeline
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
+from app.services.missing_pack import missing_pack_message
 from app.services.restorer_registry import validate_restore_mode_ready
 
 logger = logging.getLogger(__name__)
@@ -149,8 +150,9 @@ class AudioJobManager:
             raise ValueError(f"denoise must be one of {sorted(AUDIO_ENHANCE_MODES)}")
         if not self.settings.audio_enhance_available(denoise):
             raise ValueError(
-                f"denoise mode {denoise!r} requested but not installed "
-                "(run scripts/download-deepfilternet.ps1)"
+                missing_pack_message(
+                    "deepfilternet", detail=f"Modo de limpieza pedido: {denoise!r}."
+                )
             )
 
     def _validate_restore(self, restore: str) -> None:

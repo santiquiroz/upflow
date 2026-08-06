@@ -151,6 +151,7 @@ from app.services.job_manager import JobManager
 from app.services.media_tools import MediaTools
 from app.services.model_installer import ModelInstaller
 from app.services.model_preflight import preflight_upscaler
+from app.services.missing_pack import missing_pack_message
 from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry, ModelStatus
 from app.services.pack_provisioner import PackProvisioner, ProvisionJob, UnknownPackError
 from app.services.settings_service import editable_settings_status, update_setting
@@ -1492,7 +1493,8 @@ async def tts_capabilities(
     if not engine.available(directory):
         return TtsCapabilitiesResponse(
             available=False,
-            reason="Falta el modelo de voz. Instalalo con scripts/download-kokoro-tts.ps1",
+            reason=missing_pack_message("kokoro"),
+            missing_pack="kokoro",
         )
     return TtsCapabilitiesResponse(available=True, voices=available_voices(directory))
 
@@ -1510,7 +1512,7 @@ async def synthesize_speech(
     if not engine.available(directory):
         raise HTTPException(
             status_code=409,
-            detail="El modelo de voz no esta instalado. Corre scripts/download-kokoro-tts.ps1",
+            detail={"reason": missing_pack_message("kokoro"), "missingPack": "kokoro"},
         )
     phonemes = text_to_phonemes(payload.text, payload.language)
     if not phonemes:
@@ -2415,6 +2417,29 @@ async def provision_capability(
     return _provision_job_to_response(job)
 
 
+@router.post("/packs/{pack}/provision", response_model=ProvisionJobResponse, status_code=202)
+async def provision_pack(
+    pack: str,
+    request: Request,
+    variant: str | None = None,
+) -> ProvisionJobResponse:
+    """Baja un paquete por su nombre, sin pasar por una capacidad.
+
+    Casi toda pantalla sabe QUE le falta pero no a que capacidad pertenece, y
+    varios paquetes existen sin figurar en el catalogo. Sin esta ruta esas
+    pantallas no pueden ofrecer el boton, que es como se llego a tener 36
+    mensajes diciendole al usuario que abriera una terminal.
+    """
+    provisioner: PackProvisioner = request.app.state.pack_provisioner
+    try:
+        job_id = await provisioner.provision(pack, variant)
+    except (UnknownPackError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    job = provisioner.status(job_id)
+    assert job is not None
+    return _provision_job_to_response(job)
+
+
 @router.get("/capabilities/provision/{job_id}", response_model=ProvisionJobResponse)
 async def provision_status(job_id: str, request: Request) -> ProvisionJobResponse:
     provisioner: PackProvisioner = request.app.state.pack_provisioner
@@ -2547,7 +2572,8 @@ async def voice_conversion_capabilities(
     if not engine.available():
         return VoiceConversionCapabilitiesResponse(
             available=False,
-            reason="Falta el modelo de conversion de voz. Instalalo con scripts/download-voice-conversion.ps1",
+            reason=missing_pack_message("voice-conversion"),
+            missing_pack="voice-conversion",
             max_seconds=VOICE_MAX_SECONDS,
         )
     return VoiceConversionCapabilitiesResponse(available=True, max_seconds=VOICE_MAX_SECONDS)
@@ -2600,7 +2626,10 @@ async def convert_voice(
     if not engine.available():
         raise HTTPException(
             status_code=409,
-            detail="El modelo de conversion de voz no esta instalado. Corre scripts/download-voice-conversion.ps1",
+            detail={
+                "reason": missing_pack_message("voice-conversion"),
+                "missingPack": "voice-conversion",
+            },
         )
     origen = await _decoded_upload(source, settings_dep)
     muestra = await _decoded_upload(reference, settings_dep)

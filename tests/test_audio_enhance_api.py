@@ -12,6 +12,7 @@ from app.api.routes import create_video_job, resolve_video_job_fields, video_job
 from app.config import Settings
 from app.models import VideoUpscaleJob
 from app.services.device_semaphores import DeviceSemaphores
+from app.services.missing_pack import PACK_LABELS
 from app.services.storage import StorageService
 from app.services.video_job_manager import VideoJobManager
 
@@ -291,7 +292,7 @@ async def test_video_job_manager_rejects_audio_enhance_when_not_installed(tmp_pa
     source_path.parent.mkdir(parents=True, exist_ok=True)
     source_path.write_bytes(b"fake-video-bytes")
 
-    with pytest.raises(ValueError, match="(?i)not installed"):
+    with pytest.raises(ValueError) as exc_info:
         await video_jobs.create_job(
             source_path=source_path,
             original_filename="clip.mp4",
@@ -304,6 +305,9 @@ async def test_video_job_manager_rejects_audio_enhance_when_not_installed(tmp_pa
             keep_audio=True,
             audio_enhance="rnnoise",
         )
+
+    assert PACK_LABELS["deepfilternet"] in str(exc_info.value)
+    assert ".ps1" not in str(exc_info.value)
 
 
 def test_disabled_and_not_installed_audio_enhance_messages_are_distinct(tmp_path: Path) -> None:
@@ -469,7 +473,8 @@ async def test_create_video_job_route_rejects_audio_enhance_when_unavailable(tmp
         )
 
     assert exc_info.value.status_code == 400
-    assert "not installed" in exc_info.value.detail.lower()
+    assert PACK_LABELS["deepfilternet"] in exc_info.value.detail
+    assert ".ps1" not in exc_info.value.detail
 
 
 async def test_create_video_job_route_omitted_audio_enhance_defaults_to_none(tmp_path: Path) -> None:

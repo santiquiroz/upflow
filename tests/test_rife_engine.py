@@ -6,6 +6,7 @@ import pytest
 
 from app.config import Settings
 from app.services.engines.rife_ncnn import RifeNcnnEngine
+from app.services.missing_pack import PACK_LABELS
 
 # ---------------------------------------------------------------------------
 # Task 11 (4.3) - RIFE interpolation engine wrapper: argv construction,
@@ -241,7 +242,7 @@ async def test_rife_engine_run_returns_frames_out_path_on_success(
 # ---------------------------------------------------------------------------
 
 
-async def test_rife_engine_run_raises_when_not_available(tmp_path: Path) -> None:
+async def test_rife_engine_run_dice_que_paquete_falta_sin_dictar_comandos(tmp_path: Path) -> None:
     settings = make_settings(
         tmp_path,
         RIFE_BINARY=str(tmp_path / "missing.exe"),
@@ -249,8 +250,11 @@ async def test_rife_engine_run_raises_when_not_available(tmp_path: Path) -> None
     )
     engine = RifeNcnnEngine(settings)
 
-    with pytest.raises(RuntimeError, match="not available"):
+    with pytest.raises(RuntimeError) as error:
         await engine.run(tmp_path / "in", tmp_path / "out", source_frame_count=10, multiplier=2)
+
+    assert PACK_LABELS["rife"] in str(error.value)
+    assert ".ps1" not in str(error.value)
 
 
 async def test_rife_engine_run_raises_clear_error_on_nonzero_exit(

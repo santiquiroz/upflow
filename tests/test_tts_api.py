@@ -50,7 +50,7 @@ async def test_capabilities_report_the_installed_voices(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_capabilities_say_how_to_install_when_it_is_missing(tmp_path: Path):
+async def test_capabilities_name_the_missing_pack_instead_of_a_command(tmp_path: Path):
     response = await tts_capabilities(
         engine=FakeEngine(available=False),
         settings_dep=settings(tmp_path),
@@ -58,7 +58,10 @@ async def test_capabilities_say_how_to_install_when_it_is_missing(tmp_path: Path
     )
 
     assert response.available is False
-    assert "download-kokoro" in (response.reason or "")
+    assert response.missing_pack == "kokoro"
+    # La regresion que importa: este test antes EXIGIA que el mensaje nombrara
+    # el script, o sea que codificaba como contrato justo lo que sacamos.
+    assert ".ps1" not in (response.reason or "")
 
 
 @pytest.mark.asyncio

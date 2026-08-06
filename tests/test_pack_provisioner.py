@@ -216,3 +216,57 @@ async def test_two_packs_queue_and_both_run(tmp_path: Path, script: FakeScript):
 
     assert provisioner.status(first).status is ProvisionStatus.done
     assert provisioner.status(second).status is ProvisionStatus.done
+
+
+# La invariante de arriba va en UN solo sentido: que todo pack pedido por el
+# catalogo tenga script. Faltaba la inversa, y por ese hueco se colaron tres
+# descargas que solo se podian hacer desde la terminal: el modelo de voz, la
+# conversion de voz y la traduccion. El usuario las veia como texto crudo
+# diciendole que corriera un .ps1, sin boton.
+#
+# Los aceleradores por hardware quedan afuera A PROPOSITO y por escrito: no son
+# un pack de una capacidad, son un proveedor de ejecucion atado al chip.
+SCRIPTS_SIN_PACK_A_PROPOSITO = {
+    "download-openvino-ep.ps1",
+    "download-tensorrt-rtx-ep.ps1",
+}
+
+
+def test_every_download_script_is_reachable_from_a_button():
+    scripts_dir = Path(__file__).resolve().parents[1] / "scripts"
+    existentes = {p.name for p in scripts_dir.glob("download-*.ps1")}
+    huerfanos = sorted(existentes - set(PACK_SCRIPTS.values()) - SCRIPTS_SIN_PACK_A_PROPOSITO)
+    assert huerfanos == [], (
+        "Estos scripts no se pueden correr desde la app, asi que el usuario "
+        f"queda obligado a abrir una terminal: {huerfanos}"
+    )
+
+
+class TestPacksConVariante:
+    """La traduccion no es UN modelo: es uno por par de idiomas.
+
+    El script lo recibe por `-Pair`. Sin poder pasarle ese valor, el boton solo
+    podria bajar el par por defecto y el usuario quedaria otra vez obligado a
+    abrir una terminal para cualquier otro idioma — que es exactamente lo que
+    este mecanismo existe para evitar.
+    """
+
+    def test_la_variante_viaja_al_script(self):
+        comando = build_command("translation", variant="es-en")
+
+        assert comando[-2:] == ["-Pair", "es-en"]
+
+    def test_sin_variante_el_comando_queda_como_siempre(self):
+        assert "-Pair" not in build_command("translation")
+
+    def test_un_pack_sin_parametro_rechaza_la_variante(self):
+        # Pasarle una variante a un pack que no la entiende seria mandarle un
+        # argumento que el script no declara: PowerShell lo tomaria como ruta.
+        with pytest.raises(ValueError):
+            build_command("rife", variant="es-en")
+
+    def test_una_variante_con_forma_rara_se_rechaza_antes_de_correr_nada(self):
+        # El valor llega desde una peticion HTTP y termina en una linea de
+        # comandos.
+        with pytest.raises(ValueError):
+            build_command("translation", variant="es-en; rm -rf /")

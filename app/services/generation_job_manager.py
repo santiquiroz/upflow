@@ -25,6 +25,7 @@ from app.services.engines.sdcpp_video import (
 from app.services.generation_img2img import supports_img2img
 from app.services.generation_inpaint import supports_inpaint
 from app.services.job_manager import select_upscale_engine
+from app.services.missing_pack import missing_pack_message
 from app.services.model_registry import ModelKind, ModelRegistry
 from app.services.progress import (
     advance_generation_stage,
@@ -196,18 +197,17 @@ class GenerationJobManager:
             # Motor de borrado: no vive en el registro de modelos, se gatea por
             # su archivo en disco igual que el lane experimental.
             if self.migan_eraser is None or not self.migan_eraser.available():
-                raise ValueError(
-                    "El borrado rápido no está instalado: instalalo desde Ajustes "
-                    "o corré scripts/download-migan.ps1"
-                )
+                raise ValueError(missing_pack_message("migan"))
             return
         if model_id.startswith(VIDEO_MODEL_PREFIX):
             # Lane de video: el pack son tres archivos en disco, no una entrada
             # del registro. Se valida contra la lista real.
             if self.video_engine is None or resolve_video_model(model_id, self.settings) is None:
                 raise ValueError(
-                    "Ese modelo de video ya no está disponible. Instalá el pack de "
-                    "video o corré scripts/download-wan-video.ps1"
+                    missing_pack_message(
+                        "wan-video",
+                        detail=f"El modelo {model_id!r} ya no está disponible.",
+                    )
                 )
             return
         if model_id.startswith(SDCPP_MODEL_PREFIX):
@@ -222,8 +222,10 @@ class GenerationJobManager:
             # Lane experimental Fase 3: no vive en el registry, se gatea por flag.
             if self.sdcpp_engine is None or not self.settings.sdcpp_available():
                 raise ValueError(
-                    "El lane sd.cpp es experimental y está apagado: ENABLE_SDCPP=true "
-                    "+ scripts/download-sdcpp.ps1 + SDCPP_MODEL con tu checkpoint"
+                    missing_pack_message(
+                        "sdcpp",
+                        detail="Ademas hay que prender ENABLE_SDCPP=true y apuntar SDCPP_MODEL a un checkpoint.",
+                    )
                 )
             return
         entry = self.registry.get(model_id)

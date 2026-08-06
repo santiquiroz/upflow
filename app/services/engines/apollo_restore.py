@@ -15,6 +15,7 @@ from app.config import Settings
 from app.services.engines.multichannel_restore import restore_multichannel
 from app.services.engines.onnx_upscaler import _parse_dml_device_id, _wrap_onnx_error
 from app.services.gpu_session_coordinator import GpuSessionCoordinator
+from app.services.missing_pack import missing_pack_message
 
 logger = logging.getLogger(__name__)
 
@@ -80,8 +81,10 @@ class ApolloRestorer:
     def _run_and_save(self, input_wav: Path, output_wav: Path, device: str) -> None:
         if not self.available():
             raise RuntimeError(
-                "Apollo restoration is not available. Enable ENABLE_AUDIO_RESTORE and install the model "
-                "(scripts/download-apollo.ps1)."
+                missing_pack_message(
+                    "apollo",
+                    detail="Ademas hay que prender ENABLE_AUDIO_RESTORE.",
+                )
             )
         audio = _load_audio_44k(input_wav)
         session = self._get_session(device)

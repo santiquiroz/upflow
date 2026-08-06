@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.config import Settings
+from app.services.missing_pack import missing_pack_message
 from app.services.process_runner import run_guarded_process
 
 # ---------------------------------------------------------------------------
@@ -305,8 +306,10 @@ class SdcppVideoEngine:
     async def run(self, request: VideoRequest, output_path: Path, model: VideoModel) -> Path:
         if not self.available():
             raise RuntimeError(
-                "El lane de video Vulkan no está disponible: instalá el componente "
-                "de generación de video o corré scripts/download-wan-video.ps1"
+                missing_pack_message(
+                    "wan-video",
+                    detail="El lane de video Vulkan no está disponible sin él.",
+                )
             )
         command = self.build_command(request, output_path, model)
         _stdout, stderr, returncode = await run_guarded_process(

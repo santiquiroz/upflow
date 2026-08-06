@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from app.services.missing_pack import PACK_LABELS
 from app.services.openscad_render import (
     OpenScadError,
     assert_safe,
@@ -74,13 +75,23 @@ class TestGuards:
         with pytest.raises(OpenScadError, match="compilar"):
             render_to_stl("", openscad=tmp_path / "x.exe", destination=tmp_path / "o.stl")
 
-    def test_a_missing_binary_says_how_to_install_it(self, tmp_path: Path) -> None:
-        with pytest.raises(OpenScadError, match="download-openscad"):
+    def test_binario_faltante_dice_que_paquete_falta_sin_dictar_comandos(
+        self, tmp_path: Path
+    ) -> None:
+        with pytest.raises(OpenScadError) as exc_info:
             render_to_stl(
                 "cube([1,1,1]);",
                 openscad=tmp_path / "no-esta.exe",
                 destination=tmp_path / "o.stl",
             )
+
+        mensaje = str(exc_info.value)
+        # Que IDENTIFIQUE lo que falta, no la redaccion: si se afirma la frase
+        # entera, cada retoque de estilo rompe la prueba sin que nada este mal.
+        assert PACK_LABELS["openscad"] in mensaje
+        # La regresion de verdad: el mensaje viejo mandaba a correr un script a
+        # mano. La app baja el paquete sola; sin esta linea la prueba no cuida nada.
+        assert ".ps1" not in mensaje
 
 
 # ---------------------------------------------------------------------------
