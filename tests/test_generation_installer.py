@@ -978,19 +978,23 @@ def test_a_component_with_no_alias_is_still_required(tmp_path: Path) -> None:
         _validate_structure(root)
 
 
-# --- por que un repo CON ONNX igual se convierte (SIN resolver) -------------
-# Ver el comentario largo en tests/test_generation_compat.py. Resumen: la
-# deteccion se puede arreglar (probado: sdxl-turbo bajo sin convertir), pero la
-# validacion posterior no se pudo comprobar porque la prueba se contamino con un
-# job del usuario en la misma GPU. Revertido hasta re-probarlo con la GPU libre.
+# --- un repo CON ONNX completo ya NO se convierte ---------------------------
+# Estuvo sin resolver un tiempo: la deteccion se sabia arreglable pero la
+# validacion posterior nunca se pudo comprobar, porque la prueba se contamino con
+# un job del usuario en la misma GPU. Quedo revertido hasta poder repetirla.
+#
+# Resuelto el 2026-08-06 (ver tests/test_needs_conversion_vae_split.py): la
+# carpeta torch `vae` se exporta partida en `vae_encoder` y `vae_decoder`, asi que
+# comparando carpeta a carpeta nunca encontraba su gemela. Medido contra los repos
+# reales, sdxl-turbo y stable-diffusion-xl-base-1.0 se convertian al pedo.
 
 
 def _files(*paths: str) -> list[HfFile]:
     return [HfFile(path=p, size=1) for p in paths]
 
 
-def test_a_repo_shipping_onnx_beside_torch_weights_still_converts_today() -> None:
-    assert _needs_conversion(
+def test_a_repo_shipping_onnx_beside_torch_weights_is_installed_as_is() -> None:
+    assert not _needs_conversion(
         _files(
             "model_index.json",
             "unet/model.onnx",

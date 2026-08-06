@@ -139,32 +139,24 @@ def test_gated_still_wins_over_the_single_file_layout():
     assert verdict == "gated"
 
 
-# --- por que un repo CON ONNX igual se convierte (estado: SIN resolver) ------
+# --- un repo CON ONNX completo ya NO se convierte ---------------------------
 #
 # Reportado: "todos los modelos piden conversion". Parte es inevitable: la
 # mayoria de los repos de HuggingFace publican solo pesos PyTorch. Pero los mas
-# populares -- stabilityai/stable-diffusion-xl-base-1.0, sdxl-turbo,
-# SimianLuo/LCM_Dreamshaper_v7 -- SI traen un pipeline ONNX completo (unet,
-# text encoders y vae_decoder/vae_encoder) y hoy se convierten igual, porque la
-# comparacion es carpeta-a-carpeta y la carpeta torch `vae` nunca tiene gemela:
-# al exportar, el VAE se parte en encoder y decoder (lo mismo que ya contempla
-# _COMPONENT_ALIASES en generation_installer, del lado de la validacion).
+# populares -- stabilityai/stable-diffusion-xl-base-1.0, sdxl-turbo -- SI traen un
+# pipeline ONNX completo y se convertian igual, porque la comparacion era
+# carpeta-a-carpeta y la carpeta torch `vae` nunca tiene gemela: al exportar, el
+# VAE se parte en encoder y decoder.
 #
-# Se probo habilitarlos y quedo A MEDIAS, sin veredicto:
-#   - La deteccion anda: sdxl-turbo paso de "converting" a "downloading" y bajo
-#     los 7 GB de ONNX sin convertir (A/B con el mismo repo).
-#   - La validacion posterior fallo con un DmlCommandRecorder 80004005, PERO la
-#     prueba estaba contaminada: habia un job de generacion del usuario corriendo
-#     en la misma GPU y fallo con el MISMO error en el mismo minuto. O sea fue
-#     contencion de VRAM, no una prueba valida de que el fp32 del repo no entre.
-#   - LCM fallo por su safety_checker, que el model_index declara y el pipeline
-#     exige; excluirlo del veredicto lo rompe ("NoneType has no attribute decode").
+# Resuelto el 2026-08-06. La regla vive una sola vez (`covered_by_onnx`) y la usan
+# los dos lados: esta etiqueta y la decision de convertir. Estaba escrita dos
+# veces, y por eso el mismo bug estaba duplicado.
 #
-# Queda revertido a proposito hasta re-probarlo con la GPU libre. Si entonces
-# carga bien, el cambio ahorra ~40 min por modelo en los repos mas usados.
+# LCM_Dreamshaper_v7 sigue convirtiendose, y esta bien: su safety_checker no tiene
+# ONNX, el model_index lo declara y el pipeline lo exige.
 
 
-def test_a_repo_that_ships_fp32_onnx_still_needs_conversion() -> None:
+def test_a_repo_that_ships_a_complete_onnx_pipeline_is_ready() -> None:
     verdict, _ = classify(
         (
             "model_index.json",
@@ -177,7 +169,7 @@ def test_a_repo_that_ships_fp32_onnx_still_needs_conversion() -> None:
         ),
         gated=False,
     )
-    assert verdict == "needs_conversion"
+    assert verdict == "ready_onnx"
 
 
 def test_a_pure_onnx_repo_is_still_ready() -> None:

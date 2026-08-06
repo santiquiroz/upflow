@@ -64,6 +64,33 @@ def _has_root_safetensors(filenames: tuple[str, ...]) -> bool:
     )
 
 
+# Al exportar, la carpeta `vae` se parte en `vae_encoder` y `vae_decoder`. Sin
+# esto, comparando carpeta a carpeta `vae` NUNCA encuentra su gemela y un repo con
+# ONNX completo se da por no-convertido. Medido el 2026-08-06 contra repos reales:
+# sdxl-turbo y stable-diffusion-xl-base-1.0 se convertian al pedo, unos cuarenta
+# minutos cada uno.
+COMPONENT_ALIASES: dict[str, tuple[str, ...]] = {
+    "vae": ("vae_encoder", "vae_decoder"),
+    # SDXL publica ademas un VAE alternativo; el export produce un solo par.
+    "vae_1_0": ("vae_encoder", "vae_decoder"),
+}
+
+
+def covered_by_onnx(component: str, onnx_dirs: set[str]) -> bool:
+    """Si ese componente ya viene exportado, mirando tambien su nombre partido.
+
+    Vive aca y no en el instalador porque lo usan LOS DOS: la etiqueta que ve el
+    usuario en el buscador y la decision de convertir. Escrita dos veces, el bug
+    del VAE partido estaba duplicado — y si divergen, la etiqueta dice una cosa y
+    la app hace otra.
+    """
+    if component in onnx_dirs:
+        return True
+    aliases = COMPONENT_ALIASES.get(component)
+    # Todas y no alguna: media exportacion del VAE es una exportacion rota.
+    return bool(aliases) and all(alias in onnx_dirs for alias in aliases)
+
+
 def classify(
     filenames: tuple[str, ...], gated: bool | str | None
 ) -> tuple[CompatVerdict, CompatReason]:
@@ -85,7 +112,7 @@ def classify(
 
     torch_dirs = _top_level_dirs_with(filenames, _TORCH_SUFFIXES)
     onnx_dirs = _top_level_dirs_with(filenames, (_ONNX_SUFFIX,))
-    missing_onnx = sorted(torch_dirs - onnx_dirs)
+    missing_onnx = sorted(name for name in torch_dirs if not covered_by_onnx(name, onnx_dirs))
     if missing_onnx:
         return (
             "needs_conversion",

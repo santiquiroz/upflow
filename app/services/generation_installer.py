@@ -21,7 +21,7 @@ from app.services.engines.generation_onnx import (
     _wrap_generation_error,
     generation_dependencies_available,
 )
-from app.services.generation_compat import has_component_weights
+from app.services.generation_compat import covered_by_onnx, has_component_weights
 from app.services.generation_variants import Precision
 from app.services.gpu_session_coordinator import GpuSessionCoordinator
 from app.services.hf_client import HfClient, HfFile
@@ -114,7 +114,7 @@ def _needs_conversion(files: list[HfFile]) -> bool:
     # cada directorio que contiene pesos torch también tiene su propio ONNX.
     torch_dirs = _dirs_with_suffix(files, (".safetensors", ".bin"))
     onnx_dirs = _dirs_with_suffix(files, (".onnx",))
-    return bool(torch_dirs - onnx_dirs)
+    return any(not covered_by_onnx(name, onnx_dirs) for name in torch_dirs)
 
 
 def _read_declared_components(staging_root: Path) -> list[str]:
@@ -280,6 +280,8 @@ def map_disk_full(exc: OSError) -> str | None:
 # John6666/hassaku-xl-illustrious-v31-sdxl.
 _COMPONENT_ALIASES: dict[str, tuple[str, ...]] = {
     "vae": ("vae_encoder", "vae_decoder"),
+    # SDXL publica ademas un VAE alternativo; el export produce un solo par.
+    "vae_1_0": ("vae_encoder", "vae_decoder"),
 }
 
 
