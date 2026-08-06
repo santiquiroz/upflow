@@ -15,6 +15,7 @@ vi.mock("../../services/generation", async (importOriginal) => {
     installGenerationModel: vi.fn(),
     getGenerationInstallStatus: vi.fn(),
     getConversionStatus: vi.fn(),
+    fetchActiveConversions: vi.fn(),
   };
 });
 
@@ -206,5 +207,59 @@ describe("GenerationHfSearch — filtro por compatibilidad", () => {
     expect(await screen.findByText("amd/listo-onnx")).toBeInTheDocument();
     expect(screen.getByText("john/necesita-conversion")).toBeInTheDocument();
     expect((screen.getByRole("radio", { name: /All/i }) as HTMLInputElement).checked).toBe(true);
+  });
+});
+
+
+describe("volver a la seccion no pierde la conversion", () => {
+  // Reportado el 2026-08-06: "al intentar instalar y convertir un modelo y salir
+  // a otra ventana se pierde el progreso". La conversion nunca se perdia —sigue
+  // en el servidor— pero el id vivia solo en la pantalla y se iba con ella.
+  // Convertir un SDXL tarda cerca de media hora: creer que se perdio y
+  // arrancarlo de nuevo es media hora tirada.
+  it("re-engancha la barra de una conversion que ya venia corriendo", async () => {
+    vi.mocked(generationService.searchGenerationModels).mockResolvedValue(SEARCH_RESULT);
+    vi.mocked(generationService.fetchActiveConversions).mockResolvedValue([
+      {
+        conversionId: "c1",
+        repoId: "amd/sdxl-onnx",
+        status: "running",
+        progressPct: 42,
+        stage: "exporting:unet",
+        stages: null,
+        modelId: null,
+        error: null,
+      },
+    ]);
+    vi.mocked(generationService.getConversionStatus).mockResolvedValue({
+      conversionId: "c1",
+      repoId: "amd/sdxl-onnx",
+      status: "running",
+      progressPct: 42,
+      stage: "exporting:unet",
+      stages: null,
+      modelId: null,
+      error: null,
+    });
+
+    renderSearch();
+
+    // Sin instalar nada en esta pantalla, el progreso de la que ya corria
+    // tiene que aparecer igual.
+    await waitFor(() => {
+      expect(generationService.getConversionStatus).toHaveBeenCalledWith("c1");
+    });
+  });
+
+  it("sin conversiones en curso no consulta ninguna", async () => {
+    vi.mocked(generationService.searchGenerationModels).mockResolvedValue(SEARCH_RESULT);
+    vi.mocked(generationService.fetchActiveConversions).mockResolvedValue([]);
+
+    renderSearch();
+
+    await waitFor(() => {
+      expect(generationService.fetchActiveConversions).toHaveBeenCalled();
+    });
+    expect(generationService.getConversionStatus).not.toHaveBeenCalled();
   });
 });

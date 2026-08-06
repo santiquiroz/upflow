@@ -461,6 +461,22 @@ class GenerationModelConverter:
             replace(entry, status=ModelStatus.error, error=error)
         )
 
+    def active(self) -> list[ConversionJob]:
+        """Las conversiones que siguen corriendo.
+
+        Existe porque el id vivia SOLO en la pantalla: al cambiar de seccion se
+        iba con ella y la barra de progreso no podia volver a engancharse.
+        La conversion nunca se perdia —sigue en el servidor— pero el usuario veia
+        que si, y convertir un SDXL tarda cerca de media hora: creer que se
+        perdio y arrancarlo de nuevo es media hora tirada y dos conversiones
+        peleandose la misma maquina.
+        """
+        return [
+            job
+            for job in self._jobs.values()
+            if job.status in (JobStatus.queued, JobStatus.running)
+        ]
+
     def status(self, conversion_id: str) -> ConversionJob | None:
         return self._jobs.get(conversion_id)
 

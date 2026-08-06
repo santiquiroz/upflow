@@ -19,6 +19,7 @@ import {
   createGenerationJob,
   fetchGenerationCapabilities,
   fetchVideoGenerationCapabilities,
+  fetchActiveConversions,
   getConversionStatus,
   getGenerationInstallStatus,
   getGenerationJob,
@@ -265,10 +266,20 @@ export function useGenerationModelInstall(
     },
   });
 
+  // Las que siguen corriendo en el servidor. Se consultan SIEMPRE, no solo
+  // cuando hay una instalacion en curso en esta pantalla: es lo que permite
+  // re-enganchar la barra despues de salir de la seccion y volver.
+  const activasQuery = useQuery({
+    queryKey: ["generation-active-conversions"],
+    queryFn: fetchActiveConversions,
+    refetchInterval: (query) => ((query.state.data?.length ?? 0) > 0 ? pollIntervalMs : false),
+  });
+
   const conversionId =
     statusQuery.data?.status === "converting"
       ? (statusQuery.data.conversionId ?? null)
-      : null;
+      : // Sin instalacion propia, se adopta la que ya estaba corriendo.
+        (activasQuery.data?.[0]?.conversionId ?? null);
 
   const conversionQuery = useQuery({
     queryKey: ["generation-model-conversion", conversionId],

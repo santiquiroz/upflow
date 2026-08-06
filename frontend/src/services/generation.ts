@@ -159,3 +159,15 @@ export function convertGenerationModel(
 export function getConversionStatus(conversionId: string): Promise<ConversionStatusResponse> {
   return apiGet<ConversionStatusResponse>(`/generation/models/convert/${conversionId}`);
 }
+
+/**
+ * Las conversiones que siguen corriendo en el servidor.
+ *
+ * El id de una conversión vivía sólo en la pantalla: al cambiar de sección se
+ * iba con ella y la barra no podía volver a engancharse. La conversión nunca se
+ * perdía, pero el usuario veía que sí — y convertir un SDXL tarda cerca de media
+ * hora, así que arrancarlo de nuevo es media hora tirada.
+ */
+export function fetchActiveConversions(): Promise<ConversionStatusResponse[]> {
+  return apiGet<ConversionStatusResponse[]>("/generation/models/conversions");
+}

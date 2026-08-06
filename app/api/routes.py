@@ -2272,6 +2272,34 @@ async def convert_generation_model(
     )
 
 
+def _conversion_to_response(job) -> ConversionStatusResponse:
+    progress = job.metadata.get("progress")
+    return ConversionStatusResponse(
+        conversion_id=job.id,
+        repo_id=job.repo_id,
+        status=job.status,
+        progress_pct=round(progress * 100, 1) if progress is not None else None,
+        stage=job.metadata.get("stage"),
+        stages=job.metadata.get("stages"),
+        model_id=job.model_id,
+        error=job.error,
+    )
+
+
+@router.get("/generation/models/conversions", response_model=list[ConversionStatusResponse])
+async def list_active_conversions(
+    converter: GenerationModelConverter = Depends(get_generation_converter),
+) -> list[ConversionStatusResponse]:
+    """Las conversiones que siguen corriendo.
+
+    Existe porque el id de la conversion vivia SOLO en la pantalla: al cambiar de
+    seccion se iba con ella y la barra no podia volver a engancharse. La
+    conversion nunca se perdia, pero el usuario veia que si — y convertir un SDXL
+    tarda cerca de media hora.
+    """
+    return [_conversion_to_response(job) for job in converter.active()]
+
+
 @router.get("/generation/models/convert/{conversion_id}", response_model=ConversionStatusResponse)
 async def get_conversion_status(
     conversion_id: str,
