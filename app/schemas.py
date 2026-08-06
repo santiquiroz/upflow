@@ -378,7 +378,7 @@ class DeviceInfoResponse(BaseModel):
     # plugin EP del vendor está registrado y sano, sino DirectML/CPU baseline.
     active_ep: str = Field(default="", serialization_alias="activeEp")
     ep_label: str = Field(default="", serialization_alias="epLabel")
-    ep_state: Literal["", "native", "ready", "baseline", "preparing", "error"] = Field(
+    ep_state: Literal["", "native", "ready", "baseline", "preparing", "error", "cpu_fallback"] = Field(
         default="", serialization_alias="epState"
     )
     ep_detail: str = Field(default="", serialization_alias="epDetail")

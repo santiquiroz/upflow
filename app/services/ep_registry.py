@@ -50,6 +50,10 @@ EP_STATE_ERROR = "error"
 # "native" apenas se registraba: la pantalla podia anunciar un acelerador en una
 # maquina donde despues todos los trabajos caian a DirectML.
 EP_STATE_READY = "ready"
+# Una sesion REAL en un device dml:N termino corriendo en CPU: ORT cae a CPU en
+# silencio cuando DirectML no inicializa, y sin este estado el unico sintoma era
+# un trabajo eterno con la GPU fria.
+EP_STATE_CPU_FALLBACK = "cpu_fallback"
 
 VENDOR_NVIDIA = 0x10DE
 VENDOR_INTEL = 0x8086
@@ -119,6 +123,10 @@ _warmup: set[str] = set()
 # fallback: con TensorRT eso es una compilacion cara para nada.
 _native_ok: set[str] = set()
 _native_failed: set[str] = set()
+# Providers que las sesiones REALES reportaron por device (get_providers()).
+# Fuente de verdad del fallback silencioso DML→CPU: la lista pedida no dice
+# nada de la que ORT terminó usando.
+_effective_providers: dict[str, list[str]] = {}
 
 
 def reset() -> None:
@@ -135,6 +143,7 @@ def reset() -> None:
         _warmup.clear()
         _native_ok.clear()
         _native_failed.clear()
+        _effective_providers.clear()
 
 
 def _unregister_plugin(ep_name: str) -> None:
@@ -366,6 +375,40 @@ def warmup_pending(device: str) -> bool:
     return device in _warmup
 
 
+def _is_cpu_fallback(device: str, providers: list[str]) -> bool:
+    return device.startswith("dml:") and providers[:1] == [CPU_PROVIDER]
+
+
+def record_session_providers(device: str, session: Any, context: str = "") -> list[str]:
+    """Lee y registra los providers que la sesión REALMENTE usa.
+
+    ORT cae de DirectML a CPU sin error: la única forma de saber dónde corre
+    una sesión es preguntarle después de crearla.
+    """
+    get_providers = getattr(session, "get_providers", None)
+    if get_providers is None:
+        return []
+    try:
+        providers = list(get_providers())
+    except Exception as exc:  # noqa: BLE001 -- observabilidad jamás tumba un job
+        logger.debug("ep_registry: no se pudieron leer providers de %s: %s", device, exc)
+        return []
+    _effective_providers[device] = providers
+    label = context or "sesión"
+    if _is_cpu_fallback(device, providers):
+        logger.warning(
+            "ep_registry: %s pidió %s pero ORT la corre en CPU (providers efectivos: %s)",
+            label,
+            device,
+            providers,
+        )
+    else:
+        logger.info(
+            "ep_registry: %s en %s, providers efectivos: %s", label, device, providers
+        )
+    return providers
+
+
 def create_session(
     model_path: str,
     device: str,
@@ -386,7 +429,9 @@ def create_session(
     plugin = _native_plugin_for(device)
     if plugin is not None and device not in _native_failed:
         try:
-            return _create_native_session(model_path, device, plugin, sess_options_factory)
+            session = _create_native_session(model_path, device, plugin, sess_options_factory)
+            record_session_providers(device, session)
+            return session
         except Exception as exc:  # noqa: BLE001 -- fallback garantizado: el job nunca falla por el EP nativo
             # Una sola vez: reintentarlo en cada trabajo paga el intento y el
             # fallback, y con TensorRT ese intento es una compilacion cara.
@@ -398,11 +443,13 @@ def create_session(
                 device,
                 exc,
             )
-    return ort.InferenceSession(
+    session = ort.InferenceSession(
         model_path,
         sess_options=_build_options(sess_options_factory),
         providers=_dml_providers(device),
     )
+    record_session_providers(device, session)
+    return session
 
 
 def _with_session_options(
@@ -464,6 +511,17 @@ def active_ep_for_device(device: str, settings: Settings) -> EpStatus:
             label="DirectML",
             state=EP_STATE_PREPARING,
             detail="preparando aceleración para tu GPU",
+        )
+    effective = _effective_providers.get(device)
+    if effective is not None and _is_cpu_fallback(device, effective):
+        # Gana sobre cualquier otro estado: anunciar "DirectML" cuando las
+        # sesiones reales corren en CPU es exactamente la mentira que este
+        # estado existe para tapar.
+        return EpStatus(
+            ep_name=CPU_PROVIDER,
+            label="CPU",
+            state=EP_STATE_CPU_FALLBACK,
+            detail="DirectML no inicializó en este dispositivo: los trabajos están corriendo en CPU",
         )
     session_error = _session_errors.get(device)
     if session_error:

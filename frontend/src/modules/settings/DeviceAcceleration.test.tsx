@@ -102,6 +102,20 @@ describe("DeviceAcceleration", () => {
     expect(screen.getByText("TensorRT-RTX: unsupported op")).toBeInTheDocument();
   });
 
+  it("shows the CPU fallback in red with the reason visible", async () => {
+    // El caso del amigo con la GPU fria: ORT cayo a CPU en silencio y el unico
+    // sintoma era un trabajo eterno. Este estado lo tiene que gritar la UI.
+    renderWith({
+      devices: [
+        { id: "dml:0", kind: "gpu", name: "AMD Radeon RX 7900 XT", backend: "directml", activeEp: "CPUExecutionProvider", epLabel: "CPU", epState: "cpu_fallback", epDetail: "DirectML no inicializó en este dispositivo: los trabajos están corriendo en CPU" },
+      ],
+      defaultDeviceId: "dml:0",
+    });
+
+    expect(await screen.findByText("CPU · no acceleration — running on CPU")).toBeInTheDocument();
+    expect(screen.getByText(/DirectML no inicializó/)).toBeInTheDocument();
+  });
+
   it("tolerates devices without EP fields (older backend)", async () => {
     renderWith({
       devices: [{ id: "cpu", kind: "cpu", name: "CPU", backend: "cpu" }],

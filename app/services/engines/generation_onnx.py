@@ -196,6 +196,18 @@ def _inpaint_strength(pipeline: Any, requested: float) -> float:
     return requested
 
 
+_PIPELINE_SESSION_ATTRS = ("unet", "vae_decoder", "vae_encoder", "text_encoder", "text_encoder_2")
+
+
+def _record_pipeline_providers(pipeline: Any, device: str) -> None:
+    # optimum no expone los providers del pipeline: hay que preguntarle a la
+    # sesión de cada componente, que es donde ORT pudo caer a CPU en silencio.
+    for name in _PIPELINE_SESSION_ATTRS:
+        session = getattr(getattr(pipeline, name, None), "session", None)
+        if session is not None:
+            ep_registry.record_session_providers(device, session, context=f"generación/{name}")
+
+
 def _build_seed_generator(seed: int) -> Any:
     # torch.Generator, NO np.random.RandomState: __call__ es el de diffusers y
     # randn_tensor accede a generator.device (findings §d/§e, verificado empirico).
@@ -445,4 +457,6 @@ class GenerationEngine:
                 device, self.settings, sess_options_factory=build_sess_options
             ),
         }
-        return pipeline_cls.from_pretrained(str(pipeline_dir), **from_pretrained_kwargs)
+        pipeline = pipeline_cls.from_pretrained(str(pipeline_dir), **from_pretrained_kwargs)
+        _record_pipeline_providers(pipeline, device)
+        return pipeline

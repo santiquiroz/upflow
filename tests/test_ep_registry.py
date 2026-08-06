@@ -818,3 +818,68 @@ def test_preload_survives_a_sibling_that_cannot_be_loaded(
 
     # La rota va primero por orden alfabetico: si abortara, la buena no se carga.
     assert cargados == ["zzz_buena.dll"]
+
+
+# --- fallback silencioso a CPU ------------------------------------------
+
+
+def _fake_session_providers(monkeypatch: pytest.MonkeyPatch, providers: list[str]) -> None:
+    monkeypatch.setattr(
+        FakeInferenceSession, "get_providers", lambda self: list(providers), raising=False
+    )
+
+
+def test_dml_session_running_on_cpu_reports_cpu_fallback(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _fake_session_providers(monkeypatch, ["CPUExecutionProvider"])
+    settings = make_settings(tmp_path)
+    ep_registry.create_session("model.onnx", "dml:0", settings)
+    status = ep_registry.active_ep_for_device("dml:0", settings)
+    assert status.state == ep_registry.EP_STATE_CPU_FALLBACK
+    assert status.ep_name == "CPUExecutionProvider"
+    assert status.detail
+
+
+def test_dml_session_on_dml_keeps_baseline_state(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _fake_session_providers(monkeypatch, ["DmlExecutionProvider", "CPUExecutionProvider"])
+    settings = make_settings(tmp_path)
+    ep_registry.create_session("model.onnx", "dml:0", settings)
+    status = ep_registry.active_ep_for_device("dml:0", settings)
+    assert status.state == ep_registry.EP_STATE_BASELINE
+
+
+def test_session_without_get_providers_is_harmless(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    ep_registry.create_session("model.onnx", "dml:0", settings)
+    status = ep_registry.active_ep_for_device("dml:0", settings)
+    assert status.state == ep_registry.EP_STATE_BASELINE
+
+
+def test_reset_clears_effective_providers(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _fake_session_providers(monkeypatch, ["CPUExecutionProvider"])
+    settings = make_settings(tmp_path)
+    ep_registry.create_session("model.onnx", "dml:0", settings)
+    assert ep_registry.active_ep_for_device("dml:0", settings).state == ep_registry.EP_STATE_CPU_FALLBACK
+    ep_registry.reset()
+    assert ep_registry.active_ep_for_device("dml:0", settings).state == ep_registry.EP_STATE_BASELINE
+
+
+def test_record_session_providers_warns_on_cpu_fallback(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    import logging
+
+    class _CpuSession:
+        def get_providers(self) -> list[str]:
+            return ["CPUExecutionProvider"]
+
+    with caplog.at_level(logging.WARNING, logger="app.services.ep_registry"):
+        ep_registry.record_session_providers("dml:0", _CpuSession(), context="test")
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("dml:0" in r.getMessage() for r in warnings)

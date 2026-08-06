@@ -36,6 +36,19 @@ function EpStatusCell({ device }: { device: DeviceInfoResponse }) {
       </span>
     );
   }
+  if (device.epState === "cpu_fallback") {
+    // Rojo y con el detalle visible: es el estado que explica "la GPU está
+    // fría y el trabajo no avanza" — no puede quedar escondido en un tooltip.
+    return (
+      <span className="flex flex-col gap-0.5 text-xs" title={device.epDetail}>
+        <span className="inline-flex items-center gap-1.5 text-danger">
+          <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-danger" />
+          {`CPU · ${t("settings.acceleration.cpuFallback")}`}
+        </span>
+        {device.epDetail && <span className="text-[11px] text-danger">{device.epDetail}</span>}
+      </span>
+    );
+  }
   if (device.epState === "error") {
     // El motivo va VISIBLE, no solo en el tooltip: si alguien bajo el acelerador
     // y fallo, tiene que enterarse sin pasar el mouse por encima.

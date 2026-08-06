@@ -632,6 +632,7 @@ export const en = {
   "settings.acceleration.ready": "ready — will be used by the next job",
   "settings.acceleration.native": "native",
   "settings.acceleration.fallback": "fallback (native failed)",
+  "settings.acceleration.cpuFallback": "no acceleration — running on CPU",
   "settings.acceleration.preparing": "Preparing acceleration for your GPU…",
   // --- catalogo de capacidades -----------------------------------------
   "capability.domain.video": "Video",
