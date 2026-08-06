@@ -463,3 +463,62 @@ def test_generation_uses_the_native_ep_when_there_is_one(monkeypatch, tmp_path):
     assert "provider" not in kwargs
     assert kwargs["session_options"] is afinado[0]
     assert kwargs["use_io_binding"] is False
+
+
+def test_pipeline_run_lock_is_per_cache_key(tmp_path: Path) -> None:
+    engine = GenerationEngine(make_settings(tmp_path), RecordingCoordinator())  # type: ignore[arg-type]
+    lock = engine._pipeline_run_lock(("gen--m", "dml:0", "text2img"))
+    assert lock is engine._pipeline_run_lock(("gen--m", "dml:0", "text2img"))
+    assert lock is not engine._pipeline_run_lock(("gen--m", "dml:0", "inpaint"))
+
+
+def test_overlapping_calls_to_the_same_pipeline_do_not_interleave(tmp_path: Path) -> None:
+    """Dos __call__ solapadas sobre el mismo pipeline cacheado pisaban su
+    scheduler compartido: el set_timesteps del segundo job a mitad del loop del
+    primero dejaba sigmas corto y tumbaba el job con "index 31 is out of bounds
+    for dimension 0 with size 31" (visto real, inpaint de 59 minutos). El lock
+    por clave serializa las llamadas."""
+    import threading
+    import time
+
+    engine = GenerationEngine(make_settings(tmp_path), RecordingCoordinator())  # type: ignore[arg-type]
+
+    class FakeImage:
+        def save(self, path: Any) -> None:
+            Path(path).write_bytes(b"png")
+
+    class FakeResult:
+        images = [FakeImage()]
+
+    active = 0
+    overlap: list[bool] = []
+    counter_lock = threading.Lock()
+
+    class FakePipeline:
+        def __call__(self, **kwargs: Any) -> Any:
+            nonlocal active
+            with counter_lock:
+                active += 1
+                overlap.append(active > 1)
+            time.sleep(0.05)
+            with counter_lock:
+                active -= 1
+            return FakeResult()
+
+    fake = FakePipeline()
+    engine._get_pipeline = lambda *args, **kwargs: fake  # type: ignore[method-assign]
+
+    def run_one(steps: int) -> None:
+        request = make_request(steps=steps)
+        engine._run_blocking(
+            "gen--m", tmp_path, request, "dml:0",
+            tmp_path / f"out-{steps}.png", threading.Event(), lambda done, total: None,
+        )
+
+    threads = [threading.Thread(target=run_one, args=(s,)) for s in (38, 30)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert overlap and not any(overlap)

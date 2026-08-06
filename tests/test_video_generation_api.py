@@ -279,7 +279,12 @@ def test_an_explicit_device_still_wins_for_video(tmp_path: Path) -> None:
     assert manager._reservation_device(job) == "dml:1"
 
 
-def test_image_jobs_keep_reserving_exactly_what_they_asked_for(tmp_path: Path) -> None:
+def test_image_jobs_without_device_reserve_the_default_gpu(tmp_path: Path) -> None:
+    """Este test ANTES afirmaba `is None`: codificaba el bug. Un job de imagen
+    sin device gateaba en un cupo aparte pero corría en la GPU por defecto,
+    solapado con un job pinneado a ella — mismo pipeline cacheado, y el
+    set_timesteps del segundo pisaba el scheduler del primero a mitad de loop
+    ("index 31 is out of bounds for dimension 0 with size 31", visto real)."""
     from app.models import GenerationJob
     from app.services.generation_job_manager import GenerationJobManager
 
@@ -289,7 +294,20 @@ def test_image_jobs_keep_reserving_exactly_what_they_asked_for(tmp_path: Path) -
         upscale_engine=None, video_engine=SdcppVideoEngine(settings),
     )
     job = GenerationJob(prompt="x", model_id="gen--sd15", device=None)
-    assert manager._reservation_device(job) is None
+    assert manager._reservation_device(job) == settings.default_device
+
+
+def test_an_explicit_device_still_wins_for_image_jobs(tmp_path: Path) -> None:
+    from app.models import GenerationJob
+    from app.services.generation_job_manager import GenerationJobManager
+
+    settings = make_pack(tmp_path, "Wan2_2-TI2V-5B-Turbo-Q8_0.gguf")
+    manager = GenerationJobManager(
+        settings, engine=None, device_semaphores=None, registry=None,
+        upscale_engine=None, video_engine=SdcppVideoEngine(settings),
+    )
+    job = GenerationJob(prompt="x", model_id="gen--sd15", device="dml:1")
+    assert manager._reservation_device(job) == "dml:1"
 
 
 def test_unknown_video_model_is_rejected_at_creation(tmp_path: Path) -> None:

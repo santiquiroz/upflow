@@ -249,12 +249,26 @@ class GenerationEngine:
         self.gpu_coordinator = gpu_coordinator
         self._pipeline_cache: OrderedDict[tuple[str, str, str], Any] = OrderedDict()
         self._cache_lock = threading.Lock()
+        # Un lock por clave de pipeline: el scheduler del pipeline es mutable y
+        # una segunda __call__ solapada lo pisa a mitad de loop (set_timesteps
+        # ajeno -> "index N is out of bounds..."). Nunca se evictan: quedan
+        # acotados por los modelos usados en la sesión y así una entrada
+        # re-creada con la misma clave sigue serializada contra un job en vuelo.
+        self._pipeline_run_locks: dict[tuple[str, str, str], threading.Lock] = {}
 
     def release_device(self, device: str) -> None:
         with self._cache_lock:
             stale_keys = [key for key in self._pipeline_cache if key[1] == device]
             for key in stale_keys:
                 self._pipeline_cache.pop(key, None)
+
+    def _pipeline_run_lock(self, key: tuple[str, str, str]) -> threading.Lock:
+        with self._cache_lock:
+            lock = self._pipeline_run_locks.get(key)
+            if lock is None:
+                lock = threading.Lock()
+                self._pipeline_run_locks[key] = lock
+            return lock
 
     async def run(
         self,
@@ -299,6 +313,7 @@ class GenerationEngine:
     ) -> Path:
         mode = _pipeline_mode(request)
         pipeline = self._get_pipeline(model_id, pipeline_dir, device, mode)
+        run_lock = self._pipeline_run_lock((model_id, device, mode))
 
         def _on_step(step: int, _timestep: Any, _latents: Any) -> None:
             if cancel_event.is_set():
@@ -307,7 +322,7 @@ class GenerationEngine:
 
         if mode == "inpaint":
             return self._run_masked_edit_blocking(
-                pipeline, request, output_path, _on_step
+                pipeline, request, output_path, _on_step, run_lock
             )
 
         call_kwargs: dict[str, Any] = {
@@ -333,7 +348,8 @@ class GenerationEngine:
             call_kwargs["generator"] = _build_seed_generator(request.seed)
 
         try:
-            result = pipeline(**call_kwargs)
+            with run_lock:
+                result = pipeline(**call_kwargs)
         except GenerationCancelled:
             raise
         except Exception as exc:
@@ -349,6 +365,7 @@ class GenerationEngine:
         request: GenerationRequest,
         output_path: Path,
         on_step: Callable[[int, Any, Any], None],
+        run_lock: threading.Lock,
     ) -> Path:
         """Edición con máscara por el camino 'solo el área marcada'.
 
@@ -384,7 +401,8 @@ class GenerationEngine:
             if request.seed is not None:
                 call_kwargs["generator"] = _build_seed_generator(request.seed)
             try:
-                return pipeline(**call_kwargs).images[0]
+                with run_lock:
+                    return pipeline(**call_kwargs).images[0]
             except GenerationCancelled:
                 raise
             except Exception as exc:

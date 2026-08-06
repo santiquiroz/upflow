@@ -354,19 +354,19 @@ class GenerationJobManager:
                 continue
             await self._run_job(job)
 
-    def _reservation_device(self, job: GenerationJob) -> str | None:
+    def _reservation_device(self, job: GenerationJob) -> str:
         """Bajo qué dispositivo pedir permiso antes de correr.
 
-        El lane de video fija su propio backend Vulkan y no acepta un device de
-        la API, así que sus jobs llegan con `device=None`. Como los permisos se
-        cuentan por device, ese None les daba un cupo aparte y podían arrancar
-        junto a un upscale en la misma placa: medido, dos difusiones a la vez
-        pasan de 24 s/it a 60 s/it y después una se queda sin avanzar. Reservan
-        la GPU por defecto para compartir cupo con el resto del trabajo de GPU.
+        Los permisos se cuentan por device y `device=None` daba un cupo aparte:
+        el job gateaba bajo None pero CORRÍA en la GPU por defecto, al lado de
+        otro job pinneado a esa misma placa. Con video eso degradaba (medido:
+        24 s/it -> 60 s/it y después hambreado); con difusión ONNX era peor:
+        ambos jobs compartían el pipeline cacheado y el set_timesteps del
+        segundo pisaba el scheduler del primero a mitad de loop ("index N is
+        out of bounds for dimension 0 with size N"). Todo job sin device
+        reserva la GPU por defecto, que es donde efectivamente corre.
         """
-        if job.device is None and job.model_id.startswith(VIDEO_MODEL_PREFIX):
-            return self.settings.default_device
-        return job.device
+        return job.device or self.settings.default_device
 
     async def _run_job(self, job: GenerationJob) -> None:
         async with self.device_semaphores.acquire(self._reservation_device(job)):
