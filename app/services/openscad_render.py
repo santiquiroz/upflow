@@ -63,22 +63,34 @@ def extract_code(text: str) -> str:
     return (bloque.group(1) if bloque else text).strip()
 
 
-def assert_safe(code: str) -> None:
-    """Rechaza el codigo que toca el disco.
+def _sin_comentarios(code: str) -> str:
+    """Saca los comentarios para que no escondan una palabra clave.
 
-    El codigo viene de un modelo, no de una persona de confianza. OpenSCAD sabe
-    leer archivos, y `include` o `import` con una ruta absoluta convierten una
-    descripcion de pieza en una lectura arbitraria del disco.
+    Se hace ANTES de buscar, no despues: `include /* x */ <lib>` es codigo valido
+    para OpenSCAD, y dejar el comentario en el medio separaria la palabra del `<`.
     """
-    # Se mira linea por linea sin comentarios: `// import` no es una llamada.
-    for linea in code.splitlines():
-        limpia = linea.split("//", 1)[0].strip().lower()
-        for prohibido in FORBIDDEN:
-            if re.search(rf"(^|[^a-z_]){re.escape(prohibido)}\s*[(<\"']", limpia):
-                raise OpenScadError(
-                    f"El codigo usa `{prohibido}`, que puede leer archivos del disco. "
-                    "Una pieza se describe con geometria, no leyendo archivos."
-                )
+    sin_bloque = re.sub(r"/\*.*?\*/", " ", code, flags=re.DOTALL)
+    return re.sub(r"//[^\n]*", " ", sin_bloque)
+
+
+def assert_safe(code: str) -> None:
+    """Corta el codigo que lee archivos antes de que OpenSCAD lo vea.
+
+    Se busca sobre el TEXTO ENTERO, no linea por linea. El lexer de OpenSCAD no
+    ve lineas, ve tokens: medido el 2026-08-05, un `include` con el `<archivo>`
+    en la linea siguiente pasaba un guard por lineas y OpenSCAD lo ejecutaba
+    igual, porque la palabra clave y el `<` nunca caian juntos en una linea.
+
+    Esto importa porque el codigo lo escribe un modelo que puede estar corriendo
+    en un servidor que no es de quien usa la app.
+    """
+    limpio = _sin_comentarios(code).lower()
+    for prohibido in FORBIDDEN:
+        if re.search(rf"(^|[^a-z_]){re.escape(prohibido)}\s*[(<\"']", limpio):
+            raise OpenScadError(
+                f"El codigo generado usa `{prohibido}`, que lee archivos del disco. "
+                "Una pieza se describe con geometria, no leyendo archivos."
+            )
 
 
 def render_to_stl(

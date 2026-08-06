@@ -139,3 +139,49 @@ class TestWithRealOpenScad:
         )
 
         assert resultado.stl_path.with_suffix(".scad").exists()
+
+
+class TestElGuardNoSeSaltaConSaltosDeLinea:
+    """El lexer de OpenSCAD no ve lineas, ve tokens.
+
+    Medido el 2026-08-05: `include\n<archivo>` pasaba el guard Y OpenSCAD lo
+    ejecutaba, porque el guard escaneaba linea por linea y la palabra clave
+    nunca caia en la misma linea que el `<`. El codigo lo escribe un modelo que
+    puede estar en un servidor ajeno, asi que el guard es lo unico que separa
+    una descripcion de una pieza de una lectura de archivos arbitraria.
+    """
+
+    def test_include_partido_en_dos_lineas_se_bloquea(self) -> None:
+        with pytest.raises(OpenScadError):
+            assert_safe("include\n<C:/secreto.scad>\ncube([1,1,1]);")
+
+    def test_use_partido_en_dos_lineas_se_bloquea(self) -> None:
+        with pytest.raises(OpenScadError):
+            assert_safe("use\n <lib.scad>\ncube([1,1,1]);")
+
+    def test_import_partido_en_dos_lineas_se_bloquea(self) -> None:
+        with pytest.raises(OpenScadError):
+            assert_safe('import\n("pieza.stl")')
+
+    def test_surface_partido_en_dos_lineas_se_bloquea(self) -> None:
+        with pytest.raises(OpenScadError):
+            assert_safe('surface\n(file="mapa.dat")')
+
+    def test_un_comentario_de_bloque_en_el_medio_no_lo_esconde(self) -> None:
+        with pytest.raises(OpenScadError):
+            assert_safe('include /* nada que ver */ <lib.scad>')
+
+    def test_una_pieza_normal_sigue_pasando(self) -> None:
+        # El guard no sirve de nada si bloquea codigo legitimo: cada falso
+        # positivo se come un intento del bucle.
+        assert_safe(
+            "$fn=64;\n"
+            "// un espaciador\n"
+            "difference() {\n"
+            "  cylinder(d=20, h=12);\n"
+            "  translate([0,0,-1]) cylinder(d=8.4, h=14);\n"
+            "}\n"
+        )
+
+    def test_una_variable_que_empieza_con_use_no_es_un_use(self) -> None:
+        assert_safe("use_width = 5;\ncube([use_width, 2, 2]);")
