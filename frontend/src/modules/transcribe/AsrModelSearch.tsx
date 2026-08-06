@@ -22,8 +22,15 @@ import type {
 
 const DEFAULT_SEARCH_DEBOUNCE_MS = 300;
 
-// El unico modelo ASR verificado end-to-end en esta app, con voz real.
+// El unico modelo ASR verificado end-to-end en esta app, con voz real. SOLO
+// ENTIENDE INGLES: recomendarlo a secas empujaba a la gente a un error, porque
+// el desplegable de idioma viene en castellano (reportado 2026-08-06).
 const VERIFIED_ASR_REPO = "onnx-community/whisper-tiny.en";
+
+// El equivalente multilingue, para cualquier otro idioma. Medido el 2026-08-06:
+// 105 MB cuantizado, acepta es/ja/auto sin el error de "English-only model", y
+// tarda entre 0,5 y 4 s por trozo de 30 s.
+const MULTILINGUAL_ASR_REPO = "onnx-community/whisper-tiny";
 
 interface AsrModelSearchProps {
   debounceMs?: number;
@@ -279,21 +286,40 @@ export function AsrModelSearch({
       </label>
       {debouncedQuery.length === 0 && (
         // Sin modelo instalado la transcripcion no hace nada, y el buscador en
-        // blanco no dice cual buscar. Este es el unico que esta VERIFICADO con
-        // voz real en esta app (spike 2026-07-29 y 2026-08-04).
-        <button
-          type="button"
-          onClick={() => setQuery(VERIFIED_ASR_REPO)}
-          className="flex w-fit flex-col gap-0.5 rounded border border-border bg-surface-2 px-3 py-2 text-left transition-[border-color] duration-fast hover:border-accent"
-        >
-          <span className="text-xs font-medium text-text">
-            {t("transcribe.models.verified.title")}
-          </span>
-          <span className="text-xs text-text-dim">{t("transcribe.models.verified.hint")}</span>
-          <span className="font-mono-tabular text-xs text-accent">
-            {t("transcribe.models.verified.action", { repo: VERIFIED_ASR_REPO })}
-          </span>
-        </button>
+        // blanco no dice cual buscar. Van DOS sugerencias y no una: la de arriba
+        // esta verificada con voz real (spike 2026-07-29 y 2026-08-04) pero solo
+        // entiende ingles, y ofrecerla sola empujaba a la gente al error de
+        // "English-only model" con el idioma en castellano.
+        <div className="flex flex-col gap-2">
+          <button
+            type="button"
+            onClick={() => setQuery(MULTILINGUAL_ASR_REPO)}
+            className="flex w-fit flex-col gap-0.5 rounded border border-accent bg-surface-2 px-3 py-2 text-left transition-[border-color] duration-fast hover:border-accent-hover"
+          >
+            <span className="text-xs font-medium text-text">
+              {t("transcribe.models.multilingual.title")}
+            </span>
+            <span className="text-xs text-text-dim">
+              {t("transcribe.models.multilingual.hint")}
+            </span>
+            <span className="font-mono-tabular text-xs text-accent">
+              {t("transcribe.models.verified.action", { repo: MULTILINGUAL_ASR_REPO })}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setQuery(VERIFIED_ASR_REPO)}
+            className="flex w-fit flex-col gap-0.5 rounded border border-border bg-surface-2 px-3 py-2 text-left transition-[border-color] duration-fast hover:border-accent"
+          >
+            <span className="text-xs font-medium text-text">
+              {t("transcribe.models.verified.title")}
+            </span>
+            <span className="text-xs text-text-dim">{t("transcribe.models.verified.hint")}</span>
+            <span className="font-mono-tabular text-xs text-accent">
+              {t("transcribe.models.verified.action", { repo: VERIFIED_ASR_REPO })}
+            </span>
+          </button>
+        </div>
       )}
       {debouncedQuery.length > 0 && (
         <CompatFilterChips value={filter} onChange={setFilter} name="asr-compat-filter" />

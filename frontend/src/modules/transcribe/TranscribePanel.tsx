@@ -24,6 +24,7 @@ import {
 } from "../../hooks/useTranscribeJob";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "../../i18n/LocaleProvider";
+import { isEnglishOnly } from "../../lib/englishOnly";
 import type { TranscribeJob } from "../../lib/apiTypes";
 import { fetchTranslationPairs } from "../../services/transcribe";
 import type {
@@ -371,6 +372,9 @@ export function TranscribePanel({
     useTranscribeJob(pollIntervalMs);
 
   const models = modelsQuery.data ?? [];
+  const soloIngles = isEnglishOnly(
+    models.find((model) => model.id === modelId)?.name ?? modelId,
+  );
   const selectedModelId = models.some((model) => model.id === modelId)
     ? modelId
     : (models[0]?.id ?? "");
@@ -396,7 +400,9 @@ export function TranscribePanel({
       file,
       modelId: selectedModelId,
     };
-    if (language) {
+    if (soloIngles) {
+      params.language = "en";
+    } else if (language) {
       params.language = language;
     }
     if (selectedDeviceId) {
@@ -477,9 +483,10 @@ export function TranscribePanel({
                   {t("transcribe.language.label")}
                 </span>
                 <select
-                  value={language}
+                  value={soloIngles ? "en" : language}
+                  disabled={soloIngles}
                   onChange={(event) => setLanguage(event.target.value)}
-                  className="rounded border border-border bg-surface px-3 py-2 text-sm text-text focus:border-accent focus:outline-none"
+                  className="rounded border border-border bg-surface px-3 py-2 text-sm text-text focus:border-accent focus:outline-none disabled:opacity-50"
                 >
                   <option value="">{t("transcribe.language.auto")}</option>
                   {LANGUAGE_OPTIONS.map((code) => (
@@ -488,6 +495,12 @@ export function TranscribePanel({
                     </option>
                   ))}
                 </select>
+                {/* Ofrecer un idioma que el modelo no puede hacer no es una
+                    opcion: la transcripcion falla, y antes de fallar el usuario
+                    ya subio el archivo y espero. */}
+                {soloIngles && (
+                  <span className="text-xs text-warn">{t("transcribe.language.englishOnly")}</span>
+                )}
               </label>
 
               {hasPicture(file) && (

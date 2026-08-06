@@ -21,7 +21,7 @@ from app.services.auth.identity import AuthenticatedUser
 from app.services.auth.quotas import QuotaService
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
-from app.services.engines.transcribe_onnx import TranscribeRequest
+from app.services.engines.transcribe_onnx import is_english_only, TranscribeRequest
 from app.services.model_registry import ModelKind, ModelRegistry
 
 # Los tres destinos que puede tener un trabajo: solo el texto, el video con la
@@ -91,6 +91,7 @@ class TranscribeJobManager:
         self._validate_output_mode(output_mode)
         self._validate_dubbing(output_mode, target_language)
         self._validate_language(language)
+        self._validate_language_fits_the_model(model_id, language)
         await self._validate_device(device)
         if owner is not None and self.quota_service is not None:
             self.quota_service.check_admission(owner)
@@ -164,6 +165,28 @@ class TranscribeJobManager:
         if len(language) != _LANGUAGE_LENGTH or not language.isalpha():
             raise ValueError(
                 f"language must be a two-letter ISO 639-1 code, got {language!r}"
+            )
+
+    def _validate_language_fits_the_model(self, model_id: str, language: str | None) -> None:
+        """Un modelo solo-ingles no puede transcribir otro idioma.
+
+        Se rechaza ACA y no en el motor porque el usuario ya subio el archivo y
+        eligio todo: enterarse a mitad de la transcripcion, con un mensaje en
+        ingles de una libreria, no le dice que hacer.
+
+        Tragarse el idioma tampoco serviria: el modelo devolveria el castellano
+        escrito como si fuera ingles, y eso es peor que fallar — parece que
+        funciono.
+        """
+        if language is None or language.lower() == "en":
+            return
+        entry = self.registry.get(model_id)
+        nombre = entry.name if entry is not None else model_id
+        if is_english_only(nombre) or is_english_only(model_id):
+            raise ValueError(
+                f"El modelo {nombre} solo entiende ingles, y pediste otro idioma. "
+                "Elegi un modelo multilingue (los que NO terminan en .en) o "
+                "cambia el idioma a ingles."
             )
 
     async def _validate_device(self, device: str | None) -> None:

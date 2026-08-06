@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import re
 import threading
 from collections import OrderedDict
 from collections.abc import Callable
@@ -34,6 +35,25 @@ CHUNK_SAMPLES = TARGET_SAMPLE_RATE * CHUNK_SECONDS
 # Presupuesto de tokens por trozo. Treinta segundos de habla densa no pasan de esto
 # y el techo evita que un modelo que entra en bucle corra para siempre.
 MAX_TOKENS_PER_CHUNK = 220
+
+# Los Whisper que terminan en `.en` entienden UN idioma. Pedirles otro no es una
+# preferencia que se pueda ignorar: la libreria lo rechaza con "Cannot specify
+# `task` or `language` for an English-only model", y aunque no lo hiciera, el
+# resultado seria castellano escrito como si fuera ingles.
+#
+# El sufijo puede llevar cola (`whisper-tiny.en_timestamped`), asi que se busca
+# `.en` seguido de algo que no sea letra, no al final del nombre.
+_ENGLISH_ONLY = re.compile(r"\.en(?![a-z])", re.IGNORECASE)
+
+
+def is_english_only(model_id: str) -> bool:
+    """Si el modelo solo sabe ingles, por su nombre.
+
+    Es la convencion de OpenAI para toda la familia Whisper y viaja en el id, asi
+    que no hace falta bajar el modelo para saberlo — que es justo lo que permite
+    avisarle al usuario ANTES de que espere una transcripcion que va a fallar.
+    """
+    return bool(_ENGLISH_ONLY.search(model_id.rsplit("/", 1)[-1]))
 
 
 def build_load_kwargs(device: str, settings: Settings | None = None) -> dict[str, Any]:

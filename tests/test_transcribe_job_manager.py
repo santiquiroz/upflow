@@ -62,16 +62,20 @@ def make_settings(tmp_path: Path, **overrides) -> Settings:
 
 
 def register_asr_model(
-    registry: ModelRegistry, settings: Settings, model_id: str = MODEL_ID
+    registry: ModelRegistry, settings: Settings, model_id: str = MODEL_ID, name: str | None = None
 ) -> None:
+    # El nombre sale del id por defecto. Antes estaba fijo en un modelo `.en`,
+    # asi que registrar un multilingue igual quedaba con nombre de solo-ingles y
+    # cualquier chequeo por nombre lo leia mal.
+    nombre = name or f"onnx-community/{model_id.rsplit('--', 1)[-1]}"
     model_dir = settings.models_path / "asr" / model_id
     model_dir.mkdir(parents=True, exist_ok=True)
     registry.register(
         ModelEntry(
             id=model_id,
-            name="onnx-community/whisper-tiny.en",
+            name=nombre,
             kind=ModelKind.asr_onnx,
-            source="hf:onnx-community/whisper-tiny.en",
+            source=f"hf:{nombre}",
             size_bytes=257 * 1024 * 1024,
             file_path=f"asr/{model_id}",
         )
@@ -257,11 +261,16 @@ async def test_progress_is_recorded(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_the_engine_receives_the_model_dir_and_the_language(tmp_path: Path):
     engine = FakeEngine()
-    manager, settings, _r = make_manager(tmp_path, engine)
+    manager, settings, registry = make_manager(tmp_path, engine)
+    # Con un modelo MULTILINGUE: el modelo por defecto de estas pruebas termina
+    # en `.en` y solo entiende ingles, asi que pedirle castellano ya no se
+    # acepta. Lo que esta prueba verifica es que el idioma LLEGUE al motor, no
+    # esa combinacion imposible.
+    register_asr_model(registry, settings, "whisper-tiny-multilingue")
     await manager.create_job(
         source_path=make_audio(settings),
         original_filename="a.wav",
-        model_id=MODEL_ID,
+        model_id="whisper-tiny-multilingue",
         language="es",
     )
     await manager._process_next()
