@@ -122,3 +122,63 @@ class TestElPipelineUsaElContextoProporcional:
         from app.services.inpaint_pipeline import resolve_padding
 
         assert resolve_padding(None, (0, 0, 300, 300)) == context_padding_for((0, 0, 300, 300))
+
+
+class TestElContextoNoSePagaConResolucion:
+    """El recorte no puede crecer mas alla de la resolucion a la que se edita.
+
+    Reportado el 2026-08-06, para posters de publicidad: "se nota un poco que fue
+    generado por IA". Medido: con una marca de 600-900 px el recorte llegaba a
+    1150-1675 px, se achicaba a 1024 para editarlo y volvia a estirarse al pegar.
+    La zona quedaba entre 1,1x y 1,6x mas blanda que el resto de la foto — y una
+    zona mas blanda que lo que la rodea es exactamente lo que delata un retoque.
+
+    El contexto se toma del margen que sobra, no del detalle. Para una marca
+    chica sobra todo y no cambia nada; para una grande se recorta el contexto
+    antes que la nitidez.
+    """
+
+    def test_una_marca_chica_no_cambia(self) -> None:
+        # El recorte entra holgado: sigue recibiendo todo el contexto.
+        bbox = (100, 100, 400, 400)
+        sin_tope = compute_crop_box(bbox, context_padding_for(bbox), (4000, 3000))
+        con_tope = compute_crop_box(
+            bbox, context_padding_for(bbox), (4000, 3000), max_side=1024
+        )
+
+        assert con_tope == sin_tope
+
+    def test_una_marca_grande_no_se_edita_mas_chica_de_lo_que_es(self) -> None:
+        bbox = (100, 100, 1000, 1000)
+        izquierda, arriba, derecha, abajo = compute_crop_box(
+            bbox, context_padding_for(bbox), (3000, 2000), max_side=1024
+        )
+
+        assert derecha - izquierda <= 1024
+
+    def test_aun_recortado_conserva_algo_de_contexto(self) -> None:
+        # Un tope que dejara el recorte pegado a la marca devolveria el problema
+        # de la boca girada, cambiando un defecto por otro.
+        bbox = (100, 100, 700, 700)
+        izquierda, _a, derecha, _b = compute_crop_box(
+            bbox, context_padding_for(bbox), (3000, 2000), max_side=1024
+        )
+
+        assert derecha - izquierda > 700, "no quedo nada de contexto"
+
+    def test_la_marca_entra_entera_aunque_ella_sola_pase_el_tope(self) -> None:
+        # Con una marca mas grande que la resolucion de edicion no hay forma de
+        # evitar el achique — pero recortarla seria editar otra cosa.
+        bbox = (0, 0, 1500, 1500)
+        izquierda, arriba, derecha, abajo = compute_crop_box(
+            bbox, context_padding_for(bbox), (3000, 2000), max_side=1024
+        )
+
+        assert izquierda <= 0 and arriba <= 0
+        assert derecha >= 1500 and abajo >= 1500
+
+    def test_sin_tope_se_comporta_como_antes(self) -> None:
+        bbox = (100, 100, 1000, 1000)
+        assert compute_crop_box(bbox, context_padding_for(bbox), (3000, 2000)) == (
+            compute_crop_box(bbox, context_padding_for(bbox), (3000, 2000), max_side=None)
+        )

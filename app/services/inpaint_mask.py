@@ -121,16 +121,34 @@ def context_padding_for(bbox: tuple[int, int, int, int]) -> int:
 
 
 def compute_crop_box(
-    bbox: tuple[int, int, int, int], padding: int, image_size: tuple[int, int]
+    bbox: tuple[int, int, int, int],
+    padding: int,
+    image_size: tuple[int, int],
+    max_side: int | None = None,
 ) -> tuple[int, int, int, int]:
     """Región a editar: el área marcada más contexto alrededor, cuadrada.
 
     Cuadrada porque los modelos de difusión trabajan mejor en su relación de
     aspecto nativa; el contexto (padding) es lo que le permite al modelo
     continuar el fondo en vez de inventar un parche aislado.
+
+    `max_side` es la resolución a la que se va a editar. El contexto se toma del
+    margen que sobra hasta ahí, NUNCA del detalle: un recorte más grande que esa
+    resolución se achica para editarlo y vuelve a estirarse al pegarlo, y la zona
+    queda más blanda que lo que la rodea — que es justo lo que delata un retoque.
+    Medido el 2026-08-06: una marca de 900 px daba un recorte de 1675 px, o sea
+    1,6x más blando que el resto de la foto.
+
+    Si la marca SOLA ya pasa ese tope no hay nada que hacer: se prefiere el
+    achique antes que recortar la marca, porque recortarla sería editar otra cosa.
     """
     image_width, image_height = image_size
     left, top, right, bottom = bbox
+    if max_side is not None:
+        # Lo que sobra hasta el tope, repartido a los dos lados. Nunca negativo:
+        # con la marca ya pasada de tope, el contexto es cero y listo.
+        holgura = max(0, max_side - max(right - left, bottom - top))
+        padding = min(padding, holgura // 2)
     left = max(0, left - padding)
     top = max(0, top - padding)
     right = min(image_width, right + padding)

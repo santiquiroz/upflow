@@ -94,7 +94,14 @@ def run_masked_edit(
 
     caja_marcada = mask_bbox(blended_mask) or bbox
     crop_box = compute_crop_box(
-        caja_marcada, resolve_padding(settings.padding_px, caja_marcada), base_rgb.size
+        caja_marcada,
+        resolve_padding(settings.padding_px, caja_marcada),
+        base_rgb.size,
+        # El contexto se toma del margen que sobra hasta la resolucion de
+        # edicion, nunca del detalle: un recorte mas grande que esto se achica
+        # para editarlo y vuelve a estirarse al pegarlo, dejando la zona mas
+        # blanda que lo que la rodea.
+        max_side=_snap(settings.target_side),
     )
     crop_image = base_rgb.crop(crop_box)
     crop_mask = Image.fromarray(blended_mask, mode="L").crop(crop_box)
