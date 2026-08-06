@@ -360,4 +360,9 @@ class TestPrintDomain:
 
         por_id = {c.id: c for c in resueltas}
         assert por_id["print.slice"].status == "not_implemented"
-        assert por_id["print.generate"].status == "not_implemented"
+        # La generacion SI existe, pero necesita bajar el modelo: `needs_setup`
+        # y no `not_implemented`. La diferencia importa — una dice "falta bajar
+        # algo" y la otra "no esta hecho", y confundirlas manda al usuario a
+        # buscar un boton que no existe.
+        assert por_id["print.generate"].status == "needs_setup"
+        assert "shap-e" in por_id["print.generate"].missing_packs

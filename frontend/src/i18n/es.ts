@@ -608,10 +608,10 @@ export const es = {
   "capability.print.parts": "Piezas con cotas exactas",
   "capability.print.repair": "Reparación de malla",
   "capability.print.slice": "Laminado real",
-  "capability.print.generate": "De foto a malla",
+  "capability.print.generate": "De foto o texto a malla",
+  "capability.setup.shapE": "Necesita el modelo Shap-E (MIT, ~1,3 GB). Corre en el procesador: unos dos minutos por pieza.",
   "capability.reason.printRepairPending": "Todavía no está hecho: cerrar una malla sin inventar geometría que nunca estuvo.",
   "capability.reason.noSlicerPack": "Necesita un laminador que viaje con la app, como viaja ffmpeg.",
-  "capability.reason.noCleanLicenseMeshEngine": "Medido el 2026-08-05: TRELLIS es MIT pero depende de kernels CUDA y de nvdiffrast, que sí es no comercial; la familia Hunyuan3D está bloqueada por su propia licencia. TripoSR es MIT en código y pesos y su camino sin CUDA verificado es CPU, así que es lento, no imposible.",
 
   "capability.video.upscale": "Reescalar video",
   "capability.video.interpolate": "Generar fotogramas",

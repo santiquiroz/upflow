@@ -35,6 +35,7 @@ PACK_SCRIPTS: dict[str, str] = {
     # los pesos y el binario ya viene con el pack sdcpp.
     "wan-video": "download-wan-video.ps1",
     "magpie": "download-magpie.ps1",
+    "shap-e": "download-shap-e.ps1",
 }
 
 # Los scripts descargan cientos de MB desde GitHub releases. El techo es un

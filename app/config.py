@@ -689,6 +689,11 @@ class Settings(BaseSettings):
         return frozenset(item.strip() for item in self.allowed_origins.split(",") if item.strip())
 
     @property
+    def shape3d_model_path(self) -> Path:
+        """Shap-E (MIT). Se baja aparte con scripts/download-shap-e.ps1."""
+        return Path(self.runtime_dir).parent / "vendor" / "shap-e"
+
+    @property
     def ffmpeg_binary_path(self) -> Path:
         return resolve_against_project_root(self.ffmpeg_binary)
 

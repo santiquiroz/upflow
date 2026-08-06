@@ -132,18 +132,17 @@ _PRINT_CAPABILITIES: tuple[Capability, ...] = (
         id="print.generate",
         domain="print",
         label_key="capability.print.generate",
-        provisioning="none",
-        job_kind=None,
+        provisioning="vendored_pack",
+        job_kind="print",
         strategies=("model",),
-        # Verificado el 2026-08-05 contra las fuentes primarias, con revision
-        # adversarial (docs/superpowers/specs/2026-08-05-3d-engines-license-findings.md).
-        # La distincion importa: TRELLIS es MIT en codigo Y pesos — lo bloquea de
-        # que DEPENDE (kernels CUDA y nvdiffrast, que si es NVIDIA no comercial),
-        # no su propia licencia, asi que un puerto sin nvdiffrast lo devolveria a
-        # la mesa. Hunyuan3D no vuelve: ahi el problema es la licencia del modelo.
-        # TripoSR resistio el intento de refutacion: MIT en codigo y pesos, y su
-        # camino sin CUDA verificado es torch en CPU, o sea lento, no imposible.
-        unavailable_reason_key="capability.reason.noCleanLicenseMeshEngine",
+        requirements=(PathRequirement("shape3d_model_path", "shap-e"),),
+        # Shap-E (OpenAI, MIT en codigo y pesos) corre en CPU con el `diffusers`
+        # que la app YA trae. Medido en esta maquina el 2026-08-05: 116-137 s por
+        # malla, y de cuatro pruebas tres salieron estancas, manifold y solidas
+        # directamente (`scripts/spike_shape3d.py`).
+        #
+        # No da COTAS, y eso no lo arregla ningun modelo: para una pieza que tiene
+        # que encajar sigue estando el carril parametrico.
     ),
 )
 
