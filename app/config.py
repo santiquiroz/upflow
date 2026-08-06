@@ -709,6 +709,16 @@ class Settings(BaseSettings):
         return Path(r"C:/Program Files/OpenSCAD/openscad.exe")
 
     @property
+    def kokoro_model_path(self) -> Path:
+        """Modelo de voz (Kokoro, Apache 2.0). Se baja aparte."""
+        return Path(self.runtime_dir).parent / "vendor" / "kokoro"
+
+    @property
+    def voice_conversion_model_path(self) -> Path:
+        """SpeechT5 para conversion de voz. Se baja aparte."""
+        return Path(self.runtime_dir).parent / "vendor" / "speecht5-vc"
+
+    @property
     def shape3d_model_path(self) -> Path:
         """Shap-E (MIT). Se baja aparte con scripts/download-shap-e.ps1."""
         return Path(self.runtime_dir).parent / "vendor" / "shap-e"

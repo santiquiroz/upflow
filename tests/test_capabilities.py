@@ -87,11 +87,21 @@ def test_no_unimplemented_capability_declares_a_job_kind():
             assert capability.job_kind is None, capability.id
 
 
+# Capacidades que necesitan un modelo bajado pero NO encolan: responden en la
+# misma peticion porque son lo bastante rapidas, y encolarlas costaria mas que
+# hacerlas. Medido: 1,90 s de habla salen en menos de medio segundo.
+SINCRONICAS = {"audio.speak", "audio.voiceConvert"}
+
+
 def test_every_queued_capability_declares_a_job_kind():
     # `builtin` queda afuera a proposito: es codigo sincronico en proceso, no
     # trabajo que se encole, y exigirle un job_kind seria pedirle una cola que no
-    # tiene.
+    # tiene. Las de SINCRONICAS quedan afuera por lo mismo, aunque si necesiten
+    # bajar un modelo: el provisioning dice de donde sale el modelo, no si el
+    # trabajo se encola.
     for capability in CATALOG:
+        if capability.id in SINCRONICAS:
+            continue
         if capability.provisioning in ("registry", "vendored_pack"):
             assert capability.job_kind, capability.id
 
@@ -418,3 +428,41 @@ class TestElCarrilCad:
 
         assert cad.setup_reason_key == "capability.setup.missingSetting"
         assert cad.missing_packs == ()
+
+
+# ---------------------------------------------------------------------------
+# La voz no figuraba en el arbol. La pantalla de Tareas es donde el usuario elige
+# que hacer, y "convertir texto en habla" simplemente no estaba: para descubrirlo
+# habia que entrar a la seccion Voz y encontrarse con un texto muerto.
+# ---------------------------------------------------------------------------
+
+
+class TestLaVozEstaEnElArbol:
+    def test_la_sintesis_de_voz_es_una_capacidad(self, tmp_path) -> None:
+        settings = Settings(RUNTIME_DIR=str(tmp_path), _env_file=None)
+
+        assert _find(resolve_capabilities(settings, FakeRegistry()), "audio.speak")
+
+    def test_la_conversion_de_voz_es_una_capacidad(self, tmp_path) -> None:
+        settings = Settings(RUNTIME_DIR=str(tmp_path), _env_file=None)
+
+        assert _find(resolve_capabilities(settings, FakeRegistry()), "audio.voiceConvert")
+
+    def test_sin_el_modelo_pide_bajar_el_paquete_de_voz(self, tmp_path) -> None:
+        # Que diga que falta un pack es lo que le da el boton a la pantalla de
+        # Tareas; sin eso vuelve a ser un cartel sin salida.
+        settings = Settings(RUNTIME_DIR=str(tmp_path), _env_file=None)
+
+        voz = _find(resolve_capabilities(settings, FakeRegistry()), "audio.speak")
+
+        assert voz.status != "available"
+        assert "kokoro" in voz.missing_packs
+
+    def test_con_el_modelo_puesto_queda_disponible(self, tmp_path) -> None:
+        modelo = tmp_path.parent / "vendor" / "kokoro"
+        modelo.mkdir(parents=True, exist_ok=True)
+        settings = Settings(RUNTIME_DIR=str(tmp_path), _env_file=None)
+
+        voz = _find(resolve_capabilities(settings, FakeRegistry()), "audio.speak")
+
+        assert voz.status == "available"

@@ -11,16 +11,18 @@ const SURFACE_BY_CAPABILITY: Record<string, string> = {
   "audio.restore": "/audio",
   "audio.voice": "/audio",
   "audio.transcribe": "/transcribe",
+  // Sincronicas: devuelven el audio en la misma peticion, sin encolar. Igual
+  // tienen pantalla, que es lo que decide si van a algun lado.
+  "audio.speak": "/voice",
+  "audio.voiceConvert": "/voice",
   "generate.textToImage": "/generate",
   "generate.textToVideo": "/generate",
 };
 
 export function surfaceFor(capability: CapabilityResponse): string | null {
-  // Una capacidad sin job_kind no tiene a donde mandar trabajo, asi que no puede
-  // tener superficie: chequear eso ademas del mapa evita que agregar una entrada
-  // al mapa por error abra una pantalla que no hace nada.
-  if (capability.jobKind === null) {
-    return null;
-  }
+  // El mapa ES la decision. Antes habia ademas un porton por `jobKind === null`,
+  // como sustituto de "no tiene a donde mandar trabajo"; resulto falso para las
+  // capacidades sincronicas —la voz devuelve el audio en la misma peticion— que
+  // quedaban listadas en Tareas sin llevar a ninguna pantalla.
   return SURFACE_BY_CAPABILITY[capability.id] ?? null;
 }

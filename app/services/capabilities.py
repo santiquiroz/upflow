@@ -249,6 +249,28 @@ CATALOG: tuple[Capability, ...] = (
         requirements=(PathRequirement("ffmpeg_binary", "ffmpeg"),),
     ),
     Capability(
+        id="audio.speak",
+        domain="audio",
+        label_key="capability.audio.speak",
+        provisioning="vendored_pack",
+        job_kind=None,
+        strategies=("model",),
+        requirements=(PathRequirement("kokoro_model_path", "kokoro"),),
+        # Estaba fuera del arbol: la pantalla de Tareas es donde el usuario elige
+        # que hacer, y "convertir texto en habla" no aparecia por ningun lado.
+    ),
+    Capability(
+        id="audio.voiceConvert",
+        domain="audio",
+        label_key="capability.audio.voiceConvert",
+        provisioning="vendored_pack",
+        job_kind=None,
+        strategies=("model",),
+        requirements=(
+            PathRequirement("voice_conversion_model_path", "voice-conversion"),
+        ),
+    ),
+    Capability(
         id="audio.transcribe",
         domain="audio",
         label_key="capability.audio.transcribe",

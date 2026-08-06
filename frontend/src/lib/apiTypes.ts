@@ -444,7 +444,7 @@ export interface ScanOnnxDiagnosticResponse {
   report: CpuFallbackReportResponse;
 }
 
-export type CapabilityDomainId = "video" | "image" | "audio" | "generate";
+export type CapabilityDomainId = "video" | "image" | "audio" | "generate" | "print";
 export type CapabilityStatus = "available" | "needs_setup" | "not_implemented";
 /** `builtin` anda sin bajar nada; `none` significa NO implementada todavía. */
 export type CapabilityProvisioning = "registry" | "vendored_pack" | "builtin" | "none";

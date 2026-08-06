@@ -654,6 +654,8 @@ export const en = {
   "capability.audio.denoise": "Remove noise",
   "capability.audio.restore": "Restore quality",
   "capability.audio.voice": "Shape the voice",
+  "capability.audio.speak": "Text to spoken voice",
+  "capability.audio.voiceConvert": "Swap the voice in an audio clip",
   "capability.audio.transcribe": "Transcribe to text",
   "capability.audio.stems": "Separate stems",
   "capability.generate.textToImage": "Text to image",

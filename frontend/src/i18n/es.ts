@@ -649,6 +649,8 @@ export const es = {
   "capability.audio.denoise": "Quitar ruido",
   "capability.audio.restore": "Restaurar calidad",
   "capability.audio.voice": "Trabajar la voz",
+  "capability.audio.speak": "De texto a voz hablada",
+  "capability.audio.voiceConvert": "Cambiar la voz de un audio por otra",
   "capability.audio.transcribe": "Transcribir a texto",
   "capability.audio.stems": "Separar stems",
   "capability.generate.textToImage": "Texto a imagen",
