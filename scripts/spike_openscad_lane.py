@@ -75,7 +75,11 @@ class OllamaClient:
 
 
 def main() -> int:
-    modelo = sys.argv[1] if len(sys.argv) > 1 else "qwen3-coder:30b"
+    # Tag CAPADO a proposito. Un tag crudo usa el contexto nativo del modelo
+    # (100K+ tokens), desborda los 16 GB de VRAM y fuerza descarga a CPU: medido
+    # el 2026-08-05, `qwen3-coder:30b` paso de responder en 13 s a morir por
+    # timeout a los 900 s. El capado responde en 86 s y acierta.
+    modelo = sys.argv[1] if len(sys.argv) > 1 else "devstral-32k"
     if not OPENSCAD.exists():
         print(f"Falta OpenSCAD en {OPENSCAD}")
         return 1

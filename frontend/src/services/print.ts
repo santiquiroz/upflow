@@ -111,6 +111,11 @@ export interface Shape3dJob {
   status: Shape3dStatus;
   prompt: string;
   printer: string;
+  /** "mesh" = forma sin cotas. "cad" = código OpenSCAD con cotas. */
+  source: string;
+  /** Solo en "cad": el código, que es la pieza editable. */
+  code: string | null;
+  retries: number;
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;
@@ -126,12 +131,16 @@ export interface Shape3dJob {
 export function createShape3dJob(body: {
   prompt: string;
   printer: string;
+  source?: "mesh" | "cad";
   targetMm?: number;
+  expectedSize?: [number, number, number];
 }): Promise<Shape3dJob> {
   return apiPostJson<Shape3dJob>("/print/generate", {
     prompt: body.prompt,
     printer: body.printer,
+    source: body.source ?? "mesh",
     target_mm: body.targetMm ?? null,
+    expected_size: body.expectedSize ?? null,
   });
 }
 

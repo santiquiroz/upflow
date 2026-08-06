@@ -181,3 +181,74 @@ async def test_cancelling_a_queued_job_stops_it_before_it_runs(tmp_path: Path):
 
     assert job.status is JobStatus.cancelled
     assert engine.prompts == []
+
+
+# ---------------------------------------------------------------------------
+# El carril CAD: la descripcion pasa por un modelo que escribe OpenSCAD, y eso da
+# COTAS. Es lo unico que un generador de malla no puede dar.
+# ---------------------------------------------------------------------------
+
+
+class ClienteCadFalso:
+    def __init__(self, respuestas=None) -> None:
+        self.respuestas = list(respuestas or ["cube([10,10,10]);"])
+        self.pedidos: list[str] = []
+
+    def complete(self, system: str, user: str) -> str:
+        self.pedidos.append(user)
+        return self.respuestas.pop(0) if self.respuestas else "cube([10,10,10]);"
+
+
+def make_cad_manager(tmp_path: Path, cliente=None, con_openscad: bool = True):
+    settings = Settings(RUNTIME_DIR=str(tmp_path), _env_file=None)
+    StorageService(settings).ensure_directories()
+    if con_openscad:
+        falso = tmp_path / "vendor" / "openscad" / "openscad.exe"
+        falso.parent.mkdir(parents=True, exist_ok=True)
+        falso.write_bytes(b"no-es-el-binario-real")
+    return Shape3dJobManager(
+        settings, FakeEngine(), cad_client=cliente or ClienteCadFalso()
+    ), settings
+
+
+@pytest.mark.asyncio
+async def test_the_cad_lane_needs_a_model_server(tmp_path: Path):
+    # Decir "no hay servidor" es mejor que fingir que si y fallar en el medio.
+    settings = Settings(RUNTIME_DIR=str(tmp_path), _env_file=None)
+    StorageService(settings).ensure_directories()
+    manager = Shape3dJobManager(settings, FakeEngine(), cad_client=None)
+
+    with pytest.raises(Shape3dUnavailable, match="servidor"):
+        await manager.create_job(prompt="un taco", source="cad")
+
+
+@pytest.mark.asyncio
+async def test_the_cad_lane_needs_openscad(tmp_path: Path):
+    manager, settings = make_cad_manager(tmp_path, con_openscad=False)
+    # El binario del sistema puede existir en esta maquina: se apunta a uno que no.
+    object.__setattr__(settings, "runtime_dir", str(tmp_path / "sin-nada"))
+
+    if not Path(settings.openscad_binary_path).exists():
+        with pytest.raises(Shape3dUnavailable, match="OpenSCAD"):
+            await manager.create_job(prompt="un taco", source="cad")
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_source_is_refused(tmp_path: Path):
+    manager, _settings = make_cad_manager(tmp_path)
+
+    with pytest.raises(ValueError, match="Origen"):
+        await manager.create_job(prompt="algo", source="magia")
+
+
+@pytest.mark.asyncio
+async def test_the_mesh_lane_does_not_need_the_cad_pieces(tmp_path: Path):
+    # Los dos carriles son independientes: que falte uno no puede romper el otro.
+    settings = Settings(RUNTIME_DIR=str(tmp_path), _env_file=None)
+    StorageService(settings).ensure_directories()
+    manager = Shape3dJobManager(settings, FakeEngine(), cad_client=None)
+
+    job = await manager.create_job(prompt="algo", source="mesh")
+    await manager._process_next()
+
+    assert job.status is JobStatus.completed

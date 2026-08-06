@@ -4,24 +4,28 @@ Este es el carril que cierra el circulo entre "describilo" y "esto mide 80 mm".
 Un generador de malla nunca va a dar cotas — no hay medida que salga de un
 prompt. Un modelo que escribe CODIGO CAD si, porque las cotas estan en el codigo.
 
-Medido el 2026-08-05 con `qwen3-coder:30b` corriendo local: de tres piezas
-pedidas en castellano, dos salieron con las cotas EXACTAS (20,00 x 20,00 x 12,00
-y 30,00 x 25,00 x 10,00) y ambas imprimibles. La tercera no compilo — y ese es
-justamente el caso que este modulo resuelve.
+Medido el 2026-08-05 con dos modelos locales distintos, y el resultado depende
+del modelo:
+
+  `devstral-32k`    3 de 4 piezas con las cotas EXACTAS, 0 reintentos, 20-38 s
+                    cada una. La que fallo (una escuadra en L, la mas compleja)
+                    no logro compilar en 3 intentos.
+  `qwen3-coder:30b` las 4 compilaron a la primera y las 4 salieron imprimibles,
+                    pero DOS midieron mal: un espaciador de 12 mm de alto salio
+                    de 24, y una escuadra de 5 mm de espesor salio de 7,5.
 
 EL BUCLE ES LA PIEZA CENTRAL, y se cierra con DOS realimentaciones distintas:
 
   1. No compila -> vuelve el error del compilador.
   2. Compila pero MIDE MAL -> vuelve la medida real contra la pedida.
 
-La segunda es la que importa de verdad, y salio de medir: con `qwen3-coder:30b`,
-las cuatro piezas pedidas compilaron a la primera y las cuatro salieron
-imprimibles, pero DOS midieron mal — un espaciador de 12 mm de alto salio de 24, y
-una escuadra de 5 mm de espesor salio de 7,5. O sea que el fallo tipico de este
-carril no es de sintaxis: es de COTAS, que es justo lo unico que este carril
-existe para dar.
+Las dos hacen falta, y esas dos mediciones son la razon: cada modelo falla por un
+lado distinto. Uno se equivoca en las cotas y compila siempre; el otro acierta las
+cotas y a veces no compila. Quedarse con una sola realimentacion serviria para un
+modelo y no para el otro, y cual toque depende de lo que el usuario tenga
+instalado.
 
-Sin esa segunda realimentacion, el usuario recibe una pieza que compila, que se
+Sin la realimentacion dimensional, el usuario recibe una pieza que compila, que se
 imprime, y que no entra donde tenia que entrar. El banco que ya verifica cualquier
 STL es lo que permite cerrar ese bucle: se mide lo generado y se le dice al modelo
 en que se equivoco.

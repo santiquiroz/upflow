@@ -31,6 +31,8 @@ PACK_SCRIPTS: dict[str, str] = {
     "mobilesam": "download-mobilesam.ps1",
     "migan": "download-migan.ps1",
     "sdcpp": "download-sdcpp.ps1",
+    # GPL-2.0: se baja aparte y corre como proceso separado, nunca enlazado.
+    "openscad": "download-openscad.ps1",
     # El pack de video trae ADEMAS el motor Vulkan: download-wan-video.ps1 baja
     # los pesos y el binario ya viene con el pack sdcpp.
     "wan-video": "download-wan-video.ps1",

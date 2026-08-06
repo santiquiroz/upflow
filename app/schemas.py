@@ -178,9 +178,15 @@ class GeneratedPartResponse(BaseModel):
 class Shape3dJobRequest(BaseModel):
     prompt: str
     printer: str = "ender-3"
-    # Una malla generada no trae cotas: sin esto sale en la escala que se le
-    # ocurrio al modelo.
+    # "mesh" = forma sin cotas (Shap-E). "cad" = codigo OpenSCAD con cotas.
+    source: str = "mesh"
+    # Solo en "mesh": a cuanto escalar el lado mas largo.
     target_mm: float | None = Field(default=None, serialization_alias="targetMm")
+    # Solo en "cad": lo que la pieza TIENE que medir. Si no coincide, el error
+    # vuelve al modelo en vez de entregar algo que no entra.
+    expected_size: tuple[float, float, float] | None = Field(
+        default=None, serialization_alias="expectedSize"
+    )
 
 
 class Shape3dJobResponse(BaseModel):
@@ -197,6 +203,10 @@ class Shape3dJobResponse(BaseModel):
     blockers: list[str] = Field(default_factory=list)
     advice: list[str] = Field(default_factory=list)
     error: str | None = None
+    source: str = "mesh"
+    # Solo en "cad": el codigo, que es la pieza EDITABLE.
+    code: str | None = None
+    retries: int = 0
     download_url: str | None = Field(default=None, serialization_alias="downloadUrl")
 
 

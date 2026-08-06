@@ -48,6 +48,7 @@ from app.services.engines.transcribe_onnx import TranscribeEngine
 from app.services.download_job_manager import DownloadJobManager
 from app.services.transcribe_job_manager import TranscribeJobManager
 from app.services.engines.shape3d import Shape3dEngine
+from app.services.openscad_llm import OpenAiCompatibleClient
 from app.services.model_packs import enqueue_pending_model_packs
 from app.services.shape3d_job_manager import Shape3dJobManager
 from app.services.pack_provisioner import PackProvisioner
@@ -225,6 +226,15 @@ async def lifespan(app: FastAPI):
     shape3d_jobs = Shape3dJobManager(
         settings,
         Shape3dEngine(settings.shape3d_model_path),
+        # Solo si hay un servidor de modelo configurado. Sin el, el carril de
+        # malla anda igual y el de CAD dice que falta, que es mejor que fingir.
+        cad_client=(
+            OpenAiCompatibleClient(
+                base_url=settings.cad_llm_base_url, model=settings.cad_llm_model
+            )
+            if settings.cad_llm_base_url
+            else None
+        ),
         quota_service=quota_service,
     )
 

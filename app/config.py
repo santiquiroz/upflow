@@ -254,6 +254,13 @@ class Settings(BaseSettings):
     app_port: int = Field(default=8090, alias="APP_PORT")
 
     max_upload_mb: int = Field(default=50, alias="MAX_UPLOAD_MB")
+    # Servidor de modelo que escribe el OpenSCAD. Vacio = el carril CAD apagado.
+    # Cualquiera que hable el protocolo de OpenAI sirve: Ollama en
+    # http://localhost:11434/v1, LM Studio, llama.cpp server. No se vendoriza
+    # ninguno — se apunta al que el usuario ya tenga, y asi no entran 9 GB al
+    # instalador.
+    cad_llm_base_url: str = Field(default="", alias="CAD_LLM_BASE_URL")
+    cad_llm_model: str = Field(default="qwen3-coder:30b", alias="CAD_LLM_MODEL")
     max_video_upload_mb: int = Field(default=2048, alias="MAX_VIDEO_UPLOAD_MB")
     max_image_pixels: int = Field(default=120_000_000, alias="MAX_IMAGE_PIXELS")
     # Per-device concurrency (DeviceSemaphores): each physical device_id
@@ -687,6 +694,19 @@ class Settings(BaseSettings):
     @property
     def allowed_origin_values(self) -> frozenset[str]:
         return frozenset(item.strip() for item in self.allowed_origins.split(",") if item.strip())
+
+    @property
+    def openscad_binary_path(self) -> Path:
+        """El binario de OpenSCAD.
+
+        Es GPL-2.0, asi que corre como PROCESO APARTE y nunca se enlaza. Se busca
+        primero en vendor/ y si no en la instalacion del sistema, porque mucha
+        gente que imprime en 3D ya lo tiene puesto.
+        """
+        vendorizado = Path(self.runtime_dir).parent / "vendor" / "openscad" / "openscad.exe"
+        if vendorizado.exists():
+            return vendorizado
+        return Path(r"C:/Program Files/OpenSCAD/openscad.exe")
 
     @property
     def shape3d_model_path(self) -> Path:

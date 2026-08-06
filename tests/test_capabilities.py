@@ -24,6 +24,10 @@ class FakeRegistry:
         return list(self._entries)
 
 
+def _find(resueltas, capacidad_id: str):
+    return next(c for c in resueltas if c.id == capacidad_id)
+
+
 def entry(kind: ModelKind, status: ModelStatus = ModelStatus.installed) -> ModelEntry:
     return ModelEntry(
         id=f"m-{kind.value}-{status.value}",
@@ -366,3 +370,51 @@ class TestPrintDomain:
         # buscar un boton que no existe.
         assert por_id["print.generate"].status == "needs_setup"
         assert "shap-e" in por_id["print.generate"].missing_packs
+
+
+# ---------------------------------------------------------------------------
+# El carril CAD necesita DOS cosas que no son un pack: OpenSCAD instalado y un
+# servidor de modelo local apuntado. Ninguna se baja, las dos las pone el
+# usuario, y decir "disponible" sin ellas manda a la pantalla a fallar en el
+# medio en vez de avisar antes.
+# ---------------------------------------------------------------------------
+
+
+class TestElCarrilCad:
+    def test_sin_servidor_de_modelo_no_esta_disponible(self, tmp_path) -> None:
+        settings = Settings(RUNTIME_DIR=str(tmp_path), CAD_LLM_BASE_URL="", _env_file=None)
+
+        cad = _find(resolve_capabilities(settings, FakeRegistry()), "print.cad")
+
+        assert cad.status != "available"
+
+    def test_con_las_dos_cosas_puestas_esta_disponible(self, tmp_path) -> None:
+        binario = tmp_path / "openscad.exe"
+        binario.write_bytes(b"x")
+        settings = Settings(
+            RUNTIME_DIR=str(tmp_path),
+            CAD_LLM_BASE_URL="http://localhost:11434/v1",
+            OPENSCAD_BINARY_PATH=str(binario),
+            _env_file=None,
+        )
+
+        cad = _find(resolve_capabilities(settings, FakeRegistry()), "print.cad")
+
+        assert cad.status == "available"
+
+    def test_dice_que_falta_configurar_no_que_falta_bajar(self, tmp_path) -> None:
+        # Mandar al usuario a bajar un pack que no existe es peor que no decir
+        # nada: lo que falta lo configura el, no un boton de descarga.
+        binario = tmp_path / "openscad.exe"
+        binario.write_bytes(b"x")
+        settings = Settings(
+            RUNTIME_DIR=str(tmp_path),
+            CAD_LLM_BASE_URL="",
+            OPENSCAD_BINARY_PATH=str(binario),
+            _env_file=None,
+        )
+
+        cad = _find(resolve_capabilities(settings, FakeRegistry()), "print.cad")
+
+        assert cad.setup_reason_key == "capability.setup.missingSetting"
+        assert cad.missing_packs == ()

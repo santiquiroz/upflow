@@ -16,12 +16,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 
 from app.config import Settings
 from app.exceptions import QueueFullError
 from app.models import JobStatus, Shape3dJob, utc_now
 from app.services.auth.identity import AuthenticatedUser
 from app.services.engines.shape3d import Shape3dEngine, Shape3dUnavailable
+from app.services.openscad_llm import LlmUnavailable, describe_to_stl
 from app.services.mesh_fit import PRINTER_BEDS
 from app.services.print_check import check_stl_for_printing
 from app.services.stl_writer import write_stl
@@ -37,10 +39,14 @@ class Shape3dJobManager:
         settings: Settings,
         engine: Shape3dEngine,
         *,
+        cad_client=None,
         quota_service=None,
     ) -> None:
         self.settings = settings
         self.engine = engine
+        # El cliente del modelo que escribe OpenSCAD. Puede no estar: el carril de
+        # malla anda igual, y decir "no hay servidor" es mejor que fingir que si.
+        self.cad_client = cad_client
         self.quota_service = quota_service
         self.jobs: dict[str, Shape3dJob] = {}
         self.queue: asyncio.Queue[Shape3dJob] = asyncio.Queue(maxsize=settings.max_queue_size)
@@ -68,7 +74,9 @@ class Shape3dJobManager:
         *,
         prompt: str,
         printer: str = "ender-3",
+        source: str = "mesh",
         target_mm: float | None = None,
+        expected_size: tuple[float, float, float] | None = None,
         owner: AuthenticatedUser | None = None,
         job_id: str | None = None,
     ) -> Shape3dJob:
@@ -86,17 +94,33 @@ class Shape3dJobManager:
             )
         if target_mm is not None and target_mm <= 0:
             raise ValueError("La medida pedida tiene que ser mayor que cero.")
-        if not self.engine.available():
+        if source not in ("mesh", "cad"):
+            raise ValueError(f"Origen desconocido: {source!r}. Son 'mesh' o 'cad'.")
+        if source == "mesh" and not self.engine.available():
             raise Shape3dUnavailable(
                 "El modelo 3D no esta instalado. Bajalo con scripts/download-shap-e.ps1"
             )
+        if source == "cad":
+            if self.cad_client is None:
+                raise Shape3dUnavailable(
+                    "No hay servidor de modelo configurado para escribir el CAD. "
+                    "Levanta uno local (Ollama, LM Studio o llama.cpp server) y "
+                    "apuntalo desde Ajustes."
+                )
+            if not Path(self.settings.openscad_binary_path).exists():
+                raise Shape3dUnavailable(
+                    "Falta OpenSCAD, que es lo que convierte el codigo en geometria. "
+                    "Instalalo desde openscad.org."
+                )
         if owner is not None and self.quota_service is not None:
             self.quota_service.check_admission(owner)
 
         job = Shape3dJob(
             prompt=prompt.strip(),
             printer=printer,
+            source=source,
             target_mm=target_mm,
+            expected_size=expected_size,
             owner_id=owner.id if owner is not None else None,
         )
         if job_id is not None:
@@ -143,9 +167,14 @@ class Shape3dJobManager:
         try:
             # `to_thread` y no el loop: son dos minutos de CPU, y bloquear el loop
             # dejaria la app entera sin responder mientras tanto.
-            triangulos = await asyncio.to_thread(self.engine.generate_from_text, job.prompt)
             destino = self.settings.outputs_path / f"{job.id}.stl"
-            await asyncio.to_thread(write_stl, destino, triangulos)
+            if job.source == "cad":
+                await self._build_from_cad(job, destino)
+            else:
+                triangulos = await asyncio.to_thread(
+                    self.engine.generate_from_text, job.prompt
+                )
+                await asyncio.to_thread(write_stl, destino, triangulos)
 
             reporte = await asyncio.to_thread(
                 check_stl_for_printing,
@@ -161,7 +190,7 @@ class Shape3dJobManager:
             job.blockers = list(reporte.blockers)
             job.advice = list(reporte.advice)
             job.status = JobStatus.completed
-        except Shape3dUnavailable as exc:
+        except (Shape3dUnavailable, LlmUnavailable) as exc:
             job.status = JobStatus.failed
             job.error = str(exc)
         except Exception as exc:  # noqa: BLE001 - el job reporta cualquier fallo
@@ -171,6 +200,20 @@ class Shape3dJobManager:
         finally:
             job.finished_at = utc_now()
             self._record_usage(job)
+
+    async def _build_from_cad(self, job: Shape3dJob, destino) -> None:
+        resultado = await asyncio.to_thread(
+            describe_to_stl,
+            job.prompt,
+            client=self.cad_client,
+            openscad=Path(self.settings.openscad_binary_path),
+            destination=destino,
+            expected_size=job.expected_size,
+        )
+        # El codigo viaja con la pieza: es lo que la vuelve EDITABLE, y sin eso
+        # tener cotas no sirve de mucho.
+        job.code = resultado.code
+        job.retries = resultado.retries
 
     def _record_usage(self, job: Shape3dJob) -> None:
         """Descuenta lo consumido de la cuota del usuario.

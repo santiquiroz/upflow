@@ -203,9 +203,19 @@ class Shape3dJob:
 
     prompt: str
     printer: str = "ender-3"
-    # Si viene, la malla se escala para que su lado mas largo mida esto. Una malla
-    # generada no trae cotas: sin esto sale en la escala que se le ocurrio al modelo.
+    # "mesh" = Shap-E, que da FORMA sin cotas y por eso se escala con `target_mm`.
+    # "cad"  = OpenSCAD escrito por un modelo, que da COTAS y por eso se verifica
+    #          contra `expected_size` en vez de escalarse.
+    source: str = "mesh"
+    # Solo en "mesh": la malla se escala para que su lado mas largo mida esto.
     target_mm: float | None = None
+    # Solo en "cad": lo que la pieza TIENE que medir. Si no coincide, el error
+    # vuelve al modelo en vez de entregar algo que no entra.
+    expected_size: tuple[float, float, float] | None = None
+    # Solo en "cad": el codigo, que es la pieza EDITABLE. Entregar solo el STL
+    # seria entregar algo que no se puede ajustar, justo lo contrario de tener cotas.
+    code: str | None = None
+    retries: int = 0
     id: str = field(default_factory=lambda: uuid4().hex)
     status: JobStatus = JobStatus.queued
     created_at: datetime = field(default_factory=utc_now)

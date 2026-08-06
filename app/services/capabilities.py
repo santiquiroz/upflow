@@ -18,7 +18,7 @@ CapabilityStatus = Literal["available", "needs_setup", "not_implemented"]
 # "builtin" = anda sin bajar nada, y es distinto de "none". `none` significa NO
 # IMPLEMENTADA: el status ni se calcula contra la maquina. Sin esta distincion,
 # una capacidad que funciona perfecto aparecia en el mapa de ruta.
-Provisioning = Literal["registry", "vendored_pack", "builtin", "none"]
+Provisioning = Literal["registry", "vendored_pack", "builtin", "user_supplied", "none"]
 
 # Una capacidad puede resolverse por DSP (rapido, determinista, sin descarga) o
 # por modelo (mejor calidad, hay que instalarlo), y no son excluyentes: lo
@@ -48,7 +48,19 @@ class RegistryRequirement:
     kinds: tuple[ModelKind, ...]
 
 
-Requirement = PathRequirement | RegistryRequirement
+@dataclass(frozen=True, slots=True)
+class SettingRequirement:
+    """Un ajuste que el usuario tiene que poner: no se baja, se configura.
+
+    Distinto de PathRequirement a proposito. Mandar a alguien a bajar un pack
+    que no existe es peor que no decirle nada; lo que falta aca lo escribe el en
+    los ajustes.
+    """
+
+    setting_attr: str
+
+
+Requirement = PathRequirement | RegistryRequirement | SettingRequirement
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,6 +155,24 @@ _PRINT_CAPABILITIES: tuple[Capability, ...] = (
         #
         # No da COTAS, y eso no lo arregla ningun modelo: para una pieza que tiene
         # que encajar sigue estando el carril parametrico.
+    ),
+    Capability(
+        id="print.cad",
+        domain="print",
+        label_key="capability.print.cad",
+        # Ni pack ni modelo propio: las dos piezas las pone el usuario. OpenSCAD
+        # es GPL-2.0 y por eso corre como proceso aparte, nunca enlazado; el
+        # servidor del modelo es cualquiera que hable el protocolo de OpenAI.
+        provisioning="user_supplied",
+        job_kind="print",
+        strategies=("model",),
+        requirements=(
+            PathRequirement("openscad_binary_path", "openscad"),
+            SettingRequirement("cad_llm_base_url"),
+        ),
+        # Medido el 2026-08-05 con `devstral-32k` local: 3 de 4 piezas con las
+        # cotas EXACTAS y imprimibles, sin un solo reintento, 20-38 s cada una.
+        # Esto es lo unico del modulo que da COTAS desde una descripcion.
     ),
 )
 
@@ -353,6 +383,8 @@ def _is_met(
 ) -> bool:
     if isinstance(requirement, PathRequirement):
         return _path_exists(settings, requirement)
+    if isinstance(requirement, SettingRequirement):
+        return bool(str(getattr(settings, requirement.setting_attr, "") or "").strip())
     return _registry_has_kind(installed_kinds, requirement)
 
 
@@ -361,6 +393,8 @@ def _setup_reason_key(unmet: tuple[Requirement, ...]) -> str:
     # sirve de nada instalar un modelo, asi que es lo primero que hay que decir.
     if any(isinstance(requirement, PathRequirement) for requirement in unmet):
         return "capability.setup.missingPack"
+    if any(isinstance(requirement, SettingRequirement) for requirement in unmet):
+        return "capability.setup.missingSetting"
     return "capability.setup.missingModel"
 
 

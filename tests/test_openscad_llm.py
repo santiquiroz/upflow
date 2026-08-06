@@ -238,8 +238,12 @@ class TestTheDimensionalLoop:
 
     Medido con `qwen3-coder:30b`: las cuatro piezas pedidas compilaron a la
     primera y las cuatro salieron imprimibles, pero DOS midieron mal — un
-    espaciador de 12 mm de alto salio de 24. El fallo tipico de este carril no es
-    de sintaxis, es de COTAS, que es lo unico que este carril existe para dar.
+    espaciador de 12 mm de alto salio de 24.
+
+    Con `devstral-32k` paso lo contrario: 3 de 4 con las cotas exactas sin un solo
+    reintento, y la que fallo no llego a compilar. O sea que cual de las dos
+    realimentaciones salva la pieza depende del modelo que tenga el usuario, y por
+    eso estan las dos.
     """
 
     def test_a_part_with_the_wrong_size_is_sent_back(self, tmp_path: Path) -> None:

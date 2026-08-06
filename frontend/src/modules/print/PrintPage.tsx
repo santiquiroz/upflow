@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, Box, CheckCircle2, Download, Lightbulb, UploadCloud, Wrench } from "lucide-react";
+import { CadGenerator } from "./CadGenerator";
 import { MeshGenerator } from "./MeshGenerator";
 import { PartBuilder } from "./PartBuilder";
 import { useState, type ChangeEvent, type DragEvent } from "react";
@@ -111,7 +112,7 @@ function Measurements({ result }: { result: PrintCheckResult }) {
 
 export function PrintPage() {
   const { t } = useTranslation();
-  const [lane, setLane] = useState<"check" | "build" | "generate">("check");
+  const [lane, setLane] = useState<"check" | "build" | "generate" | "cad">("check");
   const [file, setFile] = useState<File | null>(null);
   const [printer, setPrinter] = useState("ender-3");
   const [targetAxis, setTargetAxis] = useState("");
@@ -174,11 +175,14 @@ export function PrintPage() {
         <p className="text-sm text-text-dim">{t("print.subtitle")}</p>
       </header>
 
-      {/* Los dos carriles con nombre: es el hallazgo de la investigación, no una
+      {/* Los carriles con nombre: es el hallazgo de la investigación, no una
           decisión de diseño. Una malla generada no tiene cotas; una pieza que
-          tiene que encajar las necesita. Esconder la diferencia sería mentir. */}
+          tiene que encajar las necesita. Esconder la diferencia sería mentir.
+          El orden tampoco es cosmético: los dos que dan cotas van antes que el
+          que da forma, porque para una pieza que tiene que encajar son los
+          correctos. */}
       <div role="tablist" className="flex gap-2 border-b border-border">
-        {(["check", "build", "generate"] as const).map((id) => (
+        {(["check", "build", "cad", "generate"] as const).map((id) => (
           <button
             key={id}
             role="tab"
@@ -197,6 +201,7 @@ export function PrintPage() {
       </div>
 
       {lane === "build" && <PartBuilder printer={printer} />}
+      {lane === "cad" && <CadGenerator printer={printer} />}
       {lane === "generate" && <MeshGenerator printer={printer} />}
 
       <div

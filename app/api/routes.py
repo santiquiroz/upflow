@@ -2830,6 +2830,9 @@ def shape3d_job_to_response(job: Shape3dJob) -> Shape3dJobResponse:
         blockers=job.blockers,
         advice=job.advice,
         error=job.error,
+        source=job.source,
+        code=job.code,
+        retries=job.retries,
         download_url=(
             f"/api/v1/print/generate/{job.id}/download"
             if job.status == JobStatus.completed and job.output_path
@@ -2856,7 +2859,9 @@ async def create_shape3d_job(
         job = await jobs.create_job(
             prompt=payload.prompt,
             printer=payload.printer,
+            source=payload.source,
             target_mm=payload.target_mm,
+            expected_size=payload.expected_size,
             owner=current_user_from_request(request),
         )
     except Shape3dUnavailable as exc:
