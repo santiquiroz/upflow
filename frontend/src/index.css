@@ -90,6 +90,18 @@
 }
 
 @layer base {
+  /* El documento NUNCA scrollea: scrollean los paneles de adentro.
+     Sin esto, cualquier cosa que se escape del contenedor de la app estira el
+     documento y la pagina se corre fuera de la ventana, dejando una franja
+     vacia abajo (reportado 2026-08-06, dos veces: la primera vez se arreglo
+     solo el contenedor, y el documento seguia pudiendo crecer). */
+  html,
+  body,
+  #root {
+    height: 100dvh;
+    overflow: hidden;
+  }
+
   html {
     color-scheme: dark;
   }
