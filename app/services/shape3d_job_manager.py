@@ -170,3 +170,17 @@ class Shape3dJobManager:
             job.error = str(exc)
         finally:
             job.finished_at = utc_now()
+            self._record_usage(job)
+
+    def _record_usage(self, job: Shape3dJob) -> None:
+        """Descuenta lo consumido de la cuota del usuario.
+
+        Sin esto, `check_admission` deja pasar el primer trabajo y despues nada
+        se descuenta nunca: la cuota queda decorativa y un usuario puede generar
+        sin limite. Se registra tambien cuando el trabajo FALLA, porque el tiempo
+        de maquina se gasto igual.
+        """
+        if self.quota_service is None or job.started_at is None or job.finished_at is None:
+            return
+        segundos = (job.finished_at - job.started_at).total_seconds()
+        self.quota_service.record_usage(job.owner_id, segundos)

@@ -24,7 +24,7 @@ if (Test-Path (Join-Path $destino 'model_index.json')) {
     exit 0
 }
 
-Write-Host "Descargando openai/shap-e (MIT, ~1.3 GB) ..."
+Write-Host "Descargando openai/shap-e (MIT, ~1,7 GB) ..."
 & $venv -c @"
 from huggingface_hub import snapshot_download
 ruta = snapshot_download(
@@ -32,8 +32,21 @@ ruta = snapshot_download(
     local_dir=r'$destino',
     # Solo lo que hace falta para generar malla: sin los pesos duplicados en
     # otras precisiones el paquete baja a menos de la mitad.
-    allow_patterns=['*.json', '*.txt', '*.safetensors', '*.bin', '*model*'],
-    ignore_patterns=['*.msgpack', '*.h5', '*.onnx'],
+    # El conjunto MINIMO, medido leyendo el repo archivo por archivo:
+    #   - `prior` y `text_encoder` tienen fp16 en safetensors: se baja esa.
+    #   - `shap_e_renderer` —que es el que la tuberia usa de verdad— NO tiene
+    #     fp16: solo existe el .bin, asi que se baja ese.
+    #   - `renderer/` se excluye entero: la tuberia no lo usa y son 1,3 GB.
+    # Bajar todo sin filtrar da 4,6 GB; esto da menos de la mitad.
+    allow_patterns=[
+        'model_index.json',
+        '*/config.json',
+        'scheduler/*',
+        'tokenizer/*',
+        'prior/*.fp16.safetensors',
+        'text_encoder/*.fp16.safetensors',
+        'shap_e_renderer/*.bin',
+    ],
 )
 print(ruta)
 "@

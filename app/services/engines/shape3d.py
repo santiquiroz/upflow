@@ -138,6 +138,11 @@ class Shape3dEngine:
         # CPU explicito: en esta maquina no hay CUDA, y dejar que diffusers
         # elija dispositivo esconderia el dia que si la haya y el resultado
         # cambie sin que nadie lo pida.
+        # `variant="fp16"` y `torch_dtype=float32`: se bajan los pesos fp16
+        # —la mitad del tamano— y se castean a fp32 para inferir. Medido: la
+        # malla sale igual. El cast es a proposito y no una omision; correr la
+        # inferencia en fp16 sobre CPU no acelera nada y arriesga NaN, que es
+        # exactamente lo que paso con la variante fp16 de Kokoro en este repo.
         return constructor.from_pretrained(
-            str(self.model_dir), torch_dtype=torch.float32
+            str(self.model_dir), variant="fp16", torch_dtype=torch.float32
         ).to("cpu")

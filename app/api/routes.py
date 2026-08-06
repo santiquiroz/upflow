@@ -2800,6 +2800,21 @@ def get_shape3d_jobs(request: Request) -> Shape3dJobManager:
     return request.app.state.shape3d_jobs
 
 
+def _shape3d_job_for(
+    job_id: str, jobs: Shape3dJobManager, request: Request | None
+) -> Shape3dJob:
+    """El trabajo, si existe Y es de quien lo pide.
+
+    Mismo 404 para "no existe" y "no es tuyo": un 403 confirmaria que el trabajo
+    existe, que es informacion de otro usuario.
+    """
+    job = jobs.get_job(job_id)
+    current_user = current_user_from_request(request)
+    if job is None or (current_user is not None and not _can_view_job(job, current_user)):
+        raise HTTPException(status_code=404, detail="Trabajo no encontrado")
+    return job
+
+
 def shape3d_job_to_response(job: Shape3dJob) -> Shape3dJobResponse:
     return Shape3dJobResponse(
         id=job.id,
@@ -2823,7 +2838,10 @@ def shape3d_job_to_response(job: Shape3dJob) -> Shape3dJobResponse:
     )
 
 
-@router.post("/print/generate", response_model=Shape3dJobResponse, status_code=202)
+@router.post(
+    "/print/generate", response_model=Shape3dJobResponse, status_code=202,
+    dependencies=[Depends(require(Permission.jobs_create))],
+)
 async def create_shape3d_job(
     payload: Shape3dJobRequest,
     request: Request,
@@ -2850,36 +2868,43 @@ async def create_shape3d_job(
     return shape3d_job_to_response(job)
 
 
-@router.get("/print/generate/{job_id}", response_model=Shape3dJobResponse)
+@router.get(
+    "/print/generate/{job_id}", response_model=Shape3dJobResponse,
+    dependencies=[Depends(require(Permission.jobs_read_own))],
+)
 async def get_shape3d_job(
     job_id: str,
     jobs: Shape3dJobManager = Depends(get_shape3d_jobs),
+    request: Request = None,
 ) -> Shape3dJobResponse:
-    job = jobs.get_job(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Trabajo no encontrado")
-    return shape3d_job_to_response(job)
+    return shape3d_job_to_response(_shape3d_job_for(job_id, jobs, request))
 
 
-@router.post("/print/generate/{job_id}/cancel", response_model=Shape3dJobResponse)
+@router.post(
+    "/print/generate/{job_id}/cancel", response_model=Shape3dJobResponse,
+    dependencies=[Depends(require(Permission.jobs_cancel_own))],
+)
 async def cancel_shape3d_job(
     job_id: str,
     jobs: Shape3dJobManager = Depends(get_shape3d_jobs),
+    request: Request = None,
 ) -> Shape3dJobResponse:
-    job = jobs.get_job(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Trabajo no encontrado")
+    job = _shape3d_job_for(job_id, jobs, request)
     jobs.cancel_job(job_id)
     return shape3d_job_to_response(job)
 
 
-@router.get("/print/generate/{job_id}/download")
+@router.get(
+    "/print/generate/{job_id}/download",
+    dependencies=[Depends(require(Permission.jobs_read_own))],
+)
 async def download_shape3d_job(
     job_id: str,
     jobs: Shape3dJobManager = Depends(get_shape3d_jobs),
+    request: Request = None,
 ) -> FileResponse:
-    job = jobs.get_job(job_id)
-    if job is None or job.output_path is None or not job.output_path.exists():
+    job = _shape3d_job_for(job_id, jobs, request)
+    if job.output_path is None or not job.output_path.exists():
         raise HTTPException(status_code=404, detail="Malla no encontrada")
     return FileResponse(
         path=job.output_path, filename="pieza-generada.stl", media_type="model/stl"

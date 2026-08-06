@@ -131,3 +131,116 @@ async def test_the_download_url_only_appears_when_the_file_exists(tmp_path: Path
     job = await manager.create_job(prompt="algo")
 
     assert shape3d_job_to_response(job).download_url is None
+
+
+# ---------------------------------------------------------------------------
+# Lo que encontro la revision de seguridad sobre este mismo codigo, clavado como
+# test para que no vuelva: permisos en las rutas, propiedad del trabajo, y la
+# cuota que se descontaba solo al admitir y nunca al consumir.
+# ---------------------------------------------------------------------------
+
+
+class UsuarioFalso:
+    def __init__(self, user_id: str) -> None:
+        self.id = user_id
+        self.username = user_id
+        self.role = "user"
+        self.permissions = frozenset()
+
+
+class RequestConUsuario:
+    def __init__(self, user) -> None:
+        # El atributo se llama `current_user`: asi lo lee `current_user_from_request`.
+        self.state = type("S", (), {"current_user": user})()
+
+
+@pytest.mark.asyncio
+async def test_a_job_of_another_user_is_a_404_not_a_403(tmp_path: Path):
+    # Un 403 confirmaria que el trabajo existe, que es informacion de otro.
+    manager = make_manager(tmp_path)
+    job = await manager.create_job(prompt="algo", owner=UsuarioFalso("ana"))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_shape3d_job(
+            job_id=job.id, jobs=manager, request=RequestConUsuario(UsuarioFalso("beto"))
+        )
+
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_the_owner_can_see_their_own_job(tmp_path: Path):
+    manager = make_manager(tmp_path)
+    ana = UsuarioFalso("ana")
+    job = await manager.create_job(prompt="algo", owner=ana)
+
+    respuesta = await get_shape3d_job(
+        job_id=job.id, jobs=manager, request=RequestConUsuario(ana)
+    )
+
+    assert respuesta.id == job.id
+
+
+@pytest.mark.asyncio
+async def test_downloading_someone_elses_mesh_is_a_404(tmp_path: Path):
+    manager = make_manager(tmp_path)
+    job = await manager.create_job(prompt="algo", owner=UsuarioFalso("ana"))
+    await manager._process_next()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await download_shape3d_job(
+            job_id=job.id, jobs=manager, request=RequestConUsuario(UsuarioFalso("beto"))
+        )
+
+    assert exc_info.value.status_code == 404
+
+
+class CuotaFalsa:
+    def __init__(self) -> None:
+        self.admitidos: list = []
+        self.consumos: list[tuple] = []
+
+    def check_admission(self, user) -> None:
+        self.admitidos.append(user.id)
+
+    def record_usage(self, user_id, gpu_seconds) -> None:
+        self.consumos.append((user_id, gpu_seconds))
+
+
+@pytest.mark.asyncio
+async def test_the_quota_records_what_was_consumed_not_only_what_was_admitted(tmp_path: Path):
+    # Sin esto, `check_admission` deja pasar el primer trabajo y despues nada se
+    # descuenta nunca: la cuota queda decorativa.
+    settings = Settings(RUNTIME_DIR=str(tmp_path), _env_file=None)
+    StorageService(settings).ensure_directories()
+    cuota = CuotaFalsa()
+    manager = Shape3dJobManager(settings, FakeEngine(), quota_service=cuota)
+    await manager.create_job(prompt="algo", owner=UsuarioFalso("ana"))
+
+    await manager._process_next()
+
+    assert cuota.admitidos == ["ana"]
+    assert len(cuota.consumos) == 1
+    assert cuota.consumos[0][0] == "ana"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_job_still_costs_quota(tmp_path: Path):
+    # El tiempo de maquina se gasto igual: no cobrarlo deja un camino gratis
+    # para consumir la maquina pidiendo cosas que fallan.
+    class MotorQueFalla:
+        def available(self) -> bool:
+            return True
+
+        def generate_from_text(self, prompt: str, **_kwargs):
+            raise RuntimeError("se rompio")
+
+    settings = Settings(RUNTIME_DIR=str(tmp_path), _env_file=None)
+    StorageService(settings).ensure_directories()
+    cuota = CuotaFalsa()
+    manager = Shape3dJobManager(settings, MotorQueFalla(), quota_service=cuota)
+    await manager.create_job(prompt="algo", owner=UsuarioFalso("ana"))
+
+    await manager._process_next()
+
+    assert len(cuota.consumos) == 1
