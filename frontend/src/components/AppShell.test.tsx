@@ -97,3 +97,36 @@ describe("AppShell", () => {
     await waitFor(() => expect(screen.getByRole("link", { name: /users/i })).toBeInTheDocument());
   });
 });
+
+describe("la pagina no se sale de la pantalla", () => {
+  // Reportado el 2026-08-06: "si scrolleo mucho la pagina se corre de los
+  // limites". El armado es una grilla de tres columnas dentro de un contenedor
+  // de la altura EXACTA de la pantalla. En una grilla, un hijo no se encoge por
+  // debajo de su contenido: si la navegacion o la cola de trabajos crecen,
+  // estiran la fila mas alla de la pantalla y todo se sale.
+  //
+  // Se arregla con `min-h-0` (permite encoger) + `overflow-y-auto` (scrollea
+  // adentro en vez de empujar). Las tres columnas lo necesitan, no solo el
+  // centro.
+  it.each([
+    ["nav.mainLabel", "navegacion"],
+    ["nav.queueLabel", "cola de trabajos"],
+  ])("la columna de %s scrollea adentro en vez de estirar la fila", async (labelKey) => {
+    renderAt("/");
+    const { en } = await import("../i18n/en");
+
+    const columna = await screen.findByLabelText(en[labelKey as keyof typeof en] as string);
+
+    expect(columna.className).toContain("min-h-0");
+    expect(columna.className).toContain("overflow-y-auto");
+  });
+
+  it("la columna central tambien puede encogerse", async () => {
+    renderAt("/");
+
+    const centro = document.querySelector("main");
+
+    expect(centro?.className).toContain("min-h-0");
+    expect(centro?.className).toContain("overflow-y-auto");
+  });
+});

@@ -29,12 +29,18 @@ export function AppShell({ children }: AppShellProps) {
     (entry) => !entry.requiredPermission || hasPermission(entry.requiredPermission),
   );
   return (
-    <div className="flex h-screen flex-col">
+    // `h-dvh` y no `h-screen`: `100vh` no descuenta la barra del navegador en
+    // movil, asi que la ultima franja de la app queda tapada.
+    <div className="flex h-dvh flex-col">
       <UpdateBanner />
       <div className="grid min-h-0 flex-1 grid-cols-[240px_1fr_320px] max-[900px]:grid-cols-[72px_1fr_320px]">
         <aside
           aria-label={t("nav.mainLabel")}
-          className="flex flex-col gap-1 border-r border-border bg-surface p-2"
+          // `min-h-0` + `overflow-y-auto` en las TRES columnas: en una grilla un
+          // hijo no se encoge por debajo de su contenido, asi que sin esto una
+          // navegacion o una cola largas estiran la fila mas alla de la pantalla
+          // y la pagina entera se sale de los limites (reportado 2026-08-06).
+          className="flex min-h-0 flex-col gap-1 overflow-y-auto border-r border-border bg-surface p-2"
         >
           <div className="flex items-center justify-between px-2 py-4 max-[900px]:hidden">
             <span className="font-heading text-lg font-semibold tracking-tight text-text">Upflow</span>
@@ -62,10 +68,10 @@ export function AppShell({ children }: AppShellProps) {
             })}
           </nav>
         </aside>
-        <main className="overflow-y-auto p-6">
+        <main className="min-h-0 overflow-y-auto p-6">
           <div className="mx-auto w-full max-w-[1200px]">{children}</div>
         </main>
-        <aside aria-label={t("nav.queueLabel")} className="border-l border-border bg-surface p-4">
+        <aside aria-label={t("nav.queueLabel")} className="min-h-0 overflow-y-auto border-l border-border bg-surface p-4">
           <JobQueue />
         </aside>
       </div>
