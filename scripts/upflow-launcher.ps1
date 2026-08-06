@@ -600,7 +600,16 @@ function Start-Upflow {
         # Tee: los logs siguen a la vista Y quedan en un archivo. Sin esto, si el
         # servidor moria al arrancar la ventana se cerraba con el error adentro y
         # no habia forma de saber que paso.
+        # El ForEach no es cosmetico de mas: uvicorn, torch y optimum escriben sus
+        # logs NORMALES en stderr, y Windows PowerShell envuelve cada linea de
+        # stderr de un programa nativo en un ErrorRecord, que el host pinta de
+        # rojo aunque el texto diga "INFO" o sea una barra de progreso. Reportado
+        # el 2026-08-06: el arranque y una conversion de modelo se veian como una
+        # pantalla llena de errores, con la app funcionando perfecto.
+        # `2>&1` solo no alcanza: fusiona los flujos pero deja los objetos como
+        # ErrorRecord. Convertirlos a texto es lo que los vuelve salida normal.
         & $pythonExe -m uvicorn app.main:app --host $appHost --port $appPort 2>&1 |
+            ForEach-Object { "$_" } |
             Tee-Object -FilePath $script:ServerLogPath
         $exitCode = $LASTEXITCODE
     } finally {
