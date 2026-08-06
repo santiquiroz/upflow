@@ -32,6 +32,7 @@ from app.models import (
     UpdateStatus,
     UpscaleJob,
     VideoUpscaleJob,
+    Shape3dJob,
 )
 from app.schemas import (
     InstallVulkanModelRequest,
@@ -72,6 +73,8 @@ from app.schemas import (
     TranslationPairsResponse,
     TtsCapabilitiesResponse,
     GeneratePartRequest,
+    Shape3dJobRequest,
+    Shape3dJobResponse,
     GeneratedPartResponse,
     MeshRepairResponse,
     PartKindResponse,
@@ -185,7 +188,9 @@ from app.services.saved_prompts import SavedPromptStore
 from app.services.subtitles import SUBTITLE_FORMATS, TranscriptSegment, render_segments
 from app.services.mesh_fit import PRINTER_BEDS
 from app.services.mesh_repair import repair_mesh
+from app.services.engines.shape3d import Shape3dUnavailable
 from app.services.parametric_parts import PartError
+from app.services.shape3d_job_manager import Shape3dJobManager
 from app.services.part_catalog import PART_KINDS, build_part
 from app.services.stl_reader import StlUnreadable, read_stl
 from app.services.stl_writer import write_stl
@@ -2789,6 +2794,96 @@ async def download_generated_part(
     if not archivo.exists():
         raise HTTPException(status_code=404, detail="Pieza no encontrada")
     return FileResponse(path=archivo, filename="pieza.stl", media_type="model/stl")
+
+
+def get_shape3d_jobs(request: Request) -> Shape3dJobManager:
+    return request.app.state.shape3d_jobs
+
+
+def shape3d_job_to_response(job: Shape3dJob) -> Shape3dJobResponse:
+    return Shape3dJobResponse(
+        id=job.id,
+        status=job.status,
+        prompt=job.prompt,
+        printer=job.printer,
+        created_at=job.created_at,
+        started_at=job.started_at,
+        finished_at=job.finished_at,
+        can_print=job.can_print,
+        size_mm=job.size_mm,
+        triangle_count=job.triangle_count,
+        blockers=job.blockers,
+        advice=job.advice,
+        error=job.error,
+        download_url=(
+            f"/api/v1/print/generate/{job.id}/download"
+            if job.status == JobStatus.completed and job.output_path
+            else None
+        ),
+    )
+
+
+@router.post("/print/generate", response_model=Shape3dJobResponse, status_code=202)
+async def create_shape3d_job(
+    payload: Shape3dJobRequest,
+    request: Request,
+    jobs: Shape3dJobManager = Depends(get_shape3d_jobs),
+) -> Shape3dJobResponse:
+    """Encola una malla desde texto. Tarda unos dos minutos: por eso es un job.
+
+    Lo que devuelve al terminar NO es solo el archivo: viaja con el veredicto del
+    banco, porque una malla generada que no cierra no es una pieza.
+    """
+    try:
+        job = await jobs.create_job(
+            prompt=payload.prompt,
+            printer=payload.printer,
+            target_mm=payload.target_mm,
+            owner=current_user_from_request(request),
+        )
+    except Shape3dUnavailable as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except QueueFullError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return shape3d_job_to_response(job)
+
+
+@router.get("/print/generate/{job_id}", response_model=Shape3dJobResponse)
+async def get_shape3d_job(
+    job_id: str,
+    jobs: Shape3dJobManager = Depends(get_shape3d_jobs),
+) -> Shape3dJobResponse:
+    job = jobs.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Trabajo no encontrado")
+    return shape3d_job_to_response(job)
+
+
+@router.post("/print/generate/{job_id}/cancel", response_model=Shape3dJobResponse)
+async def cancel_shape3d_job(
+    job_id: str,
+    jobs: Shape3dJobManager = Depends(get_shape3d_jobs),
+) -> Shape3dJobResponse:
+    job = jobs.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Trabajo no encontrado")
+    jobs.cancel_job(job_id)
+    return shape3d_job_to_response(job)
+
+
+@router.get("/print/generate/{job_id}/download")
+async def download_shape3d_job(
+    job_id: str,
+    jobs: Shape3dJobManager = Depends(get_shape3d_jobs),
+) -> FileResponse:
+    job = jobs.get_job(job_id)
+    if job is None or job.output_path is None or not job.output_path.exists():
+        raise HTTPException(status_code=404, detail="Malla no encontrada")
+    return FileResponse(
+        path=job.output_path, filename="pieza-generada.stl", media_type="model/stl"
+    )
 
 
 @router.patch(

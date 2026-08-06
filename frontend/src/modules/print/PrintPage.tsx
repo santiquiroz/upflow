@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, Box, CheckCircle2, Download, Lightbulb, UploadCloud, Wrench } from "lucide-react";
+import { MeshGenerator } from "./MeshGenerator";
 import { PartBuilder } from "./PartBuilder";
 import { useState, type ChangeEvent, type DragEvent } from "react";
 import { useTranslation } from "../../i18n/LocaleProvider";
@@ -110,7 +111,7 @@ function Measurements({ result }: { result: PrintCheckResult }) {
 
 export function PrintPage() {
   const { t } = useTranslation();
-  const [lane, setLane] = useState<"check" | "build">("check");
+  const [lane, setLane] = useState<"check" | "build" | "generate">("check");
   const [file, setFile] = useState<File | null>(null);
   const [printer, setPrinter] = useState("ender-3");
   const [targetAxis, setTargetAxis] = useState("");
@@ -177,7 +178,7 @@ export function PrintPage() {
           decisión de diseño. Una malla generada no tiene cotas; una pieza que
           tiene que encajar las necesita. Esconder la diferencia sería mentir. */}
       <div role="tablist" className="flex gap-2 border-b border-border">
-        {(["check", "build"] as const).map((id) => (
+        {(["check", "build", "generate"] as const).map((id) => (
           <button
             key={id}
             role="tab"
@@ -190,12 +191,13 @@ export function PrintPage() {
                 : "text-text-dim hover:text-text"
             }`}
           >
-            {t(id === "check" ? "print.lane.check" : "print.lane.build")}
+            {t(`print.lane.${id}`)}
           </button>
         ))}
       </div>
 
       {lane === "build" && <PartBuilder printer={printer} />}
+      {lane === "generate" && <MeshGenerator printer={printer} />}
 
       <div
         className="grid grid-cols-[1fr_360px] gap-6 max-[900px]:grid-cols-1"

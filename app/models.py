@@ -193,6 +193,35 @@ class TranscribeJob:
 
 
 @dataclass(slots=True)
+class Shape3dJob:
+    """Texto a malla 3D.
+
+    El resultado NO es solo el archivo: viaja con el veredicto del banco. Una
+    malla generada que no cierra no es una pieza, y entregarla sin decirlo seria
+    mandar a imprimir con confianza prestada.
+    """
+
+    prompt: str
+    printer: str = "ender-3"
+    # Si viene, la malla se escala para que su lado mas largo mida esto. Una malla
+    # generada no trae cotas: sin esto sale en la escala que se le ocurrio al modelo.
+    target_mm: float | None = None
+    id: str = field(default_factory=lambda: uuid4().hex)
+    status: JobStatus = JobStatus.queued
+    created_at: datetime = field(default_factory=utc_now)
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    output_path: Path | None = None
+    can_print: bool | None = None
+    size_mm: tuple[float, float, float] | None = None
+    triangle_count: int | None = None
+    blockers: list[str] = field(default_factory=list)
+    advice: list[str] = field(default_factory=list)
+    error: str | None = None
+    owner_id: str | None = None
+
+
+@dataclass(slots=True)
 class DownloadJob:
     """Traer un video o audio de una URL.
 

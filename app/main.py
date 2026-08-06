@@ -47,7 +47,9 @@ from app.services.asr_installer import AsrModelInstaller
 from app.services.engines.transcribe_onnx import TranscribeEngine
 from app.services.download_job_manager import DownloadJobManager
 from app.services.transcribe_job_manager import TranscribeJobManager
+from app.services.engines.shape3d import Shape3dEngine
 from app.services.model_packs import enqueue_pending_model_packs
+from app.services.shape3d_job_manager import Shape3dJobManager
 from app.services.pack_provisioner import PackProvisioner
 from app.services.model_registry import ModelRegistry
 from app.services.onnx_cpu_fallback_probe import OnnxCpuFallbackProbe
@@ -220,7 +222,14 @@ async def lifespan(app: FastAPI):
     await enqueue_pending_model_packs(model_registry, generation_converter)
     await pack_provisioner.start()
     await asr_installer.start()
+    shape3d_jobs = Shape3dJobManager(
+        settings,
+        Shape3dEngine(settings.shape3d_model_path),
+        quota_service=quota_service,
+    )
+
     await transcribe_jobs.start()
+    await shape3d_jobs.start()
     await download_jobs.start()
 
     app.state.storage = storage
@@ -261,6 +270,7 @@ async def lifespan(app: FastAPI):
     app.state.asr_installer = asr_installer
     app.state.transcribe_engine = transcribe_engine
     app.state.transcribe_jobs = transcribe_jobs
+    app.state.shape3d_jobs = shape3d_jobs
     app.state.download_jobs = download_jobs
     app.state.user_store = user_store
     app.state.identity_provider = identity_provider
@@ -279,6 +289,7 @@ async def lifespan(app: FastAPI):
         await pack_provisioner.stop()
         await asr_installer.stop()
         await transcribe_jobs.stop()
+        await shape3d_jobs.stop()
         await download_jobs.stop()
 
 

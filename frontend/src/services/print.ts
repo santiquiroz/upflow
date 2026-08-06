@@ -103,3 +103,42 @@ export function generatePart(body: {
 }): Promise<GeneratedPart> {
   return apiPostJson<GeneratedPart>("/print/parts", body);
 }
+
+export type Shape3dStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+
+export interface Shape3dJob {
+  id: string;
+  status: Shape3dStatus;
+  prompt: string;
+  printer: string;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  canPrint: boolean | null;
+  sizeMm: [number, number, number] | null;
+  triangleCount: number | null;
+  blockers: string[];
+  advice: string[];
+  error: string | null;
+  downloadUrl: string | null;
+}
+
+export function createShape3dJob(body: {
+  prompt: string;
+  printer: string;
+  targetMm?: number;
+}): Promise<Shape3dJob> {
+  return apiPostJson<Shape3dJob>("/print/generate", {
+    prompt: body.prompt,
+    printer: body.printer,
+    target_mm: body.targetMm ?? null,
+  });
+}
+
+export function getShape3dJob(jobId: string): Promise<Shape3dJob> {
+  return apiGet<Shape3dJob>(`/print/generate/${jobId}`);
+}
+
+export function cancelShape3dJob(jobId: string): Promise<Shape3dJob> {
+  return apiPostJson<Shape3dJob>(`/print/generate/${jobId}/cancel`, {});
+}

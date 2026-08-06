@@ -175,6 +175,31 @@ class GeneratedPartResponse(BaseModel):
     download_url: str = Field(serialization_alias="downloadUrl")
 
 
+class Shape3dJobRequest(BaseModel):
+    prompt: str
+    printer: str = "ender-3"
+    # Una malla generada no trae cotas: sin esto sale en la escala que se le
+    # ocurrio al modelo.
+    target_mm: float | None = Field(default=None, serialization_alias="targetMm")
+
+
+class Shape3dJobResponse(BaseModel):
+    id: str
+    status: JobStatus
+    prompt: str
+    printer: str
+    created_at: datetime = Field(serialization_alias="createdAt")
+    started_at: datetime | None = Field(default=None, serialization_alias="startedAt")
+    finished_at: datetime | None = Field(default=None, serialization_alias="finishedAt")
+    can_print: bool | None = Field(default=None, serialization_alias="canPrint")
+    size_mm: tuple[float, float, float] | None = Field(default=None, serialization_alias="sizeMm")
+    triangle_count: int | None = Field(default=None, serialization_alias="triangleCount")
+    blockers: list[str] = Field(default_factory=list)
+    advice: list[str] = Field(default_factory=list)
+    error: str | None = None
+    download_url: str | None = Field(default=None, serialization_alias="downloadUrl")
+
+
 class SavedPromptResponse(BaseModel):
     id: str
     name: str
