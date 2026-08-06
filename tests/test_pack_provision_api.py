@@ -70,3 +70,20 @@ async def test_un_paquete_desconocido_es_un_400_y_no_un_500():
         await provision_pack(pack="no-existe", request=PeticionFalsa(provisioner))
 
     assert capturado.value.status_code == 400
+
+
+def test_la_ruta_recibe_la_variante_por_el_nombre_que_manda_el_frontend() -> None:
+    """El frontend arma `?variant=es-en`. Si la ruta lo llamara distinto, el par
+    llegaria en None y se bajaria siempre el mismo idioma, en silencio.
+
+    Se lee la firma real en vez de confiar: es el tipo de desajuste que ningun
+    test de una sola punta encuentra.
+    """
+    import inspect
+
+    from app.api.routes import provision_pack
+
+    parametros = inspect.signature(provision_pack).parameters
+
+    assert "variant" in parametros
+    assert parametros["variant"].default is None
