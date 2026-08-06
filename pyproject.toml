@@ -1,6 +1,6 @@
 [project]
 name = "upflow"
-version = "0.45.0"
+version = "0.45.1"
 description = "Modern AI upscaling + frame interpolation for AMD GPUs — Vulkan-native, FastAPI, web UI + REST API."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -110,3 +110,8 @@ include = ["app*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# Solo nuestras pruebas. Los packs vendorizados traen las suyas: el de OpenSCAD
+# instala las librerias MCAD, que incluyen test_mcad.py, y pytest lo coleccionaba
+# y moria antes de correr una sola prueba nuestra.
+testpaths = ["tests"]
+norecursedirs = ["vendor", "runtime", "installer", "node_modules", ".venv"]

@@ -25,19 +25,32 @@ if (Test-Path (Join-Path $destino 'model_index.json')) {
 }
 
 Write-Host "Descargando openai/shap-e (MIT, ~1,7 GB) ..."
-& $venv -c @"
+
+# El here-string es LITERAL (@'...'@) y la ruta viaja por variable de entorno.
+# Con el interpolante (@"..."@) PowerShell procesa el backtick como escape: un
+# comentario que decia `renderer/` se convertia en un retorno de carro seguido de
+# "enderer/", partia la linea y Python moria con SyntaxError sin bajar nada.
+# Pasado el 2026-08-05 en la instalacion real. Por eso: nada de escapes, y el
+# codigo va a un archivo en vez de a un argumento.
+$env:UPFLOW_SHAPE_DEST = $destino
+$scriptPy = Join-Path $env:TEMP 'upflow-download-shap-e.py'
+
+@'
+import os
+
 from huggingface_hub import snapshot_download
+
+# Solo lo que hace falta para generar malla: sin los pesos duplicados en otras
+# precisiones el paquete baja a menos de la mitad.
+# El conjunto MINIMO, medido leyendo el repo archivo por archivo:
+#   - prior y text_encoder tienen fp16 en safetensors: se baja esa.
+#   - shap_e_renderer, que es el que la tuberia usa de verdad, NO tiene fp16:
+#     solo existe el .bin, asi que se baja ese.
+#   - la carpeta renderer se excluye entera: la tuberia no la usa y son 1,3 GB.
+# Bajar todo sin filtrar da 4,6 GB; esto da menos de la mitad.
 ruta = snapshot_download(
     'openai/shap-e',
-    local_dir=r'$destino',
-    # Solo lo que hace falta para generar malla: sin los pesos duplicados en
-    # otras precisiones el paquete baja a menos de la mitad.
-    # El conjunto MINIMO, medido leyendo el repo archivo por archivo:
-    #   - `prior` y `text_encoder` tienen fp16 en safetensors: se baja esa.
-    #   - `shap_e_renderer` —que es el que la tuberia usa de verdad— NO tiene
-    #     fp16: solo existe el .bin, asi que se baja ese.
-    #   - `renderer/` se excluye entero: la tuberia no lo usa y son 1,3 GB.
-    # Bajar todo sin filtrar da 4,6 GB; esto da menos de la mitad.
+    local_dir=os.environ['UPFLOW_SHAPE_DEST'],
     allow_patterns=[
         'model_index.json',
         '*/config.json',
@@ -49,7 +62,10 @@ ruta = snapshot_download(
     ],
 )
 print(ruta)
-"@
+'@ | Set-Content -Path $scriptPy -Encoding UTF8
+
+& $venv $scriptPy
+Remove-Item -Force $scriptPy -ErrorAction SilentlyContinue
 
 if (-not (Test-Path (Join-Path $destino 'model_index.json'))) {
     throw "La descarga termino pero falta model_index.json en $destino."
