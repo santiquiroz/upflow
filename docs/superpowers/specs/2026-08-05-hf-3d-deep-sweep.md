@@ -50,7 +50,42 @@ Es exactamente el mismo patrón que ya había aparecido con TRELLIS: la licencia
 repo puede ser limpia y el modelo estar igual bloqueado por lo que hereda o por lo
 que depende. Mirar solo el tag del Hub no alcanza.
 
-## Qué queda pendiente
+## Cómo terminó: implementado y medido (v0.45.0)
+
+El carril OpenSCAD se construyó el mismo día. Tres cosas cambiaron respecto del
+plan de arriba, y las tres salieron de medir:
+
+**No hizo falta vendorizar `llama.cpp` ni bajar un GGUF de 8,95 GB.** El carril
+habla el protocolo de OpenAI contra el servidor que el usuario ya tenga corriendo
+— Ollama, LM Studio, llama.cpp server. Cero peso agregado al instalador, y el
+usuario elige el modelo. Solo se vendoriza OpenSCAD (21 MB, GPL-2.0, proceso
+aparte igual que ffmpeg), vía `scripts/download-openscad.ps1`.
+
+**El bucle necesitó DOS realimentaciones, no una.** El plan asumía que el fallo
+sería de sintaxis. Medido con dos modelos, cuál falla depende del modelo:
+
+| Modelo | Cotas exactas | Reintentos | Cómo falla |
+|---|---|---|---|
+| `devstral-32k` | 3 de 4 | 0 | La que falló no compiló |
+| `qwen3-coder:30b` | 2 de 4 | 0 | Compilaron las 4; dos midieron mal |
+
+Un modelo se equivoca en las cotas y compila siempre; el otro acierta las cotas y
+a veces no compila. Con una sola realimentación el carril servía para un modelo y
+no para el otro. Están las dos: error del compilador cuando no compila, y medida
+real contra la pedida cuando compila pero no mide lo que tenía que medir. La
+segunda solo es posible porque el banco ya sabe medir cualquier STL.
+
+**El guard de seguridad tenía un agujero, y lo encontró la sonda, no el test.**
+`assert_safe` escaneaba línea por línea; el lexer de OpenSCAD no ve líneas, ve
+tokens. Un `include` con el `<archivo>` en la línea siguiente pasaba el control y
+OpenSCAD lo ejecutaba. Probarlo contra el binario real fue lo que lo destapó —
+los tests que tenía escritos pasaban todos.
+
+Tiempos medidos con `devstral-32k`: 20-38 s por pieza, contra 116-137 s de Shap-E.
+El carril que da cotas resultó además el más rápido.
+
+## Lo que quedaba pendiente (plan original)
+
 
 El carril OpenSCAD. Necesita:
 
