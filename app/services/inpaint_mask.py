@@ -89,6 +89,37 @@ def _expand_to_square(
     return new_left, new_top, new_left + side, new_top + side
 
 
+# Contexto MINIMO, para marcas diminutas donde una fraccion no daria con que
+# continuar ni siquiera una textura.
+MIN_CONTEXT_PX = 48
+
+# Cuanto contexto alrededor, como fraccion del lado mayor de lo marcado.
+#
+# Era una constante ABSOLUTA de 48 px, y ese era el bug: en una foto grande una
+# boca ocupa unos 300 px, asi que el modelo recibia el agujero y un pedacito de
+# menton. Sin ver la cara no tiene con que saber hacia donde mira, y devolvia una
+# boca plausible en si misma pero girada respecto del cuerpo (reportado
+# 2026-08-06).
+#
+# Con 0,75 el recorte mide dos veces y media lo marcado, asi que alrededor de una
+# boca entran los ojos y el contorno de la cabeza. Es un compromiso: mas contexto
+# significa que lo marcado ocupa menos del recorte y recibe menos detalle al
+# llevarlo a la resolucion del modelo. Se elige de este lado a proposito — una
+# boca bien orientada con algo menos de detalle sirve; una nitida y al reves, no.
+CONTEXT_RATIO = 0.75
+
+
+def context_padding_for(bbox: tuple[int, int, int, int]) -> int:
+    """Cuanto contexto darle al modelo alrededor de lo marcado.
+
+    Escala con el LADO MAYOR: una mancha larga y finita necesita el contexto de
+    su largo, porque mirar solo su alto daria una franja sin nada a los costados.
+    """
+    left, top, right, bottom = bbox
+    lado_mayor = max(right - left, bottom - top)
+    return max(MIN_CONTEXT_PX, round(CONTEXT_RATIO * lado_mayor))
+
+
 def compute_crop_box(
     bbox: tuple[int, int, int, int], padding: int, image_size: tuple[int, int]
 ) -> tuple[int, int, int, int]:

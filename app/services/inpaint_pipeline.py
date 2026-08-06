@@ -7,6 +7,7 @@ import numpy as np
 
 from app.services.inpaint_mask import (
     compute_crop_box,
+    context_padding_for,
     dilate_mask,
     feather_mask,
     mask_bbox,
@@ -33,6 +34,15 @@ from app.services.inpaint_mask import (
 SIZE_MULTIPLE = 64
 
 
+def resolve_padding(explicito: int | None, bbox: tuple[int, int, int, int]) -> int:
+    """El contexto pedido, o el que corresponde al tamaño de lo marcado.
+
+    Se deja pisar a proposito: hay marcas que solo necesitan continuar una
+    textura y prefieren gastar el recorte en detalle.
+    """
+    return explicito if explicito is not None else context_padding_for(bbox)
+
+
 class MaskedEditModel(Protocol):
     def __call__(self, image: Any, mask: Any, width: int, height: int) -> Any: ...
 
@@ -45,8 +55,10 @@ class MaskedEditSettings:
     dilate_px: int
     # Ancho de la transición hacia afuera para que la unión no se vea.
     feather_px: int
-    # Contexto alrededor del área marcada que ve el modelo.
-    padding_px: int
+    # Contexto alrededor del área marcada que ve el modelo. `None` = se calcula
+    # a partir del tamaño de lo marcado, que es lo correcto casi siempre: un
+    # valor fijo deja sin cara al modelo cuando la marca es grande.
+    padding_px: int | None
     # Resolución nativa a la que se edita el recorte.
     target_side: int
 
@@ -80,8 +92,9 @@ def run_masked_edit(
     grown = dilate_mask(mask_array, settings.dilate_px)
     blended_mask = feather_mask(grown, settings.feather_px)
 
+    caja_marcada = mask_bbox(blended_mask) or bbox
     crop_box = compute_crop_box(
-        mask_bbox(blended_mask) or bbox, settings.padding_px, base_rgb.size
+        caja_marcada, resolve_padding(settings.padding_px, caja_marcada), base_rgb.size
     )
     crop_image = base_rgb.crop(crop_box)
     crop_mask = Image.fromarray(blended_mask, mode="L").crop(crop_box)

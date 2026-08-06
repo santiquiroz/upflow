@@ -226,7 +226,9 @@ class GenerationRequest:
     # contexto es lo que le permite al modelo continuar el fondo.
     mask_dilate_px: int = 8
     mask_feather_px: int = 8
-    mask_padding_px: int = 48
+    # `None` = se calcula a partir del tamaño de lo marcado. Era 48 fijo, y eso
+    # dejaba al modelo sin ver la cara cuando la marca era grande.
+    mask_padding_px: int | None = None
 
 
 class GenerationEngine:
