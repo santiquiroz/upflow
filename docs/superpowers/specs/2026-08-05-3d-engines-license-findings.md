@@ -1,5 +1,14 @@
 # Motores 3D: qué se puede usar de verdad (verificado 2026-08-05)
 
+> **ESTE DOCUMENTO QUEDÓ CORTO.** Un barrido posterior y más profundo sobre el Hub
+> —seis ángulos en paralelo, leyendo el `LICENSE` crudo de cada repo— encontró
+> varios motores usables que acá no aparecen, incluido uno que da **cotas exactas**
+> desde una descripción. Ver
+> [`2026-08-05-hf-3d-deep-sweep.md`](2026-08-05-hf-3d-deep-sweep.md).
+>
+> La conclusión de abajo sobre "esto no existe hoy" era producto de una búsqueda
+> pobre, no de la realidad.
+
 Verificación adversarial: a cada afirmación sobre licencia y hardware se le pidió
 a un revisor independiente que la **refutara** leyendo la fuente primaria (el
 `LICENSE` crudo del repo, la model card de Hugging Face, el código de arranque).
