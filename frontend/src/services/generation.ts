@@ -171,3 +171,10 @@ export function getConversionStatus(conversionId: string): Promise<ConversionSta
 export function fetchActiveConversions(): Promise<ConversionStatusResponse[]> {
   return apiGet<ConversionStatusResponse[]>("/generation/models/conversions");
 }
+
+/** Corta una conversión en curso. El corte cae en el siguiente submodelo. */
+export function cancelConversion(conversionId: string): Promise<ConversionStatusResponse> {
+  return apiPost<ConversionStatusResponse>(
+    `/generation/models/convert/${conversionId}/cancel`,
+  );
+}

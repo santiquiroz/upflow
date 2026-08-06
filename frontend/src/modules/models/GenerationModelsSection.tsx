@@ -122,7 +122,7 @@ export function GenerationModelsSection({ pollIntervalMs = DEFAULT_INSTALL_POLL_
   const { t } = useTranslation();
   const [repoId, setRepoId] = useState("");
   const [pendingDelete, setPendingDelete] = useState<ModelResponse | null>(null);
-  const { phase, progressPct, stageLabel, errorMessage, install, reset } =
+  const { phase, progressPct, stageLabel, errorMessage, install, cancelConversion, reset } =
     useGenerationModelInstall(pollIntervalMs);
   const modelsQuery = useInstalledModels();
   const deleteMutation = useDeleteModel();
@@ -151,7 +151,12 @@ export function GenerationModelsSection({ pollIntervalMs = DEFAULT_INSTALL_POLL_
       <GenerationHfSearch />
       <RepoIdForm repoId={repoId} onRepoIdChange={setRepoId} onSubmit={handleSubmit} disabled={installInFlight} />
       {installInFlight && (
-        <InstallProgress phase={phase} progressPct={progressPct} stageLabel={stageLabel} />
+        <InstallProgress
+          phase={phase}
+          progressPct={progressPct}
+          stageLabel={stageLabel}
+          onCancel={cancelConversion}
+        />
       )}
       {phase === "error" && errorMessage && <InstallError message={errorMessage} onRetry={reset} />}
       <DiffusionModelsList models={diffusionModels} onRequestDelete={setPendingDelete} />

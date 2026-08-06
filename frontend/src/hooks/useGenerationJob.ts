@@ -19,6 +19,7 @@ import {
   createGenerationJob,
   fetchGenerationCapabilities,
   fetchVideoGenerationCapabilities,
+  cancelConversion,
   fetchActiveConversions,
   getConversionStatus,
   getGenerationInstallStatus,
@@ -189,6 +190,8 @@ export interface UseGenerationModelInstallResult {
   errorMessage: string | null;
   modelId: string | null;
   install: (repoId: string, precision?: Precision, checkpointPath?: string) => void;
+  /** `null` cuando no hay una conversión en curso que se pueda cortar. */
+  cancelConversion: (() => void) | null;
   reset: () => void;
 }
 
@@ -306,6 +309,21 @@ export function useGenerationModelInstall(
     startMutation.mutate({ repoId, precision, checkpointPath });
   }
 
+  const cancelMutation = useMutation({
+    mutationFn: cancelConversion,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["generation-active-conversions"] });
+    },
+  });
+
+  // Convertir un SDXL tarda cerca de media hora y ocupa la maquina entera. Sin
+  // esto, equivocarse de modelo solo se arregla cerrando la app.
+  function cancelConversionInFlight(): void {
+    if (conversionId !== null) {
+      cancelMutation.mutate(conversionId);
+    }
+  }
+
   function reset(): void {
     setInstallId(null);
     startMutation.reset();
@@ -336,6 +354,9 @@ export function useGenerationModelInstall(
       resolveConversionErrorMessage(conversionQuery.error, conversionQuery.data, t),
     modelId: conversionQuery.data?.modelId ?? statusQuery.data?.modelId ?? null,
     install,
+    // Solo se puede cortar una conversión; la descarga previa es corta y se
+    // ofrece cancelarla sería prometer algo que no cambia nada.
+    cancelConversion: conversionId !== null ? cancelConversionInFlight : null,
     reset,
   };
 }

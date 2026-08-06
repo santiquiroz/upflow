@@ -2300,6 +2300,31 @@ async def list_active_conversions(
     return [_conversion_to_response(job) for job in converter.active()]
 
 
+@router.post(
+    "/generation/models/convert/{conversion_id}/cancel",
+    response_model=ConversionStatusResponse,
+)
+async def cancel_conversion(
+    conversion_id: str,
+    converter: GenerationModelConverter = Depends(get_generation_converter),
+) -> ConversionStatusResponse:
+    """Corta una conversion en curso.
+
+    El corte cae en el limite del siguiente submodelo: el export vive dentro de
+    una libreria que no se puede interrumpir a la mitad.
+    """
+    if not converter.cancel(conversion_id):
+        job = converter.status(conversion_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Conversion job not found")
+        raise HTTPException(
+            status_code=409, detail="Esa conversion ya termino: no hay nada que cortar."
+        )
+    job = converter.status(conversion_id)
+    assert job is not None
+    return _conversion_to_response(job)
+
+
 @router.get("/generation/models/convert/{conversion_id}", response_model=ConversionStatusResponse)
 async def get_conversion_status(
     conversion_id: str,

@@ -363,6 +363,10 @@ ExportFn = Callable[
 ]
 
 
+class ConversionCancelled(Exception):
+    """El usuario corto la conversion. No es un fallo."""
+
+
 class GenerationModelConverter:
     """Cola single-worker de conversión, paralela al installer de generación.
 
@@ -389,6 +393,12 @@ class GenerationModelConverter:
         self.export_fn = export_fn or _export_with_optimum
         self._queue: asyncio.Queue[ConversionJob] = asyncio.Queue()
         self._jobs: dict[str, ConversionJob] = {}
+        # Cancelaciones pedidas. El export corre en un hilo, asi que el aviso
+        # tiene que cruzar el limite de hilo — de ahi un set y no un flag de
+        # asyncio.
+        self._cancelled: set[str] = set()
+        # Enganche de prueba: permite cancelar justo cuando empieza un submodelo.
+        self._on_component_hook: Callable[[str], None] | None = None
         self._worker_task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
@@ -461,6 +471,32 @@ class GenerationModelConverter:
             replace(entry, status=ModelStatus.error, error=error)
         )
 
+    def cancel(self, conversion_id: str) -> bool:
+        """Corta una conversion. Devuelve si habia algo que cortar.
+
+        El corte cae en el limite del SIGUIENTE submodelo, no en cualquier
+        instante: el export vive dentro de una libreria que no se puede
+        interrumpir a la mitad. En un SDXL son cinco submodelos, asi que cancelar
+        durante el mas largo espera a que ese termine.
+        """
+        job = self._jobs.get(conversion_id)
+        if job is None or job.status in (
+            JobStatus.completed,
+            JobStatus.failed,
+            JobStatus.cancelled,
+        ):
+            return False
+        self._cancelled.add(conversion_id)
+        if job.status is JobStatus.queued:
+            # Todavia no arranco: se marca ya y el worker la saltea.
+            job.status = JobStatus.cancelled
+            job.finished_at = utc_now()
+        return True
+
+    def _raise_if_cancelled(self, job: ConversionJob) -> None:
+        if job.id in self._cancelled:
+            raise ConversionCancelled()
+
     def active(self) -> list[ConversionJob]:
         """Las conversiones que siguen corriendo.
 
@@ -496,11 +532,19 @@ class GenerationModelConverter:
         return True
 
     async def _run_conversion(self, job: ConversionJob) -> None:
+        if job.status is JobStatus.cancelled or job.id in self._cancelled:
+            job.status = JobStatus.cancelled
+            job.finished_at = utc_now()
+            return
         job.status = JobStatus.running
         job.started_at = utc_now()
         try:
             await self._convert_and_register(job)
             job.status = JobStatus.completed
+        except ConversionCancelled:
+            # Cancelar no es un fallo: no lleva mensaje de error ni marca la
+            # entrada como rota.
+            job.status = JobStatus.cancelled
         except OSError as exc:
             job.status = JobStatus.failed
             job.error = map_disk_full(exc) or str(exc)
@@ -607,6 +651,10 @@ class GenerationModelConverter:
                     )
 
             def on_component(name: str) -> None:
+                if self._on_component_hook is not None:
+                    self._on_component_hook(name)
+                # Unico punto donde se puede cortar: entre submodelo y submodelo.
+                self._raise_if_cancelled(job)
                 if name not in component_keys:
                     component_keys.append(name)
                 advance_conversion_stage(

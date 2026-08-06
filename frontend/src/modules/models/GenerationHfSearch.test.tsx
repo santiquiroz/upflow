@@ -16,6 +16,7 @@ vi.mock("../../services/generation", async (importOriginal) => {
     getGenerationInstallStatus: vi.fn(),
     getConversionStatus: vi.fn(),
     fetchActiveConversions: vi.fn(),
+    cancelConversion: vi.fn(),
   };
 });
 
@@ -261,5 +262,50 @@ describe("volver a la seccion no pierde la conversion", () => {
       expect(generationService.fetchActiveConversions).toHaveBeenCalled();
     });
     expect(generationService.getConversionStatus).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("cortar una conversion", () => {
+  // Convertir un SDXL tarda cerca de media hora y ocupa la maquina entera. Sin
+  // esto, equivocarse de modelo solo se arregla cerrando la app.
+  it("ofrece cortarla y manda el corte al servidor", async () => {
+    const CORRIENDO = {
+      conversionId: "c1",
+      repoId: "amd/sdxl-onnx",
+      status: "running" as const,
+      progressPct: 42,
+      stage: "exporting:unet",
+      stages: null,
+      modelId: null,
+      error: null,
+    };
+    vi.mocked(generationService.searchGenerationModels).mockResolvedValue(SEARCH_RESULT);
+    vi.mocked(generationService.fetchActiveConversions).mockResolvedValue([CORRIENDO]);
+    vi.mocked(generationService.getConversionStatus).mockResolvedValue(CORRIENDO);
+    vi.mocked(generationService.cancelConversion).mockResolvedValue({
+      ...CORRIENDO,
+      status: "cancelled" as const,
+    });
+
+    renderSearch();
+
+    const boton = await screen.findByRole("button", { name: /cancel|cancelar/i });
+    fireEvent.click(boton);
+
+    await waitFor(() => {
+      // React Query suma un segundo argumento de contexto; lo que importa es el id.
+      expect(vi.mocked(generationService.cancelConversion).mock.calls[0][0]).toBe("c1");
+    });
+  });
+
+  it("sin conversion en curso no ofrece cortar nada", async () => {
+    vi.mocked(generationService.searchGenerationModels).mockResolvedValue(SEARCH_RESULT);
+    vi.mocked(generationService.fetchActiveConversions).mockResolvedValue([]);
+
+    renderSearch();
+
+    await screen.findByText("amd/sdxl-onnx");
+    expect(screen.queryByRole("button", { name: /cancel|cancelar/i })).toBeNull();
   });
 });

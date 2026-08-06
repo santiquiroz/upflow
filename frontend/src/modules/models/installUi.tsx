@@ -29,10 +29,14 @@ export function InstallProgress({
   phase,
   progressPct,
   stageLabel,
+  onCancel,
 }: {
   phase: ModelInstallPhase;
   progressPct: number | null;
   stageLabel?: string | null;
+  // Convertir un SDXL tarda cerca de media hora y ocupa la maquina entera. Sin
+  // esto, equivocarse de modelo solo se arregla cerrando la app.
+  onCancel?: (() => void) | null;
 }) {
   const { t } = useTranslation();
   const label =
@@ -46,6 +50,15 @@ export function InstallProgress({
         <span>{label}</span>
         {progressPct !== null && (
           <span className="font-mono-tabular text-text-dim">{Math.round(progressPct)}%</span>
+        )}
+        {onCancel && (
+          <button
+            type="button"
+            onClick={onCancel}
+            className="ml-auto rounded border border-border px-2 py-0.5 text-xs text-text-dim hover:border-danger hover:text-danger focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+          >
+            {t("common.cancel")}
+          </button>
         )}
       </div>
       {progressPct !== null ? (
