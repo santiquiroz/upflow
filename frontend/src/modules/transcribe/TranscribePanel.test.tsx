@@ -171,7 +171,7 @@ beforeEach(() => {
     downloadUrl: null,
   });
   vi.mocked(transcribeService.getTranscribeJob).mockResolvedValue(job());
-  vi.mocked(transcribeService.fetchTranslationPairs).mockResolvedValue({ pairs: [] });
+  vi.mocked(transcribeService.fetchTranslationPairs).mockResolvedValue({ pairs: [], installable: [] });
   vi.mocked(transcribeService.cancelTranscribeJob).mockResolvedValue(
     job({ status: "cancelled", text: null, downloadUrl: null }),
   );
@@ -303,6 +303,7 @@ describe("TranscribePanel", () => {
   it("asks into which language to dub, and only when dubbing is chosen", async () => {
     vi.mocked(transcribeService.fetchTranslationPairs).mockResolvedValue({
       pairs: [{ source: "en", target: "es" }],
+      installable: [],
     });
     renderPanel();
     await selectVideoFile();
@@ -322,6 +323,7 @@ describe("TranscribePanel", () => {
   it("sends the language to dub into", async () => {
     vi.mocked(transcribeService.fetchTranslationPairs).mockResolvedValue({
       pairs: [{ source: "en", target: "es" }],
+      installable: [],
     });
     renderPanel();
     await selectVideoFile();
@@ -344,9 +346,7 @@ describe("TranscribePanel", () => {
 
   it("cannot dub without an installed language pair", async () => {
     // Sin par instalado no hay a que idioma doblar: la opcion no se ofrece.
-    vi.mocked(transcribeService.fetchTranslationPairs).mockResolvedValue({
-      pairs: [],
-    });
+    vi.mocked(transcribeService.fetchTranslationPairs).mockResolvedValue({ pairs: [], installable: [] });
     renderPanel();
     await selectVideoFile();
     const salida = await screen.findByLabelText(en["transcribe.output.label"]);
@@ -369,6 +369,7 @@ describe("TranscribePanel", () => {
   it("offers to translate the subtitles when a language pair is installed", async () => {
     vi.mocked(transcribeService.fetchTranslationPairs).mockResolvedValue({
       pairs: [{ source: "en", target: "es" }],
+      installable: [],
     });
     renderPanel();
     await submitAudio();
@@ -389,9 +390,7 @@ describe("TranscribePanel", () => {
   });
 
   it("hides the translation picker when no pair is installed", async () => {
-    vi.mocked(transcribeService.fetchTranslationPairs).mockResolvedValue({
-      pairs: [],
-    });
+    vi.mocked(transcribeService.fetchTranslationPairs).mockResolvedValue({ pairs: [], installable: [] });
     renderPanel();
     await submitAudio();
 
@@ -400,6 +399,36 @@ describe("TranscribePanel", () => {
     });
     expect(
       screen.queryByLabelText(en["transcribe.translate.label"]),
+    ).not.toBeInTheDocument();
+  });
+
+  it("ofrece bajar un par cuando no hay ninguno instalado", async () => {
+    // Antes esto era un callejon sin salida: sin pares, la traduccion
+    // desaparecia de la pantalla y no habia forma de conseguirla.
+    vi.mocked(transcribeService.fetchTranslationPairs).mockResolvedValue({
+      pairs: [],
+      installable: ["en-es", "es-en"],
+    });
+    renderPanel();
+    await submitAudio();
+
+    expect(
+      await screen.findByLabelText(en["transcribe.translate.pickPair"]),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /download|descargar/i })).toBeInTheDocument();
+  });
+
+  it("no ofrece bajar nada cuando ya hay un par instalado", async () => {
+    vi.mocked(transcribeService.fetchTranslationPairs).mockResolvedValue({
+      pairs: [{ source: "en", target: "es" }],
+      installable: ["es-en"],
+    });
+    renderPanel();
+    await submitAudio();
+
+    await screen.findByLabelText(en["transcribe.translate.label"]);
+    expect(
+      screen.queryByLabelText(en["transcribe.translate.pickPair"]),
     ).not.toBeInTheDocument();
   });
 

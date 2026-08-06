@@ -95,6 +95,9 @@ class TranslationPairResponse(BaseModel):
 
 class TranslationPairsResponse(BaseModel):
     pairs: list[TranslationPairResponse]
+    # Los que se PUEDEN bajar. Sin esto, con cero pares instalados la pantalla
+    # escondia la traduccion entera y el usuario no tenia como conseguirla.
+    installable: list[str] = Field(default_factory=list)
 
 
 class VoiceConversionCapabilitiesResponse(BaseModel):

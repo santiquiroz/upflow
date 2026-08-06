@@ -64,8 +64,12 @@ export interface TranslationPair {
   target: string;
 }
 
-export function fetchTranslationPairs(): Promise<{ pairs: TranslationPair[] }> {
-  return apiGet<{ pairs: TranslationPair[] }>("/translation/pairs");
+export function fetchTranslationPairs(): Promise<{
+  pairs: TranslationPair[];
+  /** Pares que se pueden bajar, sin contar los que ya están. */
+  installable: string[];
+}> {
+  return apiGet<{ pairs: TranslationPair[]; installable: string[] }>("/translation/pairs");
 }
 
 export function getTranscribeJob(jobId: string): Promise<TranscribeJob> {

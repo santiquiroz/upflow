@@ -197,6 +197,7 @@ from app.services.stl_reader import StlUnreadable, read_stl
 from app.services.stl_writer import write_stl
 from app.services.print_check import PrintCheckUnavailable, check_stl_for_printing
 from app.services.vendor_paths import kokoro_dir, translation_dir
+from app.services.translation_catalog import INSTALLABLE_PAIRS
 from app.services.translate import (
     TranslationEngine,
     TranslationUnavailable,
@@ -1398,11 +1399,12 @@ def get_translation() -> TranslationEngine:
 async def list_translation_pairs(
     engine: TranslationEngine = Depends(get_translation),
 ) -> TranslationPairsResponse:
+    instalados = list(engine.available_pairs())
+    ya_estan = {f"{p.source}-{p.target}" for p in instalados}
     return TranslationPairsResponse(
-        pairs=[
-            TranslationPairResponse(source=p.source, target=p.target)
-            for p in engine.available_pairs()
-        ]
+        pairs=[TranslationPairResponse(source=p.source, target=p.target) for p in instalados],
+        # Solo los que faltan: ofrecer bajar algo que ya esta es ruido.
+        installable=[par for par in INSTALLABLE_PAIRS if par not in ya_estan],
     )
 
 

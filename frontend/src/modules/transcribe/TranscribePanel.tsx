@@ -24,6 +24,7 @@ import {
 } from "../../hooks/useTranscribeJob";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "../../i18n/LocaleProvider";
+import { PackDownload } from "../../components/PackDownload";
 import { isEnglishOnly } from "../../lib/englishOnly";
 import type { TranscribeJob } from "../../lib/apiTypes";
 import { fetchTranslationPairs } from "../../services/transcribe";
@@ -136,6 +137,8 @@ function TranscriptionResult({
   onCancel,
   uploadPercent,
   translationTargets,
+  installablePairs,
+  onPairInstalled,
 }: {
   phase: TranscribeJobPhase;
   job: TranscribeJob | undefined;
@@ -144,6 +147,10 @@ function TranscriptionResult({
   // `null` cuando el navegador no puede saber el total del envio.
   uploadPercent: number | null;
   translationTargets: string[];
+  // Los que se pueden bajar. Con la lista vacia de instalados, esto es lo unico
+  // que le da al usuario una salida.
+  installablePairs: string[];
+  onPairInstalled: () => void;
 }) {
   const [translateTo, setTranslateTo] = useState("");
   const { t } = useTranslation();
@@ -284,6 +291,12 @@ function TranscriptionResult({
                 ? t("transcribe.result.copied")
                 : t("transcribe.result.copy")}
             </button>
+            {translationTargets.length === 0 && installablePairs.length > 0 && (
+              <TranslationPairInstaller
+                pairs={installablePairs}
+                onDone={onPairInstalled}
+              />
+            )}
             {translationTargets.length > 0 && (
               <label className="flex items-center gap-2 text-sm text-text-dim">
                 {t("transcribe.translate.label")}
@@ -347,6 +360,48 @@ function TranscriptionResult({
   );
 }
 
+/**
+ * Elegí un par de idiomas y bajalo.
+ *
+ * OPUS-MT publica un modelo POR PAR, así que "instalar la traducción" no es una
+ * sola cosa. Antes, con ninguno instalado, la pantalla escondía la traducción
+ * entera y no había forma de llegar a ella.
+ */
+function TranslationPairInstaller({
+  pairs,
+  onDone,
+}: {
+  pairs: string[];
+  onDone: () => void;
+}) {
+  const { t } = useTranslation();
+  const [par, setPar] = useState(pairs[0] ?? "");
+
+  return (
+    <div className="flex flex-col gap-2 rounded border border-border bg-surface-2 p-3">
+      <p className="text-sm text-text-dim">{t("transcribe.translate.noPairs")}</p>
+      <label className="flex items-center gap-2 text-sm text-text-dim">
+        {t("transcribe.translate.pickPair")}
+        <select
+          value={par}
+          onChange={(event) => setPar(event.target.value)}
+          aria-label={t("transcribe.translate.pickPair")}
+          className="rounded border border-border bg-surface px-2 py-1 text-sm text-text focus:border-accent focus:outline-none"
+        >
+          {pairs.map((codigo) => (
+            <option key={codigo} value={codigo}>
+              {codigo}
+            </option>
+          ))}
+        </select>
+      </label>
+      {par && (
+        <PackDownload key={par} pack="translation" variant={par} onDone={onDone} />
+      )}
+    </div>
+  );
+}
+
 export function TranscribePanel({
   pollIntervalMs = DEFAULT_TRANSCRIBE_POLL_INTERVAL_MS,
   installPollIntervalMs = DEFAULT_ASR_INSTALL_POLL_INTERVAL_MS,
@@ -368,6 +423,9 @@ export function TranscribePanel({
   const translationTargets = [
     ...new Set((translationPairsQuery.data?.pairs ?? []).map((pair) => pair.target)),
   ];
+  // Los pares que se pueden bajar. Con cero instalados la traduccion quedaba
+  // escondida y sin forma de conseguirse: un callejon sin salida silencioso.
+  const paresInstalables = translationPairsQuery.data?.installable ?? [];
   const { phase, job, errorMessage, submit, cancel, reset, uploadPercent } =
     useTranscribeJob(pollIntervalMs);
 
@@ -609,6 +667,8 @@ export function TranscribePanel({
           onCancel={cancel}
           uploadPercent={uploadPercent}
           translationTargets={translationTargets}
+          installablePairs={paresInstalables}
+          onPairInstalled={() => void translationPairsQuery.refetch()}
         />
       </div>
 

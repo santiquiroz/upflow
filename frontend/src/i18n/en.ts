@@ -840,6 +840,8 @@ export const en = {
   "transcribe.result.download": "Download .txt",
   "transcribe.result.downloadSubtitles": "Download .srt",
   "transcribe.result.downloadVideo": "Download video with subtitles",
+  "transcribe.translate.noPairs": "No language pair installed yet. Pick one and download it.",
+  "transcribe.translate.pickPair": "Language pair",
   "transcribe.translate.label": "Translate subtitles to",
   "transcribe.translate.none": "Keep the original language",
   "transcribe.output.label": "Output",
