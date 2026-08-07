@@ -41,10 +41,50 @@ def test_probe_hags_not_applicable_off_windows(monkeypatch: pytest.MonkeyPatch) 
     assert lever.fixable is False
 
 
+def test_probe_hags_ok_when_kernel_reports_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """El caso que el registro no puede ver: HAGS activado por default, sin
+    HwSchMode escrito. Visto real: 'registry value not found' en rojo con el
+    panel de Windows diciendo Activado."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    import app.services.capability_probe as mod
+
+    monkeypatch.setattr(mod, "_query_hags_kernel_caps", lambda: (True, True))
+
+    lever = probe_hags()
+
+    assert lever.status == LeverStatus.ok
+    assert lever.fixable is False
+
+
+def test_probe_hags_fixable_when_kernel_reports_supported_but_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "platform", "win32")
+    import app.services.capability_probe as mod
+
+    monkeypatch.setattr(mod, "_query_hags_kernel_caps", lambda: (True, False))
+
+    lever = probe_hags()
+
+    assert lever.status == LeverStatus.unavailable
+    assert lever.fixable is True
+
+
+def test_probe_hags_not_fixable_when_gpu_does_not_support_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "platform", "win32")
+    import app.services.capability_probe as mod
+
+    monkeypatch.setattr(mod, "_query_hags_kernel_caps", lambda: (False, False))
+
+    lever = probe_hags()
+
+    assert lever.status == LeverStatus.unavailable
+    assert lever.fixable is False
+
+
 def test_probe_hags_ok_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "platform", "win32")
     import app.services.capability_probe as mod
 
+    monkeypatch.setattr(mod, "_query_hags_kernel_caps", lambda: None)
     monkeypatch.setattr(mod.winreg, "OpenKey", lambda *a, **k: _FakeKey())
     monkeypatch.setattr(mod.winreg, "QueryValueEx", lambda key, name: (2, 4))
 
@@ -58,6 +98,7 @@ def test_probe_hags_unavailable_and_fixable_when_disabled(monkeypatch: pytest.Mo
     monkeypatch.setattr(sys, "platform", "win32")
     import app.services.capability_probe as mod
 
+    monkeypatch.setattr(mod, "_query_hags_kernel_caps", lambda: None)
     monkeypatch.setattr(mod.winreg, "OpenKey", lambda *a, **k: _FakeKey())
     monkeypatch.setattr(mod.winreg, "QueryValueEx", lambda key, name: (1, 4))
 
@@ -67,9 +108,13 @@ def test_probe_hags_unavailable_and_fixable_when_disabled(monkeypatch: pytest.Mo
     assert lever.fixable is True
 
 
-def test_probe_hags_unavailable_when_registry_value_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_probe_hags_registry_value_missing_says_windows_decides(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Valor ausente NO es 'apagado': es el default de Windows. El detalle lo
+    dice y apunta al panel real en vez de acusar un 'not found'."""
     monkeypatch.setattr(sys, "platform", "win32")
     import app.services.capability_probe as mod
+
+    monkeypatch.setattr(mod, "_query_hags_kernel_caps", lambda: None)
 
     def _raise_open_key(*a: object, **k: object) -> None:
         raise OSError("not found")
@@ -80,6 +125,8 @@ def test_probe_hags_unavailable_when_registry_value_missing(monkeypatch: pytest.
 
     assert lever.status == LeverStatus.unavailable
     assert lever.fixable is False
+    assert "default" in lever.detail
+    assert "not found" not in lever.detail
 
 
 def test_parse_pcie_json_reports_downgrade() -> None:
@@ -593,13 +640,13 @@ def test_run_elevated_tracks_and_kills_process_instead_of_bare_wait(monkeypatch:
 
     monkeypatch.setattr(mod, "run_guarded_process", fake_run_guarded_process)
 
-    ok, message = asyncio.run(mod._run_elevated("Set-ItemProperty -Path x -Name y -Value 1", 30.0))
+    returncode, message = asyncio.run(mod._run_elevated("Set-ItemProperty -Path x -Name y -Value 1", 30.0))
 
     outer_script = captured_command[-1]
     assert "WaitForExit" in outer_script
     assert "Stop-Process" in outer_script
     assert "-Wait" not in outer_script
-    assert ok is True
+    assert returncode == 0
     assert message == ""
 
 
@@ -618,3 +665,88 @@ def test_elevation_wait_milliseconds_has_floor_for_small_timeout() -> None:
 def test_capability_fix_timeout_rejects_values_below_minimum() -> None:
     with pytest.raises(ValidationError):
         make_settings(CAPABILITY_FIX_TIMEOUT_SECONDS=0.5)
+
+
+# --- fix de Defender verificado y persistido ------------------------------
+
+
+def test_parse_defender_na_with_verified_marker_reports_ok() -> None:
+    """Antes: fix exitoso -> probe sin elevación -> N/A -> 'Requiere
+    administrador' PARA SIEMPRE (visto real en varias máquinas). Con el estado
+    verificado persistido, el probe lo reporta en vez de encogerse de hombros."""
+    raw = json.dumps({"ok": True, "exclusions": [" N/A: Must be an administrator to view exclusions "]})
+    lever = parse_defender_exclusion_json(raw, "C:\\Upflow\\runtime", verified_at="2026-08-07T12:00:00+00:00")
+    assert lever.status == LeverStatus.ok
+    assert lever.fixable is False
+    assert "2026-08-07" in lever.detail
+
+
+def test_parse_defender_na_without_marker_still_needs_admin() -> None:
+    raw = json.dumps({"ok": True, "exclusions": [" N/A: Must be an administrator to view exclusions "]})
+    lever = parse_defender_exclusion_json(raw, "C:\\Upflow\\runtime", verified_at=None)
+    assert lever.status == LeverStatus.needs_admin
+    assert lever.fixable is True
+
+
+def test_defender_marker_roundtrip(tmp_path: Path) -> None:
+    import app.services.capability_probe as mod
+
+    runtime = str(tmp_path)
+    assert mod.read_defender_verified_at(runtime) is None
+    mod.write_defender_marker(runtime)
+    verified_at = mod.read_defender_verified_at(runtime)
+    assert verified_at
+
+
+def test_defender_marker_ignored_for_a_different_runtime_path(tmp_path: Path) -> None:
+    import app.services.capability_probe as mod
+
+    (tmp_path / mod.DEFENDER_MARKER_FILENAME).write_text(
+        json.dumps({"path": "D:\\otra\\ruta", "verified_at": "2026-08-07T12:00:00+00:00"}),
+        encoding="utf-8",
+    )
+    assert mod.read_defender_verified_at(str(tmp_path)) is None
+
+
+def test_defender_fix_script_verifies_inside_the_elevation() -> None:
+    import app.services.capability_probe as mod
+
+    script = mod.build_fix_script("defender_exclusion", "C:\\Upflow\\runtime")
+    assert "Add-MpPreference" in script
+    assert "Get-MpPreference" in script
+    assert f"exit {mod.DEFENDER_FIX_VERIFY_FAILED_EXIT}" in script
+
+
+def test_apply_fix_defender_persists_marker_on_verified_success(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import app.services.capability_probe as mod
+
+    probe = CapabilityProbe(make_settings(RUNTIME_DIR=str(tmp_path)))
+
+    async def fake_run_guarded_process(command: list[str], timeout: float):
+        return b"", b"", 0
+
+    monkeypatch.setattr(mod, "run_guarded_process", fake_run_guarded_process)
+
+    asyncio.run(probe.apply_fix("defender_exclusion"))
+
+    assert mod.read_defender_verified_at(str(probe.settings.runtime_path))
+
+
+def test_apply_fix_defender_reports_when_the_exclusion_did_not_stick(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import app.services.capability_probe as mod
+
+    probe = CapabilityProbe(make_settings(RUNTIME_DIR=str(tmp_path)))
+
+    async def fake_run_guarded_process(command: list[str], timeout: float):
+        return b"", b"", mod.DEFENDER_FIX_VERIFY_FAILED_EXIT
+
+    monkeypatch.setattr(mod, "run_guarded_process", fake_run_guarded_process)
+
+    lever = asyncio.run(probe.apply_fix("defender_exclusion"))
+
+    assert mod.read_defender_verified_at(str(probe.settings.runtime_path)) is None
+    assert "no quedó aplicada" in lever.detail

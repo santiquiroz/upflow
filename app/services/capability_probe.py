@@ -5,7 +5,9 @@ import json
 import logging
 import sys
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from enum import Enum
+from pathlib import Path
 
 if sys.platform == "win32":
     import winreg
@@ -45,15 +47,121 @@ class Lever:
     fixable: bool
 
 
+_KMTQAITYPE_WDDM_2_7_CAPS = 70
+_HWSCH_SUPPORTED_BIT = 1
+_HWSCH_ENABLED_BIT = 2
+
+
+def _query_hags_kernel_caps() -> tuple[bool, bool] | None:
+    """(soportado, activado) según el kernel gráfico, o None si no se pudo leer.
+
+    El registro NO alcanza: con HAGS activado por defecto Windows no escribe
+    HwSchMode — el valor solo aparece si alguien tocó el toggle. Visto real:
+    "registry value not found" en rojo con el panel de Windows diciendo
+    Activado. La fuente de verdad es D3DKMT (WDDM 2.7 caps), la misma que usa
+    ese panel.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    class Luid(ctypes.Structure):
+        _fields_ = [("LowPart", wintypes.DWORD), ("HighPart", wintypes.LONG)]
+
+    class AdapterInfo(ctypes.Structure):
+        _fields_ = [
+            ("hAdapter", wintypes.UINT),
+            ("AdapterLuid", Luid),
+            ("NumOfSources", wintypes.ULONG),
+            ("bPresentMoveRegionsPreferred", wintypes.BOOL),
+        ]
+
+    class EnumAdapters2(ctypes.Structure):
+        _fields_ = [("NumAdapters", wintypes.ULONG), ("pAdapters", ctypes.POINTER(AdapterInfo))]
+
+    class Wddm27Caps(ctypes.Structure):
+        _fields_ = [("Value", wintypes.UINT)]
+
+    class QueryAdapterInfo(ctypes.Structure):
+        _fields_ = [
+            ("hAdapter", wintypes.UINT),
+            ("Type", ctypes.c_int),
+            ("pPrivateDriverData", ctypes.c_void_p),
+            ("PrivateDriverDataSize", wintypes.UINT),
+        ]
+
+    class CloseAdapter(ctypes.Structure):
+        _fields_ = [("hAdapter", wintypes.UINT)]
+
+    try:
+        gdi32 = ctypes.WinDLL("gdi32")
+        enum = EnumAdapters2()
+        if gdi32.D3DKMTEnumAdapters2(ctypes.byref(enum)) != 0 or enum.NumAdapters == 0:
+            return None
+        adapters = (AdapterInfo * enum.NumAdapters)()
+        enum.pAdapters = ctypes.cast(adapters, ctypes.POINTER(AdapterInfo))
+        if gdi32.D3DKMTEnumAdapters2(ctypes.byref(enum)) != 0:
+            return None
+        supported = False
+        enabled = False
+        for i in range(enum.NumAdapters):
+            info = adapters[i]
+            caps = Wddm27Caps()
+            query = QueryAdapterInfo(
+                hAdapter=info.hAdapter,
+                Type=_KMTQAITYPE_WDDM_2_7_CAPS,
+                pPrivateDriverData=ctypes.cast(ctypes.byref(caps), ctypes.c_void_p),
+                PrivateDriverDataSize=ctypes.sizeof(caps),
+            )
+            status = gdi32.D3DKMTQueryAdapterInfo(ctypes.byref(query))
+            gdi32.D3DKMTCloseAdapter(ctypes.byref(CloseAdapter(hAdapter=info.hAdapter)))
+            if status != 0:
+                continue
+            if caps.Value & _HWSCH_SUPPORTED_BIT:
+                supported = True
+                if caps.Value & _HWSCH_ENABLED_BIT:
+                    enabled = True
+        return supported, enabled
+    except Exception:  # noqa: BLE001 -- un probe jamás puede tumbar nada
+        logger.warning("HAGS kernel caps query failed", exc_info=True)
+        return None
+
+
 def probe_hags() -> Lever:
     lever_id, label = "hags", "Hardware-accelerated GPU scheduling"
     if sys.platform != "win32":
         return Lever(lever_id, label, LeverStatus.not_applicable, "Windows only", False)
+    caps = _query_hags_kernel_caps()
+    if caps is not None:
+        supported, enabled = caps
+        if enabled:
+            return Lever(lever_id, label, LeverStatus.ok, "Enabled (reported by the graphics kernel)", False)
+        if not supported:
+            return Lever(
+                lever_id, label, LeverStatus.unavailable,
+                "GPU/driver does not support hardware scheduling -- informational only", False,
+            )
+        return Lever(
+            lever_id, label, LeverStatus.unavailable,
+            "Disabled (graphics kernel reports it off). Measured impact on this workload is ~0 -- informational only.",
+            True,
+        )
+    return _probe_hags_registry(lever_id, label)
+
+
+def _probe_hags_registry(lever_id: str, label: str) -> Lever:
+    # Fallback si D3DKMT no respondió. Un valor AUSENTE no es un estado: es
+    # "Windows decide el default", así que no se reporta como apagado.
     try:
         with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, HAGS_KEY_PATH) as key:
             value, _ = winreg.QueryValueEx(key, HAGS_VALUE_NAME)
     except OSError:
-        return Lever(lever_id, label, LeverStatus.unavailable, "HwSchMode registry value not found", False)
+        return Lever(
+            lever_id, label, LeverStatus.unavailable,
+            "No se pudo determinar el estado (sin respuesta del kernel gráfico y sin HwSchMode en el "
+            "registro: Windows aplica su default). El estado real está en Configuración > Sistema > "
+            "Pantalla > Gráficos.",
+            False,
+        )
     if value == HAGS_ENABLED_VALUE:
         return Lever(lever_id, label, LeverStatus.ok, "Enabled (HwSchMode=2)", False)
     return Lever(
@@ -241,7 +349,49 @@ def _normalize_path_for_compare(path: str) -> str:
     return normalized
 
 
-def parse_defender_exclusion_json(raw_stdout: str, runtime_path: str) -> Lever:
+# Estado verificado del fix de Defender. Un probe sin elevación NUNCA puede ver
+# la lista de exclusiones (Defender la oculta), así que el estado "aplicado" se
+# persiste cuando el script ELEVADO del fix verifica con Get-MpPreference que
+# la exclusión quedó. Sin esto, un fix exitoso mostraba "Requiere administrador"
+# para siempre (visto real en varias máquinas).
+DEFENDER_MARKER_FILENAME = "defender-exclusion-verified.json"
+DEFENDER_FIX_VERIFY_FAILED_EXIT = 3
+
+
+def _defender_marker_path(runtime_path: str) -> Path:
+    return Path(runtime_path) / DEFENDER_MARKER_FILENAME
+
+
+def write_defender_marker(runtime_path: str) -> None:
+    payload = {
+        "path": runtime_path,
+        "verified_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+    try:
+        _defender_marker_path(runtime_path).write_text(json.dumps(payload), encoding="utf-8")
+    except OSError:
+        logger.warning("No se pudo persistir el marker de exclusión de Defender", exc_info=True)
+
+
+def read_defender_verified_at(runtime_path: str) -> str | None:
+    try:
+        payload = json.loads(_defender_marker_path(runtime_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    marker_path = payload.get("path")
+    if not isinstance(marker_path, str):
+        return None
+    if _normalize_path_for_compare(marker_path) != _normalize_path_for_compare(runtime_path):
+        return None
+    verified_at = payload.get("verified_at")
+    return verified_at if isinstance(verified_at, str) and verified_at else None
+
+
+def parse_defender_exclusion_json(
+    raw_stdout: str, runtime_path: str, verified_at: str | None = None
+) -> Lever:
     lever_id, label = "defender_exclusion", "Windows Defender exclusion on runtime/"
     try:
         payload = json.loads(raw_stdout)
@@ -265,12 +415,21 @@ def parse_defender_exclusion_json(raw_stdout: str, runtime_path: str) -> Lever:
         if not isinstance(p, str):
             return Lever(lever_id, label, LeverStatus.unavailable, "Defender exclusions contains non-string values", False)
         if p.strip().startswith("N/A:"):
+            if verified_at:
+                return Lever(
+                    lever_id,
+                    label,
+                    LeverStatus.ok,
+                    f"Exclusión aplicada y verificada con elevación ({verified_at}). Defender oculta la "
+                    "lista a procesos sin elevación, así que se muestra el último estado verificado.",
+                    False,
+                )
             return Lever(
                 lever_id,
                 label,
                 LeverStatus.needs_admin,
                 "Defender oculta la lista de exclusiones a procesos sin elevación — no se puede verificar el estado "
-                "real; si aplicaste el Fix antes, es probable que siga activa. El Fix se puede re-aplicar sin riesgo.",
+                "real. El Fix aplica la exclusión y la verifica elevado; al terminar, este estado queda registrado.",
                 True,
             )
         if p:
@@ -298,7 +457,9 @@ async def probe_defender_exclusion(runtime_path: str, timeout: float = 10.0) -> 
         return Lever(lever_id, label, LeverStatus.needs_admin, "Could not run the Defender exclusion probe", True)
     if returncode != 0:
         return Lever(lever_id, label, LeverStatus.needs_admin, f"Defender probe failed: {stderr.decode(errors='replace')[:200]}", True)
-    return parse_defender_exclusion_json(stdout.decode(errors="replace"), runtime_path)
+    return parse_defender_exclusion_json(
+        stdout.decode(errors="replace"), runtime_path, read_defender_verified_at(runtime_path)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -336,11 +497,27 @@ Set-ItemProperty -Path $regPath -Name "UserWriteCacheSetting" -Value 1
 """.strip()
 
 
+# El fix de Defender verifica DENTRO de la misma elevación: Add-MpPreference no
+# falla cuando Tamper Protection ignora el alta, y el probe sin elevación no
+# puede mirar la lista. exit 0 = verificado aplicado; exit 3 = corrió pero la
+# exclusión NO quedó.
+_DEFENDER_FIX_TEMPLATE = """
+$target = {path_literal}
+Add-MpPreference -ExclusionPath $target -ErrorAction Stop
+$ex = (Get-MpPreference).ExclusionPath
+if ($ex -and @($ex | Where-Object {{ "$_".TrimEnd('\\') -ieq $target.TrimEnd('\\') }}).Count -gt 0) {{ exit 0 }}
+exit {verify_failed_exit}
+""".strip()
+
+
 def build_fix_script(lever_id: str, runtime_path: str) -> str:
     if lever_id == "hags":
         return _HAGS_FIX_SCRIPT
     if lever_id == "defender_exclusion":
-        return f"Add-MpPreference -ExclusionPath {_ps_single_quote(runtime_path)}"
+        return _DEFENDER_FIX_TEMPLATE.format(
+            path_literal=_ps_single_quote(runtime_path),
+            verify_failed_exit=DEFENDER_FIX_VERIFY_FAILED_EXIT,
+        )
     if lever_id == "disk_write_cache":
         return _DISK_WRITE_CACHE_FIX_TEMPLATE.format(path_literal=_ps_single_quote(runtime_path))
     raise ValueError(f"Lever {lever_id!r} has no fix script (not fixable or unknown)")
@@ -363,7 +540,13 @@ def _elevation_wait_milliseconds(timeout: float) -> int:
     return int(wait_seconds * 1000)
 
 
-async def _run_elevated(inner_script: str, timeout: float) -> tuple[bool, str]:
+async def _run_elevated(inner_script: str, timeout: float) -> tuple[int | None, str]:
+    """(exit code del proceso elevado | None si ni corrió, mensaje de fallo).
+
+    El exit code se preserva porque los scripts de fix lo usan para reportar
+    resultados distintos de "anduvo/no anduvo" (ej. Defender: aplicó pero la
+    verificación elevada dice que la exclusión no quedó).
+    """
     # -EncodedCommand (base64 UTF-16LE) avoids nested PowerShell quoting bugs
     # that string concatenation into -Command would hit when passing an
     # already-quoted inner script through an outer Start-Process call.
@@ -380,10 +563,10 @@ async def _run_elevated(inner_script: str, timeout: float) -> tuple[bool, str]:
     try:
         _, _, returncode = await run_guarded_process(["powershell.exe", "-NoProfile", "-Command", outer], timeout)
     except Exception:  # noqa: BLE001 -- elevation failures must degrade, never raise
-        return False, "Elevation failed to run"
+        return None, "Elevation failed to run"
     if returncode != 0:
-        return False, "Elevation was cancelled or failed"
-    return True, ""
+        return returncode, "Elevation was cancelled or failed"
+    return returncode, ""
 
 
 class CapabilityProbe:
@@ -403,7 +586,18 @@ class CapabilityProbe:
     async def apply_fix(self, lever_id: str) -> Lever:
         runtime_path = str(self.settings.runtime_path)
         script = build_fix_script(lever_id, runtime_path)
-        ok, message = await _run_elevated(script, self.settings.capability_fix_timeout_seconds)
+        returncode, message = await _run_elevated(script, self.settings.capability_fix_timeout_seconds)
+        ok = returncode == 0
+        if lever_id == "defender_exclusion":
+            if ok:
+                # Único momento en que el estado real se conoce: el script
+                # elevado acaba de verificarlo con Get-MpPreference.
+                write_defender_marker(runtime_path)
+            elif returncode == DEFENDER_FIX_VERIFY_FAILED_EXIT:
+                message = (
+                    "el fix corrió elevado pero la exclusión no quedó aplicada — "
+                    "probablemente Tamper Protection o una política la bloquea"
+                )
         levers = await self.rescan()
         lever = next(l for l in levers if l.id == lever_id)
         if not ok and lever.status != LeverStatus.ok:
