@@ -12,9 +12,11 @@ from PIL import Image
 from app.config import Settings
 from app.services.devices_service import DevicesService
 from app.services.engines.onnx_video_upscaler import (
+    FrameReadbackRing,
     OnnxVideoUpscaler,
     _drain_queue,
     _put_until_cancelled,
+    derive_readback_ring_capacity,
     should_tile_frame,
 )
 from app.services.gpu_session_coordinator import GpuSessionCoordinator
@@ -395,6 +397,184 @@ def test_save_queue_maxsize_floors_at_n_save(tmp_path: Path) -> None:
 def test_save_queue_maxsize_defaults_when_no_frames(tmp_path: Path) -> None:
     engine = make_engine(tmp_path, ONNX_VIDEO_SAVE_THREADS=5)
     assert engine._save_queue_maxsize([], scale=4, n_save=5) == 10  # n_save*2
+
+
+# ---------------------------------------------------------------------------
+# FrameReadbackRing - anillo de K buffers CPU preasignados para el readback.
+# K debe SUPERAR los frames en vuelo downstream: un buffer reusado mientras el
+# frame anterior sigue encolado corrompe frames (regla dura, medida).
+# ---------------------------------------------------------------------------
+
+
+def test_readback_ring_rejects_capacity_below_two() -> None:
+    with pytest.raises(ValueError, match=">= 2"):
+        FrameReadbackRing(1)
+
+
+def test_readback_ring_reuses_the_same_buffers_after_a_full_cycle() -> None:
+    ring = FrameReadbackRing(3)
+    frames = [np.full((1, 4, 6, 3), value, dtype=np.uint8) for value in range(5)]
+    outs = [ring.copy_in(frame) for frame in frames]
+    # Dentro del ciclo son objetos distintos; al dar la vuelta se reusa el MISMO
+    # objeto (esa identidad estable es la ausencia de allocación por frame).
+    assert len({id(out) for out in outs[:3]}) == 3
+    assert outs[3] is outs[0]
+    assert outs[4] is outs[1]
+
+
+def test_readback_ring_copy_does_not_clobber_in_flight_buffers() -> None:
+    ring = FrameReadbackRing(3)
+    first = ring.copy_in(np.full((1, 2, 2, 3), 7, dtype=np.uint8))
+    ring.copy_in(np.full((1, 2, 2, 3), 9, dtype=np.uint8))
+    assert np.array_equal(first, np.full((1, 2, 2, 3), 7, dtype=np.uint8))
+
+
+def test_readback_ring_returns_its_buffer_not_the_input() -> None:
+    ring = FrameReadbackRing(2)
+    source = np.zeros((1, 2, 2, 3), dtype=np.uint8)
+    out = ring.copy_in(source)
+    assert out is not source
+    source[...] = 255
+    assert out[0, 0, 0, 0] == 0  # el buffer no comparte memoria con el input
+
+
+def test_readback_ring_reallocates_on_shape_change() -> None:
+    ring = FrameReadbackRing(2)
+    small = ring.copy_in(np.zeros((1, 2, 2, 3), dtype=np.uint8))
+    big = ring.copy_in(np.ones((1, 4, 4, 3), dtype=np.uint8))
+    assert small.shape == (1, 2, 2, 3)  # el buffer viejo queda intacto
+    assert big.shape == (1, 4, 4, 3)
+    # El anillo nuevo rota normalmente sobre el shape nuevo.
+    big2 = ring.copy_in(np.ones((1, 4, 4, 3), dtype=np.uint8))
+    big3 = ring.copy_in(np.ones((1, 4, 4, 3), dtype=np.uint8))
+    assert big2 is not big
+    assert big3 is big
+
+
+def test_derive_readback_ring_capacity_exceeds_frames_in_flight() -> None:
+    # Streaming: save_q(4) + writer(1); frames: save_q(4) + 2 savers.
+    assert derive_readback_ring_capacity(4, 1) == 7
+    assert derive_readback_ring_capacity(4, 2) == 8
+    for slots, consumers in [(2, 1), (4, 2), (16, 1)]:
+        frames_in_flight = 1 + slots + consumers  # 1 recién producido + cola + consumidores
+        assert derive_readback_ring_capacity(slots, consumers) > frames_in_flight
+
+
+def test_upscale_one_returns_ring_buffers_and_cycles_identity(tmp_path: Path) -> None:
+    engine = make_engine(tmp_path)
+    session = Double2xUint8Session()
+    ring = FrameReadbackRing(2)
+    frame = np.random.default_rng(4).integers(0, 256, (1, 4, 6, 3), dtype=np.uint8)
+
+    out1, _ = engine._upscale_one(session, frame, "cpu", False, ring)
+    out2, _ = engine._upscale_one(session, frame, "cpu", False, ring)
+    out3, _ = engine._upscale_one(session, frame, "cpu", False, ring)
+
+    assert out1 is not out2
+    assert out3 is out1  # K=2: el tercer frame reusa el primer buffer
+    expected = np.repeat(np.repeat(frame, 2, axis=1), 2, axis=2)
+    assert np.array_equal(out2, expected)
+
+
+def test_upscale_one_without_ring_keeps_per_frame_output(tmp_path: Path) -> None:
+    engine = make_engine(tmp_path)
+    session = Double2xUint8Session()
+    frame = np.random.default_rng(5).integers(0, 256, (1, 4, 6, 3), dtype=np.uint8)
+    out1, _ = engine._upscale_one(session, frame, "cpu")
+    out2, _ = engine._upscale_one(session, frame, "cpu")
+    assert out1 is not out2
+
+
+def test_upscale_one_tiled_path_bypasses_the_ring(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # El tiled ya aloca su canvas al blendear: el anillo solo cubre el readback
+    # whole-frame, así que la salida tiled debe pasar tal cual.
+    engine = make_engine(tmp_path, ONNX_WHOLE_FRAME_MAX_PIXELS=10)
+    ring = FrameReadbackRing(2)
+    sentinel = np.zeros((1, 8, 12, 3), dtype=np.uint8)
+    monkeypatch.setattr(engine, "_infer_tiled", lambda s, f, d: sentinel)
+
+    out, _ = engine._upscale_one(None, np.zeros((1, 8, 12, 3), dtype=np.uint8), "cpu", False, ring)
+
+    assert out is sentinel
+
+
+async def test_run_frames_builtin_ring_cycling_does_not_corrupt_frames(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Con 1 saver el anillo queda en K=5 (save_q 2 + saver 1 + 2); 12 frames lo
+    # hacen dar varias vueltas. La corrupción por reuso prematuro apareceria
+    # como píxeles de OTRO frame en la salida, así que se verifica el contenido
+    # exacto de cada frame, no solo el conteo.
+    engine = make_engine(tmp_path, ONNX_VIDEO_LOAD_THREADS=1, ONNX_VIDEO_SAVE_THREADS=1)
+    touch_builtin_onnx(engine.settings, "realesr-animevideov3-x4-uint8.onnx")
+    monkeypatch.setattr(engine, "_create_session", lambda model_path, device: Double2xUint8Session())
+    frames_in = tmp_path / "frames-in"
+    frames_out = tmp_path / "frames-out"
+    write_frames(frames_in, count=12, height=4, width=6)
+
+    await engine.run_frames_builtin(frames_in, frames_out, "realesr-animevideov3-x4", "cpu")
+
+    for path in sorted(frames_in.glob("*.png")):
+        with Image.open(path) as image:
+            source = np.asarray(image)
+        expected = np.repeat(np.repeat(source, 2, axis=0), 2, axis=1)
+        with Image.open(frames_out / path.name) as image:
+            produced = np.asarray(image)
+        assert np.array_equal(produced, expected), path.name
+
+
+async def test_run_frames_streaming_ring_cycling_keeps_frames_correct(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Streaming: K=7 (save_q 4 + writer 1 + 2); 12 frames dan más de una vuelta.
+    # write_frame recibe el buffer del anillo y debe consumirlo antes de
+    # retornar (contrato del sink) — de ahí el .copy() al capturar.
+    engine = make_engine(tmp_path)
+    touch_builtin_onnx(engine.settings, "realesr-animevideov3-x4-uint8.onnx")
+    monkeypatch.setattr(engine, "_create_session", lambda model_path, device: Double2xUint8Session())
+    frames_in = tmp_path / "frames-in"
+    write_frames(frames_in, count=12, height=4, width=6)
+
+    received: list[np.ndarray] = []
+    count = await engine.run_frames_streaming(
+        frames_in, "realesr-animevideov3-x4", "cpu", lambda frame: received.append(frame.copy())
+    )
+
+    assert count == 12
+    assert len(received) == 12
+    for index, path in enumerate(sorted(frames_in.glob("*.png"))):
+        with Image.open(path) as image:
+            source = np.asarray(image)
+        expected = np.repeat(np.repeat(source, 2, axis=0), 2, axis=1)
+        assert np.array_equal(received[index], expected), path.name
+
+
+def test_build_frame_upscaler_ring_capacity_cycles_buffers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = make_engine(tmp_path)
+    touch_builtin_onnx(engine.settings, "realesr-animevideov3-x4-uint8.onnx")
+    monkeypatch.setattr(engine, "_create_session", lambda model_path, device: Double2xUint8Session())
+    upscale = engine.build_frame_upscaler("realesr-animevideov3-x4", "cpu", readback_ring_capacity=2)
+    frame = np.random.default_rng(6).integers(0, 256, (1, 4, 6, 3), dtype=np.uint8)
+
+    out1, out2, out3 = upscale(frame), upscale(frame), upscale(frame)
+
+    assert out1 is not out2
+    assert out3 is out1
+    assert np.array_equal(out2, np.repeat(np.repeat(frame, 2, axis=1), 2, axis=2))
+
+
+def test_build_frame_upscaler_defaults_to_no_ring(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Sin capacidad explícita no hay anillo: el closure no conoce las colas del
+    # FramePipeline del caller y un K menor a los frames en vuelo corrompe.
+    engine = make_engine(tmp_path)
+    touch_builtin_onnx(engine.settings, "realesr-animevideov3-x4-uint8.onnx")
+    monkeypatch.setattr(engine, "_create_session", lambda model_path, device: Double2xUint8Session())
+    upscale = engine.build_frame_upscaler("realesr-animevideov3-x4", "cpu")
+    frame = np.zeros((1, 4, 6, 3), dtype=np.uint8)
+
+    assert upscale(frame) is not upscale(frame)
 
 
 def test_infer_tiled_matches_whole_frame_for_double_session(tmp_path: Path) -> None:

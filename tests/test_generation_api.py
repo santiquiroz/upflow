@@ -363,7 +363,7 @@ async def test_generation_capabilities_lists_models_and_cpu_only_flag(tmp_path: 
 
     assert response.available is True
     assert [m.model_dump() for m in response.models] == [
-        {"id": MODEL_ID, "name": "amd/sd15", "status": "installed", "supports_inpaint": True, "erase_only": False}
+        {"id": MODEL_ID, "name": "amd/sd15", "status": "installed", "supports_inpaint": True, "erase_only": False, "speed": None}
     ]
     assert response.cpu_only is True
 
@@ -817,7 +817,7 @@ def test_capabilities_lists_installed_models_and_cpu_only_flag(client_with_model
     payload = client_with_model.get("/api/v1/generation/capabilities").json()
     assert payload["available"] is True
     assert payload["models"] == [
-        {"id": "gen--amd--sd15", "name": "amd/sd15", "status": "installed", "supportsInpaint": True, "eraseOnly": False}
+        {"id": "gen--amd--sd15", "name": "amd/sd15", "status": "installed", "supportsInpaint": True, "eraseOnly": False, "speed": None}
     ]
     assert isinstance(payload["cpuOnly"], bool)
 

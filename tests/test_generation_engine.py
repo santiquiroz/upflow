@@ -175,8 +175,13 @@ async def test_run_passes_seeded_generator(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
-async def test_pipeline_cache_is_lru_one_across_devices(tmp_path: Path) -> None:
+async def test_pipeline_cache_is_lru_one_across_devices(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     engine, _coordinator, _fake = make_engine(tmp_path)
+    # Capacidad pinneada a 1: en una máquina real con VRAM libre el cache ahora
+    # retiene 2-3 entradas y este test verifica la EVICCIÓN LRU, no la capacidad.
+    monkeypatch.setattr(generation_onnx_module, "_pipeline_cache_capacity", lambda device: 1)
     created: list[str] = []
     engine._create_pipeline = lambda pipeline_dir, device, mode="text2img": created.append(device) or FakePipeline()  # type: ignore[method-assign]
 
@@ -522,3 +527,92 @@ def test_overlapping_calls_to_the_same_pipeline_do_not_interleave(tmp_path: Path
         t.join()
 
     assert overlap and not any(overlap)
+
+
+def test_apply_scheduler_swaps_and_restores_the_original(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    class FakeScheduler:
+        config = {}
+
+    pipeline = SimpleNamespace(scheduler=FakeScheduler())
+    original = pipeline.scheduler
+
+    generation_onnx_module._apply_scheduler(pipeline, "euler_a")
+    assert type(pipeline.scheduler).__name__ == "EulerAncestralDiscreteScheduler"
+
+    # None restaura el scheduler ORIGINAL del repo: el pipeline es compartido y
+    # el scheduler de un job no puede quedar pegado para el siguiente.
+    generation_onnx_module._apply_scheduler(pipeline, None)
+    assert pipeline.scheduler is original
+
+
+def test_apply_scheduler_rejects_unknown_names(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    class FakeScheduler:
+        config = {}
+
+    pipeline = SimpleNamespace(scheduler=FakeScheduler())
+    with pytest.raises(RuntimeError, match="Unsupported scheduler"):
+        generation_onnx_module._apply_scheduler(pipeline, "ddim_magico")
+
+
+def test_pipeline_cache_capacity_scales_with_free_vram(monkeypatch) -> None:
+    import app.services.devices_service as devices_module
+
+    readings = {"free": 12000}
+    monkeypatch.setattr(devices_module, "adapter_free_vram_mb", lambda index: readings["free"])
+
+    assert generation_onnx_module._pipeline_cache_capacity("dml:0") == 3
+    readings["free"] = 8000
+    assert generation_onnx_module._pipeline_cache_capacity("dml:0") == 2
+    # 4000 libres NO alcanzan para retener extra: el próximo load de peor caso
+    # (SDXL fp16 ~5GB) haría OOM contra el cache lleno.
+    readings["free"] = 4000
+    assert generation_onnx_module._pipeline_cache_capacity("dml:0") == 1
+    readings["free"] = None
+    assert generation_onnx_module._pipeline_cache_capacity("dml:0") == 1
+    assert generation_onnx_module._pipeline_cache_capacity("cpu") == 1
+
+
+def test_pipeline_precision_reads_the_unet_session_output_type() -> None:
+    from types import SimpleNamespace
+
+    def fake_pipeline(output_type: str):
+        output = SimpleNamespace(type=output_type)
+        session = SimpleNamespace(get_outputs=lambda: [output])
+        return SimpleNamespace(unet=SimpleNamespace(session=session))
+
+    assert generation_onnx_module._pipeline_precision(fake_pipeline("tensor(float16)")) == "fp16"
+    assert generation_onnx_module._pipeline_precision(fake_pipeline("tensor(float)")) == "fp32"
+    assert generation_onnx_module._pipeline_precision(SimpleNamespace(unet=None)) is None
+
+
+async def test_oom_on_pipeline_load_evicts_the_device_cache_and_retries(tmp_path: Path) -> None:
+    engine, _coordinator, _fake = make_engine(tmp_path)
+    attempts: list[int] = []
+
+    class FakePipelineOk:
+        def __call__(self, **kwargs: Any) -> Any:
+            from types import SimpleNamespace
+
+            image = SimpleNamespace(save=lambda path: Path(path).write_bytes(b"png"))
+            return SimpleNamespace(images=[image])
+
+    def create(pipeline_dir: Path, device: str, mode: str = "text2img") -> Any:
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise RuntimeError("Failed to allocate memory for requested buffer")
+        return FakePipelineOk()
+
+    engine._create_pipeline = create  # type: ignore[method-assign]
+
+    await engine.run(
+        model_id="m", pipeline_dir=tmp_path, request=make_request(), device="dml:0",
+        output_path=tmp_path / "o.png", progress_cb=lambda *_: None,
+    )
+
+    # El primer intento hizo OOM, la evicción liberó el cache del device y el
+    # retry único cargó: el retry del usuario ya no pega contra el mismo muro.
+    assert len(attempts) == 2

@@ -120,7 +120,9 @@ function ModelSelect({
         <option key={model.id} value={model.id} disabled={model.status !== "installed"}>
           {model.status === "converting"
             ? t("generate.model.converting", { name: model.name })
-            : model.name}
+            : model.speed
+              ? t("generate.model.fastModel", { name: model.name })
+              : model.name}
         </option>
       ))}
     </select>

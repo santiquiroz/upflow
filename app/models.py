@@ -276,6 +276,9 @@ class GenerationJob:
     width: int = 512
     height: int = 512
     seed: int | None = None
+    # Scheduler alternativo ("lcm" | "euler_a" | "euler_trailing"); None = el
+    # del repo. Lo puede fijar la API o el anclaje por clase de velocidad.
+    scheduler: str | None = None
     device: str | None = None
     # Imagen de partida ya staged en disco. Presente = imagen a imagen.
     init_image_path: Path | None = None

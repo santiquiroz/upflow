@@ -101,6 +101,15 @@ ControlNet Union).
 - Descartados: AnyDoor/TF-ICON/Insert-Anything (torch-only/CUDA 12B), Harmonizer (CC BY-NC).
 - F0-F3 cubren ~80% de los casos sin ningún modelo nuevo hasta F3.
 
+## Bug conocido (pre-existente, confirmado y reproducido en review 2026-08-07)
+
+`inpaint_mask._expand_to_square`: una marca más ANCHA que la dimensión menor de la
+imagen (ej. 1500px de ancho en una foto 1920x1080) produce un crop cuadrado clampado
+que NO cubre el bbox marcado → solo se edita la franja central, con costura dura y
+sin aviso. Fix: generalizar el crop a rectangular (el bucketing de 128 ya acepta
+width/height distintos); `resolve_model_side` debe pasar a (work_w, work_h).
+Va con el trabajo de geometría de la ola 2.
+
 ## Research bets
 
 - ControlNet inpaint (arriba). DeepCache vía export dual deep/shallow (2.6x claim; alternar

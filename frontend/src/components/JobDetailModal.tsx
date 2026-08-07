@@ -201,7 +201,16 @@ function JobTypeSummary({ entry, job }: { entry: JobQueueEntry; job: AnyJobRespo
       items.push({ label: "Device", value: deviceLabel(job.device) });
     }
     if (job.executionProvider) {
-      items.push({ label: "Acceleration", value: job.executionProvider });
+      items.push({
+        label: "Acceleration",
+        value: job.precision ? `${job.executionProvider} · ${job.precision}` : job.executionProvider,
+      });
+    }
+    if (job.scheduler) {
+      items.push({ label: "Scheduler", value: job.scheduler });
+    }
+    if (job.speedClass) {
+      items.push({ label: "Speed class", value: job.speedClass });
     }
     pushDurationItem(items, job);
     const pace = stepPaceLabel(job);

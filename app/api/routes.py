@@ -499,6 +499,9 @@ def generation_job_to_response(job: GenerationJob) -> GenerationJobResponse:
         seed_was_random=bool(job.metadata.get("seedWasRandom")),
         execution_provider=job.metadata.get("executionProvider"),
         strength=job.strength if job.init_image_path is not None else None,
+        scheduler=job.scheduler,
+        speed_class=job.metadata.get("speedClass"),
+        precision=job.metadata.get("precision"),
         created_at=job.created_at, started_at=job.started_at, finished_at=job.finished_at,
         progress_pct=_progress_pct_from_metadata(job.metadata), stages=job.metadata.get("stages"),
         error=job.error, download_url=download_url, owner_id=job.owner_id,
@@ -1955,7 +1958,8 @@ async def create_generation_job(
         job = await generation_jobs.create_job(
             prompt=payload.prompt, negative_prompt=payload.negative_prompt, model_id=payload.model_id,
             steps=steps, guidance=guidance, width=payload.width, height=payload.height,
-            seed=payload.seed, device=payload.device, frames=payload.frames, fps=payload.fps,
+            seed=payload.seed, scheduler=payload.scheduler,
+            device=payload.device, frames=payload.frames, fps=payload.fps,
             init_image_path=init_image_path, strength=strength,
             mask_image_path=mask_image_path,
             auto_upscale=payload.auto_upscale,
@@ -2173,12 +2177,15 @@ async def generation_capabilities(
         return GenerationCapabilitiesResponse(available=False, reason=reason, cpu_only=True)
     # error queda afuera: una conversion fallida se ve en Models con su motivo;
     # el dropdown de Generate no es lugar para un modelo que no existe en disco.
+    from app.services.generation_speed import speed_class as _speed_class
+
     models = [
         GenerationModelSummary(
             id=entry.id,
             name=entry.name,
             status=entry.status.value,
             supports_inpaint=_entry_supports_inpaint(settings, entry),
+            speed=_speed_class(entry.name),
         )
         for entry in registry.list()
         if entry.kind == ModelKind.diffusion_onnx and entry.status != ModelStatus.error

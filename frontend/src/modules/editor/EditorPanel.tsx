@@ -50,6 +50,10 @@ import {
 // En inglés porque los checkpoints SD responden mejor a prompts en inglés.
 const ERASE_PROMPT = "background, empty scene, seamless continuation of the surroundings, high quality";
 const ERASE_NEGATIVE_PROMPT = "object, person, animal, text, watermark, logo";
+// Negative anatómico por defecto del modo Reemplazar: la causa más frecuente
+// de cuerpos rotos en inpaint es no vetar explícitamente las deformaciones.
+const REPLACE_NEGATIVE_PROMPT =
+  "deformed, distorted anatomy, extra limbs, extra fingers, missing fingers, disconnected limbs, blurry, watermark, text";
 const DEFAULT_STEPS = 30;
 const DEFAULT_GUIDANCE = 7.0;
 
@@ -166,6 +170,8 @@ function InpaintModelSelect({
     (model) =>
       model.status === "installed" &&
       model.supportsInpaint !== false &&
+      // Turbo: 512px nativo y sin negative prompt — no sirve para inpaint.
+      model.speed !== "turbo" &&
       (mode === "erase" || !model.eraseOnly),
   );
   return (
@@ -209,7 +215,7 @@ export function EditorPanel() {
   // de vivir escondidos en constantes.
   const [erasePromptText, setErasePromptText] = useState(ERASE_PROMPT);
   const [eraseNegative, setEraseNegative] = useState(ERASE_NEGATIVE_PROMPT);
-  const [replaceNegative, setReplaceNegative] = useState("");
+  const [replaceNegative, setReplaceNegative] = useState(REPLACE_NEGATIVE_PROMPT);
   const [steps, setSteps] = useState(DEFAULT_STEPS);
   const [guidance, setGuidance] = useState(DEFAULT_GUIDANCE);
   const [seedText, setSeedText] = useState("");

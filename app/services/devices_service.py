@@ -345,6 +345,11 @@ def _query_adapter_free_vram_mb(adapter_index: int) -> int | None:
     return None if info is None else info[0]
 
 
+def adapter_free_vram_mb(adapter_index: int) -> int | None:
+    """VRAM libre en MB para dml:N, o None si no se puede saber. Never raises."""
+    return _query_adapter_free_vram_mb(adapter_index)
+
+
 def _build_gpu_device(index: int, name: str) -> DeviceInfo:
     return {"id": f"dml:{index}", "kind": "gpu", "name": name or f"GPU {index}", "backend": "directml"}
 

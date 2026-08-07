@@ -719,6 +719,8 @@ class CreateGenerationJobRequest(BaseModel):
     width: int = Field(default=512, ge=64, le=1024, multiple_of=32)
     height: int = Field(default=512, ge=64, le=1024, multiple_of=32)
     seed: int | None = Field(default=None, ge=0)
+    # Scheduler alternativo; None = el que declara el repo del modelo.
+    scheduler: Literal["lcm", "euler_a", "euler_trailing"] | None = None
     device: str | None = None
     # Token de una imagen ya subida con POST /generation/init-image. Presente =
     # imagen a imagen. Se sube aparte para no volver multipart el contrato JSON
@@ -760,6 +762,13 @@ class GenerationJobResponse(BaseModel):
     # La semilla se resolvió al azar en el server: el modal la muestra igual
     # (reproducible) pero aclara que no la eligió el usuario.
     seed_was_random: bool = Field(default=False, serialization_alias="seedWasRandom")
+    scheduler: str | None = None
+    # Clase de velocidad del modelo (turbo/lightning/lcm) cuando el server
+    # ancló parámetros por ella.
+    speed_class: str | None = Field(default=None, serialization_alias="speedClass")
+    # fp16/fp32 REAL del UNet cargado. fp32 = ~7x más lento (medido): el modal
+    # lo muestra para que la regresión nunca sea silenciosa.
+    precision: str | None = None
     device: str | None = None
     # Provider que las sesiones REALES usaron ("DirectML", "CPU (fallback)",
     # "Vulkan (sd.cpp)", EP nativo). None hasta que el job creó una sesión.
@@ -826,6 +835,10 @@ class GenerationModelSummary(BaseModel):
     # Motores que solo saben QUITAR (rellenan continuando el entorno): se ofrecen
     # en el modo Quitar y se esconden cuando hay que poner algo concreto.
     erase_only: bool = Field(default=False, serialization_alias="eraseOnly")
+    # Clase de velocidad derivada del nombre del repo (turbo/lightning/lcm).
+    # La UI marca el modelo como rápido y el editor esconde los turbo (512px,
+    # sin negative prompt: no sirven para inpaint).
+    speed: str | None = None
 
 
 class GenerationCapabilitiesResponse(BaseModel):

@@ -87,6 +87,7 @@ export const en = {
   "generate.model.select": "Select a model…",
   "generate.model.converting": "{{name}} (converting… ~30-45 min)",
   "generate.video.fastModel": "{{name}} - fast, 4 steps",
+  "generate.model.fastModel": "{{name}} ⚡ fast, few steps",
   "generate.video.size.square": "640 x 640 (square)",
   "generate.video.size.fastest": "480 x 480 (fastest)",
   "generate.video.size.vertical": "480 x 832 (vertical)",

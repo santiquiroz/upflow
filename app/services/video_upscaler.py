@@ -29,7 +29,11 @@ from app.services.engines.ffmpeg_frame_source import FfmpegFrameSource
 from app.services.engines.ffmpeg_frame_sink import RawPipeEncoder
 from app.services.engines.gmfss_engine import GmfssEngine
 from app.services.engines.onnx_upscaler import OnnxUpscaler
-from app.services.engines.onnx_video_upscaler import OnnxVideoUpscaler, _load_frame
+from app.services.engines.onnx_video_upscaler import (
+    OnnxVideoUpscaler,
+    _load_frame,
+    derive_readback_ring_capacity,
+)
 from app.services.engines.realesrgan_ncnn import RealEsrganNcnnEngine, gpu_index_for_device
 from app.services.engines.rife_ncnn import RifeNcnnEngine
 from app.services.frame_pipeline import (
@@ -1383,13 +1387,22 @@ class VideoUpscaler:
             # trade-off que documentaba la fusión eliminada; vigilarlo en el
             # smoke real. La serialización sigue en el coordinator/semáforos.
             stages.append(gmfss_stage_factory(device))
-        upscale_frame = self.onnx_video_engine.build_frame_upscaler(job.model_name, device, job.scale)
-        stages.append(MapStage(upscale_frame))
-
         input_bytes = width * height * 3
         output_bytes = input_bytes * job.scale * job.scale
         budget_bytes = max(1, self.settings.onnx_video_max_pipeline_mb) * 1024 * 1024
-        maxsizes = derive_stream_queue_maxsizes(input_bytes, output_bytes, len(stages), budget_bytes)
+        # Las colas se derivan ANTES de armar la etapa de upscale: su anillo de
+        # readback debe cubrir los frames en vuelo aguas abajo (última cola +
+        # sink) o un buffer reusado corrompería un frame todavía encolado.
+        maxsizes = derive_stream_queue_maxsizes(
+            input_bytes, output_bytes, len(stages) + 1, budget_bytes
+        )
+        upscale_frame = self.onnx_video_engine.build_frame_upscaler(
+            job.model_name,
+            device,
+            job.scale,
+            readback_ring_capacity=derive_readback_ring_capacity(maxsizes[-1], 1),
+        )
+        stages.append(MapStage(upscale_frame))
 
         encoder = RawPipeEncoder(
             command, summarize_error=lambda stderr: self._summarize_process_error(stderr, b"")

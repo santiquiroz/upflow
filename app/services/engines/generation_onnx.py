@@ -198,6 +198,75 @@ def _inpaint_strength(pipeline: Any, requested: float) -> float:
 
 _PIPELINE_SESSION_ATTRS = ("unet", "vae_decoder", "vae_encoder", "text_encoder", "text_encoder_2")
 
+_ORIGINAL_SCHEDULER_ATTR = "_upflow_original_scheduler"
+
+# Umbrales del cache de pipelines. Regla: retener una entrada extra exige que
+# DESPUÉS de retenerla quede lugar para UN load más de peor caso (SDXL fp16
+# ~5GB) + margen — si no, el tercer modo del mismo modelo hace OOM contra un
+# cache lleno (confirmado en review adversarial: 16GB, text2img+inpaint
+# retenidos = 10GB, img2img sin lugar). Modelos chicos solo se benefician.
+_CACHE_COMFORT_FREE_MB = 11000
+_CACHE_TIGHT_FREE_MB = 6000
+
+
+def _pipeline_cache_capacity(device: str) -> int:
+    """Cuántos pipelines retener para este device según su VRAM libre AHORA.
+
+    1 era el default seguro, pero alternar text2img↔inpaint del mismo modelo
+    recargaba GBs en cada cambio. Sin lectura de VRAM (None) se queda en 1.
+    """
+    if not device.startswith("dml:"):
+        return 1
+    from app.services.devices_service import adapter_free_vram_mb
+
+    try:
+        index = int(device.partition(":")[2])
+    except ValueError:
+        return 1
+    free_mb = adapter_free_vram_mb(index)
+    if free_mb is None:
+        return 1
+    if free_mb >= _CACHE_COMFORT_FREE_MB:
+        return 3
+    if free_mb >= _CACHE_TIGHT_FREE_MB:
+        return 2
+    return 1
+
+
+def _build_scheduler(name: str, config: Any) -> Any:
+    from diffusers.schedulers import (
+        EulerAncestralDiscreteScheduler,
+        EulerDiscreteScheduler,
+        LCMScheduler,
+    )
+
+    if name == "lcm":
+        return LCMScheduler.from_config(config)
+    if name == "euler_a":
+        return EulerAncestralDiscreteScheduler.from_config(config)
+    if name == "euler_trailing":
+        return EulerDiscreteScheduler.from_config(config, timestep_spacing="trailing")
+    raise RuntimeError(f"Unsupported scheduler: {name!r}")
+
+
+def _apply_scheduler(pipeline: Any, name: str | None) -> None:
+    """Aplica el scheduler pedido al pipeline cacheado, SIEMPRE bajo su run_lock.
+
+    El pipeline es compartido: sin restaurar, el scheduler de un job quedaría
+    pegado para el siguiente. `None` restaura el original del repo.
+    """
+    original = getattr(pipeline, _ORIGINAL_SCHEDULER_ATTR, None)
+    if original is None:
+        original = getattr(pipeline, "scheduler", None)
+        if original is None:
+            # Dobles de test o pipelines sin scheduler: nada que intercambiar.
+            return
+        setattr(pipeline, _ORIGINAL_SCHEDULER_ATTR, original)
+    if name is None:
+        pipeline.scheduler = original
+        return
+    pipeline.scheduler = _build_scheduler(name, original.config)
+
 
 def _record_pipeline_providers(pipeline: Any, device: str) -> None:
     # optimum no expone los providers del pipeline: hay que preguntarle a la
@@ -206,6 +275,40 @@ def _record_pipeline_providers(pipeline: Any, device: str) -> None:
         session = getattr(getattr(pipeline, name, None), "session", None)
         if session is not None:
             ep_registry.record_session_providers(device, session, context=f"generación/{name}")
+
+
+def _looks_like_memory_error(exc: Exception) -> bool:
+    lowered = str(exc).lower()
+    return any(token in lowered for token in _MEMORY_TOKENS)
+
+
+def _native_side_for(pipeline: Any) -> int:
+    # SDXL y SD3 entrenan a 1024; el resto de las familias soportadas, a 512.
+    name = type(pipeline).__name__
+    return 1024 if ("XL" in name or "Diffusion3" in name) else 512
+
+
+def _pipeline_precision(pipeline: Any) -> str | None:
+    """fp16/fp32 REAL del UNet cargado, leído del tipo de salida de su sesión.
+
+    Un modelo que cayó a fp32 corre ~7x más lento (medido en este repo) y sin
+    esta lectura la regresión es silenciosa.
+    """
+    session = getattr(getattr(pipeline, "unet", None), "session", None)
+    if session is None:
+        return None
+    try:
+        outputs = session.get_outputs()
+    except Exception:  # noqa: BLE001 -- diagnóstico jamás tumba un job
+        return None
+    if not outputs:
+        return None
+    output_type = getattr(outputs[0], "type", "")
+    if "float16" in output_type:
+        return "fp16"
+    if output_type == "tensor(float)":
+        return "fp32"
+    return None
 
 
 def _build_seed_generator(seed: int) -> Any:
@@ -241,6 +344,10 @@ class GenerationRequest:
     # `None` = se calcula a partir del tamaño de lo marcado. Era 48 fijo, y eso
     # dejaba al modelo sin ver la cara cuando la marca era grande.
     mask_padding_px: int | None = None
+    # Scheduler alternativo para este job ("lcm" | "euler_a" | "euler_trailing").
+    # None = el que declara el repo del modelo. El swap es CPU-side (componente
+    # diffusers): no toca el grafo ONNX y vale para cualquier EP.
+    scheduler: str | None = None
 
 
 class GenerationEngine:
@@ -269,6 +376,11 @@ class GenerationEngine:
                 lock = threading.Lock()
                 self._pipeline_run_locks[key] = lock
             return lock
+
+    def precision_for(self, model_id: str, device: str, mode: str) -> str | None:
+        with self._cache_lock:
+            pipeline = self._pipeline_cache.get((model_id, device, mode))
+        return _pipeline_precision(pipeline) if pipeline is not None else None
 
     async def run(
         self,
@@ -349,6 +461,7 @@ class GenerationEngine:
 
         try:
             with run_lock:
+                _apply_scheduler(pipeline, request.scheduler)
                 result = pipeline(**call_kwargs)
         except GenerationCancelled:
             raise
@@ -402,6 +515,7 @@ class GenerationEngine:
                 call_kwargs["generator"] = _build_seed_generator(request.seed)
             try:
                 with run_lock:
+                    _apply_scheduler(pipeline, request.scheduler)
                     return pipeline(**call_kwargs).images[0]
             except GenerationCancelled:
                 raise
@@ -413,6 +527,9 @@ class GenerationEngine:
             feather_px=request.mask_feather_px,
             padding_px=request.mask_padding_px,
             target_side=max(request.width, request.height),
+            # Piso de resolución: un parche chico difundido a su propio tamaño
+            # produce anatomía blanda — el modelo rinde a su resolución nativa.
+            native_side=_native_side_for(pipeline),
         )
         edited = run_masked_edit(base_image, mask_image, run_model, settings)
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -436,11 +553,23 @@ class GenerationEngine:
         try:
             pipeline = self._create_pipeline(pipeline_dir, device, mode)
         except Exception as exc:
-            raise _wrap_generation_error(exc) from exc
+            if not _looks_like_memory_error(exc):
+                raise _wrap_generation_error(exc) from exc
+            # OOM con cache retenido: evictar lo de este device y reintentar UNA
+            # vez. Sin esto, el retry del usuario pega contra el mismo muro
+            # indefinidamente (el cache lleno nunca se vacía solo).
+            self.release_device(device)
+            try:
+                pipeline = self._create_pipeline(pipeline_dir, device, mode)
+            except Exception as retry_exc:
+                raise _wrap_generation_error(retry_exc) from retry_exc
+        # La capacidad se lee DESPUÉS del load: la VRAM libre ya descuenta el
+        # pipeline recién cargado, así que el margen medido es real.
+        capacity = _pipeline_cache_capacity(device)
         with self._cache_lock:
             self._pipeline_cache[key] = pipeline
             self._pipeline_cache.move_to_end(key)
-            while len(self._pipeline_cache) > 1:
+            while len(self._pipeline_cache) > capacity:
                 self._pipeline_cache.popitem(last=False)
         return pipeline
 

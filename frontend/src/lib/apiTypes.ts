@@ -516,6 +516,9 @@ export interface GenerationJob {
   device: string | null;
   executionProvider?: string | null;
   strength?: number | null;
+  scheduler?: string | null;
+  speedClass?: string | null;
+  precision?: string | null;
   autoUpscale: boolean;
   createdAt: string;
   startedAt: string | null;
@@ -541,6 +544,9 @@ export interface GenerationModelSummary {
   supportsInpaint?: boolean;
   /** Motor que solo sabe quitar (rellena continuando el entorno, sin prompt). */
   eraseOnly?: boolean;
+  /** Clase de velocidad (turbo/lightning/lcm): el server ancla sus parámetros
+   *  y el editor esconde los turbo (512px, sin negative prompt). */
+  speed?: string | null;
 }
 
 export interface GenerationCapabilities {

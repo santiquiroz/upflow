@@ -80,6 +80,60 @@ def derive_queue_maxsize(frame_bytes: int, budget_bytes: int, floor: int, ceilin
     return max(floor, min(ceiling, budget_bytes // frame_bytes))
 
 
+MIN_READBACK_RING_CAPACITY = 2
+
+
+class FrameReadbackRing:
+    """Anillo de K buffers CPU preasignados para el readback GPU→CPU de frames.
+
+    Alocar un array de salida nuevo por frame costaba ~11% del tiempo de frame
+    (54.3→48.4 ms medido); el anillo preasigna los buffers una vez y rota. El
+    output de ORT se COPIA al buffer (np.copyto): lo que se evita es la
+    allocación por frame, no la copia. K=1 está prohibido porque reusar el
+    único buffer mientras el frame anterior sigue en la cola downstream
+    corrompe frames (medido) — de ahí el mínimo del constructor.
+    """
+
+    def __init__(self, capacity: int) -> None:
+        if capacity < MIN_READBACK_RING_CAPACITY:
+            raise ValueError(
+                f"readback ring capacity must be >= {MIN_READBACK_RING_CAPACITY}, got {capacity}"
+            )
+        self.capacity = capacity
+        self._buffers: list[np.ndarray] = []
+        self._index = 0
+        self._shape: tuple[int, ...] | None = None
+        self._dtype: Any = None
+
+    def copy_in(self, frame: np.ndarray) -> np.ndarray:
+        """Copia `frame` al siguiente buffer del anillo y devuelve ese buffer."""
+        if frame.shape != self._shape or frame.dtype != self._dtype:
+            self._reallocate(frame.shape, frame.dtype)
+        buffer = self._buffers[self._index]
+        self._index = (self._index + 1) % self.capacity
+        np.copyto(buffer, frame)
+        return buffer
+
+    def _reallocate(self, shape: tuple[int, ...], dtype: Any) -> None:
+        # Cambio de resolución mid-run: los buffers viejos tienen otro shape,
+        # así que el anillo completo se re-aloca para el shape nuevo.
+        self._buffers = [np.empty(shape, dtype=dtype) for _ in range(self.capacity)]
+        self._index = 0
+        self._shape = shape
+        self._dtype = dtype
+
+
+def derive_readback_ring_capacity(downstream_slots: int, n_consumers: int) -> int:
+    """K > frames en vuelo aguas abajo del infer.
+
+    En vuelo: 1 recién producido (aún no encolado) + `downstream_slots` que la
+    cola puede retener + `n_consumers` en manos de los threads consumidores.
+    El +1 extra es el margen mínimo (K = en_vuelo + 1) para no reusar jamás un
+    buffer que la cola downstream todavía referencia — eso corrompe frames.
+    """
+    return downstream_slots + n_consumers + 2
+
+
 from app.config import Settings
 from app.services.backend_registry import get_builtin_onnx_model
 from app.services.devices_service import DevicesService
@@ -337,7 +391,11 @@ class OnnxVideoUpscaler:
     # --- per-frame closure for the stream pipeline ---------------------------
 
     def build_frame_upscaler(
-        self, engine_model_name: str, device: str, scale: int | None = None
+        self,
+        engine_model_name: str,
+        device: str,
+        scale: int | None = None,
+        readback_ring_capacity: int | None = None,
     ) -> "Callable[[np.ndarray], np.ndarray]":
         """Closure NHWC uint8 → NHWC uint8 sobre la MISMA sesión/tiling/fp16 que
         run_frames_builtin: la etapa de upscale del stream pipeline (MapStage).
@@ -345,6 +403,13 @@ class OnnxVideoUpscaler:
         La sesión se resuelve UNA vez acá (cache + GpuSessionCoordinator.acquire
         — la serialización GPU existente); el flag sticky de tiling replica el
         contrato de _infer_loop para el resto del run.
+
+        `readback_ring_capacity` es opt-in porque desde acá no se ven las colas
+        del FramePipeline del caller (sus maxsizes se derivan DESPUÉS de crear
+        este closure, con techo 16): cualquier K fijo puede quedar por debajo de
+        los frames en vuelo y eso corrompe frames (medido). Sin el dato, el
+        closure aloca por frame como siempre; el caller que conoce sus colas
+        pasa K = frames_en_vuelo + 1 (derive_readback_ring_capacity).
         """
         if not self.available():
             raise RuntimeError("ONNX video engine is not available: onnxruntime and opencv are required")
@@ -359,11 +424,12 @@ class OnnxVideoUpscaler:
             raise RuntimeError(f"ONNX model file not found: {onnx_path}")
         self.devices.validate(device)
         session = self._get_session(str(onnx_path), device)
+        ring = FrameReadbackRing(readback_ring_capacity) if readback_ring_capacity is not None else None
         state = {"force_tiled": False}
 
         def upscale_frame(frame_nhwc: np.ndarray) -> np.ndarray:
             upscaled, state["force_tiled"] = self._upscale_one(
-                session, frame_nhwc, device, state["force_tiled"]
+                session, frame_nhwc, device, state["force_tiled"], ring
             )
             return upscaled
 
@@ -399,12 +465,15 @@ class OnnxVideoUpscaler:
         # writer never has to hold more than the in-flight frame (the reorder
         # buffer below is a safety net, not the normal path). Infer is the limiter
         # (~116ms/frame), so a single ~30ms loader is not a bottleneck.
+        save_maxsize = 4
         load_q: queue.Queue[tuple[str, np.ndarray]] = queue.Queue(maxsize=4)
-        save_q: queue.Queue[tuple[str, np.ndarray] | None] = queue.Queue(maxsize=4)
+        save_q: queue.Queue[tuple[str, np.ndarray] | None] = queue.Queue(maxsize=save_maxsize)
         todo: queue.Queue[Path] = queue.Queue()
         for path in frame_paths:
             todo.put(path)
         errors: list[Exception] = []
+        # Un solo consumidor aguas abajo del infer: el ordered writer.
+        ring = FrameReadbackRing(derive_readback_ring_capacity(save_maxsize, n_consumers=1))
 
         loader = threading.Thread(
             target=self._loader_loop, args=(todo, load_q, errors, cancel_event), daemon=True
@@ -417,7 +486,9 @@ class OnnxVideoUpscaler:
         loader.start()
         writer.start()
         try:
-            self._infer_loop(session, load_q, save_q, device, len(frame_paths), [loader], errors, cancel_event)
+            self._infer_loop(
+                session, load_q, save_q, device, len(frame_paths), [loader], errors, cancel_event, ring
+            )
         finally:
             _drain_queue(load_q)
             save_q.put(None)  # wake the writer if infer stopped early (error/cancel)
@@ -532,6 +603,8 @@ class OnnxVideoUpscaler:
         for path in frame_paths:
             todo.put(path)
         errors: list[Exception] = []
+        # Cada saver retiene un frame mientras codifica su PNG.
+        ring = FrameReadbackRing(derive_readback_ring_capacity(save_maxsize, n_consumers=n_save))
 
         loaders = [
             threading.Thread(target=self._loader_loop, args=(todo, load_q, errors, cancel_event), daemon=True)
@@ -547,7 +620,9 @@ class OnnxVideoUpscaler:
             thread.start()
 
         try:
-            self._infer_loop(session, load_q, save_q, device, len(frame_paths), loaders, errors, cancel_event)
+            self._infer_loop(
+                session, load_q, save_q, device, len(frame_paths), loaders, errors, cancel_event, ring
+            )
         finally:
             # Drain any frames still queued so a loader blocked on a full load_q
             # (no longer consumed once infer returns) can finish its put and exit
@@ -616,6 +691,7 @@ class OnnxVideoUpscaler:
         loaders: list[threading.Thread],
         errors: list[Exception],
         cancel_event: threading.Event,
+        ring: FrameReadbackRing | None = None,
     ) -> None:
         processed = 0
         force_tiled = False  # sticky per-run: once a whole-frame OOM forces tiling, stay tiled
@@ -635,7 +711,7 @@ class OnnxVideoUpscaler:
                     return
                 continue
             try:
-                upscaled, force_tiled = self._upscale_one(session, frame, device, force_tiled)
+                upscaled, force_tiled = self._upscale_one(session, frame, device, force_tiled, ring)
             except Exception as exc:  # noqa: BLE001
                 errors.append(exc)
                 cancel_event.set()
@@ -647,7 +723,12 @@ class OnnxVideoUpscaler:
     # --- inference ---------------------------------------------------------
 
     def _upscale_one(
-        self, session: Any, frame_nhwc: np.ndarray, device: str, force_tiled: bool = False
+        self,
+        session: Any,
+        frame_nhwc: np.ndarray,
+        device: str,
+        force_tiled: bool = False,
+        ring: FrameReadbackRing | None = None,
     ) -> tuple[np.ndarray, bool]:
         """Upscale one frame; returns (frame, force_tiled_for_rest_of_job).
 
@@ -661,7 +742,7 @@ class OnnxVideoUpscaler:
             self.last_tiled = True
             return self._infer_tiled(session, frame_nhwc, device), force_tiled
         try:
-            return self._infer_frame(session, frame_nhwc, device), False
+            upscaled = self._infer_frame(session, frame_nhwc, device)
         except Exception as exc:  # noqa: BLE001
             if not _is_oom_error(exc):
                 raise
@@ -673,6 +754,11 @@ class OnnxVideoUpscaler:
             )
             self.last_tiled = True
             return self._infer_tiled(session, frame_nhwc, device), True
+        # El anillo aplica solo al readback whole-frame (el camino rápido cuya
+        # allocación por frame se midió); el tiled ya aloca su canvas al blendear.
+        if ring is not None:
+            upscaled = ring.copy_in(upscaled)
+        return upscaled, False
 
     def _infer_frame(self, session: Any, frame_nhwc: np.ndarray, device: str) -> np.ndarray:
         input_name = session.get_inputs()[0].name

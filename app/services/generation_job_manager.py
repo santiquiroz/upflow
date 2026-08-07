@@ -25,6 +25,7 @@ from app.services.engines.sdcpp_video import (
 )
 from app.services.generation_img2img import supports_img2img
 from app.services.generation_inpaint import supports_inpaint
+from app.services.generation_speed import anchored_params, speed_class
 from app.services.job_manager import select_upscale_engine
 from app.services.missing_pack import missing_pack_message
 from app.services.model_registry import ModelKind, ModelRegistry
@@ -128,6 +129,7 @@ class GenerationJobManager:
         width: int = 512,
         height: int = 512,
         seed: int | None = None,
+        scheduler: str | None = None,
         device: str | None = None,
         init_image_path: Path | None = None,
         strength: float = 0.6,
@@ -154,7 +156,8 @@ class GenerationJobManager:
             self.quota_service.check_admission(owner)
         job = GenerationJob(
             prompt=prompt, model_id=model_id, negative_prompt=negative_prompt, steps=steps,
-            guidance=guidance, width=width, height=height, seed=seed, device=device,
+            guidance=guidance, width=width, height=height, seed=seed, scheduler=scheduler,
+            device=device,
             init_image_path=init_image_path, strength=strength,
             mask_image_path=mask_image_path,
             auto_upscale=auto_upscale, upscale_model_name=upscale_model_name,
@@ -428,6 +431,14 @@ class GenerationJobManager:
         device = job.device or self.settings.default_device
         include_upscale = job.auto_upscale
         advance_generation_stage(job, "generating", include_upscale)
+        speed = speed_class(entry.name)
+        if speed is not None:
+            # Clamp, no override: un Turbo con guidance 7 produce basura quemada
+            # y el usuario no tiene por qué saberlo.
+            job.steps, job.guidance, job.scheduler = anchored_params(
+                speed, job.steps, job.guidance, job.scheduler
+            )
+            job.metadata["speedClass"] = speed
         if job.seed is None:
             # Resolver la semilla acá y no dejarla al RNG global de diffusers:
             # sin esto el resultado es irreproducible y el modal muestra nada.
@@ -437,7 +448,7 @@ class GenerationJobManager:
             prompt=job.prompt, negative_prompt=job.negative_prompt, steps=job.steps,
             guidance=job.guidance, width=job.width, height=job.height, seed=job.seed,
             init_image_path=job.init_image_path, strength=job.strength,
-            mask_image_path=job.mask_image_path,
+            mask_image_path=job.mask_image_path, scheduler=job.scheduler,
         )
 
         def on_progress(done: int, total: int) -> None:
@@ -450,9 +461,9 @@ class GenerationJobManager:
                 progress_cb=on_progress,
             )
         finally:
-            # También en fallo: saber si el job corrió en CPU explica la mayoría
-            # de los "tarda eternidades" remotos.
-            self._record_execution_provider(job, device)
+            # También en fallo: saber si el job corrió en CPU o en fp32 explica
+            # la mayoría de los "tarda eternidades" remotos.
+            self._record_generation_diagnostics(job, device, request)
         if not job.auto_upscale:
             job.output_path = generated
             complete_generation_stages(job, include_upscale)
@@ -476,6 +487,27 @@ class GenerationJobManager:
         label = ep_registry.effective_provider_label(device)
         if label:
             job.metadata["executionProvider"] = label
+
+    def _record_generation_diagnostics(
+        self, job: GenerationJob, device: str, request: GenerationRequest
+    ) -> None:
+        from app.services.engines.generation_onnx import _pipeline_mode
+
+        self._record_execution_provider(job, device)
+        # getattr: los dobles de test y engines viejos no exponen precision_for,
+        # y un diagnóstico jamás puede fallar el job (corre en el finally).
+        precision_probe = getattr(self.engine, "precision_for", None)
+        if precision_probe is None:
+            return
+        precision = precision_probe(job.model_id, device, _pipeline_mode(request))
+        if precision:
+            job.metadata["precision"] = precision
+            if precision == "fp32":
+                logger.warning(
+                    "generación: el modelo %s corre en fp32 en %s (~7x más lento que fp16, medido)",
+                    job.model_id,
+                    device,
+                )
 
     async def _run_eraser(self, job: GenerationJob) -> None:
         # Borrado sin difusión: un solo paso, así que el progreso va de una.
