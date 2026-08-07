@@ -1,6 +1,8 @@
+import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, Ban, CheckCircle2, Circle, Loader2 } from "lucide-react";
 import { useTranslation } from "../i18n/LocaleProvider";
 import { Fragment, useEffect, useState } from "react";
+import { getDevices } from "../lib/api";
 import type { JobQueueEntry } from "../hooks/useJobQueue";
 import type { AudioJob, JobStage, VideoJobResponse } from "../lib/apiTypes";
 import { denoiseLabel, restoreLabel } from "../lib/audioLabels";
@@ -136,8 +138,33 @@ interface DetailItem {
   isNumeric?: boolean;
 }
 
+// Nombre real de la placa en vez del id crudo: "AMD Radeon RX 7900 XT" dice
+// algo; "dml:0" no. El id queda entre paréntesis para diagnóstico.
+function useDeviceLabel(): (deviceId: string) => string {
+  const devicesQuery = useQuery({ queryKey: ["devices"], queryFn: getDevices, staleTime: 60_000 });
+  return (deviceId: string) => {
+    const match = devicesQuery.data?.devices.find((device) => device.id === deviceId);
+    return match ? `${match.name} (${deviceId})` : deviceId;
+  };
+}
+
+// Ritmo real del trabajo terminado: permite comparar corridas y máquinas
+// ("~2 s/paso acá, ~90 s/paso en la máquina que cayó a CPU").
+function stepPaceLabel(job: { steps: number; startedAt: string | null; finishedAt: string | null }): string | null {
+  if (!job.startedAt || !job.finishedAt || job.steps <= 0) {
+    return null;
+  }
+  const elapsedSeconds = (new Date(job.finishedAt).getTime() - new Date(job.startedAt).getTime()) / 1000;
+  if (!Number.isFinite(elapsedSeconds) || elapsedSeconds <= 0) {
+    return null;
+  }
+  const pace = elapsedSeconds / job.steps;
+  return pace >= 10 ? `~${Math.round(pace)} s/step` : `~${pace.toFixed(1)} s/step`;
+}
+
 function JobTypeSummary({ entry, job }: { entry: JobQueueEntry; job: AnyJobResponse | undefined }) {
   const { t } = useTranslation();
+  const deviceLabel = useDeviceLabel();
   const items: DetailItem[] = [{ label: "Type", value: jobKindLabel(entry.kind) }];
   if (!job) {
     return <DetailList items={items} />;
@@ -146,7 +173,7 @@ function JobTypeSummary({ entry, job }: { entry: JobQueueEntry; job: AnyJobRespo
     items.push({ label: "Denoise", value: denoiseLabel(job.denoise) });
     items.push({ label: "Restore", value: restoreLabel(job.restore) });
     if (job.device) {
-      items.push({ label: "Device", value: job.device });
+      items.push({ label: "Device", value: deviceLabel(job.device) });
     }
     pushDurationItem(items, job);
     return <DetailList items={items} />;
@@ -159,19 +186,33 @@ function JobTypeSummary({ entry, job }: { entry: JobQueueEntry; job: AnyJobRespo
     items.push({ label: "Model", value: job.modelId });
     items.push({ label: "Steps", value: String(job.steps), isNumeric: true });
     items.push({ label: "Guidance", value: String(job.guidance), isNumeric: true });
+    if (job.strength != null) {
+      items.push({ label: "Strength", value: String(job.strength), isNumeric: true });
+    }
     items.push({ label: "Size", value: `${job.width}x${job.height}` });
     if (job.seed !== null) {
-      items.push({ label: "Seed", value: String(job.seed), isNumeric: true });
+      items.push({
+        label: "Seed",
+        value: job.seedWasRandom ? `${job.seed} (random)` : String(job.seed),
+        isNumeric: true,
+      });
     }
     if (job.device) {
-      items.push({ label: "Device", value: job.device });
+      items.push({ label: "Device", value: deviceLabel(job.device) });
+    }
+    if (job.executionProvider) {
+      items.push({ label: "Acceleration", value: job.executionProvider });
     }
     pushDurationItem(items, job);
+    const pace = stepPaceLabel(job);
+    if (pace) {
+      items.push({ label: "Speed", value: pace, isNumeric: true });
+    }
     return <DetailList items={items} />;
   }
   items.push({ label: "Model", value: job.modelName });
   if (job.device) {
-    items.push({ label: "Device", value: job.device });
+    items.push({ label: "Device", value: deviceLabel(job.device) });
   }
   items.push({ label: "Scale", value: `${job.scale}x`, isNumeric: true });
   if (isVideoJob(job)) {

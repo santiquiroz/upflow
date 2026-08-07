@@ -1,8 +1,28 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { fireEvent, render as rtlRender, screen } from "@testing-library/react";
+import type { ReactElement, ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JobQueueEntry } from "../hooks/useJobQueue";
 import type { JobStage, VideoJobResponse } from "../lib/apiTypes";
+import * as api from "../lib/api";
 import { JobDetailModal } from "./JobDetailModal";
+
+vi.mock("../lib/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/api")>();
+  return { ...actual, getDevices: vi.fn() };
+});
+
+// El modal resuelve el nombre del device vía el query ["devices"]; sin datos
+// (o sin match) cae al id crudo, que es lo que estos tests históricos afirman.
+vi.mocked(api.getDevices).mockResolvedValue({ devices: [], defaultDeviceId: "dml:0" });
+
+function render(ui: ReactElement) {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  function Wrapper({ children }: { children: ReactNode }) {
+    return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+  }
+  return rtlRender(ui, { wrapper: Wrapper });
+}
 
 function stage(key: string, label: string, status: JobStage["status"]): JobStage {
   return { key, label, weight: 0.25, status };
@@ -278,5 +298,56 @@ describe("JobDetailModal", () => {
     expect(screen.getByText("Cancelled")).toBeInTheDocument();
     expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /cancel/i })).not.toBeInTheDocument();
+  });
+});
+
+describe("generation job details", () => {
+  it("shows acceleration, resolved seed, device name and pace", async () => {
+    vi.mocked(api.getDevices).mockResolvedValue({
+      devices: [
+        { id: "dml:0", kind: "gpu", name: "AMD Radeon RX 7900 XT", backend: "directml" },
+      ],
+      defaultDeviceId: "dml:0",
+    });
+    const entry: JobQueueEntry = {
+      id: "gen-1",
+      kind: "generation",
+      status: "completed",
+      fileName: "generación",
+      errorMessage: null,
+      job: {
+        id: "gen-1",
+        status: "completed",
+        prompt: "a red apple",
+        negativePrompt: null,
+        modelId: "gen--m",
+        steps: 30,
+        guidance: 7,
+        width: 1024,
+        height: 704,
+        seed: 123456,
+        seedWasRandom: true,
+        device: "dml:0",
+        executionProvider: "CPU (fallback)",
+        strength: 1,
+        autoUpscale: false,
+        createdAt: "2026-01-01T00:00:00Z",
+        startedAt: "2026-01-01T00:00:00Z",
+        finishedAt: "2026-01-01T00:01:00Z",
+        progressPct: 100,
+        stages: null,
+        error: null,
+        ownerId: null,
+        downloadUrl: null,
+      },
+    } as unknown as JobQueueEntry;
+
+    render(<JobDetailModal entry={entry} onClose={vi.fn()} />);
+
+    expect(await screen.findByText("AMD Radeon RX 7900 XT (dml:0)")).toBeInTheDocument();
+    expect(screen.getByText("CPU (fallback)")).toBeInTheDocument();
+    expect(screen.getByText("123456 (random)")).toBeInTheDocument();
+    expect(screen.getByText("~2.0 s/step")).toBeInTheDocument();
+    expect(screen.getByText("Strength")).toBeInTheDocument();
   });
 });

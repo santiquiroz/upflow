@@ -587,6 +587,8 @@ export const en = {
   "editor.tools.label": "Editing tools",
   "editor.tool.brush": "Brush",
   "editor.tool.eraser": "Eraser",
+  "editor.tool.lasso": "Lasso",
+  "editor.tool.rect": "Rectangle",
   "editor.tool.tap": "Tap object",
   "editor.tool.tapUnavailable":
     "Tap-to-select is not installed yet. Install it from Settings, or use the brush.",
@@ -598,6 +600,7 @@ export const en = {
   "editor.zoomHint": "Scroll to zoom. Drag with the hand tool or the middle mouse button to move around.",
   "editor.undo": "Undo",
   "editor.clear": "Clear selection",
+  "editor.newImage": "Close image and start a new one",
   "editor.segmenting": "Finding the object…",
   "editor.maskHint": "The highlighted area is what will change. Everything else stays untouched.",
   "editor.mode.label": "What to do with the selection",

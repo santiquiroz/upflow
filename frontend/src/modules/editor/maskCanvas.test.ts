@@ -4,7 +4,10 @@ import {
   drawStrokes,
   fitGenerationSize,
   hasEditableArea,
+  isCommittableStroke,
+  rectanglePoints,
   startStroke,
+  strokeAddsEditableArea,
   toImagePoint,
   undoLastStroke,
   type BrushStroke,
@@ -75,6 +78,7 @@ describe("drawStrokes", () => {
       beginPath: vi.fn(),
       moveTo: vi.fn(),
       lineTo: vi.fn(),
+      closePath: vi.fn(),
       stroke: vi.fn(),
       arc: vi.fn(),
       fill: vi.fn(),
@@ -103,5 +107,47 @@ describe("drawStrokes", () => {
     drawStrokes(ctx, [{ mode: "erase", radius: 4, points: [{ x: 0, y: 0 }, { x: 9, y: 9 }] }], "#fff");
     expect(seen).toEqual(["destination-out"]);
     expect(ctx.globalCompositeOperation).toBe("source-over");
+  });
+
+  it("fills a lasso as a closed polygon instead of stroking it", () => {
+    const ctx = fakeContext();
+    const points = [{ x: 0, y: 0 }, { x: 20, y: 0 }, { x: 10, y: 15 }];
+    drawStrokes(ctx, [{ mode: "lasso", radius: 0, points }], "#fff");
+    expect(ctx.closePath).toHaveBeenCalledOnce();
+    expect(ctx.fill).toHaveBeenCalledOnce();
+    expect(ctx.stroke).not.toHaveBeenCalled();
+  });
+
+  it("skips a lasso with fewer than 2 points without touching the canvas", () => {
+    const ctx = fakeContext();
+    drawStrokes(ctx, [{ mode: "lasso", radius: 0, points: [{ x: 1, y: 1 }] }], "#fff");
+    expect(ctx.fill).not.toHaveBeenCalled();
+    expect(ctx.arc).not.toHaveBeenCalled();
+  });
+});
+
+describe("lasso commit rules", () => {
+  it("a lasso needs at least 3 points to commit; brush needs 1", () => {
+    expect(isCommittableStroke({ mode: "lasso", radius: 0, points: [{ x: 0, y: 0 }, { x: 1, y: 1 }] })).toBe(false);
+    expect(isCommittableStroke({ mode: "lasso", radius: 0, points: [{ x: 0, y: 0 }, { x: 1, y: 1 }, { x: 2, y: 0 }] })).toBe(true);
+    expect(isCommittableStroke({ mode: "paint", radius: 5, points: [{ x: 0, y: 0 }] })).toBe(true);
+  });
+
+  it("a committed lasso counts as editable area, erase does not", () => {
+    const lasso: BrushStroke = { mode: "lasso", radius: 0, points: [{ x: 0, y: 0 }, { x: 9, y: 0 }, { x: 5, y: 8 }] };
+    const erase: BrushStroke = { mode: "erase", radius: 4, points: [{ x: 0, y: 0 }, { x: 9, y: 9 }] };
+    expect(strokeAddsEditableArea(lasso)).toBe(true);
+    expect(strokeAddsEditableArea(erase)).toBe(false);
+    expect(hasEditableArea([erase, lasso])).toBe(true);
+    expect(hasEditableArea([erase])).toBe(false);
+  });
+
+  it("rectanglePoints builds the 4 corners from origin and drag point", () => {
+    expect(rectanglePoints({ x: 2, y: 3 }, { x: 10, y: 8 })).toEqual([
+      { x: 2, y: 3 },
+      { x: 10, y: 3 },
+      { x: 10, y: 8 },
+      { x: 2, y: 8 },
+    ]);
   });
 });

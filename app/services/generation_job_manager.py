@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import secrets
 from pathlib import Path
 from typing import Any
 
@@ -427,6 +428,11 @@ class GenerationJobManager:
         device = job.device or self.settings.default_device
         include_upscale = job.auto_upscale
         advance_generation_stage(job, "generating", include_upscale)
+        if job.seed is None:
+            # Resolver la semilla acá y no dejarla al RNG global de diffusers:
+            # sin esto el resultado es irreproducible y el modal muestra nada.
+            job.seed = secrets.randbelow(2**31)
+            job.metadata["seedWasRandom"] = True
         request = GenerationRequest(
             prompt=job.prompt, negative_prompt=job.negative_prompt, steps=job.steps,
             guidance=job.guidance, width=job.width, height=job.height, seed=job.seed,
@@ -437,11 +443,16 @@ class GenerationJobManager:
         def on_progress(done: int, total: int) -> None:
             apply_generation_step_progress(job, done, total, include_upscale)
 
-        generated = await self.engine.run(
-            model_id=job.model_id, pipeline_dir=pipeline_dir, request=request,
-            device=device, output_path=self.settings.outputs_path / f"{job.id}.png",
-            progress_cb=on_progress,
-        )
+        try:
+            generated = await self.engine.run(
+                model_id=job.model_id, pipeline_dir=pipeline_dir, request=request,
+                device=device, output_path=self.settings.outputs_path / f"{job.id}.png",
+                progress_cb=on_progress,
+            )
+        finally:
+            # También en fallo: saber si el job corrió en CPU explica la mayoría
+            # de los "tarda eternidades" remotos.
+            self._record_execution_provider(job, device)
         if not job.auto_upscale:
             job.output_path = generated
             complete_generation_stages(job, include_upscale)
@@ -459,6 +470,13 @@ class GenerationJobManager:
             job.output_path = generated
         complete_generation_stages(job, include_upscale)
 
+    def _record_execution_provider(self, job: GenerationJob, device: str) -> None:
+        from app.services import ep_registry
+
+        label = ep_registry.effective_provider_label(device)
+        if label:
+            job.metadata["executionProvider"] = label
+
     async def _run_eraser(self, job: GenerationJob) -> None:
         # Borrado sin difusión: un solo paso, así que el progreso va de una.
         from PIL import Image
@@ -470,6 +488,7 @@ class GenerationJobManager:
             mask_image = source_mask.convert("L")
         device = job.device or self.settings.default_device
         result = await self.migan_eraser.erase(base_image, mask_image, device)
+        self._record_execution_provider(job, device)
         output_path = self.settings.outputs_path / f"{job.id}.png"
         output_path.parent.mkdir(parents=True, exist_ok=True)
         result.save(output_path)
@@ -487,6 +506,7 @@ class GenerationJobManager:
         job.output_path = await self.sdcpp_engine.run(
             request, self.settings.outputs_path / f"{job.id}.png", checkpoint=checkpoint
         )
+        job.metadata["executionProvider"] = "Vulkan (sd.cpp)"
         complete_generation_stages(job, False)
 
     async def _run_video(self, job: GenerationJob) -> None:
@@ -507,6 +527,7 @@ class GenerationJobManager:
         job.output_path = await self.video_engine.run(
             request, self.settings.outputs_path / f"{job.id}.webm", model
         )
+        job.metadata["executionProvider"] = "Vulkan (sd.cpp)"
         complete_generation_stages(job, False)
 
     def _resolve_pipeline_dir(self, entry: Any) -> Path:

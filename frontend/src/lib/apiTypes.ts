@@ -511,7 +511,11 @@ export interface GenerationJob {
   width: number;
   height: number;
   seed: number | null;
+  // Opcionales: backends anteriores no los envían.
+  seedWasRandom?: boolean;
   device: string | null;
+  executionProvider?: string | null;
+  strength?: number | null;
   autoUpscale: boolean;
   createdAt: string;
   startedAt: string | null;

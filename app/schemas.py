@@ -757,7 +757,15 @@ class GenerationJobResponse(BaseModel):
     width: int
     height: int
     seed: int | None = None
+    # La semilla se resolvió al azar en el server: el modal la muestra igual
+    # (reproducible) pero aclara que no la eligió el usuario.
+    seed_was_random: bool = Field(default=False, serialization_alias="seedWasRandom")
     device: str | None = None
+    # Provider que las sesiones REALES usaron ("DirectML", "CPU (fallback)",
+    # "Vulkan (sd.cpp)", EP nativo). None hasta que el job creó una sesión.
+    execution_provider: str | None = Field(default=None, serialization_alias="executionProvider")
+    # Solo con imagen de partida (img2img/inpaint); None en texto a imagen.
+    strength: float | None = None
     auto_upscale: bool = Field(default=False, serialization_alias="autoUpscale")
     created_at: datetime = Field(serialization_alias="createdAt")
     started_at: datetime | None = Field(default=None, serialization_alias="startedAt")

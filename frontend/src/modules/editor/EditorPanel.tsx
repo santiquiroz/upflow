@@ -1,13 +1,16 @@
 import { useQuery } from "@tanstack/react-query";
 import {
+  BoxSelect,
   Brush,
   Eraser,
   Hand,
   ImageUp,
+  Lasso,
   Maximize,
   MousePointerClick,
   RotateCcw,
   Trash2,
+  X,
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
@@ -24,7 +27,10 @@ import {
   appendPoint,
   drawStrokes,
   fitGenerationSize,
+  isCommittableStroke,
+  rectanglePoints,
   startStroke,
+  strokeAddsEditableArea,
   toImagePoint,
   type BrushStroke,
 } from "./maskCanvas";
@@ -47,7 +53,7 @@ const ERASE_NEGATIVE_PROMPT = "object, person, animal, text, watermark, logo";
 const DEFAULT_STEPS = 30;
 const DEFAULT_GUIDANCE = 7.0;
 
-type Tool = "brush" | "eraser" | "tap" | "pan";
+type Tool = "brush" | "eraser" | "lasso" | "rect" | "tap" | "pan";
 type EditMode = "erase" | "replace";
 
 interface HistoryEntry {
@@ -113,7 +119,7 @@ function replayHistory(canvas: HTMLCanvasElement, history: HistoryEntry[], live:
 
 function maskHasContent(history: HistoryEntry[]): boolean {
   return history.some(
-    (entry) => entry.kind === "segment" || (entry.stroke?.mode === "paint" && entry.stroke.points.length > 0),
+    (entry) => entry.kind === "segment" || strokeAddsEditableArea(entry.stroke),
   );
 }
 
@@ -217,6 +223,7 @@ export function EditorPanel() {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const liveStrokeRef = useRef<BrushStroke | null>(null);
   const panOriginRef = useRef<{ x: number; y: number } | null>(null);
+  const rectOriginRef = useRef<{ x: number; y: number } | null>(null);
   const uploadSequence = useRef(0);
 
   function stageSize(): { width: number; height: number } {
@@ -363,7 +370,16 @@ export function EditorPanel() {
       return;
     }
     event.currentTarget.setPointerCapture?.(event.pointerId);
-    liveStrokeRef.current = startStroke(tool === "brush" ? "paint" : "erase", scaledBrushRadius(), point);
+    if (tool === "rect") {
+      // El rectángulo es un lazo de 4 puntos que se recalcula al arrastrar:
+      // reusa el dibujo/relleno del lazo sin un modo de trazo nuevo.
+      rectOriginRef.current = point;
+      liveStrokeRef.current = { mode: "lasso", radius: 0, points: [point] };
+    } else if (tool === "lasso") {
+      liveStrokeRef.current = startStroke("lasso", 0, point);
+    } else {
+      liveStrokeRef.current = startStroke(tool === "brush" ? "paint" : "erase", scaledBrushRadius(), point);
+    }
     const canvas = canvasRef.current;
     if (canvas) {
       replayHistory(canvas, history, liveStrokeRef.current);
@@ -387,7 +403,12 @@ export function EditorPanel() {
     if (!point) {
       return;
     }
-    liveStrokeRef.current = appendPoint(liveStrokeRef.current, point);
+    const rectOrigin = rectOriginRef.current;
+    if (rectOrigin) {
+      liveStrokeRef.current = { ...liveStrokeRef.current, points: rectanglePoints(rectOrigin, point) };
+    } else {
+      liveStrokeRef.current = appendPoint(liveStrokeRef.current, point);
+    }
     const canvas = canvasRef.current;
     if (canvas) {
       replayHistory(canvas, history, liveStrokeRef.current);
@@ -396,17 +417,45 @@ export function EditorPanel() {
 
   function handlePointerUp() {
     panOriginRef.current = null;
+    rectOriginRef.current = null;
     const stroke = liveStrokeRef.current;
     if (!stroke) {
       return;
     }
     liveStrokeRef.current = null;
+    if (!isCommittableStroke(stroke)) {
+      // Un lazo de 1-2 puntos no forma polígono: se descarta y se borra su preview.
+      const canvas = canvasRef.current;
+      if (canvas) {
+        replayHistory(canvas, history, null);
+      }
+      return;
+    }
     setHistory((previous) => [...previous, { kind: "stroke", stroke }]);
   }
 
   function handleZoomStep(direction: number) {
     const container = stageSize();
     setViewport((current) => zoomByStep(current, direction, container));
+  }
+
+  function handleCloseImage() {
+    // Cerrar la imagen actual vuelve al dropzone: antes la única forma de
+    // empezar con otra foto era recargar la página o subir encima.
+    uploadSequence.current += 1;
+    setBaseInfo(null);
+    setBaseUrl((previous) => {
+      if (previous) {
+        URL.revokeObjectURL(previous);
+      }
+      return null;
+    });
+    setHistory([]);
+    setSegmentError(null);
+    setUploadError(null);
+    setViewport(IDENTITY_VIEWPORT);
+    liveStrokeRef.current = null;
+    reset();
   }
 
   async function handleCanvasClick(event: React.MouseEvent<HTMLCanvasElement>) {
@@ -544,6 +593,8 @@ export function EditorPanel() {
           >
             {toolButton("brush", <Brush aria-hidden="true" className="h-4 w-4" />, t("editor.tool.brush"))}
             {toolButton("eraser", <Eraser aria-hidden="true" className="h-4 w-4" />, t("editor.tool.eraser"))}
+            {toolButton("lasso", <Lasso aria-hidden="true" className="h-4 w-4" />, t("editor.tool.lasso"))}
+            {toolButton("rect", <BoxSelect aria-hidden="true" className="h-4 w-4" />, t("editor.tool.rect"))}
             {toolButton(
               "tap",
               <MousePointerClick aria-hidden="true" className="h-4 w-4" />,
@@ -614,6 +665,17 @@ export function EditorPanel() {
                 className="rounded p-2 text-text-dim hover:bg-surface-2 hover:text-text disabled:opacity-40"
               >
                 <Trash2 aria-hidden="true" className="h-4 w-4" />
+              </button>
+              <span aria-hidden="true" className="mx-1 h-5 w-px bg-border" />
+              <button
+                type="button"
+                aria-label={t("editor.newImage")}
+                title={t("editor.newImage")}
+                disabled={busy}
+                onClick={handleCloseImage}
+                className="rounded p-2 text-text-dim hover:bg-surface-2 hover:text-text disabled:opacity-40"
+              >
+                <X aria-hidden="true" className="h-4 w-4" />
               </button>
             </div>
           </div>

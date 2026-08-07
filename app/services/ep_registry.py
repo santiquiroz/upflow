@@ -501,6 +501,25 @@ def loader_kwargs(
     )
 
 
+def effective_provider_label(device: str) -> str | None:
+    """Etiqueta humana del provider que las sesiones REALES usaron en el device.
+
+    None si ningún trabajo creó todavía una sesión ahí (no inventar estado).
+    """
+    providers = _effective_providers.get(device)
+    if not providers:
+        return None
+    primary = providers[0]
+    if primary == CPU_PROVIDER:
+        return "CPU (fallback)" if device.startswith("dml:") else "CPU"
+    if primary == DML_PROVIDER:
+        return "DirectML"
+    for state in _plugins.values():
+        if state.spec.ep_name == primary:
+            return state.spec.label
+    return primary
+
+
 def active_ep_for_device(device: str, settings: Settings) -> EpStatus:
     if device == "cpu":
         return EpStatus(ep_name=CPU_PROVIDER, label="CPU", state=EP_STATE_BASELINE)

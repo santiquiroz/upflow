@@ -582,6 +582,8 @@ export const es = {
   "editor.tools.label": "Herramientas de edición",
   "editor.tool.brush": "Pincel",
   "editor.tool.eraser": "Goma",
+  "editor.tool.lasso": "Lazo",
+  "editor.tool.rect": "Rectángulo",
   "editor.tool.tap": "Tocar objeto",
   "editor.tool.tapUnavailable":
     "La selección por toque no está instalada todavía. Instalala desde Ajustes, o usá el pincel.",
@@ -593,6 +595,7 @@ export const es = {
   "editor.zoomHint": "Girá la rueda para acercar. Arrastrá con la manito o el botón del medio para moverte.",
   "editor.undo": "Deshacer",
   "editor.clear": "Limpiar selección",
+  "editor.newImage": "Cerrar imagen y empezar con otra",
   "editor.segmenting": "Buscando el objeto…",
   "editor.maskHint": "El área iluminada es lo que va a cambiar. El resto queda intacto.",
   "editor.mode.label": "Qué hacer con la selección",
