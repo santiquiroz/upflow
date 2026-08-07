@@ -616,3 +616,16 @@ async def test_oom_on_pipeline_load_evicts_the_device_cache_and_retries(tmp_path
     # El primer intento hizo OOM, la evicción liberó el cache del device y el
     # retry único cargó: el retry del usuario ya no pega contra el mismo muro.
     assert len(attempts) == 2
+
+
+def test_dedicated_inpaint_model_rejects_text2img(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    engine = GenerationEngine(make_settings(tmp_path), RecordingCoordinator())  # type: ignore[arg-type]
+    (tmp_path / "model_index.json").write_text(
+        json.dumps({"_class_name": "StableDiffusionXLInpaintPipeline"}), encoding="utf-8"
+    )
+    # Un unet 9ch exige imagen+máscara: pedirle txt2img debe fallar CLARO, no
+    # con un error críptico del grafo.
+    with pytest.raises(RuntimeError, match="inpainting dedicado"):
+        engine._create_pipeline(tmp_path, "cpu", mode="text2img")
+    with pytest.raises(RuntimeError, match="inpainting dedicado"):
+        engine._create_pipeline(tmp_path, "cpu", mode="img2img")

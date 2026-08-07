@@ -552,19 +552,38 @@ class GenerationModelInstaller:
         try:
             self.gpu_coordinator.acquire(self.settings.default_device, _ValidationSessionOwner())
             pipeline = self._create_validation_pipeline(pipeline_dir)
-            pipeline(
-                prompt=VALIDATION_PROMPT,
-                num_inference_steps=VALIDATION_STEPS,
-                width=VALIDATION_SIZE,
-                height=VALIDATION_SIZE,
-            )
+            pipeline(**self._validation_call_kwargs(pipeline_dir))
         except Exception as exc:
             raise _wrap_generation_error(exc) from exc
         finally:
             del pipeline
             gc.collect()
 
+    def _validation_call_kwargs(self, pipeline_dir: Path) -> dict[str, Any]:
+        from app.services.generation_inpaint import is_dedicated_inpaint_class
+
+        kwargs: dict[str, Any] = {
+            "prompt": VALIDATION_PROMPT,
+            "num_inference_steps": VALIDATION_STEPS,
+            "width": VALIDATION_SIZE,
+            "height": VALIDATION_SIZE,
+        }
+        if is_dedicated_inpaint_class(_read_declared_class_name(pipeline_dir)):
+            # Un unet 9ch exige imagen+máscara: validar sin ellas fallaría
+            # SIEMPRE y el checkpoint dedicado quedaría ininstalable.
+            from PIL import Image
+
+            kwargs["image"] = Image.new("RGB", (VALIDATION_SIZE, VALIDATION_SIZE), (128, 128, 128))
+            kwargs["mask_image"] = Image.new("L", (VALIDATION_SIZE, VALIDATION_SIZE), 255)
+        return kwargs
+
     def _create_validation_pipeline(self, pipeline_dir: Path) -> Any:
-        pipeline_cls = _load_pipeline_class(_read_declared_class_name(pipeline_dir))
+        from app.services.generation_inpaint import is_dedicated_inpaint_class, load_inpaint_class
+
+        declared = _read_declared_class_name(pipeline_dir)
+        if is_dedicated_inpaint_class(declared):
+            pipeline_cls = load_inpaint_class(declared)
+        else:
+            pipeline_cls = _load_pipeline_class(declared)
         kwargs = _build_providers_for_validation(self.settings.default_device)
         return pipeline_cls.from_pretrained(str(pipeline_dir), **kwargs)

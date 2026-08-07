@@ -547,6 +547,8 @@ export interface GenerationModelSummary {
   /** Clase de velocidad (turbo/lightning/lcm): el server ancla sus parámetros
    *  y el editor esconde los turbo (512px, sin negative prompt). */
   speed?: string | null;
+  /** Checkpoint de inpainting dedicado (unet 9ch): solo edita con máscara. */
+  inpaintOnly?: boolean;
 }
 
 export interface GenerationCapabilities {

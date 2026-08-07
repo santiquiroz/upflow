@@ -2056,6 +2056,17 @@ def _entry_supports_inpaint(settings: Settings, entry: Any) -> bool:
     return supports_inpaint(declared)
 
 
+def _entry_inpaint_only(settings: Settings, entry: Any) -> bool:
+    from app.services.engines.generation_onnx import _read_declared_class_name
+    from app.services.generation_inpaint import is_dedicated_inpaint_class
+
+    try:
+        declared = _read_declared_class_name(settings.models_path / (entry.file_path or ""))
+    except Exception:  # noqa: BLE001 -- una lectura fallida no es un veredicto
+        return False
+    return is_dedicated_inpaint_class(declared)
+
+
 def get_vulkan_installer(request: Request):
     return request.app.state.vulkan_installer
 
@@ -2186,6 +2197,7 @@ async def generation_capabilities(
             status=entry.status.value,
             supports_inpaint=_entry_supports_inpaint(settings, entry),
             speed=_speed_class(entry.name),
+            inpaint_only=_entry_inpaint_only(settings, entry),
         )
         for entry in registry.list()
         if entry.kind == ModelKind.diffusion_onnx and entry.status != ModelStatus.error

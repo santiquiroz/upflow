@@ -579,9 +579,16 @@ class GenerationEngine:
         import onnxruntime as ort
 
         declared = _read_declared_class_name(pipeline_dir)
-        if mode == "inpaint":
-            from app.services.generation_inpaint import load_inpaint_class
+        from app.services.generation_inpaint import is_dedicated_inpaint_class, load_inpaint_class
 
+        if mode != "inpaint" and is_dedicated_inpaint_class(declared):
+            # Un unet de 9 canales EXIGE imagen+máscara como entrada: pedirle
+            # txt2img/img2img fallaría en el grafo con un error críptico.
+            raise RuntimeError(
+                "Este modelo es de inpainting dedicado: usalo desde el Editor "
+                "con una máscara. No puede generar desde texto ni desde imagen sola."
+            )
+        if mode == "inpaint":
             pipeline_cls = load_inpaint_class(declared)
         elif mode == "img2img":
             pipeline_cls = load_img2img_class(declared)

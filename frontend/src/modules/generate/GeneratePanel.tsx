@@ -117,12 +117,18 @@ function ModelSelect({
         // Una conversion en curso se VE (deshabilitada, con el aviso de demora):
         // sin esto, instalar un modelo desde el installer parecia no traer nada
         // durante los ~40 minutos que tarda la conversion.
-        <option key={model.id} value={model.id} disabled={model.status !== "installed"}>
+        <option
+          key={model.id}
+          value={model.id}
+          disabled={model.status !== "installed" || model.inpaintOnly}
+        >
           {model.status === "converting"
             ? t("generate.model.converting", { name: model.name })
-            : model.speed
-              ? t("generate.model.fastModel", { name: model.name })
-              : model.name}
+            : model.inpaintOnly
+              ? t("generate.model.inpaintOnly", { name: model.name })
+              : model.speed
+                ? t("generate.model.fastModel", { name: model.name })
+                : model.name}
         </option>
       ))}
     </select>

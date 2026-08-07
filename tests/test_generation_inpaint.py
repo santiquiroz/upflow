@@ -104,3 +104,13 @@ def test_dedicated_inpaint_checkpoints_are_accepted() -> None:
     assert inpaint_class_for("StableDiffusionXLInpaintPipeline") == "ORTStableDiffusionXLInpaintPipeline"
     assert inpaint_class_for("StableDiffusionInpaintPipeline") == "ORTStableDiffusionInpaintPipeline"
     assert supports_inpaint("StableDiffusionXLInpaintPipeline") is True
+
+
+def test_dedicated_inpaint_classes_are_detected() -> None:
+    from app.services.generation_inpaint import is_dedicated_inpaint_class
+
+    assert is_dedicated_inpaint_class("StableDiffusionXLInpaintPipeline") is True
+    assert is_dedicated_inpaint_class("ORTStableDiffusionInpaintPipeline") is True
+    # Un checkpoint base soporta inpaint por RUTEO pero no es dedicado.
+    assert is_dedicated_inpaint_class("StableDiffusionXLPipeline") is False
+    assert is_dedicated_inpaint_class("ClaseInventada") is False

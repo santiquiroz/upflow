@@ -84,7 +84,7 @@ def _bucket_up(value: int, multiple: int = SIZE_MULTIPLE) -> int:
 def resolve_model_side(
     crop_side: int, target_side: int, native_side: int | None
 ) -> tuple[int, int]:
-    """(lado de trabajo, lado del canvas) con los que se llama al modelo.
+    """(lado de trabajo, lado del canvas) para el LADO MAYOR del recorte.
 
     El trabajo es el recorte tal cual, subido al piso nativo si quedó corto o
     bajado al techo si se pasó; el canvas es ese lado redondeado al bucket. El
@@ -98,11 +98,31 @@ def resolve_model_side(
     return min(crop_side, canvas), canvas
 
 
-def _resize_square(image: Any, side: int, resample: Any) -> Any:
-    return image if image.size == (side, side) else image.resize((side, side), resample)
+def resolve_model_dims(
+    crop_size: tuple[int, int], target_side: int, native_side: int | None
+) -> tuple[tuple[int, int], tuple[int, int]]:
+    """((ancho, alto) de trabajo, (ancho, alto) del canvas) para el modelo.
+
+    Piso nativo y techo de edición se aplican sobre el LADO MAYOR con escala
+    uniforme: el aspecto del recorte se preserva, porque deformarlo haría que
+    el modelo devuelva contenido estirado. Cada eje del canvas bucketea por su
+    cuenta. Un recorte cuadrado cae exactamente en el caso histórico de
+    `resolve_model_side` en ambos ejes.
+    """
+    crop_width, crop_height = crop_size
+    major = max(crop_width, crop_height)
+    work_major, _ = resolve_model_side(major, target_side, native_side)
+    scale = work_major / major
+    work_width = work_major if crop_width == major else max(1, round(crop_width * scale))
+    work_height = work_major if crop_height == major else max(1, round(crop_height * scale))
+    return (work_width, work_height), (_bucket_up(work_width), _bucket_up(work_height))
 
 
-def _pad_to_canvas(image: Any, canvas_side: int, mode: str) -> Any:
+def _resize(image: Any, size: tuple[int, int], resample: Any) -> Any:
+    return image if image.size == size else image.resize(size, resample)
+
+
+def _pad_to_canvas(image: Any, canvas_size: tuple[int, int], mode: str) -> Any:
     """Completa hasta el canvas del modelo SIN escalar el contenido.
 
     `edge` para la imagen (el modelo ve el borde continuado, no un marco negro
@@ -112,10 +132,11 @@ def _pad_to_canvas(image: Any, canvas_side: int, mode: str) -> Any:
     """
     from PIL import Image
 
-    if image.size == (canvas_side, canvas_side):
+    if image.size == canvas_size:
         return image
+    canvas_width, canvas_height = canvas_size
     array = np.asarray(image)
-    faltante = ((0, canvas_side - array.shape[0]), (0, canvas_side - array.shape[1]))
+    faltante = ((0, canvas_height - array.shape[0]), (0, canvas_width - array.shape[1]))
     faltante += ((0, 0),) * (array.ndim - 2)
     return Image.fromarray(np.pad(array, faltante, mode=mode))
 
@@ -159,24 +180,24 @@ def run_masked_edit(
     crop_image = base_rgb.crop(crop_box)
     crop_mask = Image.fromarray(blended_mask, mode="L").crop(crop_box)
 
-    work_side, canvas_side = resolve_model_side(
-        max(crop_image.size), settings.target_side, settings.native_side
+    work_size, canvas_size = resolve_model_dims(
+        crop_image.size, settings.target_side, settings.native_side
     )
-    work_image = _resize_square(crop_image, work_side, Image.LANCZOS)
+    work_image = _resize(crop_image, work_size, Image.LANCZOS)
     # NEAREST no: la máscara ya trae su degradado y un resample duro lo perdería.
-    work_mask = _resize_square(crop_mask, work_side, Image.BILINEAR)
-    model_input = _pad_to_canvas(work_image, canvas_side, "edge")
-    model_mask = _pad_to_canvas(work_mask, canvas_side, "constant")
+    work_mask = _resize(crop_mask, work_size, Image.BILINEAR)
+    model_input = _pad_to_canvas(work_image, canvas_size, "edge")
+    model_mask = _pad_to_canvas(work_mask, canvas_size, "constant")
     if on_prepared is not None:
         on_prepared(model_input, model_mask)
 
-    edited = model(model_input, model_mask, canvas_side, canvas_side).convert("RGB")
+    edited = model(model_input, model_mask, canvas_size[0], canvas_size[1]).convert("RGB")
     # Por si el pipeline redondea internamente y devuelve otro tamaño.
-    edited = _resize_square(edited, canvas_side, Image.LANCZOS)
+    edited = _resize(edited, canvas_size, Image.LANCZOS)
     # El canvas puede ser un poco más grande que el trabajo (bucketing): primero
     # se recorta lo trabajado y recién después se vuelve al tamaño real del
     # recorte, que es el que espera el stitch.
-    edited_crop = edited.crop((0, 0, work_side, work_side))
+    edited_crop = edited.crop((0, 0, work_size[0], work_size[1]))
     if edited_crop.size != crop_image.size:
         edited_crop = edited_crop.resize(crop_image.size, Image.LANCZOS)
 

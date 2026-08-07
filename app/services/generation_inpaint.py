@@ -76,6 +76,12 @@ def supports_inpaint(declared_class_name: str) -> bool:
     return declared_class_name in INPAINT_CLASS_NAMES
 
 
+def is_dedicated_inpaint_class(declared_class_name: str) -> bool:
+    """Checkpoint de inpainting DEDICADO (unet 9ch): solo sabe editar con
+    máscara — no puede generar texto a imagen ni imagen a imagen."""
+    return "Inpaint" in declared_class_name and declared_class_name in INPAINT_CLASS_NAMES
+
+
 def load_inpaint_class(declared_class_name: str) -> Any:
     import optimum.onnxruntime as ort_module
 

@@ -104,6 +104,36 @@ def test_crop_box_never_returns_a_degenerate_region() -> None:
     assert right > left and bottom > top
 
 
+# --- marcas mas largas que la dimension menor de la imagen (bug 2026-08-07) --
+# El cuadrado clampado a min(lado, ancho, alto) dejaba la marca afuera del crop
+# y solo se editaba la franja central, con costura dura a los costados.
+
+
+def test_crop_box_covers_a_mark_wider_than_the_image_height() -> None:
+    bbox = (200, 400, 1700, 700)  # 1500x300 en una foto 1920x1080
+    left, top, right, bottom = compute_crop_box(bbox, padding=0, image_size=(1920, 1080))
+
+    assert left <= 200 and right >= 1700, "la marca tiene que entrar entera"
+    assert top >= 0 and bottom <= 1080
+
+
+def test_crop_box_covers_a_mark_taller_than_the_image_width() -> None:
+    bbox = (400, 200, 700, 1700)  # 300x1500 en una foto vertical 1080x1920
+    left, top, right, bottom = compute_crop_box(bbox, padding=0, image_size=(1080, 1920))
+
+    assert top <= 200 and bottom >= 1700, "la marca tiene que entrar entera"
+    assert left >= 0 and right <= 1080
+
+
+def test_crop_box_stays_square_when_the_mark_fits() -> None:
+    # Comportamiento historico intacto: una marca normal sigue dando cuadrado.
+    left, top, right, bottom = compute_crop_box(
+        (100, 100, 400, 200), padding=50, image_size=(2000, 2000)
+    )
+
+    assert right - left == bottom - top
+
+
 # --- composición suave ------------------------------------------------------
 
 

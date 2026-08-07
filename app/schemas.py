@@ -839,6 +839,10 @@ class GenerationModelSummary(BaseModel):
     # La UI marca el modelo como rápido y el editor esconde los turbo (512px,
     # sin negative prompt: no sirven para inpaint).
     speed: str | None = None
+    # Checkpoint de inpainting dedicado (unet 9ch): SOLO edita con máscara.
+    # Generate lo deshabilita; el Editor lo prefiere (bordes que sí calzan y
+    # strength parcial real).
+    inpaint_only: bool = Field(default=False, serialization_alias="inpaintOnly")
 
 
 class GenerationCapabilitiesResponse(BaseModel):

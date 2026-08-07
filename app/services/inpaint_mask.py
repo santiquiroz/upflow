@@ -76,17 +76,30 @@ def mask_bbox(mask: np.ndarray) -> tuple[int, int, int, int] | None:
     return left, top, right, bottom
 
 
-def _expand_to_square(
+def _centered_span(low: int, high: int, length: int, limit: int) -> int:
+    start = int(round((low + high) / 2 - length / 2))
+    return max(0, min(start, limit - length))
+
+
+def _expand_to_cover(
     left: int, top: int, right: int, bottom: int, image_width: int, image_height: int
 ) -> tuple[int, int, int, int]:
-    side = min(max(right - left, bottom - top), image_width, image_height)
-    center_x = (left + right) / 2
-    center_y = (top + bottom) / 2
-    new_left = int(round(center_x - side / 2))
-    new_top = int(round(center_y - side / 2))
-    new_left = max(0, min(new_left, image_width - side))
-    new_top = max(0, min(new_top, image_height - side))
-    return new_left, new_top, new_left + side, new_top + side
+    """Crop cuadrado cuando cabe; si no, cada eje se expande por su cuenta.
+
+    El clamp cruzado min(lado, ancho, alto) era un bug (reproducido 2026-08-07):
+    una marca más ancha que la dimensión menor de la imagen (1500x300 en
+    1920x1080) daba un cuadrado de 1080 que NO cubría lo marcado — solo se
+    editaba la franja central y quedaba una costura dura a los costados, sin
+    error ni aviso. Cubrir el bbox manda sobre el aspecto: cada eje se clampa
+    SOLO contra su propia dimensión de la imagen, y como el bbox ya viene
+    dentro de la imagen, el crop siempre lo contiene entero.
+    """
+    target = max(right - left, bottom - top)
+    width = min(target, image_width)
+    height = min(target, image_height)
+    new_left = _centered_span(left, right, width, image_width)
+    new_top = _centered_span(top, bottom, height, image_height)
+    return new_left, new_top, new_left + width, new_top + height
 
 
 # Contexto MINIMO, para marcas diminutas donde una fraccion no daria con que
@@ -126,11 +139,13 @@ def compute_crop_box(
     image_size: tuple[int, int],
     max_side: int | None = None,
 ) -> tuple[int, int, int, int]:
-    """Región a editar: el área marcada más contexto alrededor, cuadrada.
+    """Región a editar: el área marcada más contexto alrededor.
 
-    Cuadrada porque los modelos de difusión trabajan mejor en su relación de
-    aspecto nativa; el contexto (padding) es lo que le permite al modelo
-    continuar el fondo en vez de inventar un parche aislado.
+    Cuadrada cuando cabe, porque los modelos de difusión trabajan mejor cerca de
+    su relación de aspecto nativa; si la marca es más larga que la dimensión
+    menor de la imagen, rectangular — cubrir lo marcado entero manda sobre el
+    aspecto (ver _expand_to_cover). El contexto (padding) es lo que le permite
+    al modelo continuar el fondo en vez de inventar un parche aislado.
 
     `max_side` es la resolución a la que se va a editar. El contexto se toma del
     margen que sobra hasta ahí, NUNCA del detalle: un recorte más grande que esa
@@ -157,7 +172,7 @@ def compute_crop_box(
         right = min(image_width, left + 1)
     if bottom - top < 1:
         bottom = min(image_height, top + 1)
-    return _expand_to_square(left, top, right, bottom, image_width, image_height)
+    return _expand_to_cover(left, top, right, bottom, image_width, image_height)
 
 
 def soft_composite(generated: np.ndarray, original: np.ndarray, mask: np.ndarray) -> np.ndarray:

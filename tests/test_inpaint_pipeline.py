@@ -6,6 +6,7 @@ from PIL import Image
 
 from app.services.inpaint_pipeline import (
     MaskedEditSettings,
+    resolve_model_dims,
     resolve_model_side,
     run_masked_edit,
 )
@@ -184,6 +185,106 @@ class TestResolveModelSide:
 
     def test_the_canvas_never_goes_below_the_minimum_bucket(self) -> None:
         assert resolve_model_side(10, 100, None) == (10, 128)
+
+
+class TestResolveModelDims:
+    """Generalización rectangular: piso y techo sobre el LADO MAYOR, aspecto
+    preservado con escala uniforme, buckets de 128 por eje."""
+
+    def test_a_square_crop_matches_the_scalar_path(self) -> None:
+        for crop_side, target, native in [(300, 1024, 512), (700, 1024, 512), (900, 512, None)]:
+            work, canvas = resolve_model_side(crop_side, target, native)
+            assert resolve_model_dims((crop_side, crop_side), target, native) == (
+                (work, work),
+                (canvas, canvas),
+            )
+
+    def test_the_native_floor_scales_uniformly_preserving_aspect(self) -> None:
+        (work_w, work_h), (canvas_w, canvas_h) = resolve_model_dims((600, 300), 1024, 1024)
+
+        assert (work_w, work_h) == (1024, 512)
+        assert (canvas_w, canvas_h) == (1024, 512)
+
+    def test_the_target_ceiling_scales_uniformly_preserving_aspect(self) -> None:
+        (work_w, work_h), (canvas_w, canvas_h) = resolve_model_dims((1532, 1080), 512, 512)
+
+        assert work_w == 512
+        assert work_h / work_w == pytest.approx(1080 / 1532, abs=0.01)
+        assert canvas_w % 128 == 0 and canvas_h % 128 == 0
+
+    def test_the_canvas_covers_the_work_on_both_axes(self) -> None:
+        (work_w, work_h), (canvas_w, canvas_h) = resolve_model_dims((800, 256), 1024, 1024)
+
+        assert canvas_w >= work_w and canvas_h >= work_h
+
+
+# --- marcas mas largas que la dimension menor de la imagen (bug 2026-08-07) --
+
+
+class TestAWideMarkIsFullyCovered:
+    """Reproducción del bug: una máscara 1500x300 en 1920x1080 producía un crop
+    cuadrado clampado a 1080 que dejaba la marca afuera — el modelo pintaba solo
+    x∈[410,1489], los píxeles marcados en x=210/400/1500/1690 quedaban
+    originales y había un salto 60→255 en 1px en x=410."""
+
+    def _edited(self, model: RecordingModel | None = None) -> np.ndarray:
+        photo = base_photo((1920, 1080))
+        mask = mask_with_box((1920, 1080), (200, 400, 1700, 700))
+        return np.asarray(run_masked_edit(photo, mask, model or RecordingModel(), SETTINGS))
+
+    def test_every_marked_pixel_gets_edited(self) -> None:
+        after = self._edited()
+
+        for x in (210, 400, 410, 1500, 1690):
+            pixel = after[550, x]
+            assert pixel[0] > 200 and pixel[1] < 60, f"pixel marcado en x={x} quedo sin editar"
+        interior = after[450:650, 250:1650]
+        assert (interior[:, :, 0] > 200).all(), "todo el interior marcado debe quedar editado"
+
+    def test_there_is_no_hard_seam_inside_the_mark(self) -> None:
+        after = self._edited()
+
+        row = after[550, 250:1650, 0].astype(int)
+        assert np.abs(np.diff(row)).max() < 120, "salto duro = el crop no cubrio la marca"
+
+    def test_model_dims_are_buckets_of_128_on_both_axes(self) -> None:
+        model = RecordingModel()
+
+        self._edited(model)
+
+        call = model.calls[0]
+        assert call["width"] % 128 == 0 and call["height"] % 128 == 0
+        assert call["image_size"] == (call["width"], call["height"])
+        assert call["mask_size"] == (call["width"], call["height"])
+
+    def test_a_portrait_mark_taller_than_the_width_is_covered_too(self) -> None:
+        photo = base_photo((1080, 1920))
+        mask = mask_with_box((1080, 1920), (400, 200, 700, 1700))
+
+        after = np.asarray(run_masked_edit(photo, mask, RecordingModel(), SETTINGS))
+
+        for y in (210, 400, 1500, 1690):
+            pixel = after[y, 550]
+            assert pixel[0] > 200 and pixel[1] < 60, f"pixel marcado en y={y} quedo sin editar"
+        interior = after[250:1650, 450:650]
+        assert (interior[:, :, 0] > 200).all()
+
+
+def test_native_floor_on_a_rectangular_crop_keeps_its_aspect() -> None:
+    # Imagen franja: el crop se clampa en alto y queda rectangular, y el piso
+    # nativo tiene que escalar uniforme en vez de cuadrarlo por la fuerza.
+    photo = base_photo((800, 256))
+    mask = mask_with_box((800, 256), (100, 100, 700, 156))
+    model = RecordingModel()
+
+    run_masked_edit(
+        photo, mask, model, MaskedEditSettings(8, 8, None, 1024, native_side=1024)
+    )
+
+    call = model.calls[0]
+    assert call["width"] >= 1024, "el piso aplica sobre el lado mayor"
+    assert call["height"] < call["width"], "el aspecto del crop no se cuadra"
+    assert call["width"] % 128 == 0 and call["height"] % 128 == 0
 
 
 def test_a_small_crop_is_diffused_at_the_native_side_and_stitched_back() -> None:
