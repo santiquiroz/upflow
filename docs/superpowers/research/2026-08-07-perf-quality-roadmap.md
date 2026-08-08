@@ -110,6 +110,20 @@ sin aviso. Fix: generalizar el crop a rectangular (el bucketing de 128 ya acepta
 width/height distintos); `resolve_model_side` debe pasar a (work_w, work_h).
 Va con el trabajo de geometría de la ola 2.
 
+## Validación soft inpainting (2026-08-07, GPU real)
+
+A/B con seed fija (epicrealism SDXL, inpaint de boca 768px, 20 steps, RX 7800 XT):
+blend activo (diff ON/OFF centro 3.36), banda exterior 15% menos alterada
+(10.20 vs 12.02 MAE), centro sin regresión (26.2 vs 26.6). Fallback en vivo
+verificado (builder roto → warning + job completo). Shippeado en 0.54.0.
+
+## Feature candidata: "crear versión de inpainting" (merge 9ch)
+
+Receta clásica `inpaint_oficial + (checkpoint_usuario - base)` en torch offline
+dentro del conversor: convierte CUALQUIER checkpoint instalado (incl. finetunes
+sin censura, el caso de uso pedido) en su versión inpaint de 9 canales. Botón
+sobre el modelo instalado → merge + export ONNX. Va con la ola siguiente.
+
 ## Research bets
 
 - ControlNet inpaint (arriba). DeepCache vía export dual deep/shallow (2.6x claim; alternar

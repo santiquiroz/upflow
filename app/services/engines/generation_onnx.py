@@ -497,6 +497,19 @@ class GenerationEngine:
         strength = _inpaint_strength(pipeline, request.strength)
 
         def run_model(image: Any, mask: Any, width: int, height: int) -> Any:
+            from app.services.generation_soft_inpaint import (
+                build_soft_inpaint_callback,
+                chain_step_callbacks,
+            )
+
+            soft_callback = None
+            try:
+                soft_callback = build_soft_inpaint_callback(pipeline, image, mask, request.seed)
+            except Exception:  # noqa: BLE001 -- calidad extra jamás tumba el job
+                logger.warning(
+                    "soft inpainting no disponible para este pipeline, sigo sin él",
+                    exc_info=True,
+                )
             call_kwargs: dict[str, Any] = {
                 "prompt": request.prompt,
                 "image": image,
@@ -506,7 +519,7 @@ class GenerationEngine:
                 "strength": strength,
                 "width": width,
                 "height": height,
-                "callback": on_step,
+                "callback": chain_step_callbacks(soft_callback, on_step),
                 "callback_steps": 1,
             }
             if request.negative_prompt:
