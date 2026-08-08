@@ -117,6 +117,19 @@ Va con el trabajo de geometría de la ola 2.
 - Interop D3D12 → encoder por hardware (elimina readback completo; SDK por vendor).
 - Throughput real de EPs nativos + EP context caching TensorRT-RTX (falta hardware local).
 
+## Medición 2026-08-07 (noche): fusión de grafo directa sobre fp16 = DESCARTADA
+
+Spike en RX 7800 XT, UNet epicrealism SDXL fp16 (export optimum local), DML, 1024px batch-2:
+- Baseline: **2224.8 ms/inferencia UNet** (mediana, 12 runs).
+- `optimize_model(model_type="unet")` sobre el fp16 directo: GroupNorm fusion **crashea**
+  (asume pesos fp32: "Expected 1280 bytes, got 640"); sin GroupNorm, fusiona 199
+  SkipLayerNorm + 70 BiasSplitGelu + 51 NhwcConv pero **MultiHeadAttention: 0** (la
+  fusión grande no matchea el export fp16) → **0.96x, levemente PEOR** (2309.8 ms).
+- Conclusión: el 6x famoso de Olive era mayormente el fp16 que ya tenemos. La única
+  variante viva es el camino completo fp32 → fusionar (GroupNorm+MHA) → convertir fp16,
+  que exige re-export desde los pesos originales (~30+ min por modelo) — pasa a research
+  bet con ese scope, no a quick win. Spike: scratchpad spike_olive_fusion_bench.py.
+
 ## Descartes firmes (no volver sin evidencia nueva)
 
 IOBinding+DML en optimum (issues ORT #11666/#21239 abiertos, C API D3D12 requerida);
