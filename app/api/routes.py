@@ -2541,6 +2541,13 @@ def _pack_to_provision(item: ResolvedCapability) -> str:
     # No se mira `provisioning`: video.upscale es de registro y aun asi necesita
     # el binario del motor. Lo que decide es si falta un paquete concreto.
     if not item.missing_packs:
+        if item.status == "available":
+            # Caso real: el primer click descargó el pack, la tarjeta quedó
+            # vieja y el segundo click llegaba acá con un error críptico.
+            raise HTTPException(
+                status_code=409,
+                detail="La capacidad ya está lista: el paquete ya se instaló. Recargá la página.",
+            )
         raise HTTPException(
             status_code=400,
             detail=f"La capacidad {item.id!r} no tiene ningun paquete pendiente de descarga.",

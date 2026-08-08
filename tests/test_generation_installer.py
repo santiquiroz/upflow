@@ -1016,3 +1016,23 @@ def test_a_pure_onnx_repo_is_installed_as_is() -> None:
             "vae_encoder/model.onnx",
         )
     )
+
+
+def test_validation_kwargs_for_dedicated_inpaint_carry_image_mask_and_full_strength(tmp_path: Path) -> None:
+    import json as _json
+
+    (tmp_path / "model_index.json").write_text(
+        _json.dumps({"_class_name": "StableDiffusionXLInpaintPipeline"}), encoding="utf-8"
+    )
+    settings = make_settings(tmp_path)
+    registry = ModelRegistry(settings)
+    installer = GenerationModelInstaller(
+        settings, registry, FakeHfClient(files=[]), GpuSessionCoordinator(), DeviceSemaphores(settings)
+    )
+
+    kwargs = installer._validation_call_kwargs(tmp_path)
+
+    assert "image" in kwargs and "mask_image" in kwargs
+    # Sin strength explícito, el default 0.9999 del pipeline da CERO pasos con
+    # el único paso de validación y el merge entero muere acá (visto real).
+    assert kwargs["strength"] == 1.0

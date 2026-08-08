@@ -26,6 +26,12 @@ export function useCapabilityProvision(): UseCapabilityProvisionResult {
   const start = useMutation({
     mutationFn: provisionCapability,
     onSuccess: (job) => setJobId(job.jobId),
+    // Un fallo del click puede significar "la tarjeta está vieja" (ej. 409:
+    // el pack ya se instaló en una sesión anterior cortada a mitad). Re-resolver
+    // el árbol cura la tarjeta sola en vez de dejar el error críptico.
+    onError: () => {
+      void queryClient.invalidateQueries({ queryKey: ["capability-tree"] });
+    },
   });
 
   const status = useQuery({

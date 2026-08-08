@@ -579,6 +579,10 @@ class GenerationModelInstaller:
 
             kwargs["image"] = Image.new("RGB", (VALIDATION_SIZE, VALIDATION_SIZE), (128, 128, 128))
             kwargs["mask_image"] = Image.new("L", (VALIDATION_SIZE, VALIDATION_SIZE), 255)
+            # strength EXPLÍCITO: el default del pipeline es 0.9999 y con el
+            # único paso de validación int(1*0.9999)=0 pasos — el merge entero
+            # moría acá con "number of pipeline steps is 0" (visto real).
+            kwargs["strength"] = 1.0
         return kwargs
 
     def _create_validation_pipeline(self, pipeline_dir: Path) -> Any:

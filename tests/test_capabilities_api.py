@@ -192,7 +192,9 @@ async def test_provisioning_an_unknown_capability_is_404(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_provisioning_a_capability_with_nothing_pending_is_400(tmp_path: Path):
+async def test_provisioning_an_already_available_capability_is_409_with_reload_hint(tmp_path: Path):
+    # Caso real: el primer click instaló el pack, la tarjeta quedó vieja y el
+    # segundo click recibía un 400 críptico. Ahora es 409 con la cura.
     from fastapi import HTTPException
 
     from app.api.routes import provision_capability
@@ -205,7 +207,8 @@ async def test_provisioning_a_capability_with_nothing_pending_is_400(tmp_path: P
         await provision_capability(
             "video.interpolate", FakeRequest(FakeProvisioner()), settings, FakeRegistry()
         )
-    assert exc_info.value.status_code == 400
+    assert exc_info.value.status_code == 409
+    assert "Recargá" in exc_info.value.detail
 
 
 @pytest.mark.asyncio
