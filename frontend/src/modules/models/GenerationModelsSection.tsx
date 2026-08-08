@@ -164,8 +164,11 @@ export function GenerationModelsSection({ pollIntervalMs = DEFAULT_INSTALL_POLL_
     mutationFn: (model: ModelResponse) => createInpaintVersion(model.id),
     onSuccess: () => {
       // El merge corre como conversión: la entrada "(inpainting)" aparece en
-      // esta misma lista con su progreso apenas se refresca.
+      // esta misma lista con su progreso apenas se refresca. Invalidar también
+      // las conversiones activas engancha la barra de progreso AL INSTANTE —
+      // sin esto solo aparecía tras recargar la página (visto real).
       queryClient.invalidateQueries({ queryKey: ["models"] });
+      queryClient.invalidateQueries({ queryKey: ["generation-active-conversions"] });
     },
   });
 
