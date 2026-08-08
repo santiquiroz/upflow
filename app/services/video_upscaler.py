@@ -738,10 +738,12 @@ class VideoUpscaler:
             video=video,
             threshold=SCENE_CUT_THRESHOLD,
         )
-        process = await asyncio.create_subprocess_exec(
-            *command, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE
+        # run_guarded_process y no create_subprocess_exec pelado: el scan
+        # recorre el video entero y era el unico paso de este archivo sin
+        # timeout ni kill-on-cancel.
+        _stdout, stderr, _returncode = await run_guarded_process(
+            command, self.settings.subprocess_timeout
         )
-        _stdout, stderr = await process.communicate()
         tiempos = parse_scene_cut_times(stderr.decode("utf-8", "replace"))
         return [source_index_at_time(t, fps=cuadros_por_segundo) for t in tiempos]
 

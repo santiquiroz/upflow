@@ -295,6 +295,14 @@ class JobManager:
             self._fail_dequeued_job(job, str(exc))
 
     async def _execute_job(self, job: UpscaleJob) -> None:
+        if job.status == JobStatus.cancelled:
+            # Cancelled while this worker waited for a device permit: the job
+            # was already out of the queue, so the dequeue-side skip in
+            # _worker can't catch it. Without this re-check the job would
+            # silently resurrect and run to completion.
+            self._unlink_source_safely(job.source_path)
+            self.queue.task_done()
+            return
         job.status = JobStatus.running
         job.started_at = utc_now()
         advance_image_stage(job, "upscaling")

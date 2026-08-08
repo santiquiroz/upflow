@@ -18,6 +18,7 @@ from app.services.subtitle_mux import build_subtitle_mux_command
 from app.services.subtitles import render_segments, segments_to_text
 from app.models import JobStatus, TranscribeJob, utc_now
 from app.services.auth.identity import AuthenticatedUser
+from app.services.process_runner import run_guarded_process
 from app.services.auth.quotas import QuotaService
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
@@ -234,6 +235,13 @@ class TranscribeJobManager:
             await self._execute_job(job)
 
     async def _execute_job(self, job: TranscribeJob) -> None:
+        if job.status == JobStatus.cancelled:
+            # Cancelado mientras este worker esperaba el permiso del device: el
+            # job ya salio de la cola, asi que el skip del _worker no lo agarra.
+            # Sin este re-chequeo el job resucitaria y correria completo.
+            self._unlink_source_safely(job.source_path)
+            self.queue.task_done()
+            return
         job.status = JobStatus.running
         job.started_at = utc_now()
         run_task = asyncio.ensure_future(self._run_engine(job))
@@ -388,11 +396,13 @@ class TranscribeJobManager:
         return subtitle_path
 
     async def _run_ffmpeg(self, command: list[str], destination: Path, que_hacia: str) -> None:
-        process = await asyncio.create_subprocess_exec(
-            *command, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE
+        # run_guarded_process y no create_subprocess_exec pelado: aplica el
+        # timeout global y MATA el ffmpeg si el job se cancela — antes un cancel
+        # dejaba el mux/burn corriendo hasta terminar.
+        _stdout, stderr, returncode = await run_guarded_process(
+            command, self.settings.subprocess_timeout
         )
-        _stdout, stderr = await process.communicate()
-        if process.returncode != 0 or not destination.exists():
+        if returncode != 0 or not destination.exists():
             raise RuntimeError(
                 f"No se pudo {que_hacia}. "
                 f"ffmpeg dijo: {(stderr or b'').decode('utf-8', 'replace').strip()[-300:]}"

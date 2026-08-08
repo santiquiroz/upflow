@@ -377,6 +377,13 @@ class GenerationJobManager:
             await self._execute_job(job)
 
     async def _execute_job(self, job: GenerationJob) -> None:
+        if job.status == JobStatus.cancelled:
+            # Cancelled while this worker waited for a device permit: the job
+            # was already out of the queue, so the dequeue-side skip in
+            # _worker can't catch it. Without this re-check the job would
+            # silently resurrect and run to completion.
+            self.queue.task_done()
+            return
         job.status = JobStatus.running
         job.started_at = utc_now()
         run_task = asyncio.ensure_future(self._run_engine(job))

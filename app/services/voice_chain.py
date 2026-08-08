@@ -100,7 +100,11 @@ def _denoise_filter(mode: DenoiseMode, rnnoise_model: str | None) -> str | None:
             raise ValueError(
                 "El modo de denoise 'rnnoise' necesita la ruta del modelo rnnoise."
             )
-        return f"arnndn=m={rnnoise_model}"
+        # Mismo escape que AudioEnhancer._escape_filter_path: sin el, el ':'
+        # de la letra de unidad en Windows rompe el parser de filtergraph
+        # (verificado contra el ffmpeg vendoreado en audio_enhance.py).
+        escaped = rnnoise_model.replace("\\", "/").replace(":", r"\\:")
+        return f"arnndn=m={escaped}"
     if mode == "fft":
         return "afftdn"
     return None

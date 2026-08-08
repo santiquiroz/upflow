@@ -24,6 +24,9 @@ logger = logging.getLogger(__name__)
 # Whisper trabaja a 16 kHz mono. No es preferencia: el extractor de features lo
 # asume y no remuestrea por su cuenta.
 TARGET_SAMPLE_RATE = 16000
+# Decodificar audio es I/O-bound y rapido incluso para peliculas; una hora de
+# techo separa "archivo enorme" de "ffmpeg colgado".
+DECODE_TIMEOUT_SECONDS = 3600
 
 # El extractor RELLENA O TRUNCA todo a exactamente 30 segundos. Medido: 3 s, 30 s y
 # 120 s de entrada producen las tres el mismo tensor (1, 80, 3000). Sin trocear, un
@@ -117,7 +120,17 @@ def _decoded_copy(path: Path, ffmpeg: str) -> Path:
     command = build_decode_to_wav_command(
         ffmpeg=ffmpeg, source=path, destination=destination, sample_rate=TARGET_SAMPLE_RATE
     )
-    result = subprocess.run(command, capture_output=True, text=True)
+    try:
+        # Sin timeout, un contenedor corrupto podia dejar este ffmpeg colgado
+        # para siempre bloqueando el unico worker de transcripcion.
+        result = subprocess.run(
+            command, capture_output=True, text=True, timeout=DECODE_TIMEOUT_SECONDS
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"ffmpeg tardo mas de {DECODE_TIMEOUT_SECONDS}s decodificando el audio; "
+            "el archivo parece corrupto."
+        ) from exc
     if result.returncode != 0 or not destination.exists():
         raise RuntimeError(
             "No se pudo leer el audio de este archivo. "

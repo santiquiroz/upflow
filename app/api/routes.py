@@ -184,6 +184,7 @@ from app.services.engines.voice_convert import (
     VoiceConversionUnavailable,
 )
 from app.services.media_decode import build_decode_to_wav_command, needs_decoding
+from app.services.process_runner import run_guarded_process
 from app.services.prompt_presets import PROMPT_PRESETS
 from app.services.saved_prompts import SavedPromptStore
 from app.services.subtitles import SUBTITLE_FORMATS, TranscriptSegment, render_segments
@@ -2767,11 +2768,13 @@ async def _decoded_upload(upload: UploadFile, settings: Settings) -> Any:
                 destination=destino,
                 sample_rate=VOICE_SAMPLE_RATE,
             )
-            process = await asyncio.create_subprocess_exec(
-                *command, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL
+            # run_guarded_process y no create_subprocess_exec pelado: un upload
+            # malformado podia dejar este ffmpeg colgado sin techo bloqueando el
+            # request para siempre.
+            _stdout, _stderr, returncode = await run_guarded_process(
+                command, settings.subprocess_timeout
             )
-            await process.communicate()
-            if process.returncode != 0 or not destino.exists():
+            if returncode != 0 or not destino.exists():
                 raise HTTPException(status_code=400, detail="No se pudo leer ese archivo de audio.")
             origen.unlink(missing_ok=True)
             origen = destino

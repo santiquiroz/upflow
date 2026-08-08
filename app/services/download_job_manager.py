@@ -160,8 +160,22 @@ class DownloadJobManager:
         finally:
             job.finished_at = utc_now()
             self._cancel_events.pop(job.id, None)
+            self._record_quota_usage(job)
+
+    def _record_quota_usage(self, job: DownloadJob) -> None:
+        # Sin esto check_admission deja pasar el primer trabajo y despues nada
+        # se descuenta nunca: la cuota queda decorativa (mismo motivo que en
+        # Shape3dJobManager._record_usage).
+        if self.quota_service is None or job.started_at is None:
+            return
+        duration = (job.finished_at - job.started_at).total_seconds()
+        self.quota_service.record_usage(job.owner_id, duration)
 
     def _download_blocking(self, job: DownloadJob, cancel_event: threading.Event) -> None:
+        if cancel_event.is_set():
+            # Cancelado antes de arrancar: sin este chequeo el corte recien
+            # actua en el hook de progreso, y el probe puede colgarse minutos.
+            raise fetch_engine.FetchCancelled("Descarga cancelada")
         info = fetch_engine.probe(job.url)
         job.media_title = info.title
         job.media_uploader = info.uploader

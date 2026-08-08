@@ -159,12 +159,15 @@ def test_rnnoise_requires_its_model_path():
         build_filter_chain(VoiceChainOptions(denoise="rnnoise"))
 
 
-def test_rnnoise_uses_the_model_path_it_receives():
+def test_rnnoise_escapes_the_model_path_for_ffmpeg_filtergraph():
+    # El ':' de la letra de unidad es separador de opciones en un filtergraph y
+    # un solo '\' delante NO alcanza (no hay shell que consuma uno; ver
+    # AudioEnhancer._escape_filter_path): ffmpeg necesita '\\:' y barras POSIX.
     chain = build_filter_chain(
         VoiceChainOptions(denoise="rnnoise", highpass_hz=None, compress=False, deesser=False),
-        rnnoise_model="C\\:/models/rnnoise.rnnn",
+        rnnoise_model="C:\\models\\rnnoise.rnnn",
     )
-    assert chain == ["arnndn=m=C\\:/models/rnnoise.rnnn"]
+    assert chain == ["arnndn=m=C\\\\:/models/rnnoise.rnnn"]
 
 
 def test_defaults_are_a_sane_dialogue_chain():
@@ -369,9 +372,10 @@ def test_unknown_ids_are_ignored_instead_of_failing():
 
 def test_selection_uses_rnnoise_when_the_model_is_available():
     steps = steps_from_selection(
-        ["denoise"], denoise="rnnoise", rnnoise_model=r"C\:/m.rnnn"
+        ["denoise"], denoise="rnnoise", rnnoise_model=r"C:\m.rnnn"
     )
-    assert steps[0].filter_expr == r"arnndn=m=C\:/m.rnnn"
+    # Path escapado para el filtergraph (POSIX + '\\:'), no crudo.
+    assert steps[0].filter_expr == "arnndn=m=C\\\\:/m.rnnn"
 
 
 def test_a_full_selection_produces_the_documented_order():

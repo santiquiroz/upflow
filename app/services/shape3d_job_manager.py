@@ -194,17 +194,28 @@ class Shape3dJobManager:
             job.triangle_count = reporte.mesh.triangle_count
             job.blockers = list(reporte.blockers)
             job.advice = list(reporte.advice)
-            job.status = JobStatus.completed
+            self._finish(job, JobStatus.completed)
         except (Shape3dUnavailable, LlmUnavailable) as exc:
-            job.status = JobStatus.failed
-            job.error = str(exc)
+            self._finish(job, JobStatus.failed, error=str(exc))
         except Exception as exc:  # noqa: BLE001 - el job reporta cualquier fallo
             logger.exception("Fallo generando la malla 3D")
-            job.status = JobStatus.failed
-            job.error = str(exc)
+            self._finish(job, JobStatus.failed, error=str(exc))
         finally:
-            job.finished_at = utc_now()
+            if job.finished_at is None:
+                job.finished_at = utc_now()
             self._record_usage(job)
+
+    @staticmethod
+    def _finish(job: Shape3dJob, status: JobStatus, *, error: str | None = None) -> None:
+        # El hilo de CPU no se puede interrumpir, asi que un cancel a mitad de
+        # generacion deja el trabajo corriendo — pero su estado final es
+        # `cancelled` y NO debe resucitar a completed/failed cuando el hilo
+        # termine. La cuota igual descuenta hasta el momento del cancel
+        # (finished_at lo puso cancel_job).
+        if job.status == JobStatus.cancelled:
+            return
+        job.status = status
+        job.error = error
 
     async def _build_from_cad(self, job: Shape3dJob, destino) -> None:
         resultado = await asyncio.to_thread(

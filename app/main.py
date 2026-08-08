@@ -187,11 +187,6 @@ async def lifespan(app: FastAPI):
         devices=devices_service,
         quota_service=quota_service,
     )
-    quota_service.attach_managers(job_manager, video_job_manager, audio_job_manager, generation_job_manager)
-    retention_sweeper = RetentionSweeper(
-        settings, job_manager, video_job_manager, audio_job_manager,
-        generation_job_manager=generation_job_manager,
-    )
     update_service = UpdateService(settings)
     hf_client = HfClient(settings)
     model_installer = ModelInstaller(settings, model_registry, hf_client)
@@ -215,7 +210,6 @@ async def lifespan(app: FastAPI):
     await job_manager.start()
     await video_job_manager.start()
     await audio_job_manager.start()
-    await retention_sweeper.start()
     await model_installer.start()
     await generation_job_manager.start()
     await generation_installer.start()
@@ -238,6 +232,26 @@ async def lifespan(app: FastAPI):
         quota_service=quota_service,
     )
 
+    # Los SIETE managers, no solo los cuatro originales: los que faltaban
+    # (transcribe/shape3d/download) dejaban a un usuario no-admin sin limite de
+    # concurrencia ni de cola en esas familias.
+    quota_service.attach_managers(
+        job_manager,
+        video_job_manager,
+        audio_job_manager,
+        generation_job_manager,
+        transcribe_jobs,
+        shape3d_jobs,
+        download_jobs,
+    )
+    retention_sweeper = RetentionSweeper(
+        settings, job_manager, video_job_manager, audio_job_manager,
+        generation_job_manager=generation_job_manager,
+        transcribe_job_manager=transcribe_jobs,
+        shape3d_job_manager=shape3d_jobs,
+        download_job_manager=download_jobs,
+    )
+    await retention_sweeper.start()
     await transcribe_jobs.start()
     await shape3d_jobs.start()
     await download_jobs.start()
