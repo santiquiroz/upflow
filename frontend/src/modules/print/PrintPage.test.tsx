@@ -9,7 +9,14 @@ import { PrintPage } from "./PrintPage";
 
 vi.mock("../../services/print", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../services/print")>();
-  return { ...actual, fetchPrinters: vi.fn(), checkPrint: vi.fn(), repairMesh: vi.fn() };
+  return {
+    ...actual,
+    fetchPrinters: vi.fn(),
+    checkPrint: vi.fn(),
+    repairMesh: vi.fn(),
+    createShape3dJob: vi.fn(),
+    getShape3dJob: vi.fn(),
+  };
 });
 
 const RESULTADO_OK: printService.PrintCheckResult = {
@@ -58,6 +65,10 @@ beforeEach(() => {
 afterEach(() => {
   vi.mocked(printService.fetchPrinters).mockReset();
   vi.mocked(printService.checkPrint).mockReset();
+  vi.mocked(printService.repairMesh).mockReset();
+  vi.mocked(printService.createShape3dJob).mockReset();
+  vi.mocked(printService.getShape3dJob).mockReset();
+  vi.unstubAllGlobals();
 });
 
 describe("PrintPage", () => {
@@ -234,5 +245,69 @@ describe("PrintPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: en["print.repair"] }));
 
     expect(await screen.findByText(en["print.repair.closed"])).toBeInTheDocument();
+  });
+
+  it("hands a generated mesh with problems straight to the repair flow", async () => {
+    // El caso real: la palanca de freno salio con aristas de borde y hubo que
+    // bajarla y re-subirla a mano. Este boton hace ese viaje por el usuario.
+    const generado: printService.Shape3dJob = {
+      id: "j9",
+      status: "completed",
+      prompt: "una palanca de freno",
+      printer: "ender-3",
+      source: "mesh",
+      code: null,
+      retries: 0,
+      createdAt: "2026-08-05T00:00:00Z",
+      startedAt: null,
+      finishedAt: null,
+      canPrint: false,
+      sizeMm: [80, 32, 12],
+      triangleCount: 40210,
+      blockers: ["3 aristas de borde: la malla no es estanca."],
+      advice: [],
+      error: null,
+      downloadUrl: "/api/v1/print/generate/j9/download",
+    };
+    vi.mocked(printService.createShape3dJob).mockResolvedValue(generado);
+    vi.mocked(printService.getShape3dJob).mockResolvedValue(generado);
+    vi.mocked(printService.repairMesh).mockResolvedValue({
+      canPrint: true,
+      watertight: true,
+      manifold: true,
+      triangleCount: 40213,
+      volumeMm3: 9000,
+      blockers: [],
+      downloadUrl: "/api/v1/print/repaired/j9",
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        blob: () => Promise.resolve(new Blob(["solid palanca"], { type: "model/stl" })),
+      }),
+    );
+
+    renderPage();
+    fireEvent.click(await screen.findByRole("tab", { name: en["print.lane.generate"] }));
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "una palanca de freno" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: en["gen3d.generate"] }));
+    fireEvent.click(await screen.findByRole("button", { name: en["gen3d.repair"] }));
+
+    await waitFor(() => expect(printService.repairMesh).toHaveBeenCalledTimes(1));
+    const archivo = vi.mocked(printService.repairMesh).mock.calls[0][0];
+    expect(archivo.name).toBe("mesh-j9.stl");
+
+    // Volvio al carril de chequeo con el archivo ya cargado y la reparacion hecha.
+    expect(
+      screen.getByRole("tab", { name: en["print.lane.check"] }),
+    ).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByText(en["print.repair.closed"])).toBeInTheDocument();
+    expect(screen.getByText("mesh-j9.stl")).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: en["print.repair.download"] }),
+    ).toHaveAttribute("href", "/api/v1/print/repaired/j9");
   });
 });

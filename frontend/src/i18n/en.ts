@@ -377,6 +377,9 @@ export const en = {
   "gen3d.ready": "Generated and checked: this prints.",
   "gen3d.readyButNotPrintable": "Generated, but it does not print as it is. What stops it is below.",
   "gen3d.download": "Download the STL",
+  "gen3d.repair": "Repair this mesh",
+  "gen3d.repair.downloadFailed":
+    "Could not download the STL to repair it. Download it and upload it by hand in \"Check a file\".",
   "cad.subtitle": "Describe the part WITH MEASUREMENTS and a local model writes the CAD code. You get a dimensioned part, not an approximate shape.",
   "cad.hasDimensions": "Here the measurements are exact: the code carries the dimensions, and the part is measured afterwards to confirm it. This is the lane for something that has to fit.",
   "cad.prompt": "What it is",

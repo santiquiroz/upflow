@@ -46,7 +46,13 @@ const LISTA: printService.Shape3dJob = {
   downloadUrl: "/api/v1/print/generate/j1/download",
 };
 
-function renderGen() {
+const CON_PROBLEMAS: printService.Shape3dJob = {
+  ...LISTA,
+  canPrint: false,
+  blockers: ["3 aristas de borde: la malla no es estanca."],
+};
+
+function renderGen(onRepairFile: (file: File) => void = vi.fn()) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -57,7 +63,14 @@ function renderGen() {
       </QueryClientProvider>
     );
   }
-  return render(<MeshGenerator printer="ender-3" />, { wrapper: Wrapper });
+  return render(<MeshGenerator printer="ender-3" onRepairFile={onRepairFile} />, {
+    wrapper: Wrapper,
+  });
+}
+
+function generar() {
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "algo" } });
+  fireEvent.click(screen.getByRole("button", { name: en["gen3d.generate"] }));
 }
 
 beforeEach(() => {
@@ -68,6 +81,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.mocked(printService.createShape3dJob).mockReset();
   vi.mocked(printService.getShape3dJob).mockReset();
+  vi.unstubAllGlobals();
 });
 
 describe("MeshGenerator", () => {
@@ -136,5 +150,58 @@ describe("MeshGenerator", () => {
     fireEvent.click(screen.getByRole("button", { name: en["gen3d.generate"] }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(/no esta instalado/);
+  });
+
+  it("offers to repair a generated mesh that does not print", async () => {
+    vi.mocked(printService.getShape3dJob).mockResolvedValue(CON_PROBLEMAS);
+    renderGen();
+    generar();
+
+    expect(await screen.findByRole("button", { name: en["gen3d.repair"] })).toBeInTheDocument();
+  });
+
+  it("does not offer to repair a mesh that already prints", async () => {
+    // Un boton que no hace nada util entrena a ignorar los botones.
+    renderGen();
+    generar();
+
+    await screen.findByText(en["gen3d.ready"]);
+    expect(screen.queryByRole("button", { name: en["gen3d.repair"] })).not.toBeInTheDocument();
+  });
+
+  it("downloads the generated STL and hands it to the repair flow", async () => {
+    vi.mocked(printService.getShape3dJob).mockResolvedValue(CON_PROBLEMAS);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      blob: () => Promise.resolve(new Blob(["solid palanca"], { type: "model/stl" })),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const onRepairFile = vi.fn();
+    renderGen(onRepairFile);
+    generar();
+    fireEvent.click(await screen.findByRole("button", { name: en["gen3d.repair"] }));
+
+    await waitFor(() => expect(onRepairFile).toHaveBeenCalledTimes(1));
+    expect(fetchMock).toHaveBeenCalledWith(CON_PROBLEMAS.downloadUrl);
+    const archivo = onRepairFile.mock.calls[0][0] as File;
+    expect(archivo.name).toBe("mesh-j1.stl");
+    expect(archivo.type).toBe("model/stl");
+    // jsdom no implementa File.text(); el tamano alcanza para probar que el
+    // blob bajado es el contenido del archivo.
+    expect(archivo.size).toBe("solid palanca".length);
+  });
+
+  it("says when the STL could not be downloaded for repair", async () => {
+    vi.mocked(printService.getShape3dJob).mockResolvedValue(CON_PROBLEMAS);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 500 }));
+    const onRepairFile = vi.fn();
+    renderGen(onRepairFile);
+    generar();
+    fireEvent.click(await screen.findByRole("button", { name: en["gen3d.repair"] }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      en["gen3d.repair.downloadFailed"],
+    );
+    expect(onRepairFile).not.toHaveBeenCalled();
   });
 });

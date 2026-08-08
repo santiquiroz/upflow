@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Download, Sparkles } from "lucide-react";
+import { Download, Sparkles, Wrench } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "../../i18n/LocaleProvider";
 import {
@@ -16,11 +16,27 @@ function isBusy(job: Shape3dJob | null): boolean {
   return job !== null && (job.status === "queued" || job.status === "running");
 }
 
-export function MeshGenerator({ printer }: { printer: string }) {
+async function fetchStlAsFile(url: string, name: string): Promise<File> {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+  const blob = await response.blob();
+  return new File([blob], name, { type: "model/stl" });
+}
+
+export function MeshGenerator({
+  printer,
+  onRepairFile,
+}: {
+  printer: string;
+  onRepairFile: (file: File) => void;
+}) {
   const { t } = useTranslation();
   const [prompt, setPrompt] = useState("");
   const [targetMm, setTargetMm] = useState("");
   const [jobId, setJobId] = useState<string | null>(null);
+  const [isFetchingStl, setIsFetchingStl] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const jobQuery = useQuery({
@@ -56,6 +72,21 @@ export function MeshGenerator({ printer }: { printer: string }) {
     if (jobId) {
       await cancelShape3dJob(jobId).catch(() => undefined);
       void jobQuery.refetch();
+    }
+  }
+
+  async function handleRepair() {
+    if (!job?.downloadUrl) {
+      return;
+    }
+    setError(null);
+    setIsFetchingStl(true);
+    try {
+      onRepairFile(await fetchStlAsFile(job.downloadUrl, `mesh-${job.id}.stl`));
+    } catch {
+      setError(t("gen3d.repair.downloadFailed"));
+    } finally {
+      setIsFetchingStl(false);
     }
   }
 
@@ -160,14 +191,30 @@ export function MeshGenerator({ printer }: { printer: string }) {
             </p>
           ))}
           {job.downloadUrl && (
-            <a
-              href={job.downloadUrl}
-              download
-              className="inline-flex w-fit items-center gap-2 rounded bg-accent px-3 py-1.5 text-sm font-medium text-bg hover:bg-accent-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
-            >
-              <Download aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />
-              {t("gen3d.download")}
-            </a>
+            <div className="flex flex-wrap gap-2">
+              <a
+                href={job.downloadUrl}
+                download
+                className="inline-flex w-fit items-center gap-2 rounded bg-accent px-3 py-1.5 text-sm font-medium text-bg hover:bg-accent-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+              >
+                <Download aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />
+                {t("gen3d.download")}
+              </a>
+              {/* Sin este botón el camino real es bajar el STL y volver a
+                  subirlo a mano al carril de chequeo. Acá se hace ese viaje
+                  por el usuario. */}
+              {!job.canPrint && (
+                <button
+                  type="button"
+                  onClick={() => void handleRepair()}
+                  disabled={isFetchingStl}
+                  className="inline-flex items-center gap-2 rounded border border-border bg-surface px-3 py-1.5 text-sm text-text hover:border-text-faint disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                >
+                  <Wrench aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />
+                  {t("gen3d.repair")}
+                </button>
+              )}
+            </div>
           )}
         </div>
       )}

@@ -372,6 +372,9 @@ export const es = {
   "gen3d.ready": "Generada y chequeada: esto se imprime.",
   "gen3d.readyButNotPrintable": "Generada, pero así no se imprime. Abajo está qué lo impide.",
   "gen3d.download": "Bajar el STL",
+  "gen3d.repair": "Reparar esta malla",
+  "gen3d.repair.downloadFailed":
+    "No se pudo bajar el STL para repararlo. Bajalo y subilo a mano en \"Chequear un archivo\".",
   "cad.subtitle": "Describís la pieza CON MEDIDAS y un modelo local escribe el código CAD. Sale una pieza acotada, no una forma aproximada.",
   "cad.hasDimensions": "Acá las medidas son exactas: el código lleva las cotas, y la pieza se mide después para confirmarlo. Es el carril para algo que tiene que encajar.",
   "cad.prompt": "Qué es",

@@ -150,19 +150,32 @@ export function PrintPage() {
     }
   }
 
-  async function handleRepair() {
-    if (!file) {
-      return;
-    }
+  async function runRepair(target: File) {
     setIsBusy(true);
     setError(null);
     try {
-      setRepair(await repairMesh(file));
+      setRepair(await repairMesh(target));
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
     } finally {
       setIsBusy(false);
     }
+  }
+
+  function handleRepair() {
+    if (file) {
+      void runRepair(file);
+    }
+  }
+
+  // Una malla generada con problemas llega acá ya bajada: se carga como si el
+  // usuario la hubiera subido y la reparación arranca sola.
+  function handleRepairGenerated(generated: File) {
+    setFile(generated);
+    setResult(null);
+    setRepair(null);
+    setLane("check");
+    void runRepair(generated);
   }
 
   return (
@@ -202,7 +215,9 @@ export function PrintPage() {
 
       {lane === "build" && <PartBuilder printer={printer} />}
       {lane === "cad" && <CadGenerator printer={printer} />}
-      {lane === "generate" && <MeshGenerator printer={printer} />}
+      {lane === "generate" && (
+        <MeshGenerator printer={printer} onRepairFile={handleRepairGenerated} />
+      )}
 
       <div
         className="grid grid-cols-[1fr_360px] gap-6 max-[900px]:grid-cols-1"
@@ -278,7 +293,7 @@ export function PrintPage() {
         <aside className="flex min-h-64 flex-col gap-4 rounded border border-border bg-surface p-4">
           <h2 className="font-heading text-lg font-semibold text-text">{t("print.result")}</h2>
 
-          {result === null && !isBusy && (
+          {result === null && repair === null && !isBusy && (
             <p className="text-sm text-text-faint">{t("print.waiting")}</p>
           )}
 
@@ -290,7 +305,7 @@ export function PrintPage() {
               {!result.watertight && repair === null && (
                 <button
                   type="button"
-                  onClick={() => void handleRepair()}
+                  onClick={handleRepair}
                   disabled={isBusy}
                   className="inline-flex w-fit items-center gap-2 rounded border border-border bg-surface px-3 py-1.5 text-sm text-text hover:border-text-faint disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
                 >
@@ -298,28 +313,34 @@ export function PrintPage() {
                   {t("print.repair")}
                 </button>
               )}
+            </>
+          )}
 
-              {repair !== null && (
-                <div className="flex flex-col gap-2 rounded border border-border bg-surface-2 p-2">
-                  <p role="status" className="text-sm text-text">
-                    {repair.watertight ? t("print.repair.closed") : t("print.repair.stillOpen")}
-                  </p>
-                  {repair.blockers.map((b) => (
-                    <p key={b} className="text-xs text-text-dim">
-                      {b}
-                    </p>
-                  ))}
-                  <a
-                    href={repair.downloadUrl}
-                    download
-                    className="inline-flex w-fit items-center gap-2 rounded bg-accent px-3 py-1.5 text-sm font-medium text-bg hover:bg-accent-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
-                  >
-                    <Download aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />
-                    {t("print.repair.download")}
-                  </a>
-                </div>
-              )}
+          {/* Fuera del bloque del chequeo: una malla que llega desde el
+              generador se repara sin haber pasado por "Chequear". */}
+          {repair !== null && (
+            <div className="flex flex-col gap-2 rounded border border-border bg-surface-2 p-2">
+              <p role="status" className="text-sm text-text">
+                {repair.watertight ? t("print.repair.closed") : t("print.repair.stillOpen")}
+              </p>
+              {repair.blockers.map((b) => (
+                <p key={b} className="text-xs text-text-dim">
+                  {b}
+                </p>
+              ))}
+              <a
+                href={repair.downloadUrl}
+                download
+                className="inline-flex w-fit items-center gap-2 rounded bg-accent px-3 py-1.5 text-sm font-medium text-bg hover:bg-accent-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+              >
+                <Download aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />
+                {t("print.repair.download")}
+              </a>
+            </div>
+          )}
 
+          {result !== null && (
+            <>
               {result.blockers.length > 0 && (
                 <div className="flex flex-col gap-1">
                   <h3 className="font-heading text-xs font-semibold uppercase tracking-wide text-danger">
