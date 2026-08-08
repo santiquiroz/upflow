@@ -891,3 +891,67 @@ async def test_a_reconversion_never_downgrades_an_installed_entry(tmp_path: Path
     await converter.convert_from_hf("amd/sdxl-torch")
 
     assert registry.get("gen--amd--sdxl-torch").status.value == "installed"
+
+
+async def test_inpaint_merge_conversion_registers_the_merged_variant(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import app.services.generation_inpaint_merge as merge_module
+
+    converter, _installer, _settings, registry = make_converter(
+        tmp_path, export_fn=fake_export_ok
+    )
+    merge_calls: dict[str, tuple[Path, Path, Path]] = {}
+
+    def fake_merge(user_dir: Path, base_dir: Path, inpaint_dir: Path, out_dir: Path, progress_cb=None) -> Path:
+        merge_calls["dirs"] = (user_dir, base_dir, inpaint_dir)
+        # El merge real deja un dir diffusers en src_root; el export fake solo
+        # necesita el model_index.
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "model_index.json").write_text(
+            json.dumps({"_class_name": "StableDiffusionXLInpaintPipeline"}), encoding="utf-8"
+        )
+        return out_dir
+
+    monkeypatch.setattr(merge_module, "merge_to_inpaint_dir", fake_merge)
+
+    conversion_id = await converter.convert_inpaint_merge("john/epic-xl")
+    # La entrada convirtiendo existe DESDE el encolado, con nombre e id propios:
+    # el merge no puede pisar el modelo original.
+    converting = registry.get("gen--john--epic-xl--inpainting")
+    assert converting is not None and converting.status == ModelStatus.converting
+    assert converting.name == "john/epic-xl (inpainting)"
+
+    await converter._process_next()
+
+    job = converter.status(conversion_id)
+    assert job is not None and job.status == JobStatus.completed
+    entry = registry.get("gen--john--epic-xl--inpainting")
+    assert entry is not None and entry.status == ModelStatus.installed
+    assert entry.name == "john/epic-xl (inpainting)"
+    assert registry.get("gen--john--epic-xl") is None  # el original no se toca
+    user_dir, base_dir, inpaint_dir = merge_calls["dirs"]
+    assert user_dir.name == "user" and base_dir.name == "base" and inpaint_dir.name == "inpaint"
+
+
+async def test_inpaint_merge_failure_marks_the_merged_entry_not_the_original(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import app.services.generation_inpaint_merge as merge_module
+
+    converter, _installer, _settings, registry = make_converter(
+        tmp_path, export_fn=fake_export_ok
+    )
+
+    def broken_merge(*args, **kwargs) -> Path:
+        raise RuntimeError("merge roto")
+
+    monkeypatch.setattr(merge_module, "merge_to_inpaint_dir", broken_merge)
+
+    conversion_id = await converter.convert_inpaint_merge("john/epic-xl")
+    await converter._process_next()
+
+    job = converter.status(conversion_id)
+    assert job is not None and job.status == JobStatus.failed
+    entry = registry.get("gen--john--epic-xl--inpainting")
+    assert entry is not None and entry.status == ModelStatus.error

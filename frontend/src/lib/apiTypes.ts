@@ -559,6 +559,14 @@ export interface GenerationCapabilities {
   cpuOnly: boolean;
 }
 
+// Respuesta de POST /editor/insert-object: el composite viene inline en base64
+// y, si se pidió armonizar, jobId es un job de generación normal en la cola.
+export interface InsertObjectResponse {
+  compositeToken: string;
+  compositePngBase64: string;
+  jobId: string | null;
+}
+
 export interface VideoModelSummary {
   id: string;
   name: string;

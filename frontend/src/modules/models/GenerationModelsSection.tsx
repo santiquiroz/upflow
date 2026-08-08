@@ -1,6 +1,8 @@
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Download, Trash2 } from "lucide-react";
 import { useTranslation } from "../../i18n/LocaleProvider";
 import { useState } from "react";
+import { createInpaintVersion } from "../../services/generation";
 import { useGenerationModelInstall } from "../../hooks/useGenerationJob";
 import { DEFAULT_INSTALL_POLL_INTERVAL_MS, useDeleteModel, useInstalledModels } from "../../hooks/useModels";
 import type { ModelResponse } from "../../lib/apiTypes";
@@ -58,12 +60,20 @@ function RepoIdForm({
   );
 }
 
+function isInpaintVariant(model: ModelResponse): boolean {
+  return model.name.includes("(inpainting)");
+}
+
 function DiffusionModelRow({
   model,
   onRequestDelete,
+  onCreateInpaint,
+  inpaintPending,
 }: {
   model: ModelResponse;
   onRequestDelete: (model: ModelResponse) => void;
+  onCreateInpaint: (model: ModelResponse) => void;
+  inpaintPending: boolean;
 }) {
   const { t } = useTranslation();
   return (
@@ -72,14 +82,27 @@ function DiffusionModelRow({
         <span className="text-sm text-text">{model.name}</span>
         <span className="font-mono-tabular text-xs text-text-dim">{formatModelSize(model.sizeBytes)}</span>
       </div>
-      <button
-        type="button"
-        aria-label={t("models.delete.aria", { name: model.name })}
-        onClick={() => onRequestDelete(model)}
-        className="shrink-0 rounded-sm border border-border bg-surface p-2 text-text-faint transition-[border-color,color] duration-fast hover:border-danger hover:text-danger focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
-      >
-        <Trash2 aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />
-      </button>
+      <div className="flex shrink-0 items-center gap-2">
+        {!isInpaintVariant(model) && (
+          <button
+            type="button"
+            title={t("models.createInpaint.hint")}
+            disabled={inpaintPending}
+            onClick={() => onCreateInpaint(model)}
+            className="rounded-sm border border-border bg-surface px-2 py-1.5 text-xs text-text-dim transition-[border-color,color] duration-fast hover:border-accent hover:text-text disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+          >
+            {t("models.createInpaint.button")}
+          </button>
+        )}
+        <button
+          type="button"
+          aria-label={t("models.delete.aria", { name: model.name })}
+          onClick={() => onRequestDelete(model)}
+          className="rounded-sm border border-border bg-surface p-2 text-text-faint transition-[border-color,color] duration-fast hover:border-danger hover:text-danger focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+        >
+          <Trash2 aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />
+        </button>
+      </div>
     </li>
   );
 }
@@ -92,9 +115,13 @@ function DiffusionModelsEmptyState() {
 function DiffusionModelsList({
   models,
   onRequestDelete,
+  onCreateInpaint,
+  inpaintPending,
 }: {
   models: ModelResponse[];
   onRequestDelete: (model: ModelResponse) => void;
+  onCreateInpaint: (model: ModelResponse) => void;
+  inpaintPending: boolean;
 }) {
   if (models.length === 0) {
     return <DiffusionModelsEmptyState />;
@@ -102,7 +129,13 @@ function DiffusionModelsList({
   return (
     <ul className="flex flex-col gap-2">
       {models.map((model) => (
-        <DiffusionModelRow key={model.id} model={model} onRequestDelete={onRequestDelete} />
+        <DiffusionModelRow
+          key={model.id}
+          model={model}
+          onRequestDelete={onRequestDelete}
+          onCreateInpaint={onCreateInpaint}
+          inpaintPending={inpaintPending}
+        />
       ))}
     </ul>
   );
@@ -126,6 +159,15 @@ export function GenerationModelsSection({ pollIntervalMs = DEFAULT_INSTALL_POLL_
     useGenerationModelInstall(pollIntervalMs);
   const modelsQuery = useInstalledModels();
   const deleteMutation = useDeleteModel();
+  const queryClient = useQueryClient();
+  const inpaintMutation = useMutation({
+    mutationFn: (model: ModelResponse) => createInpaintVersion(model.id),
+    onSuccess: () => {
+      // El merge corre como conversión: la entrada "(inpainting)" aparece en
+      // esta misma lista con su progreso apenas se refresca.
+      queryClient.invalidateQueries({ queryKey: ["models"] });
+    },
+  });
 
   const diffusionModels = (modelsQuery.data?.models ?? []).filter(isDiffusionModel);
   const installInFlight = isInstallInFlight(phase);
@@ -159,7 +201,19 @@ export function GenerationModelsSection({ pollIntervalMs = DEFAULT_INSTALL_POLL_
         />
       )}
       {phase === "error" && errorMessage && <InstallError message={errorMessage} onRetry={reset} />}
-      <DiffusionModelsList models={diffusionModels} onRequestDelete={setPendingDelete} />
+      <DiffusionModelsList
+        models={diffusionModels}
+        onRequestDelete={setPendingDelete}
+        onCreateInpaint={(model) => inpaintMutation.mutate(model)}
+        inpaintPending={inpaintMutation.isPending}
+      />
+      {inpaintMutation.isError && (
+        <p className="text-sm text-danger">
+          {inpaintMutation.error instanceof Error
+            ? inpaintMutation.error.message
+            : t("models.createInpaint.failed")}
+        </p>
+      )}
       {deleteMutation.isError && <DeleteFailedNote error={deleteMutation.error} />}
       {pendingDelete && (
         <DeleteConfirmDialog

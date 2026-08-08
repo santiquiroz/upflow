@@ -310,6 +310,10 @@ class ConversionJob:
     repo_id: str
     precision: Precision = "fp16"
     checkpoint_path: str | None = None
+    # Merge de inpainting 9ch: repo_id es el checkpoint del USUARIO; el job
+    # descarga base+inpaint oficiales, mergea (add-difference) y exporta el
+    # resultado como un modelo nuevo "<repo> (inpainting)".
+    inpaint_merge: bool = False
     id: str = field(default_factory=lambda: uuid4().hex)
     status: JobStatus = JobStatus.queued
     created_at: datetime = field(default_factory=utc_now)

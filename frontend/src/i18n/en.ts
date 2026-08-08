@@ -89,6 +89,10 @@ export const en = {
   "generate.video.fastModel": "{{name}} - fast, 4 steps",
   "generate.model.fastModel": "{{name}} ⚡ fast, few steps",
   "generate.model.inpaintOnly": "{{name}} — Editor only (inpainting)",
+  "models.createInpaint.button": "Create inpainting version",
+  "models.createInpaint.hint":
+    "Merges this model with its family's official inpainting model (9 channels): same style, edges that match, real partial strength. Downloads ~15GB, takes ~40 min.",
+  "models.createInpaint.failed": "Could not create the inpainting version",
   "generate.video.size.square": "640 x 640 (square)",
   "generate.video.size.fastest": "480 x 480 (fastest)",
   "generate.video.size.vertical": "480 x 832 (vertical)",
@@ -629,6 +633,29 @@ export const en = {
   "editor.advanced.strength": "Strength",
   "editor.advanced.strengthHint":
     "With standard models the edit always runs at 1.0; lower values only take effect with dedicated inpainting checkpoints.",
+  "editor.insert.title": "Insert object",
+  "editor.insert.summary": "Bring an object over from another photo",
+  "editor.insert.tooltip":
+    "Cut an object out of another image and paste it into this one, with optional color matching and AI harmonization.",
+  "editor.insert.uploadSource": "Choose source image",
+  "editor.insert.sourceInputLabel": "Source image with the object",
+  "editor.insert.uploading": "Uploading…",
+  "editor.insert.clickHint": "Click the object in the source image to select it.",
+  "editor.insert.segmenting": "Finding the object…",
+  "editor.insert.positionX": "Position X",
+  "editor.insert.positionY": "Position Y",
+  "editor.insert.scale": "Scale (%)",
+  "editor.insert.matchColor": "Match color",
+  "editor.insert.harmonize": "Harmonize with AI",
+  "editor.insert.model": "Harmonization model",
+  "editor.insert.needsInpaintModel":
+    "No dedicated inpainting model is installed — harmonizing needs one.",
+  "editor.insert.insert": "Insert",
+  "editor.insert.working": "Inserting…",
+  "editor.insert.download": "Download",
+  "editor.insert.harmonizing": "Harmonizing in the job queue…",
+  "editor.insert.resultAlt": "Composite result",
+  "editor.insert.error": "The operation could not be completed.",
 
   // --- ajustes: aceleracion por dispositivo -----------------------------
   "settings.acceleration.title": "Acceleration",

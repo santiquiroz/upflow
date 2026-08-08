@@ -83,6 +83,10 @@ export const es = {
   "generate.video.fastModel": "{{name}} - rápido, 4 pasos",
   "generate.model.fastModel": "{{name}} ⚡ rápido, pocos pasos",
   "generate.model.inpaintOnly": "{{name}} — solo Editor (inpainting)",
+  "models.createInpaint.button": "Crear versión de inpainting",
+  "models.createInpaint.hint":
+    "Mergea este modelo con el inpainting oficial de su familia (9 canales): mismo estilo, bordes que calzan y fuerza parcial real. Descarga ~15GB y tarda ~40 min.",
+  "models.createInpaint.failed": "No se pudo crear la versión de inpainting",
   "generate.video.size.square": "640 x 640 (cuadrado)",
   "generate.video.size.fastest": "480 x 480 (más rápido)",
   "generate.video.size.vertical": "480 x 832 (vertical)",
@@ -624,6 +628,29 @@ export const es = {
   "editor.advanced.strength": "Fuerza",
   "editor.advanced.strengthHint":
     "Con modelos estándar la edición corre siempre a 1.0; valores menores solo aplican con checkpoints de inpainting dedicados.",
+  "editor.insert.title": "Insertar objeto",
+  "editor.insert.summary": "Traé un objeto desde otra foto",
+  "editor.insert.tooltip":
+    "Recortá un objeto de otra imagen y pegalo en esta, con igualado de color opcional y armonización con IA.",
+  "editor.insert.uploadSource": "Elegir imagen origen",
+  "editor.insert.sourceInputLabel": "Imagen origen con el objeto",
+  "editor.insert.uploading": "Subiendo…",
+  "editor.insert.clickHint": "Tocá el objeto en la imagen origen para seleccionarlo.",
+  "editor.insert.segmenting": "Buscando el objeto…",
+  "editor.insert.positionX": "Posición X",
+  "editor.insert.positionY": "Posición Y",
+  "editor.insert.scale": "Escala (%)",
+  "editor.insert.matchColor": "Igualar color",
+  "editor.insert.harmonize": "Armonizar con IA",
+  "editor.insert.model": "Modelo de armonización",
+  "editor.insert.needsInpaintModel":
+    "No hay ningún modelo de inpainting dedicado instalado — armonizar necesita uno.",
+  "editor.insert.insert": "Insertar",
+  "editor.insert.working": "Insertando…",
+  "editor.insert.download": "Descargar",
+  "editor.insert.harmonizing": "Armonizando en la cola de trabajos…",
+  "editor.insert.resultAlt": "Resultado compuesto",
+  "editor.insert.error": "No se pudo completar la operación.",
 
   // --- ajustes: aceleracion por dispositivo -----------------------------
   "settings.acceleration.title": "Aceleración",

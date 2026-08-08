@@ -23,6 +23,7 @@ import { useTranslation } from "../../i18n/LocaleProvider";
 import type { DeviceInfoResponse, GenerationModelSummary, InitImageResponse } from "../../lib/apiTypes";
 import { fetchEditorCapabilities, segmentEditorObject } from "../../services/editor";
 import { uploadGenerationInitImage, type CreateGenerationJobParams } from "../../services/generation";
+import { InsertObjectPanel } from "./InsertObjectPanel";
 import {
   appendPoint,
   drawStrokes,
@@ -868,6 +869,8 @@ export function EditorPanel() {
           {isEraseOnlyModel && (
             <p className="text-xs text-text-faint">{t("editor.eraser.hint")}</p>
           )}
+
+          <InsertObjectPanel targetInfo={baseInfo} />
 
           {uploadError && <p className="text-sm text-danger">{uploadError}</p>}
 

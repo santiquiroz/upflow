@@ -363,6 +363,15 @@ ExportFn = Callable[
 ]
 
 
+def _job_model_id(job: ConversionJob) -> str:
+    model_id = _generation_model_id(job.repo_id, job.checkpoint_path)
+    return f"{model_id}--inpainting" if job.inpaint_merge else model_id
+
+
+def _job_model_name(job: ConversionJob) -> str:
+    return f"{job.repo_id} (inpainting)" if job.inpaint_merge else job.repo_id
+
+
 class ConversionCancelled(Exception):
     """El usuario corto la conversion. No es un fallo."""
 
@@ -435,6 +444,22 @@ class GenerationModelConverter:
         await self._queue.put(job)
         return job.id
 
+    async def convert_inpaint_merge(self, repo_id: str) -> str:
+        """Crea la versión de inpainting 9ch de un checkpoint del usuario.
+
+        Mismo carril que una conversión normal (cola, progreso, cancelación,
+        registro visible desde el arranque); la diferencia es la pre-etapa de
+        merge add-difference contra los oficiales base+inpaint de la familia.
+        """
+        available, reason = generation_dependencies_available()
+        if not available:
+            raise ValueError(reason or "Generation dependencies missing")
+        job = ConversionJob(repo_id=_validate_repo_id(repo_id), inpaint_merge=True)
+        self._jobs[job.id] = job
+        self._register_converting_entry(job)
+        await self._queue.put(job)
+        return job.id
+
     def _register_converting_entry(self, job: ConversionJob) -> None:
         """La conversion existe en el registro DESDE que se encola.
 
@@ -444,14 +469,14 @@ class GenerationModelConverter:
         modelo YA instalado nunca se degrada: sigue usable hasta que una
         promocion nueva lo reemplace.
         """
-        model_id = _generation_model_id(job.repo_id, job.checkpoint_path)
+        model_id = _job_model_id(job)
         existing = self.installer.registry.get(model_id)
         if existing is not None and existing.status == ModelStatus.installed:
             return
         self.installer.registry.register(
             ModelEntry(
                 id=model_id,
-                name=job.repo_id,
+                name=_job_model_name(job),
                 kind=ModelKind.diffusion_onnx,
                 source=f"hf:{job.repo_id}",
                 size_bytes=0,
@@ -462,7 +487,7 @@ class GenerationModelConverter:
         )
 
     def _mark_entry_error(self, job: ConversionJob, error: str) -> None:
-        model_id = _generation_model_id(job.repo_id, job.checkpoint_path)
+        model_id = _job_model_id(job)
         entry = self.installer.registry.get(model_id)
         if entry is None or entry.status != ModelStatus.converting:
             # Un instalado previo sigue instalado; sin entrada no hay que marcar.
@@ -556,6 +581,72 @@ class GenerationModelConverter:
         finally:
             job.finished_at = utc_now()
 
+    async def _download_repo_dir(
+        self, repo_id: str, dest_root: Path, precision: Precision
+    ) -> tuple[list[HfFile], Precision]:
+        """Descarga un repo diffusers completo (componentes declarados, con la
+        precisión pedida si el repo la ofrece) a un directorio local.
+
+        Duplicado deliberado del camino normal de conversión: compartirlo
+        cambiaría el conteo de llamadas del que dependen sus tests.
+        """
+        files = await self.hf_client.repo_files(repo_id)
+        _ensure_model_index_listed(files, repo_id)
+        _ensure_installable_layout(files, repo_id)
+        await self.hf_client.download(
+            repo_id,
+            MODEL_INDEX_FILENAME,
+            _safe_staging_dest(dest_root, MODEL_INDEX_FILENAME),
+            unlimited=True,
+        )
+        declared = _read_declared_components(dest_root)
+        offered = await real_available_precisions(self.hf_client, repo_id, files, declared)
+        chosen = precision if precision in offered else (offered[0] if offered else "fp32")
+        selected = select_for_precision(files, declared, chosen)
+        for hf_file in selected:
+            dest = _safe_staging_dest(dest_root, canonical_weight_name(hf_file.path))
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            await self.hf_client.download(repo_id, hf_file.path, dest, unlimited=True)
+        return selected, chosen
+
+    async def _prepare_inpaint_merge(
+        self, job: ConversionJob, src_root: Path, merge_root: Path, component_keys: list[str]
+    ) -> tuple[list[HfFile], Precision]:
+        from app.services.engines.generation_onnx import _read_declared_class_name
+        from app.services.generation_inpaint_merge import (
+            INPAINT_BASE_REPOS,
+            merge_family_for,
+            merge_to_inpaint_dir,
+        )
+
+        user_root = merge_root / "user"
+        base_root = merge_root / "base"
+        inpaint_root = merge_root / "inpaint"
+        for root in (user_root, base_root, inpaint_root):
+            if root.exists():
+                shutil.rmtree(root, ignore_errors=True)
+            root.mkdir(parents=True, exist_ok=True)
+
+        selected, _ = await self._download_repo_dir(job.repo_id, user_root, "fp16")
+        self._raise_if_cancelled(job)
+        # La familia sale del checkpoint del USUARIO: decide contra qué base e
+        # inpaint oficiales se hace el add-difference.
+        family = merge_family_for(_read_declared_class_name(user_root))
+        repos = INPAINT_BASE_REPOS[family]
+        await self._download_repo_dir(repos["base"], base_root, "fp16")
+        self._raise_if_cancelled(job)
+        await self._download_repo_dir(repos["inpaint"], inpaint_root, "fp16")
+        self._raise_if_cancelled(job)
+
+        advance_conversion_stage(job, component_keys, "merging")
+        await asyncio.to_thread(
+            merge_to_inpaint_dir, user_root, base_root, inpaint_root, src_root
+        )
+        shutil.rmtree(merge_root, ignore_errors=True)
+        # El merge se guarda en fp16: el export de acá en adelante es idéntico
+        # al de una conversión normal.
+        return selected, "fp16"
+
     async def _convert_and_register(self, job: ConversionJob) -> None:
         files = await self.hf_client.repo_files(job.repo_id)
         checkpoint: HfFile | None = None
@@ -575,9 +666,10 @@ class GenerationModelConverter:
                 job.repo_id,
                 job.checkpoint_path,
             )
-        model_id = _generation_model_id(job.repo_id, job.checkpoint_path)
+        model_id = _job_model_id(job)
         src_root = self.settings.temp_path / f"genconv-src-{model_id}"
         out_root = self.settings.temp_path / f"genconv-onnx-{model_id}"
+        merge_root = self.settings.temp_path / f"genconv-merge-{model_id}"
         for root in (src_root, out_root):
             if root.exists():
                 shutil.rmtree(root, ignore_errors=True)
@@ -587,7 +679,11 @@ class GenerationModelConverter:
         try:
             advance_conversion_stage(job, component_keys, "downloading")
             selected: list[HfFile]
-            if checkpoint is not None:
+            if job.inpaint_merge:
+                selected, precision = await self._prepare_inpaint_merge(
+                    job, src_root, merge_root, component_keys
+                )
+            elif checkpoint is not None:
                 checkpoint_dest = _safe_staging_dest(src_root, checkpoint.path)
                 checkpoint_dest.parent.mkdir(parents=True, exist_ok=True)
                 await self.hf_client.download(
@@ -680,9 +776,11 @@ class GenerationModelConverter:
                 job.repo_id,
                 size_bytes,
                 checkpoint_path=job.checkpoint_path,
+                model_id=_job_model_id(job) if job.inpaint_merge else None,
+                display_name=_job_model_name(job) if job.inpaint_merge else None,
             )
             complete_conversion_stages(job, exported)
         finally:
-            for root in (src_root, out_root):
+            for root in (src_root, out_root, merge_root):
                 if root.exists():
                     shutil.rmtree(root, ignore_errors=True)

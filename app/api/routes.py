@@ -2294,6 +2294,93 @@ async def convert_generation_model(
     )
 
 
+@router.post(
+    "/generation/models/{model_id}/create-inpaint",
+    response_model=CreateConversionResponse, status_code=202,
+    dependencies=[Depends(require(Permission.models_install))],
+)
+async def create_inpaint_version(
+    model_id: str,
+    converter: GenerationModelConverter = Depends(get_generation_converter),
+    registry: ModelRegistry = Depends(get_model_registry),
+    settings: Settings = Depends(get_settings),
+) -> CreateConversionResponse:
+    from app.services.generation_inpaint_merge import (
+        InpaintMergeUnsupportedError,
+        merge_family_for,
+    )
+
+    from app.services.generation_installer import _generation_model_id
+
+    entry = registry.get(model_id)
+    if entry is None or entry.kind != ModelKind.diffusion_onnx:
+        raise HTTPException(status_code=404, detail="Modelo de generación no encontrado")
+    if not entry.source.startswith("hf:"):
+        raise HTTPException(
+            status_code=400,
+            detail="Este modelo no tiene un repo de origen en Hugging Face para mergear",
+        )
+    source_repo = entry.source[3:]
+    if entry.id != _generation_model_id(source_repo):
+        # Instalado desde un checkpoint suelto: el source solo guarda el repo,
+        # no el archivo — mergear bajaría OTROS pesos que los que el usuario
+        # instaló. Rechazo claro hasta que se persista el checkpoint de origen.
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Este modelo se instaló desde un checkpoint único: el merge de "
+                "inpainting todavía no lo soporta. Instalá el repo diffusers "
+                "completo del modelo y creá la versión desde ese."
+            ),
+        )
+    if _entry_inpaint_only(settings, entry):
+        raise HTTPException(status_code=400, detail="Este modelo ya es de inpainting")
+    try:
+        # Validar la familia ANTES de encolar 20GB de descargas: un SD3/LCM sin
+        # inpaint oficial debe fallar acá con el motivo, no a los 40 minutos.
+        from app.services.engines.generation_onnx import _read_declared_class_name
+
+        declared = _read_declared_class_name(settings.models_path / (entry.file_path or ""))
+        merge_family_for(declared)
+    except InpaintMergeUnsupportedError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 -- sin model_index legible no hay merge posible
+        raise HTTPException(
+            status_code=400, detail="No se pudo leer la clase del modelo instalado"
+        ) from exc
+    # El repo de origen debe publicar pesos PyTorch: los repos puramente ONNX
+    # (los "_amdgpu", por ejemplo) fallarían tras bajar ~14GB. Validar acá
+    # cumple el contrato "validar ANTES de encolar" del resto del endpoint.
+    try:
+        source_files = await converter.hf_client.repo_files(source_repo)
+    except Exception as exc:  # noqa: BLE001 -- sin listado no hay veredicto honesto
+        raise HTTPException(
+            status_code=400, detail=f"No se pudo listar el repo de origen: {exc}"
+        ) from exc
+    has_torch_weights = any(
+        "/" in hf_file.path
+        and hf_file.path.endswith((".safetensors", ".bin"))
+        and ".onnx" not in hf_file.path
+        for hf_file in source_files
+    )
+    if not has_torch_weights:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "El repo de origen solo publica pesos ONNX: el merge de inpainting "
+                "necesita los pesos PyTorch originales del modelo."
+            ),
+        )
+    try:
+        conversion_id = await converter.convert_inpaint_merge(source_repo)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return CreateConversionResponse(
+        conversion_id=conversion_id,
+        status_url=f"/api/v1/generation/models/convert/{conversion_id}",
+    )
+
+
 def _conversion_to_response(job) -> ConversionStatusResponse:
     progress = job.metadata.get("progress")
     return ConversionStatusResponse(

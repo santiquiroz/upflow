@@ -1,4 +1,5 @@
-import { ApiError } from "../lib/api";
+import { ApiError, apiPostJson } from "../lib/api";
+import type { InsertObjectResponse } from "../lib/apiTypes";
 
 const API_BASE = "/api/v1";
 
@@ -36,4 +37,26 @@ export async function segmentEditorObject(
     throw new ApiError(response.status, detail);
   }
   return response.blob();
+}
+
+export interface InsertObjectParams {
+  targetToken: string;
+  sourceToken: string;
+  sourceMaskToken: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  featherPx?: number;
+  matchColor?: boolean;
+  harmonize?: boolean;
+  modelId?: string;
+  prompt?: string;
+  device?: string;
+}
+
+// Pega el objeto recortado de la imagen origen sobre la destino. El composite
+// vuelve inline en base64; con harmonize el jobId entra a la cola normal.
+export function insertObject(params: InsertObjectParams): Promise<InsertObjectResponse> {
+  return apiPostJson<InsertObjectResponse>("/editor/insert-object", params);
 }

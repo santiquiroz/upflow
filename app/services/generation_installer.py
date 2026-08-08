@@ -489,19 +489,23 @@ class GenerationModelInstaller:
         repo_id: str,
         size_bytes: int,
         checkpoint_path: str | None = None,
+        model_id: str | None = None,
+        display_name: str | None = None,
     ) -> str:
         _validate_structure(staging_root)
         _patch_legacy_component_configs(staging_root)
         async with self.device_semaphores.acquire(self.settings.default_device):
             await asyncio.to_thread(self._validate_pipeline, staging_root)
 
-        model_id = _generation_model_id(repo_id, checkpoint_path)
+        # model_id/display_name explícitos: los merges de inpainting registran
+        # "<repo> (inpainting)" con id propio para no pisar el modelo original.
+        model_id = model_id or _generation_model_id(repo_id, checkpoint_path)
         final_dir = self.settings.models_path / GENERATION_MODELS_SUBDIR / model_id
         async with self._lock_for(model_id):
             await self._promote_staging_dir(staging_root, final_dir)
             entry = ModelEntry(
                 id=model_id,
-                name=repo_id,
+                name=display_name or repo_id,
                 kind=ModelKind.diffusion_onnx,
                 source=f"hf:{repo_id}",
                 size_bytes=size_bytes,

@@ -748,6 +748,35 @@ class InitImageResponse(BaseModel):
     height: int
 
 
+class InsertObjectRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    # Tokens de /generation/init-image: destino, imagen origen y máscara del
+    # objeto (la que devolvió /editor/segment, re-subida por el cliente).
+    target_token: str = Field(alias="targetToken")
+    source_token: str = Field(alias="sourceToken")
+    source_mask_token: str = Field(alias="sourceMaskToken")
+    x: int = Field(ge=-4096, le=8192)
+    y: int = Field(ge=-4096, le=8192)
+    width: int = Field(ge=8, le=4096)
+    height: int = Field(ge=8, le=4096)
+    feather_px: int = Field(default=6, alias="featherPx", ge=0, le=64)
+    match_color: bool = Field(default=True, alias="matchColor")
+    # Pase de armonización con inpaint 9ch a strength parcial. Requiere un
+    # modelo de inpainting dedicado: uno de 4 canales fuerza strength 1.0 y
+    # reinventaría el objeto recién pegado.
+    harmonize: bool = False
+    model_id: str | None = Field(default=None, alias="modelId")
+    prompt: str | None = Field(default=None, max_length=2000)
+    device: str | None = None
+
+
+class InsertObjectResponse(BaseModel):
+    composite_token: str = Field(serialization_alias="compositeToken")
+    composite_png_base64: str = Field(serialization_alias="compositePngBase64")
+    job_id: str | None = Field(default=None, serialization_alias="jobId")
+
+
 class GenerationJobResponse(BaseModel):
     id: str
     status: JobStatus

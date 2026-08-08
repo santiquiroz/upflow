@@ -156,6 +156,11 @@ export function convertGenerationModel(
   return apiPostJson("/generation/models/convert", { repoId });
 }
 
+/** Crea la versión de inpainting 9ch (merge add-difference) de un modelo instalado. */
+export function createInpaintVersion(modelId: string) {
+  return apiPostJson(`/generation/models/${encodeURIComponent(modelId)}/create-inpaint`, {});
+}
+
 export function getConversionStatus(conversionId: string): Promise<ConversionStatusResponse> {
   return apiGet<ConversionStatusResponse>(`/generation/models/convert/${conversionId}`);
 }
