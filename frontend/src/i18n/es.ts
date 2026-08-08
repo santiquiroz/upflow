@@ -365,7 +365,7 @@ export const es = {
   "gen3d.noDimensions": "Esto da una FORMA, no medidas. Una malla generada no sabe que tiene que medir 80 mm. Para una pieza que tiene que encajar, usá el carril de cotas exactas.",
   "gen3d.prompt": "Qué es",
   "gen3d.promptPlaceholder": "un soporte mecánico simple con dos agujeros",
-  "gen3d.targetMm": "Lado más largo (mm)",
+  "gen3d.targetMm": "Lado más largo (mm) — vacío = 100 mm",
   "gen3d.generate": "Generar",
   "gen3d.working": "Generando…",
   "gen3d.takesMinutes": "Esto tarda unos dos minutos. Podés dejar la página abierta.",

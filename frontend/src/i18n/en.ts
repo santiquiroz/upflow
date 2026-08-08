@@ -370,7 +370,7 @@ export const en = {
   "gen3d.noDimensions": "This gives you a SHAPE, not measurements. A generated mesh does not know it has to be 80 mm. For a part that has to fit, use the exact-sizes lane.",
   "gen3d.prompt": "What is it",
   "gen3d.promptPlaceholder": "a simple mechanical bracket with two bolt holes",
-  "gen3d.targetMm": "Longest side (mm)",
+  "gen3d.targetMm": "Longest side (mm) — empty = 100 mm",
   "gen3d.generate": "Generate",
   "gen3d.working": "Generating…",
   "gen3d.takesMinutes": "This takes about two minutes. You can leave the page open.",

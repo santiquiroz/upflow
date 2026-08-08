@@ -32,6 +32,10 @@ from app.services.stl_writer import write_stl
 logger = logging.getLogger(__name__)
 
 MAX_PROMPT_CHARS = 400
+# Sin medida pedida, la malla queda en la escala nativa de Shap-E (~2 unidades
+# leídas como mm): un STL de 2mm no le sirve a nadie (visto real). 100mm es un
+# default imprimible; la medida REAL sigue siendo decisión del usuario.
+DEFAULT_MESH_LONGEST_MM = 100.0
 
 
 class Shape3dJobManager:
@@ -95,6 +99,8 @@ class Shape3dJobManager:
             )
         if target_mm is not None and target_mm <= 0:
             raise ValueError("La medida pedida tiene que ser mayor que cero.")
+        if target_mm is None and source == "mesh":
+            target_mm = DEFAULT_MESH_LONGEST_MM
         if source not in ("mesh", "cad"):
             raise ValueError(f"Origen desconocido: {source!r}. Son 'mesh' o 'cad'.")
         if source == "mesh" and not self.engine.available():
