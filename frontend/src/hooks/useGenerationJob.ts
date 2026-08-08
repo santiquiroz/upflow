@@ -235,6 +235,7 @@ function resolveConversionErrorMessage(
 // and the "models" query key so both flows refresh the same installed list.
 export function useGenerationModelInstall(
   pollIntervalMs: number = DEFAULT_INSTALL_POLL_INTERVAL_MS,
+  repoId?: string,
 ): UseGenerationModelInstallResult {
   const { t } = useTranslation();
   const [installId, setInstallId] = useState<string | null>(null);
@@ -281,8 +282,13 @@ export function useGenerationModelInstall(
   const conversionId =
     statusQuery.data?.status === "converting"
       ? (statusQuery.data.conversionId ?? null)
-      : // Sin instalacion propia, se adopta la que ya estaba corriendo.
-        (activasQuery.data?.[0]?.conversionId ?? null);
+      : // Sin instalacion propia, se adopta la que ya estaba corriendo — pero
+        // SOLO si es de este repo cuando el caller es una tarjeta: sin el
+        // filtro, UNA conversion (ej. un merge de inpainting) se pintaba como
+        // "Convirtiendo" en TODAS las tarjetas de la busqueda (visto real).
+        (activasQuery.data?.find(
+          (item) => repoId === undefined || item.repoId === repoId
+        )?.conversionId ?? null);
 
   const conversionQuery = useQuery({
     queryKey: ["generation-model-conversion", conversionId],

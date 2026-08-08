@@ -228,7 +228,7 @@ export function GenerationModelCard({ result }: GenerationModelCardProps) {
     detailsExpanded || needsCheckpointChoice,
   );
   const { phase, progressPct, stageLabel, errorMessage, install, cancelConversion, reset } =
-    useGenerationModelInstall();
+    useGenerationModelInstall(undefined, result.id);
   // Via rapida: el lane Vulkan corre el checkpoint tal cual. Solo se ofrece si
   // el motor esta instalado, y solo para repos de archivo suelto (que es lo que
   // ese motor sabe leer).
