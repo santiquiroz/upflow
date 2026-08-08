@@ -54,6 +54,8 @@ Todo se cablea en `app/main.py` dentro del `lifespan`: se instancian servicios (
 
 **Settings**: pydantic-settings lee `.env` (ver `.env.example`). `get_settings()` está cacheado con `lru_cache` — cambios a `.env` requieren reiniciar.
 
+**Servidor MCP** (`app/mcp/`): FastMCP por stdio (`python -m app.mcp` o el script `upflow-mcp`) con 24 tools para agentes de IA. Es un **cliente HTTP fino** sobre la API REST del servidor corriendo (`UPFLOW_URL`, default `http://127.0.0.1:8090`) — NO importa servicios de la app, así MCP y la web UI ven los mismos jobs. `jobs.py` normaliza las 7 familias job-based (`jobId` vs `id`, con/sin list endpoint) a un contrato único; las tools genéricas (`upflow_job_status`/`wait`/`cancel`/`download_result`) operan sobre cualquier familia. Con `AUTH_MODE=multi`, login automático vía `UPFLOW_USERNAME`/`UPFLOW_PASSWORD` (cookie de sesión en el cliente persistente). Ver README § "Servidor MCP".
+
 ## Layout notes
 
 - `vendor/` (binarios de Real-ESRGAN, FFmpeg, RIFE y DeepFilterNet) y `runtime/` (uploads/outputs/temp/video-work) están gitignored — se crean con los scripts de `scripts/` y en runtime.

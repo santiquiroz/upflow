@@ -1,6 +1,6 @@
 [project]
 name = "upflow"
-version = "0.55.0"
+version = "0.56.0"
 description = "Modern AI upscaling + frame interpolation for AMD GPUs — Vulkan-native, FastAPI, web UI + REST API."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -81,7 +81,13 @@ dependencies = [
   # 2026-07-24-gpu-capacity-admission-design.md) - RAM libre real para
   # SystemRamProbe (app/services/resource_probes.py), jobs en cpu.
   "psutil>=6.0.0,<7.0.0",
+  # Servidor MCP (app/mcp/) - expone la API como tools para agentes de IA.
+  # Pin <2: mcp 2.0 removio mcp.server.fastmcp (API FastMCP reestructurada).
+  "mcp>=1.16.0,<2.0.0",
 ]
+
+[project.scripts]
+upflow-mcp = "app.mcp.server:main"
 
 [project.optional-dependencies]
 dev = [

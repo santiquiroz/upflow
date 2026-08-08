@@ -594,6 +594,34 @@ API: `POST /api/v1/audio/jobs` (multipart: `file`, `denoise?`, `restore?`, `outp
 
 > **Nota experimental:** el restore es un port ONNX del modelo Apollo (ver `docs/` y la guía del port). Funciona y es multi-provider, pero la calidad de reconstrucción y el rendimiento GPU aún se están evaluando — por eso va detrás de un flag y con badge "Experimental" en la UI.
 
+## Servidor MCP (tools para agentes de IA)
+
+Upflow expone toda su funcionalidad como **tools MCP** (Model Context Protocol) para que agentes de IA (Claude Code, Claude Desktop, o cualquier cliente MCP) puedan reescalar, transcribir, generar y procesar medios directamente.
+
+- **24 tools** sobre las 7 familias de jobs de la API: upscale de imagen/video, audio (denoise/restore/master), transcripción/doblaje, descargas (yt-dlp), generación de imágenes/video, TTS y 3D imprimible.
+- Modelo de jobs unificado: `upflow_job_status` / `upflow_wait_job` / `upflow_cancel_job` / `upflow_download_result` funcionan igual para cualquier familia (`image | video | audio | generation | transcribe | download | shape3d`).
+- Las tools de creación aceptan **rutas de archivo locales** y resuelven la subida (multipart o staging por token) por sí solas.
+- Es un cliente HTTP fino: el servidor Upflow tiene que estar corriendo; MCP y la web UI ven exactamente los mismos jobs.
+
+Config para un cliente MCP (ej. `.mcp.json` de Claude Code):
+
+```json
+{
+  "mcpServers": {
+    "upflow": {
+      "command": "C:/ruta/a/upflow/.venv/Scripts/python.exe",
+      "args": ["-m", "app.mcp"],
+      "cwd": "C:/ruta/a/upflow",
+      "env": { "UPFLOW_URL": "http://127.0.0.1:8090" }
+    }
+  }
+}
+```
+
+Variables: `UPFLOW_URL` (default `http://127.0.0.1:8090`); con `AUTH_MODE=multi`, `UPFLOW_USERNAME`/`UPFLOW_PASSWORD` hacen login automático. En modo single-user (default) no hace falta nada. También queda el script `upflow-mcp` instalado por `pip install -e .`.
+
+Flujo típico de un agente: `upflow_status` → `upflow_upscale_image(file_path=..., destination_path=...)` (espera y descarga en un solo paso) o, para videos largos, `upflow_upscale_video(...)` → `upflow_wait_job` → `upflow_download_result`.
+
 ## Actualizaciones
 
 Upflow chequea **en silencio** si hay una release más nueva en GitHub y, si la hay, muestra un banner discreto arriba de la UI ("New version X available") con link a la release. El chequeo es opcional y a prueba de fallos: si no hay red, hay timeout o GitHub responde con rate-limit (`403`), el endpoint igual devuelve `200` con `updateAvailable=false` y un campo `error` — el banner simplemente no aparece y **la app nunca se rompe por el chequeo**. El resultado se cachea en memoria (`UPDATE_CHECK_TTL_SECONDS`, default 3600s) para no pegarle a la API de GitHub en cada request. El banner se puede descartar por versión: una vez descartado, esa versión no vuelve a aparecer, pero una versión más nueva sí.
