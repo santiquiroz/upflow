@@ -642,12 +642,20 @@ export const en = {
   "editor.insert.uploading": "Uploading…",
   "editor.insert.clickHint": "Click the object in the source image to select it.",
   "editor.insert.segmenting": "Finding the object…",
-  "editor.insert.positionX": "Position X",
-  "editor.insert.positionY": "Position Y",
+  "editor.insert.modePoint": "Insert at a point",
+  "editor.insert.modeReplace": "Replace an object in the target",
+  "editor.insert.mapLabel": "Placement map",
+  "editor.insert.mapCaption":
+    "Placement map — proportional to the target image, not the photo itself. Click to set the object's center.",
+  "editor.insert.mapCaptionReplace":
+    "Placement map — proportional to the target image, not the photo itself. Click where the object to replace sits.",
   "editor.insert.scale": "Scale (%)",
   "editor.insert.matchColor": "Match color",
   "editor.insert.harmonize": "Harmonize with AI",
   "editor.insert.model": "Harmonization model",
+  "editor.insert.integrationPrompt": "Integration prompt (optional)",
+  "editor.insert.integrationPromptPlaceholder":
+    "same scene, seamless integration, consistent lighting and grain, high quality",
   "editor.insert.needsInpaintModel":
     "No dedicated inpainting model is installed — harmonizing needs one.",
   "editor.insert.insert": "Insert",

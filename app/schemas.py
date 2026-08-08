@@ -756,10 +756,15 @@ class InsertObjectRequest(BaseModel):
     target_token: str = Field(alias="targetToken")
     source_token: str = Field(alias="sourceToken")
     source_mask_token: str = Field(alias="sourceMaskToken")
-    x: int = Field(ge=-4096, le=8192)
-    y: int = Field(ge=-4096, le=8192)
-    width: int = Field(ge=8, le=4096)
-    height: int = Field(ge=8, le=4096)
+    # Modo reemplazo: máscara de un objeto del DESTINO (tap/MobileSAM sobre la
+    # imagen base). El objeto insertado se adapta a su bbox — posición y tamaño
+    # salen de ahí, x/y/width/height se ignoran — y la armonización cubre
+    # también lo que sobre del objeto reemplazado.
+    target_mask_token: str | None = Field(default=None, alias="targetMaskToken")
+    x: int = Field(default=0, ge=-4096, le=8192)
+    y: int = Field(default=0, ge=-4096, le=8192)
+    width: int = Field(default=8, ge=8, le=4096)
+    height: int = Field(default=8, ge=8, le=4096)
     feather_px: int = Field(default=6, alias="featherPx", ge=0, le=64)
     match_color: bool = Field(default=True, alias="matchColor")
     # Pase de armonización con inpaint 9ch a strength parcial. Requiere un

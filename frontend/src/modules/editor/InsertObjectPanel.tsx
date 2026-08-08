@@ -8,15 +8,27 @@ import type {
   InsertObjectResponse,
 } from "../../lib/apiTypes";
 import { insertObject, segmentEditorObject } from "../../services/editor";
+import type { InsertObjectParams } from "../../services/editor";
 import { uploadGenerationInitImage } from "../../services/generation";
 import { toImagePoint } from "./maskCanvas";
+import type { BrushPoint } from "./maskCanvas";
 
 const SCALE_MIN = 10;
 const SCALE_MAX = 200;
 // Por defecto el objeto entra ocupando un tercio del ancho de la imagen destino.
 const DEFAULT_TARGET_FRACTION = 1 / 3;
+// Con targetMaskToken el backend ignora la geometria: van los defaults del schema.
+const REPLACE_GEOMETRY = { x: 0, y: 0, width: 8, height: 8 };
 
 type BusyState = "idle" | "uploading" | "segmenting" | "inserting";
+type InsertMode = "point" | "replace";
+
+interface PlacementRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
 
 function clampScale(value: number): number {
   return Math.min(SCALE_MAX, Math.max(SCALE_MIN, Math.round(value)));
@@ -40,6 +52,29 @@ function scaledSize(source: InitImageResponse, scale: number): { width: number; 
   };
 }
 
+function cornerFromCenter(center: number, size: number, limit: number): number {
+  return clampPosition(center - size / 2, Math.max(0, limit - size));
+}
+
+function placementRect(
+  target: InitImageResponse,
+  source: InitImageResponse,
+  center: BrushPoint,
+  scale: number,
+): PlacementRect {
+  const size = scaledSize(source, scale);
+  return {
+    x: cornerFromCenter(center.x, size.width, target.width),
+    y: cornerFromCenter(center.y, size.height, target.height),
+    width: size.width,
+    height: size.height,
+  };
+}
+
+function toPercent(value: number, total: number): string {
+  return `${(value / total) * 100}%`;
+}
+
 function installedInpaintModels(models: GenerationModelSummary[]): GenerationModelSummary[] {
   return models.filter((model) => model.status === "installed" && model.inpaintOnly === true);
 }
@@ -57,32 +92,49 @@ export function InsertObjectPanel({ targetInfo }: { targetInfo: InitImageRespons
   const { t } = useTranslation();
   const capabilitiesQuery = useGenerationCapabilities();
 
+  const [mode, setMode] = useState<InsertMode>("point");
   const [sourceInfo, setSourceInfo] = useState<InitImageResponse | null>(null);
   const [sourceUrl, setSourceUrl] = useState<string | null>(null);
   const [maskUrl, setMaskUrl] = useState<string | null>(null);
   const [maskToken, setMaskToken] = useState<string | null>(null);
-  const [x, setX] = useState(() => Math.round(targetInfo.width / 2));
-  const [y, setY] = useState(() => Math.round(targetInfo.height / 2));
+  const [targetMaskUrl, setTargetMaskUrl] = useState<string | null>(null);
+  const [targetMaskToken, setTargetMaskToken] = useState<string | null>(null);
+  const [center, setCenter] = useState<BrushPoint>(() => ({
+    x: Math.round(targetInfo.width / 2),
+    y: Math.round(targetInfo.height / 2),
+  }));
   const [scale, setScale] = useState(100);
   const [matchColor, setMatchColor] = useState(true);
   const [harmonize, setHarmonize] = useState(false);
   const [modelId, setModelId] = useState<string | null>(null);
+  const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState<BusyState>("idle");
   const [error, setError] = useState<string | null>(null);
   const [composite, setComposite] = useState<InsertObjectResponse | null>(null);
 
   const inpaintModels = installedInpaintModels(capabilitiesQuery.data?.models ?? []);
   const compositeDataUrl = composite ? `data:image/png;base64,${composite.compositePngBase64}` : null;
+  const ghostRect =
+    mode === "point" && sourceInfo && maskToken
+      ? placementRect(targetInfo, sourceInfo, center, scale)
+      : null;
   const canInsert =
     sourceInfo !== null &&
     maskToken !== null &&
+    (mode === "point" || targetMaskToken !== null) &&
     busy === "idle" &&
     (!harmonize || inpaintModels.some((model) => model.id === modelId));
 
   useEffect(() => {
-    setX(Math.round(targetInfo.width / 2));
-    setY(Math.round(targetInfo.height / 2));
+    setCenter({ x: Math.round(targetInfo.width / 2), y: Math.round(targetInfo.height / 2) });
     setComposite(null);
+    setTargetMaskToken(null);
+    setTargetMaskUrl((previous) => {
+      if (previous) {
+        URL.revokeObjectURL(previous);
+      }
+      return null;
+    });
   }, [targetInfo]);
 
   useEffect(() => () => {
@@ -97,11 +149,23 @@ export function InsertObjectPanel({ targetInfo }: { targetInfo: InitImageRespons
     }
   }, [maskUrl]);
 
+  useEffect(() => () => {
+    if (targetMaskUrl) {
+      URL.revokeObjectURL(targetMaskUrl);
+    }
+  }, [targetMaskUrl]);
+
   useEffect(() => {
     if (harmonize && !modelId && inpaintModels.length > 0) {
       setModelId(inpaintModels[0].id);
     }
   }, [harmonize, modelId, inpaintModels]);
+
+  function switchMode(next: InsertMode) {
+    setMode(next);
+    setError(null);
+    setComposite(null);
+  }
 
   async function handleSourceSelected(file: File) {
     setBusy("uploading");
@@ -157,26 +221,71 @@ export function InsertObjectPanel({ targetInfo }: { targetInfo: InitImageRespons
     }
   }
 
-  async function handleInsert() {
+  function handleMapClick(event: React.MouseEvent<HTMLButtonElement>) {
+    if (busy !== "idle") {
+      return;
+    }
+    const rect = event.currentTarget.getBoundingClientRect();
+    const point = toImagePoint(event.clientX, event.clientY, rect, targetInfo.width, targetInfo.height);
+    if (mode === "point") {
+      setCenter({ x: Math.round(point.x), y: Math.round(point.y) });
+      return;
+    }
+    void segmentTargetObject(point);
+  }
+
+  async function segmentTargetObject(point: BrushPoint) {
+    setBusy("segmenting");
+    setError(null);
+    try {
+      const blob = await segmentEditorObject(targetInfo.initImageToken, point.x, point.y);
+      setTargetMaskUrl((previous) => {
+        if (previous) {
+          URL.revokeObjectURL(previous);
+        }
+        return createObjectUrl(blob);
+      });
+      const maskFile = new File([blob], "target-mask.png", { type: "image/png" });
+      const maskResponse = await uploadGenerationInitImage(maskFile);
+      setTargetMaskToken(maskResponse.initImageToken);
+    } catch (cause) {
+      setError(describeError(cause, t("editor.insert.error")));
+    } finally {
+      setBusy("idle");
+    }
+  }
+
+  function buildInsertParams(): InsertObjectParams | null {
     if (!sourceInfo || !maskToken) {
+      return null;
+    }
+    const base = {
+      targetToken: targetInfo.initImageToken,
+      sourceToken: sourceInfo.initImageToken,
+      sourceMaskToken: maskToken,
+      matchColor,
+      harmonize,
+      modelId: harmonize && modelId ? modelId : undefined,
+      prompt: harmonize && prompt.trim() !== "" ? prompt.trim() : undefined,
+    };
+    if (mode === "replace") {
+      if (!targetMaskToken) {
+        return null;
+      }
+      return { ...base, ...REPLACE_GEOMETRY, targetMaskToken };
+    }
+    return { ...base, ...placementRect(targetInfo, sourceInfo, center, scale) };
+  }
+
+  async function handleInsert() {
+    const params = buildInsertParams();
+    if (!params) {
       return;
     }
     setBusy("inserting");
     setError(null);
     try {
-      const size = scaledSize(sourceInfo, scale);
-      const response = await insertObject({
-        targetToken: targetInfo.initImageToken,
-        sourceToken: sourceInfo.initImageToken,
-        sourceMaskToken: maskToken,
-        x,
-        y,
-        width: size.width,
-        height: size.height,
-        matchColor,
-        harmonize,
-        modelId: harmonize && modelId ? modelId : undefined,
-      });
+      const response = await insertObject(params);
       setComposite(response);
     } catch (cause) {
       setError(describeError(cause, t("editor.insert.error")));
@@ -241,38 +350,78 @@ export function InsertObjectPanel({ targetInfo }: { targetInfo: InitImageRespons
               )}
             </div>
             <p className="text-center text-xs text-text-faint">{t("editor.insert.clickHint")}</p>
-            {busy === "segmenting" && (
-              <p className="text-center text-xs text-text-dim">{t("editor.insert.segmenting")}</p>
-            )}
           </>
         )}
+        {busy === "segmenting" && (
+          <p className="text-center text-xs text-text-dim">{t("editor.insert.segmenting")}</p>
+        )}
 
-        <div className="grid grid-cols-3 gap-3 max-[700px]:grid-cols-1">
-          <label className="flex flex-col gap-1 text-sm text-text">
-            {t("editor.insert.positionX")}
+        <div className="flex flex-wrap items-center gap-4">
+          <label className="flex items-center gap-2 text-sm text-text">
             <input
-              type="number"
-              min={0}
-              max={targetInfo.width}
-              value={x}
+              type="radio"
+              name="insert-object-mode"
+              checked={mode === "point"}
               disabled={busy !== "idle"}
-              onChange={(event) => setX(clampPosition(Number(event.target.value) || 0, targetInfo.width))}
-              className="rounded border border-border bg-surface-2 px-2 py-1.5 text-sm text-text"
+              onChange={() => switchMode("point")}
             />
+            {t("editor.insert.modePoint")}
           </label>
-          <label className="flex flex-col gap-1 text-sm text-text">
-            {t("editor.insert.positionY")}
+          <label className="flex items-center gap-2 text-sm text-text">
             <input
-              type="number"
-              min={0}
-              max={targetInfo.height}
-              value={y}
+              type="radio"
+              name="insert-object-mode"
+              checked={mode === "replace"}
               disabled={busy !== "idle"}
-              onChange={(event) => setY(clampPosition(Number(event.target.value) || 0, targetInfo.height))}
-              className="rounded border border-border bg-surface-2 px-2 py-1.5 text-sm text-text"
+              onChange={() => switchMode("replace")}
             />
+            {t("editor.insert.modeReplace")}
           </label>
-          <label className="flex flex-col gap-1 text-sm text-text">
+        </div>
+
+        <button
+          type="button"
+          data-testid="insert-placement-map"
+          aria-label={t("editor.insert.mapLabel")}
+          disabled={busy !== "idle"}
+          onClick={handleMapClick}
+          className="relative block w-full max-w-md cursor-crosshair self-center overflow-hidden rounded border border-border bg-surface-2 p-0"
+          style={{ aspectRatio: `${targetInfo.width} / ${targetInfo.height}` }}
+        >
+          {ghostRect && sourceUrl && maskUrl && (
+            <img
+              src={sourceUrl}
+              alt=""
+              data-testid="insert-ghost"
+              className="pointer-events-none absolute opacity-60"
+              style={{
+                left: toPercent(ghostRect.x, targetInfo.width),
+                top: toPercent(ghostRect.y, targetInfo.height),
+                width: toPercent(ghostRect.width, targetInfo.width),
+                height: toPercent(ghostRect.height, targetInfo.height),
+                maskImage: `url(${maskUrl})`,
+                WebkitMaskImage: `url(${maskUrl})`,
+                maskMode: "luminance",
+                maskSize: "100% 100%",
+                WebkitMaskSize: "100% 100%",
+              }}
+            />
+          )}
+          {mode === "replace" && targetMaskUrl && (
+            <img
+              src={targetMaskUrl}
+              alt=""
+              data-testid="insert-target-mask-overlay"
+              className="pointer-events-none absolute inset-0 h-full w-full opacity-50 mix-blend-screen"
+            />
+          )}
+        </button>
+        <p className="text-center text-xs text-text-faint">
+          {mode === "point" ? t("editor.insert.mapCaption") : t("editor.insert.mapCaptionReplace")}
+        </p>
+
+        {mode === "point" && (
+          <label className="flex max-w-xs flex-col gap-1 text-sm text-text">
             <span>
               {t("editor.insert.scale")}{" "}
               <span className="font-mono-tabular text-text-dim">{scale}</span>
@@ -287,7 +436,7 @@ export function InsertObjectPanel({ targetInfo }: { targetInfo: InitImageRespons
               onChange={(event) => setScale(Number(event.target.value))}
             />
           </label>
-        </div>
+        )}
 
         <div className="flex flex-wrap items-center gap-4">
           <label className="flex items-center gap-2 text-sm text-text">
@@ -328,6 +477,19 @@ export function InsertObjectPanel({ targetInfo }: { targetInfo: InitImageRespons
                 </option>
               ))}
             </select>
+          </label>
+        )}
+        {harmonize && (
+          <label className="flex flex-col gap-1 text-sm text-text">
+            {t("editor.insert.integrationPrompt")}
+            <textarea
+              rows={2}
+              value={prompt}
+              disabled={busy !== "idle"}
+              placeholder={t("editor.insert.integrationPromptPlaceholder")}
+              onChange={(event) => setPrompt(event.target.value)}
+              className="rounded border border-border bg-surface-2 px-2 py-1.5 text-sm text-text"
+            />
           </label>
         )}
 

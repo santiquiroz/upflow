@@ -637,12 +637,20 @@ export const es = {
   "editor.insert.uploading": "Subiendo…",
   "editor.insert.clickHint": "Tocá el objeto en la imagen origen para seleccionarlo.",
   "editor.insert.segmenting": "Buscando el objeto…",
-  "editor.insert.positionX": "Posición X",
-  "editor.insert.positionY": "Posición Y",
+  "editor.insert.modePoint": "Insertar en un punto",
+  "editor.insert.modeReplace": "Reemplazar un objeto del destino",
+  "editor.insert.mapLabel": "Mapa de colocación",
+  "editor.insert.mapCaption":
+    "Mapa de colocación — proporcional a la imagen destino, no es la foto. Tocá para fijar el centro del objeto.",
+  "editor.insert.mapCaptionReplace":
+    "Mapa de colocación — proporcional a la imagen destino, no es la foto. Tocá donde está el objeto a reemplazar.",
   "editor.insert.scale": "Escala (%)",
   "editor.insert.matchColor": "Igualar color",
   "editor.insert.harmonize": "Armonizar con IA",
   "editor.insert.model": "Modelo de armonización",
+  "editor.insert.integrationPrompt": "Prompt de integración (opcional)",
+  "editor.insert.integrationPromptPlaceholder":
+    "same scene, seamless integration, consistent lighting and grain, high quality",
   "editor.insert.needsInpaintModel":
     "No hay ningún modelo de inpainting dedicado instalado — armonizar necesita uno.",
   "editor.insert.insert": "Insertar",

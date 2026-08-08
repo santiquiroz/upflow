@@ -131,20 +131,57 @@ async def insert_object(payload: InsertObjectRequest, request: Request) -> Inser
                 ),
             )
 
+    target_object_mask_path = (
+        _resolve_init_image(settings, payload.target_mask_token)
+        if payload.target_mask_token
+        else None
+    )
+
     def run_transfer():
+        import numpy as np
+
+        from app.services.inpaint_mask import dilate_mask, mask_bbox
+
         with Image.open(target_path) as target_img:
             target = target_img.convert("RGB")
         with Image.open(source_path) as source_img:
             source = source_img.convert("RGB")
         with Image.open(mask_path) as mask_img:
             source_mask = mask_img.convert("L")
-        spec = PasteSpec(
-            x=payload.x, y=payload.y, width=payload.width, height=payload.height,
-            feather_px=payload.feather_px, match_color=payload.match_color,
-        )
-        return transfer_object(source, source_mask, target, spec)
 
-    composite, paste_mask = await asyncio.to_thread(run_transfer)
+        target_object = None
+        if target_object_mask_path is not None:
+            with Image.open(target_object_mask_path) as tm:
+                target_object = tm.convert("L")
+            if target_object.size != target.size:
+                target_object = target_object.resize(target.size, Image.BILINEAR)
+            bbox = mask_bbox(np.asarray(target_object))
+            if bbox is None:
+                raise ValueError("La máscara del objeto a reemplazar está vacía")
+            left, top, right, bottom = bbox
+            spec = PasteSpec(
+                x=left, y=top, width=max(8, right - left), height=max(8, bottom - top),
+                feather_px=payload.feather_px, match_color=payload.match_color,
+            )
+        else:
+            spec = PasteSpec(
+                x=payload.x, y=payload.y, width=payload.width, height=payload.height,
+                feather_px=payload.feather_px, match_color=payload.match_color,
+            )
+        composite, paste_mask = transfer_object(source, source_mask, target, spec)
+        if target_object is not None:
+            # La armonización debe cubrir también lo que SOBRA del objeto viejo
+            # (el nuevo puede ser más chico): unión de máscaras, con el viejo
+            # dilatado para que el modelo repinte sus bordes desde el contexto.
+            old = dilate_mask(np.asarray(target_object), 12)
+            union = np.maximum(np.asarray(paste_mask), old)
+            paste_mask = Image.fromarray(union, mode="L")
+        return composite, paste_mask
+
+    try:
+        composite, paste_mask = await asyncio.to_thread(run_transfer)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     token = uuid4().hex
     composite_path = settings.uploads_path / f"{token}-insert.png"

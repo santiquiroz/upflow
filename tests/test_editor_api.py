@@ -157,3 +157,57 @@ async def test_insert_object_harmonize_rejects_4ch_models() -> None:
         )
     assert excinfo.value.status_code == 400
     assert "inpainting dedicado" in excinfo.value.detail
+
+
+@pytest.mark.asyncio
+async def test_insert_object_replace_mode_fits_the_target_object_bbox() -> None:
+    from app.api.editor_routes import insert_object
+    from app.schemas import InsertObjectRequest
+    import base64
+
+    target_token = await _upload_png(Image.new("RGB", (32, 32), (0, 0, 255)), "target.png")
+    source_token = await _upload_png(Image.new("RGB", (8, 8), (255, 0, 0)), "source.png")
+    source_mask = Image.new("L", (8, 8), 255)
+    source_mask_token = await _upload_png(source_mask, "mask.png")
+    # Objeto del destino a reemplazar: cuadrado en (8,8)-(24,24).
+    target_mask = Image.new("L", (32, 32), 0)
+    target_mask.paste(255, (8, 8, 24, 24))
+    target_mask_token = await _upload_png(target_mask, "target-mask.png")
+
+    response = await insert_object(
+        InsertObjectRequest(
+            targetToken=target_token, sourceToken=source_token,
+            sourceMaskToken=source_mask_token, targetMaskToken=target_mask_token,
+            featherPx=0, matchColor=False, harmonize=False,
+        ),
+        request=None,
+    )
+
+    composite = Image.open(io.BytesIO(base64.b64decode(response.composite_png_base64)))
+    # El objeto quedó DENTRO del bbox del objeto reemplazado (x/y/width/height
+    # del request se ignoran en modo reemplazo)...
+    assert composite.getpixel((16, 16))[0] > 200
+    # ...y fuera del bbox el destino sigue intacto.
+    assert composite.getpixel((2, 2))[2] > 200
+
+
+@pytest.mark.asyncio
+async def test_insert_object_replace_mode_rejects_an_empty_target_mask() -> None:
+    from app.api.editor_routes import insert_object
+    from app.schemas import InsertObjectRequest
+
+    target_token = await _upload_png(Image.new("RGB", (16, 16), (0, 0, 255)), "target.png")
+    source_token = await _upload_png(Image.new("RGB", (8, 8), (255, 0, 0)), "source.png")
+    source_mask_token = await _upload_png(Image.new("L", (8, 8), 255), "mask.png")
+    empty_mask_token = await _upload_png(Image.new("L", (16, 16), 0), "empty.png")
+
+    with pytest.raises(HTTPException) as excinfo:
+        await insert_object(
+            InsertObjectRequest(
+                targetToken=target_token, sourceToken=source_token,
+                sourceMaskToken=source_mask_token, targetMaskToken=empty_mask_token,
+                harmonize=False,
+            ),
+            request=None,
+        )
+    assert excinfo.value.status_code == 400

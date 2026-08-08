@@ -43,6 +43,9 @@ export interface InsertObjectParams {
   targetToken: string;
   sourceToken: string;
   sourceMaskToken: string;
+  // Modo reemplazo: máscara de un objeto del destino. Con este token el backend
+  // ignora x/y/width/height (posición y tamaño salen del bbox de la máscara).
+  targetMaskToken?: string;
   x: number;
   y: number;
   width: number;

@@ -78,6 +78,17 @@ const MASK: InitImageResponse = {
   height: 200,
 };
 
+const TARGET_MASK: InitImageResponse = {
+  initImageToken: "target-mask-token",
+  originalFilename: "target-mask.png",
+  width: 640,
+  height: 480,
+};
+
+// Escala por defecto al subir SOURCE: el objeto entra ocupando 1/3 del ancho
+// destino → clamp((640/3)/400*100) = 53%, o sea 212x106 px sobre el destino.
+const DEFAULT_SCALED = { width: 212, height: 106 };
+
 function fakeContext() {
   return {
     clearRect: vi.fn(),
@@ -158,6 +169,31 @@ async function selectObjectOnPreview() {
   return preview;
 }
 
+// El mapa se dibuja a 320x240: exactamente la mitad del destino 640x480, así
+// cada click del test se escala x2 a coordenadas de imagen sin decimales.
+function mockPlacementMapRect() {
+  const map = screen.getByTestId("insert-placement-map");
+  vi.spyOn(map, "getBoundingClientRect").mockReturnValue({
+    left: 0,
+    top: 0,
+    width: 320,
+    height: 240,
+    right: 320,
+    bottom: 240,
+    x: 0,
+    y: 0,
+    toJSON: () => ({}),
+  } as DOMRect);
+  return map;
+}
+
+async function clickInsert() {
+  const insert = screen.getByRole("button", { name: en["editor.insert.insert"] });
+  await waitFor(() => expect(insert).toBeEnabled());
+  fireEvent.click(insert);
+  await waitFor(() => expect(editorService.insertObject).toHaveBeenCalledOnce());
+}
+
 describe("InsertObjectPanel", () => {
   it("only appears once a base image is loaded", async () => {
     renderWithProviders(<EditorPanel />);
@@ -217,6 +253,9 @@ describe("InsertObjectPanel", () => {
   });
 
   it("insert sends the three tokens and shows the composite with a download link", async () => {
+    // Ajuste: los inputs X/Y no existen más. Sin click en el mapa, la posición
+    // por defecto es el CENTRO del destino (320,240); el body lleva la esquina
+    // derivada centro→esquina con la escala default 53%: (320-106, 240-53).
     vi.mocked(generationService.uploadGenerationInitImage)
       .mockResolvedValueOnce(SOURCE)
       .mockResolvedValueOnce(MASK);
@@ -232,18 +271,17 @@ describe("InsertObjectPanel", () => {
     openPanel();
     await selectObjectOnPreview();
 
-    const insert = screen.getByRole("button", { name: en["editor.insert.insert"] });
-    await waitFor(() => expect(insert).toBeEnabled());
-    fireEvent.click(insert);
+    await clickInsert();
 
-    await waitFor(() => expect(editorService.insertObject).toHaveBeenCalledOnce());
     expect(editorService.insertObject).toHaveBeenCalledWith(
       expect.objectContaining({
         targetToken: "target-token",
         sourceToken: "source-token",
         sourceMaskToken: "mask-token",
-        x: 320,
-        y: 240,
+        x: 320 - DEFAULT_SCALED.width / 2,
+        y: 240 - DEFAULT_SCALED.height / 2,
+        width: DEFAULT_SCALED.width,
+        height: DEFAULT_SCALED.height,
         matchColor: true,
         harmonize: false,
       }),
@@ -254,6 +292,149 @@ describe("InsertObjectPanel", () => {
       "href",
       "data:image/png;base64,QUJD",
     );
+  });
+
+  it("clicking the placement map sets the object's center and insert derives the corner", async () => {
+    vi.mocked(generationService.uploadGenerationInitImage)
+      .mockResolvedValueOnce(SOURCE)
+      .mockResolvedValueOnce(MASK);
+    vi.mocked(editorService.segmentEditorObject).mockResolvedValue(
+      new Blob(["png"], { type: "image/png" }),
+    );
+    vi.mocked(editorService.insertObject).mockResolvedValue({
+      compositeToken: "comp-1",
+      compositePngBase64: "QUJD",
+      jobId: null,
+    });
+    renderWithProviders(<InsertObjectPanel targetInfo={TARGET} />);
+    openPanel();
+    await selectObjectOnPreview();
+    const map = mockPlacementMapRect();
+
+    // Click en (80,60) del mapa → centro (160,120) en el destino → esquina
+    // (160-106, 120-53) con el objeto escalado a 212x106.
+    fireEvent.click(map, { clientX: 80, clientY: 60 });
+    await clickInsert();
+
+    expect(editorService.insertObject).toHaveBeenCalledWith(
+      expect.objectContaining({
+        x: 160 - DEFAULT_SCALED.width / 2,
+        y: 120 - DEFAULT_SCALED.height / 2,
+        width: DEFAULT_SCALED.width,
+        height: DEFAULT_SCALED.height,
+      }),
+    );
+  });
+
+  it("replace mode segments the target at map-scaled coordinates and sends targetMaskToken", async () => {
+    vi.mocked(generationService.uploadGenerationInitImage)
+      .mockResolvedValueOnce(SOURCE)
+      .mockResolvedValueOnce(MASK)
+      .mockResolvedValueOnce(TARGET_MASK);
+    vi.mocked(editorService.segmentEditorObject).mockResolvedValue(
+      new Blob(["png"], { type: "image/png" }),
+    );
+    vi.mocked(editorService.insertObject).mockResolvedValue({
+      compositeToken: "comp-1",
+      compositePngBase64: "QUJD",
+      jobId: null,
+    });
+    renderWithProviders(<InsertObjectPanel targetInfo={TARGET} />);
+    openPanel();
+    await selectObjectOnPreview();
+
+    fireEvent.click(screen.getByLabelText(en["editor.insert.modeReplace"]));
+    // En modo reemplazo el tamaño sale del objeto reemplazado: sin escala.
+    expect(screen.queryByLabelText(en["editor.insert.scale"])).not.toBeInTheDocument();
+
+    const map = mockPlacementMapRect();
+    fireEvent.click(map, { clientX: 80, clientY: 60 });
+
+    await waitFor(() =>
+      expect(editorService.segmentEditorObject).toHaveBeenLastCalledWith("target-token", 160, 120),
+    );
+    await waitFor(() =>
+      expect(generationService.uploadGenerationInitImage).toHaveBeenCalledTimes(3),
+    );
+    expect(await screen.findByTestId("insert-target-mask-overlay")).toBeInTheDocument();
+
+    await clickInsert();
+
+    // Con targetMaskToken el backend ignora la geometría: van los defaults del schema.
+    expect(editorService.insertObject).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetMaskToken: "target-mask-token",
+        x: 0,
+        y: 0,
+        width: 8,
+        height: 8,
+      }),
+    );
+  });
+
+  it("shows the integration prompt only with harmonize on and sends its value", async () => {
+    vi.mocked(generationService.fetchGenerationCapabilities).mockResolvedValue(
+      CAPABILITIES_WITH_INPAINT,
+    );
+    vi.mocked(generationService.uploadGenerationInitImage)
+      .mockResolvedValueOnce(SOURCE)
+      .mockResolvedValueOnce(MASK);
+    vi.mocked(editorService.segmentEditorObject).mockResolvedValue(
+      new Blob(["png"], { type: "image/png" }),
+    );
+    vi.mocked(editorService.insertObject).mockResolvedValue({
+      compositeToken: "comp-1",
+      compositePngBase64: "QUJD",
+      jobId: "job-1",
+    });
+    renderWithProviders(<InsertObjectPanel targetInfo={TARGET} />);
+    openPanel();
+    await selectObjectOnPreview();
+
+    expect(
+      screen.queryByLabelText(en["editor.insert.integrationPrompt"]),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText(en["editor.insert.harmonize"]));
+    const promptInput = await screen.findByLabelText(en["editor.insert.integrationPrompt"]);
+    expect(promptInput).toHaveAttribute(
+      "placeholder",
+      en["editor.insert.integrationPromptPlaceholder"],
+    );
+    fireEvent.change(promptInput, { target: { value: "night scene, warm lighting" } });
+
+    await clickInsert();
+
+    expect(editorService.insertObject).toHaveBeenCalledWith(
+      expect.objectContaining({
+        harmonize: true,
+        modelId: "gen--inpaint",
+        prompt: "night scene, warm lighting",
+      }),
+    );
+  });
+
+  it("draws the ghost on the placement map once an object is segmented", async () => {
+    vi.mocked(generationService.uploadGenerationInitImage)
+      .mockResolvedValueOnce(SOURCE)
+      .mockResolvedValueOnce(MASK);
+    vi.mocked(editorService.segmentEditorObject).mockResolvedValue(
+      new Blob(["png"], { type: "image/png" }),
+    );
+    renderWithProviders(<InsertObjectPanel targetInfo={TARGET} />);
+    openPanel();
+    await uploadSource();
+
+    // Sin objeto segmentado todavía no hay nada que colocar: sin fantasma.
+    expect(screen.queryByTestId("insert-ghost")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("insert-source-image"), { clientX: 5, clientY: 5 });
+    await waitFor(() =>
+      expect(generationService.uploadGenerationInitImage).toHaveBeenCalledTimes(2),
+    );
+
+    const ghost = await screen.findByTestId("insert-ghost");
+    expect(screen.getByTestId("insert-placement-map")).toContainElement(ghost);
   });
 
   it("shows a notice when harmonize is on but no inpaint-only model is installed", async () => {
