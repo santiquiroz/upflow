@@ -54,26 +54,44 @@ el **roadmap de consolidación** pendiente con esfuerzo/riesgo.
 
 ## Roadmap de consolidación (por prioridad payoff/riesgo)
 
-Estado actualizado 2026-08-09 (v0.57.0):
+**ROADMAP COMPLETO 10/10** (2026-08-09, v0.57.0 + v0.58.0):
 
-| # | Qué | Esfuerzo | Riesgo | Estado |
-|---|---|---|---|---|
-| 1 | Merge tablas img2img/inpaint (`generation_pipeline_modes.py`) | S | Bajo | **HECHO v0.57.0** |
-| 2 | `OnnxAudioRestorer` base (apollo ⟷ audiosr) | S-M | Bajo | **HECHO v0.57.0** (`engines/audio_restore_base.py`) |
-| 3 | `engines/onnx_common.py` + `frame_workers.py` (8 módulos importan `_`-privados) | M | Bajo | pendiente |
-| 4 | `run_checked_process()` + `is_non_empty_file` únicos | S | Bajo | **HECHO v0.57.0** (sdcpp/voice_enhance parcial a propósito: sus mensajes assertados componen distinto) |
-| 5 | `SingleWorkerJobQueue` base para los 6 installers (seam `_process_next`, 94 refs) | M | Medio | pendiente — nota: los 5 managers de MEDIA ya tienen su base (`job_manager_base.QueuedJobManager`, v0.57.0) |
-| 6 | Unificar loudness (voice_chain ⟷ mastering) | M | Med-Alto | **HECHO v0.56.1** (skip con metadata) |
-| 7 | Colapsar los dos preflights sobre `CompatStrategy` | M | Bajo-Med | pendiente |
-| 8 | Extraer `generation_staging.py` (installer ⟷ converter) | M | Medio | pendiente |
-| 9 | Un solo parser de `dml:` + constante | S | Bajo | **HECHO v0.57.0** (`dml_device.py`; eran 4 implementaciones, no 3) |
-| 10 | Una sola fuente de "¿está listo?" (Settings ⟷ CATALOG ⟷ validators) | M | Medio | parcial — `audiosr` y `shap-e-img2img` ya están en CATALOG (v0.57.0); la unificación de mecanismo sigue pendiente |
+| # | Qué | Estado |
+|---|---|---|
+| 1 | Merge tablas img2img/inpaint | **HECHO v0.57.0** (`generation_pipeline_modes.py`) |
+| 2 | `OnnxAudioRestorer` base | **HECHO v0.57.0** (`engines/audio_restore_base.py`) |
+| 3 | `onnx_common.py` + `frame_workers.py` | **HECHO v0.58.0** — onnx_upscaler/onnx_video ya no exportan `_`-privados; blending/cache-LRU/worker-loops de 2-3 copias a 1; frame_pipeline ya no importa de un engine |
+| 4 | `run_checked_process()` + `is_non_empty_file` | **HECHO v0.57.0** (sdcpp/voice_enhance parcial a propósito) |
+| 5 | Base de los 6 installers | **HECHO v0.58.0** (`install_queue_base.SingleWorkerJobQueue`; enums por familia se quedan; `_process_next` unificado al superset observacionalmente equivalente) |
+| 6 | Unificar loudness | **HECHO v0.56.1** (skip con metadata) |
+| 7 | Preflights sobre `CompatStrategy` | **HECHO v0.58.0** (`measure_capacity`/`classify_repo` en model_preflight; generation entra por su strategy) |
+| 8 | `generation_staging.py` | **HECHO v0.58.0** — converter ya no importa privados del installer; call-counts intactos vía `files=` opcional |
+| 9 | Parser `dml:` único | **HECHO v0.57.0** (`dml_device.py`) |
+| 10 | Fuente única "¿está listo?" | **HECHO v0.58.0** (`capabilities.resolve_one`; validadores delegan; apollo ganó su `SettingRequirement` — la tarjeta ya no miente con el flag apagado). Fuera con motivo: `Settings.*_available` (ciclo de import), chequeos MÁS fuertes que CATALOG (audiosr completitud, interpolation, sdcpp), features sin tarjeta (gmfss/editor/rnnoise) |
 
 Inconsistencias de API detectadas (para una v2 de la API, no urgentes):
 `jobId` vs `id` según familia; 201 vs 202 en creates; `transcribe`/`download`/
 `shape3d` sin endpoint de listado; 3 endpoints de búsqueda HF y 4 de install
 paralelos con la misma forma; dos conceptos distintos bajo `/capabilities`.
 La capa MCP (`app/mcp/`) ya normaliza todo esto para agentes.
+
+## Descartado con medición (v0.58.0)
+
+**Solapar cómputo/I-O en el upscaler ONNX de video**: la premisa del "~30% de
+GPU ociosa entre inferencias" resultó FALSA — desglose medido (RX 7800 XT,
+1080p x2 fp16): GPU pura 82.2 ms/frame de ~93 ms totales = la GPU ya está
+~88% ocupada; el overhead no-GPU es ~11 ms (12%). Techo teórico +12.5%;
+mejor variante real (iobinding prealocado + update_inplace) +5.1%, dentro
+del ruido entre corridas. Tres hallazgos de mecanismo que matan la idea:
+(1) run_with_iobinding en DML es submit ASÍNCRONO — el sync vive en el
+readback; (2) el readback sincroniza contra TODA la command queue, no contra
+su frame — solape imposible a nivel API ORT+DML; (3) cualquier llamada ORT
+concurrente sobre el device DML produce DEVICE REMOVAL (DXGI 887A0005), no
+contención — endurece el hallazgo GMFSS histórico. El presupuesto de
+optimización futuro está en el cómputo mismo (los 82 ms), no en el I/O.
+Micro-candidato pendiente de A/B controlado: cachear io_binding+buffers por
+(sesión, shape) en _infer_iobinding (+5% nominal). Spike:
+scratchpad/spike-overlap/ de la sesión 2026-08-09.
 
 ## Descartado con medición (v0.57.0)
 

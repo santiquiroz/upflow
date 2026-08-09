@@ -6,6 +6,10 @@ ROMPEN con los defaults de un modelo normal: Turbo/Lightning corren sin CFG
 guidance ~1-2. La clase se deriva del nombre del repo: no hay migración de
 registry y los repos reales la llevan en el id (sdxl-turbo, SDXL-Lightning,
 lcm-lora-sdxl...).
+
+Hyper-SD CFG-preserved (Hyper-SD15/SDXL-8steps-CFG-lora) es la excepción:
+destilado a 8 pasos pero conserva CFG real, así que el negative prompt sigue
+funcionando con el guidance normal del usuario.
 """
 
 from __future__ import annotations
@@ -13,6 +17,7 @@ from __future__ import annotations
 SPEED_TURBO = "turbo"
 SPEED_LIGHTNING = "lightning"
 SPEED_LCM = "lcm"
+SPEED_HYPER = "hyper"
 
 _SPEED_TOKENS: tuple[tuple[str, str], ...] = (
     ("turbo", SPEED_TURBO),
@@ -24,11 +29,24 @@ _SPEED_TOKENS: tuple[tuple[str, str], ...] = (
 )
 
 
+def _is_hyper_cfg_preserved(lowered: str) -> bool:
+    # "hyper" solo no alcanza: los merges comunitarios sin "cfg" en el nombre
+    # (Juggernaut X Hyper) usan la LoRA destilada y documentan CFG 1-2, y
+    # "hyper" como prefijo aparece en modelos normales (HyperRealism,
+    # HyperPhotoGASM). El par hyper+cfg es la firma de la variante
+    # CFG-preserved, la única que conserva el negative prompt.
+    return "hyper" in lowered and "cfg" in lowered
+
+
 def speed_class(model_name: str) -> str | None:
     # Solo el segmento final del repo id: una org llamada "TurboVision" no
     # convierte a todos sus modelos en destilados (falso positivo confirmado
     # en review adversarial).
     lowered = model_name.rsplit("/", 1)[-1].lower()
+    # Antes del loop: "Hyper-SD15-8steps-CFG-lora" también contiene "hyper-sd"
+    # y caería en lightning (guidance <= 2, que mata su ventaja de CFG real).
+    if _is_hyper_cfg_preserved(lowered):
+        return SPEED_HYPER
     for token, speed in _SPEED_TOKENS:
         if token in lowered:
             return speed
@@ -50,6 +68,11 @@ def anchored_params(
         return min(steps, 8), min(guidance, 2.0), scheduler
     if speed == SPEED_LIGHTNING:
         return min(steps, 8), min(guidance, 2.0), scheduler or "euler_trailing"
+    if speed == SPEED_HYPER:
+        # CFG-preserved: la model card de ByteDance/Hyper-SD documenta
+        # "support 5~8 guidance scales", así que el guidance real del usuario
+        # (7.5 default) pasa intacto y el negative prompt sigue vivo.
+        return min(steps, 8), min(guidance, 8.0), scheduler or "euler_trailing"
     if speed == SPEED_LCM:
         return min(steps, 8), min(guidance, 2.0), scheduler or "lcm"
     return steps, guidance, scheduler
