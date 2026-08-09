@@ -383,6 +383,50 @@ class TestPrintDomain:
 
 
 # ---------------------------------------------------------------------------
+# Foto a 3D: es OTRO repo de pesos que el de texto (openai/shap-e-img2img), asi
+# que tiene su propia tarjeta con su propio pack. Confundirlos haria que el
+# boton de descargar baje el modelo equivocado.
+# ---------------------------------------------------------------------------
+
+
+class TestFotoA3dEnElArbol:
+    def test_sin_el_pack_pide_bajarlo(self, tmp_path: Path) -> None:
+        settings = make_settings(tmp_path / "runtime")
+
+        foto = _find(resolve_capabilities(settings, FakeRegistry()), "print.generatePhoto")
+
+        assert foto.status == "needs_setup"
+        assert "shap-e-img2img" in foto.missing_packs
+        assert foto.setup_reason_key == "capability.setup.missingPack"
+
+    def test_el_pack_de_texto_no_habilita_el_de_foto(self, tmp_path: Path) -> None:
+        settings = make_settings(tmp_path / "runtime")
+        touch(tmp_path / "vendor" / "shap-e" / "model_index.json")
+
+        foto = _find(resolve_capabilities(settings, FakeRegistry()), "print.generatePhoto")
+
+        assert foto.status == "needs_setup"
+
+    def test_la_carpeta_sola_sin_indice_no_alcanza(self, tmp_path: Path) -> None:
+        # Una descarga a medias deja la carpeta existiendo: el requisito apunta
+        # al indice, que es lo que la tuberia necesita para cargar.
+        settings = make_settings(tmp_path / "runtime")
+        (tmp_path / "vendor" / "shap-e-img2img").mkdir(parents=True)
+
+        foto = _find(resolve_capabilities(settings, FakeRegistry()), "print.generatePhoto")
+
+        assert foto.status == "needs_setup"
+
+    def test_con_el_indice_queda_disponible(self, tmp_path: Path) -> None:
+        settings = make_settings(tmp_path / "runtime")
+        touch(tmp_path / "vendor" / "shap-e-img2img" / "model_index.json")
+
+        foto = _find(resolve_capabilities(settings, FakeRegistry()), "print.generatePhoto")
+
+        assert foto.status == "available"
+
+
+# ---------------------------------------------------------------------------
 # El carril CAD necesita DOS cosas que no son un pack: OpenSCAD instalado y un
 # servidor de modelo local apuntado. Ninguna se baja, las dos las pone el
 # usuario, y decir "disponible" sin ellas manda a la pantalla a fallar en el
@@ -466,3 +510,48 @@ class TestLaVozEstaEnElArbol:
         voz = _find(resolve_capabilities(settings, FakeRegistry()), "audio.speak")
 
         assert voz.status == "available"
+
+
+# ---------------------------------------------------------------------------
+# AudioSR estaba escondido detras de ENABLE_AUDIOSR + un script manual: no
+# aparecia en el arbol y habia que saber que existia. Ahora es una tarjeta como
+# las demas: el boton baja el pack, y el flag pendiente se dice como
+# configuracion faltante en vez de mentir "disponible" con jobs que fallarian.
+# ---------------------------------------------------------------------------
+
+
+class TestAudioSrEnElArbol:
+    def test_sin_los_modelos_pide_bajar_el_paquete(self, tmp_path: Path) -> None:
+        settings = make_settings(tmp_path, AUDIOSR_MODEL_DIR=str(tmp_path / "audiosr"))
+
+        restore_sr = _find(resolve_capabilities(settings, FakeRegistry()), "audio.restoreSr")
+
+        assert restore_sr.status == "needs_setup"
+        assert "audiosr" in restore_sr.missing_packs
+        # El paquete manda sobre el flag: sin los modelos no sirve de nada
+        # prender ENABLE_AUDIOSR, asi que lo primero que se ofrece es descargar.
+        assert restore_sr.setup_reason_key == "capability.setup.missingPack"
+
+    def test_con_los_modelos_pero_sin_el_flag_dice_que_falta_configurar(
+        self, tmp_path: Path
+    ) -> None:
+        model_dir = tmp_path / "audiosr"
+        model_dir.mkdir()
+        settings = make_settings(tmp_path, AUDIOSR_MODEL_DIR=str(model_dir))
+
+        restore_sr = _find(resolve_capabilities(settings, FakeRegistry()), "audio.restoreSr")
+
+        assert restore_sr.status == "needs_setup"
+        assert restore_sr.missing_packs == ()
+        assert restore_sr.setup_reason_key == "capability.setup.missingSetting"
+
+    def test_con_los_modelos_y_el_flag_queda_disponible(self, tmp_path: Path) -> None:
+        model_dir = tmp_path / "audiosr"
+        model_dir.mkdir()
+        settings = make_settings(
+            tmp_path, AUDIOSR_MODEL_DIR=str(model_dir), ENABLE_AUDIOSR=True
+        )
+
+        restore_sr = _find(resolve_capabilities(settings, FakeRegistry()), "audio.restoreSr")
+
+        assert restore_sr.status == "available"

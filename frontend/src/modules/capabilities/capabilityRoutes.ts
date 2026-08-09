@@ -9,6 +9,7 @@ const SURFACE_BY_CAPABILITY: Record<string, string> = {
   "image.upscale": "/enhance/image",
   "audio.denoise": "/audio",
   "audio.restore": "/audio",
+  "audio.restoreSr": "/audio",
   "audio.voice": "/audio",
   "audio.transcribe": "/transcribe",
   // Sincronicas: devuelven el audio en la misma peticion, sin encolar. Igual

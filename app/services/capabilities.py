@@ -157,6 +157,27 @@ _PRINT_CAPABILITIES: tuple[Capability, ...] = (
         # que encajar sigue estando el carril parametrico.
     ),
     Capability(
+        id="print.generatePhoto",
+        domain="print",
+        label_key="capability.print.generatePhoto",
+        provisioning="vendored_pack",
+        job_kind="print",
+        strategies=("model",),
+        # El indice y no la carpeta: una descarga a medias deja la carpeta
+        # existiendo sin que la tuberia pueda cargar.
+        requirements=(
+            PathRequirement("shape3d_img2img_model_index", "shap-e-img2img"),
+        ),
+        # Shap-E img2img (OpenAI, MIT) es OTRO repo que el de texto: comparte el
+        # renderer pero cambia el prior y el encoder. Medido el 2026-08-08 en
+        # CPU: 16 pasos con guidance 3.0 dan ~100-136 s por malla, estanca y
+        # manifold directamente.
+        #
+        # Es una INTERPRETACION del objeto, no una replica: una imagen sin
+        # pistas 3D (un dibujo plano) colapsa a una extrusion plana de la
+        # silueta. Y como todo Shap-E, no da COTAS.
+    ),
+    Capability(
         id="print.cad",
         domain="print",
         label_key="capability.print.cad",
@@ -235,6 +256,21 @@ CATALOG: tuple[Capability, ...] = (
         job_kind="audio",
         strategies=("model",),
         requirements=(PathRequirement("apollo_restore_model", "apollo"),),
+    ),
+    Capability(
+        id="audio.restoreSr",
+        domain="audio",
+        label_key="capability.audio.restoreSr",
+        provisioning="vendored_pack",
+        job_kind="audio",
+        strategies=("model",),
+        # AudioSR es opt-in por flag ADEMAS del pack: el boton baja los modelos
+        # y la tarjeta dice honestamente que falta ENABLE_AUDIOSR, en vez de
+        # decir "disponible" y que el job falle por el flag apagado.
+        requirements=(
+            PathRequirement("audiosr_model_dir", "audiosr"),
+            SettingRequirement("enable_audiosr"),
+        ),
     ),
     Capability(
         id="audio.voice",

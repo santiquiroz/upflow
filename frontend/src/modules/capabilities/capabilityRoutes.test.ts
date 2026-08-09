@@ -33,7 +33,7 @@ describe("surfaceFor", () => {
   });
 
   it("sends audio enhancement capabilities to the audio surface", () => {
-    for (const id of ["audio.denoise", "audio.restore", "audio.voice"]) {
+    for (const id of ["audio.denoise", "audio.restore", "audio.restoreSr", "audio.voice"]) {
       expect(surfaceFor(capability({ id, domain: "audio", jobKind: "audio" }))).toBe(
         "/audio",
       );
@@ -88,6 +88,7 @@ describe("surfaceFor", () => {
       "image.upscale",
       "audio.denoise",
       "audio.restore",
+      "audio.restoreSr",
       "audio.voice",
       "audio.transcribe",
       "audio.speak",

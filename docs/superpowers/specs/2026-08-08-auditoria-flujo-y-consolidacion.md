@@ -54,24 +54,37 @@ el **roadmap de consolidación** pendiente con esfuerzo/riesgo.
 
 ## Roadmap de consolidación (por prioridad payoff/riesgo)
 
-| # | Qué | Archivos | Esfuerzo | Riesgo |
+Estado actualizado 2026-08-09 (v0.57.0):
+
+| # | Qué | Esfuerzo | Riesgo | Estado |
 |---|---|---|---|---|
-| 1 | Merge tablas img2img/inpaint (`generation_pipeline_modes.py`) | 2 | S | Bajo |
-| 2 | `OnnxAudioRestorer` base (apollo ⟷ audiosr, ~160 líneas idénticas) | 2 | S-M | Bajo |
-| 3 | `engines/onnx_common.py` + `frame_workers.py` (8 módulos importan `_`-privados de onnx_upscaler) | 10 | M | Bajo |
-| 4 | `run_checked_process()` (ritual returncode+output repetido 8×; `_is_non_empty_file` definido 6×) | ~10 | S | Bajo |
-| 5 | `SingleWorkerJobQueue` base para los 6 installers (ojo: seam `_process_next`, 94 refs en tests) | 6 | M | Medio |
-| 6 | Unificar loudness (voice_chain ⟷ mastering) — **conductual, decidir primero** | 3 | M | Med-Alto |
-| 7 | Colapsar los dos preflights sobre `CompatStrategy` (la costura ya existe) | 2 | M | Bajo-Med |
-| 8 | Extraer `generation_staging.py` (installer ⟷ converter, 7 imports privados cruzados) | 2 | M | Medio |
-| 9 | Un solo parser de `dml:` (3 implementaciones divergentes) + constante | ~12 | S | Bajo |
-| 10 | Una sola fuente de "¿está listo?" (Settings.\*\_available ⟷ capabilities.CATALOG ⟷ validators; `audiosr` ya falta en CATALOG) | 3 | M | Medio |
+| 1 | Merge tablas img2img/inpaint (`generation_pipeline_modes.py`) | S | Bajo | **HECHO v0.57.0** |
+| 2 | `OnnxAudioRestorer` base (apollo ⟷ audiosr) | S-M | Bajo | **HECHO v0.57.0** (`engines/audio_restore_base.py`) |
+| 3 | `engines/onnx_common.py` + `frame_workers.py` (8 módulos importan `_`-privados) | M | Bajo | pendiente |
+| 4 | `run_checked_process()` + `is_non_empty_file` únicos | S | Bajo | **HECHO v0.57.0** (sdcpp/voice_enhance parcial a propósito: sus mensajes assertados componen distinto) |
+| 5 | `SingleWorkerJobQueue` base para los 6 installers (seam `_process_next`, 94 refs) | M | Medio | pendiente — nota: los 5 managers de MEDIA ya tienen su base (`job_manager_base.QueuedJobManager`, v0.57.0) |
+| 6 | Unificar loudness (voice_chain ⟷ mastering) | M | Med-Alto | **HECHO v0.56.1** (skip con metadata) |
+| 7 | Colapsar los dos preflights sobre `CompatStrategy` | M | Bajo-Med | pendiente |
+| 8 | Extraer `generation_staging.py` (installer ⟷ converter) | M | Medio | pendiente |
+| 9 | Un solo parser de `dml:` + constante | S | Bajo | **HECHO v0.57.0** (`dml_device.py`; eran 4 implementaciones, no 3) |
+| 10 | Una sola fuente de "¿está listo?" (Settings ⟷ CATALOG ⟷ validators) | M | Medio | parcial — `audiosr` y `shap-e-img2img` ya están en CATALOG (v0.57.0); la unificación de mecanismo sigue pendiente |
 
 Inconsistencias de API detectadas (para una v2 de la API, no urgentes):
 `jobId` vs `id` según familia; 201 vs 202 en creates; `transcribe`/`download`/
 `shape3d` sin endpoint de listado; 3 endpoints de búsqueda HF y 4 de install
 paralelos con la misma forma; dos conceptos distintos bajo `/capabilities`.
 La capa MCP (`app/mcp/`) ya normaliza todo esto para agentes.
+
+## Descartado con medición (v0.57.0)
+
+**Batching de frames en el upscaler ONNX de video**: hipótesis era llenar el
+~30% de GPU ociosa batcheando inferencias. Spike real (RX 7800 XT,
+animevideov3-x2 fp16, 1080p, re-export con batch dinámico verificado
+bit-exacto): batch=2 = paridad con batch=1, batch=4 = **-8%**. El SRVGG
+compacto ya satura los ALUs por frame; la GPU ociosa está ENTRE inferencias
+(readback/pre-post), no dentro. La palanca real sería solapar cómputo con I/O
+(doble sesión / IOBinding pipelined) — spike distinto, no hecho. Va a la
+lista de callejones medidos junto con ReBAR y la fusión Olive sobre fp16.
 
 ## MCP (nuevo en v0.56.0)
 

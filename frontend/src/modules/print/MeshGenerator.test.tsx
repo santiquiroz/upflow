@@ -4,6 +4,9 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "../../i18n/LocaleProvider";
 import { en } from "../../i18n/en";
+import type { CapabilityTreeResponse } from "../../lib/apiTypes";
+import * as capabilitiesService from "../../services/capabilities";
+import * as generationService from "../../services/generation";
 import * as printService from "../../services/print";
 import { MeshGenerator } from "./MeshGenerator";
 
@@ -16,6 +19,47 @@ vi.mock("../../services/print", async (importOriginal) => {
     cancelShape3dJob: vi.fn(),
   };
 });
+
+vi.mock("../../services/capabilities", () => ({
+  fetchCapabilityTree: vi.fn(),
+  provisionCapability: vi.fn(),
+  provisionPack: vi.fn(),
+  getProvisionStatus: vi.fn(),
+}));
+
+vi.mock("../../services/generation", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../services/generation")>();
+  return {
+    ...actual,
+    uploadGenerationInitImage: vi.fn(),
+  };
+});
+
+function photoCapabilityTree(status: "available" | "needs_setup"): CapabilityTreeResponse {
+  return {
+    domains: [
+      {
+        domain: "print",
+        labelKey: "capability.domain.print",
+        capabilities: [
+          {
+            id: "print.generatePhoto",
+            domain: "print",
+            labelKey: "capability.print.generatePhoto",
+            status,
+            provisioning: "vendored_pack",
+            jobKind: "print",
+            strategies: ["model"],
+            missingPacks: status === "needs_setup" ? ["shap-e-img2img"] : [],
+            unavailableReasonKey: null,
+            setupReasonKey: status === "needs_setup" ? "capability.setup.missingPack" : null,
+          },
+        ],
+        roadmap: [],
+      },
+    ],
+  };
+}
 
 const EN_COLA: printService.Shape3dJob = {
   id: "j1",
@@ -76,11 +120,25 @@ function generar() {
 beforeEach(() => {
   vi.mocked(printService.createShape3dJob).mockResolvedValue(EN_COLA);
   vi.mocked(printService.getShape3dJob).mockResolvedValue(LISTA);
+  vi.mocked(capabilitiesService.fetchCapabilityTree).mockResolvedValue(
+    photoCapabilityTree("available"),
+  );
+  vi.mocked(generationService.uploadGenerationInitImage).mockResolvedValue({
+    initImageToken: "abc123",
+    originalFilename: "foto.png",
+    width: 8,
+    height: 8,
+  });
+  // jsdom no trae createObjectURL; el preview lo necesita.
+  URL.createObjectURL = vi.fn(() => "blob:preview") as never;
+  URL.revokeObjectURL = vi.fn() as never;
 });
 
 afterEach(() => {
   vi.mocked(printService.createShape3dJob).mockReset();
   vi.mocked(printService.getShape3dJob).mockReset();
+  vi.mocked(capabilitiesService.fetchCapabilityTree).mockReset();
+  vi.mocked(generationService.uploadGenerationInitImage).mockReset();
   vi.unstubAllGlobals();
 });
 
@@ -203,5 +261,110 @@ describe("MeshGenerator", () => {
       en["gen3d.repair.downloadFailed"],
     );
     expect(onRepairFile).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// El modo foto: sube la imagen por el mismo staging que la generación de
+// imágenes y manda el token; el copy dice honestamente que es una
+// interpretación del objeto, no una réplica.
+// ---------------------------------------------------------------------------
+
+function irAFoto() {
+  fireEvent.click(screen.getByRole("tab", { name: en["gen3d.mode.photo"] }));
+}
+
+function elegirFoto(file: File = new File(["png"], "taza.png", { type: "image/png" })) {
+  fireEvent.change(screen.getByLabelText(en["gen3d.photo.choose"]), {
+    target: { files: [file] },
+  });
+  return file;
+}
+
+describe("MeshGenerator photo mode", () => {
+  it("shows the honest disclaimer before anything else", () => {
+    renderGen();
+    irAFoto();
+
+    expect(screen.getByText(en["gen3d.photo.disclaimer"])).toBeInTheDocument();
+    // La advertencia de cotas sigue aplicando: img2img tampoco da medidas.
+    expect(screen.getByText(en["gen3d.noDimensions"])).toBeInTheDocument();
+  });
+
+  it("cannot generate until a photo is chosen", async () => {
+    renderGen();
+    irAFoto();
+
+    await screen.findByLabelText(en["gen3d.photo.choose"]);
+    expect(screen.getByRole("button", { name: en["gen3d.generate"] })).toBeDisabled();
+  });
+
+  it("uploads the photo and sends its token as a photo job", async () => {
+    renderGen();
+    irAFoto();
+    await screen.findByLabelText(en["gen3d.photo.choose"]);
+    const foto = elegirFoto();
+    fireEvent.click(screen.getByRole("button", { name: en["gen3d.generate"] }));
+
+    await waitFor(() => expect(printService.createShape3dJob).toHaveBeenCalled());
+    expect(generationService.uploadGenerationInitImage).toHaveBeenCalledWith(foto);
+    expect(vi.mocked(printService.createShape3dJob).mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        source: "photo",
+        imageToken: "abc123",
+        printer: "ender-3",
+      }),
+    );
+  });
+
+  it("shows a preview of the chosen photo", async () => {
+    renderGen();
+    irAFoto();
+    await screen.findByLabelText(en["gen3d.photo.choose"]);
+    elegirFoto();
+
+    expect(screen.getByAltText(en["gen3d.photo.previewAlt"])).toHaveAttribute(
+      "src",
+      "blob:preview",
+    );
+  });
+
+  it("offers the pack download instead of the picker when the pack is missing", async () => {
+    vi.mocked(capabilitiesService.fetchCapabilityTree).mockResolvedValue(
+      photoCapabilityTree("needs_setup"),
+    );
+    renderGen();
+    irAFoto();
+
+    expect(await screen.findByText(en["gen3d.photo.missingPack"])).toBeInTheDocument();
+    expect(screen.queryByLabelText(en["gen3d.photo.choose"])).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: en["gen3d.generate"] })).toBeDisabled();
+  });
+
+  it("surfaces an upload failure instead of staying silent", async () => {
+    vi.mocked(generationService.uploadGenerationInitImage).mockRejectedValue(
+      new Error("la subida fallo"),
+    );
+    renderGen();
+    irAFoto();
+    await screen.findByLabelText(en["gen3d.photo.choose"]);
+    elegirFoto();
+    fireEvent.click(screen.getByRole("button", { name: en["gen3d.generate"] }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/la subida fallo/);
+    expect(printService.createShape3dJob).not.toHaveBeenCalled();
+  });
+
+  it("keeps the text lane exactly as it was", async () => {
+    // Cambiar de modo y volver no puede romper el carril que ya funcionaba.
+    renderGen();
+    irAFoto();
+    fireEvent.click(screen.getByRole("tab", { name: en["gen3d.mode.text"] }));
+    generar();
+
+    await waitFor(() => expect(printService.createShape3dJob).toHaveBeenCalled());
+    expect(vi.mocked(printService.createShape3dJob).mock.calls[0][0]).toEqual(
+      expect.objectContaining({ prompt: "algo", printer: "ender-3" }),
+    );
   });
 });

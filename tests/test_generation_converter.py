@@ -955,3 +955,93 @@ async def test_inpaint_merge_failure_marks_the_merged_entry_not_the_original(
     assert job is not None and job.status == JobStatus.failed
     entry = registry.get("gen--john--epic-xl--inpainting")
     assert entry is not None and entry.status == ModelStatus.error
+
+
+async def test_inpaint_merge_from_a_single_checkpoint_materializes_that_exact_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Modelo instalado desde un checkpoint suelto: el UNet del usuario sale de
+    # ESE archivo (descarga + materialize), no del layout diffusers del repo.
+    import app.services.generation_inpaint_merge as merge_module
+
+    converter, _installer, _settings, registry = make_converter(
+        tmp_path, export_fn=fake_export_ok
+    )
+    checkpoint = HfFile(path="pony.safetensors", size=123)
+    converter.hf_client.files = _pytorch_repo_files() + [checkpoint]
+
+    async def read_header(repo_id: str, path: str):
+        header = _single_file_header("pony_sdxl")
+        return header, len(json.dumps(header).encode("utf-8"))
+
+    converter.hf_client.read_safetensors_header = read_header  # type: ignore[attr-defined]
+
+    materialize_calls: dict[str, object] = {}
+
+    def fake_materialize(checkpoint_path: Path, out_dir: Path, architecture: str) -> None:
+        materialize_calls["checkpoint_path"] = Path(checkpoint_path)
+        materialize_calls["out_dir"] = out_dir
+        materialize_calls["architecture"] = architecture
+        (out_dir / "model_index.json").write_text(SOURCE_MODEL_INDEX, encoding="utf-8")
+
+    monkeypatch.setattr(generation_converter_module, "materialize", fake_materialize)
+
+    merge_calls: dict[str, object] = {}
+
+    def fake_merge(
+        user_dir: Path, base_dir: Path, inpaint_dir: Path, out_dir: Path, progress_cb=None
+    ) -> Path:
+        merge_calls["user_dir"] = user_dir
+        merge_calls["user_still_has_checkpoint_file"] = (user_dir / checkpoint.path).exists()
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "model_index.json").write_text(
+            json.dumps({"_class_name": "StableDiffusionXLInpaintPipeline"}), encoding="utf-8"
+        )
+        return out_dir
+
+    monkeypatch.setattr(merge_module, "merge_to_inpaint_dir", fake_merge)
+
+    conversion_id = await converter.convert_inpaint_merge(
+        "owner/checkpoints", checkpoint_path=checkpoint.path
+    )
+    await converter._process_next()
+
+    job = converter.status(conversion_id)
+    assert job is not None
+    assert job.status is JobStatus.completed, job.error
+    assert materialize_calls["checkpoint_path"].name == checkpoint.path
+    assert materialize_calls["architecture"] == "xl_base"
+    # Materializa DENTRO del dir de usuario del merge, y el .safetensors ya
+    # descargado no queda duplicado ahí.
+    assert materialize_calls["out_dir"] == merge_calls["user_dir"]
+    assert Path(merge_calls["user_dir"]).name == "user"
+    assert merge_calls["user_still_has_checkpoint_file"] is False
+    # El checkpoint elegido se descargó tal cual (mismo archivo, no el repo).
+    downloaded = [call[1] for call in converter.hf_client.download_calls]
+    assert checkpoint.path in downloaded
+    entry = registry.get("gen--owner--checkpoints--pony.safetensors--inpainting")
+    assert entry is not None
+    assert entry.status == ModelStatus.installed
+    assert entry.checkpoint_path == checkpoint.path
+
+
+async def test_inpaint_merge_from_a_missing_checkpoint_fails_with_candidates(
+    tmp_path: Path,
+) -> None:
+    converter, _installer, _settings, _registry = make_converter(
+        tmp_path, export_fn=fake_export_ok
+    )
+    converter.hf_client.files = _pytorch_repo_files() + [
+        HfFile(path="other.safetensors", size=1)
+    ]
+
+    conversion_id = await converter.convert_inpaint_merge(
+        "owner/checkpoints", checkpoint_path="borrado.safetensors"
+    )
+    await converter._process_next()
+
+    job = converter.status(conversion_id)
+    assert job is not None
+    assert job.status is JobStatus.failed
+    assert "borrado.safetensors" in (job.error or "")
+    assert "other.safetensors" in (job.error or "")

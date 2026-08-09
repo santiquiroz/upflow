@@ -203,10 +203,15 @@ class Shape3dJob:
 
     prompt: str
     printer: str = "ender-3"
-    # "mesh" = Shap-E, que da FORMA sin cotas y por eso se escala con `target_mm`.
-    # "cad"  = OpenSCAD escrito por un modelo, que da COTAS y por eso se verifica
-    #          contra `expected_size` en vez de escalarse.
+    # "mesh"  = Shap-E desde texto: FORMA sin cotas, se escala con `target_mm`.
+    # "photo" = Shap-E img2img desde una foto: una INTERPRETACION del objeto,
+    #           tampoco con cotas, asi que se escala igual que "mesh".
+    # "cad"   = OpenSCAD escrito por un modelo, que da COTAS y por eso se
+    #           verifica contra `expected_size` en vez de escalarse.
     source: str = "mesh"
+    # Solo en "photo": la foto ya staged en uploads, resuelta por la API antes
+    # de encolar. El prompt queda vacio en ese modo.
+    image_path: Path | None = None
     # Solo en "mesh": la malla se escala para que su lado mas largo mida esto.
     target_mm: float | None = None
     # Solo en "cad": lo que la pieza TIENE que medir. Si no coincide, el error

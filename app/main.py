@@ -219,7 +219,9 @@ async def lifespan(app: FastAPI):
     await asr_installer.start()
     shape3d_jobs = Shape3dJobManager(
         settings,
-        Shape3dEngine(settings.shape3d_model_path),
+        Shape3dEngine(
+            settings.shape3d_model_path, settings.shape3d_img2img_model_path
+        ),
         # Solo si hay un servidor de modelo configurado. Sin el, el carril de
         # malla anda igual y el de CAD dice que falta, que es mejor que fingir.
         cad_client=(

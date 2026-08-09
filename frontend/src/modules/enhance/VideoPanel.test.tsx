@@ -771,7 +771,7 @@ describe("VideoPanel", () => {
     openSection("Runtime");
     expect(await screen.findByRole("radio", { name: /Auto/ })).toBeChecked();
     expect(screen.getByRole("radio", { name: /NCNN Vulkan/ })).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: /ONNX DirectML/ })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /ONNX/ })).toBeInTheDocument();
   });
 
   it("sends the chosen backend runtime and reflects it in the section summary", async () => {
@@ -816,8 +816,8 @@ describe("VideoPanel", () => {
     fireEvent.click(await screen.findByRole("radio", { name: /General Balanced 4x/ }));
 
     openSection("Runtime");
-    fireEvent.click(await screen.findByRole("radio", { name: /ONNX DirectML/ }));
-    expect(screen.getByRole("button", { name: /^Runtime/ })).toHaveTextContent("ONNX DirectML");
+    fireEvent.click(await screen.findByRole("radio", { name: /ONNX/ }));
+    expect(screen.getByRole("button", { name: /^Runtime/ })).toHaveTextContent("ONNX");
 
     const submitButton = await screen.findByRole("button", { name: /upscale video/i });
     await waitFor(() => expect(submitButton).not.toBeDisabled());

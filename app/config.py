@@ -724,6 +724,17 @@ class Settings(BaseSettings):
         return Path(self.runtime_dir).parent / "vendor" / "shap-e"
 
     @property
+    def shape3d_img2img_model_path(self) -> Path:
+        """Shap-E img2img (MIT). OTRO repo HF que el de texto; se baja aparte."""
+        return Path(self.runtime_dir).parent / "vendor" / "shap-e-img2img"
+
+    @property
+    def shape3d_img2img_model_index(self) -> Path:
+        # El requisito apunta al indice y no a la carpeta: una descarga a medias
+        # deja la carpeta existiendo sin que la tuberia pueda cargar.
+        return self.shape3d_img2img_model_path / "model_index.json"
+
+    @property
     def ffmpeg_binary_path(self) -> Path:
         return resolve_against_project_root(self.ffmpeg_binary)
 

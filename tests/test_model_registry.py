@@ -214,6 +214,49 @@ def test_register_stores_error_entry_for_failed_conversion(tmp_path: Path) -> No
 
 
 # ---------------------------------------------------------------------------
+# checkpoint_path: instalaciones desde un checkpoint suelto persisten el
+# archivo de origen; las entradas viejas sin el campo siguen cargando.
+# ---------------------------------------------------------------------------
+
+
+def test_checkpoint_path_persists_and_reloads(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    registry = ModelRegistry(settings)
+    registry.register(
+        make_onnx_entry(
+            id="gen--owner--checkpoints--pony.safetensors",
+            kind=ModelKind.diffusion_onnx,
+            checkpoint_path="Pony.safetensors",
+        )
+    )
+
+    reloaded = ModelRegistry(settings)
+    entry = reloaded.get("gen--owner--checkpoints--pony.safetensors")
+
+    assert entry is not None
+    # Con mayúsculas intactas: el id normaliza a minúsculas, el campo no debe.
+    assert entry.checkpoint_path == "Pony.safetensors"
+
+
+def test_registry_json_written_without_checkpoint_path_loads_as_none(tmp_path: Path) -> None:
+    # Simula un registry.json de una versión anterior a la que agregó el campo.
+    settings = make_settings(tmp_path)
+    ModelRegistry(settings).register(make_onnx_entry())
+    registry_path = settings.models_path / "registry.json"
+    raw = json.loads(registry_path.read_text(encoding="utf-8"))
+    for item in raw:
+        item.pop("checkpoint_path", None)
+    registry_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    reloaded = ModelRegistry(settings)
+    entry = reloaded.get("swinir-real-sr-x4")
+
+    assert entry is not None
+    assert entry.checkpoint_path is None
+    assert list(settings.models_path.glob("registry.json.corrupt-*")) == []
+
+
+# ---------------------------------------------------------------------------
 # remove()
 # ---------------------------------------------------------------------------
 

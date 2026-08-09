@@ -39,6 +39,9 @@ PACK_SCRIPTS: dict[str, str] = {
     "wan-video": "download-wan-video.ps1",
     "magpie": "download-magpie.ps1",
     "shap-e": "download-shap-e.ps1",
+    # Foto a 3D. Es OTRO repo HF que el de texto (openai/shap-e-img2img):
+    # comparte el renderer pero cambia el prior y el encoder de entrada.
+    "shap-e-img2img": "download-shap-e-img2img.ps1",
     # El nombre sigue al directorio vendorizado (vendor/kokoro), no al script:
     # es la convencion que ya usan gmfss y audiosr.
     "kokoro": "download-kokoro-tts.ps1",

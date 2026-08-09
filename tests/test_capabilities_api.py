@@ -245,6 +245,42 @@ async def test_a_registry_capability_can_still_need_a_pack(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_provisioning_audiosr_starts_its_pack(tmp_path: Path):
+    # AudioSR era el unico restore sin tarjeta: solo se podia instalar corriendo
+    # el script a mano. Ahora el boton de la tarjeta baja el pack como los demas.
+    from app.api.routes import provision_capability
+
+    settings = make_settings(tmp_path, AUDIOSR_MODEL_DIR=str(tmp_path / "audiosr"))
+    provisioner = FakeProvisioner()
+
+    response = await provision_capability(
+        "audio.restoreSr", FakeRequest(provisioner), settings, FakeRegistry()
+    )
+
+    assert provisioner.requested == ["audiosr"]
+    assert response.pack == "audiosr"
+
+
+@pytest.mark.asyncio
+async def test_audiosr_with_the_models_but_no_flag_has_nothing_to_download(tmp_path: Path):
+    # Despues de la descarga lo que falta es ENABLE_AUDIOSR, que no se baja: se
+    # configura. Ofrecer otra descarga aca seria un boton que no arregla nada.
+    from fastapi import HTTPException
+
+    from app.api.routes import provision_capability
+
+    model_dir = tmp_path / "audiosr"
+    model_dir.mkdir()
+    settings = make_settings(tmp_path, AUDIOSR_MODEL_DIR=str(model_dir))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await provision_capability(
+            "audio.restoreSr", FakeRequest(FakeProvisioner()), settings, FakeRegistry()
+        )
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
 async def test_provision_status_reports_the_job(tmp_path: Path):
     from app.api.routes import provision_capability, provision_status
 

@@ -77,15 +77,24 @@ class Shape3dJobManager:
     async def create_job(
         self,
         *,
-        prompt: str,
+        prompt: str = "",
         printer: str = "ender-3",
         source: str = "mesh",
         target_mm: float | None = None,
         expected_size: tuple[float, float, float] | None = None,
+        image_path: Path | None = None,
         owner: AuthenticatedUser | None = None,
         job_id: str | None = None,
     ) -> Shape3dJob:
-        if not prompt.strip():
+        if source not in ("mesh", "photo", "cad"):
+            raise ValueError(
+                f"Origen desconocido: {source!r}. Son 'mesh', 'photo' o 'cad'."
+            )
+        # La entrada obligatoria depende del origen: foto pide imagen y no
+        # descripcion; texto y CAD piden descripcion.
+        if source == "photo" and image_path is None:
+            raise ValueError("Hace falta la foto del objeto.")
+        if source != "photo" and not prompt.strip():
             raise ValueError("Hace falta una descripcion de la pieza.")
         if len(prompt) > MAX_PROMPT_CHARS:
             raise ValueError(
@@ -99,12 +108,13 @@ class Shape3dJobManager:
             )
         if target_mm is not None and target_mm <= 0:
             raise ValueError("La medida pedida tiene que ser mayor que cero.")
-        if target_mm is None and source == "mesh":
+        # Ni "mesh" ni "photo" traen cotas: los dos se escalan al default.
+        if target_mm is None and source in ("mesh", "photo"):
             target_mm = DEFAULT_MESH_LONGEST_MM
-        if source not in ("mesh", "cad"):
-            raise ValueError(f"Origen desconocido: {source!r}. Son 'mesh' o 'cad'.")
         if source == "mesh" and not self.engine.available():
             raise Shape3dUnavailable(missing_pack_message("shap-e"))
+        if source == "photo" and not self.engine.available_image():
+            raise Shape3dUnavailable(missing_pack_message("shap-e-img2img"))
         if source == "cad":
             if self.cad_client is None:
                 raise Shape3dUnavailable(
@@ -126,6 +136,7 @@ class Shape3dJobManager:
             source=source,
             target_mm=target_mm,
             expected_size=expected_size,
+            image_path=image_path,
             owner_id=owner.id if owner is not None else None,
         )
         if job_id is not None:
@@ -176,9 +187,7 @@ class Shape3dJobManager:
             if job.source == "cad":
                 await self._build_from_cad(job, destino)
             else:
-                triangulos = await asyncio.to_thread(
-                    self.engine.generate_from_text, job.prompt
-                )
+                triangulos = await asyncio.to_thread(self._generate_triangles, job)
                 await asyncio.to_thread(write_stl, destino, triangulos)
 
             reporte = await asyncio.to_thread(
@@ -216,6 +225,12 @@ class Shape3dJobManager:
             return
         job.status = status
         job.error = error
+
+    def _generate_triangles(self, job: Shape3dJob):
+        """Corre en un thread: son los dos minutos de CPU del modelo."""
+        if job.source == "photo":
+            return self.engine.generate_from_image(job.image_path)
+        return self.engine.generate_from_text(job.prompt)
 
     async def _build_from_cad(self, job: Shape3dJob, destino) -> None:
         resultado = await asyncio.to_thread(

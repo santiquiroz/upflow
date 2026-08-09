@@ -444,17 +444,25 @@ class GenerationModelConverter:
         await self._queue.put(job)
         return job.id
 
-    async def convert_inpaint_merge(self, repo_id: str) -> str:
+    async def convert_inpaint_merge(
+        self, repo_id: str, checkpoint_path: str | None = None
+    ) -> str:
         """Crea la versión de inpainting 9ch de un checkpoint del usuario.
 
         Mismo carril que una conversión normal (cola, progreso, cancelación,
         registro visible desde el arranque); la diferencia es la pre-etapa de
         merge add-difference contra los oficiales base+inpaint de la familia.
+        Con checkpoint_path, el UNet del usuario sale de ESE archivo suelto
+        (materializado a árbol diffusers) en vez del repo completo.
         """
         available, reason = generation_dependencies_available()
         if not available:
             raise ValueError(reason or "Generation dependencies missing")
-        job = ConversionJob(repo_id=_validate_repo_id(repo_id), inpaint_merge=True)
+        job = ConversionJob(
+            repo_id=_validate_repo_id(repo_id),
+            checkpoint_path=checkpoint_path,
+            inpaint_merge=True,
+        )
         self._jobs[job.id] = job
         self._register_converting_entry(job)
         await self._queue.put(job)
@@ -482,6 +490,7 @@ class GenerationModelConverter:
                 size_bytes=0,
                 scale=None,
                 file_path=None,
+                checkpoint_path=job.checkpoint_path,
                 status=ModelStatus.converting,
             )
         )
@@ -609,8 +618,58 @@ class GenerationModelConverter:
             await self.hf_client.download(repo_id, hf_file.path, dest, unlimited=True)
         return selected, chosen
 
+    async def _materialize_checkpoint(
+        self,
+        checkpoint: HfFile,
+        checkpoint_dest: Path,
+        out_root: Path,
+        architecture: str | None,
+    ) -> None:
+        """Convierte el checkpoint ya descargado en un árbol diffusers en out_root,
+        con los fallos de RAM traducidos a un mensaje accionable."""
+        if architecture is None:
+            architecture = await asyncio.to_thread(
+                _read_local_checkpoint_architecture,
+                checkpoint_dest,
+            )
+        try:
+            await asyncio.to_thread(materialize, checkpoint_dest, out_root, architecture)
+        except MemoryError as exc:
+            raise RuntimeError(_allocation_message(checkpoint)) from exc
+        except RuntimeError as exc:
+            if _is_allocation_runtime_error(exc):
+                raise RuntimeError(_allocation_message(checkpoint)) from exc
+            raise
+
+    async def _materialize_user_checkpoint(
+        self,
+        job: ConversionJob,
+        checkpoint: HfFile,
+        user_root: Path,
+        architecture: str | None,
+    ) -> None:
+        checkpoint_dest = _safe_staging_dest(user_root, checkpoint.path)
+        checkpoint_dest.parent.mkdir(parents=True, exist_ok=True)
+        await self.hf_client.download(
+            job.repo_id,
+            checkpoint.path,
+            checkpoint_dest,
+            unlimited=True,
+        )
+        self._raise_if_cancelled(job)
+        await self._materialize_checkpoint(checkpoint, checkpoint_dest, user_root, architecture)
+        # El árbol diffusers ya está en user_root: conservar además el
+        # .safetensors duplicaría varios GB durante el resto del merge.
+        checkpoint_dest.unlink(missing_ok=True)
+
     async def _prepare_inpaint_merge(
-        self, job: ConversionJob, src_root: Path, merge_root: Path, component_keys: list[str]
+        self,
+        job: ConversionJob,
+        src_root: Path,
+        merge_root: Path,
+        component_keys: list[str],
+        checkpoint: HfFile | None = None,
+        architecture: str | None = None,
     ) -> tuple[list[HfFile], Precision]:
         from app.services.engines.generation_onnx import _read_declared_class_name
         from app.services.generation_inpaint_merge import (
@@ -627,7 +686,13 @@ class GenerationModelConverter:
                 shutil.rmtree(root, ignore_errors=True)
             root.mkdir(parents=True, exist_ok=True)
 
-        selected, _ = await self._download_repo_dir(job.repo_id, user_root, "fp16")
+        if checkpoint is None:
+            selected, _ = await self._download_repo_dir(job.repo_id, user_root, "fp16")
+        else:
+            # Modelo instalado desde un checkpoint suelto: el UNet del usuario
+            # sale de ESE archivo, no del repo (que puede traer otros pesos).
+            await self._materialize_user_checkpoint(job, checkpoint, user_root, architecture)
+            selected = [checkpoint]
         self._raise_if_cancelled(job)
         # La familia sale del checkpoint del USUARIO: decide contra qué base e
         # inpaint oficiales se hace el add-difference.
@@ -681,7 +746,9 @@ class GenerationModelConverter:
             selected: list[HfFile]
             if job.inpaint_merge:
                 selected, precision = await self._prepare_inpaint_merge(
-                    job, src_root, merge_root, component_keys
+                    job, src_root, merge_root, component_keys,
+                    checkpoint=checkpoint,
+                    architecture=architecture,
                 )
             elif checkpoint is not None:
                 checkpoint_dest = _safe_staging_dest(src_root, checkpoint.path)
@@ -693,24 +760,9 @@ class GenerationModelConverter:
                     unlimited=True,
                 )
                 _advance_materializing_stage(job)
-                if architecture is None:
-                    architecture = await asyncio.to_thread(
-                        _read_local_checkpoint_architecture,
-                        checkpoint_dest,
-                    )
-                try:
-                    await asyncio.to_thread(
-                        materialize,
-                        checkpoint_dest,
-                        src_root,
-                        architecture,
-                    )
-                except MemoryError as exc:
-                    raise RuntimeError(_allocation_message(checkpoint)) from exc
-                except RuntimeError as exc:
-                    if _is_allocation_runtime_error(exc):
-                        raise RuntimeError(_allocation_message(checkpoint)) from exc
-                    raise
+                await self._materialize_checkpoint(
+                    checkpoint, checkpoint_dest, src_root, architecture
+                )
                 selected = [checkpoint]
                 precision = job.precision
             else:

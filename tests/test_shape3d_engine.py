@@ -92,6 +92,86 @@ class TestAvailability:
             Shape3dEngine(tmp_path).generate_from_text("   ")
 
 
+def make_photo(tmp_path: Path, mode: str = "RGBA") -> Path:
+    from PIL import Image
+
+    destino = tmp_path / "foto.png"
+    Image.new(mode, (8, 8), "white").save(destino)
+    return destino
+
+
+class TestImageAvailability:
+    def test_without_an_image_dir_it_is_not_available(self, tmp_path: Path) -> None:
+        assert not Shape3dEngine(tmp_path).available_image()
+
+    def test_the_text_pack_alone_does_not_enable_photo(self, tmp_path: Path) -> None:
+        # Son DOS repos de pesos: tener el de texto no habilita el de foto.
+        (tmp_path / "model_index.json").write_text("{}", encoding="utf-8")
+
+        assert not Shape3dEngine(tmp_path, tmp_path / "img2img").available_image()
+
+    def test_a_folder_with_the_image_index_is_available(self, tmp_path: Path) -> None:
+        image_dir = tmp_path / "img2img"
+        image_dir.mkdir()
+        (image_dir / "model_index.json").write_text("{}", encoding="utf-8")
+
+        assert Shape3dEngine(tmp_path, image_dir).available_image()
+
+    def test_generating_without_the_image_pack_says_what_is_missing(
+        self, tmp_path: Path
+    ) -> None:
+        foto = make_photo(tmp_path)
+
+        with pytest.raises(Shape3dUnavailable) as error:
+            Shape3dEngine(tmp_path, tmp_path / "img2img").generate_from_image(foto)
+
+        assert PACK_LABELS["shap-e-img2img"] in str(error.value)
+        assert ".ps1" not in str(error.value)
+
+
+class TestImagePipelineWiring:
+    def make_engine(self, tmp_path: Path, pipe: Any) -> Shape3dEngine:
+        image_dir = tmp_path / "img2img"
+        image_dir.mkdir()
+        (image_dir / "model_index.json").write_text("{}", encoding="utf-8")
+        engine = Shape3dEngine(tmp_path / "texto", image_dir)
+        engine._image_pipe = pipe
+        return engine
+
+    def test_the_photo_and_the_spike_settings_reach_the_model(self, tmp_path: Path) -> None:
+        recibido: dict = {}
+
+        class FakePipe:
+            def __call__(self, image, **kwargs):
+                recibido["image"] = image
+                recibido.update(kwargs)
+                verts = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+                return type("S", (), {"images": [FakeMesh(verts, np.array([[0, 1, 2]]))]})()
+
+        engine = self.make_engine(tmp_path, FakePipe())
+        engine.generate_from_image(make_photo(tmp_path, mode="RGBA"))
+
+        # La foto entra convertida a RGB: un PNG con alfa no puede reventar la
+        # tuberia a los dos minutos de CPU.
+        assert recibido["image"].mode == "RGB"
+        # Los valores del spike: 16 pasos y guia 3.0 (mucho mas baja que texto).
+        assert recibido["num_inference_steps"] == 16
+        assert recibido["guidance_scale"] == 3.0
+        assert recibido["frame_size"] == 64
+        assert recibido["output_type"] == "mesh"
+
+    def test_a_model_that_returns_garbage_is_caught(self, tmp_path: Path) -> None:
+        class BrokenPipe:
+            def __call__(self, image, **kwargs):
+                verts = np.full((3, 3), np.nan)
+                return type("S", (), {"images": [FakeMesh(verts, np.array([[0, 1, 2]]))]})()
+
+        engine = self.make_engine(tmp_path, BrokenPipe())
+
+        with pytest.raises(Shape3dUnavailable):
+            engine.generate_from_image(make_photo(tmp_path))
+
+
 class TestPipelineWiring:
     def make_engine(self, tmp_path: Path, pipe: Any) -> Shape3dEngine:
         (tmp_path / "model_index.json").write_text("{}", encoding="utf-8")

@@ -55,6 +55,10 @@ class ModelEntry:
     scale: int | None = None
     arch: str | None = None
     file_path: str | None = None
+    # Solo instalaciones desde un checkpoint suelto: el archivo exacto del repo
+    # de origen. El merge de inpainting lo necesita para volver a bajar LOS
+    # MISMOS pesos; source solo guarda el repo.
+    checkpoint_path: str | None = None
     status: ModelStatus = ModelStatus.installed
     error: str | None = None
     created_at: datetime = field(default_factory=utc_now)
@@ -69,6 +73,7 @@ def _entry_to_json_dict(entry: ModelEntry) -> dict[str, Any]:
         "scale": entry.scale,
         "arch": entry.arch,
         "file_path": entry.file_path,
+        "checkpoint_path": entry.checkpoint_path,
         "size_bytes": entry.size_bytes,
         "status": entry.status.value,
         "error": entry.error,
@@ -86,6 +91,8 @@ def _entry_from_json_dict(data: dict[str, Any]) -> ModelEntry:
         scale=data.get("scale"),
         arch=data.get("arch"),
         file_path=data.get("file_path"),
+        # .get: las entradas escritas antes de v0.57.0 no traen el campo.
+        checkpoint_path=data.get("checkpoint_path"),
         status=ModelStatus(data["status"]),
         error=data.get("error"),
         created_at=datetime.fromisoformat(data["created_at"]),

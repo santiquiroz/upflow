@@ -32,8 +32,12 @@ class FakeEngine:
         self.malla = tetrahedron() if malla is None else malla
         self.error = error
         self.prompts: list[str] = []
+        self.fotos: list[Path] = []
 
     def available(self) -> bool:
+        return True
+
+    def available_image(self) -> bool:
         return True
 
     def generate_from_text(self, prompt: str, **_kwargs) -> np.ndarray:
@@ -42,9 +46,25 @@ class FakeEngine:
             raise self.error
         return self.malla
 
+    def generate_from_image(self, image_path: Path, **_kwargs) -> np.ndarray:
+        self.fotos.append(image_path)
+        if self.error is not None:
+            raise self.error
+        return self.malla
+
 
 class MissingEngine:
     def available(self) -> bool:
+        return False
+
+    def available_image(self) -> bool:
+        return False
+
+
+class MissingPhotoEngine(FakeEngine):
+    """El pack de texto esta; el de foto —que es OTRO repo de pesos— no."""
+
+    def available_image(self) -> bool:
         return False
 
 
@@ -188,6 +208,85 @@ async def test_cancelling_a_queued_job_stops_it_before_it_runs(tmp_path: Path):
 
     assert job.status is JobStatus.cancelled
     assert engine.prompts == []
+
+
+# ---------------------------------------------------------------------------
+# El carril FOTO: Shap-E img2img interpreta el objeto de una foto. La entrada
+# obligatoria es la imagen y no la descripcion, y el resultado pasa por el MISMO
+# banco que el resto: una malla generada que no cierra no es una pieza.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_photo_job_routes_to_the_image_engine_and_gets_its_verdict(tmp_path: Path):
+    engine = FakeEngine()
+    manager, _settings = make_manager(tmp_path, engine)
+    foto = tmp_path / "foto.png"
+    job = await manager.create_job(source="photo", image_path=foto)
+
+    await manager._process_next()
+
+    assert job.status is JobStatus.completed
+    assert engine.fotos == [foto]
+    # La foto no pasa por el carril de texto: el prompt queda vacio y sin usar.
+    assert engine.prompts == []
+    assert job.can_print is True
+    assert job.blockers == []
+
+
+@pytest.mark.asyncio
+async def test_a_photo_job_scales_to_the_default_size_like_text_does(tmp_path: Path):
+    # img2img tampoco da cotas: sin default la malla saldria en la escala nativa
+    # de Shap-E (~2mm), que no le sirve a nadie.
+    manager, _settings = make_manager(tmp_path)
+    job = await manager.create_job(source="photo", image_path=tmp_path / "foto.png")
+
+    await manager._process_next()
+
+    assert job.size_mm[0] == pytest.approx(100.0, abs=0.1)
+
+
+@pytest.mark.asyncio
+async def test_a_photo_job_needs_no_prompt(tmp_path: Path):
+    manager, _settings = make_manager(tmp_path)
+
+    job = await manager.create_job(source="photo", image_path=tmp_path / "foto.png")
+
+    assert job.prompt == ""
+
+
+@pytest.mark.asyncio
+async def test_a_photo_job_without_the_photo_is_refused(tmp_path: Path):
+    manager, _settings = make_manager(tmp_path)
+
+    with pytest.raises(ValueError, match="foto"):
+        await manager.create_job(source="photo")
+
+
+@pytest.mark.asyncio
+async def test_photo_without_its_pack_names_it_without_dictating_commands(tmp_path: Path):
+    # El pack de foto es OTRO repo de pesos que el de texto: el mensaje tiene que
+    # nombrar EL QUE FALTA, no el que ya esta.
+    manager, _settings = make_manager(tmp_path, MissingPhotoEngine())
+
+    with pytest.raises(Shape3dUnavailable) as excinfo:
+        await manager.create_job(source="photo", image_path=tmp_path / "foto.png")
+
+    mensaje = str(excinfo.value)
+    assert PACK_LABELS["shap-e-img2img"] in mensaje
+    assert ".ps1" not in mensaje
+
+
+@pytest.mark.asyncio
+async def test_the_text_lane_does_not_need_the_photo_pack(tmp_path: Path):
+    # Los carriles son independientes: que falte el pack de foto no puede romper
+    # el de texto, que ya venia funcionando.
+    manager, _settings = make_manager(tmp_path, MissingPhotoEngine())
+
+    job = await manager.create_job(prompt="algo", source="mesh")
+    await manager._process_next()
+
+    assert job.status is JobStatus.completed
 
 
 # ---------------------------------------------------------------------------

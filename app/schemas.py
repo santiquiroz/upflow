@@ -180,11 +180,19 @@ class GeneratedPartResponse(BaseModel):
 
 
 class Shape3dJobRequest(BaseModel):
-    prompt: str
+    model_config = ConfigDict(populate_by_name=True)
+
+    # Vacio solo en "photo": ahi la entrada es la foto, no una descripcion.
+    prompt: str = ""
     printer: str = "ender-3"
-    # "mesh" = forma sin cotas (Shap-E). "cad" = codigo OpenSCAD con cotas.
+    # "mesh" = forma sin cotas (Shap-E). "photo" = interpretacion de una foto
+    # (Shap-E img2img), tampoco con cotas. "cad" = codigo OpenSCAD con cotas.
     source: str = "mesh"
-    # Solo en "mesh": a cuanto escalar el lado mas largo.
+    # Solo en "photo": token de una foto ya subida con POST /generation/init-image.
+    # Se sube aparte para no volver multipart este contrato JSON, igual que el
+    # flujo de generacion de imagenes.
+    image_token: str | None = Field(default=None, alias="imageToken")
+    # En "mesh" y "photo": a cuanto escalar el lado mas largo.
     target_mm: float | None = Field(default=None, serialization_alias="targetMm")
     # Solo en "cad": lo que la pieza TIENE que medir. Si no coincide, el error
     # vuelve al modelo en vez de entregar algo que no entra.
@@ -863,7 +871,7 @@ class GenerationModelSummary(BaseModel):
     # que "no trajo nada" durante los ~40 min de conversion.
     status: str = "installed"
     # Soporte REAL de inpainting: chequeado contra el mapeo de clases
-    # (generation_inpaint), no contra existencia de la clase. El picker filtra
+    # (generation_pipeline_modes), no contra existencia de la clase. El picker filtra
     # con esto en vez de descubrir el rechazo al crear el job.
     supports_inpaint: bool = Field(default=True, serialization_alias="supportsInpaint")
     # Motores que solo saben QUITAR (rellenan continuando el entorno): se ofrecen

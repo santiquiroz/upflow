@@ -138,6 +138,144 @@ async def test_the_download_url_only_appears_when_the_file_exists(tmp_path: Path
 
 
 # ---------------------------------------------------------------------------
+# El modo FOTO: la imagen entra por el mismo staging que la generacion de
+# imagenes (POST /generation/init-image devuelve un token) y el job JSON lleva
+# solo el token. El token se resuelve ANTES de encolar: un token vencido es un
+# 400 inmediato, no un job que muere dos minutos despues.
+# ---------------------------------------------------------------------------
+
+
+class PhotoEngine(FakeEngine):
+    def available_image(self) -> bool:
+        return True
+
+    def generate_from_image(self, image_path: Path, **_kwargs) -> np.ndarray:
+        return tetrahedron()
+
+
+class MissingPhotoEngine(FakeEngine):
+    def available_image(self) -> bool:
+        return False
+
+
+def make_photo_setup(tmp_path: Path, engine=None):
+    settings = Settings(RUNTIME_DIR=str(tmp_path), _env_file=None)
+    StorageService(settings).ensure_directories()
+    return Shape3dJobManager(settings, engine or PhotoEngine()), settings
+
+
+def stage_photo(settings: Settings, token: str = "abc123") -> str:
+    (settings.uploads_path / f"{token}-foto.png").write_bytes(b"png")
+    return token
+
+
+@pytest.mark.asyncio
+async def test_a_valid_photo_token_becomes_the_staged_path(tmp_path: Path):
+    manager, settings = make_photo_setup(tmp_path)
+    token = stage_photo(settings)
+
+    respuesta = await create_shape3d_job(
+        payload=Shape3dJobRequest(source="photo", image_token=token),
+        request=None,
+        jobs=manager,
+        settings=settings,
+    )
+
+    assert respuesta.status is JobStatus.queued
+    job = manager.get_job(respuesta.id)
+    assert job.image_path is not None
+    assert job.image_path.exists()
+    assert job.image_path.name.startswith(f"{token}-")
+
+
+@pytest.mark.asyncio
+async def test_a_photo_job_completes_with_the_verdict(tmp_path: Path):
+    manager, settings = make_photo_setup(tmp_path)
+    token = stage_photo(settings)
+    creado = await create_shape3d_job(
+        payload=Shape3dJobRequest(source="photo", image_token=token),
+        request=None,
+        jobs=manager,
+        settings=settings,
+    )
+    await manager._process_next()
+
+    respuesta = await get_shape3d_job(job_id=creado.id, jobs=manager)
+
+    assert respuesta.status is JobStatus.completed
+    assert respuesta.can_print is True
+    assert respuesta.download_url
+
+
+@pytest.mark.asyncio
+async def test_a_malformed_token_is_a_400_before_queueing(tmp_path: Path):
+    # No es hexadecimal: se rechaza antes de que toque un glob en uploads.
+    manager, settings = make_photo_setup(tmp_path)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await create_shape3d_job(
+            payload=Shape3dJobRequest(source="photo", image_token="../fuera"),
+            request=None,
+            jobs=manager,
+            settings=settings,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert manager.queue_depth() == 0
+
+
+@pytest.mark.asyncio
+async def test_an_expired_token_is_a_400_not_a_dead_job(tmp_path: Path):
+    manager, settings = make_photo_setup(tmp_path)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await create_shape3d_job(
+            payload=Shape3dJobRequest(source="photo", image_token="abc123"),
+            request=None,
+            jobs=manager,
+            settings=settings,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert manager.queue_depth() == 0
+
+
+@pytest.mark.asyncio
+async def test_a_photo_without_token_is_a_400(tmp_path: Path):
+    manager, settings = make_photo_setup(tmp_path)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await create_shape3d_job(
+            payload=Shape3dJobRequest(source="photo"),
+            request=None,
+            jobs=manager,
+            settings=settings,
+        )
+
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_photo_without_its_pack_is_a_409_naming_the_right_pack(tmp_path: Path):
+    # El pack de foto es OTRO repo que el de texto: el 409 tiene que nombrar el
+    # que falta para que la pantalla ofrezca el boton correcto.
+    manager, settings = make_photo_setup(tmp_path, MissingPhotoEngine())
+    token = stage_photo(settings)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await create_shape3d_job(
+            payload=Shape3dJobRequest(source="photo", image_token=token),
+            request=None,
+            jobs=manager,
+            settings=settings,
+        )
+
+    assert exc_info.value.status_code == 409
+    assert PACK_LABELS["shap-e-img2img"] in str(exc_info.value.detail)
+    assert ".ps1" not in str(exc_info.value.detail)
+
+
+# ---------------------------------------------------------------------------
 # Lo que encontro la revision de seguridad sobre este mismo codigo, clavado como
 # test para que no vuelva: permisos en las rutas, propiedad del trabajo, y la
 # cuota que se descontaba solo al admitir y nunca al consumir.

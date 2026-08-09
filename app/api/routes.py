@@ -2048,7 +2048,7 @@ async def download_generation_job(
 
 def _entry_supports_inpaint(settings: Settings, entry: Any) -> bool:
     from app.services.engines.generation_onnx import _read_declared_class_name
-    from app.services.generation_inpaint import supports_inpaint
+    from app.services.generation_pipeline_modes import supports_inpaint
 
     try:
         declared = _read_declared_class_name(settings.models_path / (entry.file_path or ""))
@@ -2059,7 +2059,7 @@ def _entry_supports_inpaint(settings: Settings, entry: Any) -> bool:
 
 def _entry_inpaint_only(settings: Settings, entry: Any) -> bool:
     from app.services.engines.generation_onnx import _read_declared_class_name
-    from app.services.generation_inpaint import is_dedicated_inpaint_class
+    from app.services.generation_pipeline_modes import is_dedicated_inpaint_class
 
     try:
         declared = _read_declared_class_name(settings.models_path / (entry.file_path or ""))
@@ -2311,7 +2311,10 @@ async def create_inpaint_version(
         merge_family_for,
     )
 
-    from app.services.generation_installer import _generation_model_id
+    from app.services.generation_installer import (
+        _ensure_checkpoint_listed,
+        _generation_model_id,
+    )
 
     entry = registry.get(model_id)
     if entry is None or entry.kind != ModelKind.diffusion_onnx:
@@ -2322,16 +2325,18 @@ async def create_inpaint_version(
             detail="Este modelo no tiene un repo de origen en Hugging Face para mergear",
         )
     source_repo = entry.source[3:]
-    if entry.id != _generation_model_id(source_repo):
-        # Instalado desde un checkpoint suelto: el source solo guarda el repo,
-        # no el archivo — mergear bajaría OTROS pesos que los que el usuario
-        # instaló. Rechazo claro hasta que se persista el checkpoint de origen.
+    if entry.id != _generation_model_id(source_repo) and entry.checkpoint_path is None:
+        # Instalado desde un checkpoint suelto por una versión anterior que no
+        # persistía el archivo de origen: el source solo guarda el repo, y
+        # mergear bajaría OTROS pesos que los que el usuario instaló.
         raise HTTPException(
             status_code=400,
             detail=(
-                "Este modelo se instaló desde un checkpoint único: el merge de "
-                "inpainting todavía no lo soporta. Instalá el repo diffusers "
-                "completo del modelo y creá la versión desde ese."
+                "Este modelo se instaló desde un checkpoint único con una "
+                "versión anterior que no guardaba de qué archivo vino, así que "
+                "no se puede saber qué pesos mergear. Reinstalá el modelo (la "
+                "instalación ahora guarda el checkpoint de origen) y volvé a "
+                "crear la versión de inpainting."
             ),
         )
     if _entry_inpaint_only(settings, entry):
@@ -2358,22 +2363,32 @@ async def create_inpaint_version(
         raise HTTPException(
             status_code=400, detail=f"No se pudo listar el repo de origen: {exc}"
         ) from exc
-    has_torch_weights = any(
-        "/" in hf_file.path
-        and hf_file.path.endswith((".safetensors", ".bin"))
-        and ".onnx" not in hf_file.path
-        for hf_file in source_files
-    )
-    if not has_torch_weights:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "El repo de origen solo publica pesos ONNX: el merge de inpainting "
-                "necesita los pesos PyTorch originales del modelo."
-            ),
+    if entry.checkpoint_path is not None:
+        # Instalado desde un checkpoint suelto: los pesos PyTorch son ESE
+        # archivo. Verificar que siga publicado antes de encolar la descarga.
+        try:
+            _ensure_checkpoint_listed(source_files, source_repo, entry.checkpoint_path)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    else:
+        has_torch_weights = any(
+            "/" in hf_file.path
+            and hf_file.path.endswith((".safetensors", ".bin"))
+            and ".onnx" not in hf_file.path
+            for hf_file in source_files
         )
+        if not has_torch_weights:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "El repo de origen solo publica pesos ONNX: el merge de inpainting "
+                    "necesita los pesos PyTorch originales del modelo."
+                ),
+            )
     try:
-        conversion_id = await converter.convert_inpaint_merge(source_repo)
+        conversion_id = await converter.convert_inpaint_merge(
+            source_repo, checkpoint_path=entry.checkpoint_path
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return CreateConversionResponse(
@@ -3096,12 +3111,16 @@ async def create_shape3d_job(
     payload: Shape3dJobRequest,
     request: Request,
     jobs: Shape3dJobManager = Depends(get_shape3d_jobs),
+    settings: Settings = Depends(get_settings),
 ) -> Shape3dJobResponse:
-    """Encola una malla desde texto. Tarda unos dos minutos: por eso es un job.
+    """Encola una malla desde texto o desde una foto. Tarda unos dos minutos.
 
     Lo que devuelve al terminar NO es solo el archivo: viaja con el veredicto del
     banco, porque una malla generada que no cierra no es una pieza.
     """
+    # El token se resuelve ANTES de encolar: un token vencido tiene que ser un
+    # 400 inmediato, no un job que muere dos minutos despues.
+    image_path = _resolve_init_image(settings, payload.image_token)
     try:
         job = await jobs.create_job(
             prompt=payload.prompt,
@@ -3109,6 +3128,7 @@ async def create_shape3d_job(
             source=payload.source,
             target_mm=payload.target_mm,
             expected_size=payload.expected_size,
+            image_path=image_path,
             owner=current_user_from_request(request),
         )
     except Shape3dUnavailable as exc:

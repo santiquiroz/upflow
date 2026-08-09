@@ -74,6 +74,20 @@ def test_every_mapped_script_exists_in_the_repo():
         assert (scripts_dir / name).exists(), f"{pack} -> {name}"
 
 
+def test_audiosr_is_a_catalog_pack_with_its_script():
+    # AudioSR tenia script y label pero ninguna capacidad lo pedia: el boton de
+    # descargar existia sin ninguna tarjeta desde donde apretarlo.
+    assert "audiosr" in packs_required_by_catalog()
+    assert PACK_SCRIPTS["audiosr"] == "download-audiosr-onnx.ps1"
+
+
+def test_shap_e_img2img_is_a_catalog_pack_with_its_script():
+    # Foto a 3D es OTRO repo de pesos que el de texto: sin su propio pack, el
+    # boton de descargar bajaria el modelo equivocado.
+    assert "shap-e-img2img" in packs_required_by_catalog()
+    assert PACK_SCRIPTS["shap-e-img2img"] == "download-shap-e-img2img.ps1"
+
+
 def test_an_unknown_pack_is_rejected():
     with pytest.raises(UnknownPackError):
         script_for("no-existe")

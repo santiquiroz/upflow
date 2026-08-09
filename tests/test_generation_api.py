@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,7 @@ from app.services.generation_installer import (
     GenerationModelInstaller,
 )
 from app.services.generation_job_manager import GenerationJobManager
+from app.services.hf_client import HfFile
 from app.services.model_installer import InstallJob, InstallStatus
 from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry
 
@@ -556,6 +558,152 @@ async def test_install_generation_model_returns_422_for_missing_checkpoint() -> 
 
     assert exc_info.value.status_code == 422
     assert "pony.safetensors" in exc_info.value.detail
+
+
+# ---------------------------------------------------------------------------
+# POST /generation/models/{model_id}/create-inpaint
+# ---------------------------------------------------------------------------
+
+
+class _FakeMergeHfClient:
+    def __init__(self, files: list[HfFile]) -> None:
+        self.files = files
+
+    async def repo_files(self, repo_id: str) -> list[HfFile]:
+        return self.files
+
+
+class FakeInpaintMergeConverter:
+    def __init__(self, files: list[HfFile]) -> None:
+        self.hf_client = _FakeMergeHfClient(files)
+        self.merge_calls: list[tuple[str, str | None]] = []
+
+    async def convert_inpaint_merge(
+        self, repo_id: str, checkpoint_path: str | None = None
+    ) -> str:
+        self.merge_calls.append((repo_id, checkpoint_path))
+        return "conv-inpaint-1"
+
+
+def register_mergeable_model(
+    registry: ModelRegistry,
+    settings: Settings,
+    model_id: str,
+    *,
+    source: str,
+    checkpoint_path: str | None = None,
+) -> None:
+    # El endpoint lee la clase del pipeline instalado desde disco para validar
+    # la familia antes de encolar; un SDXL normal es mergeable.
+    model_dir = settings.models_path / "generation" / model_id
+    model_dir.mkdir(parents=True, exist_ok=True)
+    (model_dir / "model_index.json").write_text(
+        json.dumps({"_class_name": "StableDiffusionXLPipeline"}), encoding="utf-8"
+    )
+    registry.register(
+        ModelEntry(
+            id=model_id, name=source.removeprefix("hf:"),
+            kind=ModelKind.diffusion_onnx, source=source, size_bytes=1,
+            scale=None, file_path=f"generation/{model_id}",
+            checkpoint_path=checkpoint_path,
+        )
+    )
+
+
+async def test_create_inpaint_accepts_a_model_installed_from_a_single_checkpoint(
+    tmp_path: Path,
+) -> None:
+    from app.api.routes import create_inpaint_version
+
+    settings = make_settings(tmp_path)
+    registry = ModelRegistry(settings)
+    model_id = "gen--owner--checkpoints--pony.safetensors"
+    register_mergeable_model(
+        registry, settings, model_id,
+        source="hf:owner/checkpoints", checkpoint_path="pony.safetensors",
+    )
+    converter = FakeInpaintMergeConverter(files=[HfFile(path="pony.safetensors", size=1)])
+
+    response = await create_inpaint_version(
+        model_id, converter=converter, registry=registry, settings=settings
+    )
+
+    assert response.conversion_id == "conv-inpaint-1"
+    assert converter.merge_calls == [("owner/checkpoints", "pony.safetensors")]
+
+
+async def test_create_inpaint_rejects_a_checkpoint_model_without_persisted_origin(
+    tmp_path: Path,
+) -> None:
+    # Entrada escrita por una versión anterior a v0.57.0: id de checkpoint
+    # suelto pero sin checkpoint_path. El rechazo debe decir POR QUÉ y QUÉ
+    # hacer (reinstalar), y no encolar nada.
+    from app.api.routes import create_inpaint_version
+
+    settings = make_settings(tmp_path)
+    registry = ModelRegistry(settings)
+    model_id = "gen--owner--checkpoints--pony.safetensors"
+    register_mergeable_model(
+        registry, settings, model_id,
+        source="hf:owner/checkpoints", checkpoint_path=None,
+    )
+    converter = FakeInpaintMergeConverter(files=[HfFile(path="pony.safetensors", size=1)])
+
+    with pytest.raises(HTTPException) as exc_info:
+        await create_inpaint_version(
+            model_id, converter=converter, registry=registry, settings=settings
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "Reinstalá el modelo" in exc_info.value.detail
+    assert converter.merge_calls == []
+
+
+async def test_create_inpaint_rejects_when_the_origin_checkpoint_disappeared(
+    tmp_path: Path,
+) -> None:
+    from app.api.routes import create_inpaint_version
+
+    settings = make_settings(tmp_path)
+    registry = ModelRegistry(settings)
+    model_id = "gen--owner--checkpoints--pony.safetensors"
+    register_mergeable_model(
+        registry, settings, model_id,
+        source="hf:owner/checkpoints", checkpoint_path="pony.safetensors",
+    )
+    converter = FakeInpaintMergeConverter(files=[HfFile(path="other.safetensors", size=1)])
+
+    with pytest.raises(HTTPException) as exc_info:
+        await create_inpaint_version(
+            model_id, converter=converter, registry=registry, settings=settings
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "pony.safetensors" in exc_info.value.detail
+    assert "other.safetensors" in exc_info.value.detail
+    assert converter.merge_calls == []
+
+
+async def test_create_inpaint_still_accepts_a_repo_installed_model(
+    tmp_path: Path,
+) -> None:
+    # El carril repo-completo no cambia: encola sin checkpoint_path.
+    from app.api.routes import create_inpaint_version
+
+    settings = make_settings(tmp_path)
+    registry = ModelRegistry(settings)
+    model_id = "gen--owner--fullrepo"
+    register_mergeable_model(registry, settings, model_id, source="hf:owner/fullrepo")
+    converter = FakeInpaintMergeConverter(
+        files=[HfFile(path="unet/diffusion_pytorch_model.safetensors", size=1)]
+    )
+
+    response = await create_inpaint_version(
+        model_id, converter=converter, registry=registry, settings=settings
+    )
+
+    assert response.conversion_id == "conv-inpaint-1"
+    assert converter.merge_calls == [("owner/fullrepo", None)]
 
 
 async def test_get_generation_install_status_returns_404_for_unknown_id() -> None:

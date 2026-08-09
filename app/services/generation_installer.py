@@ -511,6 +511,7 @@ class GenerationModelInstaller:
                 size_bytes=size_bytes,
                 scale=None,
                 file_path=f"{GENERATION_MODELS_SUBDIR}/{model_id}",
+                checkpoint_path=checkpoint_path,
                 status=ModelStatus.installed,
             )
             self.registry.register(entry)
@@ -564,7 +565,7 @@ class GenerationModelInstaller:
             gc.collect()
 
     def _validation_call_kwargs(self, pipeline_dir: Path) -> dict[str, Any]:
-        from app.services.generation_inpaint import is_dedicated_inpaint_class
+        from app.services.generation_pipeline_modes import is_dedicated_inpaint_class
 
         kwargs: dict[str, Any] = {
             "prompt": VALIDATION_PROMPT,
@@ -586,7 +587,10 @@ class GenerationModelInstaller:
         return kwargs
 
     def _create_validation_pipeline(self, pipeline_dir: Path) -> Any:
-        from app.services.generation_inpaint import is_dedicated_inpaint_class, load_inpaint_class
+        from app.services.generation_pipeline_modes import (
+            is_dedicated_inpaint_class,
+            load_inpaint_class,
+        )
 
         declared = _read_declared_class_name(pipeline_dir)
         if is_dedicated_inpaint_class(declared):

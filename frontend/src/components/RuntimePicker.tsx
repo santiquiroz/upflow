@@ -27,7 +27,10 @@ export const RUNTIME_OPTIONS: readonly RuntimeOption[] = [
   },
   {
     value: "onnx",
-    label: "ONNX DirectML",
+    // Solo "ONNX": DirectML y los aceleradores nativos (TensorRT-RTX/OpenVINO)
+    // son detalles del MISMO runtime, no runtimes aparte — llamarlo "ONNX
+    // DirectML" hacia creer que NVIDIA necesitaba otra opcion.
+    label: "ONNX",
     subtitleKey: "enhance.runtime.onnxHint",
     Icon: Zap,
   },
