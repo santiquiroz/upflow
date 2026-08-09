@@ -8,18 +8,17 @@ from pathlib import Path
 from typing import Any
 
 from app.exceptions import HfAuthError
-from app.services.generation_compat import CompatReason, CompatVerdict, classify
+from app.services.compat_strategy import GenerationCompatStrategy
+from app.services.generation_compat import CompatReason, CompatVerdict
 from app.services.generation_single_file import (
     CheckpointVerdict,
     classify_checkpoint,
 )
 from app.services.model_preflight import (
-    MB,
     DeviceCapacity,
     DiskCapacity,
-    measure_devices,
-    measure_disk,
-    measure_free_ram,
+    classify_repo,
+    measure_capacity,
 )
 from app.services.generation_variants import (
     MODEL_INDEX_FILENAME,
@@ -101,11 +100,7 @@ async def preflight(
     width: int = 512,
     height: int = 512,
 ) -> PreflightReport:
-    # Los dispositivos y el disco no dependen de Hugging Face, asi que se miden
-    # aunque la parte de red falle: un reporte degradado sigue siendo util.
-    devices = measure_devices(devices_service, probes)
-    disk = measure_disk(Path(settings.temp_path))
-    free_ram_bytes = measure_free_ram(probes)
+    capacity = measure_capacity(devices_service, probes, Path(settings.temp_path))
 
     def build(
         compat: CompatVerdict | None,
@@ -123,26 +118,17 @@ async def preflight(
             reference_width=width,
             reference_height=height,
             precisions=precisions or [],
-            devices=devices,
-            disk=disk,
+            devices=capacity.devices,
+            disk=capacity.disk,
             checkpoints=checkpoints or [],
-            free_ram_bytes=free_ram_bytes,
+            free_ram_bytes=capacity.free_ram_bytes,
         )
 
-    try:
-        files = await hf_client.repo_files(repo_id)
-    except HfAuthError as exc:
-        # 401/403 es un VEREDICTO, no una falla de medicion: el repo es gated y
-        # eso es exactamente lo que hay que decirle al usuario. `classify` no
-        # puede detectarlo desde aca porque repo_files no devuelve el flag
-        # `gated` -- el error de auth ES la senal. Si el usuario tiene un token
-        # valido, repo_files funciona y el repo se clasifica por su contenido.
-        # El detalle es el texto del 401/403: dato, no copia.
-        return build("gated", CompatReason("compat.gatedAuth", {"detail": str(exc)}), False)
-    except Exception:  # noqa: BLE001 - el pre-flight es diagnostico: nunca propaga
-        return build(None, None, True)
+    repo = await classify_repo(hf_client, repo_id, GenerationCompatStrategy())
+    if repo.files is None:
+        return build(repo.verdict, repo.reason, repo.degraded)
 
-    verdict, reason = classify(tuple(f.path for f in files), None)
+    files, verdict, reason = repo.files, repo.verdict, repo.reason
     if verdict == "single_file":
         candidates: list[CheckpointCandidate] = []
         for file in files:

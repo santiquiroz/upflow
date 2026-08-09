@@ -12,8 +12,18 @@ from PIL import Image
 from app.config import Settings
 from app.models import UpscaleJob
 from app.services.devices_service import DevicesService
-from app.services.dml_device import try_parse_dml_device_id
 from app.services.engines.base import UpscaleEngine
+from app.services.engines.onnx_common import (
+    TILE_OVERLAP_PX,
+    blend_tiles,
+    detect_scale,
+    finalize_uint8,
+    from_nchw_float,
+    get_cached_session,
+    tile_starts,
+    to_nchw_float,
+    wrap_onnx_error,
+)
 from app.services.gpu_session_coordinator import GpuSessionCoordinator
 from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry, ModelStatus
 from app.services.process_runner import is_non_empty_file
@@ -27,6 +37,7 @@ from app.services.progress import apply_image_tile_progress
 # (model_id, device) with a small LRU(2) -- large enough to keep the
 # currently-selected model warm across consecutive jobs on the same device
 # without unbounded VRAM growth from every model the user has ever tried.
+# The LRU lookup/build mechanics live in onnx_common.get_cached_session.
 #
 # GPU semaphore: this engine intentionally does NOT accept or manage its own
 # asyncio.Semaphore. JobManager/VideoJobManager already wrap every
@@ -39,11 +50,16 @@ from app.services.progress import apply_image_tile_progress
 #
 # Tiling: ONNX_TILE_SIZE (default 256, 0 disables tiling) with a fixed 16px
 # overlap. Each tile is inferred independently and stitched back with a
-# linear-feather weighted blend across the overlap band, so seams don't show
-# up as hard edges for models with real receptive-field context. Upscale
-# ratio is *not* read from static ONNX metadata (input/output shapes are
-# frequently dynamic/symbolic there) -- it is derived from the concrete
-# output array of the first inferred tile instead.
+# linear-feather weighted blend across the overlap band (onnx_common's
+# tile_starts/blend_tiles), so seams don't show up as hard edges for models
+# with real receptive-field context. Upscale ratio is *not* read from static
+# ONNX metadata (input/output shapes are frequently dynamic/symbolic there)
+# -- it is derived from the concrete output array of the first inferred tile
+# instead.
+#
+# Frame I/O is PIL + fp32 NCHW on purpose (arbitrary HF-installed graphs are
+# fp32 NCHW); the video engine's cv2/uint8-NHWC fast path lives in
+# onnx_video_upscaler -- measured decision, not duplication.
 #
 # Progress (SP5 Task 4): the tiled path reports tilesDone/tilesTotal into
 # job.metadata (framesDone/framesTotal, reusing the video job progress
@@ -54,67 +70,6 @@ from app.services.progress import apply_image_tile_progress
 # stays on the coarse validating/upscaling stages instead.
 # ---------------------------------------------------------------------------
 
-SESSION_CACHE_SIZE = 2
-TILE_OVERLAP_PX = 16
-CPU_PROVIDER = "CPUExecutionProvider"
-DML_PROVIDER = "DmlExecutionProvider"
-
-
-def _build_providers(device: str) -> list[str | tuple[str, dict[str, int]]]:
-    if device == "cpu":
-        return [CPU_PROVIDER]
-    device_id = try_parse_dml_device_id(device)
-    if device_id is not None:
-        return [(DML_PROVIDER, {"device_id": device_id}), CPU_PROVIDER]
-    raise RuntimeError(f"Unsupported device for ONNX inference: {device!r}")
-
-
-def _tile_starts(length: int, tile: int, overlap: int) -> list[int]:
-    if tile <= 0 or length <= tile:
-        return [0]
-    # Guards against a pathological ONNX_TILE_SIZE smaller than the overlap
-    # (never happens with the real default of 256 vs. 16px overlap, but a
-    # negative/zero step would otherwise infinite-loop `range`).
-    step = max(1, tile - overlap)
-    starts = list(range(0, length - tile + 1, step))
-    if starts[-1] != length - tile:
-        starts.append(length - tile)
-    return starts
-
-
-def _detect_scale(tile_h: int, tile_w: int, output_tile: np.ndarray) -> int:
-    out_h, out_w = output_tile.shape[0], output_tile.shape[1]
-    if tile_h <= 0 or tile_w <= 0 or out_h % tile_h != 0 or out_w % tile_w != 0:
-        raise RuntimeError(
-            f"Could not detect an integer upscale ratio from ONNX output shape "
-            f"(input {tile_h}x{tile_w} -> output {out_h}x{out_w})"
-        )
-    scale_h, scale_w = out_h // tile_h, out_w // tile_w
-    if scale_h != scale_w:
-        raise RuntimeError(f"ONNX model produced a non-uniform scale: {scale_h}x vs {scale_w}x")
-    return scale_h
-
-
-def _axis_weights(length: int, feather: int, is_start_edge: bool, is_end_edge: bool) -> np.ndarray:
-    weights = np.ones(length, dtype=np.float32)
-    feather = min(feather, length // 2) if length > 0 else 0
-    if feather <= 0:
-        return weights
-    ramp = np.arange(1, feather + 1, dtype=np.float32) / (feather + 1)
-    if not is_start_edge:
-        weights[:feather] = ramp
-    if not is_end_edge:
-        weights[-feather:] = ramp[::-1]
-    return weights
-
-
-def _tile_weights(
-    out_h: int, out_w: int, feather: int, is_top: bool, is_bottom: bool, is_left: bool, is_right: bool
-) -> np.ndarray:
-    vertical = _axis_weights(out_h, feather, is_top, is_bottom)
-    horizontal = _axis_weights(out_w, feather, is_left, is_right)
-    return (vertical[:, None] * horizontal[None, :])[:, :, None]
-
 
 def _load_rgb_array(source_path: Path) -> np.ndarray:
     with Image.open(source_path) as img:
@@ -124,28 +79,6 @@ def _load_rgb_array(source_path: Path) -> np.ndarray:
 def _save_rgb_array(array: np.ndarray, output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(array, mode="RGB").save(output_path)
-
-
-def _to_nchw_float(tile_rgb: np.ndarray) -> np.ndarray:
-    normalized = tile_rgb.astype(np.float32) / 255.0
-    return np.transpose(normalized, (2, 0, 1))[np.newaxis, ...]
-
-
-def _from_nchw_float(output: np.ndarray) -> np.ndarray:
-    array = np.transpose(output[0], (1, 2, 0))
-    return np.clip(array * 255.0, 0.0, 255.0)
-
-
-def _finalize_uint8(array: np.ndarray) -> np.ndarray:
-    return np.rint(np.clip(array, 0, 255)).astype(np.uint8)
-
-
-def _wrap_onnx_error(context: str, exc: Exception) -> RuntimeError:
-    message = str(exc)
-    lowered = message.lower()
-    if any(token in lowered for token in ("memory", "alloc", "oom")):
-        return RuntimeError(f"{context}: insufficient GPU/VRAM memory ({message})")
-    return RuntimeError(f"{context}: {message}")
 
 
 class OnnxUpscaler(UpscaleEngine):
@@ -256,32 +189,13 @@ class OnnxUpscaler(UpscaleEngine):
 
     def _get_session(self, model_id: str, device: str, entry: ModelEntry) -> Any:
         self.gpu_coordinator.acquire(device, self)
-        cache_key = (model_id, device)
-        with self._session_lock:
-            cached = self._session_cache.get(cache_key)
-            if cached is not None:
-                self._session_cache.move_to_end(cache_key)
-                return cached
-
-        # Session creation (expensive I/O + graph load) happens outside the
-        # lock so it never blocks other threads' cache lookups; a rare race
-        # where two threads miss the same key concurrently just builds the
-        # session twice (last insert wins), which is wasteful but not
-        # corrupting -- preferred over holding the lock across a slow load.
-        # Errors are translated here (not inside `_create_session`) so the
-        # clear-error guarantee also covers test doubles that replace the
-        # seam outright.
-        try:
-            session = self._create_session(model_id, device, entry)
-        except Exception as exc:  # onnxruntime raises its own native exception types
-            raise _wrap_onnx_error(f"Failed to load ONNX model {model_id!r} on device {device!r}", exc) from exc
-
-        with self._session_lock:
-            self._session_cache[cache_key] = session
-            self._session_cache.move_to_end(cache_key)
-            if len(self._session_cache) > SESSION_CACHE_SIZE:
-                self._session_cache.popitem(last=False)
-        return session
+        return get_cached_session(
+            self._session_cache,
+            self._session_lock,
+            (model_id, device),
+            lambda: self._create_session(model_id, device, entry),
+            f"Failed to load ONNX model {model_id!r} on device {device!r}",
+        )
 
     def _create_session(self, model_id: str, device: str, entry: ModelEntry) -> Any:
         # Monkeypatchable seam: unit tests override this to inject a fake
@@ -300,15 +214,15 @@ class OnnxUpscaler(UpscaleEngine):
         if tile_size <= 0 or (height <= tile_size and width <= tile_size):
             # Single pass: no honest sub-progress to report (tilesTotal=1 would
             # be a fake ETA), so job is intentionally not threaded through here.
-            return _finalize_uint8(self._infer_tile(session, image))
+            return finalize_uint8(self._infer_tile(session, image))
         return self._upscale_tiled(session, image, tile_size, job)
 
     def _upscale_tiled(
         self, session: Any, image: np.ndarray, tile_size: int, job: UpscaleJob | None = None
     ) -> np.ndarray:
         height, width, channels = image.shape
-        starts_y = _tile_starts(height, tile_size, TILE_OVERLAP_PX)
-        starts_x = _tile_starts(width, tile_size, TILE_OVERLAP_PX)
+        starts_y = tile_starts(height, tile_size, TILE_OVERLAP_PX)
+        starts_x = tile_starts(width, tile_size, TILE_OVERLAP_PX)
         tiles_total = len(starts_y) * len(starts_x)
 
         tiles: list[tuple[int, int, int, int, np.ndarray]] = []
@@ -322,29 +236,8 @@ class OnnxUpscaler(UpscaleEngine):
                 self._report_tile_progress(job, len(tiles), tiles_total)
 
         _, _, first_h, first_w, first_out = tiles[0]
-        scale = _detect_scale(first_h, first_w, first_out)
-        canvas_h, canvas_w = height * scale, width * scale
-        accumulator = np.zeros((canvas_h, canvas_w, channels), dtype=np.float32)
-        weight_sum = np.zeros((canvas_h, canvas_w, 1), dtype=np.float32)
-        feather = scale * TILE_OVERLAP_PX
-
-        for y0, x0, tile_h, tile_w, output_tile in tiles:
-            out_h, out_w = tile_h * scale, tile_w * scale
-            weights = _tile_weights(
-                out_h,
-                out_w,
-                feather,
-                is_top=(y0 == 0),
-                is_bottom=(y0 + tile_h == height),
-                is_left=(x0 == 0),
-                is_right=(x0 + tile_w == width),
-            )
-            oy, ox = y0 * scale, x0 * scale
-            accumulator[oy : oy + out_h, ox : ox + out_w] += output_tile * weights
-            weight_sum[oy : oy + out_h, ox : ox + out_w] += weights
-
-        blended = accumulator / np.clip(weight_sum, 1e-6, None)
-        return _finalize_uint8(blended)
+        scale = detect_scale(first_h, first_w, first_out)
+        return blend_tiles(tiles, height, width, channels, scale)
 
     @staticmethod
     def _report_tile_progress(job: UpscaleJob | None, tiles_done: int, tiles_total: int) -> None:
@@ -358,9 +251,9 @@ class OnnxUpscaler(UpscaleEngine):
     def _infer_tile(self, session: Any, tile_rgb: np.ndarray) -> np.ndarray:
         input_info = session.get_inputs()[0]
         output_info = session.get_outputs()[0]
-        batch = _to_nchw_float(tile_rgb)
+        batch = to_nchw_float(tile_rgb)
         try:
             result = session.run([output_info.name], {input_info.name: batch})[0]
         except Exception as exc:  # onnxruntime raises its own native exception types
-            raise _wrap_onnx_error("ONNX inference failed", exc) from exc
-        return _from_nchw_float(result)
+            raise wrap_onnx_error("ONNX inference failed", exc) from exc
+        return from_nchw_float(result)

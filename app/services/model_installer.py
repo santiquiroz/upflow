@@ -17,14 +17,15 @@ import numpy as np
 
 from app.config import Settings
 from app.exceptions import ModelNotFoundError, ModelProtectedError
-from app.services.engines.onnx_upscaler import (
-    _build_providers,
-    _detect_scale,
-    _from_nchw_float,
-    _to_nchw_float,
+from app.services.engines.onnx_common import (
+    build_providers,
+    detect_scale,
+    from_nchw_float,
+    to_nchw_float,
 )
 from app.services.generation_variants import Precision
 from app.services.hf_client import HfClient, HfFile, ProgressCallback, pick_weight_file
+from app.services.install_queue_base import SingleWorkerJobQueue
 from app.services.model_converter import ConversionResult, convert_to_onnx
 from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry, ModelStatus
 
@@ -52,8 +53,8 @@ logger = logging.getLogger(__name__)
 # on the exported graph, but its returned scale is discarded in favor of the
 # authoritative one for converted models.
 #
-# ONNX validation reuses onnx_upscaler's `_build_providers` (cpu-only here),
-# `_detect_scale`, `_to_nchw_float` and `_from_nchw_float` instead of
+# ONNX validation reuses onnx_common's `build_providers` (cpu-only here),
+# `detect_scale`, `to_nchw_float` and `from_nchw_float` instead of
 # duplicating the tiling/scale-inference math. Only the trivial
 # `InferenceSession(...)` constructor call is repeated -- OnnxUpscaler's own
 # `_create_session` is keyed on an already-registered ModelEntry +
@@ -163,50 +164,22 @@ def _require_4d_float_input(input_info: Any) -> None:
         raise ValueError(f"ONNX model input must be float, got type {dtype!r}")
 
 
-class ModelInstaller:
+class ModelInstaller(SingleWorkerJobQueue[InstallJob]):
+    _worker_name = "model-install-worker"
+    _error_status = InstallStatus.error
+
     def __init__(self, settings: Settings, registry: ModelRegistry, hf_client: HfClient) -> None:
+        super().__init__()
         self.settings = settings
         self.registry = registry
         self.hf_client = hf_client
-        self._jobs: dict[str, InstallJob] = {}
-        self._queue: asyncio.Queue[InstallJob] = asyncio.Queue()
-        self._worker_task: asyncio.Task | None = None
-        # One lock per model_id so a delete can't interleave with the install of
-        # the same model (which would leave a registry entry without its file, or
-        # resurrect a model the user just deleted).
-        self._model_locks: dict[str, asyncio.Lock] = {}
-
-    def _lock_for(self, model_id: str) -> asyncio.Lock:
-        lock = self._model_locks.get(model_id)
-        if lock is None:
-            lock = asyncio.Lock()
-            self._model_locks[model_id] = lock
-        return lock
-
-    async def start(self) -> None:
-        if self._worker_task is not None:
-            return
-        self._worker_task = asyncio.create_task(self._worker(), name="model-install-worker")
-
-    async def stop(self) -> None:
-        if self._worker_task is None:
-            return
-        self._worker_task.cancel()
-        try:
-            await self._worker_task
-        except asyncio.CancelledError:
-            pass
-        self._worker_task = None
+        # Base _locks: one lock per model_id so a delete can't interleave with
+        # the install of the same model (which would leave a registry entry
+        # without its file, or resurrect a model the user just deleted).
 
     async def install_from_hf(self, repo_id: str) -> str:
         sanitized_repo_id = _validate_repo_id(repo_id)
-        job = InstallJob(id=uuid4().hex, repo_id=sanitized_repo_id)
-        self._jobs[job.id] = job
-        await self._queue.put(job)
-        return job.id
-
-    def status(self, install_id: str) -> InstallJob | None:
-        return self._jobs.get(install_id)
+        return await self._enqueue(InstallJob(id=uuid4().hex, repo_id=sanitized_repo_id))
 
     async def delete(self, model_id: str) -> None:
         # Serialized against an in-flight install of the SAME model_id.
@@ -245,37 +218,13 @@ class ModelInstaller:
             # session; log and move on rather than failing the delete.
             logger.exception("Failed to delete model file %s", target)
 
-    async def _worker(self) -> None:
-        while True:
-            job = await self._queue.get()
-            try:
-                await self._run_install(job)
-            finally:
-                self._queue.task_done()
-
-    async def _process_next(self) -> bool:
-        """Test seam: processes exactly one queued job without a background
-        worker task, so tests can assert on the finished InstallJob state
-        deterministically instead of polling a live asyncio.Task.
-        """
-        try:
-            job = self._queue.get_nowait()
-        except asyncio.QueueEmpty:
-            return False
-        try:
-            await self._run_install(job)
-        finally:
-            self._queue.task_done()
-        return True
-
-    async def _run_install(self, job: InstallJob) -> None:
+    async def _run(self, job: InstallJob) -> None:
         try:
             await self._download_and_register(job)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - surfaced as job.error, never raised
-            job.status = InstallStatus.error
-            job.error = str(exc)
+            self._fail_job(job, exc)
             logger.warning("Model install failed for repo_id=%r: %s", job.repo_id, exc)
 
     async def _download_and_register(self, job: InstallJob) -> None:
@@ -435,10 +384,10 @@ class ModelInstaller:
             input_info = _require_single_input(session.get_inputs())
             _require_4d_float_input(input_info)
             output_info = session.get_outputs()[0]
-            batch = _to_nchw_float(_make_validation_tile())
+            batch = to_nchw_float(_make_validation_tile())
             result = session.run([output_info.name], {input_info.name: batch})[0]
-            output_hwc = _from_nchw_float(result)
-            return _detect_scale(VALIDATION_TILE_SIZE, VALIDATION_TILE_SIZE, output_hwc)
+            output_hwc = from_nchw_float(result)
+            return detect_scale(VALIDATION_TILE_SIZE, VALIDATION_TILE_SIZE, output_hwc)
         finally:
             # Drop the session eagerly instead of relying on refcounting at
             # function exit: an ORT session can be entangled in an internal
@@ -454,4 +403,4 @@ class ModelInstaller:
         # onnxruntime.
         import onnxruntime as ort
 
-        return ort.InferenceSession(str(path), providers=_build_providers("cpu"))
+        return ort.InferenceSession(str(path), providers=build_providers("cpu"))

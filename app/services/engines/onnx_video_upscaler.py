@@ -12,42 +12,57 @@ from typing import Any
 
 import numpy as np
 
+from app.config import Settings
+from app.services.backend_registry import get_builtin_onnx_model
+from app.services.devices_service import DevicesService
+from app.services.dml_device import DML_DEVICE_PREFIX, parse_dml_device_id
+from app.services.engines.frame_workers import (
+    QUEUE_POLL_SECONDS,
+    THREAD_JOIN_TIMEOUT_SECONDS,
+    FrameReadbackRing,
+    derive_queue_maxsize,
+    derive_readback_ring_capacity,
+    drain_queue,
+    load_frame,
+    loader_loop,
+    put_until_cancelled,
+    save_frame,
+    saver_loop,
+)
+from app.services.engines.onnx_common import (
+    TILE_OVERLAP_PX,
+    blend_tiles,
+    detect_scale,
+    get_cached_session,
+    tile_starts,
+    wrap_onnx_error,
+)
+from app.services.gpu_session_coordinator import GpuSessionCoordinator
+
 logger = logging.getLogger(__name__)
 
-# Blocking queue put/join poll interval: short enough that a cancel is observed
-# almost immediately, long enough not to busy-spin.
-_QUEUE_POLL_SECONDS = 0.2
-_THREAD_JOIN_TIMEOUT_SECONDS = 30.0
-
-
-def _put_until_cancelled(
-    q: queue.Queue, item: Any, cancel_event: threading.Event, timeout: float = _QUEUE_POLL_SECONDS
-) -> bool:
-    """Enqueue `item`, re-checking `cancel_event` while the queue is full.
-
-    A plain blocking `queue.put()` cannot be interrupted, so on cancel a loader
-    blocked on a full queue would hang forever (its only consumer stops draining)
-    and leak the worker thread. Returns True once enqueued, False if cancelled
-    before a slot frees.
-    """
-    while not cancel_event.is_set():
-        try:
-            q.put(item, timeout=timeout)
-            return True
-        except queue.Full:
-            continue
-    return False
-
-
-def _drain_queue(q: queue.Queue) -> None:
-    """Discard everything currently queued so a producer blocked on a full queue
-    can complete its put and exit. Used during pipeline teardown."""
-    while True:
-        try:
-            q.get_nowait()
-        except queue.Empty:
-            return
-
+# ---------------------------------------------------------------------------
+# SP11 - optimized ONNX Runtime video frame engine.
+#
+# The speed comes from four things the prototype benchmark proved (RX 7800 XT,
+# animevideov3-x4, 720p 4x: NCNN 5.4 fps -> 11.49 fps, 2.1x):
+#   1. uint8-in/out ONNX graph: /255, NCHW, *255, clamp/round baked INTO the
+#      graph, so a frame is a raw uint8 NHWC array in and out -- no per-frame
+#      numpy pre/post (147ms) and no fp32 readback (177MB/frame).
+#   2. Whole-frame inference (NO tiling) when the frame fits VRAM -- tiling on
+#      DirectML was catastrophic (1.26 fps). Tiling is only a fallback for
+#      huge frames (heuristic on input pixels).
+#   3. IO binding: input/output OrtValue bound on the device (dml).
+#   4. A threaded load(N+1)/infer(N)/save(N-1) pipeline with OpenCV PNG I/O
+#      (cv2 is ~50x faster than PIL for large frames), sustaining ~2x NCNN.
+#      The queue/worker plumbing is shared via engines/frame_workers.py.
+#
+# This engine runs BUILTIN Real-ESRGAN models from their vendored uint8 ONNX
+# exports. HF-installed arbitrary ONNX models keep using OnnxUpscaler (their
+# graphs are fp32 NCHW, not uint8 NHWC). GPU concurrency is gated by the
+# caller's DeviceSemaphores (same as OnnxUpscaler) -- this engine holds no
+# semaphore of its own.
+# ---------------------------------------------------------------------------
 
 _OOM_SIGNATURES = (
     "out of memory",
@@ -68,109 +83,6 @@ def _is_oom_error(exc: BaseException) -> bool:
     return any(sig in text for sig in _OOM_SIGNATURES)
 
 
-def derive_queue_maxsize(frame_bytes: int, budget_bytes: int, floor: int, ceiling: int) -> int:
-    """Cuántos frames caben en cola bajo un presupuesto de RAM en bytes.
-
-    Extraído de _save_queue_maxsize para compartirlo con las colas del stream
-    pipeline (spec 2026-07-25-stream-frame-pipeline-design.md): mismo criterio,
-    piso para no matar throughput y techo para no acumular de más.
-    """
-    if frame_bytes <= 0:
-        return ceiling
-    return max(floor, min(ceiling, budget_bytes // frame_bytes))
-
-
-MIN_READBACK_RING_CAPACITY = 2
-
-
-class FrameReadbackRing:
-    """Anillo de K buffers CPU preasignados para el readback GPU→CPU de frames.
-
-    Alocar un array de salida nuevo por frame costaba ~11% del tiempo de frame
-    (54.3→48.4 ms medido); el anillo preasigna los buffers una vez y rota. El
-    output de ORT se COPIA al buffer (np.copyto): lo que se evita es la
-    allocación por frame, no la copia. K=1 está prohibido porque reusar el
-    único buffer mientras el frame anterior sigue en la cola downstream
-    corrompe frames (medido) — de ahí el mínimo del constructor.
-    """
-
-    def __init__(self, capacity: int) -> None:
-        if capacity < MIN_READBACK_RING_CAPACITY:
-            raise ValueError(
-                f"readback ring capacity must be >= {MIN_READBACK_RING_CAPACITY}, got {capacity}"
-            )
-        self.capacity = capacity
-        self._buffers: list[np.ndarray] = []
-        self._index = 0
-        self._shape: tuple[int, ...] | None = None
-        self._dtype: Any = None
-
-    def copy_in(self, frame: np.ndarray) -> np.ndarray:
-        """Copia `frame` al siguiente buffer del anillo y devuelve ese buffer."""
-        if frame.shape != self._shape or frame.dtype != self._dtype:
-            self._reallocate(frame.shape, frame.dtype)
-        buffer = self._buffers[self._index]
-        self._index = (self._index + 1) % self.capacity
-        np.copyto(buffer, frame)
-        return buffer
-
-    def _reallocate(self, shape: tuple[int, ...], dtype: Any) -> None:
-        # Cambio de resolución mid-run: los buffers viejos tienen otro shape,
-        # así que el anillo completo se re-aloca para el shape nuevo.
-        self._buffers = [np.empty(shape, dtype=dtype) for _ in range(self.capacity)]
-        self._index = 0
-        self._shape = shape
-        self._dtype = dtype
-
-
-def derive_readback_ring_capacity(downstream_slots: int, n_consumers: int) -> int:
-    """K > frames en vuelo aguas abajo del infer.
-
-    En vuelo: 1 recién producido (aún no encolado) + `downstream_slots` que la
-    cola puede retener + `n_consumers` en manos de los threads consumidores.
-    El +1 extra es el margen mínimo (K = en_vuelo + 1) para no reusar jamás un
-    buffer que la cola downstream todavía referencia — eso corrompe frames.
-    """
-    return downstream_slots + n_consumers + 2
-
-
-from app.config import Settings
-from app.services.backend_registry import get_builtin_onnx_model
-from app.services.devices_service import DevicesService
-from app.services.dml_device import DML_DEVICE_PREFIX, parse_dml_device_id
-from app.services.engines.onnx_upscaler import (
-    SESSION_CACHE_SIZE,
-    TILE_OVERLAP_PX,
-    _detect_scale,
-    _finalize_uint8,
-    _tile_starts,
-    _tile_weights,
-    _wrap_onnx_error,
-)
-from app.services.gpu_session_coordinator import GpuSessionCoordinator
-
-# ---------------------------------------------------------------------------
-# SP11 - optimized ONNX Runtime video frame engine.
-#
-# The speed comes from four things the prototype benchmark proved (RX 7800 XT,
-# animevideov3-x4, 720p 4x: NCNN 5.4 fps -> 11.49 fps, 2.1x):
-#   1. uint8-in/out ONNX graph: /255, NCHW, *255, clamp/round baked INTO the
-#      graph, so a frame is a raw uint8 NHWC array in and out -- no per-frame
-#      numpy pre/post (147ms) and no fp32 readback (177MB/frame).
-#   2. Whole-frame inference (NO tiling) when the frame fits VRAM -- tiling on
-#      DirectML was catastrophic (1.26 fps). Tiling is only a fallback for
-#      huge frames (heuristic on input pixels).
-#   3. IO binding: input/output OrtValue bound on the device (dml).
-#   4. A threaded load(N+1)/infer(N)/save(N-1) pipeline with OpenCV PNG I/O
-#      (cv2 is ~50x faster than PIL for large frames), sustaining ~2x NCNN.
-#
-# This engine runs BUILTIN Real-ESRGAN models from their vendored uint8 ONNX
-# exports. HF-installed arbitrary ONNX models keep using OnnxUpscaler (their
-# graphs are fp32 NCHW, not uint8 NHWC). GPU concurrency is gated by the
-# caller's DeviceSemaphores (same as OnnxUpscaler) -- this engine holds no
-# semaphore of its own.
-# ---------------------------------------------------------------------------
-
 GPU_EXECUTION_PROVIDERS = frozenset(
     {"DmlExecutionProvider", "CUDAExecutionProvider", "TensorrtExecutionProvider"}
 )
@@ -188,23 +100,18 @@ def should_tile_frame(input_pixels: int, max_whole_frame_pixels: int) -> bool:
     return input_pixels > max_whole_frame_pixels
 
 
-def _load_frame(source_path: Path) -> np.ndarray:
-    import cv2
-
-    bgr = cv2.imread(str(source_path), cv2.IMREAD_COLOR)
-    if bgr is None:
-        raise RuntimeError(f"Failed to read frame {source_path}")
-    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-    return np.ascontiguousarray(rgb)[np.newaxis, ...]  # NHWC uint8 [1,H,W,3]
+def _load_named_frame(path: Path) -> tuple[str, np.ndarray]:
+    # loader_loop item transform: this engine keys frames by filename so the
+    # savers can write the matching output PNG.
+    return (path.name, load_frame(path))
 
 
-def _save_frame(frame_nhwc: np.ndarray, output_path: Path, png_compression: int) -> None:
-    import cv2
+def _frame_saver(frames_out: Path, png_level: int) -> Callable[[tuple[str, np.ndarray]], None]:
+    def save_item(item: tuple[str, np.ndarray]) -> None:
+        name, frame = item
+        save_frame(frame, frames_out / name, png_level)
 
-    bgr = cv2.cvtColor(frame_nhwc[0], cv2.COLOR_RGB2BGR)
-    ok = cv2.imwrite(str(output_path), bgr, [cv2.IMWRITE_PNG_COMPRESSION, int(png_compression)])
-    if not ok:
-        raise RuntimeError(f"Failed to write frame {output_path}")
+    return save_item
 
 
 class OnnxVideoUpscaler:
@@ -475,7 +382,7 @@ class OnnxVideoUpscaler:
         ring = FrameReadbackRing(derive_readback_ring_capacity(save_maxsize, n_consumers=1))
 
         loader = threading.Thread(
-            target=self._loader_loop, args=(todo, load_q, errors, cancel_event), daemon=True
+            target=loader_loop, args=(todo, load_q, _load_named_frame, errors, cancel_event), daemon=True
         )
         writer = threading.Thread(
             target=self._ordered_writer_loop,
@@ -489,10 +396,10 @@ class OnnxVideoUpscaler:
                 session, load_q, save_q, device, len(frame_paths), [loader], errors, cancel_event, ring
             )
         finally:
-            _drain_queue(load_q)
+            drain_queue(load_q)
             save_q.put(None)  # wake the writer if infer stopped early (error/cancel)
             for thread in (writer, loader):
-                thread.join(timeout=_THREAD_JOIN_TIMEOUT_SECONDS)
+                thread.join(timeout=THREAD_JOIN_TIMEOUT_SECONDS)
                 if thread.is_alive():
                     logger.error("onnx streaming thread did not stop within timeout: %s", thread.name)
         if errors:
@@ -516,7 +423,7 @@ class OnnxVideoUpscaler:
             if cancel_event.is_set():
                 return
             try:
-                item = save_q.get(timeout=0.2)
+                item = save_q.get(timeout=QUEUE_POLL_SECONDS)
             except queue.Empty:
                 if cancel_event.is_set() or errors:
                     return
@@ -579,7 +486,7 @@ class OnnxVideoUpscaler:
     def _output_frame_bytes(frame_path: Path, scale: int) -> int:
         # One extra decode of a single frame (negligible) to learn input dims;
         # the output frame is scale x larger per axis, 3 bytes/px (uint8 BGR).
-        image = _load_frame(frame_path)
+        image = load_frame(frame_path)
         _, height, width, channels = image.shape
         return height * scale * width * scale * channels
 
@@ -604,14 +511,17 @@ class OnnxVideoUpscaler:
         errors: list[Exception] = []
         # Cada saver retiene un frame mientras codifica su PNG.
         ring = FrameReadbackRing(derive_readback_ring_capacity(save_maxsize, n_consumers=n_save))
+        save_item = _frame_saver(frames_out, png_level)
 
         loaders = [
-            threading.Thread(target=self._loader_loop, args=(todo, load_q, errors, cancel_event), daemon=True)
+            threading.Thread(
+                target=loader_loop, args=(todo, load_q, _load_named_frame, errors, cancel_event), daemon=True
+            )
             for _ in range(n_load)
         ]
         savers = [
             threading.Thread(
-                target=self._saver_loop, args=(save_q, frames_out, png_level, errors, cancel_event), daemon=True
+                target=saver_loop, args=(save_q, save_item, errors, cancel_event), daemon=True
             )
             for _ in range(n_save)
         ]
@@ -626,59 +536,16 @@ class OnnxVideoUpscaler:
             # Drain any frames still queued so a loader blocked on a full load_q
             # (no longer consumed once infer returns) can finish its put and exit
             # instead of hanging the join below forever.
-            _drain_queue(load_q)
+            drain_queue(load_q)
             for _ in savers:
                 save_q.put(None)  # sentinel: savers are draining, so this never blocks for long
             for thread in savers + loaders:
-                thread.join(timeout=_THREAD_JOIN_TIMEOUT_SECONDS)
+                thread.join(timeout=THREAD_JOIN_TIMEOUT_SECONDS)
                 if thread.is_alive():
                     logger.error("onnx video pipeline thread did not stop within timeout: %s", thread.name)
 
         if errors:
             raise errors[0]
-
-    @staticmethod
-    def _loader_loop(
-        todo: queue.Queue[Path],
-        load_q: queue.Queue[tuple[str, np.ndarray]],
-        errors: list[Exception],
-        cancel_event: threading.Event,
-    ) -> None:
-        while not cancel_event.is_set():
-            try:
-                path = todo.get_nowait()
-            except queue.Empty:
-                return
-            try:
-                item = (path.name, _load_frame(path))
-            except Exception as exc:  # noqa: BLE001
-                errors.append(exc)
-                cancel_event.set()
-                return
-            if not _put_until_cancelled(load_q, item, cancel_event):
-                return
-
-    @staticmethod
-    def _saver_loop(
-        save_q: queue.Queue[tuple[str, np.ndarray] | None],
-        frames_out: Path,
-        png_level: int,
-        errors: list[Exception],
-        cancel_event: threading.Event,
-    ) -> None:
-        while True:
-            item = save_q.get()
-            if item is None:
-                save_q.task_done()
-                return
-            name, frame = item
-            try:
-                _save_frame(frame, frames_out / name, png_level)
-            except Exception as exc:  # noqa: BLE001
-                errors.append(exc)
-                cancel_event.set()
-            finally:
-                save_q.task_done()
 
     def _infer_loop(
         self,
@@ -698,7 +565,7 @@ class OnnxVideoUpscaler:
             if cancel_event.is_set():
                 return
             try:
-                name, frame = load_q.get(timeout=0.2)
+                name, frame = load_q.get(timeout=QUEUE_POLL_SECONDS)
             except queue.Empty:
                 # No frame ready: bail if we've been cancelled/errored, or if
                 # every loader finished and nothing more is coming (a loader
@@ -715,7 +582,7 @@ class OnnxVideoUpscaler:
                 errors.append(exc)
                 cancel_event.set()
                 return
-            if not _put_until_cancelled(save_q, (name, upscaled), cancel_event):
+            if not put_until_cancelled(save_q, (name, upscaled), cancel_event):
                 return
             processed += 1
 
@@ -769,7 +636,7 @@ class OnnxVideoUpscaler:
         try:
             return session.run([output_name], {input_name: frame_nhwc})[0]
         except Exception as exc:  # onnxruntime raises native exception types
-            raise _wrap_onnx_error("ONNX inference failed", exc) from exc
+            raise wrap_onnx_error("ONNX inference failed", exc) from exc
 
     def _infer_iobinding(
         self, session: Any, frame_nhwc: np.ndarray, input_name: str, output_name: str, device: str
@@ -803,8 +670,8 @@ class OnnxVideoUpscaler:
         tile_size = self.settings.onnx_tile_size if self.settings.onnx_tile_size > 0 else FALLBACK_TILE_SIZE
         image = frame_nhwc[0]
         height, width, channels = image.shape
-        starts_y = _tile_starts(height, tile_size, TILE_OVERLAP_PX)
-        starts_x = _tile_starts(width, tile_size, TILE_OVERLAP_PX)
+        starts_y = tile_starts(height, tile_size, TILE_OVERLAP_PX)
+        starts_x = tile_starts(width, tile_size, TILE_OVERLAP_PX)
 
         tiles: list[tuple[int, int, int, int, np.ndarray]] = []
         for y0 in starts_y:
@@ -816,61 +683,21 @@ class OnnxVideoUpscaler:
                 tiles.append((y0, x0, tile_h, tile_w, output_tile))
 
         _, _, first_h, first_w, first_out = tiles[0]
-        scale = _detect_scale(first_h, first_w, first_out)
-        blended = self._blend_tiles(tiles, height, width, channels, scale)
+        scale = detect_scale(first_h, first_w, first_out)
+        blended = blend_tiles(tiles, height, width, channels, scale)
         return blended[np.newaxis, ...]
-
-    @staticmethod
-    def _blend_tiles(
-        tiles: list[tuple[int, int, int, int, np.ndarray]],
-        height: int,
-        width: int,
-        channels: int,
-        scale: int,
-    ) -> np.ndarray:
-        canvas_h, canvas_w = height * scale, width * scale
-        accumulator = np.zeros((canvas_h, canvas_w, channels), dtype=np.float32)
-        weight_sum = np.zeros((canvas_h, canvas_w, 1), dtype=np.float32)
-        feather = scale * TILE_OVERLAP_PX
-        for y0, x0, tile_h, tile_w, output_tile in tiles:
-            out_h, out_w = tile_h * scale, tile_w * scale
-            weights = _tile_weights(
-                out_h,
-                out_w,
-                feather,
-                is_top=(y0 == 0),
-                is_bottom=(y0 + tile_h == height),
-                is_left=(x0 == 0),
-                is_right=(x0 + tile_w == width),
-            )
-            oy, ox = y0 * scale, x0 * scale
-            accumulator[oy : oy + out_h, ox : ox + out_w] += output_tile.astype(np.float32) * weights
-            weight_sum[oy : oy + out_h, ox : ox + out_w] += weights
-        blended = accumulator / np.clip(weight_sum, 1e-6, None)
-        return _finalize_uint8(blended)
 
     # --- session cache -----------------------------------------------------
 
     def _get_session(self, model_path: str, device: str) -> Any:
         self.gpu_coordinator.acquire(device, self)
-        cache_key = (model_path, device)
-        with self._session_lock:
-            cached = self._session_cache.get(cache_key)
-            if cached is not None:
-                self._session_cache.move_to_end(cache_key)
-                return cached
-        try:
-            session = self._create_session(model_path, device)
-        except Exception as exc:  # onnxruntime raises native exception types
-            raise _wrap_onnx_error(
-                f"Failed to load ONNX model {model_path!r} on device {device!r}", exc
-            ) from exc
-        with self._session_lock:
-            self._session_cache[cache_key] = session
-            self._session_cache.move_to_end(cache_key)
-            if len(self._session_cache) > SESSION_CACHE_SIZE:
-                self._session_cache.popitem(last=False)
-        return session
+        return get_cached_session(
+            self._session_cache,
+            self._session_lock,
+            (model_path, device),
+            lambda: self._create_session(model_path, device),
+            f"Failed to load ONNX model {model_path!r} on device {device!r}",
+        )
 
     def _create_session(self, model_path: str, device: str) -> Any:
         # Monkeypatchable seam: unit tests replace this with a numpy fake so no

@@ -68,6 +68,65 @@ def measure_free_ram(probes: dict[str, Any]) -> int | None:
 
 
 # ---------------------------------------------------------------------------
+# Esqueleto comun de los pre-flights
+#
+# Todos miden lo mismo (dispositivos, disco, RAM) y clasifican el repo con la
+# estrategia de su dominio; lo unico que cambia es el reporte que arman despues.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(slots=True, frozen=True)
+class CapacitySnapshot:
+    devices: list[DeviceCapacity]
+    disk: DiskCapacity | None
+    free_ram_bytes: int | None
+
+
+def measure_capacity(
+    devices_service: Any, probes: dict[str, Any], disk_target: Path
+) -> CapacitySnapshot:
+    # Los dispositivos y el disco no dependen de Hugging Face, asi que se miden
+    # aunque la parte de red falle: un reporte degradado sigue siendo util.
+    return CapacitySnapshot(
+        devices=measure_devices(devices_service, probes),
+        disk=measure_disk(disk_target),
+        free_ram_bytes=measure_free_ram(probes),
+    )
+
+
+@dataclass(slots=True, frozen=True)
+class RepoClassification:
+    verdict: CompatVerdict | None
+    reason: CompatReason | None
+    degraded: bool
+    # None cuando ni el listado del repo se pudo leer (gated o red caida): no
+    # hay nada que enriquecer por dominio.
+    files: list[Any] | None
+
+
+async def classify_repo(
+    hf_client: Any, repo_id: str, strategy: CompatStrategy
+) -> RepoClassification:
+    try:
+        files = await hf_client.repo_files(repo_id)
+    except HfAuthError as exc:
+        # 401/403 es un VEREDICTO, no una falla de medicion: el repo es gated y
+        # eso es exactamente lo que hay que decirle al usuario. `classify` no
+        # puede detectarlo desde aca porque repo_files no devuelve el flag
+        # `gated` -- el error de auth ES la senal. Si el usuario tiene un token
+        # valido, repo_files funciona y el repo se clasifica por su contenido.
+        # El detalle es el texto del 401/403: dato, no copia.
+        return RepoClassification(
+            "gated", CompatReason("compat.gatedAuth", {"detail": str(exc)}), False, None
+        )
+    except Exception:  # noqa: BLE001 - el pre-flight es diagnostico: nunca propaga
+        return RepoClassification(None, None, True, None)
+
+    verdict, reason = strategy.classify(tuple(f.path for f in files), None)
+    return RepoClassification(verdict, reason, False, files)
+
+
+# ---------------------------------------------------------------------------
 # Pre-flight de upscalers
 #
 # A proposito NO estima el pico de VRAM. El factor de vram_estimate asume que las
@@ -109,11 +168,7 @@ async def preflight_upscaler(
     repo_id: str,
     strategy: CompatStrategy,
 ) -> UpscalerPreflightReport:
-    # Los dispositivos y el disco no dependen de Hugging Face, asi que se miden
-    # aunque la parte de red falle: un reporte degradado sigue siendo util.
-    devices = measure_devices(devices_service, probes)
-    disk = measure_disk(Path(settings.models_path))
-    free_ram_bytes = measure_free_ram(probes)
+    capacity = measure_capacity(devices_service, probes, Path(settings.models_path))
 
     def build(
         compat: CompatVerdict | None,
@@ -128,19 +183,12 @@ async def preflight_upscaler(
             compat_reason_params={} if reason is None else dict(reason.params),
             degraded=degraded,
             download_bytes=download_bytes,
-            devices=devices,
-            disk=disk,
-            free_ram_bytes=free_ram_bytes,
+            devices=capacity.devices,
+            disk=capacity.disk,
+            free_ram_bytes=capacity.free_ram_bytes,
         )
 
-    try:
-        files = await hf_client.repo_files(repo_id)
-    except HfAuthError as exc:
-        # 401/403 es un VEREDICTO, no una falla de medicion: el repo es gated y
-        # eso es lo que hay que decirle al usuario.
-        return build("gated", CompatReason("compat.gatedAuth", {"detail": str(exc)}), False)
-    except Exception:  # noqa: BLE001 - el pre-flight es diagnostico: nunca propaga
-        return build(None, None, True)
-
-    verdict, reason = strategy.classify(tuple(f.path for f in files), None)
-    return build(verdict, reason, False, download_bytes=_download_bytes(files))
+    repo = await classify_repo(hf_client, repo_id, strategy)
+    if repo.files is None:
+        return build(repo.verdict, repo.reason, repo.degraded)
+    return build(repo.verdict, repo.reason, False, download_bytes=_download_bytes(repo.files))

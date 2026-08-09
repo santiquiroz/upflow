@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
-import errno
 import gc
 import json
 import shutil
@@ -21,10 +19,22 @@ from app.services.engines.generation_onnx import (
     _wrap_generation_error,
     generation_dependencies_available,
 )
-from app.services.generation_compat import covered_by_onnx, has_component_weights
+from app.services.generation_compat import covered_by_onnx
+from app.services.generation_staging import (
+    MODEL_INDEX_FILENAME,
+    ensure_installable_layout as _ensure_installable_layout,
+    ensure_model_index_listed as _ensure_model_index_listed,
+    generation_model_id as _generation_model_id,
+    is_inside as _is_inside,
+    map_disk_full,
+    read_declared_components as _read_declared_components,
+    root_checkpoint_paths as _root_checkpoint_paths,
+    safe_staging_dest as _safe_staging_dest,
+)
 from app.services.generation_variants import Precision
 from app.services.gpu_session_coordinator import GpuSessionCoordinator
 from app.services.hf_client import HfClient, HfFile
+from app.services.install_queue_base import SingleWorkerJobQueue
 from app.services.model_installer import (
     InstallStatus,
     PROMOTE_RETRY_DELAYS_SECONDS,
@@ -63,7 +73,6 @@ from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry, Mo
 # silently getting an unrelated config grafted onto it.
 # ---------------------------------------------------------------------------
 
-MODEL_INDEX_FILENAME = "model_index.json"
 GENERATION_MODELS_SUBDIR = "generation"
 SKIP_WEIGHT_SUFFIXES = (".ckpt", ".pth", ".safetensors", ".bin", ".msgpack", ".h5")
 LEGACY_PIPELINE_CLASS = "OnnxStableDiffusionPipeline"
@@ -75,17 +84,6 @@ VALIDATION_STEPS = 1
 
 class CheckpointNotFoundError(ValueError):
     pass
-
-
-def _generation_model_id(
-    repo_id: str,
-    checkpoint_path: str | None = None,
-) -> str:
-    model_id = "gen--" + repo_id.lower().replace("/", "--")
-    if checkpoint_path is None:
-        return model_id
-    checkpoint_id = checkpoint_path.lower().replace("\\", "--").replace("/", "--")
-    return f"{model_id}--{checkpoint_id}"
 
 
 def _select_files(files: list[HfFile]) -> list[HfFile]:
@@ -117,26 +115,6 @@ def _needs_conversion(files: list[HfFile]) -> bool:
     return any(not covered_by_onnx(name, onnx_dirs) for name in torch_dirs)
 
 
-def _read_declared_components(staging_root: Path) -> list[str]:
-    """Componentes que el pipeline realmente trae.
-
-    Un slot declarado como [null, null] esta declarado A PROPOSITO VACIO: el
-    pipeline lo reconoce pero ese repo no lo incluye. Contarlo como presente
-    hacia que la validacion estructural exigiera una carpeta que nunca iba a
-    existir, y el install fallaba con "Faltan componentes del pipeline en el
-    repo: feature_extractor, image_encoder" sobre repos perfectamente validos
-    (reportado 2026-07-29 con UnfilteredAI/NSFW-GEN-ANIME, un SDXL normal).
-    """
-    index = json.loads((staging_root / MODEL_INDEX_FILENAME).read_text(encoding="utf-8"))
-    return [
-        name
-        for name, value in index.items()
-        if not name.startswith("_")
-        and isinstance(value, list)
-        and any(entry is not None for entry in value)
-    ]
-
-
 def _filter_to_declared(files: list[HfFile], declared: list[str]) -> list[HfFile]:
     # Solo componentes declarados en model_index + metadata chica top-level.
     # Evita bajar carpetas ajenas al pipeline (ej. MXR/ binarios MIGraphX ~GBs,
@@ -152,22 +130,6 @@ def _filter_to_declared(files: list[HfFile], declared: list[str]) -> list[HfFile
         elif hf_file.path.lower().endswith((".json", ".txt")):
             kept.append(hf_file)
     return kept
-
-
-def _is_inside(candidate: Path, root: Path) -> bool:
-    return candidate.resolve().is_relative_to(root.resolve())
-
-
-def _safe_staging_dest(staging_root: Path, relative_path: str) -> Path:
-    # model_index.json declares its own component names (an attacker-
-    # controlled repo file), and repo_files() lists whatever the repo
-    # actually contains -- both feed _filter_to_declared, so a malicious repo
-    # could otherwise smuggle a "declared component" like "../../etc" plus a
-    # matching file path and have it written outside staging_root.
-    dest = staging_root / relative_path
-    if not _is_inside(dest, staging_root):
-        raise ValueError(f"Archivo del repo escapa el directorio de staging: {relative_path!r}")
-    return dest
 
 
 def _patch_legacy_component_configs(staging_root: Path) -> None:
@@ -193,57 +155,6 @@ def _patch_legacy_component_configs(staging_root: Path) -> None:
             shutil.copyfile(vendored, config_path)
 
 
-def _ensure_model_index_listed(files: list[HfFile], repo_id: str) -> None:
-    if any(f.path == MODEL_INDEX_FILENAME for f in files):
-        return
-    # Un repo SIN model_index.json pero CON checkpoints sueltos en la raiz no es un
-    # repo invalido: es de archivo unico, y se instala eligiendo cual. Decir solo
-    # "falta model_index.json" es cierto y no sirve para nada -- paso con tres repos
-    # Flux reales, donde el motivo real era que nadie habia elegido archivo.
-    candidates = _root_checkpoint_paths(files)
-    if candidates:
-        listed = ", ".join(candidates[:5])
-        more = f" (y {len(candidates) - 5} mas)" if len(candidates) > 5 else ""
-        raise ValueError(
-            f"El repo {repo_id!r} es de archivo unico: hay que elegir que checkpoint "
-            f"instalar. Disponibles: {listed}{more}."
-        )
-    raise ValueError(
-        f"El repo {repo_id!r} no parece un pipeline diffusers ONNX: falta "
-        f"{MODEL_INDEX_FILENAME}, y tampoco tiene checkpoints en la raiz para elegir."
-    )
-
-
-def _ensure_installable_layout(
-    files: list[HfFile],
-    repo_id: str,
-    checkpoint_path: str | None = None,
-) -> None:
-    """Rechaza los repos de checkpoints sueltos ANTES de descargar.
-
-    Traen model_index.json pero guardan los pesos en la raiz, sin carpetas por
-    componente. Sin este guard el ruteo los daba por validos, la seleccion no
-    elegia ni un archivo y el fallo aparecia recien en la validacion
-    estructural, con un mensaje que no decia el motivo real.
-    """
-    if checkpoint_path is not None:
-        return
-    if not has_component_weights(tuple(f.path for f in files)):
-        raise ValueError(
-            f"El repo {repo_id!r} guarda los pesos sueltos en la raiz, sin carpetas por "
-            "componente (unet, vae, text_encoder...). Es un checkpoint single-file: este "
-            "instalador necesita el layout de carpetas de diffusers."
-        )
-
-
-def _root_checkpoint_paths(files: list[HfFile]) -> list[str]:
-    return [
-        file.path
-        for file in files
-        if "/" not in file.path and file.path.lower().endswith(".safetensors")
-    ]
-
-
 def _ensure_checkpoint_listed(
     files: list[HfFile],
     repo_id: str,
@@ -256,17 +167,6 @@ def _ensure_checkpoint_listed(
             f"El checkpoint {checkpoint_path!r} no existe en la raiz del repo "
             f"{repo_id!r}. Candidatos: {available}."
         )
-
-
-def map_disk_full(exc: OSError) -> str | None:
-    if exc.errno != errno.ENOSPC:
-        return None
-    target = getattr(exc, "filename", None)
-    where = f" en {target}" if target else ""
-    return (
-        f"No queda espacio en disco{where}. Liberá espacio y volvé a intentar; "
-        "la descarga parcial ya se limpió."
-    )
 
 
 # Un componente declarado por el pipeline de ORIGEN que en la exportacion ONNX se
@@ -313,7 +213,10 @@ class _ValidationSessionOwner:
         pass
 
 
-class GenerationModelInstaller:
+class GenerationModelInstaller(SingleWorkerJobQueue[InstallJob]):
+    _worker_name = "generation-install-worker"
+    _error_status = InstallStatus.error
+
     def __init__(
         self,
         settings: Settings,
@@ -322,6 +225,7 @@ class GenerationModelInstaller:
         gpu_coordinator: GpuSessionCoordinator,
         device_semaphores: DeviceSemaphores,
     ) -> None:
+        super().__init__()
         self.settings = settings
         self.registry = registry
         self.hf_client = hf_client
@@ -330,23 +234,6 @@ class GenerationModelInstaller:
         self.enqueue_conversion: (
             Callable[[str, Precision, str | None], Awaitable[str]] | None
         ) = None
-        self._queue: asyncio.Queue[InstallJob] = asyncio.Queue()
-        self._jobs: dict[str, InstallJob] = {}
-        self._worker_task: asyncio.Task | None = None
-        self._model_locks: dict[str, asyncio.Lock] = {}
-
-    async def start(self) -> None:
-        if self._worker_task is None:
-            self._worker_task = asyncio.create_task(
-                self._worker(), name="generation-install-worker"
-            )
-
-    async def stop(self) -> None:
-        if self._worker_task is not None:
-            self._worker_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._worker_task
-            self._worker_task = None
 
     async def install_from_hf(
         self,
@@ -361,51 +248,24 @@ class GenerationModelInstaller:
         if checkpoint_path is not None:
             files = await self.hf_client.repo_files(validated)
             _ensure_checkpoint_listed(files, validated, checkpoint_path)
-        job = InstallJob(
-            id=uuid.uuid4().hex,
-            repo_id=validated,
-            precision=precision,
-            checkpoint_path=checkpoint_path,
-            status=InstallStatus.downloading,
+        return await self._enqueue(
+            InstallJob(
+                id=uuid.uuid4().hex,
+                repo_id=validated,
+                precision=precision,
+                checkpoint_path=checkpoint_path,
+                status=InstallStatus.downloading,
+            )
         )
-        self._jobs[job.id] = job
-        await self._queue.put(job)
-        return job.id
 
-    def status(self, install_id: str) -> InstallJob | None:
-        return self._jobs.get(install_id)
-
-    def _lock_for(self, model_id: str) -> asyncio.Lock:
-        lock = self._model_locks.get(model_id)
-        if lock is None:
-            lock = asyncio.Lock()
-            self._model_locks[model_id] = lock
-        return lock
-
-    async def _worker(self) -> None:
-        while True:
-            job = await self._queue.get()
-            await self._run_install(job)
-            self._queue.task_done()
-
-    async def _process_next(self) -> bool:
-        try:
-            job = self._queue.get_nowait()
-        except asyncio.QueueEmpty:
-            return False
-        await self._run_install(job)
-        self._queue.task_done()
-        return True
-
-    async def _run_install(self, job: InstallJob) -> None:
+    async def _run(self, job: InstallJob) -> None:
         try:
             await self._download_and_register(job)
         except OSError as exc:
             job.status = InstallStatus.error
             job.error = map_disk_full(exc) or str(exc)
         except Exception as exc:  # noqa: BLE001 - el job reporta cualquier fallo
-            job.status = InstallStatus.error
-            job.error = str(exc)
+            self._fail_job(job, exc)
 
     async def _download_and_register(self, job: InstallJob) -> None:
         files = await self.hf_client.repo_files(job.repo_id)

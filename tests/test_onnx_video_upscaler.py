@@ -11,14 +11,13 @@ from PIL import Image
 
 from app.config import Settings
 from app.services.devices_service import DevicesService
-from app.services.engines.onnx_video_upscaler import (
+from app.services.engines.frame_workers import (
     FrameReadbackRing,
-    OnnxVideoUpscaler,
-    _drain_queue,
-    _put_until_cancelled,
     derive_readback_ring_capacity,
-    should_tile_frame,
+    drain_queue,
+    put_until_cancelled,
 )
+from app.services.engines.onnx_video_upscaler import OnnxVideoUpscaler, should_tile_frame
 from app.services.gpu_session_coordinator import GpuSessionCoordinator
 from app.services.model_registry import ModelRegistry
 
@@ -354,7 +353,7 @@ def test_upscale_one_reraises_non_oom_error(tmp_path: Path, monkeypatch: pytest.
         engine._upscale_one(None, frame, "dml:0")
 
 
-from app.services.engines.onnx_video_upscaler import derive_queue_maxsize
+from app.services.engines.frame_workers import derive_queue_maxsize
 
 
 def test_derive_queue_maxsize_budget_decides_between_floor_and_ceiling() -> None:
@@ -791,7 +790,7 @@ async def test_run_frames_builtin_cancel_sets_event_and_reraises(
 def test_put_until_cancelled_returns_true_when_slot_available() -> None:
     q: queue.Queue = queue.Queue(maxsize=1)
     cancel = threading.Event()
-    assert _put_until_cancelled(q, "item", cancel, timeout=0.01) is True
+    assert put_until_cancelled(q, "item", cancel, timeout=0.01) is True
     assert q.get_nowait() == "item"
 
 
@@ -800,7 +799,7 @@ def test_put_until_cancelled_returns_false_without_enqueue_when_cancelled_on_ful
     q.put("occupied")  # queue is now full
     cancel = threading.Event()
     cancel.set()
-    assert _put_until_cancelled(q, "item", cancel, timeout=0.01) is False
+    assert put_until_cancelled(q, "item", cancel, timeout=0.01) is False
     assert q.qsize() == 1  # the blocked item was NOT enqueued
 
 
@@ -813,7 +812,7 @@ def test_put_until_cancelled_unblocks_when_cancel_set_from_another_thread() -> N
     result: dict[str, bool] = {}
 
     def worker() -> None:
-        result["value"] = _put_until_cancelled(q, "item", cancel, timeout=0.02)
+        result["value"] = put_until_cancelled(q, "item", cancel, timeout=0.02)
 
     thread = threading.Thread(target=worker)
     thread.start()
@@ -827,7 +826,7 @@ def test_drain_queue_empties_all_pending_items() -> None:
     q: queue.Queue = queue.Queue()
     for index in range(5):
         q.put(index)
-    _drain_queue(q)
+    drain_queue(q)
     assert q.empty()
 
 

@@ -12,7 +12,7 @@ import numpy as np
 from app.services.engines.audio_restore_base import OnnxAudioRestorer, is_cpu_device
 from app.services.engines.audiosr.assets import GRAPH_NAMES, AudioSrAssets
 from app.services.engines.audiosr.driver import AudioSrDriver
-from app.services.engines.onnx_upscaler import _wrap_onnx_error
+from app.services.engines.onnx_common import wrap_onnx_error
 
 # ---------------------------------------------------------------------------
 # AudioSR restoration (ONNX, in-process). Second restore engine next to
@@ -117,7 +117,7 @@ def _session_runner(sessions: dict[str, Any]):
         try:
             result = session.run(None, feeds)[0]
         except Exception as exc:  # onnxruntime raises its own native exception types
-            raise _wrap_onnx_error(f"AudioSR {name} inference failed", exc) from exc
+            raise wrap_onnx_error(f"AudioSR {name} inference failed", exc) from exc
         return np.asarray(result, dtype=np.float32)
 
     return run_graph

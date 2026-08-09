@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import logging
 import re
@@ -17,30 +16,24 @@ from unittest.mock import patch as _patch
 from app.config import Settings
 from app.models import ConversionJob, JobStatus, utc_now
 from app.services.engines.generation_onnx import generation_dependencies_available
-from app.services.generation_installer import (
-    MODEL_INDEX_FILENAME,
-    GenerationModelInstaller,
-    _ensure_installable_layout,
-    _ensure_model_index_listed,
-    _generation_model_id,
-    _read_declared_components,
-    _safe_staging_dest,
-    map_disk_full,
-)
+from app.services.generation_installer import GenerationModelInstaller
 from app.services.generation_single_file import (
     CheckpointVerdict,
     classify_checkpoint,
     materialize,
     supported_architecture,
 )
-from app.services.generation_variants import (
-    CONVERSION_SKIP_SUFFIXES,
-    Precision,
-    canonical_weight_name,
-    real_available_precisions,
-    select_for_precision,
+from app.services.generation_staging import (
+    download_repo_dir,
+    ensure_installable_layout,
+    ensure_model_index_listed,
+    generation_model_id,
+    map_disk_full,
+    safe_staging_dest,
 )
+from app.services.generation_variants import Precision
 from app.services.hf_client import HfClient, HfFile
+from app.services.install_queue_base import SingleWorkerJobQueue
 from app.services.model_installer import _validate_repo_id
 from app.services.model_registry import ModelEntry, ModelKind, ModelStatus
 from app.services.progress import (
@@ -364,7 +357,7 @@ ExportFn = Callable[
 
 
 def _job_model_id(job: ConversionJob) -> str:
-    model_id = _generation_model_id(job.repo_id, job.checkpoint_path)
+    model_id = generation_model_id(job.repo_id, job.checkpoint_path)
     return f"{model_id}--inpainting" if job.inpaint_merge else model_id
 
 
@@ -376,7 +369,7 @@ class ConversionCancelled(Exception):
     """El usuario corto la conversion. No es un fallo."""
 
 
-class GenerationModelConverter:
+class GenerationModelConverter(SingleWorkerJobQueue[ConversionJob]):
     """Cola single-worker de conversión, paralela al installer de generación.
 
     No reutiliza model_converter.py (Spandrel: un solo conv-net, segundos):
@@ -389,6 +382,9 @@ class GenerationModelConverter:
     funcional, ya protegida por device_semaphores en validate_and_promote.
     """
 
+    _worker_name = "generation-convert-worker"
+    _error_status = JobStatus.failed
+
     def __init__(
         self,
         settings: Settings,
@@ -396,33 +392,17 @@ class GenerationModelConverter:
         hf_client: HfClient,
         export_fn: ExportFn | None = None,
     ) -> None:
+        super().__init__()
         self.settings = settings
         self.installer = installer
         self.hf_client = hf_client
         self.export_fn = export_fn or _export_with_optimum
-        self._queue: asyncio.Queue[ConversionJob] = asyncio.Queue()
-        self._jobs: dict[str, ConversionJob] = {}
         # Cancelaciones pedidas. El export corre en un hilo, asi que el aviso
         # tiene que cruzar el limite de hilo — de ahi un set y no un flag de
         # asyncio.
         self._cancelled: set[str] = set()
         # Enganche de prueba: permite cancelar justo cuando empieza un submodelo.
         self._on_component_hook: Callable[[str], None] | None = None
-        self._worker_task: asyncio.Task[None] | None = None
-
-    async def start(self) -> None:
-        if self._worker_task is None:
-            self._worker_task = asyncio.create_task(
-                self._worker(),
-                name="generation-convert-worker",
-            )
-
-    async def stop(self) -> None:
-        if self._worker_task is not None:
-            self._worker_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._worker_task
-            self._worker_task = None
 
     async def convert_from_hf(
         self,
@@ -439,10 +419,8 @@ class GenerationModelConverter:
             precision=precision,
             checkpoint_path=checkpoint_path,
         )
-        self._jobs[job.id] = job
         self._register_converting_entry(job)
-        await self._queue.put(job)
-        return job.id
+        return await self._enqueue(job)
 
     async def convert_inpaint_merge(
         self, repo_id: str, checkpoint_path: str | None = None
@@ -463,10 +441,8 @@ class GenerationModelConverter:
             checkpoint_path=checkpoint_path,
             inpaint_merge=True,
         )
-        self._jobs[job.id] = job
         self._register_converting_entry(job)
-        await self._queue.put(job)
-        return job.id
+        return await self._enqueue(job)
 
     def _register_converting_entry(self, job: ConversionJob) -> None:
         """La conversion existe en el registro DESDE que se encola.
@@ -547,25 +523,7 @@ class GenerationModelConverter:
             if job.status in (JobStatus.queued, JobStatus.running)
         ]
 
-    def status(self, conversion_id: str) -> ConversionJob | None:
-        return self._jobs.get(conversion_id)
-
-    async def _worker(self) -> None:
-        while True:
-            job = await self._queue.get()
-            await self._run_conversion(job)
-            self._queue.task_done()
-
-    async def _process_next(self) -> bool:
-        try:
-            job = self._queue.get_nowait()
-        except asyncio.QueueEmpty:
-            return False
-        await self._run_conversion(job)
-        self._queue.task_done()
-        return True
-
-    async def _run_conversion(self, job: ConversionJob) -> None:
+    async def _run(self, job: ConversionJob) -> None:
         if job.status is JobStatus.cancelled or job.id in self._cancelled:
             job.status = JobStatus.cancelled
             job.finished_at = utc_now()
@@ -584,39 +542,10 @@ class GenerationModelConverter:
             job.error = map_disk_full(exc) or str(exc)
             self._mark_entry_error(job, job.error)
         except Exception as exc:  # noqa: BLE001 - el job reporta cualquier fallo
-            job.status = JobStatus.failed
-            job.error = str(exc)
+            self._fail_job(job, exc)
             self._mark_entry_error(job, job.error)
         finally:
             job.finished_at = utc_now()
-
-    async def _download_repo_dir(
-        self, repo_id: str, dest_root: Path, precision: Precision
-    ) -> tuple[list[HfFile], Precision]:
-        """Descarga un repo diffusers completo (componentes declarados, con la
-        precisión pedida si el repo la ofrece) a un directorio local.
-
-        Duplicado deliberado del camino normal de conversión: compartirlo
-        cambiaría el conteo de llamadas del que dependen sus tests.
-        """
-        files = await self.hf_client.repo_files(repo_id)
-        _ensure_model_index_listed(files, repo_id)
-        _ensure_installable_layout(files, repo_id)
-        await self.hf_client.download(
-            repo_id,
-            MODEL_INDEX_FILENAME,
-            _safe_staging_dest(dest_root, MODEL_INDEX_FILENAME),
-            unlimited=True,
-        )
-        declared = _read_declared_components(dest_root)
-        offered = await real_available_precisions(self.hf_client, repo_id, files, declared)
-        chosen = precision if precision in offered else (offered[0] if offered else "fp32")
-        selected = select_for_precision(files, declared, chosen)
-        for hf_file in selected:
-            dest = _safe_staging_dest(dest_root, canonical_weight_name(hf_file.path))
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            await self.hf_client.download(repo_id, hf_file.path, dest, unlimited=True)
-        return selected, chosen
 
     async def _materialize_checkpoint(
         self,
@@ -648,7 +577,7 @@ class GenerationModelConverter:
         user_root: Path,
         architecture: str | None,
     ) -> None:
-        checkpoint_dest = _safe_staging_dest(user_root, checkpoint.path)
+        checkpoint_dest = safe_staging_dest(user_root, checkpoint.path)
         checkpoint_dest.parent.mkdir(parents=True, exist_ok=True)
         await self.hf_client.download(
             job.repo_id,
@@ -687,7 +616,7 @@ class GenerationModelConverter:
             root.mkdir(parents=True, exist_ok=True)
 
         if checkpoint is None:
-            selected, _ = await self._download_repo_dir(job.repo_id, user_root, "fp16")
+            selected, _ = await download_repo_dir(self.hf_client, job.repo_id, user_root, "fp16")
         else:
             # Modelo instalado desde un checkpoint suelto: el UNet del usuario
             # sale de ESE archivo, no del repo (que puede traer otros pesos).
@@ -698,9 +627,9 @@ class GenerationModelConverter:
         # inpaint oficiales se hace el add-difference.
         family = merge_family_for(_read_declared_class_name(user_root))
         repos = INPAINT_BASE_REPOS[family]
-        await self._download_repo_dir(repos["base"], base_root, "fp16")
+        await download_repo_dir(self.hf_client, repos["base"], base_root, "fp16")
         self._raise_if_cancelled(job)
-        await self._download_repo_dir(repos["inpaint"], inpaint_root, "fp16")
+        await download_repo_dir(self.hf_client, repos["inpaint"], inpaint_root, "fp16")
         self._raise_if_cancelled(job)
 
         advance_conversion_stage(job, component_keys, "merging")
@@ -717,15 +646,15 @@ class GenerationModelConverter:
         checkpoint: HfFile | None = None
         architecture: str | None = None
         if job.checkpoint_path is None:
-            _ensure_model_index_listed(files, job.repo_id)
-            _ensure_installable_layout(files, job.repo_id)
+            ensure_model_index_listed(files, job.repo_id)
+            ensure_installable_layout(files, job.repo_id)
         else:
             checkpoint = _selected_checkpoint(
                 files,
                 job.repo_id,
                 job.checkpoint_path,
             )
-            _ensure_installable_layout(files, job.repo_id, job.checkpoint_path)
+            ensure_installable_layout(files, job.repo_id, job.checkpoint_path)
             architecture = await _read_checkpoint_architecture(
                 self.hf_client,
                 job.repo_id,
@@ -751,7 +680,7 @@ class GenerationModelConverter:
                     architecture=architecture,
                 )
             elif checkpoint is not None:
-                checkpoint_dest = _safe_staging_dest(src_root, checkpoint.path)
+                checkpoint_dest = safe_staging_dest(src_root, checkpoint.path)
                 checkpoint_dest.parent.mkdir(parents=True, exist_ok=True)
                 await self.hf_client.download(
                     job.repo_id,
@@ -766,37 +695,15 @@ class GenerationModelConverter:
                 selected = [checkpoint]
                 precision = job.precision
             else:
-                await self.hf_client.download(
-                    job.repo_id,
-                    MODEL_INDEX_FILENAME,
-                    _safe_staging_dest(src_root, MODEL_INDEX_FILENAME),
-                    unlimited=True,
-                )
-                declared = _read_declared_components(src_root)
-                offered = await real_available_precisions(
+                # `files` ya listado arriba: pasarlo evita re-listar el repo
+                # (mismo conteo de llamadas que el camino historico).
+                selected, precision = await download_repo_dir(
                     self.hf_client,
                     job.repo_id,
-                    files,
-                    declared,
+                    src_root,
+                    job.precision,
+                    files=files,
                 )
-                precision = (
-                    job.precision
-                    if job.precision in offered
-                    else (offered[0] if offered else "fp32")
-                )
-                selected = select_for_precision(files, declared, precision)
-                for hf_file in selected:
-                    dest = _safe_staging_dest(
-                        src_root,
-                        canonical_weight_name(hf_file.path),
-                    )
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    await self.hf_client.download(
-                        job.repo_id,
-                        hf_file.path,
-                        dest,
-                        unlimited=True,
-                    )
 
             def on_component(name: str) -> None:
                 if self._on_component_hook is not None:

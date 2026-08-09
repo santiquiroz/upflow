@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Protocol
 
 from app.config import APOLLO_MODE, AUDIOSR_MODE, Settings
+from app.services.capabilities import resolve_one
 from app.services.gpu_session_coordinator import GpuSessionCoordinator
 from app.services.missing_pack import missing_pack_message
 
@@ -16,6 +17,22 @@ class AudioRestorer(Protocol):
     async def run(self, input_wav: Path, output_wav: Path, device: str) -> None: ...
 
 
+# Que capacidad del CATALOG respalda cada modo: la fuente de "¿esta instalado el
+# pack?" es la resolucion de capabilities, no una re-lectura a mano de settings.
+_CAPABILITY_BY_MODE = {APOLLO_MODE: "audio.restore", AUDIOSR_MODE: "audio.restoreSr"}
+
+
+def _missing_pack_for_mode(settings: Settings, mode: str) -> str | None:
+    resolved = resolve_one(_CAPABILITY_BY_MODE[mode], settings, None)
+    return resolved.missing_packs[0] if resolved.missing_packs else None
+
+
+def _raise_missing_restore_pack(pack: str, mode: str) -> None:
+    raise ValueError(
+        missing_pack_message(pack, detail=f"Lo pide el modo de restauracion {mode!r}.")
+    )
+
+
 def validate_restore_mode_ready(settings: Settings, mode: str) -> None:
     """Raises ValueError with distinct disabled vs not-installed messages,
     same split as the video audio_enhance validation."""
@@ -24,24 +41,24 @@ def validate_restore_mode_ready(settings: Settings, mode: str) -> None:
             raise ValueError(
                 "Audio restoration is disabled by configuration (set ENABLE_AUDIO_RESTORE=true)"
             )
-        if not settings.apollo_restore_model_path.exists():
-            raise ValueError(
-                missing_pack_message(
-                    "apollo", detail=f"Lo pide el modo de restauracion {mode!r}."
-                )
-            )
+        missing = _missing_pack_for_mode(settings, mode)
+        if missing is not None:
+            _raise_missing_restore_pack(missing, mode)
         return
     if mode == AUDIOSR_MODE:
         if not settings.enable_audiosr:
             raise ValueError(
                 "AudioSR restoration is disabled by configuration (set ENABLE_AUDIOSR=true)"
             )
+        missing = _missing_pack_for_mode(settings, mode)
+        if missing is not None:
+            _raise_missing_restore_pack(missing, mode)
         if not settings.audiosr_available():
-            raise ValueError(
-                missing_pack_message(
-                    "audiosr", detail=f"Lo pide el modo de restauracion {mode!r}."
-                )
-            )
+            # Mas fuerte que el PathRequirement del catalogo a proposito: una
+            # descarga a medias deja la carpeta existiendo sin que el motor
+            # pueda cargar (la tarjeta puede decir "disponible" con la carpeta
+            # sola; validar un job no).
+            _raise_missing_restore_pack("audiosr", mode)
         return
     raise ValueError(f"Unknown restore mode: {mode!r}")
 

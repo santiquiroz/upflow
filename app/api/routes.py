@@ -123,6 +123,7 @@ from app.services.capabilities import (
     ResolvedCapability,
     group_by_domain,
     resolve_capabilities,
+    resolve_one,
 )
 from app.services.compat_strategy import CompatStrategy, InstallOptions, strategy_for
 from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
@@ -2547,10 +2548,12 @@ def _capability_to_response(item: ResolvedCapability) -> CapabilityResponse:
     )
 
 def _resolved_by_id(settings: Settings, registry: ModelRegistry, capability_id: str) -> ResolvedCapability:
-    for item in resolve_capabilities(settings, registry):
-        if item.id == capability_id:
-            return item
-    raise HTTPException(status_code=404, detail=f"Capacidad desconocida: {capability_id!r}")
+    try:
+        return resolve_one(capability_id, settings, registry)
+    except KeyError:
+        raise HTTPException(
+            status_code=404, detail=f"Capacidad desconocida: {capability_id!r}"
+        ) from None
 
 
 def _pack_to_provision(item: ResolvedCapability) -> str:

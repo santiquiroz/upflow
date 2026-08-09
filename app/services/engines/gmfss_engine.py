@@ -7,7 +7,7 @@ import queue
 import shutil
 import threading
 from collections import OrderedDict
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -17,11 +17,13 @@ from app.config import Settings
 from app.services.engines.gmfss import softsplat_cl
 from app.services.engines.gmfss.assets import GRAPH_NAMES, GmfssAssets
 from app.services.engines.gmfss.pipeline import GmfssDriver, resize_bilinear
-from app.services.engines.onnx_upscaler import _wrap_onnx_error
-from app.services.engines.onnx_video_upscaler import (
-    _THREAD_JOIN_TIMEOUT_SECONDS,
-    _drain_queue,
-    _put_until_cancelled,
+from app.services.engines.onnx_common import get_cached_session, wrap_onnx_error
+from app.services.engines.frame_workers import (
+    THREAD_JOIN_TIMEOUT_SECONDS,
+    drain_queue,
+    loader_loop,
+    put_until_cancelled,
+    saver_loop,
 )
 from app.services.gpu_session_coordinator import GpuSessionCoordinator
 from app.services.missing_pack import missing_pack_message
@@ -206,23 +208,14 @@ class GmfssEngine:
 
     def _get_sessions(self, device: str) -> dict[str, Any]:
         self.gpu_coordinator.acquire(device, self)
-        with self._session_lock:
-            cached = self._session_cache.get(device)
-            if cached is not None:
-                self._session_cache.move_to_end(device)
-                return cached
-
-        try:
-            sessions = self._create_sessions(device)
-        except Exception as exc:  # onnxruntime raises its own native exception types
-            raise _wrap_onnx_error(f"Failed to load GMFSS models on device {device!r}", exc) from exc
-
-        with self._session_lock:
-            self._session_cache[device] = sessions
-            self._session_cache.move_to_end(device)
-            if len(self._session_cache) > 1:
-                self._session_cache.popitem(last=False)
-        return sessions
+        return get_cached_session(
+            self._session_cache,
+            self._session_lock,
+            device,
+            lambda: self._create_sessions(device),
+            f"Failed to load GMFSS models on device {device!r}",
+            cache_size=1,
+        )
 
     def _create_sessions(self, device: str) -> dict[str, Any]:
         # Monkeypatchable seam: unit tests override this to inject fake numpy
@@ -280,15 +273,17 @@ class GmfssEngine:
         load_q: queue.Queue[tuple[int, np.ndarray, tuple[int, int]]] = queue.Queue(maxsize=n_load * 2)
         save_q: queue.Queue[tuple | None] = queue.Queue(maxsize=n_save * 2)
         errors: list[Exception] = []
+        load_item = _padded_frame_loader(padded_hw)
+        save_item = _save_task_runner(png_level)
 
         loaders = [
             threading.Thread(
-                target=_loader_loop, args=(todo, load_q, padded_hw, errors, cancel_event), daemon=True
+                target=loader_loop, args=(todo, load_q, load_item, errors, cancel_event), daemon=True
             )
             for _ in range(n_load)
         ]
         savers = [
-            threading.Thread(target=_saver_loop, args=(save_q, png_level, errors, cancel_event), daemon=True)
+            threading.Thread(target=saver_loop, args=(save_q, save_item, errors, cancel_event), daemon=True)
             for _ in range(n_save)
         ]
         for thread in loaders + savers:
@@ -299,11 +294,11 @@ class GmfssEngine:
                 driver, frame_paths, plan, load_q, save_q, frames_out, loaders, errors, cancel_event
             )
         finally:
-            _drain_queue(load_q)
+            drain_queue(load_q)
             for _ in savers:
                 save_q.put(None)  # sentinel: savers are draining, so this never blocks for long
             for thread in savers + loaders:
-                thread.join(timeout=_THREAD_JOIN_TIMEOUT_SECONDS)
+                thread.join(timeout=THREAD_JOIN_TIMEOUT_SECONDS)
                 if thread.is_alive():
                     logger.error("gmfss pipeline thread did not stop within timeout: %s", thread.name)
 
@@ -611,7 +606,7 @@ def _enqueue_copy(
     save_q: queue.Queue, source_path: Path, frames_out: Path, index: int, cancel_event: threading.Event
 ) -> bool:
     dest_path = _output_path(frames_out, index)
-    return _put_until_cancelled(save_q, ("copy", source_path, dest_path), cancel_event)
+    return put_until_cancelled(save_q, ("copy", source_path, dest_path), cancel_event)
 
 
 def _enqueue_frame(
@@ -623,49 +618,27 @@ def _enqueue_frame(
     cancel_event: threading.Event,
 ) -> bool:
     dest_path = _output_path(frames_out, index)
-    return _put_until_cancelled(save_q, ("frame", frame_chw, original_hw, dest_path), cancel_event)
+    return put_until_cancelled(save_q, ("frame", frame_chw, original_hw, dest_path), cancel_event)
 
 
-def _loader_loop(
-    todo: queue.Queue[tuple[int, Path]],
-    load_q: queue.Queue[tuple[int, np.ndarray, tuple[int, int]]],
+def _padded_frame_loader(
     padded_hw: tuple[int, int],
-    errors: list[Exception],
-    cancel_event: threading.Event,
-) -> None:
-    while not cancel_event.is_set():
-        try:
-            index, path = todo.get_nowait()
-        except queue.Empty:
-            return
-        try:
-            frame, original_hw = _load_padded_frame(path, padded_hw)
-        except Exception as exc:  # noqa: BLE001
-            errors.append(exc)
-            cancel_event.set()
-            return
-        if not _put_until_cancelled(load_q, (index, frame, original_hw), cancel_event):
-            return
+) -> Callable[[tuple[int, Path]], tuple[int, np.ndarray, tuple[int, int]]]:
+    # frame_workers.loader_loop item transform: the padded resolution is the
+    # per-run loader state GMFSS needs beyond the path itself.
+    def load_item(work: tuple[int, Path]) -> tuple[int, np.ndarray, tuple[int, int]]:
+        index, path = work
+        frame, original_hw = _load_padded_frame(path, padded_hw)
+        return (index, frame, original_hw)
+
+    return load_item
 
 
-def _saver_loop(
-    save_q: queue.Queue,
-    png_level: int,
-    errors: list[Exception],
-    cancel_event: threading.Event,
-) -> None:
-    while True:
-        item = save_q.get()
-        if item is None:
-            save_q.task_done()
-            return
-        try:
-            _execute_save_task(item, png_level)
-        except Exception as exc:  # noqa: BLE001
-            errors.append(exc)
-            cancel_event.set()
-        finally:
-            save_q.task_done()
+def _save_task_runner(png_level: int) -> Callable[[tuple], None]:
+    def save_item(item: tuple) -> None:
+        _execute_save_task(item, png_level)
+
+    return save_item
 
 
 def _execute_save_task(item: tuple, png_level: int) -> None:
@@ -711,6 +684,6 @@ def _graph_runner(sessions: dict[str, Any]):
         try:
             return session.run(None, feeds)
         except Exception as exc:  # onnxruntime raises its own native exception types
-            raise _wrap_onnx_error(f"GMFSS {name} inference failed", exc) from exc
+            raise wrap_onnx_error(f"GMFSS {name} inference failed", exc) from exc
 
     return run_graph

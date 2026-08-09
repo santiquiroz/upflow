@@ -255,7 +255,13 @@ CATALOG: tuple[Capability, ...] = (
         provisioning="vendored_pack",
         job_kind="audio",
         strategies=("model",),
-        requirements=(PathRequirement("apollo_restore_model", "apollo"),),
+        # Mismo criterio que restoreSr: el restore de Apollo tambien es opt-in
+        # por flag; sin declararlo, la tarjeta decia "disponible" con el flag
+        # apagado y el job moria en la validacion.
+        requirements=(
+            PathRequirement("apollo_restore_model", "apollo"),
+            SettingRequirement("enable_audio_restore"),
+        ),
     ),
     Capability(
         id="audio.restoreSr",
@@ -521,6 +527,37 @@ def installed_kinds(registry: object) -> frozenset[ModelKind]:
 def resolve_capabilities(settings: Settings, registry: object) -> list[ResolvedCapability]:
     kinds = installed_kinds(registry)
     return [_resolve_one(capability, settings, kinds) for capability in CATALOG]
+
+
+def _capability_by_id(capability_id: str) -> Capability:
+    for capability in CATALOG:
+        if capability.id == capability_id:
+            return capability
+    raise KeyError(capability_id)
+
+
+def resolve_one(
+    capability_id: str, settings: Settings, registry: object | None
+) -> ResolvedCapability:
+    """La fuente unica de "¿esta listo?" para UNA capacidad del catalogo.
+
+    Los validadores que re-chequeaban a mano lo que el CATALOG ya declara
+    delegan aca, asi el drift (audiosr fuera del catalogo hasta v0.57.0) no se
+    puede repetir. Lanza KeyError si el id no existe en el catalogo.
+
+    `registry=None` solo vale para capacidades sin RegistryRequirement: un
+    validador sin el registro a mano no puede responder por las que lo
+    necesitan, y fingir un registro vacio inventaria un `needs_setup`.
+    """
+    capability = _capability_by_id(capability_id)
+    if registry is None:
+        if any(isinstance(r, RegistryRequirement) for r in capability.requirements):
+            raise ValueError(
+                f"La capacidad {capability_id!r} depende del registro de modelos: "
+                "resolverla sin registro daria una respuesta inventada."
+            )
+        return _resolve_one(capability, settings, frozenset())
+    return _resolve_one(capability, settings, installed_kinds(registry))
 
 
 @dataclass(frozen=True, slots=True)

@@ -161,10 +161,10 @@ class OnnxCpuFallbackProbe:
             return report
 
     def _resolve(self, model_id: str, device_id: str) -> tuple[str, list[Any], str]:
-        from app.services.engines.onnx_upscaler import _build_providers
+        from app.services.engines.onnx_common import build_providers
 
-        providers = _build_providers(device_id)
-        # _build_providers returns a plain provider-name string for "cpu" but
+        providers = build_providers(device_id)
+        # build_providers returns a plain provider-name string for "cpu" but
         # a (name, options) tuple for "dml:N" -- device_ep must always be the
         # bare provider name string to compare against profiling's `provider`
         # field, so unwrap the tuple case.

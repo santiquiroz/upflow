@@ -14,7 +14,7 @@ from app.config import Settings
 from app.services.dml_device import try_parse_dml_device_id
 from app.services.generation_pipeline_modes import load_img2img_class
 from app.services.engines.gmfss_engine import _tune_session_options_for_device
-from app.services.engines.onnx_upscaler import _build_providers
+from app.services.engines.onnx_common import build_providers
 from app.services.gpu_session_coordinator import GpuSessionCoordinator
 from app.services import ep_registry
 
@@ -129,7 +129,7 @@ def _wrap_generation_error(exc: Exception) -> RuntimeError:
 
 
 def _build_providers_for_validation(device: str) -> dict[str, Any]:
-    primary = _build_providers(device)[0]
+    primary = build_providers(device)[0]
     kwargs: dict[str, Any] = {"use_io_binding": False}
     if isinstance(primary, tuple):
         provider_name, provider_options = primary

@@ -11,7 +11,7 @@ import numpy as np
 from app.config import Settings
 from app.services.dml_device import DML_DEVICE_PREFIX, parse_dml_device_id
 from app.services.engines.audio_restore_base import OnnxAudioRestorer, is_cpu_device
-from app.services.engines.onnx_upscaler import _wrap_onnx_error
+from app.services.engines.onnx_common import wrap_onnx_error
 from app.services.gpu_session_coordinator import GpuSessionCoordinator
 
 logger = logging.getLogger(__name__)
@@ -132,7 +132,7 @@ class ApolloRestorer(OnnxAudioRestorer):
         try:
             result = session.run([output_name], {input_name: batch})[0]
         except Exception as exc:  # onnxruntime raises its own native exception types
-            raise _wrap_onnx_error("Apollo inference failed", exc) from exc
+            raise wrap_onnx_error("Apollo inference failed", exc) from exc
         return np.asarray(result, dtype=np.float64).reshape(-1)
 
     def _infer_iobinding(

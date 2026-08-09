@@ -27,13 +27,10 @@ from app.services.encoder_capability_probe import EncoderCapabilityProbe
 from app.services.engines.audio_enhance import AudioEnhancer
 from app.services.engines.ffmpeg_frame_source import FfmpegFrameSource
 from app.services.engines.ffmpeg_frame_sink import RawPipeEncoder
+from app.services.engines.frame_workers import derive_readback_ring_capacity, load_frame
 from app.services.engines.gmfss_engine import GmfssEngine
 from app.services.engines.onnx_upscaler import OnnxUpscaler
-from app.services.engines.onnx_video_upscaler import (
-    OnnxVideoUpscaler,
-    _load_frame,
-    derive_readback_ring_capacity,
-)
+from app.services.engines.onnx_video_upscaler import OnnxVideoUpscaler
 from app.services.engines.realesrgan_ncnn import RealEsrganNcnnEngine, gpu_index_for_device
 from app.services.engines.rife_ncnn import RifeNcnnEngine
 from app.services.frame_pipeline import (
@@ -1528,7 +1525,7 @@ class VideoUpscaler:
         paths = sorted(frames_dir.glob("*.png"))
         if not paths:
             raise RuntimeError("no hay frames para streamear")
-        first = _load_frame(paths[0])
+        first = load_frame(paths[0])
         _, height, width, _ = first.shape
         return len(paths), width, height
 
@@ -1662,7 +1659,7 @@ class VideoUpscaler:
         job: VideoUpscaleJob,
         encoder: str,
     ) -> list[str]:
-        # Upscaled frames are RGB HWC uint8 (see OnnxVideoUpscaler / _load_frame),
+        # Upscaled frames are RGB HWC uint8 (see OnnxVideoUpscaler / frame_workers.load_frame),
         # so the raw input is rgb24 at the upscaled size.
         cmd = [
             str(self.settings.ffmpeg_binary_path),

@@ -10,14 +10,14 @@ from PIL import Image
 
 from app.config import Settings
 from app.services.devices_service import DevicesService
-from app.services.engines.onnx_upscaler import (
+from app.services.engines.onnx_common import (
     SESSION_CACHE_SIZE,
     TILE_OVERLAP_PX,
-    OnnxUpscaler,
-    _build_providers,
-    _detect_scale,
-    _tile_starts,
+    build_providers,
+    detect_scale,
+    tile_starts,
 )
+from app.services.engines.onnx_upscaler import OnnxUpscaler
 from app.services.gpu_session_coordinator import GpuSessionCoordinator
 from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry, ModelStatus
 
@@ -203,18 +203,18 @@ def test_available_false_when_onnxruntime_import_fails(tmp_path: Path, monkeypat
 
 
 def test_build_providers_for_cpu() -> None:
-    assert _build_providers("cpu") == ["CPUExecutionProvider"]
+    assert build_providers("cpu") == ["CPUExecutionProvider"]
 
 
 def test_build_providers_for_dml_zero() -> None:
-    assert _build_providers("dml:0") == [
+    assert build_providers("dml:0") == [
         ("DmlExecutionProvider", {"device_id": 0}),
         "CPUExecutionProvider",
     ]
 
 
 def test_build_providers_for_dml_one() -> None:
-    assert _build_providers("dml:1") == [
+    assert build_providers("dml:1") == [
         ("DmlExecutionProvider", {"device_id": 1}),
         "CPUExecutionProvider",
     ]
@@ -222,48 +222,48 @@ def test_build_providers_for_dml_one() -> None:
 
 def test_build_providers_rejects_unknown_device() -> None:
     with pytest.raises(RuntimeError, match="Unsupported device"):
-        _build_providers("npu:0")
+        build_providers("npu:0")
 
 
 # ---------------------------------------------------------------------------
-# _tile_starts
+# tile_starts
 # ---------------------------------------------------------------------------
 
 
 def test_tile_starts_single_tile_when_image_smaller_than_tile() -> None:
-    assert _tile_starts(100, 256, 16) == [0]
+    assert tile_starts(100, 256, 16) == [0]
 
 
 def test_tile_starts_evenly_divisible_with_overlap() -> None:
-    assert _tile_starts(48, 32, 16) == [0, 16]
+    assert tile_starts(48, 32, 16) == [0, 16]
 
 
 def test_tile_starts_last_tile_flush_with_edge() -> None:
-    starts = _tile_starts(100, 32, 16)
+    starts = tile_starts(100, 32, 16)
     assert starts[-1] == 100 - 32
     assert starts[0] == 0
 
 
 # ---------------------------------------------------------------------------
-# _detect_scale
+# detect_scale
 # ---------------------------------------------------------------------------
 
 
 def test_detect_scale_doubles() -> None:
     output = np.zeros((64, 64, 3), dtype=np.float32)
-    assert _detect_scale(32, 32, output) == 2
+    assert detect_scale(32, 32, output) == 2
 
 
 def test_detect_scale_raises_on_non_integer_ratio() -> None:
     output = np.zeros((50, 50, 3), dtype=np.float32)
     with pytest.raises(RuntimeError, match="integer upscale ratio"):
-        _detect_scale(32, 32, output)
+        detect_scale(32, 32, output)
 
 
 def test_detect_scale_raises_on_non_uniform_scale() -> None:
     output = np.zeros((64, 96, 3), dtype=np.float32)
     with pytest.raises(RuntimeError, match="non-uniform scale"):
-        _detect_scale(32, 32, output)
+        detect_scale(32, 32, output)
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 from dataclasses import dataclass
 from enum import Enum
@@ -10,6 +9,7 @@ from uuid import uuid4
 from app.config import Settings
 from app.services.engines.sdcpp_models import CHECKPOINT_SUFFIXES, sdcpp_model_id
 from app.services.hf_client import HfClient
+from app.services.install_queue_base import SingleWorkerJobQueue
 from app.services.missing_pack import missing_pack_message
 
 logger = logging.getLogger(__name__)
@@ -45,30 +45,13 @@ class VulkanInstallJob:
     error: str | None = None
 
 
-class VulkanModelInstaller:
+class VulkanModelInstaller(SingleWorkerJobQueue[VulkanInstallJob]):
+    _error_status = VulkanInstallStatus.error
+
     def __init__(self, settings: Settings, hf_client: HfClient) -> None:
+        super().__init__()
         self.settings = settings
         self.hf_client = hf_client
-        self._jobs: dict[str, VulkanInstallJob] = {}
-        self._queue: asyncio.Queue[str] = asyncio.Queue()
-        self._worker_task: asyncio.Task | None = None
-
-    async def start(self) -> None:
-        if self._worker_task is None:
-            self._worker_task = asyncio.create_task(self._worker())
-
-    async def stop(self) -> None:
-        if self._worker_task is None:
-            return
-        self._worker_task.cancel()
-        try:
-            await self._worker_task
-        except asyncio.CancelledError:
-            pass
-        self._worker_task = None
-
-    def status(self, job_id: str) -> VulkanInstallJob | None:
-        return self._jobs.get(job_id)
 
     async def install(self, repo_id: str, filename: str) -> str:
         if not self.settings.enable_sdcpp:
@@ -82,23 +65,16 @@ class VulkanModelInstaller:
         if Path(filename).name != filename or not filename.strip():
             raise ValueError("Nombre de archivo inválido.")
 
-        job = VulkanInstallJob(id=uuid4().hex, repo_id=repo_id, filename=filename)
-        self._jobs[job.id] = job
-        await self._queue.put(job.id)
-        return job.id
-
-    async def _worker(self) -> None:
-        while True:
-            job_id = await self._queue.get()
-            await self._run(self._jobs[job_id])
+        return await self._enqueue(
+            VulkanInstallJob(id=uuid4().hex, repo_id=repo_id, filename=filename)
+        )
 
     async def _run(self, job: VulkanInstallJob) -> None:
         try:
             await self._download(job)
         except Exception as exc:  # noqa: BLE001 - el job reporta, no propaga
             logger.warning("vulkan install failed", extra={"repo": job.repo_id})
-            job.status = VulkanInstallStatus.error
-            job.error = str(exc) or type(exc).__name__
+            self._fail_job(job, exc)
 
     async def _download(self, job: VulkanInstallJob) -> None:
         job.status = VulkanInstallStatus.downloading

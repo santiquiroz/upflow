@@ -10,7 +10,7 @@ import numpy as np
 
 from app.config import Settings
 from app.services.engines.multichannel_restore import restore_multichannel
-from app.services.engines.onnx_upscaler import _wrap_onnx_error
+from app.services.engines.onnx_common import wrap_onnx_error
 from app.services.gpu_session_coordinator import GpuSessionCoordinator
 from app.services.missing_pack import missing_pack_message
 from app.services.process_runner import is_non_empty_file
@@ -98,7 +98,7 @@ class OnnxAudioRestorer:
         try:
             session = self._build_session(device)
         except Exception as exc:  # onnxruntime raises its own native exception types
-            raise _wrap_onnx_error(f"{self.load_error_context} {device!r}", exc) from exc
+            raise wrap_onnx_error(f"{self.load_error_context} {device!r}", exc) from exc
 
         with self._session_lock:
             self._session_cache[device] = session

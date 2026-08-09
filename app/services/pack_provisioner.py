@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 import sys
@@ -12,6 +11,7 @@ from uuid import uuid4
 
 from app.config import Settings, resolve_against_project_root
 from app.services.capabilities import CATALOG, PathRequirement
+from app.services.install_queue_base import SingleWorkerJobQueue
 from app.services.process_runner import run_guarded_process
 
 logger = logging.getLogger(__name__)
@@ -153,29 +153,12 @@ def _tail(raw: bytes, limit: int = 600) -> str:
     return text[-limit:] if len(text) > limit else text
 
 
-class PackProvisioner:
+class PackProvisioner(SingleWorkerJobQueue[ProvisionJob]):
+    _error_status = ProvisionStatus.error
+
     def __init__(self, settings: Settings) -> None:
+        super().__init__()
         self._settings = settings
-        self._jobs: dict[str, ProvisionJob] = {}
-        self._queue: asyncio.Queue[str] = asyncio.Queue()
-        self._worker_task: asyncio.Task[None] | None = None
-        # Un paquete a la vez: dos descargas del mismo destino se pisarian los
-        # archivos a medio escribir.
-        self._locks: dict[str, asyncio.Lock] = {}
-
-    async def start(self) -> None:
-        if self._worker_task is None:
-            self._worker_task = asyncio.create_task(self._worker())
-
-    async def stop(self) -> None:
-        if self._worker_task is None:
-            return
-        self._worker_task.cancel()
-        try:
-            await self._worker_task
-        except asyncio.CancelledError:
-            pass
-        self._worker_task = None
 
     async def provision(self, pack: str, variant: str | None = None) -> str:
         # Se valida ANTES de encolar: un pack desconocido, o una variante con
@@ -183,39 +166,17 @@ class PackProvisioner:
         # despues se muere solo.
         script_for(pack)
         build_command(pack, variant)
-        job = ProvisionJob(id=uuid4().hex, pack=pack, variant=variant)
-        self._jobs[job.id] = job
-        await self._queue.put(job.id)
-        return job.id
-
-    def status(self, job_id: str) -> ProvisionJob | None:
-        return self._jobs.get(job_id)
-
-    def _lock_for(self, pack: str) -> asyncio.Lock:
-        if pack not in self._locks:
-            self._locks[pack] = asyncio.Lock()
-        return self._locks[pack]
-
-    async def _worker(self) -> None:
-        while True:
-            job_id = await self._queue.get()
-            await self._run(self._jobs[job_id])
-
-    async def _process_next(self) -> bool:
-        if self._queue.empty():
-            return False
-        job_id = await self._queue.get()
-        await self._run(self._jobs[job_id])
-        return True
+        return await self._enqueue(ProvisionJob(id=uuid4().hex, pack=pack, variant=variant))
 
     async def _run(self, job: ProvisionJob) -> None:
+        # Un paquete a la vez: dos descargas del mismo destino se pisarian los
+        # archivos a medio escribir.
         async with self._lock_for(job.pack):
             try:
                 await self._execute(job)
             except Exception as exc:  # noqa: BLE001 - el job reporta, no propaga
                 logger.warning("pack provisioning failed", extra={"pack": job.pack})
-                job.status = ProvisionStatus.error
-                job.error = str(exc) or type(exc).__name__
+                self._fail_job(job, exc)
 
     async def _execute(self, job: ProvisionJob) -> None:
         if not provisioning_supported():

@@ -9,13 +9,13 @@ from typing import Protocol
 
 import numpy as np
 
-from app.services.engines.onnx_video_upscaler import (
-    _QUEUE_POLL_SECONDS,
-    _THREAD_JOIN_TIMEOUT_SECONDS,
-    _drain_queue,
-    _load_frame,
-    _put_until_cancelled,
+from app.services.engines.frame_workers import (
+    QUEUE_POLL_SECONDS,
+    THREAD_JOIN_TIMEOUT_SECONDS,
     derive_queue_maxsize,
+    drain_queue,
+    load_frame,
+    put_until_cancelled,
 )
 
 logger = logging.getLogger(__name__)
@@ -96,13 +96,13 @@ def iter_png_frames(frames_dir: Path, cancel_event: threading.Event) -> Iterator
     for path in sorted(frames_dir.glob("*.png")):
         if cancel_event.is_set():
             return
-        yield _load_frame(path)
+        yield load_frame(path)
 
 
 class FramePipeline:
     """Etapas conectadas por colas acotadas, cada una en su propio thread.
 
-    Backpressure: cola llena ⇒ el productor bloquea (vía _put_until_cancelled,
+    Backpressure: cola llena ⇒ el productor bloquea (vía put_until_cancelled,
     que observa cancel_event — nunca un put ciego). Orden garantizado: un solo
     thread por etapa + colas FIFO. Fin de stream: sentinel None que cada etapa
     reenvía tras emitir su flush(). El sink corre en el thread llamador.
@@ -151,9 +151,9 @@ class FramePipeline:
             if self._errors:
                 cancel_event.set()
             for pending_queue in self._queues:
-                _drain_queue(pending_queue)
+                drain_queue(pending_queue)
             for thread in threads:
-                thread.join(timeout=_THREAD_JOIN_TIMEOUT_SECONDS)
+                thread.join(timeout=THREAD_JOIN_TIMEOUT_SECONDS)
                 if thread.is_alive():
                     logger.error("frame pipeline thread did not stop within timeout: %s", thread.name)
             self._close_source()
@@ -167,9 +167,9 @@ class FramePipeline:
             for source_frame in self._source:
                 if cancel_event.is_set():
                     return
-                if not _put_until_cancelled(out_q, source_frame, cancel_event):
+                if not put_until_cancelled(out_q, source_frame, cancel_event):
                     return
-            _put_until_cancelled(out_q, None, cancel_event)
+            put_until_cancelled(out_q, None, cancel_event)
         except BaseException as exc:  # noqa: BLE001 - todo fallo debe cancelar el pipeline
             self._fail(exc, cancel_event)
 
@@ -185,15 +185,15 @@ class FramePipeline:
                 if cancel_event.is_set() or self._errors:
                     return
                 try:
-                    item = in_q.get(timeout=_QUEUE_POLL_SECONDS)
+                    item = in_q.get(timeout=QUEUE_POLL_SECONDS)
                 except queue.Empty:
                     continue
                 outputs = stage.flush() if item is None else stage.process(item)
                 for output_frame in outputs:
-                    if not _put_until_cancelled(out_q, output_frame, cancel_event):
+                    if not put_until_cancelled(out_q, output_frame, cancel_event):
                         return
                 if item is None:
-                    _put_until_cancelled(out_q, None, cancel_event)
+                    put_until_cancelled(out_q, None, cancel_event)
                     return
         except BaseException as exc:  # noqa: BLE001 - todo fallo debe cancelar el pipeline
             self._fail(exc, cancel_event)
@@ -205,7 +205,7 @@ class FramePipeline:
             if cancel_event.is_set() or self._errors:
                 return delivered
             try:
-                item = last_q.get(timeout=_QUEUE_POLL_SECONDS)
+                item = last_q.get(timeout=QUEUE_POLL_SECONDS)
             except queue.Empty:
                 continue
             if item is None:
