@@ -234,10 +234,10 @@ async def test_separation_produces_instrumental_and_vocals_outputs(tmp_path: Pat
     output_path = await pipeline.run(job)
 
     assert output_path.name == f"{job.id}.instrumental.flac"
-    assert job.vocals_output_path is not None
-    assert job.vocals_output_path.name == f"{job.id}.vocals.flac"
+    assert job.secondary_output_path is not None
+    assert job.secondary_output_path.name == f"{job.id}.vocals.flac"
     assert output_path.exists()
-    assert job.vocals_output_path.exists()
+    assert job.secondary_output_path.exists()
 
 
 async def test_separation_reencodes_both_outputs_with_the_chosen_format(tmp_path: Path) -> None:
@@ -262,7 +262,7 @@ async def test_separation_wav_output_moves_without_reencode(tmp_path: Path) -> N
     # Solo el decode paso por ffmpeg: los dos stems se mueven tal cual.
     assert len(pipeline.commands) == 1
     assert output_path.exists()
-    assert job.vocals_output_path is not None and job.vocals_output_path.exists()
+    assert job.secondary_output_path is not None and job.secondary_output_path.exists()
 
 
 async def test_separation_decodes_to_stereo_44100(tmp_path: Path) -> None:
@@ -449,7 +449,7 @@ def test_response_exposes_vocals_download_url_when_completed(tmp_path: Path) -> 
     job = make_separate_job(tmp_path / "song.wav")
     job.status = JobStatus.completed
     job.output_path = tmp_path / f"{job.id}.instrumental.flac"
-    job.vocals_output_path = tmp_path / f"{job.id}.vocals.flac"
+    job.secondary_output_path = tmp_path / f"{job.id}.vocals.flac"
 
     serialized = audio_job_to_response(job).model_dump(by_alias=True)
 
@@ -488,8 +488,8 @@ async def make_completed_manager_job(
     job.output_path = tmp_path / "instrumental.flac"
     job.output_path.write_bytes(b"instrumental")
     if separate:
-        job.vocals_output_path = tmp_path / "vocals.flac"
-        job.vocals_output_path.write_bytes(b"vocals")
+        job.secondary_output_path = tmp_path / "vocals.flac"
+        job.secondary_output_path.write_bytes(b"vocals")
     manager.jobs[job.id] = job
     return manager, job
 
@@ -507,7 +507,7 @@ async def test_download_serves_the_vocals_stem(tmp_path: Path) -> None:
 
     response = await download_audio_job(job.id, stem="vocals", audio_jobs=manager)
 
-    assert Path(response.path) == job.vocals_output_path
+    assert Path(response.path) == job.secondary_output_path
 
 
 async def test_download_rejects_an_unknown_stem_with_400(tmp_path: Path) -> None:
@@ -627,3 +627,4 @@ class TestPackKaraokePorVariante:
             assert f"'{spec.id}'" in validate_set_line
             assert spec.filename in script
             assert spec.uvr_hash in script
+            assert spec.sha256 in script

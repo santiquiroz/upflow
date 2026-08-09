@@ -44,6 +44,7 @@ from app.schemas import (
     AudioCapabilitiesResponse,
     AudioJobResponse,
     AudioJobsListResponse,
+    AudioStemDownloadResponse,
     AudioTrackResponse,
     CapabilityDomainResponse,
     CapabilityResponse,
@@ -64,6 +65,7 @@ from app.schemas import (
     GenerationModelSummary,
     MasteringPresetResponse,
     SeparationModelResponse,
+    SeparationStemResponse,
     PromptPresetResponse,
     PromptPresetsResponse,
     CreateSavedPromptRequest,
@@ -470,13 +472,45 @@ def video_job_to_response(job: VideoUpscaleJob) -> VideoJobResponse:
     )
 
 
+def _audio_separation_spec(job: AudioJob):
+    if not job.separate or job.separation_model is None:
+        return None
+    from app.services.engines.mdx_models import SEPARATION_MODELS
+
+    return SEPARATION_MODELS.get(job.separation_model)
+
+
+def _audio_stem_downloads(job: AudioJob) -> list[AudioStemDownloadResponse] | None:
+    """Las DOS descargas de un job de separacion completado, ordenadas: la
+    primera es la que el usuario quiere (la misma que downloadUrl)."""
+    spec = _audio_separation_spec(job)
+    if (
+        spec is None
+        or job.status != JobStatus.completed
+        or job.secondary_output_path is None
+    ):
+        return None
+    base = f"/api/v1/audio/jobs/{job.id}/download"
+    return [
+        AudioStemDownloadResponse(id=stem.id, label_key=stem.label_key, url=f"{base}?stem={stem.id}")
+        for stem in spec.stems
+    ]
+
+
+def _audio_vocals_download_url(job: AudioJob) -> str | None:
+    # Compat v0.59: solo cuando el par de stems realmente incluye "vocals"
+    # (los modelos karaoke). reverb_hq no tiene voz que ofrecer aca.
+    if job.status != JobStatus.completed or job.secondary_output_path is None:
+        return None
+    spec = _audio_separation_spec(job)
+    if spec is not None and "vocals" not in spec.stem_ids():
+        return None
+    return f"/api/v1/audio/jobs/{job.id}/download?stem=vocals"
+
+
 def audio_job_to_response(job: AudioJob) -> AudioJobResponse:
     download_url = f"/api/v1/audio/jobs/{job.id}/download" if job.status == JobStatus.completed else None
-    vocals_download_url = (
-        f"/api/v1/audio/jobs/{job.id}/download?stem=vocals"
-        if job.status == JobStatus.completed and job.vocals_output_path is not None
-        else None
-    )
+    vocals_download_url = _audio_vocals_download_url(job)
     return AudioJobResponse(
         id=job.id,
         status=job.status,
@@ -494,6 +528,7 @@ def audio_job_to_response(job: AudioJob) -> AudioJobResponse:
         stages=job.metadata.get("stages"),
         error=job.error,
         download_url=download_url,
+        stems=_audio_stem_downloads(job),
         vocals_download_url=vocals_download_url,
         owner_id=job.owner_id,
     )
@@ -1653,6 +1688,12 @@ async def audio_capabilities(settings: Settings = Depends(get_settings)) -> Audi
                 name=spec.name,
                 installed=spec.id in installed_separation_models,
                 primary_stem=spec.primary_stem,
+                category=spec.category,
+                description_key=spec.description_key,
+                stems=[
+                    SeparationStemResponse(id=stem.id, label_key=stem.label_key)
+                    for stem in spec.stems
+                ],
             )
             for spec in SEPARATION_MODELS.values()
         ],
@@ -1744,16 +1785,38 @@ async def cancel_audio_job(
     return audio_job_to_response(job)
 
 
-AUDIO_DOWNLOAD_STEMS = ("instrumental", "vocals")
+# Ids validos cuando el job NO tiene un modelo de separacion del catalogo
+# (jobs clasicos): compat v0.59, stem=vocals responde 409 explicando.
+LEGACY_AUDIO_DOWNLOAD_STEMS = ("instrumental", "vocals")
+
+
+def _valid_stems_for(job: AudioJob) -> tuple[str, ...]:
+    spec = _audio_separation_spec(job)
+    if spec is None:
+        return LEGACY_AUDIO_DOWNLOAD_STEMS
+    return spec.stem_ids()
+
+
+def _stem_output_path(job: AudioJob, stem: str, valid_stems: tuple[str, ...]) -> Path:
+    if stem == valid_stems[0]:
+        return job.output_path
+    if job.secondary_output_path is None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"This job did not run separation; there is no {stem} stem",
+        )
+    return job.secondary_output_path
 
 
 @router.get("/audio/jobs/{job_id}/download", dependencies=[Depends(require(Permission.jobs_read_own))])
 async def download_audio_job(
     job_id: str,
-    # CONTRATO consumido tambien por el flujo MCP: stem=instrumental|vocals,
-    # default instrumental (= output_path, que en jobs sin separacion es la
-    # unica salida). 400 stem invalido; 409 vocals en un job sin separacion.
-    stem: str = Query(default="instrumental"),
+    # CONTRATO consumido tambien por el flujo MCP: los ids de stem validos son
+    # los del modelo del job (karaoke: instrumental|vocals; reverb_hq:
+    # dry|wet). Sin stem se sirve el principal (= output_path, que en jobs sin
+    # separacion es la unica salida). 400 stem invalido listando los validos
+    # DEL JOB; 409 al pedir el secundario en un job sin separacion.
+    stem: str | None = Query(default=None),
     audio_jobs: AudioJobManager = Depends(get_audio_job_manager),
     # Bare `Request` (not `Request | None`) so FastAPI's special-case
     # injection still recognizes it -- `lenient_issubclass` rejects unions.
@@ -1762,26 +1825,22 @@ async def download_audio_job(
 ) -> FileResponse:
     if not isinstance(stem, str):
         # Llamada directa (tests): el default es el FieldInfo de Query().
-        stem = "instrumental"
-    if stem not in AUDIO_DOWNLOAD_STEMS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"stem must be one of {', '.join(AUDIO_DOWNLOAD_STEMS)}",
-        )
+        stem = None
     job = audio_jobs.get_job(job_id)
     current_user = current_user_from_request(request)
     if not job or (current_user is not None and not _can_view_job(job, current_user)):
         raise HTTPException(status_code=404, detail="Audio job not found")
+    valid_stems = _valid_stems_for(job)
+    if stem is None:
+        stem = valid_stems[0]
+    if stem not in valid_stems:
+        raise HTTPException(
+            status_code=400,
+            detail=f"stem must be one of {', '.join(valid_stems)}",
+        )
     if job.status != JobStatus.completed or not job.output_path:
         raise HTTPException(status_code=409, detail="Audio job is not completed yet")
-    output_path = job.output_path
-    if stem == "vocals":
-        if job.vocals_output_path is None:
-            raise HTTPException(
-                status_code=409,
-                detail="This job did not run separation; there is no vocals stem",
-            )
-        output_path = job.vocals_output_path
+    output_path = _stem_output_path(job, stem, valid_stems)
     return FileResponse(path=output_path, filename=output_path.name, media_type="application/octet-stream")
 
 

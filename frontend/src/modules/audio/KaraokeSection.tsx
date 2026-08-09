@@ -11,12 +11,81 @@ function modelButtonClassName(isActive: boolean): string {
   return `${base} border-border bg-surface text-text-dim hover:border-text-faint hover:text-text`;
 }
 
+function orderedCategories(models: SeparationModel[]): string[] {
+  // El orden lo fija el catálogo del backend; acá solo se de-duplica.
+  const seen: string[] = [];
+  for (const model of models) {
+    if (!seen.includes(model.category)) {
+      seen.push(model.category);
+    }
+  }
+  return seen;
+}
+
 /**
- * Modo karaoke: separar la mezcla en instrumental + voz.
+ * Un grupo del picker (categoría "karaoke" o "cleanup"): botones para los
+ * modelos instalados, la descripción del modelo seleccionado, y una tarjeta
+ * de descarga por cada modelo que falta.
+ */
+function ModelCategoryGroup({
+  category,
+  models,
+  selectedModel,
+  onSelectModel,
+}: {
+  category: string;
+  models: SeparationModel[];
+  selectedModel: string | null;
+  onSelectModel: (modelId: string) => void;
+}) {
+  const { t } = useTranslation();
+  const installed = models.filter((model) => model.installed);
+  const missing = models.filter((model) => !model.installed);
+  const selected = installed.find((model) => model.id === selectedModel);
+
+  return (
+    <fieldset className="flex flex-col gap-2">
+      <legend className="font-heading text-xs font-semibold uppercase tracking-wide text-text-dim">
+        {t(`audio.karaoke.category.${category}`)}
+      </legend>
+      {installed.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {installed.map((model) => (
+            <button
+              key={model.id}
+              type="button"
+              aria-pressed={selectedModel === model.id}
+              className={modelButtonClassName(selectedModel === model.id)}
+              onClick={() => onSelectModel(model.id)}
+            >
+              {model.name}
+            </button>
+          ))}
+        </div>
+      )}
+      {selected && (
+        <p role="status" className="text-xs text-text-dim">
+          {t(selected.descriptionKey)}
+        </p>
+      )}
+      {missing.map((model) => (
+        <PackDownload
+          key={model.id}
+          pack="karaoke"
+          variant={model.id}
+          reason={`${t("audio.karaoke.modelMissing", { name: model.name })} ${t(model.descriptionKey)}`}
+        />
+      ))}
+    </fieldset>
+  );
+}
+
+/**
+ * Modo separación: karaoke (voz/instrumental) y limpieza (quitar reverb).
  *
- * El picker sale del catálogo del backend (instalados y descargables): la idea
- * no es casarse con un modelo, cada tarjeta faltante trae su botón de descarga
- * por variante del pack "karaoke".
+ * El picker sale del catálogo del backend (instalados y descargables),
+ * agrupado por categoría: la idea no es casarse con un modelo, cada tarjeta
+ * faltante trae su botón de descarga por variante del pack "karaoke".
  */
 export function KaraokeSection({
   enabled,
@@ -33,7 +102,6 @@ export function KaraokeSection({
 }) {
   const { t } = useTranslation();
   const installed = models.filter((model) => model.installed);
-  const missing = models.filter((model) => !model.installed);
 
   return (
     <div className="flex flex-col gap-3">
@@ -53,33 +121,13 @@ export function KaraokeSection({
         </p>
       )}
 
-      {installed.length > 0 && (
-        <fieldset className="flex flex-col gap-2">
-          <legend className="font-heading text-xs font-semibold uppercase tracking-wide text-text-dim">
-            {t("audio.karaoke.model")}
-          </legend>
-          <div className="flex flex-wrap gap-2">
-            {installed.map((model) => (
-              <button
-                key={model.id}
-                type="button"
-                aria-pressed={selectedModel === model.id}
-                className={modelButtonClassName(selectedModel === model.id)}
-                onClick={() => onSelectModel(model.id)}
-              >
-                {model.name}
-              </button>
-            ))}
-          </div>
-        </fieldset>
-      )}
-
-      {missing.map((model) => (
-        <PackDownload
-          key={model.id}
-          pack="karaoke"
-          variant={model.id}
-          reason={t("audio.karaoke.modelMissing", { name: model.name })}
+      {orderedCategories(models).map((category) => (
+        <ModelCategoryGroup
+          key={category}
+          category={category}
+          models={models.filter((model) => model.category === category)}
+          selectedModel={selectedModel}
+          onSelectModel={onSelectModel}
         />
       ))}
 

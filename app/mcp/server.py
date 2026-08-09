@@ -186,7 +186,10 @@ async def upflow_download_result(
     transcript_format (solo transcribe): txt | srt | vtt | video.
     translate_to (solo transcribe): código de idioma para traducir subtítulos.
     file_index (solo download): índice del archivo cuando la descarga produjo varios.
-    stem (solo audio con separate/karaoke): instrumental | vocals.
+    stem (solo audio con separación): id de stem del modelo usado — karaoke:
+    instrumental | vocals; de-reverb (reverb_hq): dry | wet. Los stems válidos
+    del job vienen en upflow_job_status (campo stems). Un stem que no aplica
+    devuelve el 400 de la API listando los válidos.
     Devuelve {outputPath}. Falla con 409 si el job no está completed.
     """
     try:
@@ -194,8 +197,8 @@ async def upflow_download_result(
         params: dict[str, Any] = {}
         default_name = fam.default_output_name
         if fam.name == "audio" and stem:
-            if stem not in ("instrumental", "vocals"):
-                return "Error: stem debe ser 'instrumental' o 'vocals'."
+            # Sin whitelist local: los stems dependen del modelo del job y la
+            # API es la autoridad — un id inválido vuelve como 400 accionable.
             params["stem"] = stem
             default_name = f"{stem}.flac"
         if fam.name == "transcribe":

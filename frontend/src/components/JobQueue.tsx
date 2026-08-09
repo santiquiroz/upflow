@@ -1,5 +1,6 @@
 import { AlertTriangle, Ban, CheckCircle2, Clock, Download, Loader2, X } from "lucide-react";
 import { useState, useEffect } from "react";
+import type { AudioStemDownload } from "../lib/apiTypes";
 import { useAllJobsView, type AllJobsEntry } from "../hooks/useAllJobs";
 import { useTranslation } from "../i18n/LocaleProvider";
 import { useAuth } from "../hooks/useAuth";
@@ -39,8 +40,18 @@ function RunningStatus() {
 const QUEUE_DOWNLOAD_LINK_CLASS =
   "inline-flex items-center gap-1 rounded-sm border border-accent px-2 py-1 text-xs font-medium text-accent transition-[background-color,color] duration-fast hover:bg-accent hover:text-bg focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent";
 
+function readStemDownloads(entry: JobQueueEntry): AudioStemDownload[] | null {
+  // Solo los jobs de audio en modo separación traen el par de stems.
+  const job = entry.job;
+  if (!job || !("stems" in job)) {
+    return null;
+  }
+  const stems = job.stems ?? null;
+  return stems !== null && stems.length > 0 ? stems : null;
+}
+
 function readVocalsUrl(entry: JobQueueEntry): string | null {
-  // Solo los jobs de audio en modo karaoke traen el segundo stem.
+  // Fallback karaoke pre-stems: instrumental + voz con labels fijos.
   const job = entry.job;
   return job && "vocalsDownloadUrl" in job ? job.vocalsDownloadUrl ?? null : null;
 }
@@ -49,6 +60,20 @@ function CompletedDownloadLinks({ entry }: { entry: JobQueueEntry }) {
   const { t } = useTranslation();
   if (!entry.downloadUrl) {
     return null;
+  }
+  const stems = readStemDownloads(entry);
+  if (stems) {
+    // El backend ordena el par: primero el stem que el usuario quiere.
+    return (
+      <div className="flex flex-wrap justify-end gap-1.5">
+        {stems.map((stem) => (
+          <a key={stem.id} href={stem.url} download className={QUEUE_DOWNLOAD_LINK_CLASS}>
+            <Download aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.75} />
+            {t(stem.labelKey)}
+          </a>
+        ))}
+      </div>
+    );
   }
   const vocalsUrl = readVocalsUrl(entry);
   if (vocalsUrl) {

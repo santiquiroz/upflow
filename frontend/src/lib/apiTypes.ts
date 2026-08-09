@@ -153,12 +153,28 @@ export interface AudioJob {
   error: string | null;
   ownerId: string | null;
   downloadUrl: string | null;
-  // Modo karaoke. Opcionales para no obligar a cada fixture a declararlos:
+  // Modo separación. Opcionales para no obligar a cada fixture a declararlos:
   // el backend los manda siempre.
   separate?: boolean;
   separationModel?: string | null;
-  /** Solo en modo karaoke: downloadUrl baja la instrumental y esto la voz. */
+  /**
+   * Solo en jobs de separación completados: las DOS descargas con el label
+   * del catálogo, ordenadas (la primera es la que el usuario quiere y
+   * coincide con downloadUrl).
+   */
+  stems?: AudioStemDownload[] | null;
+  /**
+   * Compat karaoke: downloadUrl baja la instrumental y esto la voz. Solo
+   * viene cuando el modelo del job tiene stem "vocals"; preferir `stems`.
+   */
   vocalsDownloadUrl?: string | null;
+}
+
+// Mirrors app/schemas.py::AudioStemDownloadResponse.
+export interface AudioStemDownload {
+  id: string;
+  labelKey: string;
+  url: string;
 }
 
 // Mirrors app/schemas.py::MasteringPresetResponse. La copia viaja como clave
@@ -170,13 +186,25 @@ export interface MasteringPreset {
   targetLufs: number;
 }
 
+// Mirrors app/schemas.py::SeparationStemResponse. `id` va en download?stem=;
+// la copia viaja como clave de traducción.
+export interface SeparationStem {
+  id: string;
+  labelKey: string;
+}
+
 // Mirrors app/schemas.py::SeparationModelResponse. `name` es nombre propio del
-// modelo: se muestra tal cual, no se traduce.
+// modelo: se muestra tal cual, no se traduce. `stems` viene ordenado: el
+// primero es el que el usuario quiere (downloadUrl del job); `category`
+// agrupa el picker ("karaoke" | "cleanup").
 export interface SeparationModel {
   id: string;
   name: string;
   installed: boolean;
   primaryStem: string;
+  category: string;
+  descriptionKey: string;
+  stems: SeparationStem[];
 }
 
 export interface AudioCapabilities {

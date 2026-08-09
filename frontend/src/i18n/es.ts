@@ -527,17 +527,28 @@ export const es = {
   "audio.section.device": "Dispositivo",
   "audio.section.outputFormat": "Formato de salida",
   "audio.section.karaoke": "Karaoke",
-  "audio.karaoke.toggle": "Separar voz e instrumental",
+  "audio.karaoke.toggle": "Dividir el audio en dos stems",
   "audio.karaoke.tooltip":
-    "Divide la mezcla en dos archivos: la instrumental (pista de karaoke) y la voz aislada. Corre un modelo de separación MDX-Net de Ultimate Vocal Remover.",
+    "Divide la mezcla en dos archivos con un modelo de separación MDX-Net del catálogo de Ultimate Vocal Remover: karaoke (instrumental + voz) o pasadas de limpieza como quitar reverb.",
   "audio.karaoke.summary.on": "Voz + instrumental",
   "audio.karaoke.exclusiveNote":
     "El modo karaoke corre solo: los demás pasos se aplicarían a un stem ambiguo. Pedilos en un segundo trabajo sobre el stem que quieras.",
-  "audio.karaoke.model": "Modelo de separación",
   "audio.karaoke.modelMissing": "El modelo {{name}} todavía no está descargado.",
   "audio.karaoke.noModels": "Descargá al menos un modelo de separación para habilitar el karaoke.",
   "audio.karaoke.credit":
-    "Modelos de Ultimate Vocal Remover (Anjok07 & aufr33), MIT.",
+    "Modelos distribuidos por el canal oficial de descargas de Ultimate Vocal Remover: Anjok07 & aufr33 (MIT) y Reverb HQ de FoxJoy.",
+  "audio.karaoke.category.karaoke": "Karaoke",
+  "audio.karaoke.category.cleanup": "Limpieza",
+  "audio.karaoke.model.inst_hq_3.description":
+    "Extrae la instrumental (pista de karaoke); la voz es el resto.",
+  "audio.karaoke.model.voc_ft.description":
+    "Extrae la voz; la instrumental es el resto.",
+  "audio.karaoke.model.reverb_hq.description":
+    "Quitar reverb — segunda pasada para limpiar la instrumental de una pista vieja.",
+  "audio.stem.instrumental": "Instrumental",
+  "audio.stem.vocals": "Voces",
+  "audio.stem.dry": "Sin reverb (dry)",
+  "audio.stem.wet": "Reverb (wet)",
   "audio.karaoke.download.instrumental": "Instrumental",
   "audio.karaoke.download.vocals": "Voces",
   "audio.mastering.none": "Sin nivelar",

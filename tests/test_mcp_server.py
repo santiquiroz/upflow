@@ -238,13 +238,22 @@ async def test_process_audio_separation_model_without_separate_propagates_400(
     assert "separate=true" in result
 
 
-async def test_download_result_rejects_unknown_stem(
+async def test_download_result_unknown_stem_propagates_api_400(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    install_mock(monkeypatch, lambda request: httpx.Response(200, content=b""))
+    # Sin whitelist local: los stems dependen del modelo del job (karaoke usa
+    # instrumental/vocals, reverb_hq usa dry/wet) — el 400 de la API es la
+    # verdad y llega al cliente MCP con los válidos.
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["stem"] == "drums"
+        return httpx.Response(
+            400, json={"detail": "stem inválido; válidos: dry, wet"}
+        )
+
+    install_mock(monkeypatch, handler)
     result = await upflow_download_result("audio", "a1", str(tmp_path), stem="drums")
     assert result.startswith("Error")
-    assert "instrumental" in result
+    assert "dry, wet" in result
 
 
 async def test_connection_refused_is_actionable(monkeypatch: pytest.MonkeyPatch) -> None:

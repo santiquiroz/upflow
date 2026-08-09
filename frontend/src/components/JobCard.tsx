@@ -1,6 +1,6 @@
 import { AlertTriangle, Ban, CheckCircle2, Clock, Download, ImageIcon, Loader2, UploadCloud } from "lucide-react";
 import { useTranslation } from "../i18n/LocaleProvider";
-import type { AudioJob, GenerationJob, JobResponse, VideoJobResponse } from "../lib/apiTypes";
+import type { AudioJob, AudioStemDownload, GenerationJob, JobResponse, VideoJobResponse } from "../lib/apiTypes";
 import { denoiseLabel, restoreLabel } from "../lib/audioLabels";
 import { formatDuration } from "../lib/formatDuration";
 import { formatFps } from "../lib/formatFps";
@@ -305,8 +305,17 @@ function CompletedDetails({ job }: { job: AnyJobResponse }) {
 const DOWNLOAD_LINK_CLASS =
   "inline-flex items-center justify-center gap-2 rounded border border-accent bg-surface-2 px-3 py-2 text-sm font-medium text-accent transition-[background-color,color] duration-fast hover:bg-accent hover:text-bg focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent";
 
+function readStemDownloads(job: AnyJobResponse): AudioStemDownload[] | null {
+  // Solo los jobs de audio en modo separación traen el par de stems.
+  if (!isAudioJob(job)) {
+    return null;
+  }
+  const stems = job.stems ?? null;
+  return stems !== null && stems.length > 0 ? stems : null;
+}
+
 function readVocalsDownloadUrl(job: AnyJobResponse): string | null {
-  // Solo los jobs de audio en modo karaoke traen el segundo stem.
+  // Fallback karaoke pre-stems: instrumental + voz con labels fijos.
   if (!isAudioJob(job)) {
     return null;
   }
@@ -317,6 +326,21 @@ function DownloadLinks({ job }: { job: AnyJobResponse }) {
   const { t } = useTranslation();
   if (!job.downloadUrl) {
     return null;
+  }
+  const stems = readStemDownloads(job);
+  if (stems) {
+    // El backend ordena el par: primero el stem que el usuario quiere
+    // (instrumental en karaoke, "sin reverb" en la limpieza).
+    return (
+      <div className="flex flex-wrap gap-2">
+        {stems.map((stem) => (
+          <a key={stem.id} href={stem.url} download className={DOWNLOAD_LINK_CLASS}>
+            <Download aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />
+            {t(stem.labelKey)}
+          </a>
+        ))}
+      </div>
+    );
   }
   const vocalsUrl = readVocalsDownloadUrl(job);
   if (vocalsUrl) {

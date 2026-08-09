@@ -532,17 +532,28 @@ export const en = {
   "audio.section.device": "Device",
   "audio.section.outputFormat": "Output format",
   "audio.section.karaoke": "Karaoke",
-  "audio.karaoke.toggle": "Separate vocals and instrumental",
+  "audio.karaoke.toggle": "Split the audio into two stems",
   "audio.karaoke.tooltip":
-    "Split the mix into two files: the instrumental (karaoke track) and the isolated vocals. Runs an MDX-Net separation model from Ultimate Vocal Remover.",
+    "Split the mix into two files with an MDX-Net separation model from Ultimate Vocal Remover's catalog: karaoke (instrumental + vocals) or cleanup passes such as removing reverb.",
   "audio.karaoke.summary.on": "Vocals + instrumental",
   "audio.karaoke.exclusiveNote":
     "Karaoke runs alone: the other steps would apply to an ambiguous stem. Ask for them in a second job on the stem you want.",
-  "audio.karaoke.model": "Separation model",
   "audio.karaoke.modelMissing": "The {{name}} model is not downloaded yet.",
   "audio.karaoke.noModels": "Download at least one separation model to enable karaoke.",
   "audio.karaoke.credit":
-    "Models from Ultimate Vocal Remover (Anjok07 & aufr33), MIT.",
+    "Models distributed via Ultimate Vocal Remover's official download center: Anjok07 & aufr33 (MIT) and Reverb HQ by FoxJoy.",
+  "audio.karaoke.category.karaoke": "Karaoke",
+  "audio.karaoke.category.cleanup": "Cleanup",
+  "audio.karaoke.model.inst_hq_3.description":
+    "Extracts the instrumental (karaoke track); the vocals are the remainder.",
+  "audio.karaoke.model.voc_ft.description":
+    "Extracts the vocals; the instrumental is the remainder.",
+  "audio.karaoke.model.reverb_hq.description":
+    "Remove reverb — a second pass to clean up the instrumental of an old track.",
+  "audio.stem.instrumental": "Instrumental",
+  "audio.stem.vocals": "Vocals",
+  "audio.stem.dry": "No reverb (dry)",
+  "audio.stem.wet": "Reverb (wet)",
   "audio.karaoke.download.instrumental": "Instrumental",
   "audio.karaoke.download.vocals": "Vocals",
   "audio.mastering.none": "Not levelled",

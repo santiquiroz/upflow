@@ -1,7 +1,7 @@
 param(
     # Cual modelo del catalogo bajar. Tiene que coincidir con los ids de
     # app/services/engines/mdx_models.py.
-    [ValidateSet('inst_hq_3', 'voc_ft')]
+    [ValidateSet('inst_hq_3', 'voc_ft', 'reverb_hq')]
     [string]$Model = 'inst_hq_3'
 )
 
@@ -13,12 +13,14 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $vendorDir = Join-Path $root 'vendor\karaoke'
 
-# Modelos MDX-Net del propio equipo de Ultimate Vocal Remover (Anjok07 & aufr33,
-# MIT). El hash es el "hash UVR": MD5 de los ultimos 10000 KiB del archivo, que
-# es como UVR identifica sus modelos en model_data_new.json. El hash UVR solo
-# cubre la cola (~15% del archivo), asi que ADEMAS se pinea el SHA-256 del
-# archivo completo: el mirror TRvlvr/model_repo es de terceros, no del equipo
-# UVR. Verificados contra los archivos reales el 2026-08-09.
+# Modelos MDX-Net distribuidos por el canal oficial de descargas de Ultimate
+# Vocal Remover (el Download Center de la app), con credito por autor: equipo
+# core (Anjok07 & aufr33, MIT) o contribuidores comunitarios como FoxJoy
+# (Reverb HQ). El hash es el "hash UVR": MD5 de los ultimos 10000 KiB del
+# archivo, que es como UVR identifica sus modelos en model_data_new.json. El
+# hash UVR solo cubre la cola (~15% del archivo), asi que ADEMAS se pinea el
+# SHA-256 del archivo completo: el mirror TRvlvr/model_repo es de terceros, no
+# del equipo UVR. Verificados contra los archivos reales el 2026-08-09.
 $modelos = @{
     'inst_hq_3' = @{
         File   = 'UVR-MDX-NET-Inst_HQ_3.onnx'
@@ -33,6 +35,13 @@ $modelos = @{
         Hash   = '77d07b2667ddf05b9e3175941b4454a0'
         Sha256 = '534b2070fcc7df514b13ef660dc8cbb328679c2374d04354a5c42bb14ecce111'
         Label  = 'MDX-Net Voc FT (saca la voz)'
+    }
+    'reverb_hq' = @{
+        File   = 'Reverb_HQ_By_FoxJoy.onnx'
+        Url    = 'https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/Reverb_HQ_By_FoxJoy.onnx'
+        Hash   = 'cd5b2989ad863f116c855db1dfe24e39'
+        Sha256 = '233bb5c6aaa365e568659a0a81211746fa881f8f47f82d9e864fce1f7692db80'
+        Label  = 'Reverb HQ by FoxJoy (saca la cola de reverb; la pista limpia es la resta)'
     }
 }
 
@@ -90,8 +99,9 @@ function Get-ModelIntegrityError([string]$path, $info) {
 
 function Write-KaraokeCredits([string]$directory) {
     $credits = @(
-        'Models: UVR-MDX-NET Inst HQ 3 / UVR-MDX-NET Voc FT'
+        'Models: UVR-MDX-NET Inst HQ 3 / UVR-MDX-NET Voc FT / Reverb HQ'
         'Ultimate Vocal Remover (Anjok07 & aufr33), MIT'
+        'Reverb HQ by FoxJoy - distributed via the official UVR Download Center'
         'github.com/Anjok07/ultimatevocalremovergui'
     ) -join [Environment]::NewLine
     Set-Content -Path (Join-Path $directory 'CREDITS.txt') -Value $credits -Encoding UTF8
@@ -128,5 +138,5 @@ Move-Item -Force $temporal $destino
 Write-KaraokeCredits $vendorDir
 
 Write-Host "Modelo de separacion listo en: $destino"
-Write-Host 'Licencia MIT (Ultimate Vocal Remover, Anjok07 & aufr33).'
+Write-Host 'Distribuido por el canal oficial de descargas de UVR (creditos por autor en CREDITS.txt).'
 Write-Host 'El modo Karaoke del apartado Audio queda habilitado con este modelo.'

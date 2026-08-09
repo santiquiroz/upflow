@@ -65,6 +65,16 @@ const VOICE_CATALOG: VoiceCatalog = {
   ],
 };
 
+const KARAOKE_STEMS = [
+  { id: "instrumental", labelKey: "audio.stem.instrumental" },
+  { id: "vocals", labelKey: "audio.stem.vocals" },
+];
+
+const REVERB_STEMS = [
+  { id: "dry", labelKey: "audio.stem.dry" },
+  { id: "wet", labelKey: "audio.stem.wet" },
+];
+
 const FULL_CAPABILITIES: AudioCapabilities = {
   denoiseModes: ["deepfilter", "rnnoise"],
   restoreAvailable: true,
@@ -84,8 +94,33 @@ const FULL_CAPABILITIES: AudioCapabilities = {
     },
   ],
   separationModels: [
-    { id: "inst_hq_3", name: "MDX-Net Inst HQ 3", installed: true, primaryStem: "Instrumental" },
-    { id: "voc_ft", name: "MDX-Net Voc FT", installed: false, primaryStem: "Vocals" },
+    {
+      id: "inst_hq_3",
+      name: "MDX-Net Inst HQ 3",
+      installed: true,
+      primaryStem: "Instrumental",
+      category: "karaoke",
+      descriptionKey: "audio.karaoke.model.inst_hq_3.description",
+      stems: KARAOKE_STEMS,
+    },
+    {
+      id: "voc_ft",
+      name: "MDX-Net Voc FT",
+      installed: false,
+      primaryStem: "Vocals",
+      category: "karaoke",
+      descriptionKey: "audio.karaoke.model.voc_ft.description",
+      stems: KARAOKE_STEMS,
+    },
+    {
+      id: "reverb_hq",
+      name: "Reverb HQ by FoxJoy",
+      installed: true,
+      primaryStem: "Reverb",
+      category: "cleanup",
+      descriptionKey: "audio.karaoke.model.reverb_hq.description",
+      stems: REVERB_STEMS,
+    },
   ],
 };
 
@@ -364,7 +399,7 @@ describe("AudioPanel", () => {
 describe("AudioPanel modo karaoke", () => {
   async function openKaraoke() {
     fireEvent.click(await screen.findByRole("button", { name: /^Karaoke/ }));
-    return screen.findByRole("checkbox", { name: /separate vocals and instrumental/i });
+    return screen.findByRole("checkbox", { name: /split the audio into two stems/i });
   }
 
   it("submits a separate-only job with the installed model and nulls the rest", async () => {
@@ -430,7 +465,15 @@ describe("AudioPanel modo karaoke", () => {
       restoreAvailable: false,
       restoreModes: [],
       separationModels: [
-        { id: "inst_hq_3", name: "MDX-Net Inst HQ 3", installed: false, primaryStem: "Instrumental" },
+        {
+          id: "inst_hq_3",
+          name: "MDX-Net Inst HQ 3",
+          installed: false,
+          primaryStem: "Instrumental",
+          category: "karaoke",
+          descriptionKey: "audio.karaoke.model.inst_hq_3.description",
+          stems: KARAOKE_STEMS,
+        },
       ],
     });
     selectFile();
@@ -486,6 +529,77 @@ describe("AudioPanel modo karaoke", () => {
     await openKaraoke();
 
     expect(screen.getByText(/ultimate vocal remover/i)).toBeInTheDocument();
+  });
+
+  it("groups the picker by category and describes the cleanup model", async () => {
+    renderPanel(FULL_CAPABILITIES);
+    fireEvent.click(await openKaraoke());
+
+    // Dos grupos: los modelos karaoke y la pasada de limpieza, separados.
+    expect(screen.getByText("Cleanup")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Reverb HQ by FoxJoy" }));
+
+    expect(
+      await screen.findByText(/second pass to clean up the instrumental/i),
+    ).toBeInTheDocument();
+    // El resumen de la sección nombra los stems del modelo elegido.
+    expect(screen.getByText("No reverb (dry) + Reverb (wet)")).toBeInTheDocument();
+  });
+
+  it("submits the cleanup model and labels the stem downloads from the catalog", async () => {
+    vi.mocked(audioService.createAudioJob).mockResolvedValue({
+      jobId: "rev-1", status: "queued", statusUrl: "/x", downloadUrl: null,
+    });
+    vi.mocked(audioService.getAudioJob).mockResolvedValue({
+      ownerId: null,
+      id: "rev-1",
+      status: "completed",
+      originalFilename: "instrumental.flac",
+      denoise: null,
+      restore: null,
+      device: "cpu",
+      createdAt: "2026-01-01T00:00:00Z",
+      startedAt: "2026-01-01T00:00:01Z",
+      finishedAt: "2026-01-01T00:02:00Z",
+      progressPct: null,
+      stages: null,
+      error: null,
+      separate: true,
+      separationModel: "reverb_hq",
+      downloadUrl: "/api/v1/audio/jobs/rev-1/download",
+      stems: [
+        {
+          id: "dry",
+          labelKey: "audio.stem.dry",
+          url: "/api/v1/audio/jobs/rev-1/download?stem=dry",
+        },
+        {
+          id: "wet",
+          labelKey: "audio.stem.wet",
+          url: "/api/v1/audio/jobs/rev-1/download?stem=wet",
+        },
+      ],
+      vocalsDownloadUrl: null,
+    });
+    renderPanel(FULL_CAPABILITIES);
+    selectFile();
+    fireEvent.click(await openKaraoke());
+    fireEvent.click(screen.getByRole("button", { name: "Reverb HQ by FoxJoy" }));
+
+    const submitButton = screen.getByRole("button", { name: /enhance audio/i });
+    await waitFor(() => expect(submitButton).not.toBeDisabled());
+    fireEvent.click(submitButton);
+
+    await waitFor(() => expect(audioService.createAudioJob).toHaveBeenCalled());
+    expect(vi.mocked(audioService.createAudioJob).mock.calls[0][0].separationModel).toBe(
+      "reverb_hq",
+    );
+    // "Sin reverb" primero: es el stem que el usuario quiere.
+    const dryLink = await screen.findByRole("link", { name: /no reverb \(dry\)/i });
+    expect(dryLink).toHaveAttribute("href", "/api/v1/audio/jobs/rev-1/download?stem=dry");
+    const wetLink = screen.getByRole("link", { name: /reverb \(wet\)/i });
+    expect(wetLink).toHaveAttribute("href", "/api/v1/audio/jobs/rev-1/download?stem=wet");
+    expect(dryLink.compareDocumentPosition(wetLink) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });
 

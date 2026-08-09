@@ -128,12 +128,17 @@ class AudioPipeline:
         return output_path
 
     async def _run_separation(self, job: AudioJob, work_dir: Path, decoded: Path) -> Path:
-        """Modo karaoke: DOS salidas (instrumental y voz), mismo formato ambas.
+        """Modo separacion: DOS salidas nombradas por stem, mismo formato ambas.
 
-        job.output_path (lo devuelto) es la instrumental; la voz queda en
-        job.vocals_output_path. El manager ya garantizo que el modo corre solo.
+        job.output_path (lo devuelto) es el stem principal del modelo (el que
+        el usuario quiere: instrumental en karaoke, dry en reverb_hq); el
+        restante queda en job.secondary_output_path. El manager ya garantizo
+        que el modo corre solo.
         """
-        from app.services.engines.mdx_models import DEFAULT_SEPARATION_MODEL
+        from app.services.engines.mdx_models import (
+            DEFAULT_SEPARATION_MODEL,
+            SEPARATION_MODELS,
+        )
 
         if self.separator is None:
             # Mismo criterio que la cadena de voz: pedir la separacion y que se
@@ -143,14 +148,22 @@ class AudioPipeline:
                 "motor de separacion."
             )
         advance_audio_stage(job, "separating")
-        instrumental_wav = work_dir / "instrumental.wav"
-        vocals_wav = work_dir / "vocals.wav"
+        model_id = job.separation_model or DEFAULT_SEPARATION_MODEL
+        spec = SEPARATION_MODELS.get(model_id)
+        if spec is None:
+            # El manager valida al crear; esto cubre llamadas directas.
+            known = ", ".join(sorted(SEPARATION_MODELS))
+            raise RuntimeError(
+                f"Modelo de separacion desconocido: {model_id!r}. Validos: {known}."
+            )
+        main_wav = work_dir / f"{spec.main_stem.id}.wav"
+        other_wav = work_dir / f"{spec.other_stem.id}.wav"
         await self.separator.run(
             decoded,
-            instrumental_wav,
-            vocals_wav,
+            main_wav,
+            other_wav,
             job.device or self.settings.default_device,
-            model_id=job.separation_model or DEFAULT_SEPARATION_MODEL,
+            model_id=spec.id,
             on_chunk=lambda done, total: apply_audio_chunk_progress(job, done, total),
         )
 
@@ -158,15 +171,15 @@ class AudioPipeline:
         output_format = job.output_format
         outputs_dir = self.settings.outputs_path
         outputs_dir.mkdir(parents=True, exist_ok=True)
-        instrumental_out = outputs_dir / f"{job.id}.instrumental.{output_format}"
-        vocals_out = outputs_dir / f"{job.id}.vocals.{output_format}"
-        await self._write_output(instrumental_wav, instrumental_out, output_format)
-        await self._write_output(vocals_wav, vocals_out, output_format)
-        self._validate_output(instrumental_out)
-        self._validate_output(vocals_out)
-        job.vocals_output_path = vocals_out
+        main_out = outputs_dir / f"{job.id}.{spec.main_stem.id}.{output_format}"
+        other_out = outputs_dir / f"{job.id}.{spec.other_stem.id}.{output_format}"
+        await self._write_output(main_wav, main_out, output_format)
+        await self._write_output(other_wav, other_out, output_format)
+        self._validate_output(main_out)
+        self._validate_output(other_out)
+        job.secondary_output_path = other_out
         complete_audio_stages(job)
-        return instrumental_out
+        return main_out
 
     def _voice_steps_without_double_loudnorm(self, job: AudioJob) -> list[str]:
         """Con mastering activo, el paso `loudness` de la cadena de voz sobra.

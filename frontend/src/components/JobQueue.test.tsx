@@ -202,6 +202,35 @@ describe("JobQueue", () => {
     expect(screen.queryByRole("link", { name: /download song\.wav/i })).not.toBeInTheDocument();
   });
 
+  it("labels the stem links from the catalog for a completed de-reverb job", async () => {
+    // reverb_hq no tiene vocalsDownloadUrl: sin `stems`, el stem wet quedaba
+    // inalcanzable desde la cola tras un refresh.
+    vi.mocked(audioService.getAudioJob).mockResolvedValue({
+      ...BASE_AUDIO_JOB,
+      status: "completed",
+      denoise: null,
+      separate: true,
+      separationModel: "reverb_hq",
+      downloadUrl: "/api/v1/audio/jobs/aud-1/download",
+      stems: [
+        { id: "dry", labelKey: "audio.stem.dry", url: "/api/v1/audio/jobs/aud-1/download?stem=dry" },
+        { id: "wet", labelKey: "audio.stem.wet", url: "/api/v1/audio/jobs/aud-1/download?stem=wet" },
+      ],
+      vocalsDownloadUrl: null,
+    });
+    jobQueueStore.addTrackedJob({ id: "aud-1", kind: "audio", fileName: "instrumental.flac", createdAt: 1 });
+
+    renderQueue();
+
+    const dry = await screen.findByRole("link", { name: /no reverb \(dry\)/i });
+    expect(dry).toHaveAttribute("href", "/api/v1/audio/jobs/aud-1/download?stem=dry");
+    expect(screen.getByRole("link", { name: /reverb \(wet\)/i })).toHaveAttribute(
+      "href",
+      "/api/v1/audio/jobs/aud-1/download?stem=wet",
+    );
+    expect(screen.queryByRole("link", { name: /download instrumental\.flac/i })).not.toBeInTheDocument();
+  });
+
   it("keeps the generic download link for a completed non-karaoke audio job", async () => {
     vi.mocked(audioService.getAudioJob).mockResolvedValue({
       ...BASE_AUDIO_JOB,

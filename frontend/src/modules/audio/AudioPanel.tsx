@@ -211,6 +211,14 @@ export function AudioPanel() {
   // Default: el elegido, o el primer modelo instalado del catálogo.
   const effectiveSeparationModel =
     separationModel ?? separationModels.find((model) => model.installed)?.id ?? null;
+  const selectedSeparationSpec = separationModels.find(
+    (model) => model.id === effectiveSeparationModel,
+  );
+  // El resumen nombra los stems del modelo elegido: para karaoke dice
+  // voz/instrumental y para la limpieza "sin reverb + reverb".
+  const separationSummary = selectedSeparationSpec
+    ? selectedSeparationSpec.stems.map((stem) => t(stem.labelKey)).join(" + ")
+    : t("audio.karaoke.summary.on");
 
   function handleFilesSelected(selected: File[]) {
     setFiles(selected);
@@ -273,7 +281,7 @@ export function AudioPanel() {
         <Dropzone files={files} onFilesSelected={handleFilesSelected} />
         <AccordionSection
           title={t("audio.section.karaoke")}
-          summary={separate ? t("audio.karaoke.summary.on") : t("audio.mode.none")}
+          summary={separate ? separationSummary : t("audio.mode.none")}
           tooltip={t("audio.karaoke.tooltip")}
         >
           <KaraokeSection

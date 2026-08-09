@@ -70,6 +70,15 @@ class VideoJobResponse(BaseModel):
     download_url: str | None = Field(default=None, serialization_alias="downloadUrl")
 
 
+class AudioStemDownloadResponse(BaseModel):
+    """Una descarga por stem de un job de separacion completado. `id` es el
+    valor de download?stem=; la copia viaja como clave de traduccion."""
+
+    id: str
+    label_key: str = Field(serialization_alias="labelKey")
+    url: str
+
+
 class AudioJobResponse(BaseModel):
     id: str
     status: JobStatus
@@ -88,7 +97,13 @@ class AudioJobResponse(BaseModel):
     error: str | None = None
     owner_id: str | None = Field(default=None, serialization_alias="ownerId")
     download_url: str | None = Field(default=None, serialization_alias="downloadUrl")
-    # Solo en modo karaoke: downloadUrl baja la instrumental y esto la voz.
+    # Solo en jobs de separacion completados: las DOS descargas con el label
+    # del catalogo, ORDENADAS (la primera es la que el usuario quiere y
+    # coincide con downloadUrl).
+    stems: list[AudioStemDownloadResponse] | None = None
+    # Compat v0.59 (karaoke): downloadUrl baja la instrumental y esto la voz.
+    # Solo se llena cuando el modelo del job tiene un stem "vocals"; para
+    # reverb_hq usar `stems`.
     vocals_download_url: str | None = Field(
         default=None, serialization_alias="vocalsDownloadUrl"
     )
@@ -286,17 +301,31 @@ class MasteringPresetResponse(BaseModel):
     target_lufs: float = Field(serialization_alias="targetLufs")
 
 
+class SeparationStemResponse(BaseModel):
+    """Un stem de un modelo de separacion. `id` es el valor que va en
+    download?stem=; la copia viaja como clave de traduccion."""
+
+    id: str
+    label_key: str = Field(serialization_alias="labelKey")
+
+
 class SeparationModelResponse(BaseModel):
     """Un modelo del catalogo de separacion (mdx_models.SEPARATION_MODELS).
 
     `name` es nombre propio del modelo y viaja tal cual (no se traduce);
     `installed` sale de mirar el disco, como todas las capacidades.
+    `stems` viene ORDENADO: el primero es el que el usuario quiere (el que
+    sirve downloadUrl del job); `category` agrupa el picker de la UI
+    ("karaoke" | "cleanup").
     """
 
     id: str
     name: str
     installed: bool
     primary_stem: str = Field(serialization_alias="primaryStem")
+    category: str
+    description_key: str = Field(serialization_alias="descriptionKey")
+    stems: list[SeparationStemResponse] = Field(default_factory=list)
 
 
 class AudioCapabilitiesResponse(BaseModel):

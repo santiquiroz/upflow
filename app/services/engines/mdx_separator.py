@@ -91,15 +91,20 @@ def model_output_to_audio(output: np.ndarray, spec: MdxModelSpec) -> np.ndarray:
 def stems_from_primary(
     mix: np.ndarray, primary: np.ndarray, spec: MdxModelSpec
 ) -> tuple[np.ndarray, np.ndarray]:
-    """(instrumental, vocals) a partir del stem que el modelo saca."""
-    secondary = mix - primary * spec.compensate
-    if spec.primary_stem == "Vocals":
-        return secondary, primary
-    return primary, secondary
+    """Audio de los DOS stems en el orden del spec (primero = downloadUrl).
+
+    Cada MdxStem declara su fuente: "primary" es lo que el modelo infiere y
+    "secondary" la resta compensada. Asi voc_ft (saca la voz, se quiere la
+    instrumental) y reverb_hq (saca el reverb, se quiere la pista limpia)
+    invierten sin ningun caso especial aca.
+    """
+    residual = mix - primary * spec.compensate
+    by_source = {"primary": primary, "secondary": residual}
+    return by_source[spec.stems[0].source], by_source[spec.stems[1].source]
 
 
 def normalize_stem_peaks(
-    instrumental: np.ndarray, vocals: np.ndarray
+    main: np.ndarray, other: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray]:
     """Factor UNICO para ambos stems, solo si algun pico supera 1.0.
 
@@ -107,10 +112,10 @@ def normalize_stem_peaks(
     mezcla; un factor compartido preserva el balance relativo y evita que el
     encode entero final (flac/mp3) recorte esos picos.
     """
-    peak = max(float(np.max(np.abs(instrumental))), float(np.max(np.abs(vocals))))
+    peak = max(float(np.max(np.abs(main))), float(np.max(np.abs(other))))
     if peak <= 1.0:
-        return instrumental, vocals
-    return instrumental / peak, vocals / peak
+        return main, other
+    return main / peak, other / peak
 
 
 class SeparationCancelled(RuntimeError):
@@ -139,19 +144,21 @@ class MdxSeparator(OnnxAudioRestorer):
     async def run(
         self,
         input_wav: Path,
-        instrumental_wav: Path,
-        vocals_wav: Path,
+        main_wav: Path,
+        other_wav: Path,
         device: str,
         model_id: str = DEFAULT_SEPARATION_MODEL,
         on_chunk: Callable[[int, int], None] | None = None,
     ) -> None:
+        # main_wav recibe el stem que el usuario quiere (spec.main_stem) y
+        # other_wav el restante, en el orden que declara el catalogo.
         cancel_event = threading.Event()
         worker = asyncio.ensure_future(
             asyncio.to_thread(
                 self._separate_and_save,
                 input_wav,
-                instrumental_wav,
-                vocals_wav,
+                main_wav,
+                other_wav,
                 device,
                 model_id,
                 cancel_event,
@@ -171,14 +178,14 @@ class MdxSeparator(OnnxAudioRestorer):
                 with contextlib.suppress(BaseException):
                     await asyncio.shield(worker)
             raise
-        self._ensure_output_file(instrumental_wav)
-        self._ensure_output_file(vocals_wav)
+        self._ensure_output_file(main_wav)
+        self._ensure_output_file(other_wav)
 
     def _separate_and_save(
         self,
         input_wav: Path,
-        instrumental_wav: Path,
-        vocals_wav: Path,
+        main_wav: Path,
+        other_wav: Path,
         device: str,
         model_id: str,
         cancel_event: threading.Event,
@@ -188,11 +195,9 @@ class MdxSeparator(OnnxAudioRestorer):
         mix = self._load_stereo(input_wav)
         session = self._get_session(device, model_id)
         primary = self._run_chunks(mix, session, spec, cancel_event, on_chunk)
-        instrumental, vocals = normalize_stem_peaks(
-            *stems_from_primary(mix, primary, spec)
-        )
-        self._save_stereo(instrumental_wav, instrumental)
-        self._save_stereo(vocals_wav, vocals)
+        main, other = normalize_stem_peaks(*stems_from_primary(mix, primary, spec))
+        self._save_stereo(main_wav, main)
+        self._save_stereo(other_wav, other)
 
     def _require_model(self, model_id: str) -> MdxModelSpec:
         spec = SEPARATION_MODELS.get(model_id)
