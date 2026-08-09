@@ -137,12 +137,12 @@ def derive_readback_ring_capacity(downstream_slots: int, n_consumers: int) -> in
 from app.config import Settings
 from app.services.backend_registry import get_builtin_onnx_model
 from app.services.devices_service import DevicesService
+from app.services.dml_device import DML_DEVICE_PREFIX, parse_dml_device_id
 from app.services.engines.onnx_upscaler import (
     SESSION_CACHE_SIZE,
     TILE_OVERLAP_PX,
     _detect_scale,
     _finalize_uint8,
-    _parse_dml_device_id,
     _tile_starts,
     _tile_weights,
     _wrap_onnx_error,
@@ -171,7 +171,6 @@ from app.services.gpu_session_coordinator import GpuSessionCoordinator
 # semaphore of its own.
 # ---------------------------------------------------------------------------
 
-DML_DEVICE_PREFIX = "dml:"
 GPU_EXECUTION_PROVIDERS = frozenset(
     {"DmlExecutionProvider", "CUDAExecutionProvider", "TensorrtExecutionProvider"}
 )
@@ -781,7 +780,7 @@ class OnnxVideoUpscaler:
         try:
             import onnxruntime as ort
 
-            device_id = _parse_dml_device_id(device)
+            device_id = parse_dml_device_id(device)
             io_binding = session.io_binding()
             input_value = ort.OrtValue.ortvalue_from_numpy(frame_nhwc, "dml", device_id)
             io_binding.bind_ortvalue_input(input_name, input_value)

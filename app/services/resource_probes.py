@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from app.services import devices_service
+from app.services.dml_device import try_parse_dml_device_id
 
 
 class ResourceProbe(Protocol):
@@ -62,32 +63,20 @@ class SystemRamProbe:
         return int(psutil.Process().memory_info().rss // (1024 * 1024))
 
 
-_DML_DEVICE_PREFIX = "dml:"
-
-
-def _dml_adapter_index(device_id: str) -> int | None:
-    if not device_id.startswith(_DML_DEVICE_PREFIX):
-        return None
-    try:
-        return int(device_id[len(_DML_DEVICE_PREFIX):])
-    except ValueError:
-        return None
-
-
 class DxgiVramProbe:
     """Real VRAM probe for gpu-kind devices (dml:N), Windows/DirectML only.
     Thin adapter: parses the device_id and delegates the actual DXGI query
     to devices_service, which owns the ctypes/COM bindings."""
 
     def free_capacity_mb(self, device_id: str) -> int | None:
-        adapter_index = _dml_adapter_index(device_id)
+        adapter_index = try_parse_dml_device_id(device_id)
         if adapter_index is None:
             return None
         info = devices_service._query_adapter_vram_info_mb(adapter_index)
         return None if info is None else info[0]
 
     def own_usage_mb(self, device_id: str) -> int | None:
-        adapter_index = _dml_adapter_index(device_id)
+        adapter_index = try_parse_dml_device_id(device_id)
         if adapter_index is None:
             return None
         info = devices_service._query_adapter_vram_info_mb(adapter_index)

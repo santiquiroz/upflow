@@ -52,7 +52,7 @@ from app.services.media_tools import (
     resolve_video_fps,
 )
 from app.services.model_registry import ModelKind, ModelRegistry
-from app.services.process_runner import run_guarded_process
+from app.services.process_runner import is_non_empty_file, run_guarded_process
 from app.services.progress import (
     advance_video_stage,
     apply_stage_transition,
@@ -370,7 +370,7 @@ class VideoUpscaler:
         return frames_out, encode_fps
 
     def _finalize_output(self, job: VideoUpscaleJob, output_path: Path) -> None:
-        if not self._is_non_empty_file(output_path):
+        if not is_non_empty_file(output_path):
             raise RuntimeError("Video processing finished but no output file was produced")
         complete_video_stages(job)
         width, height = self._final_output_dims(job)
@@ -550,7 +550,7 @@ class VideoUpscaler:
         # codecs; the pre-enhance pipeline gated the mux on the file existing
         # and silently encoded a muted video instead of failing the whole job,
         # so this guard keeps that contract.
-        if self._is_non_empty_file(prepared_audio_path):
+        if is_non_empty_file(prepared_audio_path):
             return prepared_audio_path
         logger.warning(
             "Prepared audio track %s is missing or empty; encoding without audio", prepared_audio_path
@@ -932,10 +932,6 @@ class VideoUpscaler:
     @staticmethod
     def _output_file_size(output_path: Path) -> int:
         return output_path.stat().st_size if output_path.exists() else 0
-
-    @staticmethod
-    def _is_non_empty_file(path: Path) -> bool:
-        return path.exists() and path.stat().st_size > 0
 
     @staticmethod
     def _safe_rmtree(path: Path) -> None:
@@ -1361,7 +1357,7 @@ class VideoUpscaler:
         # (y no recién en _finalize_output, que corre FUERA del try del caller)
         # es lo que hace que ese caso caiga al camino clásico en vez de fallar
         # el job con streamPipeline=true ya estampado.
-        if not self._is_non_empty_file(output_path):
+        if not is_non_empty_file(output_path):
             raise RuntimeError("el stream pipeline terminó sin dejar un archivo de salida utilizable")
         if expected_output_count is None:
             # El denominador era un estimado (o no había): publicar lo realmente

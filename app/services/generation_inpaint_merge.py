@@ -33,7 +33,7 @@ INPAINT_BASE_REPOS: dict[str, dict[str, str]] = {
 }
 
 # Mapea tanto el nombre diffusers (repo HF) como el ORT (repo ya convertido por
-# la app), misma convención que INPAINT_CLASS_NAMES en generation_inpaint.py.
+# la app), misma convención que INPAINT_CLASS_NAMES en generation_pipeline_modes.py.
 _MERGE_FAMILIES: dict[str, str] = {
     "StableDiffusionPipeline": "sd15",
     "ORTStableDiffusionPipeline": "sd15",

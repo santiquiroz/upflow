@@ -8,8 +8,7 @@ from pathlib import Path
 from PIL import Image, UnidentifiedImageError
 
 from app.config import Settings
-from app.exceptions import QueueFullError
-from app.models import TERMINAL_JOB_STATUSES, JobStatus, UpscaleJob, utc_now
+from app.models import UpscaleJob
 from app.services.auth.identity import AuthenticatedUser
 from app.services.auth.quotas import QuotaService
 from app.services.device_router import DeviceRouter, has_compatible_device
@@ -17,6 +16,7 @@ from app.services.device_semaphores import DeviceSemaphores
 from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
 from app.services.engines.base import UpscaleEngine
 from app.services.classic_upscalers import is_classic_upscaler
+from app.services.job_manager_base import QueuedJobManager
 from app.services.model_registry import ModelKind, ModelRegistry, ModelStatus
 from app.services.progress import advance_image_stage, complete_image_stages
 
@@ -50,7 +50,10 @@ def select_upscale_engine(
     return builtin_engine
 
 
-class JobManager:
+class JobManager(QueuedJobManager[UpscaleJob]):
+    queue_full_message = "Job queue is full; try again later"
+    worker_name_prefix = "upscale-worker"
+
     def __init__(
         self,
         settings: Settings,
@@ -63,39 +66,17 @@ class JobManager:
         device_router: DeviceRouter | None = None,
         quota_service: QuotaService | None = None,
     ) -> None:
-        self.settings = settings
+        super().__init__(
+            settings,
+            quota_service=quota_service,
+            worker_count=settings.max_concurrent_jobs,
+        )
         self.engine = engine
         self.onnx_engine = onnx_engine
         self.registry = registry
         self.devices = devices
-        self.jobs: dict[str, UpscaleJob] = {}
-        self.queue: asyncio.Queue[UpscaleJob] = asyncio.Queue(maxsize=settings.max_queue_size)
         self.device_semaphores = device_semaphores
         self.device_router = device_router or DeviceRouter(device_semaphores)
-        self.worker_tasks: list[asyncio.Task] = []
-        self._active: dict[str, asyncio.Task] = {}
-        self.quota_service = quota_service
-
-    async def start(self) -> None:
-        if self.worker_tasks:
-            return
-        self.worker_tasks = [
-            asyncio.create_task(self._worker(), name=f"upscale-worker-{i}")
-            for i in range(self.settings.max_concurrent_jobs)
-        ]
-
-    async def stop(self) -> None:
-        for task in self.worker_tasks:
-            task.cancel()
-        for task in self.worker_tasks:
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-        self.worker_tasks = []
-
-    def queue_depth(self) -> int:
-        return self.queue.qsize()
 
     async def create_job(
         self,
@@ -140,31 +121,6 @@ class JobManager:
         self._enqueue(job)
         self.jobs[job.id] = job
         return job
-
-    def get_job(self, job_id: str) -> UpscaleJob | None:
-        return self.jobs.get(job_id)
-
-    def cancel_job(self, job_id: str) -> bool:
-        job = self.jobs.get(job_id)
-        if job is None:
-            return False
-        if job.status in TERMINAL_JOB_STATUSES:
-            return False
-        if job.status == JobStatus.queued:
-            # Still in the queue: mark it so the worker skips it on dequeue.
-            job.status = JobStatus.cancelled
-            job.finished_at = utc_now()
-            return True
-        task = self._active.get(job_id)
-        if task is not None:
-            task.cancel()
-        return True
-
-    def _enqueue(self, job: UpscaleJob) -> None:
-        try:
-            self.queue.put_nowait(job)
-        except asyncio.QueueFull as exc:
-            raise QueueFullError("Job queue is full; try again later") from exc
 
     def _resolve_model(
         self, *, model_id: str, scale: int, output_format: str, device: str | None
@@ -258,18 +214,11 @@ class JobManager:
                 f"Unsupported image format: {img.format}. Allowed formats: {sorted(ALLOWED_IMAGE_FORMATS)}"
             )
 
-    async def _worker(self) -> None:
-        while True:
-            job = await self.queue.get()
-            if job.status == JobStatus.cancelled:
-                # Cancelled while waiting in the queue: skip without processing.
-                self._unlink_source_safely(job.source_path)
-                self.queue.task_done()
-                continue
-            if job.device == AUTO_DEVICE_ID:
-                await self._run_auto_job(job)
-            else:
-                await self._run_pinned_job(job)
+    async def _dispatch(self, job: UpscaleJob) -> None:
+        if job.device == AUTO_DEVICE_ID:
+            await self._run_auto_job(job)
+        else:
+            await self._run_pinned_job(job)
 
     async def _run_pinned_job(self, job: UpscaleJob) -> None:
         async with self.device_semaphores.acquire(job.device):
@@ -294,56 +243,18 @@ class JobManager:
         except ValueError as exc:
             self._fail_dequeued_job(job, str(exc))
 
-    async def _execute_job(self, job: UpscaleJob) -> None:
-        if job.status == JobStatus.cancelled:
-            # Cancelled while this worker waited for a device permit: the job
-            # was already out of the queue, so the dequeue-side skip in
-            # _worker can't catch it. Without this re-check the job would
-            # silently resurrect and run to completion.
-            self._unlink_source_safely(job.source_path)
-            self.queue.task_done()
-            return
-        job.status = JobStatus.running
-        job.started_at = utc_now()
+    def _on_running(self, job: UpscaleJob) -> None:
         advance_image_stage(job, "upscaling")
-        run_task = asyncio.ensure_future(self._run_engine(job))
-        self._active[job.id] = run_task
-        try:
-            await run_task
-            job.status = JobStatus.completed
-            complete_image_stages(job)
-        except asyncio.CancelledError:
-            run_task.cancel()
-            if asyncio.current_task().cancelling() > 0:
-                # The WORKER task itself was cancelled (shutdown via stop()):
-                # fail the job and re-raise so the worker actually dies.
-                job.status = JobStatus.failed
-                job.error = "Job cancelled"
-                raise
-            # Only the child engine task was cancelled (per-job cancel_job):
-            # mark cancelled and let the worker live on for other jobs.
-            job.status = JobStatus.cancelled
-            job.error = None
-        except Exception as exc:  # noqa: BLE001
-            job.status = JobStatus.failed
-            job.error = str(exc)
-        finally:
-            self._active.pop(job.id, None)
-            job.finished_at = utc_now()
-            self._unlink_source_safely(job.source_path)
-            self.queue.task_done()
-            self._record_quota_usage(job)
+
+    def _on_completed(self, job: UpscaleJob) -> None:
+        complete_image_stages(job)
+
+    def _cleanup_source(self, job: UpscaleJob) -> None:
+        self._unlink_source_safely(job.source_path)
 
     async def _run_engine(self, job: UpscaleJob) -> None:
         engine = self._select_engine(job)
         job.output_path = await engine.run(job)
-
-    def _fail_dequeued_job(self, job: UpscaleJob, error: str) -> None:
-        job.status = JobStatus.failed
-        job.error = error
-        job.finished_at = utc_now()
-        self._unlink_source_safely(job.source_path)
-        self.queue.task_done()
 
     @staticmethod
     def _unlink_source_safely(source_path: Path) -> None:
@@ -351,9 +262,3 @@ class JobManager:
             source_path.unlink(missing_ok=True)
         except OSError:
             logger.exception("Failed to delete source upload %s", source_path)
-
-    def _record_quota_usage(self, job: UpscaleJob) -> None:
-        if self.quota_service is None or job.started_at is None:
-            return
-        duration = (job.finished_at - job.started_at).total_seconds()
-        self.quota_service.record_usage(job.owner_id, duration)

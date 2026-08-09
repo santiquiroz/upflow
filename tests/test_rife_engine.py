@@ -113,7 +113,7 @@ async def test_rife_engine_run_builds_expected_argv(
         write_fake_frames(frames_out, target_frame_count)
         return b"", b"", 0
 
-    monkeypatch.setattr("app.services.engines.rife_ncnn.run_guarded_process", fake_run_guarded_process)
+    monkeypatch.setattr("app.services.process_runner.run_guarded_process", fake_run_guarded_process)
 
     await engine.run(frames_in, frames_out, source_frame_count, multiplier)
 
@@ -157,7 +157,7 @@ async def test_rife_engine_run_targets_job_device_gpu(
         write_fake_frames(frames_out, 4)
         return b"", b"", 0
 
-    monkeypatch.setattr("app.services.engines.rife_ncnn.run_guarded_process", fake_run_guarded_process)
+    monkeypatch.setattr("app.services.process_runner.run_guarded_process", fake_run_guarded_process)
 
     await engine.run(frames_in, frames_out, 2, 2, device=device)
 
@@ -187,7 +187,7 @@ async def test_rife_engine_run_creates_output_dir_before_invoking_runner(
         write_fake_frames(frames_out, 20)
         return b"", b"", 0
 
-    monkeypatch.setattr("app.services.engines.rife_ncnn.run_guarded_process", fake_run_guarded_process)
+    monkeypatch.setattr("app.services.process_runner.run_guarded_process", fake_run_guarded_process)
 
     await engine.run(frames_in, frames_out, source_frame_count=10, multiplier=2)
 
@@ -210,7 +210,7 @@ async def test_rife_engine_run_uses_shared_runner_with_configured_timeout(
         write_fake_frames(frames_out, 20)
         return b"", b"", 0
 
-    monkeypatch.setattr("app.services.engines.rife_ncnn.run_guarded_process", fake_run_guarded_process)
+    monkeypatch.setattr("app.services.process_runner.run_guarded_process", fake_run_guarded_process)
 
     await engine.run(frames_in, frames_out, source_frame_count=10, multiplier=2)
 
@@ -230,7 +230,7 @@ async def test_rife_engine_run_returns_frames_out_path_on_success(
         write_fake_frames(frames_out, 20)
         return b"", b"", 0
 
-    monkeypatch.setattr("app.services.engines.rife_ncnn.run_guarded_process", fake_run_guarded_process)
+    monkeypatch.setattr("app.services.process_runner.run_guarded_process", fake_run_guarded_process)
 
     result = await engine.run(frames_in, frames_out, source_frame_count=10, multiplier=2)
 
@@ -269,7 +269,7 @@ async def test_rife_engine_run_raises_clear_error_on_nonzero_exit(
     async def fake_run_guarded_process(command: list[str], timeout: float) -> tuple[bytes, bytes, int]:
         return b"", b"boom: simulated rife failure\n", 1
 
-    monkeypatch.setattr("app.services.engines.rife_ncnn.run_guarded_process", fake_run_guarded_process)
+    monkeypatch.setattr("app.services.process_runner.run_guarded_process", fake_run_guarded_process)
 
     with pytest.raises(RuntimeError, match="boom: simulated rife failure"):
         await engine.run(frames_in, frames_out, source_frame_count=10, multiplier=2)
@@ -287,7 +287,7 @@ async def test_rife_engine_run_raises_when_output_frame_count_is_zero(
     async def fake_run_guarded_process(command: list[str], timeout: float) -> tuple[bytes, bytes, int]:
         return b"", b"", 0
 
-    monkeypatch.setattr("app.services.engines.rife_ncnn.run_guarded_process", fake_run_guarded_process)
+    monkeypatch.setattr("app.services.process_runner.run_guarded_process", fake_run_guarded_process)
 
     with pytest.raises(RuntimeError, match="no output frames"):
         await engine.run(frames_in, frames_out, source_frame_count=10, multiplier=2)
@@ -306,7 +306,7 @@ async def test_rife_engine_run_raises_when_output_frame_count_does_not_match_tar
         write_fake_frames(frames_out, 15)
         return b"", b"", 0
 
-    monkeypatch.setattr("app.services.engines.rife_ncnn.run_guarded_process", fake_run_guarded_process)
+    monkeypatch.setattr("app.services.process_runner.run_guarded_process", fake_run_guarded_process)
 
     with pytest.raises(RuntimeError, match="15"):
         await engine.run(frames_in, frames_out, source_frame_count=10, multiplier=2)
@@ -335,7 +335,7 @@ async def test_rife_engine_run_accepts_explicit_target_frame_count(
         write_fake_frames(frames_out, target_frame_count)
         return b"", b"", 0
 
-    monkeypatch.setattr("app.services.engines.rife_ncnn.run_guarded_process", fake_run_guarded_process)
+    monkeypatch.setattr("app.services.process_runner.run_guarded_process", fake_run_guarded_process)
 
     await engine.run(frames_in, frames_out, source_frame_count=100, target_frame_count=target_frame_count)
 
@@ -358,7 +358,7 @@ async def test_rife_engine_run_target_frame_count_overrides_multiplier(
         write_fake_frames(frames_out, 250)
         return b"", b"", 0
 
-    monkeypatch.setattr("app.services.engines.rife_ncnn.run_guarded_process", fake_run_guarded_process)
+    monkeypatch.setattr("app.services.process_runner.run_guarded_process", fake_run_guarded_process)
 
     await engine.run(frames_in, frames_out, source_frame_count=100, multiplier=2, target_frame_count=250)
 
@@ -378,7 +378,7 @@ async def test_rife_engine_run_validates_output_against_target_frame_count(
         write_fake_frames(frames_out, 100)
         return b"", b"", 0
 
-    monkeypatch.setattr("app.services.engines.rife_ncnn.run_guarded_process", fake_run_guarded_process)
+    monkeypatch.setattr("app.services.process_runner.run_guarded_process", fake_run_guarded_process)
 
     with pytest.raises(RuntimeError, match="100"):
         await engine.run(frames_in, frames_out, source_frame_count=100, target_frame_count=250)

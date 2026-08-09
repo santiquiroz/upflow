@@ -4,9 +4,10 @@ from pathlib import Path
 
 from app.config import Settings
 from app.models import UpscaleJob
+from app.services.dml_device import DML_DEVICE_PREFIX
 from app.services.engines.base import UpscaleEngine
 from app.services.missing_pack import missing_pack_message
-from app.services.process_runner import run_guarded_process
+from app.services.process_runner import is_non_empty_file, run_checked_process
 
 
 def gpu_index_for_device(device: str | None) -> str:
@@ -34,7 +35,7 @@ def gpu_index_for_device(device: str | None) -> str:
     """
     if device is None:
         return "0"
-    if device.startswith("dml:"):
+    if device.startswith(DML_DEVICE_PREFIX):
         return device.partition(":")[2]
     if device == "cpu":
         raise RuntimeError("Real-ESRGAN NCNN engine requires a Vulkan GPU device; 'cpu' is not supported")
@@ -75,16 +76,9 @@ class RealEsrganNcnnEngine(UpscaleEngine):
             gpu_index_for_device(job.device),
         ]
 
-        _, stderr, returncode = await run_guarded_process(command, self.settings.subprocess_timeout)
+        await run_checked_process(command, self.settings.subprocess_timeout, "Upscaling process failed")
 
-        if returncode != 0:
-            raise RuntimeError(stderr.decode("utf-8", errors="ignore") or "Upscaling process failed")
-
-        if not self._is_non_empty_file(output_path):
+        if not is_non_empty_file(output_path):
             raise RuntimeError("Upscaling process completed but no output file was produced")
 
         return output_path
-
-    @staticmethod
-    def _is_non_empty_file(path: Path) -> bool:
-        return path.exists() and path.stat().st_size > 0

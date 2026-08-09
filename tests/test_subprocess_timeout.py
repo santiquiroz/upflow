@@ -155,7 +155,7 @@ async def test_realesrgan_engine_run_uses_shared_runner_with_configured_timeout(
         output_path.write_bytes(b"fake-output")
         return b"", b"", 0
 
-    monkeypatch.setattr("app.services.engines.realesrgan_ncnn.run_guarded_process", fake_run_guarded_process)
+    monkeypatch.setattr("app.services.process_runner.run_guarded_process", fake_run_guarded_process)
 
     output_path = await engine.run(job)
 
@@ -175,7 +175,7 @@ async def test_realesrgan_engine_run_raises_clear_error_on_nonzero_exit(
     async def fake_run_guarded_process(command: list[str], timeout: float) -> tuple[bytes, bytes, int]:
         return b"", b"boom: simulated engine failure\n", 1
 
-    monkeypatch.setattr("app.services.engines.realesrgan_ncnn.run_guarded_process", fake_run_guarded_process)
+    monkeypatch.setattr("app.services.process_runner.run_guarded_process", fake_run_guarded_process)
 
     with pytest.raises(RuntimeError, match="boom: simulated engine failure"):
         await engine.run(job)

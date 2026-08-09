@@ -7,7 +7,7 @@ from pathlib import Path
 from app.config import Settings
 from app.services.engines.realesrgan_ncnn import gpu_index_for_device
 from app.services.missing_pack import missing_pack_message
-from app.services.process_runner import run_guarded_process
+from app.services.process_runner import run_checked_process
 
 OUTPUT_FRAME_PATTERN = "%08d.png"
 # RIFE's -u (UHD mode) halves the flow-estimation resolution; it exists for
@@ -47,10 +47,9 @@ class RifeNcnnEngine:
         command = self._build_command(
             frames_in, frames_out, resolved_target_frame_count, self._gpu_index(device)
         )
-        _, stderr, returncode = await run_guarded_process(command, self.settings.subprocess_timeout)
-
-        if returncode != 0:
-            raise RuntimeError(stderr.decode("utf-8", errors="ignore") or "Frame interpolation process failed")
+        await run_checked_process(
+            command, self.settings.subprocess_timeout, "Frame interpolation process failed"
+        )
 
         self._validate_output_frame_count(frames_out, resolved_target_frame_count)
 

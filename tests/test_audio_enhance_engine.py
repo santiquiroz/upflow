@@ -139,7 +139,7 @@ async def test_deepfilter_engine_run_builds_expected_argv(
         write_deepfilter_output(command, input_wav)
         return b"", b"", 0
 
-    monkeypatch.setattr("app.services.engines.audio_enhance.run_guarded_process", fake_run_guarded_process)
+    monkeypatch.setattr("app.services.process_runner.run_guarded_process", fake_run_guarded_process)
 
     await engine.run(input_wav, output_wav)
 
@@ -167,7 +167,7 @@ async def test_deepfilter_engine_run_promotes_output_to_requested_path(
         write_deepfilter_output(command, input_wav)
         return b"", b"", 0
 
-    monkeypatch.setattr("app.services.engines.audio_enhance.run_guarded_process", fake_run_guarded_process)
+    monkeypatch.setattr("app.services.process_runner.run_guarded_process", fake_run_guarded_process)
 
     await engine.run(input_wav, output_wav)
 
@@ -187,7 +187,7 @@ async def test_deepfilter_engine_run_supports_same_name_input_and_output(
         write_deepfilter_output(command, input_wav, b"same-name-output")
         return b"", b"", 0
 
-    monkeypatch.setattr("app.services.engines.audio_enhance.run_guarded_process", fake_run_guarded_process)
+    monkeypatch.setattr("app.services.process_runner.run_guarded_process", fake_run_guarded_process)
 
     await engine.run(input_wav, output_wav)
 
@@ -213,7 +213,7 @@ async def test_deepfilter_engine_run_same_directory_leaves_input_untouched(
         write_deepfilter_output(command, input_wav)
         return b"", b"", 0
 
-    monkeypatch.setattr("app.services.engines.audio_enhance.run_guarded_process", fake_run_guarded_process)
+    monkeypatch.setattr("app.services.process_runner.run_guarded_process", fake_run_guarded_process)
 
     await engine.run(input_wav, output_wav)
 
@@ -238,7 +238,7 @@ async def test_deepfilter_engine_run_creates_output_dir_before_invoking_runner(
         write_deepfilter_output(command, input_wav)
         return b"", b"", 0
 
-    monkeypatch.setattr("app.services.engines.audio_enhance.run_guarded_process", fake_run_guarded_process)
+    monkeypatch.setattr("app.services.process_runner.run_guarded_process", fake_run_guarded_process)
 
     await engine.run(input_wav, output_wav)
 
@@ -263,7 +263,7 @@ async def test_deepfilter_engine_run_cleans_temp_dir_on_success(
         write_deepfilter_output(command, input_wav)
         return b"", b"", 0
 
-    monkeypatch.setattr("app.services.engines.audio_enhance.run_guarded_process", fake_run_guarded_process)
+    monkeypatch.setattr("app.services.process_runner.run_guarded_process", fake_run_guarded_process)
 
     await engine.run(input_wav, output_wav)
 
@@ -282,7 +282,7 @@ async def test_deepfilter_engine_run_cleans_temp_dir_when_runner_raises(
     async def fake_run_guarded_process(command: list[str], timeout: float) -> tuple[bytes, bytes, int]:
         raise SubprocessTimeoutError("Process 'deep-filter.exe' timed out after 1s")
 
-    monkeypatch.setattr("app.services.engines.audio_enhance.run_guarded_process", fake_run_guarded_process)
+    monkeypatch.setattr("app.services.process_runner.run_guarded_process", fake_run_guarded_process)
 
     with pytest.raises(SubprocessTimeoutError):
         await engine.run(input_wav, output_wav)
@@ -302,7 +302,7 @@ async def test_deepfilter_engine_run_cleans_temp_dir_on_nonzero_exit(
     async def fake_run_guarded_process(command: list[str], timeout: float) -> tuple[bytes, bytes, int]:
         return b"", b"boom\n", 1
 
-    monkeypatch.setattr("app.services.engines.audio_enhance.run_guarded_process", fake_run_guarded_process)
+    monkeypatch.setattr("app.services.process_runner.run_guarded_process", fake_run_guarded_process)
 
     with pytest.raises(RuntimeError, match="boom"):
         await engine.run(input_wav, output_wav)
@@ -331,7 +331,7 @@ async def test_rnnoise_engine_run_builds_expected_argv_with_escaped_model_path(
         write_wav(output_wav, b"denoised-audio")
         return b"", b"", 0
 
-    monkeypatch.setattr("app.services.engines.audio_enhance.run_guarded_process", fake_run_guarded_process)
+    monkeypatch.setattr("app.services.process_runner.run_guarded_process", fake_run_guarded_process)
 
     await engine.run(input_wav, output_wav)
 
@@ -366,7 +366,7 @@ async def test_rnnoise_engine_run_creates_output_dir_before_invoking_runner(
         write_wav(output_wav, b"denoised-audio")
         return b"", b"", 0
 
-    monkeypatch.setattr("app.services.engines.audio_enhance.run_guarded_process", fake_run_guarded_process)
+    monkeypatch.setattr("app.services.process_runner.run_guarded_process", fake_run_guarded_process)
 
     await engine.run(input_wav, output_wav)
 
@@ -406,7 +406,7 @@ async def test_deepfilter_engine_run_raises_when_produced_file_missing(
     async def fake_run_guarded_process(command: list[str], timeout: float) -> tuple[bytes, bytes, int]:
         return b"", b"", 0
 
-    monkeypatch.setattr("app.services.engines.audio_enhance.run_guarded_process", fake_run_guarded_process)
+    monkeypatch.setattr("app.services.process_runner.run_guarded_process", fake_run_guarded_process)
 
     with pytest.raises(RuntimeError, match="no output file was produced"):
         await engine.run(input_wav, output_wav)
@@ -427,7 +427,7 @@ async def test_deepfilter_engine_run_raises_when_output_is_zero_bytes(
         write_deepfilter_output(command, input_wav, b"")
         return b"", b"", 0
 
-    monkeypatch.setattr("app.services.engines.audio_enhance.run_guarded_process", fake_run_guarded_process)
+    monkeypatch.setattr("app.services.process_runner.run_guarded_process", fake_run_guarded_process)
 
     with pytest.raises(RuntimeError, match="no output file"):
         await engine.run(input_wav, output_wav)
@@ -446,7 +446,7 @@ async def test_rnnoise_engine_run_raises_when_output_is_zero_bytes(
         write_wav(output_wav, b"")
         return b"", b"", 0
 
-    monkeypatch.setattr("app.services.engines.audio_enhance.run_guarded_process", fake_run_guarded_process)
+    monkeypatch.setattr("app.services.process_runner.run_guarded_process", fake_run_guarded_process)
 
     with pytest.raises(RuntimeError, match="no output file"):
         await engine.run(input_wav, output_wav)
@@ -464,7 +464,7 @@ async def test_rnnoise_engine_run_raises_when_output_missing(
     async def fake_run_guarded_process(command: list[str], timeout: float) -> tuple[bytes, bytes, int]:
         return b"", b"", 0
 
-    monkeypatch.setattr("app.services.engines.audio_enhance.run_guarded_process", fake_run_guarded_process)
+    monkeypatch.setattr("app.services.process_runner.run_guarded_process", fake_run_guarded_process)
 
     with pytest.raises(RuntimeError, match="no output file"):
         await engine.run(input_wav, output_wav)
@@ -511,7 +511,7 @@ async def test_deepfilter_engine_run_raises_clear_error_on_nonzero_exit(
     async def fake_run_guarded_process(command: list[str], timeout: float) -> tuple[bytes, bytes, int]:
         return b"", b"boom: simulated deep-filter failure\n", 1
 
-    monkeypatch.setattr("app.services.engines.audio_enhance.run_guarded_process", fake_run_guarded_process)
+    monkeypatch.setattr("app.services.process_runner.run_guarded_process", fake_run_guarded_process)
 
     with pytest.raises(RuntimeError, match="boom: simulated deep-filter failure"):
         await engine.run(input_wav, output_wav)
@@ -529,7 +529,7 @@ async def test_rnnoise_engine_run_raises_clear_error_on_nonzero_exit(
     async def fake_run_guarded_process(command: list[str], timeout: float) -> tuple[bytes, bytes, int]:
         return b"", b"boom: simulated ffmpeg arnndn failure\n", 1
 
-    monkeypatch.setattr("app.services.engines.audio_enhance.run_guarded_process", fake_run_guarded_process)
+    monkeypatch.setattr("app.services.process_runner.run_guarded_process", fake_run_guarded_process)
 
     with pytest.raises(RuntimeError, match="boom: simulated ffmpeg arnndn failure"):
         await engine.run(input_wav, output_wav)
@@ -556,7 +556,7 @@ async def test_deepfilter_engine_run_uses_shared_runner_with_configured_timeout(
         write_deepfilter_output(command, input_wav)
         return b"", b"", 0
 
-    monkeypatch.setattr("app.services.engines.audio_enhance.run_guarded_process", fake_run_guarded_process)
+    monkeypatch.setattr("app.services.process_runner.run_guarded_process", fake_run_guarded_process)
 
     await engine.run(input_wav, output_wav)
 
@@ -579,7 +579,7 @@ async def test_rnnoise_engine_run_uses_shared_runner_with_configured_timeout(
         write_wav(output_wav, b"denoised-audio")
         return b"", b"", 0
 
-    monkeypatch.setattr("app.services.engines.audio_enhance.run_guarded_process", fake_run_guarded_process)
+    monkeypatch.setattr("app.services.process_runner.run_guarded_process", fake_run_guarded_process)
 
     await engine.run(input_wav, output_wav)
 

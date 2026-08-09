@@ -7,8 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from app.config import Settings
-from app.exceptions import QueueFullError
-from app.models import TERMINAL_JOB_STATUSES, GenerationJob, JobStatus, UpscaleJob, utc_now
+from app.models import GenerationJob, UpscaleJob
 from app.services.auth.identity import AuthenticatedUser
 from app.services.auth.quotas import QuotaService
 from app.services.device_semaphores import DeviceSemaphores
@@ -23,10 +22,10 @@ from app.services.engines.sdcpp_video import (
     VideoRequest,
     resolve_video_model,
 )
-from app.services.generation_img2img import supports_img2img
-from app.services.generation_inpaint import supports_inpaint
+from app.services.generation_pipeline_modes import supports_img2img, supports_inpaint
 from app.services.generation_speed import anchored_params, speed_class
 from app.services.job_manager import select_upscale_engine
+from app.services.job_manager_base import QueuedJobManager
 from app.services.missing_pack import missing_pack_message
 from app.services.model_registry import ModelKind, ModelRegistry
 from app.services.progress import (
@@ -53,18 +52,20 @@ DEFAULT_VIDEO_FPS = 16
 MAX_VIDEO_FRAMES = 81
 
 
-class GenerationJobManager:
-    """Standalone text-to-image job manager. Mirrors AudioJobManager: bounded
-    queue, N workers, shared device_semaphores, CancelledError-safe execution.
+class GenerationJobManager(QueuedJobManager[GenerationJob]):
+    """Standalone text-to-image job manager sobre QueuedJobManager.
 
     Generation jobs have no source upload (the request is JSON, not a file),
-    so there is no source-unlink step in _execute_job's finally. A job may
-    optionally auto-upscale its own output in the SAME job (two stages, one
-    worker, no re-queue) via _run_engine -> _run_auto_upscale.
+    so there is no source-cleanup override. A job may optionally auto-upscale
+    its own output in the SAME job (two stages, one worker, no re-queue) via
+    _run_engine -> _run_auto_upscale.
 
     Like audio, generation is device-pinned: the `auto` sentinel is rejected
     at create_job time rather than resolved.
     """
+
+    queue_full_message = "Generation job queue is full; try again later"
+    worker_name_prefix = "generation-worker"
 
     def __init__(
         self,
@@ -81,42 +82,20 @@ class GenerationJobManager:
         migan_eraser: Any | None = None,
         video_engine: SdcppVideoEngine | None = None,
     ) -> None:
-        self.settings = settings
+        super().__init__(
+            settings,
+            quota_service=quota_service,
+            worker_count=settings.max_concurrent_jobs,
+        )
         self.engine = engine
         self.device_semaphores = device_semaphores
         self.registry = registry
         self.upscale_engine = upscale_engine
         self.onnx_upscale_engine = onnx_upscale_engine
         self.devices = devices
-        self.quota_service = quota_service
         self.sdcpp_engine = sdcpp_engine
         self.migan_eraser = migan_eraser
         self.video_engine = video_engine
-        self.jobs: dict[str, GenerationJob] = {}
-        self.queue: asyncio.Queue[GenerationJob] = asyncio.Queue(maxsize=settings.max_queue_size)
-        self.worker_tasks: list[asyncio.Task] = []
-        self._active: dict[str, asyncio.Task] = {}
-
-    async def start(self) -> None:
-        if self.worker_tasks:
-            return
-        self.worker_tasks = [
-            asyncio.create_task(self._worker(), name=f"generation-worker-{i}")
-            for i in range(self.settings.max_concurrent_jobs)
-        ]
-
-    async def stop(self) -> None:
-        for task in self.worker_tasks:
-            task.cancel()
-        for task in self.worker_tasks:
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-        self.worker_tasks = []
-
-    def queue_depth(self) -> int:
-        return self.queue.qsize()
 
     async def create_job(
         self,
@@ -170,31 +149,6 @@ class GenerationJobManager:
         self.jobs[job.id] = job
         self._enqueue(job)
         return job
-
-    def get_job(self, job_id: str) -> GenerationJob | None:
-        return self.jobs.get(job_id)
-
-    def cancel_job(self, job_id: str) -> bool:
-        job = self.jobs.get(job_id)
-        if job is None:
-            return False
-        if job.status in TERMINAL_JOB_STATUSES:
-            return False
-        if job.status == JobStatus.queued:
-            # Still in the queue: mark it so the worker skips it on dequeue.
-            job.status = JobStatus.cancelled
-            job.finished_at = utc_now()
-            return True
-        task = self._active.get(job_id)
-        if task is not None:
-            task.cancel()
-        return True
-
-    def _enqueue(self, job: GenerationJob) -> None:
-        try:
-            self.queue.put_nowait(job)
-        except asyncio.QueueFull as exc:
-            raise QueueFullError("Generation job queue is full; try again later") from exc
 
     def _validate_generation_model(self, model_id: str) -> None:
         if model_id == ERASER_MODEL_ID:
@@ -349,15 +303,6 @@ class GenerationJobManager:
             if entry is None or entry.kind != ModelKind.onnx:
                 raise ValueError(f"Unknown upscale model: {model_id!r}")
 
-    async def _worker(self) -> None:
-        while True:
-            job = await self.queue.get()
-            if job.status == JobStatus.cancelled:
-                # Cancelled while waiting in the queue: skip without processing.
-                self.queue.task_done()
-                continue
-            await self._run_job(job)
-
     def _reservation_device(self, job: GenerationJob) -> str:
         """Bajo qué dispositivo pedir permiso antes de correr.
 
@@ -372,51 +317,8 @@ class GenerationJobManager:
         """
         return job.device or self.settings.default_device
 
-    async def _run_job(self, job: GenerationJob) -> None:
-        async with self.device_semaphores.acquire(self._reservation_device(job)):
-            await self._execute_job(job)
-
-    async def _execute_job(self, job: GenerationJob) -> None:
-        if job.status == JobStatus.cancelled:
-            # Cancelled while this worker waited for a device permit: the job
-            # was already out of the queue, so the dequeue-side skip in
-            # _worker can't catch it. Without this re-check the job would
-            # silently resurrect and run to completion.
-            self.queue.task_done()
-            return
-        job.status = JobStatus.running
-        job.started_at = utc_now()
-        run_task = asyncio.ensure_future(self._run_engine(job))
-        self._active[job.id] = run_task
-        try:
-            await run_task
-            job.status = JobStatus.completed
-        except asyncio.CancelledError:
-            run_task.cancel()
-            if asyncio.current_task().cancelling() > 0:
-                # The WORKER task itself was cancelled (shutdown via stop()):
-                # fail the job and re-raise so the worker actually dies.
-                job.status = JobStatus.failed
-                job.error = "Job cancelled"
-                raise
-            # Only the child engine task was cancelled (per-job cancel_job):
-            # mark cancelled and let the worker live on for other jobs.
-            job.status = JobStatus.cancelled
-            job.error = None
-        except Exception as exc:  # noqa: BLE001
-            job.status = JobStatus.failed
-            job.error = str(exc)
-        finally:
-            self._active.pop(job.id, None)
-            job.finished_at = utc_now()
-            self.queue.task_done()
-            self._record_quota_usage(job)
-
-    def _record_quota_usage(self, job: GenerationJob) -> None:
-        if self.quota_service is None or job.started_at is None:
-            return
-        duration = (job.finished_at - job.started_at).total_seconds()
-        self.quota_service.record_usage(job.owner_id, duration)
+    def _admit(self, job: GenerationJob):
+        return self.device_semaphores.acquire(self._reservation_device(job))
 
     async def _run_engine(self, job: GenerationJob) -> None:
         if job.model_id.startswith(VIDEO_MODEL_PREFIX):

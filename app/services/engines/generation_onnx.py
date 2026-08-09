@@ -11,7 +11,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from app.config import Settings
-from app.services.generation_img2img import load_img2img_class
+from app.services.dml_device import try_parse_dml_device_id
+from app.services.generation_pipeline_modes import load_img2img_class
 from app.services.engines.gmfss_engine import _tune_session_options_for_device
 from app.services.engines.onnx_upscaler import _build_providers
 from app.services.gpu_session_coordinator import GpuSessionCoordinator
@@ -215,14 +216,11 @@ def _pipeline_cache_capacity(device: str) -> int:
     1 era el default seguro, pero alternar text2img↔inpaint del mismo modelo
     recargaba GBs en cada cambio. Sin lectura de VRAM (None) se queda en 1.
     """
-    if not device.startswith("dml:"):
+    index = try_parse_dml_device_id(device)
+    if index is None:
         return 1
     from app.services.devices_service import adapter_free_vram_mb
 
-    try:
-        index = int(device.partition(":")[2])
-    except ValueError:
-        return 1
     free_mb = adapter_free_vram_mb(index)
     if free_mb is None:
         return 1
@@ -592,7 +590,10 @@ class GenerationEngine:
         import onnxruntime as ort
 
         declared = _read_declared_class_name(pipeline_dir)
-        from app.services.generation_inpaint import is_dedicated_inpaint_class, load_inpaint_class
+        from app.services.generation_pipeline_modes import (
+            is_dedicated_inpaint_class,
+            load_inpaint_class,
+        )
 
         if mode != "inpaint" and is_dedicated_inpaint_class(declared):
             # Un unet de 9 canales EXIGE imagen+máscara como entrada: pedirle

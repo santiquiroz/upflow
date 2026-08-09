@@ -4,7 +4,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from app.config import Settings
-from app.services.process_runner import run_guarded_process
+from app.services.process_runner import is_non_empty_file, run_guarded_process
 from app.services.voice_chain import (
     ChainStep,
     FfmpegStage,
@@ -90,5 +90,5 @@ class VoiceEnhancer:
 
     @staticmethod
     def _require_output(path: Path, what: str) -> None:
-        if not path.exists() or path.stat().st_size == 0:
+        if not is_non_empty_file(path):
             raise RuntimeError(f"{what} no produjo ningun archivo de salida.")

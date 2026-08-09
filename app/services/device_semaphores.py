@@ -7,11 +7,12 @@ from contextlib import asynccontextmanager
 
 from app.config import Settings
 from app.services.devices_service import CPU_DEVICE_ID
+from app.services.dml_device import DML_DEVICE_PREFIX
 from app.services.resource_probes import ResourceProbe
 
 logger = logging.getLogger(__name__)
 
-_GPU_DEVICE_PREFIX = "dml:"
+_GPU_DEVICE_PREFIX = DML_DEVICE_PREFIX
 _NPU_DEVICE_PREFIX = "npu:"
 
 

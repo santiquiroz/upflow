@@ -8,6 +8,26 @@ class SubprocessTimeoutError(RuntimeError):
     pass
 
 
+def is_non_empty_file(path: Path) -> bool:
+    return path.exists() and path.stat().st_size > 0
+
+
+async def run_checked_process(
+    command: list[str],
+    timeout: float,
+    failure_message: str,
+    expect_output: Path | None = None,
+) -> bytes:
+    stdout, stderr, returncode = await run_guarded_process(command, timeout)
+    if returncode != 0:
+        raise RuntimeError(stderr.decode("utf-8", errors="ignore") or failure_message)
+    if expect_output is not None and not is_non_empty_file(expect_output):
+        raise RuntimeError(
+            f"Process '{Path(command[0]).name}' completed but no output file was produced"
+        )
+    return stdout
+
+
 async def run_guarded_process(command: list[str], timeout: float) -> tuple[bytes, bytes, int]:
     process = await asyncio.create_subprocess_exec(
         *command,

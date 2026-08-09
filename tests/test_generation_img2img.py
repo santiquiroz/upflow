@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.services.generation_img2img import (
+from app.services.generation_pipeline_modes import (
     IMG2IMG_CLASS_NAMES,
     TEXT_ONLY_CLASS_NAMES,
     Img2ImgUnsupportedError,

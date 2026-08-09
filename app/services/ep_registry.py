@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from app.config import Settings
+from app.services.dml_device import DML_DEVICE_PREFIX, parse_dml_device_id, try_parse_dml_device_id
 
 # ---------------------------------------------------------------------------
 # Fase 1b (2026-07-31) - selector de execution provider por dispositivo.
@@ -284,16 +285,8 @@ def _initialize(settings: Settings) -> None:
         _register_winml_catalog(settings)
 
 
-def _parse_dml_device_id(device: str) -> int:
-    _, _, suffix = device.partition(":")
-    try:
-        return int(suffix)
-    except ValueError as exc:
-        raise RuntimeError(f"Unsupported device for ONNX inference: {device!r}") from exc
-
-
 def _dml_providers(device: str) -> list[Any]:
-    return [(DML_PROVIDER, {"device_id": _parse_dml_device_id(device)}), CPU_PROVIDER]
+    return [(DML_PROVIDER, {"device_id": parse_dml_device_id(device)}), CPU_PROVIDER]
 
 
 # Los EPs del catálogo de Windows ML se registran con vendor_id 0: el catálogo
@@ -307,9 +300,8 @@ def _vendor_of_adapter(device: str) -> int | None:
     `enumerate_adapter_vendor_ids` devuelve los vendors en el MISMO orden que
     numera dml:N, así que el índice del device es el índice del adaptador.
     """
-    try:
-        index = _parse_dml_device_id(device)
-    except RuntimeError:
+    index = try_parse_dml_device_id(device)
+    if index is None:
         return None
     vendors = _adapter_vendor_ids()
     return vendors[index] if 0 <= index < len(vendors) else None
@@ -333,7 +325,7 @@ def _native_plugin_for(device: str) -> _PluginState | None:
     máquina con iGPU Intel y placa NVIDIA eso mandaba un trabajo fijado a la
     iGPU a correr en la NVIDIA, en silencio y contra lo que pidió el usuario.
     """
-    if not device.startswith("dml:"):
+    if not device.startswith(DML_DEVICE_PREFIX):
         return None
     vendor = _vendor_of_adapter(device)
     if vendor is None:
@@ -376,7 +368,7 @@ def warmup_pending(device: str) -> bool:
 
 
 def _is_cpu_fallback(device: str, providers: list[str]) -> bool:
-    return device.startswith("dml:") and providers[:1] == [CPU_PROVIDER]
+    return device.startswith(DML_DEVICE_PREFIX) and providers[:1] == [CPU_PROVIDER]
 
 
 def record_session_providers(device: str, session: Any, context: str = "") -> list[str]:
@@ -422,7 +414,7 @@ def create_session(
         return ort.InferenceSession(
             model_path, sess_options=_build_options(sess_options_factory), providers=[CPU_PROVIDER]
         )
-    if not device.startswith("dml:"):
+    if not device.startswith(DML_DEVICE_PREFIX):
         raise RuntimeError(f"Unsupported device for ONNX inference: {device!r}")
 
     _initialize(settings)
@@ -480,7 +472,7 @@ def loader_kwargs(
 
     if device == "cpu":
         return _with_session_options({"provider": CPU_PROVIDER}, sess_options_factory)
-    if not device.startswith("dml:"):
+    if not device.startswith(DML_DEVICE_PREFIX):
         raise RuntimeError(f"Unsupported device for ONNX inference: {device!r}")
 
     _initialize(settings)
@@ -495,7 +487,7 @@ def loader_kwargs(
     return _with_session_options(
         {
             "provider": DML_PROVIDER,
-            "provider_options": {"device_id": _parse_dml_device_id(device)},
+            "provider_options": {"device_id": parse_dml_device_id(device)},
         },
         sess_options_factory,
     )
@@ -511,7 +503,7 @@ def effective_provider_label(device: str) -> str | None:
         return None
     primary = providers[0]
     if primary == CPU_PROVIDER:
-        return "CPU (fallback)" if device.startswith("dml:") else "CPU"
+        return "CPU (fallback)" if device.startswith(DML_DEVICE_PREFIX) else "CPU"
     if primary == DML_PROVIDER:
         return "DirectML"
     for state in _plugins.values():

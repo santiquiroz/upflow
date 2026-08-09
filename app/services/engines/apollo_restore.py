@@ -2,20 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import threading
 import time
-from collections import OrderedDict
-from math import gcd
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
 from app.config import Settings
-from app.services.engines.multichannel_restore import restore_multichannel
-from app.services.engines.onnx_upscaler import _parse_dml_device_id, _wrap_onnx_error
+from app.services.dml_device import DML_DEVICE_PREFIX, parse_dml_device_id
+from app.services.engines.audio_restore_base import OnnxAudioRestorer, is_cpu_device
+from app.services.engines.onnx_upscaler import _wrap_onnx_error
 from app.services.gpu_session_coordinator import GpuSessionCoordinator
-from app.services.missing_pack import missing_pack_message
 
 logger = logging.getLogger(__name__)
 
@@ -24,10 +21,10 @@ logger = logging.getLogger(__name__)
 # lossy codec threw away. The model is audio->audio, self-contained, 44.1kHz
 # mono, input tensor "audio" [1,1,n] -> output "restored" [1,1,n].
 #
-# Multi-EP: reuses OnnxUpscaler._build_providers so `dml:N` runs on
-# DirectML(device_id=N) (any AMD/NVIDIA/Intel GPU) and `cpu` on the CPU EP --
-# NOT AMD-specific. Session cache mirrors OnnxUpscaler (LRU(2) keyed by device,
-# built outside the lock).
+# Multi-EP: `dml:N` runs on DirectML(device_id=N) (any AMD/NVIDIA/Intel GPU)
+# and `cpu` on the CPU EP -- NOT AMD-specific. Session cache, coordinator
+# wiring and audio I/O live in OnnxAudioRestorer (audio_restore_base.py),
+# shared with AudioSR; here the cache is LRU(2) keyed by device.
 #
 # Chunking: DirectML breaks on long tensors, so inference runs in chunks of
 # AUDIO_RESTORE_CHUNK_SECONDS with a 0.5s Hann overlap-add (ported from the
@@ -46,7 +43,6 @@ CPU_OVERLAP_SECONDS = 0.5
 SESSION_CACHE_SIZE = 2
 ONNX_INPUT_NAME = "audio"
 ONNX_OUTPUT_NAME = "restored"
-DML_DEVICE_PREFIX = "dml:"
 
 
 def _import_onnxruntime() -> Any:
@@ -55,40 +51,33 @@ def _import_onnxruntime() -> Any:
     return ort
 
 
-class ApolloRestorer:
+class ApolloRestorer(OnnxAudioRestorer):
+    sample_rate = APOLLO_SAMPLE_RATE
+    session_cache_size = SESSION_CACHE_SIZE
+    pack_name = "apollo"
+    missing_pack_detail = "Ademas hay que prender ENABLE_AUDIO_RESTORE."
+    engine_label = "Apollo"
+    load_error_context = "Failed to load Apollo model on device"
+
     def __init__(self, settings: Settings, gpu_coordinator: GpuSessionCoordinator) -> None:
-        self.settings = settings
-        self.gpu_coordinator = gpu_coordinator
-        self._session_cache: OrderedDict[str, Any] = OrderedDict()
-        self._session_lock = threading.Lock()
+        super().__init__(settings, gpu_coordinator)
         self._iobinding_warned = False
 
     def available(self) -> bool:
         return self.settings.audio_restore_available()
-
-    def release_device(self, device: str) -> None:
-        with self._session_lock:
-            self._session_cache.pop(device, None)
 
     async def run(self, input_wav: Path, output_wav: Path, device: str) -> None:
         # available()/session build/inference all touch native libraries
         # (onnxruntime, soundfile) so they run off the event loop in one
         # to_thread call, mirroring OnnxUpscaler.run.
         await asyncio.to_thread(self._run_and_save, input_wav, output_wav, device)
-        if not self._is_non_empty_file(output_wav):
-            raise RuntimeError("Apollo restoration completed but no output file was produced")
+        self._ensure_output_file(output_wav)
 
     def _run_and_save(self, input_wav: Path, output_wav: Path, device: str) -> None:
-        if not self.available():
-            raise RuntimeError(
-                missing_pack_message(
-                    "apollo",
-                    detail="Ademas hay que prender ENABLE_AUDIO_RESTORE.",
-                )
-            )
-        audio = _load_audio_44k(input_wav)
+        self._require_available()
+        audio = self._load_audio(input_wav)
         session = self._get_session(device)
-        is_cpu = _is_cpu_device(device)
+        is_cpu = is_cpu_device(device)
         # En GPU (dml:N) el cómputo satura la única tarjeta y el escritorio se
         # laguea; un respiro entre chunks le devuelve la GPU al compositor. En CPU
         # no hay contencion de GPU, asi que no se aplica (seria solo mas lento).
@@ -103,8 +92,7 @@ class ApolloRestorer:
         def restore_mono(mono: np.ndarray) -> np.ndarray:
             return self._restore_chunked(session, mono, device, throttle, chunk_seconds, overlap_seconds)
 
-        restored = restore_multichannel(audio, restore_mono)
-        _save_wav(output_wav, restored)
+        self._restore_and_save(audio, restore_mono, output_wav)
 
     def _restore_chunked(
         self, session: Any, audio: np.ndarray, device: str, throttle: float = 0.0,
@@ -157,7 +145,7 @@ class ApolloRestorer:
         # doesn't silently downgrade every chunk to the slower path forever.
         try:
             ort = _import_onnxruntime()
-            device_id = _parse_dml_device_id(device)
+            device_id = parse_dml_device_id(device)
             io_binding = session.io_binding()
             input_value = ort.OrtValue.ortvalue_from_numpy(batch, "dml", device_id)
             io_binding.bind_ortvalue_input(input_name, input_value)
@@ -174,29 +162,12 @@ class ApolloRestorer:
             return None
 
     def _get_session(self, device: str) -> Any:
-        self.gpu_coordinator.acquire(device, self)
-        with self._session_lock:
-            cached = self._session_cache.get(device)
-            if cached is not None:
-                self._session_cache.move_to_end(device)
-                return cached
+        return self._get_session_for_device(device)
 
-        # Session build happens outside the lock (slow graph load); a rare
-        # double-build on a concurrent miss just wastes work (last insert
-        # wins), same trade-off as OnnxUpscaler._get_session.
-        try:
-            session = self._create_session(device)
-        except Exception as exc:  # onnxruntime raises its own native exception types
-            raise _wrap_onnx_error(
-                f"Failed to load Apollo model on device {device!r}", exc
-            ) from exc
-
-        with self._session_lock:
-            self._session_cache[device] = session
-            self._session_cache.move_to_end(device)
-            if len(self._session_cache) > SESSION_CACHE_SIZE:
-                self._session_cache.popitem(last=False)
-        return session
+    def _build_session(self, device: str) -> Any:
+        # Delegación y no llamada directa desde la base: los tests
+        # monkeypatchean `_create_session` por nombre en la instancia.
+        return self._create_session(device)
 
     def _create_session(self, device: str) -> Any:
         # Monkeypatchable seam: unit tests override this to inject a fake numpy
@@ -206,37 +177,3 @@ class ApolloRestorer:
         return ep_registry.create_session(
             str(self.settings.apollo_restore_model_path), device, self.settings
         )
-
-    @staticmethod
-    def _is_non_empty_file(path: Path) -> bool:
-        return path.exists() and path.stat().st_size > 0
-
-
-def _is_cpu_device(device: str) -> bool:
-    return device.strip().lower() == "cpu"
-
-
-def _load_audio_44k(input_wav: Path) -> np.ndarray:
-    import soundfile as sf
-
-    data, sample_rate = sf.read(str(input_wav), dtype="float32", always_2d=True)
-    channels = [_resample(data[:, c], sample_rate, APOLLO_SAMPLE_RATE) for c in range(data.shape[1])]
-    return np.stack(channels, axis=1)
-
-
-def _resample(signal: np.ndarray, source_rate: int, target_rate: int) -> np.ndarray:
-    if source_rate == target_rate:
-        return signal.astype(np.float32)
-    from scipy.signal import resample_poly
-
-    divisor = gcd(int(source_rate), int(target_rate))
-    up = int(target_rate) // divisor
-    down = int(source_rate) // divisor
-    return resample_poly(signal, up, down).astype(np.float32)
-
-
-def _save_wav(output_wav: Path, audio: np.ndarray) -> None:
-    import soundfile as sf
-
-    output_wav.parent.mkdir(parents=True, exist_ok=True)
-    sf.write(str(output_wav), audio, APOLLO_SAMPLE_RATE)

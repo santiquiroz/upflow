@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any
 
 from app.config import Settings
-from app.exceptions import QueueFullError
 from app.services.dub_mux import build_dub_mux_command
 from app.services.dubbing_pipeline import DubbingPipeline, DubbingUnavailable
 from app.services.engines.tts_kokoro import SAMPLE_RATE as TTS_SAMPLE_RATE
@@ -16,8 +15,9 @@ from app.services.translate import TranslationEngine
 from app.services.vendor_paths import kokoro_dir, translation_dir
 from app.services.subtitle_mux import build_subtitle_mux_command
 from app.services.subtitles import render_segments, segments_to_text
-from app.models import JobStatus, TranscribeJob, utc_now
+from app.models import TranscribeJob
 from app.services.auth.identity import AuthenticatedUser
+from app.services.job_manager_base import QueuedJobManager
 from app.services.process_runner import run_guarded_process
 from app.services.auth.quotas import QuotaService
 from app.services.device_semaphores import DeviceSemaphores
@@ -37,7 +37,10 @@ logger = logging.getLogger(__name__)
 _LANGUAGE_LENGTH = 2
 
 
-class TranscribeJobManager:
+class TranscribeJobManager(QueuedJobManager[TranscribeJob]):
+    queue_full_message = "Transcribe job queue is full; try again later"
+    worker_name_prefix = "transcribe-worker"
+
     def __init__(
         self,
         settings: Settings,
@@ -48,32 +51,13 @@ class TranscribeJobManager:
         devices: DevicesService | None = None,
         quota_service: QuotaService | None = None,
     ) -> None:
-        self.settings = settings
+        # Un solo worker a propósito: la transcripción es CPU/GPU-bound y gatea
+        # por device igual; N workers solo sumarían contención.
+        super().__init__(settings, quota_service=quota_service, worker_count=1)
         self.engine = engine
         self.device_semaphores = device_semaphores
         self.registry = registry
         self.devices = devices
-        self.quota_service = quota_service
-        self.jobs: dict[str, TranscribeJob] = {}
-        self.queue: asyncio.Queue[TranscribeJob] = asyncio.Queue(
-            maxsize=settings.max_queue_size
-        )
-        self._worker_task: asyncio.Task[None] | None = None
-        self._active: dict[str, asyncio.Task[None]] = {}
-
-    async def start(self) -> None:
-        if self._worker_task is None:
-            self._worker_task = asyncio.create_task(self._worker())
-
-    async def stop(self) -> None:
-        if self._worker_task is None:
-            return
-        self._worker_task.cancel()
-        try:
-            await self._worker_task
-        except asyncio.CancelledError:
-            pass
-        self._worker_task = None
 
     async def create_job(
         self,
@@ -126,34 +110,6 @@ class TranscribeJobManager:
         # tirar todo ese trabajo.
         if output_mode == "dubbed_video" and not (target_language or "").strip():
             raise ValueError("Hace falta el idioma al que doblar.")
-
-    def get_job(self, job_id: str) -> TranscribeJob | None:
-        return self.jobs.get(job_id)
-
-    def cancel_job(self, job_id: str) -> bool:
-        job = self.jobs.get(job_id)
-        if job is None or job.status in (
-            JobStatus.completed,
-            JobStatus.failed,
-            JobStatus.cancelled,
-        ):
-            return False
-        task = self._active.get(job_id)
-        if task is not None:
-            task.cancel()
-        else:
-            # Todavia en la cola: se marca y el worker lo saltea sin procesarlo.
-            job.status = JobStatus.cancelled
-            job.finished_at = utc_now()
-        return True
-
-    def _enqueue(self, job: TranscribeJob) -> None:
-        try:
-            self.queue.put_nowait(job)
-        except asyncio.QueueFull as exc:
-            raise QueueFullError(
-                "Transcribe job queue is full; try again later"
-            ) from exc
 
     def _validate_model(self, model_id: str) -> None:
         entry = self.registry.get(model_id)
@@ -210,65 +166,11 @@ class TranscribeJobManager:
             raise RuntimeError(f"Model folder missing on disk: {entry.file_path!r}")
         return target
 
-    async def _worker(self) -> None:
-        while True:
-            job = await self.queue.get()
-            if job.status == JobStatus.cancelled:
-                self._unlink_source_safely(job.source_path)
-                self.queue.task_done()
-                continue
-            await self._run_job(job)
+    def _admit(self, job: TranscribeJob):
+        return self.device_semaphores.acquire(job.device)
 
-    async def _process_next(self) -> bool:
-        if self.queue.empty():
-            return False
-        job = await self.queue.get()
-        if job.status == JobStatus.cancelled:
-            self._unlink_source_safely(job.source_path)
-            self.queue.task_done()
-            return True
-        await self._run_job(job)
-        return True
-
-    async def _run_job(self, job: TranscribeJob) -> None:
-        async with self.device_semaphores.acquire(job.device):
-            await self._execute_job(job)
-
-    async def _execute_job(self, job: TranscribeJob) -> None:
-        if job.status == JobStatus.cancelled:
-            # Cancelado mientras este worker esperaba el permiso del device: el
-            # job ya salio de la cola, asi que el skip del _worker no lo agarra.
-            # Sin este re-chequeo el job resucitaria y correria completo.
-            self._unlink_source_safely(job.source_path)
-            self.queue.task_done()
-            return
-        job.status = JobStatus.running
-        job.started_at = utc_now()
-        run_task = asyncio.ensure_future(self._run_engine(job))
-        self._active[job.id] = run_task
-        try:
-            await run_task
-            job.status = JobStatus.completed
-        except asyncio.CancelledError:
-            run_task.cancel()
-            current = asyncio.current_task()
-            if current is not None and current.cancelling() > 0:
-                # El WORKER se cancelo (stop()): el job falla y se re-lanza para que
-                # el worker muera de verdad.
-                job.status = JobStatus.failed
-                job.error = "Job cancelled"
-                raise
-            job.status = JobStatus.cancelled
-            job.error = None
-        except Exception as exc:  # noqa: BLE001
-            job.status = JobStatus.failed
-            job.error = str(exc)
-        finally:
-            self._active.pop(job.id, None)
-            job.finished_at = utc_now()
-            self._unlink_source_safely(job.source_path)
-            self.queue.task_done()
-            self._record_quota_usage(job)
+    def _cleanup_source(self, job: TranscribeJob) -> None:
+        self._unlink_source_safely(job.source_path)
 
     async def _run_engine(self, job: TranscribeJob) -> None:
         entry = self.registry.get(job.model_id)
@@ -415,12 +317,6 @@ class TranscribeJobManager:
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(text, encoding="utf-8")
         return destination
-
-    def _record_quota_usage(self, job: TranscribeJob) -> None:
-        if self.quota_service is None or job.started_at is None or job.finished_at is None:
-            return
-        duration = (job.finished_at - job.started_at).total_seconds()
-        self.quota_service.record_usage(job.owner_id, duration)
 
     @staticmethod
     def _unlink_source_safely(source_path: Path) -> None:

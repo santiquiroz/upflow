@@ -5,7 +5,7 @@ from pathlib import Path
 
 from app.config import Settings
 from app.services.missing_pack import missing_pack_message
-from app.services.process_runner import run_guarded_process
+from app.services.process_runner import is_non_empty_file, run_guarded_process
 
 # ---------------------------------------------------------------------------
 # Fase 3 (2026-07-31) - lane EXPERIMENTAL de difusión por stable-diffusion.cpp
@@ -62,6 +62,6 @@ class SdcppEngine:
         if returncode != 0:
             tail = stderr.decode(errors="replace")[-600:]
             raise RuntimeError(f"sd.cpp failed with exit code {returncode}: {tail}")
-        if not output_path.exists() or output_path.stat().st_size == 0:
+        if not is_non_empty_file(output_path):
             raise RuntimeError("sd.cpp exited 0 but produced no output image")
         return output_path

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.services.generation_inpaint import (
+from app.services.generation_pipeline_modes import (
     INPAINT_CLASS_NAMES,
     InpaintUnsupportedError,
     inpaint_class_for,
@@ -107,7 +107,7 @@ def test_dedicated_inpaint_checkpoints_are_accepted() -> None:
 
 
 def test_dedicated_inpaint_classes_are_detected() -> None:
-    from app.services.generation_inpaint import is_dedicated_inpaint_class
+    from app.services.generation_pipeline_modes import is_dedicated_inpaint_class
 
     assert is_dedicated_inpaint_class("StableDiffusionXLInpaintPipeline") is True
     assert is_dedicated_inpaint_class("ORTStableDiffusionInpaintPipeline") is True

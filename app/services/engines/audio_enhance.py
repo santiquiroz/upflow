@@ -6,7 +6,7 @@ from uuid import uuid4
 
 from app.config import AUDIO_ENHANCE_MODES, DEEPFILTER_MODE, Settings
 from app.services.missing_pack import missing_pack_message
-from app.services.process_runner import run_guarded_process
+from app.services.process_runner import is_non_empty_file, run_checked_process
 
 
 class AudioEnhancer:
@@ -51,7 +51,9 @@ class AudioEnhancer:
         temp_dir.mkdir(parents=True, exist_ok=True)
         try:
             command = self._build_deepfilter_command(input_wav, temp_dir)
-            await self._execute(command, "DeepFilterNet enhancement process failed")
+            await run_checked_process(
+                command, self.settings.subprocess_timeout, "DeepFilterNet enhancement process failed"
+            )
             self._promote_deepfilter_output(temp_dir / input_wav.name, output_wav)
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
@@ -76,7 +78,9 @@ class AudioEnhancer:
 
     async def _run_rnnoise(self, input_wav: Path, output_wav: Path) -> None:
         command = self._build_rnnoise_command(input_wav, output_wav)
-        await self._execute(command, "RNNoise ffmpeg filter process failed")
+        await run_checked_process(
+            command, self.settings.subprocess_timeout, "RNNoise ffmpeg filter process failed"
+        )
         self._validate_output(output_wav)
 
     def _build_rnnoise_command(self, input_wav: Path, output_wav: Path) -> list[str]:
@@ -107,17 +111,8 @@ class AudioEnhancer:
         posix_style = str(path).replace("\\", "/")
         return posix_style.replace(":", r"\\:")
 
-    async def _execute(self, command: list[str], failure_message: str) -> None:
-        _, stderr, returncode = await run_guarded_process(command, self.settings.subprocess_timeout)
-        if returncode != 0:
-            raise RuntimeError(stderr.decode("utf-8", errors="ignore") or failure_message)
-
     def _validate_output(self, output_wav: Path) -> None:
-        if not self._is_non_empty_file(output_wav):
+        if not is_non_empty_file(output_wav):
             raise RuntimeError(
                 f"Audio enhance mode {self.mode!r} completed but no output file was produced"
             )
-
-    @staticmethod
-    def _is_non_empty_file(path: Path) -> bool:
-        return path.exists() and path.stat().st_size > 0

@@ -4,20 +4,15 @@ import asyncio
 import contextlib
 import threading
 import time
-from collections import OrderedDict
-from math import gcd
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from app.config import Settings
+from app.services.engines.audio_restore_base import OnnxAudioRestorer, is_cpu_device
 from app.services.engines.audiosr.assets import GRAPH_NAMES, AudioSrAssets
 from app.services.engines.audiosr.driver import AudioSrDriver
-from app.services.engines.multichannel_restore import restore_multichannel
 from app.services.engines.onnx_upscaler import _wrap_onnx_error
-from app.services.gpu_session_coordinator import GpuSessionCoordinator
-from app.services.missing_pack import missing_pack_message
 
 # ---------------------------------------------------------------------------
 # AudioSR restoration (ONNX, in-process). Second restore engine next to
@@ -25,8 +20,10 @@ from app.services.missing_pack import missing_pack_message
 # but general-purpose. Port: santiquiroz/port-audiosr-onnx (4 graphs + numpy
 # DDIM/CFG driver, parity-validated against the PyTorch original).
 #
-# Session cache holds the 4 graphs of ONE device (LRU 1): a full set is
-# ~1.7GB of weights, so caching per-device like Apollo would double VRAM/RAM.
+# Session cache, coordinator wiring and audio I/O live in OnnxAudioRestorer
+# (audio_restore_base.py), shared with Apollo. The cache holds the 4 graphs
+# of ONE device (LRU 1): a full set is ~1.7GB of weights, so caching
+# per-device like Apollo would double VRAM/RAM.
 #
 # TDR: unlike Apollo there is no chunk-size knob -- each DDIM step is one
 # monolithic UNet call over the model's fixed 10.24s window (~90ms on a
@@ -37,19 +34,16 @@ from app.services.missing_pack import missing_pack_message
 AUDIOSR_SAMPLE_RATE = 48000
 
 
-class AudioSrRestorer:
-    def __init__(self, settings: Settings, gpu_coordinator: GpuSessionCoordinator) -> None:
-        self.settings = settings
-        self.gpu_coordinator = gpu_coordinator
-        self._session_cache: OrderedDict[str, dict[str, Any]] = OrderedDict()
-        self._session_lock = threading.Lock()
+class AudioSrRestorer(OnnxAudioRestorer):
+    sample_rate = AUDIOSR_SAMPLE_RATE
+    session_cache_size = 1
+    pack_name = "audiosr"
+    missing_pack_detail = "Ademas hay que prender ENABLE_AUDIOSR para usar la restauracion AudioSR."
+    engine_label = "AudioSR"
+    load_error_context = "Failed to load AudioSR models on device"
 
     def available(self) -> bool:
         return self.settings.audiosr_available()
-
-    def release_device(self, device: str) -> None:
-        with self._session_lock:
-            self._session_cache.pop(device, None)
 
     async def run(self, input_wav: Path, output_wav: Path, device: str) -> None:
         cancel_event = threading.Event()
@@ -62,32 +56,25 @@ class AudioSrRestorer:
             # to_thread can't interrupt the worker; the driver polls this event
             # at every stage boundary. Waiting for the thread to actually
             # finish keeps the caller's finally (rmtree of the work dir) from
-            # racing a straggler _save_wav that would resurrect the directory.
+            # racing a straggler save_wav that would resurrect the directory.
             cancel_event.set()
             with contextlib.suppress(Exception):
                 await worker
             raise
-        if not self._is_non_empty_file(output_wav):
-            raise RuntimeError("AudioSR restoration completed but no output file was produced")
+        self._ensure_output_file(output_wav)
 
     def _run_and_save(
         self, input_wav: Path, output_wav: Path, device: str, cancel_event: threading.Event
     ) -> None:
-        if not self.available():
-            raise RuntimeError(
-                missing_pack_message(
-                    "audiosr",
-                    detail="Ademas hay que prender ENABLE_AUDIOSR para usar la restauracion AudioSR.",
-                )
-            )
-        audio = _load_audio_48k(input_wav)
+        self._require_available()
+        audio = self._load_audio(input_wav)
         if audio.shape[0] == 0:
             raise RuntimeError(
                 "The uploaded audio decoded to zero samples; the file is empty or corrupted"
             )
         sessions = self._get_sessions(device)
         assets = AudioSrAssets.load(self.settings.audiosr_model_dir_path)
-        throttle = 0.0 if _is_cpu_device(device) else self.settings.audiosr_gpu_throttle_seconds
+        throttle = 0.0 if is_cpu_device(device) else self.settings.audiosr_gpu_throttle_seconds
 
         driver = AudioSrDriver(assets, _session_runner(sessions))
 
@@ -99,30 +86,15 @@ class AudioSrRestorer:
                 step_throttle=(lambda: time.sleep(throttle)) if throttle > 0 else None,
             )
 
-        restored = restore_multichannel(audio, restore_mono)
-        _save_wav(output_wav, restored)
+        self._restore_and_save(audio, restore_mono, output_wav)
 
     def _get_sessions(self, device: str) -> dict[str, Any]:
-        self.gpu_coordinator.acquire(device, self)
-        with self._session_lock:
-            cached = self._session_cache.get(device)
-            if cached is not None:
-                self._session_cache.move_to_end(device)
-                return cached
+        return self._get_session_for_device(device)
 
-        try:
-            sessions = self._create_sessions(device)
-        except Exception as exc:  # onnxruntime raises its own native exception types
-            raise _wrap_onnx_error(
-                f"Failed to load AudioSR models on device {device!r}", exc
-            ) from exc
-
-        with self._session_lock:
-            self._session_cache[device] = sessions
-            self._session_cache.move_to_end(device)
-            if len(self._session_cache) > 1:
-                self._session_cache.popitem(last=False)
-        return sessions
+    def _build_session(self, device: str) -> Any:
+        # Delegación y no llamada directa desde la base: los tests
+        # monkeypatchean `_create_sessions` por nombre en la instancia.
+        return self._create_sessions(device)
 
     def _create_sessions(self, device: str) -> dict[str, Any]:
         # Monkeypatchable seam: unit tests override this to inject fake numpy
@@ -137,10 +109,6 @@ class AudioSrRestorer:
             for name in GRAPH_NAMES
         }
 
-    @staticmethod
-    def _is_non_empty_file(path: Path) -> bool:
-        return path.exists() and path.stat().st_size > 0
-
 
 def _session_runner(sessions: dict[str, Any]):
     def run_graph(name: str, feeds: dict[str, np.ndarray]) -> np.ndarray:
@@ -153,33 +121,3 @@ def _session_runner(sessions: dict[str, Any]):
         return np.asarray(result, dtype=np.float32)
 
     return run_graph
-
-
-def _is_cpu_device(device: str) -> bool:
-    return device.strip().lower() == "cpu"
-
-
-def _load_audio_48k(input_wav: Path) -> np.ndarray:
-    import soundfile as sf
-
-    data, sample_rate = sf.read(str(input_wav), dtype="float32", always_2d=True)
-    channels = [_resample(data[:, c], sample_rate, AUDIOSR_SAMPLE_RATE) for c in range(data.shape[1])]
-    return np.stack(channels, axis=1)
-
-
-def _resample(signal: np.ndarray, source_rate: int, target_rate: int) -> np.ndarray:
-    if source_rate == target_rate:
-        return signal.astype(np.float32)
-    from scipy.signal import resample_poly
-
-    divisor = gcd(int(source_rate), int(target_rate))
-    up = int(target_rate) // divisor
-    down = int(source_rate) // divisor
-    return resample_poly(signal, up, down).astype(np.float32)
-
-
-def _save_wav(output_wav: Path, audio: np.ndarray) -> None:
-    import soundfile as sf
-
-    output_wav.parent.mkdir(parents=True, exist_ok=True)
-    sf.write(str(output_wav), audio, AUDIOSR_SAMPLE_RATE)

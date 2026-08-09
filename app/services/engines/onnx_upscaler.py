@@ -12,9 +12,11 @@ from PIL import Image
 from app.config import Settings
 from app.models import UpscaleJob
 from app.services.devices_service import DevicesService
+from app.services.dml_device import try_parse_dml_device_id
 from app.services.engines.base import UpscaleEngine
 from app.services.gpu_session_coordinator import GpuSessionCoordinator
 from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry, ModelStatus
+from app.services.process_runner import is_non_empty_file
 from app.services.progress import apply_image_tile_progress
 
 # ---------------------------------------------------------------------------
@@ -58,19 +60,11 @@ CPU_PROVIDER = "CPUExecutionProvider"
 DML_PROVIDER = "DmlExecutionProvider"
 
 
-def _parse_dml_device_id(device: str) -> int:
-    _, _, suffix = device.partition(":")
-    try:
-        return int(suffix)
-    except ValueError as exc:
-        raise RuntimeError(f"Unsupported device for ONNX inference: {device!r}") from exc
-
-
 def _build_providers(device: str) -> list[str | tuple[str, dict[str, int]]]:
     if device == "cpu":
         return [CPU_PROVIDER]
-    if device.startswith("dml:"):
-        device_id = _parse_dml_device_id(device)
+    device_id = try_parse_dml_device_id(device)
+    if device_id is not None:
         return [(DML_PROVIDER, {"device_id": device_id}), CPU_PROVIDER]
     raise RuntimeError(f"Unsupported device for ONNX inference: {device!r}")
 
@@ -196,7 +190,7 @@ class OnnxUpscaler(UpscaleEngine):
 
         await asyncio.to_thread(self._run_and_save, job, entry, output_path)
 
-        if not self._is_non_empty_file(output_path):
+        if not is_non_empty_file(output_path):
             raise RuntimeError("ONNX upscaling completed but no output file was produced")
         return output_path
 
@@ -370,7 +364,3 @@ class OnnxUpscaler(UpscaleEngine):
         except Exception as exc:  # onnxruntime raises its own native exception types
             raise _wrap_onnx_error("ONNX inference failed", exc) from exc
         return _from_nchw_float(result)
-
-    @staticmethod
-    def _is_non_empty_file(path: Path) -> bool:
-        return path.exists() and path.stat().st_size > 0

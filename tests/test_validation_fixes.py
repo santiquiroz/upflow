@@ -15,7 +15,6 @@ from app.config import Settings
 from app.models import UpscaleJob, VideoUpscaleJob
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.job_manager import JobManager
-from app.services.engines import realesrgan_ncnn as realesrgan_module
 from app.services.engines.realesrgan_ncnn import RealEsrganNcnnEngine
 from app.services.media_tools import parse_fps_fraction, resolve_video_fps
 from app.services.storage import StorageService
@@ -271,7 +270,7 @@ async def test_zero_byte_image_engine_output_fails_the_job(
         output_path.write_bytes(b"")
         return b"", b"", 0
 
-    monkeypatch.setattr(realesrgan_module, "run_guarded_process", fake_run_guarded_process)
+    monkeypatch.setattr("app.services.process_runner.run_guarded_process", fake_run_guarded_process)
 
     engine = RealEsrganNcnnEngine(settings)
     source_path = settings.uploads_path / "photo.png"
