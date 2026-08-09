@@ -12,7 +12,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 
-from app.api.auth_deps import current_user_from_request, require
+from app.api.auth_deps import current_user_from_request, get_current_user, require
 from app.config import (
     AUDIO_ENHANCE_MODES,
     AUDIO_RESTORE_MODES,
@@ -2875,11 +2875,45 @@ async def check_print(
     )
 
 
+# Los STL reparados/generados se sirven por token opaco, no por job: el token
+# solo debe servirle a quien lo creo. El registro vive en memoria (igual que
+# los jobs — un reinicio lo vacia) con un techo para que no crezca sin limite.
+MAX_PRINT_TOKENS = 512
+
+
+def _print_token_owners(request: Request) -> dict[str, str | None]:
+    owners = getattr(request.app.state, "print_token_owners", None)
+    if owners is None:
+        owners = {}
+        request.app.state.print_token_owners = owners
+    return owners
+
+
+def _register_print_token(request: Request, token: str) -> None:
+    owners = _print_token_owners(request)
+    while len(owners) >= MAX_PRINT_TOKENS:
+        owners.pop(next(iter(owners)))
+    owners[token] = _owner_id(request)
+
+
+def _require_print_token_owner(
+    request: Request, token: str, current_user: AuthenticatedUser, detail: str
+) -> None:
+    """Mismo 404 para "no existe" y "no es tuyo" — igual que con los jobs."""
+    if Permission.jobs_read_all in current_user.permissions:
+        return
+    owners = _print_token_owners(request)
+    if token not in owners or owners[token] != _owner_id(request):
+        raise HTTPException(status_code=404, detail=detail)
+
+
 @router.post("/print/repair", response_model=MeshRepairResponse)
 async def repair_print_mesh(
+    request: Request,
     file: UploadFile = File(...),
     settings_dep: Settings = Depends(get_settings),
     storage: StorageService = Depends(get_storage),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> MeshRepairResponse:
     """Tapa los agujeros de la malla y devuelve como quedo, medido.
 
@@ -2900,6 +2934,7 @@ async def repair_print_mesh(
     finally:
         origen.unlink(missing_ok=True)
 
+    _register_print_token(request, token)
     return MeshRepairResponse(
         can_print=reporte.printable,
         watertight=reporte.is_watertight,
@@ -2914,11 +2949,14 @@ async def repair_print_mesh(
 @router.get("/print/repaired/{token}")
 async def download_repaired_mesh(
     token: str,
+    request: Request,
     settings_dep: Settings = Depends(get_settings),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> FileResponse:
     # Solo hexadecimal: cualquier otra cosa podria salirse de la carpeta.
     if not re.fullmatch(r"[0-9a-f]{32}", token):
         raise HTTPException(status_code=404, detail="Malla reparada no encontrada")
+    _require_print_token_owner(request, token, current_user, "Malla reparada no encontrada")
     archivo = settings_dep.outputs_path / f"{token}.repaired.stl"
     if not archivo.exists():
         raise HTTPException(status_code=404, detail="Malla reparada no encontrada")
@@ -2950,7 +2988,9 @@ async def list_part_kinds() -> PartKindsResponse:
 @router.post("/print/parts", response_model=GeneratedPartResponse)
 async def generate_part(
     payload: GeneratePartRequest,
+    request: Request,
     settings_dep: Settings = Depends(get_settings),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> GeneratedPartResponse:
     """Construye una pieza con cotas EXACTAS y la devuelve ya verificada.
 
@@ -2974,6 +3014,7 @@ async def generate_part(
     except PrintCheckUnavailable as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    _register_print_token(request, token)
     return GeneratedPartResponse(
         can_print=reporte.can_print,
         size_mm=reporte.size,
@@ -2989,10 +3030,13 @@ async def generate_part(
 @router.get("/print/parts/{token}")
 async def download_generated_part(
     token: str,
+    request: Request,
     settings_dep: Settings = Depends(get_settings),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> FileResponse:
     if not re.fullmatch(r"[0-9a-f]{32}", token):
         raise HTTPException(status_code=404, detail="Pieza no encontrada")
+    _require_print_token_owner(request, token, current_user, "Pieza no encontrada")
     archivo = settings_dep.outputs_path / f"{token}.part.stl"
     if not archivo.exists():
         raise HTTPException(status_code=404, detail="Pieza no encontrada")

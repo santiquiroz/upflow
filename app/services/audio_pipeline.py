@@ -75,7 +75,8 @@ class AudioPipeline:
             await self._restore(job.restore, current, restored, job.device)
             current = restored
 
-        if job.voice_steps:
+        voice_steps = self._voice_steps_without_double_loudnorm(job)
+        if voice_steps:
             if self.voice_enhancer is None:
                 # Pedir la cadena y que se ignore en silencio seria peor que
                 # fallar: el usuario creeria que se aplico.
@@ -87,7 +88,7 @@ class AudioPipeline:
             voiced = work_dir / "voiced.wav"
             await self.voice_enhancer.run(
                 steps_from_selection(
-                    job.voice_steps,
+                    voice_steps,
                     delivery=job.voice_delivery,
                     presence_db=job.voice_presence_db,
                     rnnoise_model=str(self.settings.rnnoise_model_path),
@@ -111,6 +112,21 @@ class AudioPipeline:
         self._validate_output(output_path)
         complete_audio_stages(job)
         return output_path
+
+    def _voice_steps_without_double_loudnorm(self, job: AudioJob) -> list[str]:
+        """Con mastering activo, el paso `loudness` de la cadena de voz sobra.
+
+        Aplicar ambos normalizaba DOS veces: primero el loudnorm single-pass de
+        la cadena de voz (la forma que la propia doc de mastering explica que
+        "bombea") y despues el de dos pasadas midiendo audio ya normalizado.
+        Gana el mastering, y el motivo queda en metadata — nunca en silencio.
+        """
+        if not job.master or "loudness" not in job.voice_steps:
+            return list(job.voice_steps)
+        job.metadata["voiceLoudnessSkipped"] = (
+            "mastering activo aplica la normalización final (dos pasadas)"
+        )
+        return [step for step in job.voice_steps if step != "loudness"]
 
     async def _master(self, job: AudioJob, source: Path, destination: Path) -> bool:
         """Normaliza la sonoridad en dos pasadas y deja lo medido en el job.

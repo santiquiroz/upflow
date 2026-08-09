@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import io
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 from fastapi import HTTPException
 from starlette.datastructures import UploadFile
 
+from app.api.auth_deps import off_mode_user
 from app.api.routes import download_repaired_mesh, repair_print_mesh
 from app.config import Settings
 from app.services.storage import StorageService
@@ -27,6 +29,11 @@ def make_settings(tmp_path: Path) -> Settings:
     return settings
 
 
+def fake_request() -> SimpleNamespace:
+    # Suficiente para _print_token_owners (app.state) y _owner_id (state).
+    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()), state=SimpleNamespace())
+
+
 def tetrahedron() -> np.ndarray:
     a, b, c, d = (0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (0.0, 10.0, 0.0), (0.0, 0.0, 10.0)
     return np.array([[a, c, b], [a, b, d], [a, d, c], [b, c, d]], dtype=np.float64)
@@ -42,9 +49,11 @@ async def test_a_hole_comes_back_closed(tmp_path: Path):
     settings = make_settings(tmp_path)
 
     respuesta = await repair_print_mesh(
+        request=fake_request(),
         file=upload(tmp_path, tetrahedron()[:-1]),
         settings_dep=settings,
         storage=StorageService(settings),
+        current_user=off_mode_user(),
     )
 
     assert respuesta.watertight
@@ -54,14 +63,19 @@ async def test_a_hole_comes_back_closed(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_the_repaired_file_can_be_downloaded_and_is_really_closed(tmp_path: Path):
     settings = make_settings(tmp_path)
+    req = fake_request()
     respuesta = await repair_print_mesh(
+        request=req,
         file=upload(tmp_path, tetrahedron()[:-1]),
         settings_dep=settings,
         storage=StorageService(settings),
+        current_user=off_mode_user(),
     )
     token = respuesta.download_url.rsplit("/", 1)[-1]
 
-    archivo = await download_repaired_mesh(token=token, settings_dep=settings)
+    archivo = await download_repaired_mesh(
+        token=token, request=req, settings_dep=settings, current_user=off_mode_user()
+    )
 
     from app.services.mesh_inspect import inspect_mesh
 
@@ -81,9 +95,11 @@ async def test_a_mesh_it_cannot_close_says_so_instead_of_claiming_success(tmp_pa
     settings = make_settings(tmp_path)
 
     respuesta = await repair_print_mesh(
+        request=fake_request(),
         file=upload(tmp_path, lamina),
         settings_dep=settings,
         storage=StorageService(settings),
+        current_user=off_mode_user(),
     )
 
     assert not respuesta.can_print
@@ -95,7 +111,12 @@ async def test_an_unknown_token_is_a_404(tmp_path: Path):
     settings = make_settings(tmp_path)
 
     with pytest.raises(HTTPException) as exc_info:
-        await download_repaired_mesh(token="no-existe", settings_dep=settings)
+        await download_repaired_mesh(
+            token="no-existe",
+            request=fake_request(),
+            settings_dep=settings,
+            current_user=off_mode_user(),
+        )
 
     assert exc_info.value.status_code == 404
 
@@ -106,7 +127,12 @@ async def test_a_token_cannot_escape_the_outputs_folder(tmp_path: Path):
     settings = make_settings(tmp_path)
 
     with pytest.raises(HTTPException):
-        await download_repaired_mesh(token="../../../etc/passwd", settings_dep=settings)
+        await download_repaired_mesh(
+            token="../../../etc/passwd",
+            request=fake_request(),
+            settings_dep=settings,
+            current_user=off_mode_user(),
+        )
 
 
 @pytest.mark.asyncio
@@ -114,9 +140,77 @@ async def test_the_uploaded_original_does_not_stay_on_disk(tmp_path: Path):
     settings = make_settings(tmp_path)
 
     await repair_print_mesh(
+        request=fake_request(),
         file=upload(tmp_path, tetrahedron()[:-1]),
         settings_dep=settings,
         storage=StorageService(settings),
+        current_user=off_mode_user(),
     )
 
     assert list(settings.uploads_path.glob("*.stl")) == []
+
+
+# ---------------------------------------------------------------------------
+# Ownership del token (2026-08-08): el token solo le sirve a quien lo creo.
+# Mismo 404 para "no existe" y "no es tuyo", igual que con los jobs.
+# ---------------------------------------------------------------------------
+
+
+def _plain_user(user_id: str):
+    admin = off_mode_user()
+    return SimpleNamespace(
+        id=user_id, username=user_id, role=admin.role,
+        permissions=frozenset(), must_change_password=False, quota_overrides={},
+    )
+
+
+@pytest.mark.asyncio
+async def test_another_user_cannot_download_someone_elses_token(tmp_path: Path):
+    settings = make_settings(tmp_path)
+    req = fake_request()
+    req.state.current_user = _plain_user("user-a")
+    respuesta = await repair_print_mesh(
+        request=req,
+        file=upload(tmp_path, tetrahedron()[:-1]),
+        settings_dep=settings,
+        storage=StorageService(settings),
+        current_user=req.state.current_user,
+    )
+    token = respuesta.download_url.rsplit("/", 1)[-1]
+
+    req.state.current_user = _plain_user("user-b")
+    with pytest.raises(HTTPException) as exc_info:
+        await download_repaired_mesh(
+            token=token, request=req, settings_dep=settings,
+            current_user=req.state.current_user,
+        )
+    assert exc_info.value.status_code == 404
+
+    # El dueño si puede.
+    req.state.current_user = _plain_user("user-a")
+    archivo = await download_repaired_mesh(
+        token=token, request=req, settings_dep=settings,
+        current_user=req.state.current_user,
+    )
+    assert Path(archivo.path).exists()
+
+
+@pytest.mark.asyncio
+async def test_admin_can_download_any_token(tmp_path: Path):
+    settings = make_settings(tmp_path)
+    req = fake_request()
+    req.state.current_user = _plain_user("user-a")
+    respuesta = await repair_print_mesh(
+        request=req,
+        file=upload(tmp_path, tetrahedron()[:-1]),
+        settings_dep=settings,
+        storage=StorageService(settings),
+        current_user=req.state.current_user,
+    )
+    token = respuesta.download_url.rsplit("/", 1)[-1]
+
+    req.state.current_user = off_mode_user()
+    archivo = await download_repaired_mesh(
+        token=token, request=req, settings_dep=settings, current_user=off_mode_user()
+    )
+    assert Path(archivo.path).exists()

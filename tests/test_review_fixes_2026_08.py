@@ -196,6 +196,54 @@ def test_sweeper_protects_queued_transcribe_source(tmp_path: Path) -> None:
     assert source.exists(), "el sweep borro la fuente de un job de transcripcion activo"
 
 
+# ---------------------------------------------------------------------------
+# (4) doble loudnorm: con mastering activo, el paso `loudness` de la cadena de
+# voz se omite (normalizar dos veces — la primera single-pass — bombea).
+# ---------------------------------------------------------------------------
+def _audio_pipeline(tmp_path: Path):
+    from app.services.audio_pipeline import AudioPipeline
+
+    return AudioPipeline(make_settings(tmp_path), audio_enhancers={}, restorers={})
+
+
+def _voice_job(tmp_path: Path, *, master: str | None, steps: list[str]):
+    from app.models import AudioJob
+
+    return AudioJob(
+        source_path=tmp_path / "in.wav",
+        original_filename="in.wav",
+        voice_steps=steps,
+        master=master,
+    )
+
+
+def test_loudness_step_is_skipped_when_mastering_is_active(tmp_path: Path) -> None:
+    pipeline = _audio_pipeline(tmp_path)
+    job = _voice_job(tmp_path, master="streaming", steps=["denoise", "loudness"])
+
+    steps = pipeline._voice_steps_without_double_loudnorm(job)
+
+    assert steps == ["denoise"]
+    assert "voiceLoudnessSkipped" in job.metadata
+
+
+def test_loudness_step_stays_without_mastering(tmp_path: Path) -> None:
+    pipeline = _audio_pipeline(tmp_path)
+    job = _voice_job(tmp_path, master=None, steps=["denoise", "loudness"])
+
+    steps = pipeline._voice_steps_without_double_loudnorm(job)
+
+    assert steps == ["denoise", "loudness"]
+    assert "voiceLoudnessSkipped" not in job.metadata
+
+
+def test_only_loudness_plus_mastering_skips_the_voice_stage_entirely(tmp_path: Path) -> None:
+    pipeline = _audio_pipeline(tmp_path)
+    job = _voice_job(tmp_path, master="streaming", steps=["loudness"])
+
+    assert pipeline._voice_steps_without_double_loudnorm(job) == []
+
+
 def test_sweeper_prunes_finished_jobs_of_new_managers(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     sweeper, stubs = _sweeper_with_stubs(settings)
