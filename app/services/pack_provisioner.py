@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import sys
 from dataclasses import dataclass
@@ -135,6 +136,19 @@ def provisioning_supported(platform: str = sys.platform) -> bool:
     return platform == "win32"
 
 
+def _powershell_safe_env() -> dict[str, str]:
+    """Entorno para los scripts .ps1 SIN PSModulePath heredado.
+
+    Pasado real (2026-08-09): el server relanzado desde pwsh 7 hereda un
+    PSModulePath ajeno, y el powershell 5.1 hijo deja de resolver cmdlets de
+    modulo (Get-FileHash → CommandNotFound en plena descarga del pack de
+    karaoke). Sin la variable, 5.1 reconstruye su default completo.
+    """
+    env = dict(os.environ)
+    env.pop("PSModulePath", None)
+    return env
+
+
 def build_command(pack: str, variant: str | None = None) -> list[str]:
     comando = [
         "powershell",
@@ -218,7 +232,9 @@ class PackProvisioner(SingleWorkerJobQueue[ProvisionJob]):
 
         job.status = ProvisionStatus.running
         _stdout, stderr, returncode = await run_guarded_process(
-            build_command(job.pack, job.variant), timeout=PROVISION_TIMEOUT_SECONDS
+            build_command(job.pack, job.variant),
+            timeout=PROVISION_TIMEOUT_SECONDS,
+            env=_powershell_safe_env(),
         )
         if returncode != 0:
             detail = _tail(stderr)

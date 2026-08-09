@@ -29,12 +29,14 @@ class FakeScript:
     def __init__(self, returncode: int = 0, stderr: bytes = b"") -> None:
         self.commands: list[list[str]] = []
         self.timeouts: list[float] = []
+        self.envs: list[dict[str, str] | None] = []
         self.returncode = returncode
         self.stderr = stderr
 
-    async def __call__(self, command, timeout):
+    async def __call__(self, command, timeout, *, env=None):
         self.commands.append(list(command))
         self.timeouts.append(timeout)
+        self.envs.append(env)
         return b"", self.stderr, self.returncode
 
 
@@ -198,7 +200,7 @@ def test_provisioning_is_only_supported_on_windows():
 async def test_an_unexpected_exception_lands_in_the_job_and_not_in_the_worker(
     tmp_path: Path, monkeypatch
 ):
-    async def explode(command, timeout):
+    async def explode(command, timeout, *, env=None):
         raise OSError("disco lleno")
 
     monkeypatch.setattr(provisioner_module, "run_guarded_process", explode)
@@ -284,3 +286,19 @@ class TestPacksConVariante:
         # comandos.
         with pytest.raises(ValueError):
             build_command("translation", variant="es-en; rm -rf /")
+
+
+async def test_el_script_corre_sin_psmodulepath_heredado(tmp_path, script, monkeypatch):
+    # Pasado real (2026-08-09): server relanzado desde pwsh 7 -> el powershell
+    # 5.1 hijo heredaba un PSModulePath ajeno y Get-FileHash dejaba de resolver.
+    # Sin la variable, 5.1 reconstruye su default completo.
+    monkeypatch.setenv("PSModulePath", "C:\\ruta\\de\\pwsh7\\rota")
+    provisioner = PackProvisioner(make_settings(tmp_path))
+    job_id = await provisioner.provision("rife")
+    await provisioner._process_next()
+
+    assert script.envs, "run_guarded_process no recibio env"
+    env = script.envs[0]
+    assert env is not None
+    assert "PSModulePath" not in env
+    assert provisioner.status(job_id).status is ProvisionStatus.done

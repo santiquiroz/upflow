@@ -56,13 +56,32 @@ function Get-UvrHash([string]$path) {
     return ([System.BitConverter]::ToString($hash) -replace '-', '').ToLowerInvariant()
 }
 
+function Get-Sha256([string]$path) {
+    # .NET directo y no Get-FileHash: ese cmdlet vive en un modulo, y un server
+    # lanzado con PSModulePath contaminado (pasado real 2026-08-09: relanzado
+    # desde pwsh 7) deja al powershell 5.1 hijo sin poder resolverlo. .NET
+    # siempre esta.
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $stream = [System.IO.File]::OpenRead($path)
+        try {
+            $hash = $sha256.ComputeHash($stream)
+        } finally {
+            $stream.Dispose()
+        }
+    } finally {
+        $sha256.Dispose()
+    }
+    return ([System.BitConverter]::ToString($hash) -replace '-', '').ToLowerInvariant()
+}
+
 function Get-ModelIntegrityError([string]$path, $info) {
     # $null si pasa ambas verificaciones; si no, un texto que dice CUAL fallo.
     $uvr = Get-UvrHash $path
     if ($uvr -ne $info.Hash) {
         return "hash UVR $uvr, se esperaba $($info.Hash)"
     }
-    $sha = (Get-FileHash -Path $path -Algorithm SHA256).Hash.ToLowerInvariant()
+    $sha = Get-Sha256 $path
     if ($sha -ne $info.Sha256) {
         return "SHA-256 $sha, se esperaba $($info.Sha256)"
     }

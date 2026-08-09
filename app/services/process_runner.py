@@ -28,11 +28,14 @@ async def run_checked_process(
     return stdout
 
 
-async def run_guarded_process(command: list[str], timeout: float) -> tuple[bytes, bytes, int]:
+async def run_guarded_process(
+    command: list[str], timeout: float, *, env: dict[str, str] | None = None
+) -> tuple[bytes, bytes, int]:
     process = await asyncio.create_subprocess_exec(
         *command,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        env=env,
     )
     try:
         stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
