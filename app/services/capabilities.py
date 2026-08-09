@@ -279,6 +279,18 @@ CATALOG: tuple[Capability, ...] = (
         ),
     ),
     Capability(
+        id="audio.karaoke",
+        domain="audio",
+        label_key="capability.audio.karaoke",
+        provisioning="vendored_pack",
+        job_kind="audio",
+        strategies=("model",),
+        # Sin SettingRequirement a proposito: descargar un modelo = usable. El
+        # requisito apunta al primer modelo instalado (propiedad de Settings),
+        # asi la carpeta a medias de una descarga cortada no cuenta como listo.
+        requirements=(PathRequirement("karaoke_installed_model", "karaoke"),),
+    ),
+    Capability(
         id="audio.voice",
         domain="audio",
         label_key="capability.audio.voice",

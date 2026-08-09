@@ -178,6 +178,7 @@ async def upflow_download_result(
     transcript_format: str = "txt",
     translate_to: str = "",
     file_index: int = 0,
+    stem: str = "",
 ) -> str:
     """Guarda el resultado de un job completado en un archivo local.
 
@@ -185,12 +186,18 @@ async def upflow_download_result(
     transcript_format (solo transcribe): txt | srt | vtt | video.
     translate_to (solo transcribe): código de idioma para traducir subtítulos.
     file_index (solo download): índice del archivo cuando la descarga produjo varios.
+    stem (solo audio con separate/karaoke): instrumental | vocals.
     Devuelve {outputPath}. Falla con 409 si el job no está completed.
     """
     try:
         fam = family_or_raise(family)
         params: dict[str, Any] = {}
         default_name = fam.default_output_name
+        if fam.name == "audio" and stem:
+            if stem not in ("instrumental", "vocals"):
+                return "Error: stem debe ser 'instrumental' o 'vocals'."
+            params["stem"] = stem
+            default_name = f"{stem}.flac"
         if fam.name == "transcribe":
             params["fmt"] = transcript_format
             if translate_to:
@@ -408,11 +415,20 @@ async def upflow_process_audio(
     voice_presence_db: float = 0.0,
     output_format: str = "flac",
     device: str = "",
+    separate: bool = False,
+    separation_model: str = "",
 ) -> str:
     """Crea un job de procesamiento de audio: denoise, restauración (Apollo/
-    AudioSR), cadena de voz y/o mastering. Devuelve jobId (seguir con
-    upflow_wait_job, descargar con upflow_download_result).
+    AudioSR), cadena de voz, mastering, o separación voz/instrumental
+    (karaoke). Devuelve jobId (seguir con upflow_wait_job, descargar con
+    upflow_download_result).
 
+    separate=True (karaoke): separa el audio en instrumental + voces (dos
+    salidas; bajar cada una con upflow_download_result y su stem). Es
+    EXCLUSIVO: no se combina con denoise/restore/voice/master en el mismo
+    job — encadená un segundo job sobre el stem que quieras.
+    separation_model: id del catálogo (upflow_capabilities(audio) →
+    separationModels); vacío = el default instalado.
     Modos válidos: upflow_capabilities(audio) y upflow_capabilities(voice_catalog).
     voice_steps: CSV de pasos de la cadena de voz en orden.
     output_format: wav | flac | mp3.
@@ -420,6 +436,13 @@ async def upflow_process_audio(
     try:
         name, content = client.read_upload(file_path)
         data: dict[str, Any] = {"output_format": output_format}
+        if separate:
+            data["separate"] = "true"
+        if separation_model:
+            # Siempre viaja: si falta separate, la API responde su 400 explícito
+            # ("separation_model solo aplica cuando separate=true") en vez de
+            # descartar el pedido en silencio y crear otro job del que se pidió.
+            data["separation_model"] = separation_model
         optional = {
             "denoise": denoise,
             "restore": restore,

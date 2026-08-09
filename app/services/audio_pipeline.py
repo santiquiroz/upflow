@@ -4,6 +4,8 @@ import logging
 import shutil
 from pathlib import Path
 
+from typing import TYPE_CHECKING
+
 from app.config import Settings
 from app.models import AudioJob
 from app.services.engines.audio_enhance import AudioEnhancer
@@ -11,7 +13,14 @@ from app.services.engines.voice_enhance import VoiceEnhancer
 from app.services.voice_chain import steps_from_selection
 from app.services.restorer_registry import AudioRestorer
 from app.services.process_runner import run_guarded_process
-from app.services.progress import advance_audio_stage, complete_audio_stages
+from app.services.progress import (
+    advance_audio_stage,
+    apply_audio_chunk_progress,
+    complete_audio_stages,
+)
+
+if TYPE_CHECKING:
+    from app.services.engines.mdx_separator import MdxSeparator
 
 logger = logging.getLogger(__name__)
 
@@ -44,11 +53,13 @@ class AudioPipeline:
         audio_enhancers: dict[str, AudioEnhancer],
         restorers: dict[str, AudioRestorer],
         voice_enhancer: VoiceEnhancer | None = None,
+        separator: "MdxSeparator | None" = None,
     ) -> None:
         self.settings = settings
         self.audio_enhancers = audio_enhancers
         self.restorers = restorers
         self.voice_enhancer = voice_enhancer
+        self.separator = separator
 
     async def run(self, job: AudioJob) -> Path:
         work_dir = self.settings.temp_path / f"audio-{job.id}"
@@ -61,7 +72,10 @@ class AudioPipeline:
     async def _run_chain(self, job: AudioJob, work_dir: Path) -> Path:
         advance_audio_stage(job, "decoding")
         current = work_dir / "decoded.wav"
-        await self._decode_to_wav(job.source_path, current)
+        await self._decode_to_wav(job.source_path, current, force_stereo=job.separate)
+
+        if job.separate:
+            return await self._run_separation(job, work_dir, current)
 
         if job.denoise:
             advance_audio_stage(job, "denoising")
@@ -112,6 +126,47 @@ class AudioPipeline:
         self._validate_output(output_path)
         complete_audio_stages(job)
         return output_path
+
+    async def _run_separation(self, job: AudioJob, work_dir: Path, decoded: Path) -> Path:
+        """Modo karaoke: DOS salidas (instrumental y voz), mismo formato ambas.
+
+        job.output_path (lo devuelto) es la instrumental; la voz queda en
+        job.vocals_output_path. El manager ya garantizo que el modo corre solo.
+        """
+        from app.services.engines.mdx_models import DEFAULT_SEPARATION_MODEL
+
+        if self.separator is None:
+            # Mismo criterio que la cadena de voz: pedir la separacion y que se
+            # ignore en silencio seria peor que fallar.
+            raise RuntimeError(
+                "El job pide separacion pero el pipeline se construyo sin "
+                "motor de separacion."
+            )
+        advance_audio_stage(job, "separating")
+        instrumental_wav = work_dir / "instrumental.wav"
+        vocals_wav = work_dir / "vocals.wav"
+        await self.separator.run(
+            decoded,
+            instrumental_wav,
+            vocals_wav,
+            job.device or self.settings.default_device,
+            model_id=job.separation_model or DEFAULT_SEPARATION_MODEL,
+            on_chunk=lambda done, total: apply_audio_chunk_progress(job, done, total),
+        )
+
+        advance_audio_stage(job, "finalizing")
+        output_format = job.output_format
+        outputs_dir = self.settings.outputs_path
+        outputs_dir.mkdir(parents=True, exist_ok=True)
+        instrumental_out = outputs_dir / f"{job.id}.instrumental.{output_format}"
+        vocals_out = outputs_dir / f"{job.id}.vocals.{output_format}"
+        await self._write_output(instrumental_wav, instrumental_out, output_format)
+        await self._write_output(vocals_wav, vocals_out, output_format)
+        self._validate_output(instrumental_out)
+        self._validate_output(vocals_out)
+        job.vocals_output_path = vocals_out
+        complete_audio_stages(job)
+        return instrumental_out
 
     def _voice_steps_without_double_loudnorm(self, job: AudioJob) -> list[str]:
         """Con mastering activo, el paso `loudness` de la cadena de voz sobra.
@@ -175,8 +230,15 @@ class AudioPipeline:
         ]
         await self._run_process(command, "Audio encode failed while writing the final output file")
 
-    async def _decode_to_wav(self, source_path: Path, output_wav: Path) -> None:
+    async def _decode_to_wav(
+        self, source_path: Path, output_wav: Path, force_stereo: bool = False
+    ) -> None:
         output_wav.parent.mkdir(parents=True, exist_ok=True)
+        # El separador MDX trabaja a 44100 estereo: decodificar directo a eso
+        # evita un resample extra y le baja el surround a 2 canales a ffmpeg,
+        # que tiene el downmix canonico.
+        sample_rate = 44100 if force_stereo else DECODE_SAMPLE_RATE
+        channel_args = ["-ac", "2"] if force_stereo else []
         command = [
             str(self.settings.ffmpeg_binary_path),
             "-y",
@@ -186,7 +248,8 @@ class AudioPipeline:
             "-acodec",
             "pcm_s16le",
             "-ar",
-            str(DECODE_SAMPLE_RATE),
+            str(sample_rate),
+            *channel_args,
             str(output_wav),
         ]
         await self._run_process(command, "Audio decode failed; the uploaded file is not a supported audio format")

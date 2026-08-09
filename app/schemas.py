@@ -78,6 +78,8 @@ class AudioJobResponse(BaseModel):
     restore: str | None = None
     device: str | None = None
     output_format: str = Field(default="flac", serialization_alias="outputFormat")
+    separate: bool = False
+    separation_model: str | None = Field(default=None, serialization_alias="separationModel")
     created_at: datetime = Field(serialization_alias="createdAt")
     started_at: datetime | None = Field(default=None, serialization_alias="startedAt")
     finished_at: datetime | None = Field(default=None, serialization_alias="finishedAt")
@@ -86,6 +88,10 @@ class AudioJobResponse(BaseModel):
     error: str | None = None
     owner_id: str | None = Field(default=None, serialization_alias="ownerId")
     download_url: str | None = Field(default=None, serialization_alias="downloadUrl")
+    # Solo en modo karaoke: downloadUrl baja la instrumental y esto la voz.
+    vocals_download_url: str | None = Field(
+        default=None, serialization_alias="vocalsDownloadUrl"
+    )
 
 
 class TranslationPairResponse(BaseModel):
@@ -280,6 +286,19 @@ class MasteringPresetResponse(BaseModel):
     target_lufs: float = Field(serialization_alias="targetLufs")
 
 
+class SeparationModelResponse(BaseModel):
+    """Un modelo del catalogo de separacion (mdx_models.SEPARATION_MODELS).
+
+    `name` es nombre propio del modelo y viaja tal cual (no se traduce);
+    `installed` sale de mirar el disco, como todas las capacidades.
+    """
+
+    id: str
+    name: str
+    installed: bool
+    primary_stem: str = Field(serialization_alias="primaryStem")
+
+
 class AudioCapabilitiesResponse(BaseModel):
     denoise_modes: list[str] = Field(serialization_alias="denoiseModes")
     restore_available: bool = Field(serialization_alias="restoreAvailable")
@@ -288,6 +307,11 @@ class AudioCapabilitiesResponse(BaseModel):
     # viene con la app, sin descargar nada.
     mastering_presets: list[MasteringPresetResponse] = Field(
         default_factory=list, serialization_alias="masteringPresets"
+    )
+    # Catalogo completo de modelos de separacion (instalados o no): la UI arma
+    # el picker y los botones de descarga por modelo con esto.
+    separation_models: list[SeparationModelResponse] = Field(
+        default_factory=list, serialization_alias="separationModels"
     )
 
 

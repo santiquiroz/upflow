@@ -39,6 +39,7 @@ IMAGE_STAGE_ORDER: tuple[str, ...] = ("validating", "upscaling")
 
 AUDIO_STAGE_WEIGHTS: dict[str, tuple[str, float]] = {
     "decoding": ("Decoding audio", 10),
+    "separating": ("Separating stems", 80),
     "denoising": ("Denoising", 40),
     "restoring": ("Restoring", 40),
     "voicing": ("Enhancing voice", 5),
@@ -47,7 +48,8 @@ AUDIO_STAGE_WEIGHTS: dict[str, tuple[str, float]] = {
 }
 
 AUDIO_STAGE_ORDER: tuple[str, ...] = (
-    "decoding", "denoising", "restoring", "voicing", "mastering", "finalizing",
+    "decoding", "separating", "denoising", "restoring", "voicing", "mastering",
+    "finalizing",
 )
 
 GENERATION_STAGE_DEFS: tuple[tuple[str, str, float], ...] = (
@@ -112,6 +114,12 @@ def build_image_stages() -> list[Stage]:
 
 
 def _audio_stage_active(job: AudioJob, key: str) -> bool:
+    if key == "separating":
+        return job.separate
+    if job.separate:
+        # El modo karaoke corre solo (lo garantiza el manager): mostrar las
+        # etapas de la cadena clasica seria pintar pasos que nunca van a correr.
+        return key in ("decoding", "finalizing")
     if key == "denoising":
         return bool(job.denoise)
     if key == "restoring":
@@ -265,6 +273,19 @@ def apply_image_tile_progress(job: UpscaleJob, tiles_done: int, tiles_total: int
     job.metadata["stages"] = [asdict(stage) for stage in stages]
     job.metadata["framesDone"] = tiles_done
     job.metadata["framesTotal"] = tiles_total
+    job.metadata["progress"] = compute_progress(stages, current_fraction=fraction)
+
+
+def apply_audio_chunk_progress(job: AudioJob, chunks_done: int, chunks_total: int) -> None:
+    # Mirrors apply_image_tile_progress -- called between chunks from the
+    # separator's worker thread, so this stays a direct metadata write rather
+    # than _write_stage_metadata (which would re-stamp stageStartedAt on every
+    # chunk). Sin framesDone/framesTotal a proposito: "frames" mentiria para
+    # chunks y FramesReadout ya saltea los jobs de audio.
+    stages = apply_stage_transition(build_audio_stages(job), "separating")
+    fraction = frame_stage_fraction(chunks_done, chunks_total)
+    job.metadata["stage"] = "separating"
+    job.metadata["stages"] = [asdict(stage) for stage in stages]
     job.metadata["progress"] = compute_progress(stages, current_fraction=fraction)
 
 

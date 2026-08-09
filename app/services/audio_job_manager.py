@@ -60,13 +60,31 @@ class AudioJobManager(QueuedJobManager[AudioJob]):
         voice_delivery: str | None = None,
         voice_presence_db: float | None = None,
         master: str | None = None,
+        separate: bool = False,
+        separation_model: str | None = None,
         job_id: str | None = None,
         owner: AuthenticatedUser | None = None,
     ) -> AudioJob:
-        self._validate_modes(denoise, restore)
-        selected_voice_steps = self._validate_voice_selection(
-            voice_steps or [], voice_delivery
-        )
+        if separate:
+            separation_model = self._validate_separation(
+                separation_model,
+                denoise=denoise,
+                restore=restore,
+                voice_steps=voice_steps or [],
+                master=master,
+                voice_delivery=voice_delivery,
+                voice_presence_db=voice_presence_db,
+            )
+            selected_voice_steps: list[str] = []
+        else:
+            if separation_model is not None:
+                raise ValueError(
+                    "separation_model solo aplica cuando separate=true."
+                )
+            self._validate_modes(denoise, restore)
+            selected_voice_steps = self._validate_voice_selection(
+                voice_steps or [], voice_delivery
+            )
         self._validate_output_format(output_format)
         await self._validate_device(device)
 
@@ -84,6 +102,8 @@ class AudioJobManager(QueuedJobManager[AudioJob]):
             voice_delivery=voice_delivery,
             voice_presence_db=voice_presence_db,
             master=master,
+            separate=separate,
+            separation_model=separation_model,
             owner_id=owner.id if owner is not None else None,
         )
         if job_id is not None:
@@ -91,6 +111,53 @@ class AudioJobManager(QueuedJobManager[AudioJob]):
         self._enqueue(job)
         self.jobs[job.id] = job
         return job
+
+    def _validate_separation(
+        self,
+        separation_model: str | None,
+        *,
+        denoise: str | None,
+        restore: str | None,
+        voice_steps: list[str],
+        master: str | None,
+        voice_delivery: str | None,
+        voice_presence_db: float | None,
+    ) -> str:
+        from app.services.engines.mdx_models import SEPARATION_MODELS
+
+        # voice_delivery por truthiness ("" de un form cuenta como ausente);
+        # voice_presence_db por is-not-None (un 0.0 explicito tambien se rechaza).
+        if (
+            denoise
+            or restore
+            or voice_steps
+            or master
+            or voice_delivery
+            or voice_presence_db is not None
+        ):
+            raise ValueError(
+                "El modo karaoke corre solo; los demas pasos se aplicarian a un "
+                "stem ambiguo. Pedilos en un segundo trabajo sobre el stem que "
+                "quieras."
+            )
+        model_id = separation_model or self._default_installed_model()
+        if model_id not in SEPARATION_MODELS:
+            known = ", ".join(sorted(SEPARATION_MODELS))
+            raise ValueError(
+                f"Modelo de separacion desconocido: {model_id!r}. Validos: {known}."
+            )
+        if model_id not in self.settings.karaoke_installed_models():
+            raise ValueError(missing_pack_message("karaoke", variant=model_id))
+        return model_id
+
+    def _default_installed_model(self) -> str:
+        """Vacio = primer modelo instalado: la capability marca disponible con
+        cualquier modelo, asi que el default fijo daria un 400 enganoso. Sin
+        ninguno instalado cae al default del catalogo (mensaje missing-pack)."""
+        from app.services.engines.mdx_models import DEFAULT_SEPARATION_MODEL
+
+        installed = self.settings.karaoke_installed_models()
+        return installed[0] if installed else DEFAULT_SEPARATION_MODEL
 
     def _validate_modes(self, denoise: str | None, restore: str | None) -> None:
         if denoise is None and restore is None:

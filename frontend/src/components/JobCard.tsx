@@ -48,6 +48,19 @@ function readStage(job: VideoJobResponse): string | null {
   return typeof raw === "string" ? raw : null;
 }
 
+function readActiveStage(job: AnyJobResponse): string | null {
+  if (isVideoJob(job)) {
+    return readStage(job);
+  }
+  // Audio y generacion llevan `stages` al tope, sin `metadata.stage`: la etapa
+  // activa es la unica con status "active".
+  if (isAudioJob(job) || isGenerationJob(job)) {
+    const active = job.stages?.find((stage) => stage.status === "active");
+    return active ? active.key : null;
+  }
+  return null;
+}
+
 function humanizeStage(stage: string): string {
   return stage.replace(/_/g, " ");
 }
@@ -139,7 +152,7 @@ function QueuedState({ job, onCancel }: { job?: AnyJobResponse | null; onCancel?
 }
 
 function RunningState({ job, onCancel }: { job?: AnyJobResponse | null; onCancel?: () => void }) {
-  const stage = job && isVideoJob(job) ? readStage(job) : null;
+  const stage = job ? readActiveStage(job) : null;
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center gap-2 text-sm text-text">
@@ -289,6 +302,45 @@ function CompletedDetails({ job }: { job: AnyJobResponse }) {
   return <ImageCompletedDetails job={job} />;
 }
 
+const DOWNLOAD_LINK_CLASS =
+  "inline-flex items-center justify-center gap-2 rounded border border-accent bg-surface-2 px-3 py-2 text-sm font-medium text-accent transition-[background-color,color] duration-fast hover:bg-accent hover:text-bg focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent";
+
+function readVocalsDownloadUrl(job: AnyJobResponse): string | null {
+  // Solo los jobs de audio en modo karaoke traen el segundo stem.
+  if (!isAudioJob(job)) {
+    return null;
+  }
+  return job.vocalsDownloadUrl ?? null;
+}
+
+function DownloadLinks({ job }: { job: AnyJobResponse }) {
+  const { t } = useTranslation();
+  if (!job.downloadUrl) {
+    return null;
+  }
+  const vocalsUrl = readVocalsDownloadUrl(job);
+  if (vocalsUrl) {
+    return (
+      <div className="flex flex-wrap gap-2">
+        <a href={job.downloadUrl} download className={DOWNLOAD_LINK_CLASS}>
+          <Download aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />
+          {t("audio.karaoke.download.instrumental")}
+        </a>
+        <a href={vocalsUrl} download className={DOWNLOAD_LINK_CLASS}>
+          <Download aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />
+          {t("audio.karaoke.download.vocals")}
+        </a>
+      </div>
+    );
+  }
+  return (
+    <a href={job.downloadUrl} download className={DOWNLOAD_LINK_CLASS}>
+      <Download aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />
+      Download
+    </a>
+  );
+}
+
 function CompletedState({ job }: { job: AnyJobResponse }) {
   return (
     <div className="flex flex-col gap-3">
@@ -297,16 +349,7 @@ function CompletedState({ job }: { job: AnyJobResponse }) {
         <span>Completed</span>
       </div>
       <CompletedDetails job={job} />
-      {job.downloadUrl && (
-        <a
-          href={job.downloadUrl}
-          download
-          className="inline-flex items-center justify-center gap-2 rounded border border-accent bg-surface-2 px-3 py-2 text-sm font-medium text-accent transition-[background-color,color] duration-fast hover:bg-accent hover:text-bg focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
-        >
-          <Download aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />
-          Download
-        </a>
-      )}
+      <DownloadLinks job={job} />
     </div>
   );
 }

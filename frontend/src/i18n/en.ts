@@ -531,6 +531,20 @@ export const en = {
   "audio.section.restore": "Restore",
   "audio.section.device": "Device",
   "audio.section.outputFormat": "Output format",
+  "audio.section.karaoke": "Karaoke",
+  "audio.karaoke.toggle": "Separate vocals and instrumental",
+  "audio.karaoke.tooltip":
+    "Split the mix into two files: the instrumental (karaoke track) and the isolated vocals. Runs an MDX-Net separation model from Ultimate Vocal Remover.",
+  "audio.karaoke.summary.on": "Vocals + instrumental",
+  "audio.karaoke.exclusiveNote":
+    "Karaoke runs alone: the other steps would apply to an ambiguous stem. Ask for them in a second job on the stem you want.",
+  "audio.karaoke.model": "Separation model",
+  "audio.karaoke.modelMissing": "The {{name}} model is not downloaded yet.",
+  "audio.karaoke.noModels": "Download at least one separation model to enable karaoke.",
+  "audio.karaoke.credit":
+    "Models from Ultimate Vocal Remover (Anjok07 & aufr33), MIT.",
+  "audio.karaoke.download.instrumental": "Instrumental",
+  "audio.karaoke.download.vocals": "Vocals",
   "audio.mastering.none": "Not levelled",
   "audio.mastering.target": "Target: {{lufs}} LUFS.",
   "audio.hint.pickOne": "Pick at least one of {{options}}.",
@@ -715,6 +729,7 @@ export const en = {
   "capability.audio.speak": "Text to spoken voice",
   "capability.audio.voiceConvert": "Swap the voice in an audio clip",
   "capability.audio.transcribe": "Transcribe to text",
+  "capability.audio.karaoke": "Karaoke (separate the vocals)",
   "capability.audio.stems": "Separate stems",
   "capability.generate.textToImage": "Text to image",
   "capability.generate.imageToImage": "Image to image",

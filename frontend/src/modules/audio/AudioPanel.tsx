@@ -10,6 +10,7 @@ import { useTranslation } from "../../i18n/LocaleProvider";
 import { denoiseLabel, restoreLabel } from "../../lib/audioLabels";
 import type { DeviceInfoResponse, MasteringPreset } from "../../lib/apiTypes";
 import { formatDeviceSummary } from "../enhance/accordionSummaries";
+import { KaraokeSection } from "./KaraokeSection";
 import { VoiceChainPanel, voiceSummaryKey } from "./VoiceChainPanel";
 import { joinAsChoices, selectableSectionKeys } from "./selectionHint";
 import { useVoiceSelection } from "./useVoiceSelection";
@@ -181,6 +182,8 @@ export function AudioPanel() {
   const [outputFormat, setOutputFormat] = useState<AudioOutputFormat>("flac");
   const [device, setDevice] = useState<DeviceInfoResponse | null>(CPU_DEVICE);
   const [master, setMaster] = useState<string | null>(null);
+  const [separate, setSeparate] = useState(false);
+  const [separationModel, setSeparationModel] = useState<string | null>(null);
 
   const capabilitiesQuery = useAudioCapabilities();
   const voiceCatalogQuery = useVoiceCatalog();
@@ -204,6 +207,10 @@ export function AudioPanel() {
   const restoreAvailable = restoreModes.length > 0;
   // Siempre disponible: lo hace ffmpeg, que ya viene con la app.
   const masteringPresets = capabilitiesQuery.data?.masteringPresets ?? [];
+  const separationModels = capabilitiesQuery.data?.separationModels ?? [];
+  // Default: el elegido, o el primer modelo instalado del catálogo.
+  const effectiveSeparationModel =
+    separationModel ?? separationModels.find((model) => model.installed)?.id ?? null;
 
   function handleFilesSelected(selected: File[]) {
     setFiles(selected);
@@ -214,16 +221,31 @@ export function AudioPanel() {
     if (!canSubmit || files.length === 0) {
       return;
     }
-    const comunes = {
-      denoise,
-      restore,
-      outputFormat,
-      device: device?.id ?? null,
-      voiceSteps: voice.enabledIds,
-      voiceDelivery: voice.delivery,
-      voicePresenceDb: voice.isEnabled("presence") ? voice.presenceDb : null,
-      master,
-    };
+    // Con karaoke activo se manda SOLO la separacion: el backend rechaza
+    // combinarla, y las secciones deshabilitadas no deben viajar en el form.
+    const comunes = separate
+      ? {
+          denoise: null,
+          restore: null,
+          outputFormat,
+          device: device?.id ?? null,
+          voiceSteps: [],
+          voiceDelivery: null,
+          voicePresenceDb: null,
+          master: null,
+          separate: true,
+          separationModel: effectiveSeparationModel,
+        }
+      : {
+          denoise,
+          restore,
+          outputFormat,
+          device: device?.id ?? null,
+          voiceSteps: voice.enabledIds,
+          voiceDelivery: voice.delivery,
+          voicePresenceDb: voice.isEnabled("presence") ? voice.presenceDb : null,
+          master,
+        };
     submitMany(files.map((file) => ({ file, ...comunes })));
   }
 
@@ -232,14 +254,53 @@ export function AudioPanel() {
   // Nivelar el volumen es una entrega valida por si sola: alguien puede querer
   // solo dejar el archivo al volumen del estandar, sin tocarle nada mas.
   const hasSelection =
-    denoise !== null || restore !== null || master !== null || voice.enabledIds.length > 0;
+    separate ||
+    denoise !== null ||
+    restore !== null ||
+    master !== null ||
+    voice.enabledIds.length > 0;
+  const separationReady = !separate || effectiveSeparationModel !== null;
   const canSubmit =
-    files.length > 0 && hasSelection && !voice.needsDelivery && !isJobBusy(phase);
+    files.length > 0 &&
+    hasSelection &&
+    separationReady &&
+    (separate || !voice.needsDelivery) &&
+    !isJobBusy(phase);
 
   return (
     <div className="grid grid-cols-[1fr_320px] gap-6 max-[900px]:grid-cols-1">
       <div className="flex flex-col gap-6">
         <Dropzone files={files} onFilesSelected={handleFilesSelected} />
+        <AccordionSection
+          title={t("audio.section.karaoke")}
+          summary={separate ? t("audio.karaoke.summary.on") : t("audio.mode.none")}
+          tooltip={t("audio.karaoke.tooltip")}
+        >
+          <KaraokeSection
+            enabled={separate}
+            onToggle={setSeparate}
+            models={separationModels}
+            selectedModel={effectiveSeparationModel}
+            onSelectModel={setSeparationModel}
+          />
+        </AccordionSection>
+        {separate && (
+          <p role="status" className="text-xs text-text-dim">
+            {t("audio.karaoke.exclusiveNote")}
+          </p>
+        )}
+        <div
+          aria-disabled={separate}
+          // inert saca el subarbol del tab order y del arbol de accesibilidad:
+          // pointer-events-none solo bloquea el mouse, no Enter/Space ni Tab.
+          // React 18 no tipa inert como prop; el spread esquiva el chequeo.
+          {...(separate ? { inert: "" } : {})}
+          className={
+            separate
+              ? "pointer-events-none flex flex-col gap-6 opacity-40"
+              : "flex flex-col gap-6"
+          }
+        >
         <AccordionSection
           title={t("audio.section.denoise")}
           summary={denoiseLabel(denoise)}
@@ -317,6 +378,7 @@ export function AudioPanel() {
             selection={voice}
           />
         </AccordionSection>
+        </div>
         <AccordionSection
           title={t("audio.section.device")}
           summary={formatDeviceSummary(device, t)}

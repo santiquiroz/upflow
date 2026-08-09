@@ -33,6 +33,7 @@ PACK_LABELS: dict[str, str] = {
     "magpie": "el overlay de tiempo real",
     "shap-e": "el modelo de generacion 3D",
     "shap-e-img2img": "el modelo de foto a 3D",
+    "karaoke": "el modelo de separacion de voz e instrumental",
     "kokoro": "el modelo de voz",
     "voice-conversion": "el modelo de conversion de voz",
     "translation": "el par de idiomas para traducir",

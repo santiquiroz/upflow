@@ -135,6 +135,13 @@ class AudioJob:
     # Acabado profesional: normaliza la sonoridad al estandar elegido (EBU R128).
     # None = no se toca el volumen, que es el comportamiento de siempre.
     master: str | None = None
+    # Modo karaoke: separa la mezcla en instrumental + voz. Exclusivo en v1 —
+    # el manager rechaza combinarlo con los demas pasos porque se aplicarian a
+    # un stem ambiguo.
+    separate: bool = False
+    # Id del catalogo de modelos de separacion (mdx_models.SEPARATION_MODELS).
+    # El manager lo resuelve al default cuando separate=True y no viene.
+    separation_model: str | None = None
     # Standalone-module output format (Fase C Task 9): "wav" (lossless, no
     # re-encode -- current is already PCM from decode/denoise/restore),
     # "flac" (lossless, ~50% smaller, default), "mp3" (lossy, smallest). See
@@ -148,6 +155,8 @@ class AudioJob:
     finished_at: datetime | None = None
     error: str | None = None
     output_path: Path | None = None
+    # Solo en modo karaoke: output_path es la instrumental y esto la voz.
+    vocals_output_path: Path | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     owner_id: str | None = None
 

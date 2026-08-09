@@ -49,11 +49,13 @@ def load_audio(input_wav: Path, target_rate: int) -> np.ndarray:
     return np.stack(channels, axis=1)
 
 
-def save_wav(output_wav: Path, audio: np.ndarray, sample_rate: int) -> None:
+def save_wav(
+    output_wav: Path, audio: np.ndarray, sample_rate: int, subtype: str | None = None
+) -> None:
     import soundfile as sf
 
     output_wav.parent.mkdir(parents=True, exist_ok=True)
-    sf.write(str(output_wav), audio, sample_rate)
+    sf.write(str(output_wav), audio, sample_rate, subtype=subtype)
 
 
 class OnnxAudioRestorer:

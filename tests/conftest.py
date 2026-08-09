@@ -29,6 +29,8 @@ def isolated_runtime_dir(tmp_path, monkeypatch: pytest.MonkeyPatch):
     # vendor/ep-plugins, una maquina con el acelerador de Intel bajado hacia
     # fallar tests que en una limpia pasaban.
     monkeypatch.setenv("EP_PLUGINS_DIR", str(tmp_path / "ep-plugins-no-instalado"))
+    # Mismo motivo con los modelos de separacion karaoke (vendor/karaoke).
+    monkeypatch.setenv("KARAOKE_MODEL_DIR", str(tmp_path / "karaoke-no-instalado"))
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()

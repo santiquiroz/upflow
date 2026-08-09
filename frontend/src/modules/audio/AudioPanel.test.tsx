@@ -83,6 +83,10 @@ const FULL_CAPABILITIES: AudioCapabilities = {
       targetLufs: -16,
     },
   ],
+  separationModels: [
+    { id: "inst_hq_3", name: "MDX-Net Inst HQ 3", installed: true, primaryStem: "Instrumental" },
+    { id: "voc_ft", name: "MDX-Net Voc FT", installed: false, primaryStem: "Vocals" },
+  ],
 };
 
 function renderPanel(capabilities: AudioCapabilities = FULL_CAPABILITIES) {
@@ -354,6 +358,134 @@ describe("AudioPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Streaming" }));
 
     expect(screen.getByRole("button", { name: /enhance audio/i })).toBeEnabled();
+  });
+});
+
+describe("AudioPanel modo karaoke", () => {
+  async function openKaraoke() {
+    fireEvent.click(await screen.findByRole("button", { name: /^Karaoke/ }));
+    return screen.findByRole("checkbox", { name: /separate vocals and instrumental/i });
+  }
+
+  it("submits a separate-only job with the installed model and nulls the rest", async () => {
+    vi.mocked(audioService.createAudioJob).mockResolvedValue({
+      jobId: "kar-1", status: "queued", statusUrl: "/x", downloadUrl: null,
+    });
+    renderPanel(FULL_CAPABILITIES);
+    selectFile();
+    // Aunque haya un denoise elegido de antes, activar karaoke lo excluye del
+    // form: el backend rechaza combinarlos.
+    fireEvent.click(await screen.findByRole("button", { name: "DeepFilterNet" }));
+    fireEvent.click(await openKaraoke());
+
+    const submitButton = screen.getByRole("button", { name: /enhance audio/i });
+    await waitFor(() => expect(submitButton).not.toBeDisabled());
+    fireEvent.click(submitButton);
+
+    await waitFor(() => expect(audioService.createAudioJob).toHaveBeenCalled());
+    const sent = vi.mocked(audioService.createAudioJob).mock.calls[0][0];
+    expect(sent.separate).toBe(true);
+    expect(sent.separationModel).toBe("inst_hq_3");
+    expect(sent.denoise).toBeNull();
+    expect(sent.restore).toBeNull();
+    expect(sent.master).toBeNull();
+    expect(sent.voiceSteps).toEqual([]);
+  });
+
+  it("explains why the other sections are disabled while karaoke is on", async () => {
+    renderPanel(FULL_CAPABILITIES);
+    fireEvent.click(await openKaraoke());
+
+    expect(await screen.findByText(/karaoke runs alone/i)).toBeInTheDocument();
+  });
+
+  it("marks the attenuated sections wrapper as inert while karaoke is on", async () => {
+    // pointer-events-none solo bloquea el mouse: sin inert, Tab + Enter seguian
+    // operando los controles atenuados y la seleccion se descartaba en silencio.
+    renderPanel(FULL_CAPABILITIES);
+    const denoiseButton = await screen.findByRole("button", { name: "DeepFilterNet" });
+    const wrapper = denoiseButton.closest("[aria-disabled]");
+    expect(wrapper).not.toBeNull();
+    expect(wrapper).not.toHaveAttribute("inert");
+
+    fireEvent.click(await openKaraoke());
+
+    expect(wrapper).toHaveAttribute("inert");
+    expect(wrapper).toHaveClass("pointer-events-none", "opacity-40");
+  });
+
+  it("offers a download button for models that are not installed yet", async () => {
+    renderPanel(FULL_CAPABILITIES);
+    await openKaraoke();
+
+    expect(screen.getByText(/MDX-Net Voc FT.*not downloaded/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /download/i })).toBeInTheDocument();
+    // El instalado es un boton de seleccion, no una tarjeta de descarga.
+    expect(screen.getByRole("button", { name: "MDX-Net Inst HQ 3" })).toBeInTheDocument();
+  });
+
+  it("keeps the CTA disabled when karaoke is on but no model is installed", async () => {
+    renderPanel({
+      denoiseModes: [],
+      restoreAvailable: false,
+      restoreModes: [],
+      separationModels: [
+        { id: "inst_hq_3", name: "MDX-Net Inst HQ 3", installed: false, primaryStem: "Instrumental" },
+      ],
+    });
+    selectFile();
+    fireEvent.click(await openKaraoke());
+
+    expect(await screen.findByText(/at least one separation model/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /enhance audio/i })).toBeDisabled();
+  });
+
+  it("shows both stem download links when a karaoke job completes", async () => {
+    vi.mocked(audioService.createAudioJob).mockResolvedValue({
+      jobId: "kar-2", status: "queued", statusUrl: "/x", downloadUrl: null,
+    });
+    vi.mocked(audioService.getAudioJob).mockResolvedValue({
+      ownerId: null,
+      id: "kar-2",
+      status: "completed",
+      originalFilename: "song.wav",
+      denoise: null,
+      restore: null,
+      device: "cpu",
+      createdAt: "2026-01-01T00:00:00Z",
+      startedAt: "2026-01-01T00:00:01Z",
+      finishedAt: "2026-01-01T00:02:00Z",
+      progressPct: null,
+      stages: null,
+      error: null,
+      separate: true,
+      separationModel: "inst_hq_3",
+      downloadUrl: "/api/v1/audio/jobs/kar-2/download",
+      vocalsDownloadUrl: "/api/v1/audio/jobs/kar-2/download?stem=vocals",
+    });
+    renderPanel(FULL_CAPABILITIES);
+    selectFile();
+    fireEvent.click(await openKaraoke());
+
+    const submitButton = screen.getByRole("button", { name: /enhance audio/i });
+    await waitFor(() => expect(submitButton).not.toBeDisabled());
+    fireEvent.click(submitButton);
+
+    expect(await screen.findByRole("link", { name: /instrumental/i })).toHaveAttribute(
+      "href",
+      "/api/v1/audio/jobs/kar-2/download",
+    );
+    expect(screen.getByRole("link", { name: /vocals/i })).toHaveAttribute(
+      "href",
+      "/api/v1/audio/jobs/kar-2/download?stem=vocals",
+    );
+  });
+
+  it("credits UVR in the karaoke section", async () => {
+    renderPanel(FULL_CAPABILITIES);
+    await openKaraoke();
+
+    expect(screen.getByText(/ultimate vocal remover/i)).toBeInTheDocument();
   });
 });
 

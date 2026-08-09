@@ -177,6 +177,47 @@ describe("JobQueue", () => {
     expect(link).toHaveAttribute("href", "/api/v1/jobs/img-1/download");
   });
 
+  it("shows labeled instrumental and vocals links for a completed karaoke job", async () => {
+    // Tras un refresh la cola es la unica superficie con el job: el boton
+    // generico bajaba SOLO la instrumental y la voz quedaba inalcanzable.
+    vi.mocked(audioService.getAudioJob).mockResolvedValue({
+      ...BASE_AUDIO_JOB,
+      status: "completed",
+      denoise: null,
+      separate: true,
+      separationModel: "inst_hq_3",
+      downloadUrl: "/api/v1/audio/jobs/aud-1/download",
+      vocalsDownloadUrl: "/api/v1/audio/jobs/aud-1/download?stem=vocals",
+    });
+    jobQueueStore.addTrackedJob({ id: "aud-1", kind: "audio", fileName: "song.wav", createdAt: 1 });
+
+    renderQueue();
+
+    const instrumental = await screen.findByRole("link", { name: /instrumental/i });
+    expect(instrumental).toHaveAttribute("href", "/api/v1/audio/jobs/aud-1/download");
+    expect(screen.getByRole("link", { name: /vocals/i })).toHaveAttribute(
+      "href",
+      "/api/v1/audio/jobs/aud-1/download?stem=vocals",
+    );
+    expect(screen.queryByRole("link", { name: /download song\.wav/i })).not.toBeInTheDocument();
+  });
+
+  it("keeps the generic download link for a completed non-karaoke audio job", async () => {
+    vi.mocked(audioService.getAudioJob).mockResolvedValue({
+      ...BASE_AUDIO_JOB,
+      status: "completed",
+      downloadUrl: "/api/v1/audio/jobs/aud-1/download",
+      vocalsDownloadUrl: null,
+    });
+    jobQueueStore.addTrackedJob({ id: "aud-1", kind: "audio", fileName: "voice.wav", createdAt: 1 });
+
+    renderQueue();
+
+    const link = await screen.findByRole("link", { name: /download voice\.wav/i });
+    expect(link).toHaveAttribute("href", "/api/v1/audio/jobs/aud-1/download");
+    expect(screen.queryByRole("link", { name: /instrumental/i })).not.toBeInTheDocument();
+  });
+
   it("shows the error message for a failed job", async () => {
     vi.mocked(api.getJob).mockResolvedValue({ ...BASE_IMAGE_JOB, status: "failed", error: "Model crashed" });
     jobQueueStore.addTrackedJob({ id: "img-1", kind: "image", fileName: "photo.png", createdAt: 1 });

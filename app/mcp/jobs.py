@@ -63,6 +63,8 @@ def normalize_job(family: JobFamily, payload: dict[str, Any]) -> dict[str, Any]:
         "finishedAt": payload.get("finishedAt"),
     }
     extras: dict[str, Any] = {}
+    if family.name == "audio":
+        extras["vocalsDownloadUrl"] = payload.get("vocalsDownloadUrl")
     if family.name == "transcribe":
         extras["text"] = payload.get("text")
         extras["videoUrl"] = payload.get("videoUrl")

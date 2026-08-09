@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from app.config import Settings, resolve_against_project_root
 from app.services.capabilities import CATALOG, PathRequirement
+from app.services.engines.mdx_models import SEPARATION_MODELS
 from app.services.install_queue_base import SingleWorkerJobQueue
 from app.services.process_runner import run_guarded_process
 
@@ -42,6 +43,9 @@ PACK_SCRIPTS: dict[str, str] = {
     # Foto a 3D. Es OTRO repo HF que el de texto (openai/shap-e-img2img):
     # comparte el renderer pero cambia el prior y el encoder de entrada.
     "shap-e-img2img": "download-shap-e-img2img.ps1",
+    # Separacion voz/instrumental. Pack-familia: un .onnx por modelo del
+    # catalogo (mdx_models.py) y el script recibe cual por parametro.
+    "karaoke": "download-karaoke.ps1",
     # El nombre sigue al directorio vendorizado (vendor/kokoro), no al script:
     # es la convencion que ya usan gmfss y audiosr.
     "kokoro": "download-kokoro-tts.ps1",
@@ -50,14 +54,26 @@ PACK_SCRIPTS: dict[str, str] = {
 }
 
 # Packs que no son UN modelo sino una familia. La traduccion es uno por par de
-# idiomas, que es como OPUS-MT los publica, y el script lo recibe por parametro.
+# idiomas, que es como OPUS-MT los publica; karaoke es un modelo de separacion
+# por variante del catalogo. El script recibe cual por parametro.
 PACK_PARAMETERS: dict[str, str] = {
     "translation": "-Pair",
+    "karaoke": "-Model",
 }
 
 # La variante llega desde una peticion HTTP y termina en una linea de comandos:
-# se acepta la forma exacta que el script declara, y nada mas.
-VARIANT_PATTERN = re.compile(r"^[a-z]{2,3}-[a-z]{2,3}$")
+# se acepta la forma exacta que cada script declara, y nada mas.
+VARIANT_PATTERNS: dict[str, re.Pattern[str]] = {
+    "translation": re.compile(r"^[a-z]{2,3}-[a-z]{2,3}$"),
+    "karaoke": re.compile(r"^[a-z0-9_]{1,32}$"),
+}
+
+# Catalogos CERRADOS por pack: la variante tiene que existir, no solo tener la
+# forma. La traduccion queda fuera a proposito: es una familia abierta (OPUS-MT
+# publica un modelo por par de idiomas, la URL se arma con el par).
+VARIANT_CATALOGS: dict[str, frozenset[str]] = {
+    "karaoke": frozenset(SEPARATION_MODELS),
+}
 
 # Los scripts descargan cientos de MB desde GitHub releases. El techo es un
 # limite de seguridad contra un proceso colgado, no una expectativa de duracion.
@@ -130,7 +146,7 @@ def build_command(pack: str, variant: str | None = None) -> list[str]:
     ]
     if variant is None:
         return comando
-    return comando + [_parameter_for(pack), _checked_variant(variant)]
+    return comando + [_parameter_for(pack), _checked_variant(pack, variant)]
 
 
 def _parameter_for(pack: str) -> str:
@@ -142,9 +158,20 @@ def _parameter_for(pack: str) -> str:
         ) from exc
 
 
-def _checked_variant(variant: str) -> str:
-    if not VARIANT_PATTERN.match(variant):
-        raise ValueError(f"La variante tiene que verse como 'en-es'. Recibido: {variant!r}")
+def _checked_variant(pack: str, variant: str) -> str:
+    pattern = VARIANT_PATTERNS.get(pack)
+    if pattern is None:
+        raise ValueError(f"El paquete '{pack}' no declara forma de variante.")
+    if not pattern.match(variant):
+        raise ValueError(
+            f"La variante no tiene la forma que el paquete '{pack}' espera. Recibido: {variant!r}"
+        )
+    catalogo = VARIANT_CATALOGS.get(pack)
+    if catalogo is not None and variant not in catalogo:
+        raise ValueError(
+            f"La variante {variant!r} no existe en el catalogo del paquete "
+            f"'{pack}'. Conocidas: {', '.join(sorted(catalogo))}"
+        )
     return variant
 
 

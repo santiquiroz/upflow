@@ -153,6 +153,12 @@ export interface AudioJob {
   error: string | null;
   ownerId: string | null;
   downloadUrl: string | null;
+  // Modo karaoke. Opcionales para no obligar a cada fixture a declararlos:
+  // el backend los manda siempre.
+  separate?: boolean;
+  separationModel?: string | null;
+  /** Solo en modo karaoke: downloadUrl baja la instrumental y esto la voz. */
+  vocalsDownloadUrl?: string | null;
 }
 
 // Mirrors app/schemas.py::MasteringPresetResponse. La copia viaja como clave
@@ -164,12 +170,23 @@ export interface MasteringPreset {
   targetLufs: number;
 }
 
+// Mirrors app/schemas.py::SeparationModelResponse. `name` es nombre propio del
+// modelo: se muestra tal cual, no se traduce.
+export interface SeparationModel {
+  id: string;
+  name: string;
+  installed: boolean;
+  primaryStem: string;
+}
+
 export interface AudioCapabilities {
   /** Acabado profesional (EBU R128). Siempre presente: lo hace ffmpeg. */
   masteringPresets?: MasteringPreset[];
   denoiseModes: string[];
   restoreAvailable: boolean;
   restoreModes: string[];
+  /** Catálogo de modelos de separación karaoke (instalados o no). */
+  separationModels?: SeparationModel[];
 }
 
 // Mirrors app/schemas.py::VoiceStepResponse. La copia viaja como clave de

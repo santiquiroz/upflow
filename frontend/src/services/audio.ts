@@ -17,6 +17,9 @@ export interface CreateAudioJobParams {
   voiceDelivery?: string | null;
   voicePresenceDb?: number | null;
   master?: string | null;
+  /** Modo karaoke: exclusivo, el backend rechaza combinarlo con otros pasos. */
+  separate?: boolean;
+  separationModel?: string | null;
 }
 
 function buildAudioJobFormData(params: CreateAudioJobParams): FormData {
@@ -34,6 +37,12 @@ function buildAudioJobFormData(params: CreateAudioJobParams): FormData {
   }
   if (params.master) {
     formData.append("master", params.master);
+  }
+  if (params.separate) {
+    formData.append("separate", "true");
+    if (params.separationModel) {
+      formData.append("separation_model", params.separationModel);
+    }
   }
   appendVoiceFields(formData, params);
   return formData;

@@ -526,6 +526,20 @@ export const es = {
   "audio.section.restore": "Restauración",
   "audio.section.device": "Dispositivo",
   "audio.section.outputFormat": "Formato de salida",
+  "audio.section.karaoke": "Karaoke",
+  "audio.karaoke.toggle": "Separar voz e instrumental",
+  "audio.karaoke.tooltip":
+    "Divide la mezcla en dos archivos: la instrumental (pista de karaoke) y la voz aislada. Corre un modelo de separación MDX-Net de Ultimate Vocal Remover.",
+  "audio.karaoke.summary.on": "Voz + instrumental",
+  "audio.karaoke.exclusiveNote":
+    "El modo karaoke corre solo: los demás pasos se aplicarían a un stem ambiguo. Pedilos en un segundo trabajo sobre el stem que quieras.",
+  "audio.karaoke.model": "Modelo de separación",
+  "audio.karaoke.modelMissing": "El modelo {{name}} todavía no está descargado.",
+  "audio.karaoke.noModels": "Descargá al menos un modelo de separación para habilitar el karaoke.",
+  "audio.karaoke.credit":
+    "Modelos de Ultimate Vocal Remover (Anjok07 & aufr33), MIT.",
+  "audio.karaoke.download.instrumental": "Instrumental",
+  "audio.karaoke.download.vocals": "Voces",
   "audio.mastering.none": "Sin nivelar",
   "audio.mastering.target": "Objetivo: {{lufs}} LUFS.",
   "audio.hint.pickOne": "Elige al menos una: {{options}}.",
@@ -710,6 +724,7 @@ export const es = {
   "capability.audio.speak": "De texto a voz hablada",
   "capability.audio.voiceConvert": "Cambiar la voz de un audio por otra",
   "capability.audio.transcribe": "Transcribir a texto",
+  "capability.audio.karaoke": "Karaoke (separar la voz)",
   "capability.audio.stems": "Separar stems",
   "capability.generate.textToImage": "Texto a imagen",
   "capability.generate.imageToImage": "Imagen a imagen",

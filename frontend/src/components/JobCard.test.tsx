@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { GenerationJob, JobResponse, VideoJobResponse } from "../lib/apiTypes";
+import type { AudioJob, GenerationJob, JobResponse, VideoJobResponse } from "../lib/apiTypes";
 import { JobCard } from "./JobCard";
 
 const BASE_JOB: JobResponse = {
@@ -142,6 +142,36 @@ describe("JobCard", () => {
     render(<JobCard phase="running" job={job} />);
 
     expect(screen.getByText(/processing/i)).toBeInTheDocument();
+  });
+
+  it("shows the active stage for a running audio job with top-level stages", () => {
+    // Los jobs de audio no llevan metadata.stage: la etapa activa viene en el
+    // array `stages` al tope. Sin leerla, una separacion de minutos decia solo
+    // "Processing".
+    const job: AudioJob = {
+      ownerId: null,
+      id: "aud-1",
+      status: "running",
+      originalFilename: "song.wav",
+      denoise: null,
+      restore: null,
+      device: null,
+      createdAt: "2026-01-01T00:00:00Z",
+      startedAt: null,
+      finishedAt: null,
+      progressPct: 11,
+      stages: [
+        { key: "decoding", label: "Decoding audio", weight: 0.105, status: "done" },
+        { key: "separating", label: "Separating stems", weight: 0.842, status: "active" },
+        { key: "finalizing", label: "Writing output", weight: 0.053, status: "pending" },
+      ],
+      error: null,
+      downloadUrl: null,
+      separate: true,
+    };
+    render(<JobCard phase="running" job={job} />);
+
+    expect(screen.getByText(/— separating/i)).toBeInTheDocument();
   });
 
   it("warns that the image could not be enlarged instead of shipping it silently", () => {

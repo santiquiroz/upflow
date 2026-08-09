@@ -183,6 +183,70 @@ async def test_download_result_transcribe_passes_format_params(
     assert saved.exists()
 
 
+async def test_process_audio_separate_sends_karaoke_flag(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    source = tmp_path / "cancion.mp3"
+    source.write_bytes(b"mp3-bytes")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/audio/jobs"
+        body = request.read()
+        assert b'name="separate"' in body and b"true" in body
+        return httpx.Response(202, json={"jobId": "a1", "status": "queued"})
+
+    install_mock(monkeypatch, handler)
+    from app.mcp.server import upflow_process_audio
+
+    result = json.loads(await upflow_process_audio(str(source), separate=True))
+    assert result["jobId"] == "a1"
+
+
+async def test_download_result_audio_stem_passes_query(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/audio/jobs/a1/download"
+        assert request.url.params["stem"] == "vocals"
+        return httpx.Response(200, content=b"wav-bytes")
+
+    install_mock(monkeypatch, handler)
+    result = json.loads(
+        await upflow_download_result("audio", "a1", str(tmp_path), stem="vocals")
+    )
+    assert Path(result["outputPath"]).name == "vocals.flac"
+
+
+async def test_process_audio_separation_model_without_separate_propagates_400(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    source = tmp_path / "cancion.mp3"
+    source.write_bytes(b"mp3-bytes")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = request.read()
+        assert b'name="separation_model"' in body
+        return httpx.Response(
+            400, json={"detail": "separation_model solo aplica cuando separate=true."}
+        )
+
+    install_mock(monkeypatch, handler)
+    from app.mcp.server import upflow_process_audio
+
+    result = await upflow_process_audio(str(source), separation_model="voc_ft")
+    assert result.startswith("Error")
+    assert "separate=true" in result
+
+
+async def test_download_result_rejects_unknown_stem(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    install_mock(monkeypatch, lambda request: httpx.Response(200, content=b""))
+    result = await upflow_download_result("audio", "a1", str(tmp_path), stem="drums")
+    assert result.startswith("Error")
+    assert "instrumental" in result
+
+
 async def test_connection_refused_is_actionable(monkeypatch: pytest.MonkeyPatch) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("rechazado")

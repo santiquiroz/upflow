@@ -36,6 +36,50 @@ function RunningStatus() {
   );
 }
 
+const QUEUE_DOWNLOAD_LINK_CLASS =
+  "inline-flex items-center gap-1 rounded-sm border border-accent px-2 py-1 text-xs font-medium text-accent transition-[background-color,color] duration-fast hover:bg-accent hover:text-bg focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent";
+
+function readVocalsUrl(entry: JobQueueEntry): string | null {
+  // Solo los jobs de audio en modo karaoke traen el segundo stem.
+  const job = entry.job;
+  return job && "vocalsDownloadUrl" in job ? job.vocalsDownloadUrl ?? null : null;
+}
+
+function CompletedDownloadLinks({ entry }: { entry: JobQueueEntry }) {
+  const { t } = useTranslation();
+  if (!entry.downloadUrl) {
+    return null;
+  }
+  const vocalsUrl = readVocalsUrl(entry);
+  if (vocalsUrl) {
+    // Dos links etiquetados: el generico bajaba SOLO la instrumental y dejaba
+    // la voz inalcanzable desde la cola tras un refresh.
+    return (
+      <div className="flex flex-wrap justify-end gap-1.5">
+        <a href={entry.downloadUrl} download className={QUEUE_DOWNLOAD_LINK_CLASS}>
+          <Download aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.75} />
+          {t("audio.karaoke.download.instrumental")}
+        </a>
+        <a href={vocalsUrl} download className={QUEUE_DOWNLOAD_LINK_CLASS}>
+          <Download aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.75} />
+          {t("audio.karaoke.download.vocals")}
+        </a>
+      </div>
+    );
+  }
+  return (
+    <a
+      href={entry.downloadUrl}
+      download
+      aria-label={t("job.download.aria", { name: entry.fileName })}
+      className={QUEUE_DOWNLOAD_LINK_CLASS}
+    >
+      <Download aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.75} />
+      {t("job.download")}
+    </a>
+  );
+}
+
 function CompletedStatus({ entry }: { entry: JobQueueEntry }) {
   const { t } = useTranslation();
   return (
@@ -44,17 +88,7 @@ function CompletedStatus({ entry }: { entry: JobQueueEntry }) {
         <CheckCircle2 aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.75} />
         {t("job.status.completed")}
       </span>
-      {entry.downloadUrl && (
-        <a
-          href={entry.downloadUrl}
-          download
-          aria-label={t("job.download.aria", { name: entry.fileName })}
-          className="inline-flex items-center gap-1 rounded-sm border border-accent px-2 py-1 text-xs font-medium text-accent transition-[background-color,color] duration-fast hover:bg-accent hover:text-bg focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
-        >
-          <Download aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.75} />
-          {t("job.download")}
-        </a>
-      )}
+      <CompletedDownloadLinks entry={entry} />
     </div>
   );
 }

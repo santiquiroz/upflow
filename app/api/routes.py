@@ -63,6 +63,7 @@ from app.schemas import (
     GenerationJobsListResponse,
     GenerationModelSummary,
     MasteringPresetResponse,
+    SeparationModelResponse,
     PromptPresetResponse,
     PromptPresetsResponse,
     CreateSavedPromptRequest,
@@ -471,6 +472,11 @@ def video_job_to_response(job: VideoUpscaleJob) -> VideoJobResponse:
 
 def audio_job_to_response(job: AudioJob) -> AudioJobResponse:
     download_url = f"/api/v1/audio/jobs/{job.id}/download" if job.status == JobStatus.completed else None
+    vocals_download_url = (
+        f"/api/v1/audio/jobs/{job.id}/download?stem=vocals"
+        if job.status == JobStatus.completed and job.vocals_output_path is not None
+        else None
+    )
     return AudioJobResponse(
         id=job.id,
         status=job.status,
@@ -479,6 +485,8 @@ def audio_job_to_response(job: AudioJob) -> AudioJobResponse:
         restore=job.restore,
         device=job.device,
         output_format=job.output_format,
+        separate=job.separate,
+        separation_model=job.separation_model,
         created_at=job.created_at,
         started_at=job.started_at,
         finished_at=job.finished_at,
@@ -486,6 +494,7 @@ def audio_job_to_response(job: AudioJob) -> AudioJobResponse:
         stages=job.metadata.get("stages"),
         error=job.error,
         download_url=download_url,
+        vocals_download_url=vocals_download_url,
         owner_id=job.owner_id,
     )
 
@@ -1039,6 +1048,8 @@ async def create_audio_job(
     voice_delivery: str | None = Form(default=None),
     master: str | None = Form(default=None),
     voice_presence_db: float | None = Form(default=None),
+    separate: bool = Form(default=False),
+    separation_model: str | None = Form(default=None),
     audio_jobs: AudioJobManager = Depends(get_audio_job_manager),
     storage: StorageService = Depends(get_storage),
     settings: Settings = Depends(get_settings),
@@ -1064,6 +1075,12 @@ async def create_audio_job(
             master=master if isinstance(master, str) and master else None,
             voice_presence_db=(
                 voice_presence_db if isinstance(voice_presence_db, (int, float)) else None
+            ),
+            # isinstance y no truthiness: llamada directa (tests) => el default
+            # es el FieldInfo de Form(), que es truthy.
+            separate=separate if isinstance(separate, bool) else False,
+            separation_model=(
+                separation_model if isinstance(separation_model, str) and separation_model else None
             ),
             job_id=token,
             owner=current_user,
@@ -1614,7 +1631,9 @@ async def audio_capabilities(settings: Settings = Depends(get_settings)) -> Audi
         mode for mode in sorted(AUDIO_RESTORE_MODES) if settings.audio_restore_mode_available(mode)
     ]
     from app.services.audio_mastering import MASTERING_PRESETS
+    from app.services.engines.mdx_models import SEPARATION_MODELS
 
+    installed_separation_models = set(settings.karaoke_installed_models())
     return AudioCapabilitiesResponse(
         denoise_modes=denoise_modes,
         restore_available=bool(restore_modes),
@@ -1627,6 +1646,15 @@ async def audio_capabilities(settings: Settings = Depends(get_settings)) -> Audi
                 target_lufs=p.target_lufs,
             )
             for p in MASTERING_PRESETS
+        ],
+        separation_models=[
+            SeparationModelResponse(
+                id=spec.id,
+                name=spec.name,
+                installed=spec.id in installed_separation_models,
+                primary_stem=spec.primary_stem,
+            )
+            for spec in SEPARATION_MODELS.values()
         ],
     )
 
@@ -1716,22 +1744,45 @@ async def cancel_audio_job(
     return audio_job_to_response(job)
 
 
+AUDIO_DOWNLOAD_STEMS = ("instrumental", "vocals")
+
+
 @router.get("/audio/jobs/{job_id}/download", dependencies=[Depends(require(Permission.jobs_read_own))])
 async def download_audio_job(
     job_id: str,
+    # CONTRATO consumido tambien por el flujo MCP: stem=instrumental|vocals,
+    # default instrumental (= output_path, que en jobs sin separacion es la
+    # unica salida). 400 stem invalido; 409 vocals en un job sin separacion.
+    stem: str = Query(default="instrumental"),
     audio_jobs: AudioJobManager = Depends(get_audio_job_manager),
     # Bare `Request` (not `Request | None`) so FastAPI's special-case
     # injection still recognizes it -- `lenient_issubclass` rejects unions.
     # Direct/unit-test calls that omit this kwarg still get `None`.
     request: Request = None,
 ) -> FileResponse:
+    if not isinstance(stem, str):
+        # Llamada directa (tests): el default es el FieldInfo de Query().
+        stem = "instrumental"
+    if stem not in AUDIO_DOWNLOAD_STEMS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"stem must be one of {', '.join(AUDIO_DOWNLOAD_STEMS)}",
+        )
     job = audio_jobs.get_job(job_id)
     current_user = current_user_from_request(request)
     if not job or (current_user is not None and not _can_view_job(job, current_user)):
         raise HTTPException(status_code=404, detail="Audio job not found")
     if job.status != JobStatus.completed or not job.output_path:
         raise HTTPException(status_code=409, detail="Audio job is not completed yet")
-    return FileResponse(path=job.output_path, filename=job.output_path.name, media_type="application/octet-stream")
+    output_path = job.output_path
+    if stem == "vocals":
+        if job.vocals_output_path is None:
+            raise HTTPException(
+                status_code=409,
+                detail="This job did not run separation; there is no vocals stem",
+            )
+        output_path = job.vocals_output_path
+    return FileResponse(path=output_path, filename=output_path.name, media_type="application/octet-stream")
 
 
 @router.get("/models", response_model=ModelsResponse)

@@ -355,6 +355,11 @@ class Settings(BaseSettings):
     audiosr_gpu_throttle_seconds: float = Field(default=0.01, alias="AUDIOSR_GPU_THROTTLE_SECONDS")
     max_audio_upload_mb: int = Field(default=200, alias="MAX_AUDIO_UPLOAD_MB")
 
+    # Karaoke (separacion voz/instrumental, MDX-Net de UVR por ONNX). Sin flag
+    # de habilitacion a proposito: descargar un modelo = poder usarlo. El
+    # catalogo de modelos vive en app/services/engines/mdx_models.py.
+    karaoke_model_dir: str = Field(default="vendor/karaoke", alias="KARAOKE_MODEL_DIR")
+
     # GMFSS (second interpolation engine, max-quality anime frame interpolation,
     # own port santiquiroz/port-gmfss-onnx). 10x or more slower than RIFE by
     # design -- a short-clip smoke test measured closer to 20x due to
@@ -826,6 +831,27 @@ class Settings(BaseSettings):
         if mode == AUDIOSR_MODE:
             return self.audiosr_available()
         return False
+
+    @property
+    def karaoke_model_dir_path(self) -> Path:
+        return resolve_against_project_root(self.karaoke_model_dir)
+
+    def karaoke_installed_models(self) -> list[str]:
+        from app.services.engines.mdx_models import installed_model_ids
+
+        return installed_model_ids(self.karaoke_model_dir_path)
+
+    def karaoke_available(self) -> bool:
+        return bool(self.karaoke_installed_models())
+
+    @property
+    def karaoke_installed_model(self) -> str:
+        # Para el PathRequirement del catalogo de capacidades: la ruta del
+        # primer modelo instalado, o "" (= no cumplido) si no hay ninguno.
+        from app.services.engines.mdx_models import first_installed_model_path
+
+        path = first_installed_model_path(self.karaoke_model_dir_path)
+        return str(path) if path is not None else ""
 
     @property
     def gmfss_model_dir_path(self) -> Path:
