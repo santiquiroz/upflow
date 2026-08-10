@@ -237,6 +237,66 @@ def test_loudness_step_stays_without_mastering(tmp_path: Path) -> None:
     assert "voiceLoudnessSkipped" not in job.metadata
 
 
+def _stage_keys(job) -> list[str]:
+    from app.services.progress import build_audio_stages
+
+    return [stage.key for stage in build_audio_stages(job)]
+
+
+def test_stage_map_hides_voice_and_mastering_when_not_requested(tmp_path: Path) -> None:
+    # Reporte de campo (2026-08-10): un job denoise+restore mostraba
+    # "Enhancing voice" en el stepper sin haber pedido cadena de voz.
+    from app.models import AudioJob
+
+    job = AudioJob(
+        source_path=tmp_path / "in.wav",
+        original_filename="in.wav",
+        denoise="deepfilternet",
+        restore="audiosr",
+    )
+
+    keys = _stage_keys(job)
+
+    assert "voicing" not in keys
+    assert "mastering" not in keys
+    assert keys == ["decoding", "denoising", "restoring", "finalizing"]
+
+
+def test_stage_map_shows_the_steps_that_were_requested(tmp_path: Path) -> None:
+    from app.models import AudioJob
+
+    job = AudioJob(
+        source_path=tmp_path / "in.wav",
+        original_filename="in.wav",
+        denoise="deepfilternet",
+        voice_steps=["compress"],
+        master="streaming",
+    )
+
+    keys = _stage_keys(job)
+
+    assert keys == ["decoding", "denoising", "voicing", "mastering", "finalizing"]
+
+
+def test_stage_map_hides_voicing_when_mastering_swallows_the_only_step(tmp_path: Path) -> None:
+    # El pipeline descarta `loudness` con mastering activo: pintarlo seria
+    # mostrar una etapa que nunca corre.
+    from app.models import AudioJob
+
+    job = AudioJob(
+        source_path=tmp_path / "in.wav",
+        original_filename="in.wav",
+        denoise="deepfilternet",
+        voice_steps=["loudness"],
+        master="streaming",
+    )
+
+    keys = _stage_keys(job)
+
+    assert "voicing" not in keys
+    assert "mastering" in keys
+
+
 def test_only_loudness_plus_mastering_skips_the_voice_stage_entirely(tmp_path: Path) -> None:
     pipeline = _audio_pipeline(tmp_path)
     job = _voice_job(tmp_path, master="streaming", steps=["loudness"])

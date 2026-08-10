@@ -211,6 +211,19 @@ class ModelStage:
 Stage = FfmpegStage | ModelStage
 
 
+def effective_voice_steps(selected: list[str], master: str | None) -> list[str]:
+    """Los pasos de voz que REALMENTE se van a correr.
+
+    Con mastering activo el paso `loudness` sobra: normalizaria dos veces
+    (single-pass primero, dos pasadas despues sobre audio ya normalizado).
+    Vive aca y no en el pipeline porque el mapa de etapas tiene que decidir lo
+    MISMO que la ejecucion — si divergen, la UI pinta un paso que nunca corre.
+    """
+    if not master or "loudness" not in selected:
+        return list(selected)
+    return [step for step in selected if step != "loudness"]
+
+
 def steps_from_selection(
     selected_ids: list[str],
     delivery: str | None = None,

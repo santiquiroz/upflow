@@ -10,7 +10,7 @@ from app.config import Settings
 from app.models import AudioJob
 from app.services.engines.audio_enhance import AudioEnhancer
 from app.services.engines.voice_enhance import VoiceEnhancer
-from app.services.voice_chain import steps_from_selection
+from app.services.voice_chain import effective_voice_steps, steps_from_selection
 from app.services.restorer_registry import AudioRestorer
 from app.services.process_runner import run_guarded_process
 from app.services.progress import (
@@ -197,12 +197,12 @@ class AudioPipeline:
         "bombea") y despues el de dos pasadas midiendo audio ya normalizado.
         Gana el mastering, y el motivo queda en metadata — nunca en silencio.
         """
-        if not job.master or "loudness" not in job.voice_steps:
-            return list(job.voice_steps)
-        job.metadata["voiceLoudnessSkipped"] = (
-            "mastering activo aplica la normalización final (dos pasadas)"
-        )
-        return [step for step in job.voice_steps if step != "loudness"]
+        steps = effective_voice_steps(job.voice_steps, job.master)
+        if steps != job.voice_steps:
+            job.metadata["voiceLoudnessSkipped"] = (
+                "mastering activo aplica la normalización final (dos pasadas)"
+            )
+        return steps
 
     async def _master(self, job: AudioJob, source: Path, destination: Path) -> bool:
         """Normaliza la sonoridad en dos pasadas y deja lo medido en el job.

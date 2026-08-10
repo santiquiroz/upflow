@@ -5,6 +5,7 @@ from typing import Any, Literal, Protocol
 
 from app.models import AudioJob, UpscaleJob, VideoUpscaleJob, utc_now
 from app.services.media_tools import parse_fps_fraction
+from app.services.voice_chain import effective_voice_steps
 
 StageStatus = Literal["pending", "active", "done"]
 
@@ -124,6 +125,13 @@ def _audio_stage_active(job: AudioJob, key: str) -> bool:
         return bool(job.denoise)
     if key == "restoring":
         return bool(job.restore)
+    if key == "voicing":
+        # Los mismos pasos que va a correr el pipeline, no los pedidos: con
+        # mastering activo el paso `loudness` se descarta, y pintarlo igual
+        # mostraria una etapa que nunca avanza.
+        return bool(effective_voice_steps(job.voice_steps, job.master))
+    if key == "mastering":
+        return bool(job.master)
     return True
 
 
