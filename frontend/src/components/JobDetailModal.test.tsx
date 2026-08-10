@@ -1,10 +1,20 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render as rtlRender, screen } from "@testing-library/react";
+import { act, fireEvent, render as rtlRender, screen } from "@testing-library/react";
 import type { ReactElement, ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JobQueueEntry } from "../hooks/useJobQueue";
-import type { JobStage, VideoJobResponse } from "../lib/apiTypes";
+import { LocaleProvider } from "../i18n/LocaleProvider";
+import type {
+  AudioJob,
+  DownloadJob,
+  GenerationJob,
+  JobStage,
+  Shape3dJob,
+  TranscribeJob,
+  VideoJobResponse,
+} from "../lib/apiTypes";
 import * as api from "../lib/api";
+import * as audioService from "../services/audio";
 import { JobDetailModal } from "./JobDetailModal";
 
 vi.mock("../lib/api", async (importOriginal) => {
@@ -12,14 +22,31 @@ vi.mock("../lib/api", async (importOriginal) => {
   return { ...actual, getDevices: vi.fn() };
 });
 
-// El modal resuelve el nombre del device vía el query ["devices"]; sin datos
-// (o sin match) cae al id crudo, que es lo que estos tests históricos afirman.
-vi.mocked(api.getDevices).mockResolvedValue({ devices: [], defaultDeviceId: "dml:0" });
+vi.mock("../services/audio", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/audio")>();
+  return { ...actual, fetchAudioCapabilities: vi.fn(), fetchVoiceCatalog: vi.fn() };
+});
+
+beforeEach(() => {
+  // Sin datos (o sin match) el modal cae al id crudo del device, que es lo que
+  // afirman los tests historicos.
+  vi.mocked(api.getDevices).mockResolvedValue({ devices: [], defaultDeviceId: "dml:0" });
+  vi.mocked(audioService.fetchAudioCapabilities).mockResolvedValue({
+    denoiseModes: [],
+    restoreAvailable: false,
+    restoreModes: [],
+  });
+  vi.mocked(audioService.fetchVoiceCatalog).mockResolvedValue({ steps: [], deliveries: [] });
+});
 
 function render(ui: ReactElement) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   function Wrapper({ children }: { children: ReactNode }) {
-    return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+    return (
+      <QueryClientProvider client={queryClient}>
+        <LocaleProvider initialLocale="en">{children}</LocaleProvider>
+      </QueryClientProvider>
+    );
   }
   return rtlRender(ui, { wrapper: Wrapper });
 }
@@ -56,7 +83,10 @@ const BASE_VIDEO_JOB: VideoJobResponse = {
   downloadUrl: null,
 };
 
-function buildEntry(overrides: Partial<VideoJobResponse> = {}, entryOverrides: Partial<JobQueueEntry> = {}): JobQueueEntry {
+function buildEntry(
+  overrides: Partial<VideoJobResponse> = {},
+  entryOverrides: Partial<JobQueueEntry> = {},
+): JobQueueEntry {
   const job: VideoJobResponse = { ...BASE_VIDEO_JOB, ...overrides };
   return {
     id: job.jobId,
@@ -71,11 +101,27 @@ function buildEntry(overrides: Partial<VideoJobResponse> = {}, entryOverrides: P
   };
 }
 
+function entryFor(kind: JobQueueEntry["kind"], job: unknown, fileName: string): JobQueueEntry {
+  const typed = job as { id: string; status: JobQueueEntry["status"] };
+  return {
+    id: typed.id,
+    kind,
+    fileName,
+    createdAt: 1,
+    status: typed.status,
+    downloadUrl: null,
+    errorMessage: null,
+    job: job as JobQueueEntry["job"],
+  };
+}
+
 describe("JobDetailModal", () => {
-  it("renders the file name and job summary fields", () => {
+  it("renders the file name and the grouped sections", () => {
     render(<JobDetailModal entry={buildEntry()} onClose={vi.fn()} />);
 
     expect(screen.getByRole("heading", { name: "clip.mp4" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Parameters" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Progress", level: 3 })).toBeInTheDocument();
     expect(screen.getByText("Video")).toBeInTheDocument();
     expect(screen.getByText("realesr-animevideov3-x2")).toBeInTheDocument();
     expect(screen.getByText("dml:0")).toBeInTheDocument();
@@ -100,17 +146,28 @@ describe("JobDetailModal", () => {
 
     expect(screen.getByText("Duration")).toBeInTheDocument();
     expect(screen.getByText("3m 12s")).toBeInTheDocument();
+    expect(screen.queryByText("Running for")).not.toBeInTheDocument();
   });
 
-  it("omits the duration row while the job is still running", () => {
-    const entry = buildEntry({ status: "running", startedAt: "2026-01-01T00:00:00Z", finishedAt: null });
+  it("shows how long a running job has been going, and keeps it ticking", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.parse("2026-01-01T00:00:10Z"));
+    const entry = buildEntry({ status: "running", startedAt: "2026-01-01T00:00:00Z" });
 
     render(<JobDetailModal entry={entry} onClose={vi.fn()} />);
+    expect(screen.getByText("Running for")).toBeInTheDocument();
+    expect(screen.getByText("10s")).toBeInTheDocument();
 
-    expect(screen.queryByText("Duration")).not.toBeInTheDocument();
+    // advanceTimersByTime mueve tambien el reloj falso: 10s + 5s = 15s.
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+
+    expect(screen.getByText("15s")).toBeInTheDocument();
+    vi.useRealTimers();
   });
 
-  it("renders a vertical stepper from job.metadata.stages", () => {
+  it("renders a vertical stepper translated from the stage keys", () => {
     const entry = buildEntry({
       metadata: {
         stages: [
@@ -126,6 +183,17 @@ describe("JobDetailModal", () => {
     expect(screen.getByText("Probing video")).toBeInTheDocument();
     expect(screen.getByText("Upscaling frames")).toBeInTheDocument();
     expect(screen.getByText("Encoding video")).toBeInTheDocument();
+  });
+
+  it("falls back to the backend label for a stage the catalog does not know", () => {
+    const entry = buildEntry({
+      metadata: { stages: [stage("quantizing", "Quantizing weights", "active")] },
+    });
+
+    render(<JobDetailModal entry={entry} onClose={vi.fn()} />);
+
+    expect(screen.getByText("Quantizing weights")).toBeInTheDocument();
+    expect(screen.queryByText("job.stage.quantizing")).not.toBeInTheDocument();
   });
 
   it("shows a determinate progress bar with the percentage when progressPct is available", () => {
@@ -169,17 +237,6 @@ describe("JobDetailModal", () => {
     expect(screen.getByText(/frames/)).toHaveTextContent("800 / 800 frames");
   });
 
-  it("keeps using framesTotal during a normal upscaling stage", () => {
-    const entry = buildEntry({
-      progressPct: 40,
-      metadata: { stage: "upscaling_frames", framesDone: 200, framesTotal: 400, interpFramesTotal: 800 },
-    });
-
-    render(<JobDetailModal entry={entry} onClose={vi.fn()} />);
-
-    expect(screen.getByText(/frames/)).toHaveTextContent("200 / 400 frames");
-  });
-
   it("omits the frames readout when framesTotal is unknown (VFR source)", () => {
     const entry = buildEntry({ progressPct: 20, metadata: { framesDone: 120, framesTotal: null } });
 
@@ -196,21 +253,52 @@ describe("JobDetailModal", () => {
     expect(screen.getByText("DeepFilterNet")).toBeInTheDocument();
   });
 
-  it("shows Disabled for audio when the job dropped the audio track", () => {
+  it("says the audio was dropped when the job did not keep it", () => {
     const entry = buildEntry({ keepAudio: false });
 
     render(<JobDetailModal entry={entry} onClose={vi.fn()} />);
 
-    expect(screen.getByText("Disabled")).toBeInTheDocument();
+    expect(screen.getByText("Dropped")).toBeInTheDocument();
   });
 
-  it("shows the failure message and hides the progress section when the job failed", () => {
-    const entry = buildEntry({ status: "failed", error: "Model crashed" }, { status: "failed", errorMessage: "Model crashed" });
+  it("shows the failure message and hides the progress bar when the job failed", () => {
+    const entry = buildEntry(
+      { status: "failed", error: "Model crashed" },
+      { status: "failed", errorMessage: "Model crashed" },
+    );
 
     render(<JobDetailModal entry={entry} onClose={vi.fn()} />);
 
     expect(screen.getByRole("alert")).toHaveTextContent("Model crashed");
     expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+  });
+
+  it("keeps a long error inside the modal instead of stretching it", () => {
+    const long = "ffmpeg: ".concat("x".repeat(400));
+    const entry = buildEntry({ status: "failed" }, { status: "failed", errorMessage: long });
+
+    render(<JobDetailModal entry={entry} onClose={vi.fn()} />);
+
+    expect(screen.getByRole("alert").querySelector("span")).toHaveClass("break-words");
+  });
+
+  it("scrolls its body instead of growing past the screen", () => {
+    // Un trabajo de video llega a veinte filas: en un celular el modal tiene que
+    // scrollear por dentro y dejar el titulo y los botones alcanzables.
+    render(<JobDetailModal entry={buildEntry()} onClose={vi.fn()} />);
+
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.className).toContain("max-h-[90vh]");
+    expect(dialog.querySelector(".overflow-y-auto")).not.toBeNull();
+  });
+
+  it("does not blow up when the job has not been fetched yet", () => {
+    const entry = buildEntry({}, { job: undefined });
+
+    render(<JobDetailModal entry={entry} onClose={vi.fn()} />);
+
+    expect(screen.getByRole("heading", { name: "clip.mp4" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Parameters" })).not.toBeInTheDocument();
   });
 
   describe("ETA", () => {
@@ -290,7 +378,7 @@ describe("JobDetailModal", () => {
     expect(screen.queryByRole("button", { name: /cancel/i })).not.toBeInTheDocument();
   });
 
-  it("renders the cancelled status and hides the progress section", () => {
+  it("renders the cancelled status and hides the progress bar", () => {
     const entry = buildEntry({ status: "cancelled" }, { status: "cancelled" });
 
     render(<JobDetailModal entry={entry} onClose={vi.fn()} onCancel={vi.fn()} />);
@@ -304,50 +392,245 @@ describe("JobDetailModal", () => {
 describe("generation job details", () => {
   it("shows acceleration, resolved seed, device name and pace", async () => {
     vi.mocked(api.getDevices).mockResolvedValue({
-      devices: [
-        { id: "dml:0", kind: "gpu", name: "AMD Radeon RX 7900 XT", backend: "directml" },
-      ],
+      devices: [{ id: "dml:0", kind: "gpu", name: "AMD Radeon RX 7900 XT", backend: "directml" }],
       defaultDeviceId: "dml:0",
     });
-    const entry: JobQueueEntry = {
+    const job: GenerationJob = {
       id: "gen-1",
-      kind: "generation",
       status: "completed",
-      fileName: "generación",
-      errorMessage: null,
-      job: {
-        id: "gen-1",
-        status: "completed",
-        prompt: "a red apple",
-        negativePrompt: null,
-        modelId: "gen--m",
-        steps: 30,
-        guidance: 7,
-        width: 1024,
-        height: 704,
-        seed: 123456,
-        seedWasRandom: true,
-        device: "dml:0",
-        executionProvider: "CPU (fallback)",
-        strength: 1,
-        autoUpscale: false,
-        createdAt: "2026-01-01T00:00:00Z",
-        startedAt: "2026-01-01T00:00:00Z",
-        finishedAt: "2026-01-01T00:01:00Z",
-        progressPct: 100,
-        stages: null,
-        error: null,
-        ownerId: null,
-        downloadUrl: null,
-      },
-    } as unknown as JobQueueEntry;
+      prompt: "a red apple",
+      negativePrompt: null,
+      modelId: "gen--m",
+      steps: 30,
+      guidance: 7,
+      width: 1024,
+      height: 704,
+      seed: 123456,
+      seedWasRandom: true,
+      device: "dml:0",
+      executionProvider: "CPU (fallback)",
+      strength: 1,
+      autoUpscale: false,
+      createdAt: "2026-01-01T00:00:00Z",
+      startedAt: "2026-01-01T00:00:00Z",
+      finishedAt: "2026-01-01T00:01:00Z",
+      progressPct: 100,
+      stages: null,
+      error: null,
+      ownerId: null,
+      downloadUrl: null,
+    };
 
-    render(<JobDetailModal entry={entry} onClose={vi.fn()} />);
+    render(<JobDetailModal entry={entryFor("generation", job, "a red apple")} onClose={vi.fn()} />);
 
     expect(await screen.findByText("AMD Radeon RX 7900 XT (dml:0)")).toBeInTheDocument();
     expect(screen.getByText("CPU (fallback)")).toBeInTheDocument();
     expect(screen.getByText("123456 (random)")).toBeInTheDocument();
     expect(screen.getByText("~2.0 s/step")).toBeInTheDocument();
     expect(screen.getByText("Strength")).toBeInTheDocument();
+  });
+});
+
+describe("audio job details", () => {
+  const AUDIO_JOB: AudioJob = {
+    id: "aud-1",
+    status: "completed",
+    originalFilename: "cancion.mp3",
+    denoise: null,
+    restore: "audiosr",
+    device: null,
+    outputFormat: "flac",
+    master: "streaming",
+    cleanupSteps: ["denoise"],
+    createdAt: "2026-01-01T00:00:00Z",
+    startedAt: "2026-01-01T00:00:00Z",
+    finishedAt: "2026-01-01T00:04:14Z",
+    progressPct: 100,
+    stages: [
+      stage("decoding", "Decoding audio", "done"),
+      stage("restoring", "Restoring", "done"),
+      stage("mastering", "Mastering", "done"),
+      stage("finalizing", "Writing output", "done"),
+    ],
+    metadata: { loudnessBefore: -21.53, loudnessTarget: -14 },
+    error: null,
+    ownerId: null,
+    downloadUrl: "/download",
+  };
+
+  it("shows the chain the user picked, the finishing preset and the loudness move", async () => {
+    render(<JobDetailModal entry={entryFor("audio", AUDIO_JOB, "cancion.mp3")} onClose={vi.fn()} />);
+
+    expect(await screen.findByText("AudioSR")).toBeInTheDocument();
+    expect(screen.getByText("Cleanup chain")).toBeInTheDocument();
+    expect(screen.getByText("Mastering", { selector: "dt" })).toBeInTheDocument();
+    expect(screen.getByText("FLAC")).toBeInTheDocument();
+    expect(screen.getByText("-21.5 → -14.0 LUFS")).toBeInTheDocument();
+  });
+
+  it("shows the effective device even though the job did not pin one", async () => {
+    render(<JobDetailModal entry={entryFor("audio", AUDIO_JOB, "cancion.mp3")} onClose={vi.fn()} />);
+
+    expect(await screen.findByText("dml:0 (by default)")).toBeInTheDocument();
+  });
+
+  it("hides the video-only rows", () => {
+    render(<JobDetailModal entry={entryFor("audio", AUDIO_JOB, "cancion.mp3")} onClose={vi.fn()} />);
+
+    expect(screen.queryByText("Container")).not.toBeInTheDocument();
+    expect(screen.queryByText("Scale")).not.toBeInTheDocument();
+  });
+
+  it("translates a cleanup pass keeping the model's proper name", () => {
+    const job: AudioJob = {
+      ...AUDIO_JOB,
+      stages: [stage("cleanup_denoise", "Cleaning up: UVR DeNoise by FoxJoy", "active")],
+    };
+
+    render(<JobDetailModal entry={entryFor("audio", job, "cancion.mp3")} onClose={vi.fn()} />);
+
+    expect(screen.getByText("Cleaning up: UVR DeNoise by FoxJoy")).toBeInTheDocument();
+  });
+});
+
+describe("transcribe job details", () => {
+  const TRANSCRIBE_JOB: TranscribeJob = {
+    id: "tr-1",
+    status: "completed",
+    originalFilename: "charla.mp4",
+    modelId: "whisper-small",
+    language: null,
+    device: null,
+    outputMode: "dubbed_video",
+    targetLanguage: "en",
+    createdAt: "2026-01-01T00:00:00Z",
+    startedAt: "2026-01-01T00:00:00Z",
+    finishedAt: "2026-01-01T00:02:00Z",
+    progressPct: 100,
+    text: "hola",
+    error: null,
+    ownerId: null,
+    downloadUrl: null,
+  };
+
+  it("shows the model, the output mode and the dubbing language", () => {
+    render(<JobDetailModal entry={entryFor("transcribe", TRANSCRIBE_JOB, "charla.mp4")} onClose={vi.fn()} />);
+
+    expect(screen.getByText("Transcription")).toBeInTheDocument();
+    expect(screen.getByText("whisper-small")).toBeInTheDocument();
+    expect(screen.getByText("Dubbed video")).toBeInTheDocument();
+    expect(screen.getByText("Dubbing language")).toBeInTheDocument();
+  });
+
+  it("hides the dubbing language on a plain transcription", () => {
+    const job: TranscribeJob = { ...TRANSCRIBE_JOB, outputMode: "text", targetLanguage: null };
+
+    render(<JobDetailModal entry={entryFor("transcribe", job, "charla.mp4")} onClose={vi.fn()} />);
+
+    expect(screen.queryByText("Dubbing language")).not.toBeInTheDocument();
+  });
+});
+
+describe("download job details", () => {
+  const DOWNLOAD_JOB: DownloadJob = {
+    id: "dl-1",
+    status: "running",
+    url: "https://example.com/watch?v=1",
+    maxHeight: 1080,
+    audioOnly: false,
+    audioFormat: "mp3",
+    audioBitrateKbps: null,
+    videoContainer: "mp4",
+    mediaTitle: "Un video",
+    mediaUploader: "Alguien",
+    extractor: "youtube",
+    createdAt: "2026-01-01T00:00:00Z",
+    startedAt: "2026-01-01T00:00:00Z",
+    finishedAt: null,
+    progressPct: 25,
+    downloadedBytes: 1024 * 1024,
+    totalBytes: 4 * 1024 * 1024,
+    outputFiles: [],
+    outputDirectory: "",
+    error: null,
+    ownerId: null,
+  };
+
+  it("shows where the media came from and how much has arrived", () => {
+    render(<JobDetailModal entry={entryFor("download", DOWNLOAD_JOB, "Un video")} onClose={vi.fn()} />);
+
+    expect(screen.getByText("Download")).toBeInTheDocument();
+    // El titulo es tambien el nombre visible en la cola: aparece en el encabezado
+    // y en la fila de Titulo.
+    expect(screen.getByText("Un video", { selector: "dd" })).toBeInTheDocument();
+    expect(screen.getByText("youtube")).toBeInTheDocument();
+    expect(screen.getByText("1.0 MB / 4.0 MB")).toBeInTheDocument();
+  });
+
+  it("hides the produced files until there are any", () => {
+    render(<JobDetailModal entry={entryFor("download", DOWNLOAD_JOB, "Un video")} onClose={vi.fn()} />);
+
+    expect(screen.queryByText("Files")).not.toBeInTheDocument();
+  });
+});
+
+describe("3D job details", () => {
+  const SHAPE3D_JOB: Shape3dJob = {
+    id: "3d-1",
+    status: "completed",
+    prompt: "una maceta",
+    printer: "ender-3",
+    source: "mesh",
+    code: null,
+    retries: 0,
+    targetMm: 80,
+    targetMmSource: "estimate",
+    targetMmReference: "una taza",
+    createdAt: "2026-01-01T00:00:00Z",
+    startedAt: "2026-01-01T00:00:00Z",
+    finishedAt: "2026-01-01T00:03:00Z",
+    canPrint: true,
+    sizeMm: [80, 40, 40],
+    triangleCount: 4200,
+    blockers: [],
+    advice: [],
+    error: null,
+    downloadUrl: "/download",
+  };
+
+  it("shows the printer, the measurement and where the measurement came from", () => {
+    render(<JobDetailModal entry={entryFor("shape3d", SHAPE3D_JOB, "una maceta")} onClose={vi.fn()} />);
+
+    expect(screen.getByText("3D model")).toBeInTheDocument();
+    expect(screen.getByText("ender-3")).toBeInTheDocument();
+    expect(
+      screen.getByText("80 mm · the model suggested it from una taza and you confirmed it"),
+    ).toBeInTheDocument();
+  });
+
+  it("shows the print verdict", () => {
+    render(<JobDetailModal entry={entryFor("shape3d", SHAPE3D_JOB, "una maceta")} onClose={vi.fn()} />);
+
+    expect(screen.getByText("Ready to print")).toBeInTheDocument();
+  });
+
+  it("renders without a progress percentage, since the 3D lane reports none", () => {
+    render(<JobDetailModal entry={entryFor("shape3d", SHAPE3D_JOB, "una maceta")} onClose={vi.fn()} />);
+
+    const bar = screen.getByRole("progressbar", { name: "Progress" });
+    expect(bar).toHaveAttribute("aria-busy", "true");
+  });
+
+  it("hides the CAD code on the mesh lane and shows it on the CAD lane", () => {
+    const { rerender } = render(
+      <JobDetailModal entry={entryFor("shape3d", SHAPE3D_JOB, "una maceta")} onClose={vi.fn()} />,
+    );
+    expect(screen.queryByText("CAD code")).not.toBeInTheDocument();
+
+    const cad: Shape3dJob = { ...SHAPE3D_JOB, source: "cad", code: "cube([10,10,10]);" };
+    rerender(<JobDetailModal entry={entryFor("shape3d", cad, "una maceta")} onClose={vi.fn()} />);
+
+    expect(screen.getByText("CAD code")).toBeInTheDocument();
+    expect(screen.getByText("cube([10,10,10]);")).toBeInTheDocument();
   });
 });

@@ -88,6 +88,13 @@ export interface VideoJobResponse {
   targetFps: string | null;
   audioEnhance: string | null;
   audioRestore: string | null;
+  // Pistas de audio elegidas (indices absolutos de ffprobe; la primera es la
+  // primaria, la que pasa por enhance/restore) y si se copiaron los subtitulos.
+  // Opcionales: los jobs de backends anteriores no los mandan.
+  audioTrackIndices?: number[] | null;
+  keepSubtitles?: boolean;
+  // Codec de la pista de audio procesada: "auto" | "flac" | "aac".
+  audioOutputFormat?: string;
   // Frame-interpolation engine used for this job: "rife" (default, always) or
   // "gmfss" (opt-in, much higher quality, 10x or more slower). Mirrors app.config.INTERP_ENGINES.
   interpEngine: string;
@@ -153,6 +160,20 @@ export interface AudioJob {
   error: string | null;
   ownerId: string | null;
   downloadUrl: string | null;
+  /** Formato del archivo entregado ("wav" | "flac" | "mp3"). */
+  outputFormat?: string;
+  /** Acabado profesional elegido (id del catálogo de mastering). */
+  master?: string | null;
+  /** Cadena de voz pedida, su destino de entrega y el realce de presencia. */
+  voiceSteps?: string[];
+  voiceDelivery?: string | null;
+  voicePresenceDb?: number | null;
+  /**
+   * Lo que el pipeline decidió solo (masteringSkipped, voiceLoudnessSkipped) y
+   * lo que midió (loudnessBefore/loudnessTarget). Mismo contrato que en
+   * image/video: opcional para tolerar respuestas de backends anteriores.
+   */
+  metadata?: JobMetadata;
   // Modo separación. Opcionales para no obligar a cada fixture a declararlos:
   // el backend los manda siempre.
   separate?: boolean;
@@ -770,6 +791,10 @@ export interface TranscribeJob {
   modelId: string;
   language: string | null;
   device: string | null;
+  /** "text" | "video" | "video_burned" | "dubbed_video". Opcional: backends anteriores no lo mandan. */
+  outputMode?: string;
+  /** Solo en doblaje: a qué idioma se habló. */
+  targetLanguage?: string | null;
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;
@@ -807,6 +832,44 @@ export interface MediaProbe {
   availableHeights: number[];
   /** La miniatura que vuelve reconocible un video antes de bajarlo. */
   thumbnailUrl: string | null;
+}
+
+// Mirrors app/schemas.py::Shape3dJobResponse. Vive acá y no en services/print
+// porque la cola de trabajos lo trata como una familia más y `lib` no puede
+// depender de `services`; print.ts lo reexporta para no mover sus importadores.
+export interface Shape3dJob {
+  id: string;
+  status: JobStatus;
+  prompt: string;
+  printer: string;
+  /**
+   * "mesh" = forma sin cotas. "photo" = interpretación de una foto, tampoco
+   * con cotas. "cad" = código OpenSCAD con cotas.
+   */
+  source: string;
+  /** Solo en "cad": el código, que es la pieza editable. */
+  code: string | null;
+  retries: number;
+  /** A cuánto se escaló el lado más largo. */
+  targetMm: number | null;
+  /**
+   * De dónde salió esa medida: "user", "estimate" (la sugirió el modelo y el
+   * usuario la confirmó) o "default" (la puso el programa). El número solo
+   * dejaría creer que alguien lo eligió.
+   */
+  targetMmSource: string | null;
+  /** Contra qué objeto la comparó el modelo, si vino de una estimación. */
+  targetMmReference: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  canPrint: boolean | null;
+  sizeMm: [number, number, number] | null;
+  triangleCount: number | null;
+  blockers: string[];
+  advice: string[];
+  error: string | null;
+  downloadUrl: string | null;
 }
 
 export interface DownloadJob {

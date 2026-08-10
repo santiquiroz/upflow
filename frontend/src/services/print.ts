@@ -1,4 +1,5 @@
 import { apiGet, apiPostForm, apiPostJson } from "../lib/api";
+import type { Shape3dJob } from "../lib/apiTypes";
 import type { UploadOptions } from "../lib/uploadRequest";
 
 export interface Printer {
@@ -106,40 +107,10 @@ export function generatePart(body: {
 
 export type Shape3dStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 
-export interface Shape3dJob {
-  id: string;
-  status: Shape3dStatus;
-  prompt: string;
-  printer: string;
-  /**
-   * "mesh" = forma sin cotas. "photo" = interpretación de una foto, tampoco
-   * con cotas. "cad" = código OpenSCAD con cotas.
-   */
-  source: string;
-  /** Solo en "cad": el código, que es la pieza editable. */
-  code: string | null;
-  retries: number;
-  /** A cuánto se escaló el lado más largo. */
-  targetMm: number | null;
-  /**
-   * De dónde salió esa medida: "user", "estimate" (la sugirió el modelo y el
-   * usuario la confirmó) o "default" (la puso el programa). El número solo
-   * dejaría creer que alguien lo eligió.
-   */
-  targetMmSource: string | null;
-  /** Contra qué objeto la comparó el modelo, si vino de una estimación. */
-  targetMmReference: string | null;
-  createdAt: string;
-  startedAt: string | null;
-  finishedAt: string | null;
-  canPrint: boolean | null;
-  sizeMm: [number, number, number] | null;
-  triangleCount: number | null;
-  blockers: string[];
-  advice: string[];
-  error: string | null;
-  downloadUrl: string | null;
-}
+// La forma vive en lib/apiTypes (la cola la trata como una familia mas y `lib`
+// no puede depender de `services`); se reexporta para no mover a quien ya la
+// importa desde este modulo.
+export type { Shape3dJob };
 
 export function createShape3dJob(body: {
   /** Vacío solo en "photo": ahí la entrada es la foto. */

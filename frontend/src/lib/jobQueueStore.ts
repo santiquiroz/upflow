@@ -1,4 +1,6 @@
-export type TrackedJobKind = "image" | "video" | "audio" | "generation";
+import type { JobKind } from "./jobTypeGuards";
+
+export type TrackedJobKind = JobKind;
 
 export interface TrackedJob {
   id: string;

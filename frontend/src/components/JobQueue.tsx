@@ -7,7 +7,7 @@ import { useAuth } from "../hooks/useAuth";
 import { type JobQueueEntry, useJobQueue } from "../hooks/useJobQueue";
 import { rehydrateJobQueue } from "../lib/jobQueueRehydrate";
 import { jobQueueStore } from "../lib/jobQueueStore";
-import { isCancellableJobStatus, isTerminalJobStatus, jobKindLabel } from "../lib/jobStatus";
+import { isCancellableJobStatus, isTerminalJobStatus, jobKindLabelKey } from "../lib/jobStatus";
 import { IndeterminateProgressBar } from "./IndeterminateProgressBar";
 import { JobDetailModal } from "./JobDetailModal";
 
@@ -224,7 +224,7 @@ function QueueEntryRow({
           <span className="truncate text-xs text-text" title={entry.fileName}>
             {entry.fileName}
           </span>
-          <span className="text-[10px] uppercase tracking-wide text-text-faint">{jobKindLabel(entry.kind)}</span>
+          <span className="text-[10px] uppercase tracking-wide text-text-faint">{t(jobKindLabelKey(entry.kind))}</span>
         </button>
         <QueueEntryAction entry={entry} onDismiss={onDismiss} onCancel={onCancel} />
       </div>
@@ -255,7 +255,7 @@ function AllJobsRow({ entry }: { entry: AllJobsEntry }) {
         <span className="truncate text-xs text-text" title={entry.fileName}>
           {entry.fileName}
         </span>
-        <span className="text-[10px] uppercase tracking-wide text-text-faint">{jobKindLabel(entry.kind)}</span>
+        <span className="text-[10px] uppercase tracking-wide text-text-faint">{t(jobKindLabelKey(entry.kind))}</span>
       </div>
       <div className="flex items-center justify-between text-[10px] text-text-faint">
         <span>{t("job.owner", { owner: entry.ownerId ?? "—" })}</span>

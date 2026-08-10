@@ -4,11 +4,10 @@ import { useTranslation } from "../i18n/LocaleProvider";
 import { Fragment, useEffect, useState } from "react";
 import { getDevices } from "../lib/api";
 import type { JobQueueEntry } from "../hooks/useJobQueue";
-import type { AudioJob, JobStage, VideoJobResponse } from "../lib/apiTypes";
-import { denoiseLabel, restoreLabel } from "../lib/audioLabels";
+import { useCatalogLabels } from "../hooks/useCatalogLabels";
+import type { JobStage } from "../lib/apiTypes";
 import { estimateEta, formatEta, type EtaSample } from "../lib/eta";
-import { formatDuration } from "../lib/formatDuration";
-import { formatFps } from "../lib/formatFps";
+import { buildJobDetailSections, type DetailItem, type JobDetailSections } from "../lib/jobDetails";
 import {
   areFramesReportable,
   deriveStepper,
@@ -16,8 +15,9 @@ import {
   resolveFramesDenominator,
   toMonotonicProgressPct,
 } from "../lib/jobProgress";
-import { isCancellableJobStatus, jobKindLabel } from "../lib/jobStatus";
-import { isGenerationJob, type AnyJobResponse } from "../lib/jobTypeGuards";
+import { translateStageLabel } from "../lib/jobStageLabels";
+import { isCancellableJobStatus } from "../lib/jobStatus";
+import { isVideoJob, type AnyQueuedJob } from "../lib/jobTypeGuards";
 import { DeterminateProgressBar } from "./DeterminateProgressBar";
 import { IndeterminateProgressBar } from "./IndeterminateProgressBar";
 import { Modal } from "./Modal";
@@ -29,58 +29,22 @@ interface JobDetailModalProps {
 }
 
 const MAX_ETA_SAMPLES = 5;
+const ELAPSED_TICK_MS = 1000;
 
-const AUDIO_ENHANCE_LABELS: Record<string, string> = {
-  rnnoise: "RNNoise",
-  deepfilter: "DeepFilterNet",
-};
-
-function isVideoJob(job: AnyJobResponse): job is VideoJobResponse {
-  return "videoCodec" in job;
-}
-
-function isAudioJob(job: AnyJobResponse): job is AudioJob {
-  return "denoise" in job;
-}
-
-// Audio and generation jobs carry stages at the top level (no `metadata`),
-// image/video jobs nest them under metadata -- normalize both to the same list.
-function resolveStages(job: AnyJobResponse | undefined): JobStage[] | undefined {
+// Audio and generation jobs carry stages at the top level, image/video jobs nest
+// them under metadata, and transcribe/download/shape3d have none -- normalize.
+function resolveStages(job: AnyQueuedJob | undefined): JobStage[] | undefined {
   if (!job) {
     return undefined;
   }
-  if (isAudioJob(job) || isGenerationJob(job)) {
+  if ("stages" in job) {
     return job.stages ?? undefined;
   }
-  return job.metadata.stages;
+  return "metadata" in job ? job.metadata?.stages : undefined;
 }
 
 function titleIdFor(jobId: string): string {
   return `job-detail-title-${jobId}`;
-}
-
-function readAudioLabel(job: VideoJobResponse): string {
-  if (!job.keepAudio) {
-    return "Disabled";
-  }
-  if (job.audioEnhance) {
-    return AUDIO_ENHANCE_LABELS[job.audioEnhance] ?? job.audioEnhance;
-  }
-  return "Kept";
-}
-
-function readFpsLabel(job: VideoJobResponse): string | null {
-  const outputFps = job.metadata.outputFps;
-  if (outputFps) {
-    return formatFps(outputFps);
-  }
-  if (job.targetFps) {
-    return formatFps(job.targetFps);
-  }
-  if (job.fpsMultiplier > 1) {
-    return `${job.fpsMultiplier}x`;
-  }
-  return null;
 }
 
 // Progress must never appear to move backward in the UI (a stage-transition
@@ -132,135 +96,87 @@ function useEtaSampleBuffer(jobId: string, monotonicProgressPct: number | null):
   return state.jobId === jobId ? state.samples : [];
 }
 
-interface DetailItem {
-  label: string;
-  value: string;
-  isNumeric?: boolean;
+// El "lleva corriendo" solo avanza si algo lo empuja. Se tickea unicamente
+// mientras el trabajo corre: un modal abierto sobre un job terminado no tiene
+// por que re-renderizarse cada segundo.
+function useTickingNow(isRunning: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!isRunning) {
+      return;
+    }
+    const timer = setInterval(() => setNow(Date.now()), ELAPSED_TICK_MS);
+    return () => clearInterval(timer);
+  }, [isRunning]);
+
+  return now;
 }
 
 // Nombre real de la placa en vez del id crudo: "AMD Radeon RX 7900 XT" dice
 // algo; "dml:0" no. El id queda entre paréntesis para diagnóstico.
-function useDeviceLabel(): (deviceId: string) => string {
+function useDeviceInfo(): { label: (deviceId: string) => string; defaultId: string | null } {
   const devicesQuery = useQuery({ queryKey: ["devices"], queryFn: getDevices, staleTime: 60_000 });
-  return (deviceId: string) => {
-    const match = devicesQuery.data?.devices.find((device) => device.id === deviceId);
-    return match ? `${match.name} (${deviceId})` : deviceId;
+  return {
+    label: (deviceId: string) => {
+      const match = devicesQuery.data?.devices.find((device) => device.id === deviceId);
+      return match ? `${match.name} (${deviceId})` : deviceId;
+    },
+    defaultId: devicesQuery.data?.defaultDeviceId ?? null,
   };
 }
 
-// Ritmo real del trabajo terminado: permite comparar corridas y máquinas
-// ("~2 s/paso acá, ~90 s/paso en la máquina que cayó a CPU").
-function stepPaceLabel(job: { steps: number; startedAt: string | null; finishedAt: string | null }): string | null {
-  if (!job.startedAt || !job.finishedAt || job.steps <= 0) {
-    return null;
-  }
-  const elapsedSeconds = (new Date(job.finishedAt).getTime() - new Date(job.startedAt).getTime()) / 1000;
-  if (!Number.isFinite(elapsedSeconds) || elapsedSeconds <= 0) {
-    return null;
-  }
-  const pace = elapsedSeconds / job.steps;
-  return pace >= 10 ? `~${Math.round(pace)} s/step` : `~${pace.toFixed(1)} s/step`;
-}
-
-function JobTypeSummary({ entry, job }: { entry: JobQueueEntry; job: AnyJobResponse | undefined }) {
+function useJobDetailSections(entry: JobQueueEntry): JobDetailSections {
   const { t } = useTranslation();
-  const deviceLabel = useDeviceLabel();
-  const items: DetailItem[] = [{ label: "Type", value: jobKindLabel(entry.kind) }];
-  if (!job) {
-    return <DetailList items={items} />;
-  }
-  if (isAudioJob(job)) {
-    items.push({ label: "Denoise", value: denoiseLabel(job.denoise) });
-    items.push({ label: "Restore", value: restoreLabel(job.restore) });
-    if (job.device) {
-      items.push({ label: "Device", value: deviceLabel(job.device) });
-    }
-    pushDurationItem(items, job);
-    return <DetailList items={items} />;
-  }
-  if (isGenerationJob(job)) {
-    items.push({ label: "Prompt", value: job.prompt });
-    if (job.negativePrompt) {
-      items.push({ label: t("job.detail.negativePrompt"), value: job.negativePrompt });
-    }
-    items.push({ label: "Model", value: job.modelId });
-    items.push({ label: "Steps", value: String(job.steps), isNumeric: true });
-    items.push({ label: "Guidance", value: String(job.guidance), isNumeric: true });
-    if (job.strength != null) {
-      items.push({ label: "Strength", value: String(job.strength), isNumeric: true });
-    }
-    items.push({ label: "Size", value: `${job.width}x${job.height}` });
-    if (job.seed !== null) {
-      items.push({
-        label: "Seed",
-        value: job.seedWasRandom ? `${job.seed} (random)` : String(job.seed),
-        isNumeric: true,
-      });
-    }
-    if (job.device) {
-      items.push({ label: "Device", value: deviceLabel(job.device) });
-    }
-    if (job.executionProvider) {
-      items.push({
-        label: "Acceleration",
-        value: job.precision ? `${job.executionProvider} · ${job.precision}` : job.executionProvider,
-      });
-    }
-    if (job.scheduler) {
-      items.push({ label: "Scheduler", value: job.scheduler });
-    }
-    if (job.speedClass) {
-      items.push({ label: "Speed class", value: job.speedClass });
-    }
-    pushDurationItem(items, job);
-    const pace = stepPaceLabel(job);
-    if (pace) {
-      items.push({ label: "Speed", value: pace, isNumeric: true });
-    }
-    return <DetailList items={items} />;
-  }
-  items.push({ label: "Model", value: job.modelName });
-  if (job.device) {
-    items.push({ label: "Device", value: deviceLabel(job.device) });
-  }
-  items.push({ label: "Scale", value: `${job.scale}x`, isNumeric: true });
-  if (isVideoJob(job)) {
-    items.push({ label: "Container", value: job.outputContainer });
-    const fps = readFpsLabel(job);
-    if (fps) {
-      items.push({ label: "FPS", value: fps, isNumeric: true });
-    }
-    items.push({ label: "Audio", value: readAudioLabel(job) });
-  } else {
-    items.push({ label: "Format", value: job.outputFormat.toUpperCase() });
-  }
-  pushDurationItem(items, job);
-  return <DetailList items={items} />;
+  const device = useDeviceInfo();
+  const labelFor = useCatalogLabels(entry.kind === "audio");
+  const nowMs = useTickingNow(entry.status === "running");
+  return buildJobDetailSections(entry.job, {
+    t,
+    deviceLabel: device.label,
+    defaultDeviceId: device.defaultId,
+    labelFor,
+    nowMs,
+  });
 }
 
-// Only meaningful once the job has actually finished (completed/failed/cancelled) --
-// while running, finishedAt is still null so the row is omitted.
-function pushDurationItem(items: DetailItem[], job: AnyJobResponse): void {
-  if (!job.finishedAt) {
-    return;
+function detailValueClassName(item: DetailItem): string {
+  if (item.isLong) {
+    // Un prompt, una ruta o un bloque de código no pueden estirar el modal:
+    // ocupan las dos columnas y se parten donde haga falta.
+    return "col-span-2 break-words whitespace-pre-wrap text-text";
   }
-  items.push({ label: "Duration", value: formatDuration(job.startedAt, job.finishedAt) });
-}
-
-function detailValueClassName(isNumeric: boolean | undefined): string {
-  return isNumeric ? "font-mono-tabular text-right text-text" : "text-right text-text";
+  return item.isNumeric ? "font-mono-tabular break-words text-right text-text" : "break-words text-right text-text";
 }
 
 function DetailList({ items }: { items: DetailItem[] }) {
+  const { t } = useTranslation();
   return (
     <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs text-text-dim">
       {items.map((item) => (
-        <Fragment key={item.label}>
-          <dt className="text-text-faint">{item.label}</dt>
-          <dd className={detailValueClassName(item.isNumeric)}>{item.value}</dd>
+        <Fragment key={`${item.labelKey}-${item.value}`}>
+          <dt className={item.isLong ? "col-span-2 text-text-faint" : "text-text-faint"}>
+            {t(item.labelKey)}
+          </dt>
+          <dd className={detailValueClassName(item)}>{item.value}</dd>
         </Fragment>
       ))}
     </dl>
+  );
+}
+
+function DetailSection({ titleKey, items }: { titleKey: string; items: DetailItem[] }) {
+  const { t } = useTranslation();
+  if (items.length === 0) {
+    return null;
+  }
+  return (
+    <section className="flex flex-col gap-2">
+      <h3 className="font-heading text-[10px] font-semibold uppercase tracking-wide text-text-faint">
+        {t(titleKey)}
+      </h3>
+      <DetailList items={items} />
+    </section>
   );
 }
 
@@ -281,7 +197,8 @@ function stepTextClassName(state: "done" | "active" | "pending"): string {
   return state === "active" ? "text-text" : "text-text-dim";
 }
 
-function Stepper({ job }: { job: AnyJobResponse | undefined }) {
+function Stepper({ job }: { job: AnyQueuedJob | undefined }) {
+  const { t } = useTranslation();
   const steps = deriveStepper(resolveStages(job));
   if (steps.length === 0) {
     return null;
@@ -291,15 +208,22 @@ function Stepper({ job }: { job: AnyJobResponse | undefined }) {
       {steps.map((step) => (
         <li key={step.key} className="flex items-center gap-2 text-xs">
           <StepIcon state={step.iconState} />
-          <span className={stepTextClassName(step.iconState)}>{step.label}</span>
+          <span className={stepTextClassName(step.iconState)}>{translateStageLabel(step, t)}</span>
         </li>
       ))}
     </ol>
   );
 }
 
-function ProgressSection({ job, monotonicProgressPct }: { job: AnyJobResponse | undefined; monotonicProgressPct: number | null }) {
-  const label = "Progress";
+function ProgressSection({
+  job,
+  monotonicProgressPct,
+}: {
+  job: AnyQueuedJob | undefined;
+  monotonicProgressPct: number | null;
+}) {
+  const { t } = useTranslation();
+  const label = t("job.detail.progress");
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-center justify-between text-xs text-text-dim">
@@ -318,8 +242,9 @@ function ProgressSection({ job, monotonicProgressPct }: { job: AnyJobResponse | 
   );
 }
 
-function FramesReadout({ job }: { job: AnyJobResponse | undefined }) {
-  if (!job || isAudioJob(job) || isGenerationJob(job)) {
+function FramesReadout({ job }: { job: AnyQueuedJob | undefined }) {
+  const { t } = useTranslation();
+  if (!job || !isVideoJob(job)) {
     return null;
   }
   const framesDone = job.metadata.framesDone;
@@ -332,38 +257,34 @@ function FramesReadout({ job }: { job: AnyJobResponse | undefined }) {
       <span className="font-mono-tabular">{framesDone}</span>
       {" / "}
       <span className="font-mono-tabular">{framesTotal}</span>
-      {" frames"}
+      {` ${t("job.detail.frames")}`}
     </p>
   );
 }
 
 function EtaReadout({ samples }: { samples: EtaSample[] }) {
+  const { t } = useTranslation();
   const etaSeconds = estimateEta(samples);
   if (etaSeconds === null) {
     return null;
   }
-  return <p className="text-xs text-text-dim">ETA {formatEta(etaSeconds)}</p>;
+  return <p className="text-xs text-text-dim">{`${t("job.detail.eta")} ${formatEta(etaSeconds)}`}</p>;
 }
 
 function ErrorNotice({ message }: { message: string }) {
   return (
-    <div role="alert" className="flex items-start gap-2 rounded border border-danger bg-surface-2 px-3 py-2 text-sm text-danger">
+    <div
+      role="alert"
+      className="flex items-start gap-2 rounded border border-danger bg-surface-2 px-3 py-2 text-sm text-danger"
+    >
       <AlertTriangle aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0" strokeWidth={1.75} />
-      <span>{message}</span>
-    </div>
-  );
-}
-
-function CancelledNotice() {
-  return (
-    <div className="flex items-center gap-2 rounded border border-border bg-surface-2 px-3 py-2 text-sm text-text-dim">
-      <Ban aria-hidden="true" className="h-4 w-4 shrink-0" strokeWidth={1.75} />
-      <span>Cancelled</span>
+      <span className="min-w-0 break-words whitespace-pre-wrap">{message}</span>
     </div>
   );
 }
 
 function ModalActions({ entry, onClose, onCancel }: JobDetailModalProps) {
+  const { t } = useTranslation();
   return (
     <div className="ml-auto flex w-fit gap-2">
       {isCancellableJobStatus(entry.status) && onCancel && (
@@ -373,7 +294,7 @@ function ModalActions({ entry, onClose, onCancel }: JobDetailModalProps) {
           className="inline-flex items-center gap-1.5 rounded-sm border border-danger px-3 py-1.5 text-sm text-danger transition-[background-color,color] duration-fast hover:bg-danger hover:text-bg focus-visible:outline focus-visible:outline-2 focus-visible:outline-danger"
         >
           <Ban aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />
-          Cancel
+          {t("job.detail.cancel")}
         </button>
       )}
       <button
@@ -381,7 +302,7 @@ function ModalActions({ entry, onClose, onCancel }: JobDetailModalProps) {
         onClick={onClose}
         className="rounded-sm border border-border bg-surface px-3 py-1.5 text-sm text-text-dim transition-[border-color,color] duration-fast hover:border-text-faint hover:text-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
       >
-        Close
+        {t("job.detail.close")}
       </button>
     </div>
   );
@@ -391,23 +312,70 @@ function showsProgress(status: JobQueueEntry["status"]): boolean {
   return status !== "failed" && status !== "cancelled";
 }
 
+// La generacion 3D no reporta fraccion (es un hilo de CPU no interrumpible):
+// ahi la barra queda indeterminada en vez de inventar un porcentaje.
+function readProgressPct(job: AnyQueuedJob | undefined): number | null {
+  if (!job || !("progressPct" in job)) {
+    return null;
+  }
+  return job.progressPct ?? null;
+}
+
+function ProgressBlock({
+  entry,
+  monotonicProgressPct,
+  etaSamples,
+  timing,
+}: {
+  entry: JobQueueEntry;
+  monotonicProgressPct: number | null;
+  etaSamples: EtaSample[];
+  timing: DetailItem[];
+}) {
+  const { t } = useTranslation();
+  return (
+    <section className="flex flex-col gap-2">
+      <h3 className="font-heading text-[10px] font-semibold uppercase tracking-wide text-text-faint">
+        {t("job.detail.group.progress")}
+      </h3>
+      <Stepper job={entry.job} />
+      {showsProgress(entry.status) && (
+        <ProgressSection job={entry.job} monotonicProgressPct={monotonicProgressPct} />
+      )}
+      {entry.status === "running" && <EtaReadout samples={etaSamples} />}
+      <DetailList items={timing} />
+    </section>
+  );
+}
+
 export function JobDetailModal({ entry, onClose, onCancel }: JobDetailModalProps) {
   const titleId = titleIdFor(entry.id);
-  const rawProgressPct = entry.job?.progressPct ?? null;
+  const rawProgressPct = readProgressPct(entry.job);
   const monotonicProgressPct = useMonotonicProgressPct(entry.id, rawProgressPct);
   const etaSamples = useEtaSampleBuffer(entry.id, monotonicProgressPct);
+  const sections = useJobDetailSections(entry);
 
   return (
-    <Modal titleId={titleId} onClose={onClose}>
+    <Modal titleId={titleId} onClose={onClose} widthClassName="max-w-md">
       <h2 id={titleId} className="truncate font-heading text-sm font-semibold text-text" title={entry.fileName}>
         {entry.fileName}
       </h2>
-      <JobTypeSummary entry={entry} job={entry.job} />
-      <Stepper job={entry.job} />
-      {showsProgress(entry.status) && <ProgressSection job={entry.job} monotonicProgressPct={monotonicProgressPct} />}
-      {entry.status === "running" && <EtaReadout samples={etaSamples} />}
-      {entry.status === "cancelled" && <CancelledNotice />}
-      {entry.errorMessage && <ErrorNotice message={entry.errorMessage} />}
+      {/* Un trabajo de video llega a veinte filas: el cuerpo scrollea y el
+          titulo y los botones quedan siempre a la vista, incluso en un celular. */}
+      <div className="flex min-h-0 flex-col gap-4 overflow-y-auto">
+        <DetailSection titleKey="job.detail.group.parameters" items={sections.parameters} />
+        <ProgressBlock
+          entry={entry}
+          monotonicProgressPct={monotonicProgressPct}
+          etaSamples={etaSamples}
+          timing={sections.timing}
+        />
+        <DetailSection titleKey="job.detail.group.result" items={sections.result} />
+        {/* El estado cancelado ya se lee en la fila de Estado: repetirlo en un
+            cartel aparte era la misma palabra dos veces. El error si va aparte:
+            es largo y tiene que interrumpir. */}
+        {entry.errorMessage && <ErrorNotice message={entry.errorMessage} />}
+      </div>
       <ModalActions entry={entry} onClose={onClose} onCancel={onCancel} />
     </Modal>
   );

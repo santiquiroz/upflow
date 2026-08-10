@@ -5,7 +5,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as api from "../lib/api";
 import type { GenerationJob, JobResponse, VideoJobResponse } from "../lib/apiTypes";
 import { createJobQueueStore } from "../lib/jobQueueStore";
+import * as downloadService from "../services/download";
 import * as generationService from "../services/generation";
+import * as printService from "../services/print";
+import * as transcribeService from "../services/transcribe";
 import { useJobQueue } from "./useJobQueue";
 
 vi.mock("../lib/api", async (importOriginal) => {
@@ -16,6 +19,21 @@ vi.mock("../lib/api", async (importOriginal) => {
 vi.mock("../services/generation", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../services/generation")>();
   return { ...actual, getGenerationJob: vi.fn(), cancelGenerationJob: vi.fn() };
+});
+
+vi.mock("../services/transcribe", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/transcribe")>();
+  return { ...actual, getTranscribeJob: vi.fn(), cancelTranscribeJob: vi.fn() };
+});
+
+vi.mock("../services/download", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/download")>();
+  return { ...actual, getDownloadJob: vi.fn(), cancelDownloadJob: vi.fn() };
+});
+
+vi.mock("../services/print", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/print")>();
+  return { ...actual, getShape3dJob: vi.fn(), cancelShape3dJob: vi.fn() };
 });
 
 const POLL_INTERVAL_MS = 10;
@@ -102,6 +120,9 @@ afterEach(() => {
   vi.mocked(api.getVideoJob).mockReset();
   vi.mocked(generationService.getGenerationJob).mockReset();
   vi.mocked(generationService.cancelGenerationJob).mockReset();
+  vi.mocked(transcribeService.getTranscribeJob).mockReset();
+  vi.mocked(downloadService.getDownloadJob).mockReset();
+  vi.mocked(printService.getShape3dJob).mockReset();
 });
 
 describe("useJobQueue", () => {
@@ -185,6 +206,124 @@ describe("useJobQueue", () => {
     act(() => result.current.dismiss("img-1"));
 
     expect(result.current.entries).toHaveLength(0);
+  });
+
+  it("tracks the transcribe, download and 3D families too", async () => {
+    const store = createJobQueueStore();
+    vi.mocked(transcribeService.getTranscribeJob).mockResolvedValue({
+      id: "tr-1",
+      status: "running",
+      originalFilename: "charla.mp4",
+      modelId: "whisper-small",
+      language: null,
+      device: null,
+      createdAt: "2026-01-01T00:00:00Z",
+      startedAt: "2026-01-01T00:00:00Z",
+      finishedAt: null,
+      progressPct: 10,
+      text: null,
+      error: null,
+      ownerId: null,
+      downloadUrl: null,
+    });
+    vi.mocked(downloadService.getDownloadJob).mockResolvedValue({
+      id: "dl-1",
+      status: "running",
+      url: "https://example.com/x",
+      maxHeight: 1080,
+      audioOnly: false,
+      audioFormat: "mp3",
+      audioBitrateKbps: null,
+      videoContainer: "mp4",
+      mediaTitle: "Un video",
+      mediaUploader: null,
+      extractor: "youtube",
+      createdAt: "2026-01-01T00:00:00Z",
+      startedAt: "2026-01-01T00:00:00Z",
+      finishedAt: null,
+      progressPct: 25,
+      downloadedBytes: 10,
+      totalBytes: 100,
+      outputFiles: [],
+      outputDirectory: "",
+      error: null,
+      ownerId: null,
+    });
+    vi.mocked(printService.getShape3dJob).mockResolvedValue({
+      id: "3d-1",
+      status: "running",
+      prompt: "una maceta",
+      printer: "ender-3",
+      source: "mesh",
+      code: null,
+      retries: 0,
+      targetMm: null,
+      targetMmSource: null,
+      targetMmReference: null,
+      createdAt: "2026-01-01T00:00:00Z",
+      startedAt: "2026-01-01T00:00:00Z",
+      finishedAt: null,
+      canPrint: null,
+      sizeMm: null,
+      triangleCount: null,
+      blockers: [],
+      advice: [],
+      error: null,
+      downloadUrl: null,
+    });
+
+    store.addTrackedJob({ id: "tr-1", kind: "transcribe", fileName: "charla.mp4", createdAt: 1 });
+    store.addTrackedJob({ id: "dl-1", kind: "download", fileName: "Un video", createdAt: 2 });
+    store.addTrackedJob({ id: "3d-1", kind: "shape3d", fileName: "una maceta", createdAt: 3 });
+
+    const { result } = renderHook(() => useJobQueue(store, POLL_INTERVAL_MS), { wrapper: createWrapper() });
+
+    await waitFor(() =>
+      expect(result.current.entries.every((entry) => entry.status === "running")).toBe(true),
+    );
+    expect(result.current.entries.map((entry) => entry.kind)).toEqual([
+      "shape3d",
+      "download",
+      "transcribe",
+    ]);
+    // Una descarga deja los archivos en disco: no tiene URL de descarga y eso no
+    // puede romper la entrada de la cola.
+    expect(result.current.entries.find((entry) => entry.kind === "download")?.downloadUrl).toBeNull();
+  });
+
+  it("cancels a 3D job through its own endpoint", async () => {
+    const store = createJobQueueStore();
+    vi.mocked(printService.getShape3dJob).mockResolvedValue({
+      id: "3d-1",
+      status: "running",
+      prompt: "una maceta",
+      printer: "ender-3",
+      source: "mesh",
+      code: null,
+      retries: 0,
+      targetMm: null,
+      targetMmSource: null,
+      targetMmReference: null,
+      createdAt: "2026-01-01T00:00:00Z",
+      startedAt: null,
+      finishedAt: null,
+      canPrint: null,
+      sizeMm: null,
+      triangleCount: null,
+      blockers: [],
+      advice: [],
+      error: null,
+      downloadUrl: null,
+    });
+    vi.mocked(printService.cancelShape3dJob).mockResolvedValue({} as never);
+    store.addTrackedJob({ id: "3d-1", kind: "shape3d", fileName: "una maceta", createdAt: 1 });
+
+    const { result } = renderHook(() => useJobQueue(store, POLL_INTERVAL_MS), { wrapper: createWrapper() });
+    await waitFor(() => expect(result.current.entries).toHaveLength(1));
+
+    act(() => result.current.cancel("3d-1"));
+
+    expect(printService.cancelShape3dJob).toHaveBeenCalledWith("3d-1");
   });
 
   it("clears only completed and failed jobs, keeping active ones", async () => {

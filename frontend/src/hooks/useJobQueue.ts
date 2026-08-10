@@ -2,15 +2,19 @@ import { useQueries, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "../i18n/LocaleProvider";
 import { useSyncExternalStore } from "react";
 import { cancelJob, cancelVideoJob, getJob, getVideoJob } from "../lib/api";
-import type { AudioJob, GenerationJob, JobResponse, JobStatus, VideoJobResponse } from "../lib/apiTypes";
+import type { JobStatus } from "../lib/apiTypes";
 import { isTerminalJobStatus } from "../lib/jobStatus";
+import type { AnyQueuedJob } from "../lib/jobTypeGuards";
 import { jobQueueStore, type JobQueueStore, type TrackedJob } from "../lib/jobQueueStore";
 import { cancelAudioJob, getAudioJob } from "../services/audio";
+import { cancelDownloadJob, getDownloadJob } from "../services/download";
 import { cancelGenerationJob, getGenerationJob } from "../services/generation";
+import { cancelShape3dJob, getShape3dJob } from "../services/print";
+import { cancelTranscribeJob, getTranscribeJob } from "../services/transcribe";
 
 export const DEFAULT_QUEUE_POLL_INTERVAL_MS = 1500;
 
-export type TrackedJobResponse = JobResponse | VideoJobResponse | AudioJob | GenerationJob;
+export type TrackedJobResponse = AnyQueuedJob;
 
 export interface JobQueueEntry {
   id: string;
@@ -35,6 +39,9 @@ const QUERY_KEY_BY_KIND: Record<TrackedJob["kind"], string> = {
   video: "videoJob",
   audio: "audioJob",
   generation: "generationJob",
+  transcribe: "transcribe-job",
+  download: "download-job",
+  shape3d: "shape3dJob",
 };
 
 const CANCEL_BY_KIND: Record<TrackedJob["kind"], (id: string) => Promise<TrackedJobResponse>> = {
@@ -42,19 +49,23 @@ const CANCEL_BY_KIND: Record<TrackedJob["kind"], (id: string) => Promise<Tracked
   video: cancelVideoJob,
   audio: cancelAudioJob,
   generation: cancelGenerationJob,
+  transcribe: cancelTranscribeJob,
+  download: cancelDownloadJob,
+  shape3d: cancelShape3dJob,
+};
+
+const FETCH_BY_KIND: Record<TrackedJob["kind"], (id: string) => Promise<TrackedJobResponse>> = {
+  image: getJob,
+  video: getVideoJob,
+  audio: getAudioJob,
+  generation: getGenerationJob,
+  transcribe: getTranscribeJob,
+  download: getDownloadJob,
+  shape3d: getShape3dJob,
 };
 
 function fetchTrackedJob(tracked: TrackedJob): Promise<TrackedJobResponse> {
-  if (tracked.kind === "image") {
-    return getJob(tracked.id);
-  }
-  if (tracked.kind === "audio") {
-    return getAudioJob(tracked.id);
-  }
-  if (tracked.kind === "generation") {
-    return getGenerationJob(tracked.id);
-  }
-  return getVideoJob(tracked.id);
+  return FETCH_BY_KIND[tracked.kind](tracked.id);
 }
 
 function resolveEntryError(data: TrackedJobResponse | undefined, queryError: unknown,
@@ -69,6 +80,15 @@ function resolveEntryError(data: TrackedJobResponse | undefined, queryError: unk
   return null;
 }
 
+// Una descarga deja los archivos en disco: no tiene URL de descarga, asi que la
+// propiedad no existe en su respuesta en vez de venir en null.
+function readDownloadUrl(data: TrackedJobResponse | undefined): string | null {
+  if (!data || !("downloadUrl" in data)) {
+    return null;
+  }
+  return data.downloadUrl ?? null;
+}
+
 function toQueueEntry(
   tracked: TrackedJob,
   data: TrackedJobResponse | undefined,
@@ -81,7 +101,7 @@ function toQueueEntry(
     fileName: tracked.fileName,
     createdAt: tracked.createdAt,
     status: data?.status ?? "queued",
-    downloadUrl: data?.downloadUrl ?? null,
+    downloadUrl: readDownloadUrl(data),
     errorMessage: resolveEntryError(data, queryError, t),
     job: data,
   };

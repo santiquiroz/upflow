@@ -6,6 +6,7 @@ import { useTranslation } from "../i18n/LocaleProvider";
 import { DeterminateProgressBar } from "../components/DeterminateProgressBar";
 import { IndeterminateProgressBar } from "../components/IndeterminateProgressBar";
 import type { DownloadJob, MediaProbe } from "../lib/apiTypes";
+import { jobQueueStore } from "../lib/jobQueueStore";
 import {
   cancelDownloadJob,
   createDownloadJob,
@@ -153,7 +154,17 @@ export function DownloadPage() {
         includePlaylist,
         playlistLimit: clampPlaylistLimit(playlistLimit),
       }),
-    onSuccess: (job) => setJobId(job.id),
+    onSuccess: (job) => {
+      setJobId(job.id);
+      // La descarga es una cola mas del programa: sin esto no aparecia en la
+      // lista lateral ni tenia detalle, aunque el trabajo fuera igual de largo.
+      jobQueueStore.addTrackedJob({
+        id: job.id,
+        kind: "download",
+        fileName: job.mediaTitle ?? job.url,
+        createdAt: Date.now(),
+      });
+    },
   });
 
   const jobQuery = useQuery({

@@ -17,6 +17,10 @@ interface RawJob {
   prompt?: string;
 }
 
+// Transcripcion, descarga y 3D NO se rehidratan: su API no expone un endpoint de
+// lista (ver app/mcp/jobs.py::FAMILIES, has_list=False), asi que tras recargar
+// el navegador no hay forma de preguntar "que quedo corriendo" sin inventar
+// rutas nuevas. Se siguen en la cola durante la sesion en que se crean.
 export interface JobFetchers {
   fetchImageJobs: () => Promise<{ jobs: RawJob[] }>;
   fetchVideoJobs: () => Promise<{ jobs: RawJob[] }>;

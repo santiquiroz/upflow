@@ -4,6 +4,12 @@ interface ModalProps {
   titleId: string;
   onClose: () => void;
   children: ReactNode;
+  /**
+   * Ancho maximo. El default sirve para un dialogo de confirmacion; un detalle
+   * con dos columnas de datos necesita mas. Es una clase y no un numero para no
+   * salirse de la escala de Tailwind que usa el resto de la app.
+   */
+  widthClassName?: string;
 }
 
 const FOCUSABLE_SELECTOR =
@@ -38,7 +44,7 @@ function trapTabWithin(event: KeyboardEvent<HTMLDivElement>, dialog: HTMLElement
   }
 }
 
-export function Modal({ titleId, onClose, children }: ModalProps) {
+export function Modal({ titleId, onClose, children, widthClassName = "max-w-sm" }: ModalProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const previouslyFocusedRef = useRef<HTMLElement | null>(null);
 
@@ -68,7 +74,7 @@ export function Modal({ titleId, onClose, children }: ModalProps) {
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className="flex w-full max-w-sm flex-col gap-4 rounded border border-border bg-surface p-5"
+        className={`flex max-h-[90vh] w-full flex-col gap-4 rounded border border-border bg-surface p-5 ${widthClassName}`}
       >
         {children}
       </div>

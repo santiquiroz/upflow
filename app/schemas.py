@@ -88,6 +88,16 @@ class AudioJobResponse(BaseModel):
     restore: str | None = None
     device: str | None = None
     output_format: str = Field(default="flac", serialization_alias="outputFormat")
+    # Acabado profesional elegido (id del catalogo de mastering). Sin esto el
+    # detalle del trabajo no puede decir a que sonoridad se normalizo.
+    master: str | None = None
+    # Cadena de voz REALMENTE pedida (ids del catalogo) + su destino de entrega:
+    # son parametros que el usuario eligio y que no viajaban a ningun lado.
+    voice_steps: list[str] = Field(default_factory=list, serialization_alias="voiceSteps")
+    voice_delivery: str | None = Field(default=None, serialization_alias="voiceDelivery")
+    voice_presence_db: float | None = Field(
+        default=None, serialization_alias="voicePresenceDb"
+    )
     # Cadena de limpieza YA normalizada (orden del catalogo, sin redundancias):
     # es la cadena que realmente se va a correr, no la lista que llego.
     cleanup_steps: list[str] = Field(
@@ -100,6 +110,12 @@ class AudioJobResponse(BaseModel):
     finished_at: datetime | None = Field(default=None, serialization_alias="finishedAt")
     progress_pct: float | None = Field(default=None, serialization_alias="progressPct")
     stages: list[dict[str, Any]] | None = None
+    # Las decisiones que el pipeline tomo solo (masteringSkipped,
+    # voiceLoudnessSkipped) y lo que midio (loudnessBefore/loudnessTarget) vivian
+    # en la metadata del job y no salian por ningun lado: el aviso de
+    # "se salto la masterizacion" ya existia en la UI y nunca podia dispararse
+    # para audio. Viaja entera, igual que en image/video.
+    metadata: dict[str, Any] = Field(default_factory=dict)
     error: str | None = None
     owner_id: str | None = Field(default=None, serialization_alias="ownerId")
     download_url: str | None = Field(default=None, serialization_alias="downloadUrl")
@@ -767,6 +783,11 @@ class TranscribeJobResponse(BaseModel):
     model_id: str = Field(serialization_alias="modelId")
     language: str | None = None
     device: str | None = None
+    # Que se pidio de salida ("text" | "video" | "video_burned" | "dubbed_video")
+    # y, solo en doblaje, a que idioma. Son las dos decisiones que cambian lo que
+    # el usuario recibe y no viajaban en la respuesta.
+    output_mode: str = Field(default="text", serialization_alias="outputMode")
+    target_language: str | None = Field(default=None, serialization_alias="targetLanguage")
     created_at: datetime = Field(serialization_alias="createdAt")
     started_at: datetime | None = Field(default=None, serialization_alias="startedAt")
     finished_at: datetime | None = Field(default=None, serialization_alias="finishedAt")

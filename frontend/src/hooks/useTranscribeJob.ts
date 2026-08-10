@@ -9,6 +9,7 @@ import type {
 } from "../lib/apiTypes";
 import { isTerminalInstallStatus } from "../lib/installStatus";
 import { isTerminalJobStatus } from "../lib/jobStatus";
+import { jobQueueStore, type JobQueueStore } from "../lib/jobQueueStore";
 import {
   cancelTranscribeJob,
   createTranscribeJob,
@@ -73,9 +74,11 @@ function resolveJobError(
 
 export function useTranscribeJob(
   pollIntervalMs: number = DEFAULT_TRANSCRIBE_POLL_INTERVAL_MS,
+  queue: JobQueueStore = jobQueueStore,
 ): UseTranscribeJobResult {
   const [jobId, setJobId] = useState<string | null>(null);
   const queryClient = useQueryClient();
+  const pendingFileNameRef = useRef<string>("");
 
   const [uploadPercent, setUploadPercent] = useState<number | null>(null);
   // Mientras se sube todavia no hay jobId: cortar el envio es lo unico que
@@ -90,7 +93,15 @@ export function useTranscribeJob(
         signal: controller.signal,
       });
     },
-    onSuccess: (response) => setJobId(response.jobId),
+    onSuccess: (response) => {
+      setJobId(response.jobId);
+      queue.addTrackedJob({
+        id: response.jobId,
+        kind: "transcribe",
+        fileName: pendingFileNameRef.current,
+        createdAt: Date.now(),
+      });
+    },
   });
 
   const jobQuery = useQuery({
@@ -105,6 +116,7 @@ export function useTranscribeJob(
 
   function submit(params: CreateTranscribeJobParams): void {
     setJobId(null);
+    pendingFileNameRef.current = params.file.name;
     createMutation.mutate(params);
   }
 

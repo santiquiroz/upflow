@@ -12,6 +12,7 @@ import {
   type Shape3dJob,
 } from "../../services/print";
 import { SizeSuggestion, objectHintFromFileName } from "./SizeSuggestion";
+import { trackShape3dJob } from "./trackShape3dJob";
 
 const POLL_MS = 3000;
 const MAX_CHARS = 400;
@@ -165,6 +166,7 @@ export function MeshGenerator({
               ...sizeFields(),
             });
       setJobId(creado.id);
+      trackShape3dJob(creado, photo?.name ?? prompt.trim());
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
     }

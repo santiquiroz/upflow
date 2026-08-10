@@ -8,6 +8,7 @@ import {
   getShape3dJob,
   type Shape3dJob,
 } from "../../services/print";
+import { trackShape3dJob } from "./trackShape3dJob";
 
 const POLL_MS = 3000;
 const MAX_CHARS = 400;
@@ -60,6 +61,7 @@ export function CadGenerator({ printer }: { printer: string }) {
         expectedSize: parseSize(largo, ancho, alto),
       });
       setJobId(creado.id);
+      trackShape3dJob(creado, prompt.trim());
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
     }
