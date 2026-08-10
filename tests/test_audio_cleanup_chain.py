@@ -274,14 +274,20 @@ async def test_cleanup_combines_with_master_in_the_same_job(tmp_path: Path) -> N
     assert job.voice_steps == ["deesser"]
 
 
-async def test_a_job_with_nothing_requested_is_still_rejected(tmp_path: Path) -> None:
+async def test_a_job_with_nothing_requested_and_the_same_format_is_still_rejected(
+    tmp_path: Path,
+) -> None:
+    # Sin pasos Y con el formato de salida igual al del archivo no queda nada
+    # que hacer. Sin pasos pero con OTRO formato si: es una conversion pura, y
+    # eso lo cubre test_audio_conversion.py.
     settings = make_settings(tmp_path)
     manager = make_manager(settings)
 
-    with pytest.raises(ValueError, match="al menos un paso"):
+    with pytest.raises(ValueError, match="ya esta en WAV"):
         await manager.create_job(
             source_path=write_upload_source(settings),
             original_filename="song.wav",
+            output_format="wav",
         )
 
 

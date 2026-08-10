@@ -10,20 +10,27 @@ import { useAudioCapabilities, useAudioJob, type AudioJobPhase } from "../../hoo
 import { useVoiceCatalog } from "../../hooks/useVoiceCatalog";
 import { useTranslation } from "../../i18n/LocaleProvider";
 import { denoiseLabel, restoreLabel } from "../../lib/audioLabels";
-import type { DeviceInfoResponse, MasteringPreset } from "../../lib/apiTypes";
+import type { DeviceInfoResponse, LossyQuality, MasteringPreset } from "../../lib/apiTypes";
 import { formatDeviceSummary } from "../enhance/accordionSummaries";
 import { CleanupChainPanel, cleanupSummaryKey } from "./CleanupChainPanel";
 import { KaraokeSection } from "./KaraokeSection";
 import { VoiceChainPanel, voiceSummaryKey } from "./VoiceChainPanel";
-import { joinAsChoices, selectableSectionKeys } from "./selectionHint";
+import {
+  convertibleFileCount,
+  isLossyFormat,
+  joinAsChoices,
+  losesQualityIrreversibly,
+  selectableSectionKeys,
+} from "./selectionHint";
 import { useCleanupSelection } from "./useCleanupSelection";
 import { useVoiceSelection } from "./useVoiceSelection";
 
-type AudioOutputFormat = "flac" | "wav" | "mp3";
+type AudioOutputFormat = "flac" | "wav" | "mp3" | "m4a";
 
 const OUTPUT_FORMAT_KEYS: readonly { value: AudioOutputFormat; labelKey: string; descriptionKey: string }[] = [
   { value: "flac", labelKey: "audio.format.flac", descriptionKey: "audio.format.flac.description" },
   { value: "wav", labelKey: "audio.format.wav", descriptionKey: "audio.format.wav.description" },
+  { value: "m4a", labelKey: "audio.format.m4a", descriptionKey: "audio.format.m4a.description" },
   { value: "mp3", labelKey: "audio.format.mp3", descriptionKey: "audio.format.mp3.description" },
 ];
 
@@ -34,6 +41,22 @@ function outputFormatOptions(
     value: option.value,
     label: t(option.labelKey),
     description: t(option.descriptionKey),
+  }));
+}
+
+// El nombre del escalon lo pone el frontend y el bitrate el backend: una sola
+// fuente para los numeros, y la copia sigue siendo traducible.
+function lossyQualityOptions(
+  qualities: readonly LossyQuality[],
+  outputFormat: string,
+  t: (key: string, vars?: Record<string, string | number>) => string,
+): readonly FormatOption<string>[] {
+  return qualities.map((quality) => ({
+    value: quality.id,
+    label: t(`audio.quality.${quality.id}`),
+    description: t("audio.quality.bitrate", {
+      bitrate: quality.bitrates[outputFormat] ?? "",
+    }),
   }));
 }
 
@@ -188,6 +211,7 @@ export function AudioPanel() {
   const [denoise, setDenoise] = useState<string | null>(null);
   const [restore, setRestore] = useState<string | null>(null);
   const [outputFormat, setOutputFormat] = useState<AudioOutputFormat>("flac");
+  const [lossyQuality, setLossyQuality] = useState<string>("maximum");
   // null = el dispositivo por defecto del backend (la GPU si hay una), igual
   // que los paneles de imagen y video. Antes arrancaba fijo en CPU y mandaba
   // device="cpu" pisando ese default: un restore quedaba ~10x mas lento sin
@@ -232,6 +256,7 @@ export function AudioPanel() {
   // Siempre disponible: lo hace ffmpeg, que ya viene con la app.
   const masteringPresets = capabilitiesQuery.data?.masteringPresets ?? [];
   const separationModels = capabilitiesQuery.data?.separationModels ?? [];
+  const lossyQualities = capabilitiesQuery.data?.lossyQualities ?? [];
   // Default: el elegido, o el primer modelo instalado del catálogo.
   const effectiveSeparationModel =
     separationModel ?? separationModels.find((model) => model.installed)?.id ?? null;
@@ -260,6 +285,7 @@ export function AudioPanel() {
           denoise: null,
           restore: null,
           outputFormat,
+          lossyQuality,
           device: device?.id ?? null,
           voiceSteps: [],
           voiceDelivery: null,
@@ -273,6 +299,7 @@ export function AudioPanel() {
           denoise,
           restore,
           outputFormat,
+          lossyQuality,
           device: device?.id ?? null,
           voiceSteps: voice.enabledIds,
           voiceDelivery: voice.delivery,
@@ -294,10 +321,19 @@ export function AudioPanel() {
     master !== null ||
     cleanup.enabledIds.length > 0 ||
     voice.enabledIds.length > 0;
+  // Cambiar de formato es una entrega valida POR SI SOLA: quien tiene un FLAC y
+  // necesita un MP3 por compatibilidad no tiene ningun paso que pedir, y hasta
+  // ahora el boton lo dejaba afuera pidiendole que eligiera una seccion.
+  const convertibleFiles = convertibleFileCount(files, outputFormat);
+  const isConversionOnly = !hasSelection && convertibleFiles > 0;
+  // El unico caso que sigue sin tener nada que hacer: sin pasos y con todos los
+  // archivos ya en el formato pedido. El backend lo rechaza igual; decirlo aca
+  // evita el viaje.
+  const hasNothingToDo = !hasSelection && files.length > 0 && convertibleFiles === 0;
   const separationReady = !separate || effectiveSeparationModel !== null;
   const canSubmit =
     files.length > 0 &&
-    hasSelection &&
+    (hasSelection || isConversionOnly) &&
     separationReady &&
     (separate || !voice.needsDelivery) &&
     !isJobBusy(phase);
@@ -460,8 +496,36 @@ export function AudioPanel() {
           value={outputFormat}
           onChange={setOutputFormat}
         />
+        {/* Que se puede convertir SIN procesar nada tiene que estar escrito
+            donde se elige el formato: es la unica pista de que el boton se
+            enciende sin tocar ninguna seccion. */}
+        <p className="text-xs text-text-dim">{t("audio.convert.standaloneHint")}</p>
+        {lossyQualities.length > 0 && isLossyFormat(outputFormat) && (
+          <FormatOptionFieldset
+            legend={t("audio.section.lossyQuality")}
+            name="audio-lossy-quality"
+            options={lossyQualityOptions(lossyQualities, outputFormat, t)}
+            value={lossyQuality}
+            onChange={setLossyQuality}
+          />
+        )}
+        {losesQualityIrreversibly(files, outputFormat) && (
+          <p role="status" className="text-xs text-warn">
+            {t("audio.convert.lossyWarning", { format: outputFormat.toUpperCase() })}
+          </p>
+        )}
         <div className="flex flex-col gap-2">
-          {!hasSelection && (
+          {isConversionOnly && (
+            <p role="status" className="text-xs text-text-dim">
+              {t("audio.convert.onlyConversion", { format: outputFormat.toUpperCase() })}
+            </p>
+          )}
+          {hasNothingToDo && (
+            <p role="status" className="text-xs text-text-faint">
+              {t("audio.hint.sameFormat", { format: outputFormat.toUpperCase() })}
+            </p>
+          )}
+          {!hasSelection && !isConversionOnly && !hasNothingToDo && (
             <p role="status" className="text-xs text-text-faint">
               {t("audio.hint.pickOne", {
                 options: joinAsChoices(
@@ -482,7 +546,7 @@ export function AudioPanel() {
             className="inline-flex w-fit items-center gap-2 rounded bg-accent px-4 py-2 text-sm font-medium text-bg transition-[background-color,opacity] duration-fast hover:bg-accent-hover active:bg-accent-press disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
           >
             <AudioWaveform aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />
-            Enhance audio
+            {t(isConversionOnly ? "audio.cta.convert" : "audio.cta.enhance")}
           </button>
         </div>
       </div>

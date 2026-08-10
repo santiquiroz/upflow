@@ -382,6 +382,90 @@ describe("buildJobDetailSections", () => {
       );
     });
 
+    // Una conversion promete conservar tasa y profundidad. El detalle es donde
+    // eso se COMPRUEBA: sin estas filas, "sin tocar nada" es solo una promesa.
+    it("shows what the conversion actually produced", () => {
+      const sections = buildJobDetailSections(
+        {
+          ...AUDIO_JOB,
+          outputFormat: "mp3",
+          metadata: {
+            conversionSourceFormat: "FLAC",
+            conversionTargetFormat: "MP3",
+            conversionSampleRate: 44100,
+            conversionBitrate: "320k",
+          },
+        },
+        context(),
+      );
+
+      expect(valueOf(sections.result, "job.detail.field.conversion")).toBe("FLAC → MP3");
+      expect(valueOf(sections.result, "job.detail.field.sampleRate")).toBe("44.1 kHz");
+      expect(valueOf(sections.result, "job.detail.field.bitrate")).toBe("320k");
+    });
+
+    it("shows the resulting bit depth for a lossless conversion", () => {
+      const sections = buildJobDetailSections(
+        {
+          ...AUDIO_JOB,
+          outputFormat: "wav",
+          metadata: {
+            conversionSourceFormat: "FLAC",
+            conversionTargetFormat: "WAV",
+            conversionSampleRate: 48000,
+            conversionBitDepth: 24,
+          },
+        },
+        context({ t: (key, params) => (params ? `${key}:${params.bits}` : key) }),
+      );
+
+      expect(valueOf(sections.result, "job.detail.field.sampleRate")).toBe("48 kHz");
+      expect(valueOf(sections.result, "job.detail.field.bitDepth")).toBe(
+        "job.detail.bitDepth.value:24",
+      );
+    });
+
+    it("surfaces a forced resample instead of leaving it silent", () => {
+      const sections = buildJobDetailSections(
+        {
+          ...AUDIO_JOB,
+          outputFormat: "mp3",
+          metadata: {
+            conversionSourceFormat: "FLAC",
+            conversionTargetFormat: "MP3",
+            conversionSampleRate: 48000,
+            conversionResampled: "MP3 no admite 96000 Hz: la salida quedo a 48000 Hz.",
+          },
+        },
+        context(),
+      );
+
+      expect(valueOf(sections.result, "job.detail.field.conversionResampled")).toContain("96000");
+    });
+
+    it("does not add conversion rows to a job that only processed audio", () => {
+      const sections = buildJobDetailSections({ ...AUDIO_JOB, denoise: "rnnoise" }, context());
+
+      expect(valueOf(sections.result, "job.detail.field.conversion")).toBeUndefined();
+      expect(valueOf(sections.result, "job.detail.field.sampleRate")).toBeUndefined();
+    });
+
+    it("names the quality tier only when the format is lossy", () => {
+      const lossy = buildJobDetailSections(
+        { ...AUDIO_JOB, outputFormat: "mp3", lossyQuality: "compact" },
+        context({ t: (key) => key }),
+      );
+      const lossless = buildJobDetailSections(
+        { ...AUDIO_JOB, outputFormat: "flac", lossyQuality: "compact" },
+        context({ t: (key) => key }),
+      );
+
+      expect(valueOf(lossy.parameters, "job.detail.field.lossyQuality")).toBe(
+        "audio.quality.compact",
+      );
+      expect(valueOf(lossless.parameters, "job.detail.field.lossyQuality")).toBeUndefined();
+    });
+
     it("shows the voice chain and its delivery target", () => {
       const sections = buildJobDetailSections(
         { ...AUDIO_JOB, voiceSteps: ["deesser", "presence"], voiceDelivery: "podcast" },

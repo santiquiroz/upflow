@@ -8,6 +8,11 @@ from app.config import AUDIO_ENHANCE_MODES, AUDIO_OUTPUT_FORMATS, AUDIO_RESTORE_
 from app.models import AudioJob
 from app.services.auth.identity import AuthenticatedUser
 from app.services.auth.quotas import QuotaService
+from app.services.audio_conversion import (
+    AUDIO_LOSSY_QUALITIES,
+    DEFAULT_LOSSY_QUALITY,
+    unambiguous_source_format,
+)
 from app.services.audio_pipeline import AudioPipeline
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
@@ -56,6 +61,7 @@ class AudioJobManager(QueuedJobManager[AudioJob]):
         restore: str | None = None,
         device: str | None = None,
         output_format: str = "flac",
+        lossy_quality: str = DEFAULT_LOSSY_QUALITY,
         voice_steps: list[str] | None = None,
         voice_delivery: str | None = None,
         voice_presence_db: float | None = None,
@@ -66,6 +72,11 @@ class AudioJobManager(QueuedJobManager[AudioJob]):
         job_id: str | None = None,
         owner: AuthenticatedUser | None = None,
     ) -> AudioJob:
+        # El formato se valida PRIMERO: sin pasos pedidos, el resto de la
+        # validacion razona sobre el (un job de pura conversion), y un formato
+        # inexistente ahi daria un mensaje sobre pasos en vez de sobre formatos.
+        self._validate_output_format(output_format)
+        self._validate_lossy_quality(lossy_quality)
         if separate:
             separation_model = self._validate_separation(
                 separation_model,
@@ -92,8 +103,9 @@ class AudioJobManager(QueuedJobManager[AudioJob]):
                 denoise,
                 restore,
                 has_other_work=bool(selected_cleanup_steps or selected_voice_steps or master),
+                original_filename=original_filename,
+                output_format=output_format,
             )
-        self._validate_output_format(output_format)
         await self._validate_device(device)
 
         if owner is not None and self.quota_service is not None:
@@ -106,6 +118,7 @@ class AudioJobManager(QueuedJobManager[AudioJob]):
             restore=restore,
             device=device,
             output_format=output_format,
+            lossy_quality=lossy_quality,
             voice_steps=selected_voice_steps,
             voice_delivery=voice_delivery,
             voice_presence_db=voice_presence_db,
@@ -196,16 +209,20 @@ class AudioJobManager(QueuedJobManager[AudioJob]):
         return [step.model_id for step in steps]
 
     def _validate_modes(
-        self, denoise: str | None, restore: str | None, *, has_other_work: bool = False
+        self,
+        denoise: str | None,
+        restore: str | None,
+        *,
+        has_other_work: bool = False,
+        original_filename: str,
+        output_format: str,
     ) -> None:
         # Un job de limpieza, de voz o de mastering solo es una entrega valida:
         # el pedido es que el archivo pase por ALGO, no que pase por denoise o
-        # restore en particular.
+        # restore en particular. Y un job SIN ningun paso tambien lo es, si lo
+        # que se pide es cambiar de formato.
         if denoise is None and restore is None and not has_other_work:
-            raise ValueError(
-                "Pedi al menos un paso: limpieza, reduccion de ruido, "
-                "restauracion, mejora de voz o acabado."
-            )
+            self._validate_conversion_only(original_filename, output_format)
         if denoise is not None:
             self._validate_denoise(denoise)
         if restore is not None:
@@ -252,9 +269,35 @@ class AudioJobManager(QueuedJobManager[AudioJob]):
             )
         return list(selected)
 
+    def _validate_conversion_only(self, original_filename: str, output_format: str) -> None:
+        """Sin pasos, lo unico que queda es convertir — y solo si hay a que.
+
+        Se rechaza en vez de copiar el archivo: copiarlo ocuparia una plaza de
+        la cola y una descarga para devolver el mismo archivo, y quien lo pidio
+        creeria que algo paso. Un 400 con el motivo se entiende de una.
+
+        La comparacion va contra la EXTENSION y no contra un ffprobe porque solo
+        necesita responder "esto ya es lo que pediste", y las extensiones que
+        consulta (wav/flac/mp3) determinan el codec sin ambiguedad. `.m4a` queda
+        afuera a proposito: puede traer ALAC, y ALAC -> AAC es una conversion de
+        verdad (el pipeline la resuelve copiando el stream si resulta que el
+        origen ya era AAC).
+        """
+        if unambiguous_source_format(original_filename) == output_format:
+            raise ValueError(
+                f"El archivo ya esta en {output_format.upper()} y no se pidio "
+                "ningun paso de procesamiento: no hay nada que hacer. Elegi otro "
+                "formato de salida, o agrega limpieza, reduccion de ruido, "
+                "restauracion, mejora de voz o acabado."
+            )
+
     def _validate_output_format(self, output_format: str) -> None:
         if output_format not in AUDIO_OUTPUT_FORMATS:
             raise ValueError(f"output_format must be one of {sorted(AUDIO_OUTPUT_FORMATS)}")
+
+    def _validate_lossy_quality(self, lossy_quality: str) -> None:
+        if lossy_quality not in AUDIO_LOSSY_QUALITIES:
+            raise ValueError(f"lossy_quality must be one of {sorted(AUDIO_LOSSY_QUALITIES)}")
 
     async def _validate_device(self, device: str | None) -> None:
         if device is None:

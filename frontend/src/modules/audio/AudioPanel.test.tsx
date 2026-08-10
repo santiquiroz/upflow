@@ -104,6 +104,14 @@ const FULL_CAPABILITIES: AudioCapabilities = {
     },
   ],
   cleanupOverprocessingThreshold: 3,
+  outputFormats: ["flac", "m4a", "mp3", "wav"],
+  lossyFormats: ["m4a", "mp3"],
+  lossyQualities: [
+    { id: "maximum", bitrates: { mp3: "320k", m4a: "256k" } },
+    { id: "balanced", bitrates: { mp3: "192k", m4a: "192k" } },
+    { id: "compact", bitrates: { mp3: "128k", m4a: "128k" } },
+  ],
+  defaultLossyQuality: "maximum",
   cleanupSteps: [
     {
       id: "denoise",
@@ -233,6 +241,17 @@ function selectFile() {
   fireEvent.change(fileInput, { target: { files: [makeFile()] } });
 }
 
+// Un archivo que YA esta en el formato de salida por defecto (FLAC): sin
+// conversion posible, el envio vuelve a depender de que se elija un paso. Es la
+// unica forma de probar la puerta del CTA ahora que convertir es una entrega
+// valida por si sola.
+function selectFileAlreadyInOutputFormat() {
+  const fileInput = document.getElementById("audio-file-input") as HTMLInputElement;
+  fireEvent.change(fileInput, {
+    target: { files: [new File(["binary"], "voice.flac", { type: "audio/flac" })] },
+  });
+}
+
 afterEach(() => {
   vi.mocked(api.getDevices).mockReset();
   vi.mocked(audioService.fetchAudioCapabilities).mockReset();
@@ -250,14 +269,14 @@ describe("AudioPanel", () => {
     expect(screen.getByRole("button", { name: "None" })).toBeInTheDocument();
   });
 
-  it("keeps the Enhance CTA disabled until at least one mode is chosen", async () => {
+  it("keeps the CTA disabled until a step is chosen when there is nothing to convert", async () => {
     renderPanel({ denoiseModes: ["deepfilter"], restoreAvailable: false, restoreModes: [] });
     const denoiseButton = await screen.findByRole("button", { name: "DeepFilterNet" });
 
-    selectFile();
+    selectFileAlreadyInOutputFormat();
     const submitButton = screen.getByRole("button", { name: /enhance audio/i });
     expect(submitButton).toBeDisabled();
-    expect(screen.getByRole("status")).toHaveTextContent(/at least one/i);
+    expect(screen.getByRole("status")).toHaveTextContent(/nothing to do/i);
 
     fireEvent.click(denoiseButton);
 
@@ -274,14 +293,12 @@ describe("AudioPanel", () => {
     // no hay secciones opcionales: esperar a que la seccion exista es esperar al
     // estado que el mensaje tiene que describir.
     await screen.findByRole("button", { name: /^Mastering/ });
-    selectFile();
 
     expect(screen.getByText(/at least one/i)).toHaveTextContent(/mastering/i);
   });
 
   it("does not name Restore when there are no restore models installed", async () => {
     renderPanel({ denoiseModes: ["deepfilter"], restoreAvailable: false, restoreModes: [] });
-    selectFile();
 
     const hint = await screen.findByText(/at least one/i);
 
@@ -383,7 +400,10 @@ describe("AudioPanel", () => {
 
     expect(await screen.findByRole("radio", { name: /flac/i })).toBeChecked();
     expect(screen.getByText(/lossless.*50%|50%.*lighter|smaller/i)).toBeInTheDocument();
-    expect(screen.getByText(/only if.*size/i)).toBeInTheDocument();
+    expect(screen.getByText(/plays everywhere/i)).toBeInTheDocument();
+    // M4A esta por compatibilidad: es el formato que pide el caso de uso real
+    // (pasar un archivo al telefono), asi que tiene que estar en la lista.
+    expect(screen.getByRole("radio", { name: /m4a/i })).toBeInTheDocument();
   });
 
   it("submits the selected output format", async () => {
@@ -432,7 +452,7 @@ describe("AudioPanel", () => {
       jobId: "aud-v", status: "queued", statusUrl: "/x", downloadUrl: null,
     });
     renderPanel();
-    selectFile();
+    selectFileAlreadyInOutputFormat();
 
     const submitButton = screen.getByRole("button", { name: /enhance audio/i });
     expect(submitButton).toBeDisabled();
@@ -544,7 +564,7 @@ describe("AudioPanel cadena de limpieza", () => {
       jobId: "aud-c2", status: "queued", statusUrl: "/x", downloadUrl: null,
     });
     renderPanel();
-    selectFile();
+    selectFileAlreadyInOutputFormat();
 
     const submitButton = screen.getByRole("button", { name: /enhance audio/i });
     expect(submitButton).toBeDisabled();
@@ -962,5 +982,140 @@ describe("AudioPanel en lote", () => {
       .mock.calls.map((call) => call[0]);
     expect(enviados.map((p) => p.file.name)).toEqual(["uno.wav", "dos.wav"]);
     expect(enviados[1].denoise).toBe(enviados[0].denoise);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Conversion de formato sin procesar nada. El caso real: alguien con un FLAC
+// que necesita un MP3 por compatibilidad no tiene ningun paso que pedir, y
+// hasta ahora el boton lo dejaba afuera pidiendole que eligiera una seccion.
+// ---------------------------------------------------------------------------
+
+describe("AudioPanel conversion de formato", () => {
+  function selectFlacFile() {
+    const fileInput = document.getElementById("audio-file-input") as HTMLInputElement;
+    fireEvent.change(fileInput, {
+      target: { files: [new File(["b"], "song.flac", { type: "audio/flac" })] },
+    });
+  }
+
+  function pickFormat(label: RegExp) {
+    fireEvent.click(screen.getByRole("radio", { name: label }));
+  }
+
+  it("says up front that converting works without picking any step", async () => {
+    renderPanel();
+
+    expect(
+      await screen.findByText(/conversion works on its own|converted in a single pass/i),
+    ).toBeInTheDocument();
+  });
+
+  it("enables the CTA with only a file and a different output format", async () => {
+    renderPanel();
+    await screen.findByRole("radio", { name: /flac/i });
+
+    selectFlacFile();
+    pickFormat(/mp3/i);
+
+    const submitButton = screen.getByRole("button", { name: /convert/i });
+    await waitFor(() => expect(submitButton).not.toBeDisabled());
+  });
+
+  it("renames the CTA to Convert while no step is selected", async () => {
+    renderPanel();
+    await screen.findByRole("radio", { name: /flac/i });
+
+    selectFlacFile();
+    pickFormat(/mp3/i);
+
+    expect(screen.getByRole("button", { name: /^convert$/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /enhance audio/i })).not.toBeInTheDocument();
+  });
+
+  it("goes back to the enhance CTA as soon as a step is picked", async () => {
+    renderPanel();
+    selectFlacFile();
+    pickFormat(/mp3/i);
+
+    fireEvent.click(await screen.findByRole("button", { name: "DeepFilterNet" }));
+
+    expect(await screen.findByRole("button", { name: /enhance audio/i })).toBeInTheDocument();
+  });
+
+  it("warns that lossless to lossy cannot be undone, without blocking it", async () => {
+    renderPanel();
+    await screen.findByRole("radio", { name: /flac/i });
+
+    selectFlacFile();
+    pickFormat(/mp3/i);
+
+    expect(screen.getByText(/cannot be recovered|discards audio data/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /convert/i })).not.toBeDisabled();
+  });
+
+  it("does not warn when the target keeps the audio lossless", async () => {
+    renderPanel();
+    await screen.findByRole("radio", { name: /flac/i });
+
+    selectFlacFile();
+    pickFormat(/wav/i);
+
+    expect(screen.queryByText(/cannot be recovered|discards audio data/i)).not.toBeInTheDocument();
+  });
+
+  it("offers the quality tiers only for lossy targets", async () => {
+    renderPanel();
+    await screen.findByRole("radio", { name: /flac/i });
+
+    expect(screen.queryByRole("radio", { name: /maximum/i })).not.toBeInTheDocument();
+
+    pickFormat(/mp3/i);
+
+    expect(await screen.findByRole("radio", { name: /maximum/i })).toBeChecked();
+    expect(screen.getByText(/320kbps/i)).toBeInTheDocument();
+  });
+
+  it("shows the bitrate of the format actually selected", async () => {
+    renderPanel();
+    await screen.findByRole("radio", { name: /flac/i });
+
+    pickFormat(/m4a/i);
+
+    // 256k es el bitrate de AAC en el escalon maximo; 320k es el de MP3.
+    expect(await screen.findByText(/256kbps/i)).toBeInTheDocument();
+    expect(screen.queryByText(/320kbps/i)).not.toBeInTheDocument();
+  });
+
+  it("submits a conversion-only job with no processing step and the chosen quality", async () => {
+    vi.mocked(audioService.createAudioJob).mockResolvedValue({
+      jobId: "aud-conv", status: "queued", statusUrl: "/x", downloadUrl: null,
+    });
+    renderPanel();
+    await screen.findByRole("radio", { name: /flac/i });
+    selectFlacFile();
+    pickFormat(/mp3/i);
+    fireEvent.click(await screen.findByRole("radio", { name: /compact/i }));
+
+    fireEvent.click(screen.getByRole("button", { name: /convert/i }));
+
+    await waitFor(() => expect(audioService.createAudioJob).toHaveBeenCalled());
+    const sent = vi.mocked(audioService.createAudioJob).mock.calls[0][0];
+    expect(sent.outputFormat).toBe("mp3");
+    expect(sent.lossyQuality).toBe("compact");
+    expect(sent.denoise).toBeNull();
+    expect(sent.restore).toBeNull();
+    expect(sent.master).toBeNull();
+    expect(sent.cleanupSteps).toEqual([]);
+  });
+
+  it("explains that a file already in the output format has nothing to do", async () => {
+    renderPanel();
+    await screen.findByRole("radio", { name: /flac/i });
+
+    selectFlacFile();
+
+    expect(screen.getByText(/nothing to do/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /enhance audio/i })).toBeDisabled();
   });
 });

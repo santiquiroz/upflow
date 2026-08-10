@@ -51,7 +51,12 @@ AUDIO_RESTORE_MODES = frozenset({APOLLO_MODE, AUDIOSR_MODE})
 
 # Standalone-module output format selector (Fase C Task 9). "flac" is the
 # default (lossless, ~50% smaller than wav); see AudioPipeline._write_output.
-AUDIO_OUTPUT_FORMATS = frozenset({"wav", "flac", "mp3"})
+# "m4a" (AAC en contenedor MP4) esta por COMPATIBILIDAD: es lo que reproduce
+# cualquier telefono y todo el ecosistema Apple sin instalar nada. Ogg/Opus
+# siguen aceptandose de ENTRADA pero no se ofrecen de salida: Vorbis pierde
+# contra Opus en calidad y contra MP3/AAC en compatibilidad, y Opus gana en
+# eficiencia pero pierde justo en el eje por el que existe esta seleccion.
+AUDIO_OUTPUT_FORMATS = frozenset({"wav", "flac", "mp3", "m4a"})
 
 # Frame-interpolation engine selector (Task 4.2). `rife` is ALWAYS the
 # default -- GMFSS (much higher quality, 10x or more slower -- see
@@ -747,15 +752,55 @@ class Settings(BaseSettings):
         """Modelo de voz (Kokoro, Apache 2.0). Se baja aparte."""
         return Path(self.runtime_dir).parent / "vendor" / "kokoro"
 
+    # Los ARCHIVOS y no la carpeta: el script la crea antes de bajar nada, asi
+    # que hasta una descarga fallida dejaba la tarjeta diciendo "disponible".
+    # Son los dos que KokoroTtsEngine.available() exige.
+    @property
+    def kokoro_model_file(self) -> Path:
+        return self.kokoro_model_path / "model.onnx"
+
+    @property
+    def kokoro_tokenizer_file(self) -> Path:
+        return self.kokoro_model_path / "tokenizer.json"
+
+    @property
+    def vendor_dir(self) -> Path:
+        return Path(self.runtime_dir).parent / "vendor"
+
+    # La conversion de voz necesita TRES piezas, no una. Declararlas por separado
+    # es lo que evita que la tarjeta diga "disponible" con el pack a medias:
+    # hasta la v0.60.0 solo se miraba speecht5-vc y faltando el x-vector la app
+    # prometia algo que el motor rechazaba.
     @property
     def voice_conversion_model_path(self) -> Path:
-        """SpeechT5 para conversion de voz. Se baja aparte."""
-        return Path(self.runtime_dir).parent / "vendor" / "speecht5-vc"
+        """SpeechT5 VC (MIT). Se baja aparte."""
+        return self.vendor_dir / "speecht5-vc"
+
+    @property
+    def voice_conversion_vocoder_path(self) -> Path:
+        """El vocoder HiFi-GAN de SpeechT5 (MIT), que convierte el mel en audio."""
+        return self.vendor_dir / "speecht5-hifigan"
+
+    @property
+    def voice_conversion_xvector_path(self) -> Path:
+        """Encoder de x-vector (Apache-2.0, santiquiroz/port-xvector-onnx).
+
+        El ARCHIVO y no la carpeta: una descarga cortada deja el directorio
+        existiendo y sin el la conversion sale en NaN.
+        """
+        return self.vendor_dir / "xvector" / "tdnn.onnx"
 
     @property
     def shape3d_model_path(self) -> Path:
         """Shap-E (MIT). Se baja aparte con scripts/download-shap-e.ps1."""
         return Path(self.runtime_dir).parent / "vendor" / "shap-e"
+
+    @property
+    def shape3d_model_index(self) -> Path:
+        # Mismo criterio que la variante img2img: el indice y no la carpeta. Es
+        # lo que Shape3dEngine.available() carga, y una descarga a medias deja
+        # la carpeta existiendo.
+        return self.shape3d_model_path / "model_index.json"
 
     @property
     def shape3d_img2img_model_path(self) -> Path:
@@ -791,6 +836,13 @@ class Settings(BaseSettings):
     @property
     def rife_models_path(self) -> Path:
         return resolve_against_project_root(self.rife_models_dir)
+
+    @property
+    def rife_default_model_path(self) -> Path:
+        """La carpeta del modelo configurado, que es lo que interpolation_available()
+        exige ademas del binario. Sin declararla, la tarjeta prometia interpolar
+        con un install a medias y el job manager rechazaba el trabajo."""
+        return self.rife_models_path / self.rife_model
 
     @property
     def allowed_fps_multiplier_values(self) -> list[int]:
@@ -908,6 +960,16 @@ class Settings(BaseSettings):
     @property
     def sdcpp_models_dir_path(self) -> Path:
         return resolve_against_project_root(self.sdcpp_models_dir)
+
+    @property
+    def sdcpp_video_models_dir_path(self) -> Path:
+        """Donde download-wan-video.ps1 deja los pesos de video.
+
+        Es OTRO pack que el binario: `wan-video` baja los pesos y `sdcpp` baja
+        sd-cli.exe. La capacidad pedia solo el binario contra el pack de pesos,
+        asi que bajar el pack de la tarjeta nunca la ponia en verde.
+        """
+        return self.sdcpp_models_dir_path / "video"
 
     @property
     def sdcpp_model_path(self) -> Path | None:

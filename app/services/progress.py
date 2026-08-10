@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass, replace
 from typing import Any, Literal, Protocol
 
 from app.models import AudioJob, UpscaleJob, VideoUpscaleJob, utc_now
+from app.services.audio_conversion import is_conversion_only
 from app.services.media_tools import parse_fps_fraction
 from app.services.voice_chain import effective_voice_steps
 
@@ -39,6 +40,11 @@ IMAGE_STAGE_WEIGHTS: dict[str, tuple[str, float]] = {
 IMAGE_STAGE_ORDER: tuple[str, ...] = ("validating", "upscaling")
 
 AUDIO_STAGE_WEIGHTS: dict[str, tuple[str, float]] = {
+    # Etapa propia y unica de la conversion directa. No reusa
+    # "decoding" + "finalizing" porque ahi no hay decode a WAV ni un archivo
+    # intermedio que finalizar: es UNA pasada de ffmpeg, y nombrarla con las
+    # otras dos describiria un trabajo que no ocurre.
+    "converting": ("Converting format", 100),
     "decoding": ("Decoding audio", 10),
     "separating": ("Separating stems", 80),
     "denoising": ("Denoising", 40),
@@ -60,8 +66,8 @@ AUDIO_CLEANUP_STAGE_SLOT = "cleanup"
 AUDIO_CLEANUP_TOTAL_WEIGHT = 80.0
 
 AUDIO_STAGE_ORDER: tuple[str, ...] = (
-    "decoding", "separating", AUDIO_CLEANUP_STAGE_SLOT, "denoising", "restoring",
-    "voicing", "mastering", "finalizing",
+    "converting", "decoding", "separating", AUDIO_CLEANUP_STAGE_SLOT, "denoising",
+    "restoring", "voicing", "mastering", "finalizing",
 )
 
 
@@ -133,6 +139,13 @@ def build_image_stages() -> list[Stage]:
 
 
 def _audio_stage_active(job: AudioJob, key: str) -> bool:
+    # La conversion directa es UNA etapa y ninguna otra: no decodifica a WAV ni
+    # escribe un intermedio, asi que pintar "decoding"/"finalizing" mostraria
+    # pasos que no existen en ese camino.
+    if is_conversion_only(job):
+        return key == "converting"
+    if key == "converting":
+        return False
     if key == "separating":
         return job.separate
     if job.separate:

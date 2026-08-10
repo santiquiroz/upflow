@@ -417,6 +417,7 @@ async def upflow_process_audio(
     voice_delivery: str = "",
     voice_presence_db: float = 0.0,
     output_format: str = "flac",
+    lossy_quality: str = "maximum",
     device: str = "",
     cleanup_steps: str = "",
     separate: bool = False,
@@ -424,8 +425,20 @@ async def upflow_process_audio(
 ) -> str:
     """Crea un job de procesamiento de audio: limpieza (quitar ruido/eco/reverb
     de música), denoise, restauración (Apollo/AudioSR), cadena de voz,
-    mastering, o separación voz/instrumental (karaoke). Devuelve jobId (seguir
-    con upflow_wait_job, descargar con upflow_download_result).
+    mastering, separación voz/instrumental (karaoke), o SOLO conversión de
+    formato. Devuelve jobId (seguir con upflow_wait_job, descargar con
+    upflow_download_result).
+
+    CONVERSIÓN PURA: sin ningún paso (sin denoise/restore/master/voice_steps/
+    cleanup_steps/separate), con output_format distinto al del archivo, el job
+    es válido y hace UNA sola pasada de ffmpeg del original al formato destino.
+    No pasa por el decode a 48 kHz / 16 bits que necesitan los motores: un FLAC
+    de 44.1 kHz y 24 bits convertido a WAV sale a 44.1 kHz y 24 bits. A un
+    destino con pérdida se conserva la tasa si el codec la admite; si no (96 kHz
+    a MP3), se resamplea a la más cercana soportada y queda dicho en
+    metadata.conversionResampled — nunca en silencio. Lo mismo con un downmix
+    forzado (metadata.conversionDownmixed). Pedir el MISMO formato que el
+    origen sin ningún paso devuelve 400: no hay nada que hacer.
 
     cleanup_steps: CSV de ids de la CADENA DE LIMPIEZA (upflow_capabilities(audio)
     → cleanupSteps). Encadena una pasada por id sobre CUALQUIER audio y devuelve
@@ -453,11 +466,18 @@ async def upflow_process_audio(
     sacó una pasada, porque devuelve los dos stems.
     Modos válidos: upflow_capabilities(audio) y upflow_capabilities(voice_catalog).
     voice_steps: CSV de pasos de la cadena de voz en orden.
-    output_format: wav | flac | mp3.
+    output_format: wav | flac | mp3 | m4a. Los dos primeros son sin pérdida
+    (conservan tasa y profundidad del origen); m4a es AAC en contenedor MP4, el
+    más compatible con teléfonos y con el ecosistema Apple.
+    lossy_quality: maximum (MP3 320k / AAC 256k, default) | balanced (192k) |
+    compact (128k). Solo aplica a mp3 y m4a; en wav/flac se ignora.
     """
     try:
         name, content = client.read_upload(file_path)
-        data: dict[str, Any] = {"output_format": output_format}
+        data: dict[str, Any] = {
+            "output_format": output_format,
+            "lossy_quality": lossy_quality,
+        }
         if separate:
             data["separate"] = "true"
         if separation_model:

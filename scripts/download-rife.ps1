@@ -81,6 +81,17 @@ finally {
     }
 }
 
+# Verificacion final: el pack se da por instalado SOLO con el binario Y la
+# carpeta del modelo por defecto, que es lo que interpolation_available() exige.
+# El copiado de modelos toma lo que traiga el archivo: si el fork renombra la
+# carpeta, salir en 0 dejaria la tarjeta en verde y el job rechazado despues.
+$missing = @()
+if (-not (Test-Path $binaryPath)) { $missing += 'rife-ncnn-vulkan.exe' }
+if (-not (Test-Path $defaultModelDir)) { $missing += 'models\rife-v4.25' }
+if ($missing.Count -gt 0) {
+    throw "La instalacion de RIFE quedo incompleta; falta: $($missing -join ', ')."
+}
+
 Write-Host 'RIFE NCNN Vulkan downloaded to:' $vendorDir
 Write-Host 'Binary:' $binaryPath
 Write-Host 'Models:' $modelsDir

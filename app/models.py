@@ -151,9 +151,12 @@ class AudioJob:
     separation_model: str | None = None
     # Standalone-module output format (Fase C Task 9): "wav" (lossless, no
     # re-encode -- current is already PCM from decode/denoise/restore),
-    # "flac" (lossless, ~50% smaller, default), "mp3" (lossy, smallest). See
+    # "flac" (lossless, ~50% smaller, default), "mp3" / "m4a" (con perdida). See
     # AudioPipeline._write_output.
     output_format: str = "flac"
+    # Calidad de los destinos con perdida (mp3/m4a): tres escalones con nombre,
+    # no un bitrate libre. Se ignora en destinos sin perdida.
+    lossy_quality: str = "maximum"
     device: str | None = None
     id: str = field(default_factory=lambda: uuid4().hex)
     status: JobStatus = JobStatus.queued

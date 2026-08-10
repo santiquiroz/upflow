@@ -259,6 +259,43 @@ async def test_process_audio_redundant_cleanup_propagates_the_api_400(
     assert "redundantes" in result
 
 
+async def test_process_audio_can_be_a_pure_format_conversion(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Sin ningun paso: el form solo lleva formato y calidad, y la API lo acepta.
+    source = tmp_path / "cancion.flac"
+    source.write_bytes(b"flac-bytes")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = request.read()
+        assert b'name="output_format"' in body and b"m4a" in body
+        assert b'name="lossy_quality"' in body and b"balanced" in body
+        assert b'name="denoise"' not in body
+        assert b'name="master"' not in body
+        return httpx.Response(202, json={"jobId": "a9", "status": "queued"})
+
+    install_mock(monkeypatch, handler)
+    from app.mcp.server import upflow_process_audio
+
+    result = json.loads(
+        await upflow_process_audio(str(source), output_format="m4a", lossy_quality="balanced")
+    )
+    assert result["jobId"] == "a9"
+
+
+async def test_process_audio_docstring_documents_the_conversion_contract() -> None:
+    # La docstring ES el contrato para un agente: sin decir que la conversion
+    # pura existe y que un resample forzado queda en metadata, un agente asume
+    # que hace falta un paso y que la tasa siempre se conserva.
+    from app.mcp.server import upflow_process_audio
+
+    doc = upflow_process_audio.__doc__ or ""
+    assert "CONVERSIÓN PURA" in doc
+    assert "conversionResampled" in doc
+    assert "m4a" in doc
+    assert "lossy_quality" in doc
+
+
 async def test_process_audio_cleanup_docstring_states_the_fixed_order() -> None:
     # La docstring ES el contrato para un agente: si no dice que el orden es
     # fijo y que hay exclusividad, el agente va a intentar imponer los suyos.

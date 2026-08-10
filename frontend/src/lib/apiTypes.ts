@@ -160,8 +160,10 @@ export interface AudioJob {
   error: string | null;
   ownerId: string | null;
   downloadUrl: string | null;
-  /** Formato del archivo entregado ("wav" | "flac" | "mp3"). */
+  /** Formato del archivo entregado ("wav" | "flac" | "mp3" | "m4a"). */
   outputFormat?: string;
+  /** Escalón de calidad usado en destinos con pérdida ("maximum" | "balanced" | "compact"). */
+  lossyQuality?: string;
   /** Acabado profesional elegido (id del catálogo de mastering). */
   master?: string | null;
   /** Cadena de voz pedida, su destino de entrega y el realce de presencia. */
@@ -265,6 +267,22 @@ export interface AudioCapabilities {
   cleanupSteps?: CleanupStep[];
   /** Desde cuántas pasadas avisar que el resultado puede sonar procesado. */
   cleanupOverprocessingThreshold?: number;
+  /** Formatos de salida válidos y cuáles de ellos tienen pérdida. */
+  outputFormats?: string[];
+  lossyFormats?: string[];
+  /**
+   * Escalones de calidad para destinos con pérdida, en orden descendente. Los
+   * bitrates son del backend; el nombre de cada escalón lo pone el frontend.
+   */
+  lossyQualities?: LossyQuality[];
+  defaultLossyQuality?: string;
+}
+
+// Mirrors app/schemas.py::LossyQualityResponse.
+export interface LossyQuality {
+  id: string;
+  /** Bitrate por formato de salida, p. ej. { mp3: "320k", m4a: "256k" }. */
+  bitrates: Record<string, string>;
 }
 
 // Mirrors app/schemas.py::VoiceStepResponse. La copia viaja como clave de

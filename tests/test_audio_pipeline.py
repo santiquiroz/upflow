@@ -123,7 +123,10 @@ async def test_output_format_mp3_produces_mp3_extension_and_codec(tmp_path: Path
 
     assert output_path.suffix == ".mp3"
     encode_command = pipeline.commands[-1]
-    assert encode_command[-5:-1] == ["-c:a", "libmp3lame", "-b:a", "192k"]
+    # 320k y no el 192k fijo de antes: el bitrate ahora sale del escalon de
+    # calidad del job, cuyo default ("maximum") entrega MAS que el numero fijo
+    # anterior. Los otros escalones se cubren en test_audio_conversion.py.
+    assert encode_command[-5:-1] == ["-c:a", "libmp3lame", "-b:a", "320k"]
 
 
 async def test_default_output_format_is_flac_end_to_end(tmp_path: Path) -> None:

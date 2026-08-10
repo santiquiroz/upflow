@@ -70,6 +70,19 @@ class TestEncoder:
     def test_reports_unavailable_without_the_exported_model(self, tmp_path: Path) -> None:
         assert XvectorEncoder(tmp_path / "no-esta.onnx").available() is False
 
-    def test_says_how_to_get_the_model_when_it_is_missing(self, tmp_path: Path) -> None:
-        with pytest.raises(XvectorUnavailable, match="export_xvector_onnx"):
+    def test_says_which_pack_is_missing_without_dictating_commands(
+        self, tmp_path: Path
+    ) -> None:
+        # Antes mandaba a generar el encoder a mano con scripts/export_xvector_onnx.py,
+        # en un venv con torch+speechbrain. Ahora viene en el pack de conversion
+        # de voz y la app lo baja sola: el mensaje tiene que nombrar el paquete
+        # para que la pantalla pueda ofrecer el boton.
+        from app.services.missing_pack import PACK_LABELS
+
+        with pytest.raises(XvectorUnavailable) as error:
             XvectorEncoder(tmp_path / "no-esta.onnx").encode(tono())
+
+        mensaje = str(error.value)
+        assert PACK_LABELS["voice-conversion"] in mensaje
+        assert "export_xvector_onnx" not in mensaje
+        assert ".ps1" not in mensaje

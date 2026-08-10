@@ -12,6 +12,8 @@ export interface CreateAudioJobParams {
   denoise: string | null;
   restore: string | null;
   outputFormat: string;
+  /** Escalón de calidad para mp3/m4a. Ausente = el default del backend. */
+  lossyQuality?: string | null;
   device: string | null;
   voiceSteps?: string[];
   voiceDelivery?: string | null;
@@ -31,6 +33,9 @@ function buildAudioJobFormData(params: CreateAudioJobParams): FormData {
   const formData = new FormData();
   formData.append("file", params.file);
   formData.append("output_format", params.outputFormat);
+  if (params.lossyQuality) {
+    formData.append("lossy_quality", params.lossyQuality);
+  }
   if (params.denoise) {
     formData.append("denoise", params.denoise);
   }

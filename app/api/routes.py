@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse
 from app.api.auth_deps import current_user_from_request, get_current_user, require
 from app.config import (
     AUDIO_ENHANCE_MODES,
+    AUDIO_OUTPUT_FORMATS,
     AUDIO_RESTORE_MODES,
     INTERP_ENGINES,
     RIFE_ENGINE,
@@ -64,6 +65,7 @@ from app.schemas import (
     GenerationJobResponse,
     GenerationJobsListResponse,
     GenerationModelSummary,
+    LossyQualityResponse,
     MasteringPresetResponse,
     SeparationModelResponse,
     SeparationStemResponse,
@@ -122,6 +124,11 @@ from app.schemas import (
     VoiceCatalogResponse,
 )
 from app.services.asr_installer import AsrModelInstaller
+from app.services.audio_conversion import (
+    DEFAULT_LOSSY_QUALITY,
+    LOSSY_OUTPUT_FORMATS,
+    LOSSY_QUALITY_BITRATES,
+)
 from app.services.audio_job_manager import AudioJobManager
 from app.services.auth.identity import AuthenticatedUser
 from app.services.auth.permissions import Permission
@@ -523,6 +530,7 @@ def audio_job_to_response(job: AudioJob) -> AudioJobResponse:
         restore=job.restore,
         device=job.device,
         output_format=job.output_format,
+        lossy_quality=job.lossy_quality,
         master=job.master,
         voice_steps=list(job.voice_steps),
         voice_delivery=job.voice_delivery,
@@ -1089,6 +1097,8 @@ async def create_audio_job(
     restore: str | None = Form(default=None),
     device: str | None = Form(default=None),
     output_format: str = Form(default="flac"),
+    # Calidad de los destinos con perdida (mp3/m4a). Se ignora en wav/flac.
+    lossy_quality: str = Form(default=DEFAULT_LOSSY_QUALITY),
     voice_steps: str | None = Form(default=None),
     voice_delivery: str | None = Form(default=None),
     master: str | None = Form(default=None),
@@ -1118,6 +1128,13 @@ async def create_audio_job(
             restore=restore,
             device=device,
             output_format=output_format,
+            # isinstance y no truthiness: llamada directa (tests) => el default
+            # es el FieldInfo de Form(), que es truthy pero no es un str.
+            lossy_quality=(
+                lossy_quality
+                if isinstance(lossy_quality, str) and lossy_quality
+                else DEFAULT_LOSSY_QUALITY
+            ),
             voice_steps=_parse_chain_steps(voice_steps),
             voice_delivery=voice_delivery if isinstance(voice_delivery, str) else None,
             master=master if isinstance(master, str) and master else None,
@@ -1702,6 +1719,14 @@ async def audio_capabilities(settings: Settings = Depends(get_settings)) -> Audi
         denoise_modes=denoise_modes,
         restore_available=bool(restore_modes),
         restore_modes=restore_modes,
+        output_formats=sorted(AUDIO_OUTPUT_FORMATS),
+        lossy_formats=sorted(LOSSY_OUTPUT_FORMATS),
+        # En orden de calidad DESCENDENTE: el orden del catalogo, no alfabetico.
+        lossy_qualities=[
+            LossyQualityResponse(id=quality, bitrates=bitrates)
+            for quality, bitrates in LOSSY_QUALITY_BITRATES.items()
+        ],
+        default_lossy_quality=DEFAULT_LOSSY_QUALITY,
         mastering_presets=[
             MasteringPresetResponse(
                 id=p.id,

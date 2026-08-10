@@ -28,13 +28,17 @@ $base = "https://huggingface.co/$repo/resolve/main"
 $voices = @('af_heart', 'am_michael', 'ef_dora', 'em_alex', 'ff_siwis', 'if_sara', 'pf_dora')
 
 $modelPath = Join-Path $destDir 'model.onnx'
+$tokenizerPath = Join-Path $destDir 'tokenizer.json'
 New-Item -ItemType Directory -Force -Path (Join-Path $destDir 'voices') | Out-Null
 
-# Se revisa el modelo Y las voces, no solo el modelo: una instalacion vieja tiene
-# el modelo pero le faltan las voces de los idiomas que se agregaron despues, y
-# salir temprano la dejaria doblando espanol con voz inglesa para siempre.
+# Se revisa el modelo, el tokenizador Y las voces, no solo el modelo. Dos
+# motivos, los dos vistos en instalaciones reales: una instalacion vieja tiene el
+# modelo pero le faltan las voces de los idiomas que se agregaron despues, y
+# tokenizer.json solo se bajaba en el mismo if que el modelo, asi que una
+# instalacion con el modelo y sin el tokenizador nunca se arreglaba sola --
+# KokoroTtsEngine.available() exige los dos.
 $faltantes = @($voices | Where-Object { -not (Test-Path (Join-Path $destDir "voices\$_.bin")) })
-if ((Test-Path $modelPath) -and $faltantes.Count -eq 0) {
+if ((Test-Path $modelPath) -and (Test-Path $tokenizerPath) -and $faltantes.Count -eq 0) {
     Write-Host "ya esta: Kokoro en $destDir"
     exit 0
 }
@@ -49,16 +53,27 @@ function Get-File($relative, $destination) {
 }
 
 try {
+    # Cada pieza se baja por separado: atar el tokenizador al modelo dejaba sin
+    # arreglo a quien ya tenia el modelo y no el tokenizador.
     if (-not (Test-Path $modelPath)) {
         Get-File 'onnx/model.onnx' $modelPath
-        Get-File 'tokenizer.json' (Join-Path $destDir 'tokenizer.json')
+    }
+    if (-not (Test-Path $tokenizerPath)) {
+        Get-File 'tokenizer.json' $tokenizerPath
     }
     foreach ($voice in $faltantes) {
         Get-File "voices/$voice.bin" (Join-Path $destDir "voices\$voice.bin")
     }
 
-    if (-not (Test-Path $modelPath)) {
-        throw "La descarga termino pero falta model.onnx en $destDir."
+    # Verificacion final: el pack se da por instalado SOLO con todo lo que el
+    # motor necesita. La carpeta se crea antes de bajar nada, asi que salir en 0
+    # sin esto dejaba la tarjeta en verde con el directorio vacio.
+    $incompletos = @()
+    if (-not (Test-Path $modelPath)) { $incompletos += 'model.onnx' }
+    if (-not (Test-Path $tokenizerPath)) { $incompletos += 'tokenizer.json' }
+    $incompletos += @($voices | Where-Object { -not (Test-Path (Join-Path $destDir "voices\$_.bin")) } | ForEach-Object { "voices\$_.bin" })
+    if ($incompletos.Count -gt 0) {
+        throw "La descarga de Kokoro quedo incompleta; falta: $($incompletos -join ', ')."
     }
     $total = (Get-ChildItem -Path $destDir -File -Recurse | Measure-Object -Property Length -Sum).Sum
     Write-Host "Kokoro listo en: $destDir"

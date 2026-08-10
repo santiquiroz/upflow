@@ -63,12 +63,21 @@ class VoiceConversionEngine:
         self._loaded: tuple[Any, Any, Any] | None = None
         self._lock = threading.Lock()
 
-    def available(self) -> bool:
+    def required_paths(self) -> tuple[Path, ...]:
+        """Las TRES piezas, en un solo lugar.
+
+        El CATALOG las declara aparte para poder ofrecer el boton de descarga, y
+        un test compara las dos listas: sin eso la tarjeta decia "disponible" con
+        el x-vector faltando y el motor rechazaba el trabajo.
+        """
         return (
-            (self.models_root / VC_DIRNAME).is_dir()
-            and (self.models_root / VOCODER_DIRNAME).is_dir()
-            and self.xvector.available()
+            self.models_root / VC_DIRNAME,
+            self.models_root / VOCODER_DIRNAME,
+            self.xvector.model_path,
         )
+
+    def available(self) -> bool:
+        return all(path.exists() for path in self.required_paths())
 
     def convert(self, *, source: np.ndarray, reference: np.ndarray) -> np.ndarray:
         assert_convertible(source)

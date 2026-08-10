@@ -82,6 +82,37 @@ describe("createAudioJob", () => {
     const body = uploads[0].body;
     expect(body.get("output_format")).toBe("mp3");
   });
+
+  it("sends the lossy quality tier when one was chosen", async () => {
+    mockUploadOnce(
+      { jobId: "aud-4", status: "queued", statusUrl: "/api/v1/audio/jobs/aud-4", downloadUrl: null },
+      202,
+    );
+    const file = new File(["binary"], "voice.flac", { type: "audio/flac" });
+
+    await createAudioJob({
+      file,
+      denoise: null,
+      restore: null,
+      outputFormat: "mp3",
+      lossyQuality: "compact",
+      device: null,
+    });
+
+    expect(uploads[0].body.get("lossy_quality")).toBe("compact");
+  });
+
+  it("omits the quality tier when none was chosen so the backend default wins", async () => {
+    mockUploadOnce(
+      { jobId: "aud-5", status: "queued", statusUrl: "/api/v1/audio/jobs/aud-5", downloadUrl: null },
+      202,
+    );
+    const file = new File(["binary"], "voice.flac", { type: "audio/flac" });
+
+    await createAudioJob({ file, denoise: null, restore: null, outputFormat: "wav", device: null });
+
+    expect(uploads[0].body.has("lossy_quality")).toBe(false);
+  });
 });
 
 describe("getAudioJob", () => {

@@ -152,7 +152,9 @@ _PRINT_CAPABILITIES: tuple[Capability, ...] = (
         provisioning="vendored_pack",
         job_kind="print",
         strategies=("model",),
-        requirements=(PathRequirement("shape3d_model_path", "shap-e"),),
+        # El indice y no la carpeta, igual que en generatePhoto: una descarga a
+        # medias deja la carpeta existiendo sin que la tuberia pueda cargar.
+        requirements=(PathRequirement("shape3d_model_index", "shap-e"),),
         # Shap-E (OpenAI, MIT en codigo y pesos) corre en CPU con el `diffusers`
         # que la app YA trae. Medido en esta maquina el 2026-08-05: 116-137 s por
         # malla, y de cuatro pruebas tres salieron estancas, manifold y solidas
@@ -235,7 +237,14 @@ CATALOG: tuple[Capability, ...] = (
         provisioning="vendored_pack",
         job_kind="video",
         strategies=("model",),
-        requirements=(PathRequirement("rife_binary", "rife"),),
+        # El binario Y la carpeta del modelo configurado, que es lo que
+        # Settings.interpolation_available() exige. Pidiendo solo el binario, un
+        # install a medias dejaba la tarjeta en verde y el job manager rechazaba
+        # el trabajo por el modelo faltante.
+        requirements=(
+            PathRequirement("rife_binary", "rife"),
+            PathRequirement("rife_default_model_path", "rife"),
+        ),
     ),
     Capability(
         id="video.subtitles",
@@ -328,7 +337,13 @@ CATALOG: tuple[Capability, ...] = (
         provisioning="vendored_pack",
         job_kind=None,
         strategies=("model",),
-        requirements=(PathRequirement("kokoro_model_path", "kokoro"),),
+        # Los dos ARCHIVOS que KokoroTtsEngine.available() exige, no la carpeta:
+        # el script la crea antes de bajar nada, asi que una descarga fallida
+        # dejaba la tarjeta diciendo "disponible" con la carpeta vacia.
+        requirements=(
+            PathRequirement("kokoro_model_file", "kokoro"),
+            PathRequirement("kokoro_tokenizer_file", "kokoro"),
+        ),
         # Estaba fuera del arbol: la pantalla de Tareas es donde el usuario elige
         # que hacer, y "convertir texto en habla" no aparecia por ningun lado.
     ),
@@ -339,8 +354,14 @@ CATALOG: tuple[Capability, ...] = (
         provisioning="vendored_pack",
         job_kind=None,
         strategies=("model",),
+        # Las TRES piezas que VoiceConversionEngine.required_paths() exige, y no
+        # solo el modelo de conversion: con el vocoder o el x-vector faltando, la
+        # tarjeta decia "disponible" y el motor rechazaba el trabajo. El x-vector
+        # ademas apunta al ARCHIVO -- una descarga cortada deja la carpeta.
         requirements=(
             PathRequirement("voice_conversion_model_path", "voice-conversion"),
+            PathRequirement("voice_conversion_vocoder_path", "voice-conversion"),
+            PathRequirement("voice_conversion_xvector_path", "voice-conversion"),
         ),
     ),
     Capability(
@@ -395,7 +416,14 @@ CATALOG: tuple[Capability, ...] = (
         provisioning="vendored_pack",
         job_kind="generation",
         strategies=("model",),
-        requirements=(PathRequirement("sdcpp_binary", "wan-video"),),
+        # SON DOS PACKS: `sdcpp` baja sd-cli.exe y `wan-video` baja los pesos.
+        # Pidiendo el binario contra el pack de pesos, apretar el boton de la
+        # tarjeta bajaba ~16 GB y la dejaba igual de roja; y quien tenia solo el
+        # binario la veia verde sin un solo peso en disco.
+        requirements=(
+            PathRequirement("sdcpp_binary", "sdcpp"),
+            PathRequirement("sdcpp_video_models_dir_path", "wan-video"),
+        ),
     ),
     Capability(
         id="generate.videoToVideo",
@@ -514,12 +542,24 @@ def _resolve_one(
     return _as_resolved(
         capability,
         "needs_setup",
-        missing_packs=tuple(
-            requirement.pack for requirement in unmet if isinstance(requirement, PathRequirement)
-        ),
+        missing_packs=_missing_packs(unmet),
         setup_reason_key=_setup_reason_key(unmet),
         activatable_settings=_activatable_settings(unmet),
     )
+
+
+def _missing_packs(unmet: tuple[Requirement, ...]) -> tuple[str, ...]:
+    """Sin repetir: un pack que trae varias piezas falta UNA vez.
+
+    La conversion de voz declara tres requisitos del mismo pack; listarlo tres
+    veces le daria a la pantalla tres botones para la misma descarga.
+    """
+    packs = [
+        requirement.pack
+        for requirement in unmet
+        if isinstance(requirement, PathRequirement)
+    ]
+    return tuple(dict.fromkeys(packs))
 
 
 def _activatable_settings(unmet: tuple[Requirement, ...]) -> tuple[str, ...]:

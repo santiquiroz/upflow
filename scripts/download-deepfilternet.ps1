@@ -81,6 +81,16 @@ finally {
     }
 }
 
+# Verificacion final: el binario se copia ANTES de bajar el modelo rnnoise, asi
+# que un fallo a mitad dejaba el binario en su sitio. Salir en 0 con una pieza
+# menos es lo que hace que la app de el pack por instalado.
+$missing = @()
+if (-not (Test-Path $binaryPath)) { $missing += 'deep-filter.exe' }
+if (-not (Test-Path $rnnoiseModelPath)) { $missing += 'models\sh.rnnn' }
+if ($missing.Count -gt 0) {
+    throw "La instalacion de DeepFilterNet quedo incompleta; falta: $($missing -join ', ')."
+}
+
 Write-Host 'DeepFilterNet downloaded to:' $vendorDir
 Write-Host 'Binary:' $binaryPath
 Write-Host 'Rnnoise model:' $rnnoiseModelPath

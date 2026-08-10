@@ -55,4 +55,13 @@ if (-not (Test-Path $modelPath)) {
     Move-Item $modelTemp $modelPath -Force
 }
 
+# Verificacion final: el binario Y el checkpoint, que es lo que sdcpp_available()
+# exige. Terminar en 0 con uno de los dos faltando daria el pack por instalado.
+$missing = @()
+if (-not (Test-Path $binaryPath)) { $missing += 'sd-cli.exe' }
+if (-not (Test-Path $modelPath)) { $missing += 'models\dreamshaper_8.safetensors' }
+if ($missing.Count -gt 0) {
+    throw "La instalacion de sd.cpp quedo incompleta; falta: $($missing -join ', ')."
+}
+
 Write-Host "sd.cpp listo en $binaryPath (modelo: $modelPath)"

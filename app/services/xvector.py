@@ -6,9 +6,10 @@ MAS a la voz de origen que a la de destino, o sea peor que no convertir).
 
 speechbrain no se puede instalar en el entorno de la app — 1.1.0 tiene un lazy
 import roto y 1.0.2 choca con torchaudio 2.11 —, asi que el TDNN se exporto a
-ONNX aparte (`scripts/export_xvector_onnx.py`). Lo que ese export NO pudo
-llevarse es el frontend de features, que revienta al trazar el STFT. Eso es lo
-que se reproduce aca.
+ONNX aparte (`scripts/export_xvector_onnx.py`) y se publico en
+santiquiroz/port-xvector-onnx, de donde el pack de conversion de voz lo baja
+como cualquier otro modelo. Lo que ese export NO pudo llevarse es el frontend de
+features, que revienta al trazar el STFT. Eso es lo que se reproduce aca.
 
 Los numeros salen de LEER el modelo cargado, no de la documentacion.
 """
@@ -124,8 +125,16 @@ class XvectorEncoder:
                 import onnxruntime as ort
 
                 if not self.model_path.exists():
+                    # El encoder ya viene en el pack de conversion de voz: la app
+                    # lo baja sola. Antes este mensaje mandaba a generarlo a mano
+                    # en un venv con torch+speechbrain.
+                    from app.services.missing_pack import missing_pack_message
+
                     raise XvectorUnavailable(
-                        f"Falta {self.model_path}. Se genera con scripts/export_xvector_onnx.py"
+                        missing_pack_message(
+                            "voice-conversion",
+                            detail=f"Se esperaba el encoder de voz en {self.model_path}.",
+                        )
                     )
                 self._session = ort.InferenceSession(
                     str(self.model_path), providers=["CPUExecutionProvider"]

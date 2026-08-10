@@ -7,9 +7,75 @@ import {
   readMetadataNumber,
   readMetadataString,
 } from "./common";
-import { type DetailContext, type DetailItem, type JobDetailSections, push } from "./types";
+import {
+  type DetailContext,
+  type DetailItem,
+  type JobDetailSections,
+  push,
+  pushNumber,
+} from "./types";
 
 const CHAIN_SEPARATOR = " → ";
+const FORMAT_ARROW = " → ";
+const LOSSY_OUTPUT_FORMATS: ReadonlySet<string> = new Set(["mp3", "m4a"]);
+
+function isLossyOutput(outputFormat: string | undefined): boolean {
+  return outputFormat !== undefined && LOSSY_OUTPUT_FORMATS.has(outputFormat);
+}
+
+// 44100 -> "44.1 kHz", 48000 -> "48 kHz". Sin decimales de relleno: el numero
+// que importa es cual es, no cuantos ceros tiene.
+function formatSampleRate(hz: number): string {
+  return `${Number((hz / 1000).toFixed(3))} kHz`;
+}
+
+/**
+ * Que salio REALMENTE de una conversion: de que formato a cual, con que tasa y
+ * profundidad, y con que bitrate si el destino tiene perdida. Es la unica forma
+ * de comprobar que un FLAC 44.1/24 no se convirtio en algo a 48 kHz y 16 bits.
+ */
+function pushConversionResult(items: DetailItem[], job: AudioJob, context: DetailContext): void {
+  const sourceFormat = readMetadataString(job, "conversionSourceFormat");
+  const targetFormat = readMetadataString(job, "conversionTargetFormat");
+  if (!sourceFormat || !targetFormat) {
+    return;
+  }
+  push(items, "job.detail.field.conversion", `${sourceFormat}${FORMAT_ARROW}${targetFormat}`);
+  pushNumber(
+    items,
+    "job.detail.field.sampleRate",
+    readMetadataNumber(job, "conversionSampleRate"),
+    formatSampleRate,
+  );
+  pushNumber(
+    items,
+    "job.detail.field.bitDepth",
+    readMetadataNumber(job, "conversionBitDepth"),
+    (bits) => context.t("job.detail.bitDepth.value", { bits: String(bits) }),
+  );
+  push(items, "job.detail.field.bitrate", readMetadataString(job, "conversionBitrate"), {
+    isNumeric: true,
+  });
+}
+
+// Lo que la conversion NO pudo conservar. Van juntos y como texto largo: son
+// avisos, no medidas, y callarlos convertiria la promesa de "sin tocar nada"
+// en una mentira silenciosa.
+const CONVERSION_NOTICE_KEYS: readonly { metadataKey: string; labelKey: string }[] = [
+  { metadataKey: "conversionResampled", labelKey: "job.detail.field.conversionResampled" },
+  { metadataKey: "conversionDownmixed", labelKey: "job.detail.field.conversionDownmixed" },
+  {
+    metadataKey: "conversionBitDepthReduced",
+    labelKey: "job.detail.field.conversionBitDepthReduced",
+  },
+  { metadataKey: "conversionCopied", labelKey: "job.detail.field.conversionCopied" },
+];
+
+function pushConversionNotices(items: DetailItem[], job: AudioJob): void {
+  for (const notice of CONVERSION_NOTICE_KEYS) {
+    push(items, notice.labelKey, readMetadataString(job, notice.metadataKey), { isLong: true });
+  }
+}
 
 function pushSeparation(items: DetailItem[], job: AudioJob, context: DetailContext): void {
   if (!job.separate) {
@@ -93,9 +159,18 @@ export function buildAudioSections(job: AudioJob, context: DetailContext): JobDe
     job.master ? context.labelFor("masteringPreset", job.master) : null,
   );
   push(parameters, "job.detail.field.format", job.outputFormat?.toUpperCase());
+  push(
+    parameters,
+    "job.detail.field.lossyQuality",
+    job.lossyQuality && isLossyOutput(job.outputFormat)
+      ? context.t(`audio.quality.${job.lossyQuality}`)
+      : null,
+  );
   pushDevice(parameters, job.device, context);
 
   const result: DetailItem[] = [];
+  pushConversionResult(result, job, context);
+  pushConversionNotices(result, job);
   pushLoudnessMove(result, job, context);
   push(result, "job.detail.field.masteringSkipped", readMetadataString(job, "masteringSkipped"), {
     isLong: true,

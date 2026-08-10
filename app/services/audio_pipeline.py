@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 from pathlib import Path
@@ -8,6 +9,16 @@ from typing import TYPE_CHECKING
 
 from app.config import Settings
 from app.models import AudioJob
+from app.services.audio_conversion import (
+    SourceAudio,
+    build_conversion_command,
+    build_probe_command,
+    conversion_metadata,
+    is_conversion_only,
+    lossy_bitrate,
+    parse_source_audio,
+    resolve_conversion_plan,
+)
 from app.services.engines.audio_enhance import AudioEnhancer
 from app.services.engines.voice_enhance import VoiceEnhancer
 from app.services.voice_chain import effective_voice_steps, steps_from_selection
@@ -31,10 +42,12 @@ DECODE_SAMPLE_RATE = 48000
 # Codec args for the final "finalizing" re-encode, keyed by output_format
 # (Fase C Task 9). "wav" is deliberately absent: current is already PCM WAV
 # from decode/denoise/restore, so it is moved into place with no re-encode
-# (see AudioPipeline._write_output).
+# (see AudioPipeline._write_output). Los destinos con perdida toman su bitrate
+# del escalon de calidad del job, no de un numero fijo.
 _OUTPUT_FORMAT_CODEC_ARGS: dict[str, list[str]] = {
     "flac": ["-c:a", "flac"],
-    "mp3": ["-c:a", "libmp3lame", "-b:a", "192k"],
+    "mp3": ["-c:a", "libmp3lame"],
+    "m4a": ["-c:a", "aac"],
 }
 
 
@@ -84,6 +97,13 @@ class AudioPipeline:
             shutil.rmtree(work_dir, ignore_errors=True)
 
     async def _run_chain(self, job: AudioJob, work_dir: Path) -> Path:
+        # Sin ningun paso pedido el trabajo es SOLO cambiar de formato, y eso no
+        # puede pasar por el decode de abajo: fija 48 kHz y 16 bits porque los
+        # motores lo necesitan, y aplicarselo a una conversion pura degradaria
+        # el archivo justo cuando el pedido era no tocarlo.
+        if is_conversion_only(job):
+            return await self._run_conversion(job)
+
         advance_audio_stage(job, "decoding")
         current = work_dir / "decoded.wav"
         # La cadena de limpieza corre los mismos motores que la separacion, asi
@@ -145,10 +165,55 @@ class AudioPipeline:
         advance_audio_stage(job, "finalizing")
         output_path = self.settings.outputs_path / f"{job.id}.{job.output_format}"
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        await self._write_output(current, output_path, job.output_format)
+        await self._write_output(current, output_path, job.output_format, job.lossy_quality)
         self._validate_output(output_path)
         complete_audio_stages(job)
         return output_path
+
+    async def _run_conversion(self, job: AudioJob) -> Path:
+        """Conversion directa: UNA pasada de ffmpeg del original al destino.
+
+        Conserva tasa de muestreo y profundidad hasta donde el formato destino
+        las admita, y deja en metadata TODO lo que no se pudo conservar (un
+        resample forzado, un downmix, una profundidad recortada). El pipeline de
+        procesamiento no se toca: sigue decodificando a 48 kHz porque sus
+        motores estan especificados a esa tasa.
+        """
+        advance_audio_stage(job, "converting")
+        source = await self._probe_source(job.source_path)
+        plan = resolve_conversion_plan(job.output_format, job.lossy_quality, source)
+        output_path = self.settings.outputs_path / f"{job.id}.{job.output_format}"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        await self._run_process(
+            build_conversion_command(
+                self.settings.ffmpeg_binary_path, job.source_path, output_path, plan
+            ),
+            "Audio conversion failed",
+        )
+        self._validate_output(output_path)
+        job.metadata.update(conversion_metadata(source, plan, job.output_format))
+        complete_audio_stages(job)
+        return output_path
+
+    async def _probe_source(self, source_path: Path) -> SourceAudio:
+        """Sin probe no hay conversion: promete conservar tasa y profundidad, y
+        sin leerlas del original solo podria inventar un default — que es
+        exactamente la mentira que este camino existe para evitar."""
+        stdout, stderr, returncode = await run_guarded_process(
+            build_probe_command(self.settings.ffprobe_binary_path, source_path),
+            self.settings.subprocess_timeout,
+        )
+        if returncode != 0:
+            detail = stderr.decode("utf-8", errors="ignore").strip()
+            raise RuntimeError(
+                detail.splitlines()[-1]
+                if detail
+                else "No se pudo leer el audio del archivo subido."
+            )
+        try:
+            return parse_source_audio(json.loads(stdout.decode("utf-8", errors="ignore")))
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("No se pudo leer el audio del archivo subido.") from exc
 
     async def _run_cleanup_chain(self, job: AudioJob, work_dir: Path, decoded: Path) -> Path:
         """Una pasada por paso, encadenadas: la salida limpia alimenta la siguiente.
@@ -259,8 +324,8 @@ class AudioPipeline:
         outputs_dir.mkdir(parents=True, exist_ok=True)
         main_out = outputs_dir / f"{job.id}.{spec.main_stem.id}.{output_format}"
         other_out = outputs_dir / f"{job.id}.{spec.other_stem.id}.{output_format}"
-        await self._write_output(main_wav, main_out, output_format)
-        await self._write_output(other_wav, other_out, output_format)
+        await self._write_output(main_wav, main_out, output_format, job.lossy_quality)
+        await self._write_output(other_wav, other_out, output_format, job.lossy_quality)
         self._validate_output(main_out)
         self._validate_output(other_out)
         job.secondary_output_path = other_out
@@ -325,17 +390,21 @@ class AudioPipeline:
         job.metadata["loudnessTarget"] = mastering_preset(job.master).target_lufs
         return True
 
-    async def _write_output(self, current: Path, output_path: Path, output_format: str) -> None:
+    async def _write_output(
+        self, current: Path, output_path: Path, output_format: str, lossy_quality: str
+    ) -> None:
         if output_format == "wav":
             shutil.move(str(current), str(output_path))
             return
         codec_args = _OUTPUT_FORMAT_CODEC_ARGS.get(output_format, _OUTPUT_FORMAT_CODEC_ARGS["flac"])
+        bitrate = lossy_bitrate(output_format, lossy_quality)
         command = [
             str(self.settings.ffmpeg_binary_path),
             "-y",
             "-i",
             str(current),
             *codec_args,
+            *(["-b:a", bitrate] if bitrate is not None else []),
             str(output_path),
         ]
         await self._run_process(command, "Audio encode failed while writing the final output file")

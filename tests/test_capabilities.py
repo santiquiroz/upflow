@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from app.config import Settings
+from app.config import Settings, resolve_against_project_root
 from app.services.capabilities import (
     CATALOG,
     DOMAIN_ORDER,
@@ -154,8 +154,19 @@ def test_registry_requirements_use_real_kinds():
 # ---------------------------------------------------------------------------
 
 
+def rife_settings(tmp_path: Path) -> Settings:
+    # Las dos rutas apuntadas al tmp: la interpolacion necesita el binario Y la
+    # carpeta del modelo, y dejar los defaults haria que la prueba dependiera de
+    # lo que este bajado en el checkout.
+    return make_settings(
+        tmp_path,
+        RIFE_BINARY=str(tmp_path / "rife.exe"),
+        RIFE_MODELS_DIR=str(tmp_path / "rife-models"),
+    )
+
+
 def test_a_missing_pack_leaves_the_capability_needing_setup(tmp_path: Path):
-    settings = make_settings(tmp_path, RIFE_BINARY=str(tmp_path / "nope.exe"))
+    settings = rife_settings(tmp_path)
     resolved = resolve_capabilities(settings, FakeRegistry())
 
     interpolate = by_id(resolved, "video.interpolate")
@@ -164,22 +175,35 @@ def test_a_missing_pack_leaves_the_capability_needing_setup(tmp_path: Path):
 
 
 def test_the_status_follows_the_disk_when_the_pack_appears(tmp_path: Path):
-    binary = tmp_path / "rife.exe"
-    settings = make_settings(tmp_path, RIFE_BINARY=str(binary))
+    settings = rife_settings(tmp_path)
 
     before = by_id(resolve_capabilities(settings, FakeRegistry()), "video.interpolate")
-    touch(binary)
+    touch(Path(settings.rife_binary))
+    settings.rife_default_model_path.mkdir(parents=True, exist_ok=True)
     after = by_id(resolve_capabilities(settings, FakeRegistry()), "video.interpolate")
 
     assert before.status == "needs_setup"
     assert after.status == "available"
 
 
+def test_the_binary_without_the_model_folder_is_not_enough(tmp_path: Path):
+    # interpolation_available() exige la carpeta del modelo configurado ademas
+    # del binario: sin declararla, un install a medias dejaba la tarjeta en verde
+    # y el job manager rechazaba el trabajo despues.
+    settings = rife_settings(tmp_path)
+    touch(Path(settings.rife_binary))
+
+    assert by_id(resolve_capabilities(settings, FakeRegistry()), "video.interpolate").status == (
+        "needs_setup"
+    )
+
+
 def test_deleting_the_pack_by_hand_takes_the_capability_back_to_needs_setup(tmp_path: Path):
     # El status se deriva de disco y nunca de un flag persistido, justamente para
     # que borrar la carpeta a mano no deje la UI diciendo que esta listo.
-    binary = touch(tmp_path / "rife.exe")
-    settings = make_settings(tmp_path, RIFE_BINARY=str(binary))
+    settings = rife_settings(tmp_path)
+    binary = touch(Path(settings.rife_binary))
+    settings.rife_default_model_path.mkdir(parents=True, exist_ok=True)
     assert by_id(resolve_capabilities(settings, FakeRegistry()), "video.interpolate").status == (
         "available"
     )
@@ -503,13 +527,213 @@ class TestLaVozEstaEnElArbol:
         assert "kokoro" in voz.missing_packs
 
     def test_con_el_modelo_puesto_queda_disponible(self, tmp_path) -> None:
-        modelo = tmp_path.parent / "vendor" / "kokoro"
-        modelo.mkdir(parents=True, exist_ok=True)
-        settings = Settings(RUNTIME_DIR=str(tmp_path), _env_file=None)
+        modelo = tmp_path / "vendor" / "kokoro"
+        touch(modelo / "model.onnx")
+        touch(modelo / "tokenizer.json")
+        settings = Settings(RUNTIME_DIR=str(tmp_path / "runtime"), _env_file=None)
 
         voz = _find(resolve_capabilities(settings, FakeRegistry()), "audio.speak")
 
         assert voz.status == "available"
+
+    def test_la_carpeta_vacia_no_alcanza(self, tmp_path) -> None:
+        # El script crea vendor\kokoro ANTES de bajar nada, asi que hasta una
+        # descarga fallida dejaba la tarjeta en verde con el directorio vacio.
+        (tmp_path / "vendor" / "kokoro").mkdir(parents=True, exist_ok=True)
+        settings = Settings(RUNTIME_DIR=str(tmp_path / "runtime"), _env_file=None)
+
+        voz = _find(resolve_capabilities(settings, FakeRegistry()), "audio.speak")
+
+        assert voz.status == "needs_setup"
+        assert "kokoro" in voz.missing_packs
+
+    def test_el_modelo_sin_el_tokenizador_no_alcanza(self, tmp_path) -> None:
+        # KokoroTtsEngine.available() exige los dos, y tokenizer.json solo se
+        # bajaba dentro del mismo if que el modelo: una instalacion con uno y sin
+        # el otro no se arreglaba sola y la tarjeta decia que si.
+        touch(tmp_path / "vendor" / "kokoro" / "model.onnx")
+        settings = Settings(RUNTIME_DIR=str(tmp_path / "runtime"), _env_file=None)
+
+        voz = _find(resolve_capabilities(settings, FakeRegistry()), "audio.speak")
+
+        assert voz.status == "needs_setup"
+
+
+# ---------------------------------------------------------------------------
+# La conversion de voz necesita TRES piezas y el catalogo declaraba UNA. El
+# usuario bajaba el pack, la tarjeta decia "disponible" y la pantalla de Voz le
+# contestaba "falta el modelo de conversion de voz": el script no bajaba el
+# encoder de x-vector y aun asi terminaba en 0.
+# ---------------------------------------------------------------------------
+
+
+def _vendor_de(settings: Settings) -> Path:
+    return Path(settings.runtime_dir).parent / "vendor"
+
+
+def _poner_piezas(settings: Settings, *, vc=True, vocoder=True, xvector=True) -> None:
+    vendor = _vendor_de(settings)
+    if vc:
+        (vendor / "speecht5-vc").mkdir(parents=True, exist_ok=True)
+    if vocoder:
+        (vendor / "speecht5-hifigan").mkdir(parents=True, exist_ok=True)
+    if xvector:
+        touch(vendor / "xvector" / "tdnn.onnx")
+
+
+class TestLaConversionDeVozPideLasTresPiezas:
+    def test_el_catalogo_declara_todo_lo_que_el_motor_exige(self, tmp_path: Path) -> None:
+        # La prueba de coherencia: si el motor empieza a necesitar otra pieza y
+        # nadie la declara en el CATALOG, la tarjeta vuelve a mentir. Comparar
+        # rutas resueltas y no nombres es lo que hace que no se pueda fingir.
+        from app.services.engines.voice_convert import VoiceConversionEngine
+
+        settings = make_settings(tmp_path / "runtime")
+        capacidad = next(c for c in CATALOG if c.id == "audio.voiceConvert")
+        declaradas = {
+            resolve_against_project_root(str(getattr(settings, r.setting_attr)))
+            for r in capacidad.requirements
+            if isinstance(r, PathRequirement)
+        }
+
+        exigidas = set(VoiceConversionEngine(_vendor_de(settings)).required_paths())
+
+        assert exigidas <= declaradas, (
+            "El motor exige rutas que el catalogo no declara, asi que la tarjeta "
+            f"puede decir 'disponible' sin ellas: {sorted(exigidas - declaradas)}"
+        )
+
+    @pytest.mark.parametrize("falta", ["vc", "vocoder", "xvector"])
+    def test_sin_cualquiera_de_las_tres_no_esta_disponible(
+        self, tmp_path: Path, falta: str
+    ) -> None:
+        settings = make_settings(tmp_path / "runtime")
+        _poner_piezas(settings, **{falta: False})
+
+        conversion = _find(resolve_capabilities(settings, FakeRegistry()), "audio.voiceConvert")
+
+        assert conversion.status == "needs_setup"
+        assert conversion.missing_packs == ("voice-conversion",)
+
+    def test_con_las_tres_queda_disponible(self, tmp_path: Path) -> None:
+        settings = make_settings(tmp_path / "runtime")
+        _poner_piezas(settings)
+
+        conversion = _find(resolve_capabilities(settings, FakeRegistry()), "audio.voiceConvert")
+
+        assert conversion.status == "available"
+
+    def test_la_carpeta_del_xvector_sin_el_modelo_no_alcanza(self, tmp_path: Path) -> None:
+        # Una descarga cortada deja el directorio existiendo: el requisito apunta
+        # al archivo, que es lo que el encoder necesita para cargar.
+        settings = make_settings(tmp_path / "runtime")
+        _poner_piezas(settings, xvector=False)
+        (_vendor_de(settings) / "xvector").mkdir(parents=True, exist_ok=True)
+
+        conversion = _find(resolve_capabilities(settings, FakeRegistry()), "audio.voiceConvert")
+
+        assert conversion.status == "needs_setup"
+
+    def test_la_tarjeta_y_el_motor_dicen_lo_mismo(self, tmp_path: Path) -> None:
+        # Lo que el usuario reporto: la tarjeta decia disponible y el endpoint
+        # decia que no. Las dos respuestas salen ahora del mismo criterio.
+        from app.services.engines.voice_convert import VoiceConversionEngine
+
+        settings = make_settings(tmp_path / "runtime")
+        motor = VoiceConversionEngine(_vendor_de(settings))
+
+        for faltante in (None, "vc", "vocoder", "xvector"):
+            for sobrante in _vendor_de(settings).glob("*"):
+                if sobrante.is_dir():
+                    for hijo in sorted(sobrante.rglob("*"), reverse=True):
+                        hijo.unlink() if hijo.is_file() else hijo.rmdir()
+                    sobrante.rmdir()
+            _poner_piezas(settings, **({faltante: False} if faltante else {}))
+
+            tarjeta = _find(
+                resolve_capabilities(settings, FakeRegistry()), "audio.voiceConvert"
+            )
+            assert (tarjeta.status == "available") is motor.available(), faltante
+
+
+# ---------------------------------------------------------------------------
+# El mismo barrido encontro dos tarjetas mas que se derivaban de menos de lo que
+# su motor exige, y una que apuntaba directamente al pack equivocado.
+# ---------------------------------------------------------------------------
+
+
+class TestOtrasTarjetasQueSeDerivabanDeMenos:
+    def test_la_generacion_3d_pide_el_indice_y_no_la_carpeta(self, tmp_path: Path) -> None:
+        # Una descarga a medias deja vendor\shap-e existiendo: Shape3dEngine
+        # carga model_index.json, asi que es eso lo que hay que exigir.
+        settings = make_settings(tmp_path / "runtime")
+        (tmp_path / "vendor" / "shap-e").mkdir(parents=True)
+
+        pieza = _find(resolve_capabilities(settings, FakeRegistry()), "print.generate")
+
+        assert pieza.status == "needs_setup"
+
+        touch(tmp_path / "vendor" / "shap-e" / "model_index.json")
+        pieza = _find(resolve_capabilities(settings, FakeRegistry()), "print.generate")
+        assert pieza.status == "available"
+
+    def test_el_video_generado_necesita_el_motor_Y_los_pesos(self, tmp_path: Path) -> None:
+        # Son dos packs distintos: `sdcpp` trae sd-cli.exe y `wan-video` los
+        # pesos. La tarjeta pedia el binario contra el pack de pesos, asi que
+        # apretar su boton bajaba 16 GB y la dejaba igual de roja.
+        binario = tmp_path / "sd-cli.exe"
+        settings = make_settings(
+            tmp_path / "runtime",
+            SDCPP_BINARY=str(binario),
+            SDCPP_MODELS_DIR=str(tmp_path / "sdcpp-models"),
+        )
+
+        solo_nada = _find(resolve_capabilities(settings, FakeRegistry()), "generate.textToVideo")
+        assert solo_nada.status == "needs_setup"
+        assert set(solo_nada.missing_packs) == {"sdcpp", "wan-video"}
+
+        touch(binario)
+        solo_motor = _find(resolve_capabilities(settings, FakeRegistry()), "generate.textToVideo")
+        assert solo_motor.status == "needs_setup"
+        assert solo_motor.missing_packs == ("wan-video",)
+
+        settings.sdcpp_video_models_dir_path.mkdir(parents=True, exist_ok=True)
+        completo = _find(resolve_capabilities(settings, FakeRegistry()), "generate.textToVideo")
+        assert completo.status == "available"
+
+
+def test_every_path_requirement_names_a_pack_that_can_produce_it() -> None:
+    # La invariante que faltaba: no alcanza con que el pack tenga script, tiene
+    # que ser el script que produce ESA ruta. `generate.textToVideo` pedia el
+    # binario de sd.cpp contra el pack de pesos de video, que nunca lo baja.
+    from app.services.pack_provisioner import PACK_SCRIPTS
+
+    esperado = {
+        "sdcpp_binary": "sdcpp",
+        "sdcpp_video_models_dir_path": "wan-video",
+        "voice_conversion_xvector_path": "voice-conversion",
+        "kokoro_model_file": "kokoro",
+        "rife_default_model_path": "rife",
+    }
+    declarado = {
+        requirement.setting_attr: requirement.pack
+        for capability in CATALOG
+        for requirement in capability.requirements
+        if isinstance(requirement, PathRequirement)
+    }
+
+    for atributo, pack in esperado.items():
+        assert declarado.get(atributo) == pack, atributo
+        assert pack in PACK_SCRIPTS, pack
+
+
+def test_a_pack_that_covers_several_pieces_is_offered_once(tmp_path: Path) -> None:
+    # Tres requisitos del mismo pack no son tres botones de descarga.
+    settings = make_settings(tmp_path / "runtime")
+
+    conversion = _find(resolve_capabilities(settings, FakeRegistry()), "audio.voiceConvert")
+
+    assert conversion.missing_packs == ("voice-conversion",)
 
 
 # ---------------------------------------------------------------------------

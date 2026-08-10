@@ -88,6 +88,9 @@ class AudioJobResponse(BaseModel):
     restore: str | None = None
     device: str | None = None
     output_format: str = Field(default="flac", serialization_alias="outputFormat")
+    # Escalon de calidad de los destinos con perdida. Viaja siempre para que el
+    # detalle pueda decir con que bitrate se escribio un mp3/m4a.
+    lossy_quality: str = Field(default="maximum", serialization_alias="lossyQuality")
     # Acabado profesional elegido (id del catalogo de mastering). Sin esto el
     # detalle del trabajo no puede decir a que sonoridad se normalizo.
     master: str | None = None
@@ -412,8 +415,31 @@ class CleanupStepResponse(BaseModel):
     description_key: str = Field(serialization_alias="descriptionKey")
 
 
+class LossyQualityResponse(BaseModel):
+    """Un escalon de calidad para los destinos con perdida.
+
+    Viaja con los bitrates POR FORMATO y no con un texto armado: la UI escribe
+    la copia y el backend es dueno de los numeros, igual que en los presets de
+    mastering.
+    """
+
+    id: str
+    bitrates: dict[str, str]
+
+
 class AudioCapabilitiesResponse(BaseModel):
     denoise_modes: list[str] = Field(serialization_alias="denoiseModes")
+    # Formatos de salida y cuales de ellos tienen perdida: con esto la UI puede
+    # avisar que una conversion sin-perdida -> con-perdida es irreversible sin
+    # duplicar la lista de formatos de su lado.
+    output_formats: list[str] = Field(default_factory=list, serialization_alias="outputFormats")
+    lossy_formats: list[str] = Field(default_factory=list, serialization_alias="lossyFormats")
+    lossy_qualities: list[LossyQualityResponse] = Field(
+        default_factory=list, serialization_alias="lossyQualities"
+    )
+    default_lossy_quality: str = Field(
+        default="maximum", serialization_alias="defaultLossyQuality"
+    )
     restore_available: bool = Field(serialization_alias="restoreAvailable")
     restore_modes: list[str] = Field(default_factory=list, serialization_alias="restoreModes")
     # Acabado profesional (EBU R128). Siempre disponible: lo hace ffmpeg, que ya
