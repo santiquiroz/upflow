@@ -125,6 +125,17 @@ const FULL_CAPABILITIES: AudioCapabilities = {
       stems: KARAOKE_STEMS,
     },
     {
+      id: "mel_band_roformer_kim",
+      name: "Mel-Band RoFormer by KimberleyJSN",
+      installed: true,
+      primaryStem: "Vocals",
+      category: "karaoke",
+      architecture: "roformer",
+      descriptionKey: "audio.karaoke.model.mel_band_roformer_kim.description",
+      warningKey: "audio.karaoke.model.mel_band_roformer_kim.warning",
+      stems: KARAOKE_STEMS,
+    },
+    {
       id: "reverb_hq",
       name: "Reverb HQ by FoxJoy",
       installed: true,
@@ -629,6 +640,49 @@ describe("AudioPanel modo karaoke", () => {
     await openKaraoke();
 
     expect(screen.getByText(/ultimate vocal remover/i)).toBeInTheDocument();
+  });
+
+  it("warns that the max-quality model is slow BEFORE it is selected", async () => {
+    // El punto entero de la advertencia: enterarse del ~9x cuando el trabajo
+    // ya arrancó no es haber elegido. Con inst_hq_3 seleccionado (el default),
+    // el texto del carril lento ya tiene que estar en pantalla.
+    renderPanel(FULL_CAPABILITIES);
+    fireEvent.click(await openKaraoke());
+
+    const warning = await screen.findByText(/20x slower than Inst HQ 3/i);
+    expect(warning).toBeInTheDocument();
+    expect(warning).toHaveTextContent("Mel-Band RoFormer by KimberleyJSN");
+    // Y no es que esté seleccionado: el elegido sigue siendo el default.
+    expect(
+      screen.getByRole("button", { name: /MDX-Net Inst HQ 3/ }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(
+      screen.getByRole("button", { name: /Mel-Band RoFormer/ }),
+    ).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("marks the slow model's button with a badge and leaves the others clean", async () => {
+    renderPanel(FULL_CAPABILITIES);
+    fireEvent.click(await openKaraoke());
+
+    expect(
+      await screen.findByRole("button", { name: /Mel-Band RoFormer by KimberleyJSN Slow/ }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /MDX-Net Inst HQ 3/ }),
+    ).not.toHaveTextContent("Slow");
+  });
+
+  it("submits the roformer model when it is picked", async () => {
+    renderPanel(FULL_CAPABILITIES);
+    fireEvent.click(await openKaraoke());
+    fireEvent.click(
+      screen.getByRole("button", { name: /Mel-Band RoFormer by KimberleyJSN/ }),
+    );
+
+    expect(
+      await screen.findByText(/highest quality in the catalog/i),
+    ).toBeInTheDocument();
   });
 
   it("groups the picker by category and describes the cleanup model", async () => {

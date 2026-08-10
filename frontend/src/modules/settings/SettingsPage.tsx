@@ -5,6 +5,7 @@ import { getEngineInfo, getHealth } from "../../lib/api";
 import type { EngineInfoResponse, HealthResponse } from "../../lib/apiTypes";
 import { DeviceDefault } from "../models/DeviceDefault";
 import { DeviceAcceleration } from "./DeviceAcceleration";
+import { CapabilitySettingsSection } from "./CapabilitySettingsSection";
 import { EditableSettingsSection } from "./EditableSettingsSection";
 import { VideoUploadLimitSection } from "./VideoUploadLimitSection";
 import { LanguageSection } from "./LanguageSection";
@@ -130,6 +131,7 @@ export function SettingsPage() {
         <EngineSectionStatus query={engineQuery} />
         <CapacitySectionStatus query={healthQuery} />
         <EditableSettingsSection />
+        <CapabilitySettingsSection />
         {engineQuery.data && (
           <VideoUploadLimitSection currentMb={engineQuery.data.maxVideoUploadMb} />
         )}

@@ -19,13 +19,13 @@ y el script de descarga sin riesgo de ciclos.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import ClassVar, Literal
 
 # Arquitecturas soportadas. Viaja en la API para que la UI pueda explicar de
 # donde sale cada modelo, pero el usuario NUNCA la elige: elige un id de modelo
 # y el pipeline resuelve el motor.
-Architecture = Literal["mdx", "vr"]
+Architecture = Literal["mdx", "vr", "roformer"]
 
 STEM_INSTRUMENTAL = "audio.stem.instrumental"
 STEM_VOCALS = "audio.stem.vocals"
@@ -66,6 +66,15 @@ class SeparationModelSpec:
     # Stems de cara al usuario, ORDENADOS: el primero es el que el usuario
     # quiere (lo sirve downloadUrl); el segundo va en ?stem=<id>.
     stems: tuple[SeparationStem, SeparationStem]
+
+    # Lo que el usuario tiene que saber ANTES de elegir el modelo, no al final
+    # del trabajo: hoy es el costo del carril de maxima calidad (~9x el default).
+    # None = el modelo no necesita advertir nada, que es el caso normal.
+    #
+    # kw_only para que un campo con default en la BASE no obligue a las
+    # subclases a darle default a los suyos (MdxModelSpec/VrModelSpec declaran
+    # parametros obligatorios despues de este).
+    warning_key: str | None = field(default=None, kw_only=True)
 
     # Lo fija la subclase, no los datos: una entrada no puede declarar una
     # arquitectura que no coincida con sus propios parametros.

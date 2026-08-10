@@ -31,6 +31,14 @@ from app.services.generation_staging import (
     map_disk_full,
     safe_staging_dest,
 )
+from app.services.generation_graph_fusion import (
+    copy_pipeline_without_unet_graph,
+    optimize_unet_in_place,
+)
+from app.services.generation_optimize import (
+    optimized_display_name,
+    optimized_model_id,
+)
 from app.services.generation_variants import Precision
 from app.services.hf_client import HfClient, HfFile
 from app.services.install_queue_base import SingleWorkerJobQueue
@@ -38,7 +46,9 @@ from app.services.model_installer import _validate_repo_id
 from app.services.model_registry import ModelEntry, ModelKind, ModelStatus
 from app.services.progress import (
     advance_conversion_stage,
+    advance_optimize_stage,
     complete_conversion_stages,
+    complete_optimize_stages,
 )
 
 _SUBMODEL_LINE = re.compile(
@@ -355,14 +365,26 @@ ExportFn = Callable[
     list[str],
 ]
 
+OptimizeUnetFn = Callable[[Path, Path, Callable[[], None]], dict[str, int]]
+
 
 def _job_model_id(job: ConversionJob) -> str:
+    if job.optimize:
+        # El id sale del modelo instalado, no del repo: una variante de
+        # inpainting tiene su propio id y derivarlo del repo apuntaría al otro.
+        return optimized_model_id(job.source_model_id or "")
     model_id = generation_model_id(job.repo_id, job.checkpoint_path)
     return f"{model_id}--inpainting" if job.inpaint_merge else model_id
 
 
 def _job_model_name(job: ConversionJob) -> str:
+    if job.optimize:
+        return optimized_display_name(job.source_model_name or job.repo_id)
     return f"{job.repo_id} (inpainting)" if job.inpaint_merge else job.repo_id
+
+
+def _directory_size(root: Path) -> int:
+    return sum(path.stat().st_size for path in root.rglob("*") if path.is_file())
 
 
 class ConversionCancelled(Exception):
@@ -391,12 +413,14 @@ class GenerationModelConverter(SingleWorkerJobQueue[ConversionJob]):
         installer: GenerationModelInstaller,
         hf_client: HfClient,
         export_fn: ExportFn | None = None,
+        optimize_unet_fn: OptimizeUnetFn | None = None,
     ) -> None:
         super().__init__()
         self.settings = settings
         self.installer = installer
         self.hf_client = hf_client
         self.export_fn = export_fn or _export_with_optimum
+        self.optimize_unet_fn = optimize_unet_fn or optimize_unet_in_place
         # Cancelaciones pedidas. El export corre en un hilo, asi que el aviso
         # tiene que cruzar el limite de hilo — de ahi un set y no un flag de
         # asyncio.
@@ -441,6 +465,36 @@ class GenerationModelConverter(SingleWorkerJobQueue[ConversionJob]):
             checkpoint_path=checkpoint_path,
             inpaint_merge=True,
         )
+        self._register_converting_entry(job)
+        return await self._enqueue(job)
+
+    async def optimize_installed(
+        self,
+        *,
+        source_model_id: str,
+        source_model_name: str,
+        repo_id: str,
+        checkpoint_path: str | None,
+        installed_dir: Path,
+    ) -> str:
+        """Crea la variante optimizada por fusión de grafo de un modelo instalado.
+
+        El original NO se toca: el resultado se registra como un modelo nuevo. Es
+        obligatorio porque la fusión reordena las operaciones y en SDXL la misma
+        semilla ya no da la MISMA imagen (medido: 23.9 dB de PSNR a 12 pasos),
+        aunque la calidad y la composición se conserven.
+        """
+        available, reason = generation_dependencies_available()
+        if not available:
+            raise ValueError(reason or "Generation dependencies missing")
+        job = ConversionJob(
+            repo_id=_validate_repo_id(repo_id),
+            checkpoint_path=checkpoint_path,
+            optimize=True,
+            source_model_id=source_model_id,
+            source_model_name=source_model_name,
+        )
+        job.metadata["installedDir"] = str(installed_dir)
         self._register_converting_entry(job)
         return await self._enqueue(job)
 
@@ -531,7 +585,10 @@ class GenerationModelConverter(SingleWorkerJobQueue[ConversionJob]):
         job.status = JobStatus.running
         job.started_at = utc_now()
         try:
-            await self._convert_and_register(job)
+            if job.optimize:
+                await self._optimize_and_register(job)
+            else:
+                await self._convert_and_register(job)
             job.status = JobStatus.completed
         except ConversionCancelled:
             # Cancelar no es un fallo: no lleva mensaje de error ni marca la
@@ -640,6 +697,94 @@ class GenerationModelConverter(SingleWorkerJobQueue[ConversionJob]):
         # El merge se guarda en fp16: el export de acá en adelante es idéntico
         # al de una conversión normal.
         return selected, "fp16"
+
+    async def _download_torch_source(self, job: ConversionJob, src_root: Path) -> None:
+        """Deja en src_root el árbol diffusers del que se re-exporta el fp32.
+
+        La fusión NECESITA los pesos torch: sobre el ONNX fp16 ya instalado los
+        patrones de GroupNorm y atención no matchean ninguno.
+        """
+        if job.checkpoint_path is None:
+            await download_repo_dir(self.hf_client, job.repo_id, src_root, "fp16")
+            return
+        files = await self.hf_client.repo_files(job.repo_id)
+        checkpoint = _selected_checkpoint(files, job.repo_id, job.checkpoint_path)
+        checkpoint_dest = safe_staging_dest(src_root, checkpoint.path)
+        checkpoint_dest.parent.mkdir(parents=True, exist_ok=True)
+        await self.hf_client.download(
+            job.repo_id, checkpoint.path, checkpoint_dest, unlimited=True
+        )
+        self._raise_if_cancelled(job)
+        architecture = await _read_checkpoint_architecture(
+            self.hf_client, job.repo_id, job.checkpoint_path
+        )
+        await self._materialize_checkpoint(
+            checkpoint, checkpoint_dest, src_root, architecture
+        )
+        checkpoint_dest.unlink(missing_ok=True)
+
+    async def _optimize_and_register(self, job: ConversionJob) -> None:
+        model_id = _job_model_id(job)
+        installed_dir = Path(job.metadata["installedDir"])
+        src_root = self.settings.temp_path / f"genopt-src-{model_id}"
+        fp32_root = self.settings.temp_path / f"genopt-fp32-{model_id}"
+        out_root = self.settings.temp_path / f"genopt-onnx-{model_id}"
+        for root in (src_root, fp32_root, out_root):
+            if root.exists():
+                shutil.rmtree(root, ignore_errors=True)
+
+        try:
+            advance_optimize_stage(job, "downloading")
+            # El pipeline optimizado es el instalado con OTRO grafo de UNet: los
+            # demás componentes quedan byte a byte iguales, así que sólo el UNet
+            # puede cambiar de comportamiento.
+            await asyncio.to_thread(
+                copy_pipeline_without_unet_graph, installed_dir, out_root
+            )
+            self._raise_if_cancelled(job)
+            src_root.mkdir(parents=True, exist_ok=True)
+            await self._download_torch_source(job, src_root)
+            self._raise_if_cancelled(job)
+
+            advance_optimize_stage(job, "exporting")
+            _cap_vae_trace_resolution(src_root)
+            _disable_vae_force_upcast(src_root)
+            await asyncio.to_thread(
+                self.export_fn,
+                src_root,
+                fp32_root,
+                lambda _name: self._raise_if_cancelled(job),
+                "fp32",
+                None,
+            )
+            self._raise_if_cancelled(job)
+
+            advance_optimize_stage(job, "fusing")
+            job.metadata["fusedOperators"] = await asyncio.to_thread(
+                self.optimize_unet_fn,
+                fp32_root / "unet" / "model.onnx",
+                out_root / "unet",
+                lambda: advance_optimize_stage(job, "converting"),
+            )
+            self._raise_if_cancelled(job)
+
+            advance_optimize_stage(job, "validating")
+            # validate_and_promote CARGA el pipeline fusionado y genera una imagen
+            # antes de registrar nada: un grafo que no carga (el caso de
+            # SkipGroupNorm) falla acá y no llega a existir como modelo.
+            job.model_id = await self.installer.validate_and_promote(
+                out_root,
+                job.repo_id,
+                _directory_size(out_root),
+                checkpoint_path=job.checkpoint_path,
+                model_id=model_id,
+                display_name=_job_model_name(job),
+            )
+            complete_optimize_stages(job)
+        finally:
+            for root in (src_root, fp32_root, out_root):
+                if root.exists():
+                    shutil.rmtree(root, ignore_errors=True)
 
     async def _convert_and_register(self, job: ConversionJob) -> None:
         files = await self.hf_client.repo_files(job.repo_id)

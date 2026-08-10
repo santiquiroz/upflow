@@ -13,8 +13,10 @@ from app.services.inpaint_mask import mask_bbox
 # El caller ya trae el objeto segmentado (RGB + máscara L de MobileSAM) y el
 # destino donde pegarlo. Acá se recorta, se escala, se iguala el color contra
 # la zona donde va a caer y se pega con borde suave. La segunda imagen que se
-# devuelve es la máscara (zona pegada + margen) que la fase 1 le pasa tal cual
-# al inpaint de armonización.
+# devuelve es la máscara de armonización que la fase 1 le pasa tal cual al
+# inpaint: NO es binaria, trae un degradado (máximo en la costura, casi cero en
+# el centro de lo pegado) para que la difusión diferencial re-genere la unión
+# sin reinventar el objeto. Ver harmonization_mask.
 # ---------------------------------------------------------------------------
 
 # 70% mapeado / 30% original: el mapeo MK lleva la distribución de color del
@@ -35,6 +37,16 @@ RING_EXPAND_RATIO = 0.25
 HARMONIZE_DILATE_RATIO = 0.10
 HARMONIZE_DILATE_MIN_PX = 8
 
+# Qué fracción de la PROFUNDIDAD del objeto entra en la banda de costura. El
+# centro de lo pegado no tiene nada roto que arreglar: re-generarlo solo lo
+# aleja del objeto que el usuario eligió. Con 0.35 la banda queda holgada (en un
+# objeto de 400 px de ancho son ~70 px hacia adentro) y el interior se conserva.
+DEFAULT_HARMONIZE_BLEND = 0.35
+
+# Piso de la banda, en píxeles: por debajo de esto el modelo no tiene con qué
+# fundir nada, por chico que sea el objeto o por bajo que venga el parámetro.
+HARMONIZE_SEAM_MIN_PX = 12
+
 
 @dataclass(slots=True, kw_only=True)
 class PasteSpec:
@@ -44,6 +56,9 @@ class PasteSpec:
     height: int
     feather_px: int = 6
     match_color: bool = True
+    # Ver harmonization_mask: 0 = solo la costura, 1 = el objeto entero a
+    # intensidad uniforme (el comportamiento clásico).
+    harmonize_blend: float = DEFAULT_HARMONIZE_BLEND
 
 
 def transfer_object(
@@ -75,7 +90,7 @@ def transfer_object(
         object_rgb = match_color_mk(object_rgb, alpha, reference)
 
     composed = paste(target, object_rgb, alpha, paste_x, paste_y)
-    return composed, _harmonization_mask(target.size, alpha, replace(spec, x=paste_x, y=paste_y, width=fit_w, height=fit_h))
+    return composed, harmonization_mask(target.size, alpha, replace(spec, x=paste_x, y=paste_y, width=fit_w, height=fit_h))
 
 
 def _fit_preserving_aspect(size: tuple[int, int], max_w: int, max_h: int) -> tuple[int, int]:
@@ -91,6 +106,8 @@ def _validate_inputs(source: Image.Image, source_mask: Image.Image, spec: PasteS
         raise ValueError("spec width and height must be >= 1")
     if spec.feather_px < 0:
         raise ValueError("feather_px must be >= 0")
+    if not 0.0 <= spec.harmonize_blend <= 1.0:
+        raise ValueError("harmonize_blend must be between 0 and 1")
 
 
 def crop_object(source: Image.Image, source_mask: Image.Image) -> tuple[Image.Image, Image.Image]:
@@ -126,6 +143,11 @@ def match_color_mk(
 
     Reimplementación del paper; el paquete pip `color-matcher` es GPL-3.0 y no
     se puede importar ni copiar.
+
+    Sigue siendo clásico a propósito: la armonización aprendida (PCT-Net y
+    familia) mide ~9x mejor, pero TODOS los checkpoints publicados se entrenan
+    sobre HAdobe5k, cuya licencia de Adobe es explícitamente de investigación.
+    Ver docs/superpowers/specs/2026-08-10-pctnet-harmonization-license-findings.md
     """
     pixels = object_rgb.reshape(-1, 3).astype(np.float32)
     weights = object_alpha.reshape(-1).astype(np.float32)
@@ -213,9 +235,22 @@ def _overlap(
     return (left, top, right, bottom), (left - x, top - y, right - x, bottom - y)
 
 
-def _harmonization_mask(
+def harmonization_mask(
     target_size: tuple[int, int], alpha: np.ndarray, spec: PasteSpec
 ) -> Image.Image:
+    """Máscara de armonización: máxima en la costura, decreciente hacia adentro.
+
+    Un strength plano sobre toda la zona pegada re-genera también el centro del
+    objeto, que no tiene ninguna costura que arreglar — y ahí es justo donde se
+    pierde la identidad de lo que el usuario eligió pegar. Con la intensidad
+    CONTINUA, el inpaint por difusión diferencial (generation_soft_inpaint
+    re-inyecta el original en proporción al gris de la máscara, paso a paso)
+    conserva el interior casi intacto y concentra el trabajo en la banda de la
+    costura, que es el único lugar donde el pegado se nota.
+
+    `spec.harmonize_blend` es la fracción de la profundidad del objeto que entra
+    en esa banda; 1.0 devuelve la máscara uniforme clásica.
+    """
     width, height = target_size
     canvas = np.zeros((height, width), dtype=np.float32)
     overlap = _overlap(spec.x, spec.y, spec.width, spec.height, width, height)
@@ -226,7 +261,28 @@ def _harmonization_mask(
     dilate_px = max(
         HARMONIZE_DILATE_MIN_PX, round(HARMONIZE_DILATE_RATIO * max(spec.width, spec.height))
     )
-    return Image.fromarray(_dilate_and_soften(canvas, dilate_px), mode="L")
+    ring = _dilate_and_soften(canvas, dilate_px)
+    return Image.fromarray(_taper_interior(ring, canvas > 0.0, spec.harmonize_blend), mode="L")
+
+
+def _smoothstep(ramp: np.ndarray) -> np.ndarray:
+    """Rampa suave 0→1 (3t²-2t³): llega y sale sin quiebre en los extremos."""
+    return ramp * ramp * (3.0 - 2.0 * ramp)
+
+
+def _taper_interior(mask: np.ndarray, covered: np.ndarray, blend: float) -> np.ndarray:
+    """Baja la intensidad hacia el centro de lo pegado; 1.0 la deja uniforme."""
+    if blend >= 1.0 or not covered.any():
+        return mask
+    from scipy.ndimage import distance_transform_edt
+
+    # SIN padding a propósito, al revés que feather_alpha: un objeto que toca el
+    # borde del DESTINO no tiene costura ahí (no hay nada del otro lado), así que
+    # esos píxeles cuentan como profundos y se preservan.
+    depth = distance_transform_edt(covered)
+    band = max(HARMONIZE_SEAM_MIN_PX, round(blend * float(depth.max())))
+    tapered = mask.astype(np.float32) * _smoothstep(np.clip(1.0 - depth / band, 0.0, 1.0))
+    return np.where(covered, np.rint(tapered), mask).astype(np.uint8)
 
 
 def _dilate_and_soften(alpha_canvas: np.ndarray, dilate_px: int) -> np.ndarray:

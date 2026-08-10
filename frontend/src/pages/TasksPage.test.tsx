@@ -6,7 +6,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { en } from "../i18n/en";
 import type { CapabilityTreeResponse, ProvisionJob } from "../lib/apiTypes";
 import * as capabilitiesService from "../services/capabilities";
+import * as settingsService from "../services/settings";
 import { TasksPage } from "./TasksPage";
+
+vi.mock("../services/settings", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/settings")>();
+  return { ...actual, patchSetting: vi.fn() };
+});
 
 vi.mock("../services/capabilities", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../services/capabilities")>();
@@ -30,6 +36,7 @@ function leaf(overrides: Partial<CapabilityTreeResponse["domains"][0]["capabilit
     missingPacks: [] as string[],
     unavailableReasonKey: null as string | null,
     setupReasonKey: null as string | null,
+    activatableSettings: [] as string[],
     ...overrides,
   };
 }
@@ -84,10 +91,31 @@ function provisionJob(overrides: Partial<ProvisionJob> = {}): ProvisionJob {
   };
 }
 
+const NEEDS_FLAG_TREE: CapabilityTreeResponse = {
+  domains: [
+    {
+      domain: "video",
+      labelKey: "capability.domain.video",
+      capabilities: [
+        leaf({
+          id: "audio.restoreSr",
+          labelKey: "capability.audio.restoreSr",
+          status: "needs_setup",
+          provisioning: "vendored_pack",
+          setupReasonKey: "capability.setup.missingSetting",
+          activatableSettings: ["enable_audiosr"],
+        }),
+      ],
+      roadmap: [],
+    },
+  ],
+};
+
 afterEach(() => {
   vi.mocked(capabilitiesService.fetchCapabilityTree).mockReset();
   vi.mocked(capabilitiesService.provisionCapability).mockReset();
   vi.mocked(capabilitiesService.getProvisionStatus).mockReset();
+  vi.mocked(settingsService.patchSetting).mockReset();
 });
 
 describe("TasksPage", () => {
@@ -166,5 +194,46 @@ describe("TasksPage", () => {
 
     expect(screen.queryByText(en["capability.provision.running"])).not.toBeInTheDocument();
     expect(screen.queryByText(en["capability.provision.done"])).not.toBeInTheDocument();
+  });
+
+  it("turns the setting on from the card and re-resolves the tree", async () => {
+    // El atajo completo: la tarjeta prende el flag y el arbol se vuelve a
+    // resolver, asi la capacidad queda disponible sin pasar por Ajustes.
+    vi.mocked(capabilitiesService.fetchCapabilityTree).mockResolvedValue(NEEDS_FLAG_TREE);
+    vi.mocked(settingsService.patchSetting).mockResolvedValue({ key: "enable_audiosr" });
+    renderPage();
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: new RegExp(en["capability.tree.activate"]) }),
+    );
+
+    await waitFor(() =>
+      expect(settingsService.patchSetting).toHaveBeenCalledWith("enable_audiosr", "true"),
+    );
+    expect(await screen.findByText(en["capability.activation.done"])).toBeInTheDocument();
+    await waitFor(() =>
+      expect(vi.mocked(capabilitiesService.fetchCapabilityTree).mock.calls.length).toBeGreaterThan(1),
+    );
+  });
+
+  it("shows the reason when turning the setting on fails", async () => {
+    vi.mocked(capabilitiesService.fetchCapabilityTree).mockResolvedValue(NEEDS_FLAG_TREE);
+    vi.mocked(settingsService.patchSetting).mockRejectedValue(new Error("no es editable"));
+    renderPage();
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: new RegExp(en["capability.tree.activate"]) }),
+    );
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("no es editable");
+  });
+
+  it("says nothing about turning things on before anything is clicked", () => {
+    vi.mocked(capabilitiesService.fetchCapabilityTree).mockResolvedValue(NEEDS_FLAG_TREE);
+    renderPage();
+
+    expect(screen.queryByText(en["capability.activation.done"])).not.toBeInTheDocument();
+    expect(screen.queryByText(en["capability.activation.running"])).not.toBeInTheDocument();
   });
 });

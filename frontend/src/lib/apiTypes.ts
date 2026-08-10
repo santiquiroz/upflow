@@ -196,9 +196,10 @@ export interface SeparationStem {
 // Mirrors app/schemas.py::SeparationModelResponse. `name` es nombre propio del
 // modelo: se muestra tal cual, no se traduce. `stems` viene ordenado: el
 // primero es el que el usuario quiere (downloadUrl del job); `category`
-// agrupa el picker ("karaoke" | "cleanup") y `architecture` ("mdx" | "vr") es
-// informativa: el usuario elige por lo que el modelo hace, el backend resuelve
-// el motor.
+// agrupa el picker ("karaoke" | "cleanup") y `architecture` ("mdx" | "vr" |
+// "roformer") es informativa: el usuario elige por lo que el modelo hace, el
+// backend resuelve el motor. `warningKey` es lo que hay que mostrar ANTES de
+// elegir el modelo (hoy: el costo del carril de máxima calidad).
 export interface SeparationModel {
   id: string;
   name: string;
@@ -207,6 +208,7 @@ export interface SeparationModel {
   category: string;
   architecture: string;
   descriptionKey: string;
+  warningKey?: string | null;
   stems: SeparationStem[];
 }
 
@@ -502,7 +504,12 @@ export interface ScanOnnxDiagnosticResponse {
 export type CapabilityDomainId = "video" | "image" | "audio" | "generate" | "print";
 export type CapabilityStatus = "available" | "needs_setup" | "not_implemented";
 /** `builtin` anda sin bajar nada; `none` significa NO implementada todavía. */
-export type CapabilityProvisioning = "registry" | "vendored_pack" | "builtin" | "none";
+export type CapabilityProvisioning =
+  | "registry"
+  | "vendored_pack"
+  | "builtin"
+  | "user_supplied"
+  | "none";
 export type CapabilityStrategy = "dsp" | "model";
 
 export interface CapabilityResponse {
@@ -516,6 +523,12 @@ export interface CapabilityResponse {
   missingPacks: string[];
   unavailableReasonKey: string | null;
   setupReasonKey: string | null;
+  /**
+   * Ajustes que la tarjeta puede prender de un click. Solo llegan aca los
+   * flags que aplican en caliente: los que exigen reiniciar quedan fuera para
+   * que el boton no prometa algo que no pasa.
+   */
+  activatableSettings: string[];
 }
 
 export interface CapabilityDomainResponse {
@@ -711,6 +724,13 @@ export interface UserJobsResponse {
 export interface EditableSettingStatus {
   key: string;
   configured: boolean;
+  /**
+   * Presente SOLO para los flags booleanos ("true" | "false"). Para hf_token y
+   * el texto libre viaja null: el valor nunca sale del servidor.
+   */
+  value: string | null;
+  /** El cambio se escribe igual, pero no aplica hasta reiniciar el servidor. */
+  requiresRestart: boolean;
 }
 
 export interface EditableSettingsResponse {

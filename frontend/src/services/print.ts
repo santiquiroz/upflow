@@ -119,6 +119,16 @@ export interface Shape3dJob {
   /** Solo en "cad": el código, que es la pieza editable. */
   code: string | null;
   retries: number;
+  /** A cuánto se escaló el lado más largo. */
+  targetMm: number | null;
+  /**
+   * De dónde salió esa medida: "user", "estimate" (la sugirió el modelo y el
+   * usuario la confirmó) o "default" (la puso el programa). El número solo
+   * dejaría creer que alguien lo eligió.
+   */
+  targetMmSource: string | null;
+  /** Contra qué objeto la comparó el modelo, si vino de una estimación. */
+  targetMmReference: string | null;
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;
@@ -137,6 +147,12 @@ export function createShape3dJob(body: {
   printer: string;
   source?: "mesh" | "photo" | "cad";
   targetMm?: number;
+  /**
+   * De dónde salió `targetMm`. Lo declara el cliente porque es el único que
+   * sabe si el usuario escribió la medida o aceptó la sugerida.
+   */
+  targetMmSource?: "user" | "estimate";
+  targetMmReference?: string;
   expectedSize?: [number, number, number];
   /** Solo en "photo": token devuelto por /generation/init-image. */
   imageToken?: string;
@@ -147,8 +163,21 @@ export function createShape3dJob(body: {
     source: body.source ?? "mesh",
     image_token: body.imageToken ?? null,
     target_mm: body.targetMm ?? null,
+    target_mm_source: body.targetMmSource ?? null,
+    target_mm_reference: body.targetMmReference ?? null,
     expected_size: body.expectedSize ?? null,
   });
+}
+
+/** Cuánto mide de verdad el objeto descrito. Es una SUGERENCIA, no una cota. */
+export interface SizeEstimate {
+  longestMm: number;
+  /** Contra qué objeto lo comparó el modelo. Puede venir vacío. */
+  reference: string;
+}
+
+export function estimatePrintSize(prompt: string): Promise<SizeEstimate> {
+  return apiPostJson<SizeEstimate>("/print/estimate-size", { prompt });
 }
 
 export function getShape3dJob(jobId: string): Promise<Shape3dJob> {

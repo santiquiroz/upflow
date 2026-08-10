@@ -27,6 +27,7 @@ from app.services.openscad_llm import LlmUnavailable, describe_to_stl
 from app.services.mesh_fit import PRINTER_BEDS
 from app.services.missing_pack import missing_pack_message
 from app.services.print_check import check_stl_for_printing
+from app.services.size_estimate import MAX_REFERENCE_CHARS, clean_reference
 from app.services.stl_writer import write_stl
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,43 @@ MAX_PROMPT_CHARS = 400
 # leídas como mm): un STL de 2mm no le sirve a nadie (visto real). 100mm es un
 # default imprimible; la medida REAL sigue siendo decisión del usuario.
 DEFAULT_MESH_LONGEST_MM = 100.0
+
+# De donde salio la medida con la que se escala la malla. Sin esto el resultado
+# no puede distinguir "el usuario quiso 100 mm" de "el programa escalo a 100 mm
+# porque habia que escalar a algo", y esa diferencia decide si la pieza sirve.
+TARGET_MM_FROM_USER = "user"
+TARGET_MM_FROM_ESTIMATE = "estimate"
+TARGET_MM_FROM_DEFAULT = "default"
+# El default lo pone el servidor: nadie puede DECLARARLO desde afuera, porque
+# seria decir "esto lo eligio el programa" sobre una medida que llego escrita.
+DECLARABLE_TARGET_MM_SOURCES = (TARGET_MM_FROM_USER, TARGET_MM_FROM_ESTIMATE)
+
+
+def resolve_target_mm(
+    target_mm: float | None, source: str, declared: str | None
+) -> tuple[float | None, str | None]:
+    """La medida con la que se escala Y de donde salio, que viajan juntas.
+
+    "cad" no escala: sus cotas estan en el codigo, asi que no tiene ni medida de
+    escalado ni procedencia que registrar.
+    """
+    if target_mm is not None:
+        return target_mm, declared or TARGET_MM_FROM_USER
+    if source in ("mesh", "photo"):
+        return DEFAULT_MESH_LONGEST_MM, TARGET_MM_FROM_DEFAULT
+    return None, None
+
+
+def reference_for(resolved_source: str | None, reference: str | None) -> str | None:
+    """La referencia solo acompana a una medida ESTIMADA.
+
+    Pegarla a una medida que escribio el usuario seria atribuirle al modelo algo
+    que no dijo.
+    """
+    if resolved_source != TARGET_MM_FROM_ESTIMATE:
+        return None
+    limpia = clean_reference(reference)[:MAX_REFERENCE_CHARS]
+    return limpia or None
 
 
 class Shape3dJobManager:
@@ -81,6 +119,8 @@ class Shape3dJobManager:
         printer: str = "ender-3",
         source: str = "mesh",
         target_mm: float | None = None,
+        target_mm_source: str | None = None,
+        target_mm_reference: str | None = None,
         expected_size: tuple[float, float, float] | None = None,
         image_path: Path | None = None,
         owner: AuthenticatedUser | None = None,
@@ -108,9 +148,13 @@ class Shape3dJobManager:
             )
         if target_mm is not None and target_mm <= 0:
             raise ValueError("La medida pedida tiene que ser mayor que cero.")
+        if target_mm_source is not None and target_mm_source not in DECLARABLE_TARGET_MM_SOURCES:
+            raise ValueError(
+                f"No se de donde salio la medida: {target_mm_source!r}. Es "
+                f"{' o '.join(DECLARABLE_TARGET_MM_SOURCES)}."
+            )
         # Ni "mesh" ni "photo" traen cotas: los dos se escalan al default.
-        if target_mm is None and source in ("mesh", "photo"):
-            target_mm = DEFAULT_MESH_LONGEST_MM
+        target_mm, resolved_source = resolve_target_mm(target_mm, source, target_mm_source)
         if source == "mesh" and not self.engine.available():
             raise Shape3dUnavailable(missing_pack_message("shap-e"))
         if source == "photo" and not self.engine.available_image():
@@ -135,6 +179,8 @@ class Shape3dJobManager:
             printer=printer,
             source=source,
             target_mm=target_mm,
+            target_mm_source=resolved_source,
+            target_mm_reference=reference_for(resolved_source, target_mm_reference),
             expected_size=expected_size,
             image_path=image_path,
             owner_id=owner.id if owner is not None else None,

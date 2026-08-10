@@ -87,6 +87,13 @@ export const es = {
   "models.createInpaint.hint":
     "Mergea este modelo con el inpainting oficial de su familia (9 canales): mismo estilo, bordes que calzan y fuerza parcial real. Descarga ~15GB y tarda ~40 min.",
   "models.createInpaint.failed": "No se pudo crear la versión de inpainting",
+  "models.optimize.button": "Optimizar",
+  "models.optimize.hint":
+    "Reconstruye el UNet con el grafo fusionado: los mismos pesos, hasta 3x más rápido " +
+    "en SDXL (1,3x en SD 1.5). Se guarda como un modelo nuevo y el original queda intacto. " +
+    "Tarda ~10 min en SDXL y ~3 min en SD 1.5, y pide unos 50 GB de RAM libre en SDXL " +
+    "(26 GB en SD 1.5). Las imágenes con la misma semilla pueden variar levemente.",
+  "models.optimize.failed": "No se pudo optimizar este modelo",
   "generate.video.size.square": "640 x 640 (cuadrado)",
   "generate.video.size.fastest": "480 x 480 (más rápido)",
   "generate.video.size.vertical": "480 x 832 (vertical)",
@@ -192,6 +199,19 @@ export const es = {
   "settings.diagnostics.none": "Todavía no se escaneó ninguna combinación de modelo ONNX y dispositivo.",
   "settings.diagnostics.loading": "Cargando el diagnóstico…",
   "settings.diagnostics.loadError": "No se pudo cargar el diagnóstico.",
+  "settings.capabilityFlags.title": "Interruptores de capacidades",
+  "settings.capabilityFlags.explanation": "Funciones que vienen apagadas de fábrica. Prenderlas acá alcanza: no hay ningún archivo que editar.",
+  "settings.capabilityFlags.loading": "Cargando interruptores…",
+  "settings.flag.enable_audiosr": "Restauración AudioSR (pesada, reconstruye cualquier banda hasta 48 kHz)",
+  "settings.flag.enable_audio_restore": "Restauración Apollo (reconstruye la banda alta que tiró el códec)",
+  "settings.flag.enable_file_logging": "Guardar los registros en un archivo (para reportar problemas)",
+  "settings.flag.restartNeeded": "Guardado, pero recién se aplica al reiniciar el servidor.",
+  "settings.flag.saveError": "No se pudo guardar el interruptor.",
+  "settings.cadServer.label": "Servidor del modelo CAD",
+  "settings.cadServer.explanation": "Cualquier servidor compatible con OpenAI: Ollama, LM Studio, llama.cpp. No se incluye ninguno — se apunta al que ya tengas corriendo.",
+  "settings.cadServer.placeholder": "http://localhost:11434/v1",
+  "settings.cadServer.configured": "Configurado",
+  "settings.cadServer.restartNeeded": "El cliente CAD se arma al arrancar: un cambio acá se aplica al reiniciar el servidor.",
   "settings.token.notConfigured": "Sin configurar",
   "settings.token.placeholder": "Escribe un token nuevo",
   "settings.token.saveError": "No se pudo guardar el token.",
@@ -385,6 +405,18 @@ export const es = {
   "gen3d.photo.previewAlt": "Vista previa de la foto elegida",
   "gen3d.photo.missingPack":
     "El modelo de foto a 3D no está descargado todavía. Es una descarga aparte del de texto (unos 2 GB).",
+  "gen3d.estimate.action": "Estimar el tamaño real",
+  "gen3d.estimate.working": "Preguntándole al modelo…",
+  "gen3d.estimate.suggestion": "El modelo sugiere {{mm}} mm para el lado más largo.",
+  "gen3d.estimate.reference": "Comparable a: {{reference}}",
+  "gen3d.estimate.apply": "Usar {{mm}} mm",
+  "gen3d.estimate.disclaimer":
+    "Es una conjetura sobre el objeto real, no una medición de esta malla. Revisala antes de imprimir.",
+  "gen3d.estimate.failed":
+    "El modelo no pudo estimar un tamaño. No se cambió nada: vale la medida que ves.",
+  "gen3d.size.source.user": "Escalada a la medida que pediste.",
+  "gen3d.size.source.estimate": "Escalada a una medida que sugirió el modelo y confirmaste vos.",
+  "gen3d.size.source.default": "Escalada al valor por defecto (100 mm): esa medida no la eligió nadie.",
   "cad.subtitle": "Describís la pieza CON MEDIDAS y un modelo local escribe el código CAD. Sale una pieza acotada, no una forma aproximada.",
   "cad.hasDimensions": "Acá las medidas son exactas: el código lleva las cotas, y la pieza se mide después para confirmarlo. Es el carril para algo que tiene que encajar.",
   "cad.prompt": "Qué es",
@@ -538,9 +570,14 @@ export const es = {
   "audio.karaoke.modelMissing": "El modelo {{name}} todavía no está descargado.",
   "audio.karaoke.noModels": "Descargá al menos un modelo de separación para habilitar el karaoke.",
   "audio.karaoke.credit":
-    "Modelos distribuidos por el canal oficial de descargas de Ultimate Vocal Remover: Anjok07 & aufr33 (MIT), y Reverb HQ / De-Echo / De-Reverb de FoxJoy (port a ONNX: santiquiroz/port-uvr-deecho-onnx, MIT).",
+    "Modelos distribuidos por el canal oficial de descargas de Ultimate Vocal Remover: Anjok07 & aufr33 (MIT), y Reverb HQ / De-Echo / De-Reverb / De-Noise de FoxJoy (port a ONNX: santiquiroz/port-uvr-deecho-onnx, MIT). Mel-Band RoFormer es de KimberleyJSN (MIT), port a ONNX: santiquiroz/port-bs-roformer-onnx.",
   "audio.karaoke.category.karaoke": "Karaoke",
   "audio.karaoke.category.cleanup": "Limpieza",
+  "audio.karaoke.slowBadge": "Lento",
+  "audio.karaoke.model.mel_band_roformer_kim.description":
+    "Extrae la voz con la máxima calidad del catálogo (Mel-Band RoFormer); la instrumental es el resto.",
+  "audio.karaoke.model.mel_band_roformer_kim.warning":
+    "Máxima calidad, unas 20x más lento que Inst HQ 3: medido en 50 s de GPU por cada minuto de audio, contra 2,5 s de Inst HQ 3. Descarga 931 MB y necesita ~2,3 GB libres de VRAM.",
   "audio.karaoke.model.inst_hq_3.description":
     "Extrae la instrumental (pista de karaoke); la voz es el resto.",
   "audio.karaoke.model.voc_ft.description":
@@ -553,6 +590,8 @@ export const es = {
     "Saca el eco fuerte. Pega más duro que Normal y puede apagar la señal — usalo cuando Normal deja eco.",
   "audio.karaoke.model.deecho_dereverb.description":
     "Saca eco Y reverb de sala en una sola pasada. La limpieza más amplia de las tres.",
+  "audio.karaoke.model.denoise.description":
+    "Saca el ruido de fondo constante — hiss, zumbido y ruido de sala. Es otro trabajo que los De-Echo: apunta al ruido parejo, no a los reflejos.",
   "audio.stem.instrumental": "Instrumental",
   "audio.stem.vocals": "Voces",
   "audio.stem.dry": "Sin reverb (dry)",
@@ -561,6 +600,8 @@ export const es = {
   "audio.stem.echo": "Eco",
   "audio.stem.no_reverb": "Sin eco ni reverb",
   "audio.stem.reverb": "Eco y reverb",
+  "audio.stem.no_noise": "Sin ruido",
+  "audio.stem.noise": "Ruido",
   "audio.karaoke.download.instrumental": "Instrumental",
   "audio.karaoke.download.vocals": "Voces",
   "audio.mastering.none": "Sin nivelar",
@@ -697,6 +738,9 @@ export const es = {
   "editor.insert.scale": "Escala (%)",
   "editor.insert.matchColor": "Igualar color",
   "editor.insert.harmonize": "Armonizar con IA",
+  "editor.insert.blend": "Fundido del borde (%)",
+  "editor.insert.blendHint":
+    "Hasta dónde entra la IA desde el borde del objeto para rehacer la costura. Bajo conserva el objeto tal como lo elegiste; 100% rehace el objeto entero.",
   "editor.insert.model": "Modelo de armonización",
   "editor.insert.integrationPrompt": "Prompt de integración (opcional)",
   "editor.insert.integrationPromptPlaceholder":
@@ -732,6 +776,7 @@ export const es = {
   "capability.print.cad": "De descripción a pieza con cotas exactas",
   "capability.print.generate": "De foto o texto a malla",
   "capability.print.generatePhoto": "De foto a malla",
+  "capability.print.estimateSize": "Tamaño real sugerido para una malla generada",
   "capability.setup.shapE": "Necesita el modelo Shap-E (MIT, ~1,3 GB). Corre en el procesador: unos dos minutos por pieza.",
   "capability.reason.printRepairPending": "Todavía no está hecho: cerrar una malla sin inventar geometría que nunca estuvo.",
   "capability.reason.noSlicerPack": "Necesita un laminador que viaje con la app, como viaja ffmpeg.",
@@ -791,6 +836,10 @@ export const es = {
   "capability.provision.running": "Descargando el paquete… puede tardar unos minutos.",
   "capability.provision.done": "Paquete descargado. La capacidad quedó lista.",
   "capability.provision.failed": "La descarga falló: {{error}}",
+  "capability.tree.activate": "Activar",
+  "capability.activation.running": "Activando…",
+  "capability.activation.done": "Activada. La capacidad quedó lista, sin reiniciar.",
+  "capability.activation.failed": "No se pudo activar: {{error}}",
 
   // --- pila de pasos de video -------------------------------------------
   "video.steps.title": "Pasos",

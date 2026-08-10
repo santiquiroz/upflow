@@ -93,6 +93,13 @@ export const en = {
   "models.createInpaint.hint":
     "Merges this model with its family's official inpainting model (9 channels): same style, edges that match, real partial strength. Downloads ~15GB, takes ~40 min.",
   "models.createInpaint.failed": "Could not create the inpainting version",
+  "models.optimize.button": "Optimize",
+  "models.optimize.hint":
+    "Rebuilds the UNet with a fused graph: same weights, up to 3x faster on SDXL " +
+    "(1.3x on SD 1.5). Saved as a new model, the original is untouched. Takes ~10 min " +
+    "on SDXL and ~3 min on SD 1.5, and needs about 50 GB of free RAM on SDXL (26 GB on " +
+    "SD 1.5). Images from the same seed may vary slightly.",
+  "models.optimize.failed": "Could not optimize this model",
   "generate.video.size.square": "640 x 640 (square)",
   "generate.video.size.fastest": "480 x 480 (fastest)",
   "generate.video.size.vertical": "480 x 832 (vertical)",
@@ -197,6 +204,19 @@ export const en = {
   "settings.diagnostics.none": "No ONNX model/device combinations have been scanned yet.",
   "settings.diagnostics.loading": "Loading diagnostics…",
   "settings.diagnostics.loadError": "Could not load diagnostics.",
+  "settings.capabilityFlags.title": "Capability switches",
+  "settings.capabilityFlags.explanation": "Features that ship off by default. Turning one on here is enough — no file to edit.",
+  "settings.capabilityFlags.loading": "Loading switches…",
+  "settings.flag.enable_audiosr": "AudioSR restoration (heavy, rebuilds any band up to 48 kHz)",
+  "settings.flag.enable_audio_restore": "Apollo restoration (rebuilds the high band a lossy codec threw away)",
+  "settings.flag.enable_file_logging": "Write logs to a file (for reporting problems)",
+  "settings.flag.restartNeeded": "Saved, but it only applies after restarting the server.",
+  "settings.flag.saveError": "Could not save the switch.",
+  "settings.cadServer.label": "CAD model server",
+  "settings.cadServer.explanation": "Any OpenAI-compatible server: Ollama, LM Studio, llama.cpp. Nothing is bundled — point it at the one you already run.",
+  "settings.cadServer.placeholder": "http://localhost:11434/v1",
+  "settings.cadServer.configured": "Configured",
+  "settings.cadServer.restartNeeded": "The CAD client is wired at startup: a change here applies after restarting the server.",
   "settings.token.notConfigured": "Not configured",
   "settings.token.placeholder": "Enter a new token",
   "settings.token.saveError": "Could not save the token.",
@@ -390,6 +410,18 @@ export const en = {
   "gen3d.photo.previewAlt": "Preview of the chosen photo",
   "gen3d.photo.missingPack":
     "The photo-to-3D model is not downloaded yet. It is a separate download from the text one (about 2 GB).",
+  "gen3d.estimate.action": "Estimate the real size",
+  "gen3d.estimate.working": "Asking the model…",
+  "gen3d.estimate.suggestion": "The model suggests {{mm}} mm for the longest side.",
+  "gen3d.estimate.reference": "Comparable to: {{reference}}",
+  "gen3d.estimate.apply": "Use {{mm}} mm",
+  "gen3d.estimate.disclaimer":
+    "A guess about the real object, not a measurement of this mesh. Check it before you print.",
+  "gen3d.estimate.failed":
+    "The model could not estimate a size. Nothing changed: the value you see is still the one that will be used.",
+  "gen3d.size.source.user": "Scaled to the size you asked for.",
+  "gen3d.size.source.estimate": "Scaled to a size the model suggested and you confirmed.",
+  "gen3d.size.source.default": "Scaled to the default 100 mm: nobody chose that size.",
   "cad.subtitle": "Describe the part WITH MEASUREMENTS and a local model writes the CAD code. You get a dimensioned part, not an approximate shape.",
   "cad.hasDimensions": "Here the measurements are exact: the code carries the dimensions, and the part is measured afterwards to confirm it. This is the lane for something that has to fit.",
   "cad.prompt": "What it is",
@@ -543,9 +575,14 @@ export const en = {
   "audio.karaoke.modelMissing": "The {{name}} model is not downloaded yet.",
   "audio.karaoke.noModels": "Download at least one separation model to enable karaoke.",
   "audio.karaoke.credit":
-    "Models distributed via Ultimate Vocal Remover's official download center: Anjok07 & aufr33 (MIT), and Reverb HQ / De-Echo / De-Reverb by FoxJoy (ONNX port: santiquiroz/port-uvr-deecho-onnx, MIT).",
+    "Models distributed via Ultimate Vocal Remover's official download center: Anjok07 & aufr33 (MIT), and Reverb HQ / De-Echo / De-Reverb / De-Noise by FoxJoy (ONNX port: santiquiroz/port-uvr-deecho-onnx, MIT). Mel-Band RoFormer is by KimberleyJSN (MIT), ONNX port: santiquiroz/port-bs-roformer-onnx.",
   "audio.karaoke.category.karaoke": "Karaoke",
   "audio.karaoke.category.cleanup": "Cleanup",
+  "audio.karaoke.slowBadge": "Slow",
+  "audio.karaoke.model.mel_band_roformer_kim.description":
+    "Extracts the vocals at the highest quality in the catalog (Mel-Band RoFormer); the instrumental is the remainder.",
+  "audio.karaoke.model.mel_band_roformer_kim.warning":
+    "Highest quality, about 20x slower than Inst HQ 3: measured at 50 s of GPU time for each minute of audio, against 2.5 s for Inst HQ 3. Downloads 931 MB and needs ~2.3 GB of free VRAM.",
   "audio.karaoke.model.inst_hq_3.description":
     "Extracts the instrumental (karaoke track); the vocals are the remainder.",
   "audio.karaoke.model.voc_ft.description":
@@ -558,6 +595,8 @@ export const en = {
     "Remove strong echo. Hits harder than Normal and can dull the signal — use it when Normal leaves echo behind.",
   "audio.karaoke.model.deecho_dereverb.description":
     "Remove echo AND room reverb in a single pass. The broadest cleanup of the three.",
+  "audio.karaoke.model.denoise.description":
+    "Remove steady background noise — hiss, hum and room tone. A different job from the De-Echo models: it targets constant noise, not reflections.",
   "audio.stem.instrumental": "Instrumental",
   "audio.stem.vocals": "Vocals",
   "audio.stem.dry": "No reverb (dry)",
@@ -566,6 +605,8 @@ export const en = {
   "audio.stem.echo": "Echo",
   "audio.stem.no_reverb": "No echo or reverb",
   "audio.stem.reverb": "Echo and reverb",
+  "audio.stem.no_noise": "No noise",
+  "audio.stem.noise": "Noise",
   "audio.karaoke.download.instrumental": "Instrumental",
   "audio.karaoke.download.vocals": "Vocals",
   "audio.mastering.none": "Not levelled",
@@ -702,6 +743,9 @@ export const en = {
   "editor.insert.scale": "Scale (%)",
   "editor.insert.matchColor": "Match color",
   "editor.insert.harmonize": "Harmonize with AI",
+  "editor.insert.blend": "Edge blend (%)",
+  "editor.insert.blendHint":
+    "How far in from the object's edge the AI reworks the seam. Low keeps the object as you picked it; 100% rebuilds the whole object.",
   "editor.insert.model": "Harmonization model",
   "editor.insert.integrationPrompt": "Integration prompt (optional)",
   "editor.insert.integrationPromptPlaceholder":
@@ -737,6 +781,7 @@ export const en = {
   "capability.print.cad": "Description to a part with exact sizes",
   "capability.print.generate": "Photo or text to mesh",
   "capability.print.generatePhoto": "Photo to mesh",
+  "capability.print.estimateSize": "Suggested real size for a generated mesh",
   "capability.setup.shapE": "Needs the Shap-E model (MIT, ~1.3 GB). Runs on the processor: about two minutes per part.",
   "capability.reason.printRepairPending": "Not built yet: closing a mesh without inventing geometry that was never there.",
   "capability.reason.noSlicerPack": "Needs a slicer that ships with the app, the way ffmpeg does.",
@@ -796,6 +841,10 @@ export const en = {
   "capability.provision.running": "Downloading the package… this can take a few minutes.",
   "capability.provision.done": "Package downloaded. The capability is ready.",
   "capability.provision.failed": "The download failed: {{error}}",
+  "capability.tree.activate": "Turn it on",
+  "capability.activation.running": "Turning it on…",
+  "capability.activation.done": "Turned on. The capability is ready — no restart needed.",
+  "capability.activation.failed": "Could not turn it on: {{error}}",
 
   // --- pila de pasos de video -------------------------------------------
   "video.steps.title": "Steps",

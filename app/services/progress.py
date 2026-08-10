@@ -349,6 +349,32 @@ def build_conversion_stages(component_keys: list[str]) -> list[Stage]:
     return _normalize_weights(raw_stages)
 
 
+# Pesos tomados de los tiempos medidos en el spike del 2026-08-10 sobre SDXL:
+# export fp32 280 s, fusión 222 s, conversión a fp16 + escritura 104 s. La
+# descarga y la validación dependen de la red y de la GPU, no del modelo.
+OPTIMIZE_STAGE_DEFS: tuple[tuple[str, str, float], ...] = (
+    ("downloading", "Downloading source weights", 12.0),
+    ("exporting", "Re-exporting in fp32", 40.0),
+    ("fusing", "Fusing graph", 32.0),
+    ("converting", "Converting to fp16", 12.0),
+    ("validating", "Validating pipeline", 4.0),
+)
+
+
+def build_optimize_stages() -> list[Stage]:
+    return _normalize_weights(list(OPTIMIZE_STAGE_DEFS))
+
+
+def advance_optimize_stage(job: HasMetadata, stage_key: str) -> None:
+    stages = apply_stage_transition(build_optimize_stages(), stage_key)
+    _write_stage_metadata(job, stages, stage_key)
+
+
+def complete_optimize_stages(job: HasMetadata) -> None:
+    stages = mark_all_done(build_optimize_stages())
+    _write_stage_metadata(job, stages, "completed", progress_override=1.0)
+
+
 def advance_conversion_stage(job: HasMetadata, component_keys: list[str], stage_key: str) -> None:
     stages = apply_stage_transition(build_conversion_stages(component_keys), stage_key)
     _write_stage_metadata(job, stages, stage_key)

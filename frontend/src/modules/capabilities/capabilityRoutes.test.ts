@@ -14,6 +14,7 @@ function capability(overrides: Partial<CapabilityResponse> = {}): CapabilityResp
     missingPacks: [],
     unavailableReasonKey: null,
     setupReasonKey: null,
+    activatableSettings: [],
     ...overrides,
   };
 }

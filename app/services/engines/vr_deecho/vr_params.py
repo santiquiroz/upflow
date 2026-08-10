@@ -1,5 +1,5 @@
 # Vendored from santiquiroz/port-uvr-deecho-onnx driver/vr_params.py @ commit
-# 23b2564 (see app/services/engines/vr_deecho/__init__.py for sync notes).
+# 02cd199 (see app/services/engines/vr_deecho/__init__.py for sync notes).
 # Verbatim except this header -- no internal `driver.*` imports to rewrite.
 """VR 4band_v3 multiband parameters, transcribed from python-audio-separator's
 uvr_lib_v5/vr_network/modelparams/4band_v3.json (MIT). Kept as plain constants so

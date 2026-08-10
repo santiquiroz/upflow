@@ -21,6 +21,7 @@ vi.mock("../../services/generation", async (importOriginal) => {
     installGenerationModel: vi.fn(),
     getGenerationInstallStatus: vi.fn(),
     getConversionStatus: vi.fn(),
+    optimizeGenerationModel: vi.fn(),
   };
 });
 
@@ -73,6 +74,7 @@ afterEach(() => {
   vi.mocked(generationService.installGenerationModel).mockReset();
   vi.mocked(generationService.getGenerationInstallStatus).mockReset();
   vi.mocked(generationService.getConversionStatus).mockReset();
+  vi.mocked(generationService.optimizeGenerationModel).mockReset();
 });
 
 describe("GenerationModelsSection", () => {
@@ -188,6 +190,43 @@ describe("GenerationModelsSection", () => {
 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(api.deleteModel).not.toHaveBeenCalled();
+  });
+
+  it("optimizes an installed diffusion model through the graph-fusion endpoint", async () => {
+    vi.mocked(generationService.optimizeGenerationModel).mockResolvedValue({
+      conversionId: "opt-1",
+      statusUrl: "/x",
+    });
+    renderSection([DIFFUSION_MODEL]);
+
+    fireEvent.click(await screen.findByRole("button", { name: /^optimize$/i }));
+
+    await waitFor(() =>
+      expect(vi.mocked(generationService.optimizeGenerationModel).mock.calls[0]?.[0]).toBe(
+        DIFFUSION_MODEL.id,
+      ),
+    );
+  });
+
+  it("does not offer optimization for variants that have no source weights to re-export", async () => {
+    renderSection([
+      { ...DIFFUSION_MODEL, id: "sd15--inpainting", name: "owner/sd15 (inpainting)" },
+      { ...DIFFUSION_MODEL, id: "sd15--optimized", name: "owner/sd15 (optimized)" },
+    ]);
+
+    await screen.findByText("owner/sd15 (inpainting)");
+    expect(screen.queryByRole("button", { name: /^optimize$/i })).not.toBeInTheDocument();
+  });
+
+  it("surfaces the backend reason when optimization is rejected", async () => {
+    vi.mocked(generationService.optimizeGenerationModel).mockRejectedValue(
+      new Error("Optimizar un SDXL necesita unos 50.0 GiB de RAM libre y ahora hay 8.0 GiB"),
+    );
+    renderSection([DIFFUSION_MODEL]);
+
+    fireEvent.click(await screen.findByRole("button", { name: /^optimize$/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/50\.0 GiB/);
   });
 
   it("deletes the diffusion model once the destructive action is confirmed", async () => {

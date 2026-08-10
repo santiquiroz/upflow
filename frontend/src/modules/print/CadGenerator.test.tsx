@@ -30,6 +30,10 @@ const EN_COLA: printService.Shape3dJob = {
   source: "cad",
   code: null,
   retries: 0,
+  // El carril CAD no escala nada: sus cotas estan en el codigo.
+  targetMm: null,
+  targetMmSource: null,
+  targetMmReference: null,
   createdAt: "2026-08-05T00:00:00Z",
   startedAt: null,
   finishedAt: null,

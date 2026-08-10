@@ -14,12 +14,22 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.services.engines.mdx_models import MDX_MODELS
+from app.services.engines.roformer_models import ROFORMER_MODELS
 from app.services.engines.separation_spec import SeparationModelSpec
 from app.services.engines.vr_models import VR_MODELS
 
 DEFAULT_SEPARATION_MODEL = "inst_hq_3"
 
-SEPARATION_MODELS: dict[str, SeparationModelSpec] = {**MDX_MODELS, **VR_MODELS}
+# RoFormer va DESPUES de los MDX dentro de karaoke y no antes: el orden del
+# dict es el orden del picker, y el primero de un grupo es el que se lee como
+# recomendado. El carril de maxima calidad cuesta ~20x medido de punta a punta,
+# asi que se ofrece como alternativa explicita al default, no como la primera
+# opcion.
+SEPARATION_MODELS: dict[str, SeparationModelSpec] = {
+    **MDX_MODELS,
+    **ROFORMER_MODELS,
+    **VR_MODELS,
+}
 
 
 def model_file(model_dir: Path, model_id: str) -> Path:

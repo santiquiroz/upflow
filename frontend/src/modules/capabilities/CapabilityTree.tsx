@@ -3,6 +3,7 @@ import {
   Download,
   Map,
   PackageSearch,
+  ToggleRight,
 } from "lucide-react";
 import { useState } from "react";
 import { useCapabilityTree } from "../../hooks/useCapabilityTree";
@@ -15,6 +16,18 @@ import type {
 interface CapabilityTreeProps {
   onSelect: (capability: CapabilityResponse) => void;
   onProvision: (capability: CapabilityResponse) => void;
+  onActivate: (capability: CapabilityResponse) => void;
+}
+
+// Lo que le falta a la tarjeta se resuelve en UN orden: sin el paquete no
+// sirve prender nada, asi que el interruptor recien aparece con el pack en
+// disco. El backend ya deja fuera de `activatableSettings` lo que exige
+// reiniciar, asi que este boton nunca promete algo que no pasa.
+function canActivateHere(capability: CapabilityResponse): boolean {
+  return (
+    capability.missingPacks.length === 0 &&
+    capability.activatableSettings.length > 0
+  );
 }
 
 function AvailableCapability({
@@ -47,9 +60,11 @@ function AvailableCapability({
 function SetupCapability({
   capability,
   onProvision,
+  onActivate,
 }: {
   capability: CapabilityResponse;
   onProvision: (capability: CapabilityResponse) => void;
+  onActivate: (capability: CapabilityResponse) => void;
 }) {
   const { t } = useTranslation();
   const label = t(capability.labelKey);
@@ -81,6 +96,17 @@ function SetupCapability({
         >
           <Download aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={2} />
           {t("capability.tree.download")}
+        </button>
+      )}
+      {canActivateHere(capability) && (
+        <button
+          type="button"
+          aria-label={`${t("capability.tree.activate")}: ${label}`}
+          onClick={() => onActivate(capability)}
+          className="ml-7 inline-flex w-fit items-center gap-1.5 rounded-sm border border-warn bg-surface px-2.5 py-1.5 text-xs font-medium text-text transition-[background-color,border-color] duration-fast hover:bg-surface-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+        >
+          <ToggleRight aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={2} />
+          {t("capability.tree.activate")}
         </button>
       )}
     </li>
@@ -117,6 +143,7 @@ function RoadmapCapability({ capability }: { capability: CapabilityResponse }) {
 export function CapabilityTree({
   onSelect,
   onProvision,
+  onActivate,
 }: CapabilityTreeProps) {
   const { t } = useTranslation();
   const query = useCapabilityTree();
@@ -197,6 +224,7 @@ export function CapabilityTree({
                 key={capability.id}
                 capability={capability}
                 onProvision={onProvision}
+                onActivate={onActivate}
               />
             ),
           )}

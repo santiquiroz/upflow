@@ -23,6 +23,23 @@ function orderedCategories(models: SeparationModel[]): string[] {
 }
 
 /**
+ * La advertencia de un modelo, visible SIEMPRE — esté instalado o no, esté
+ * elegido o no. Es el punto: enterarse de que un modelo cuesta ~9x cuando el
+ * trabajo ya arrancó no es haber elegido.
+ */
+function ModelWarning({ model }: { model: SeparationModel }) {
+  const { t } = useTranslation();
+  if (!model.warningKey) {
+    return null;
+  }
+  return (
+    <p role="note" className="text-xs text-warn">
+      <span className="font-semibold">{model.name}:</span> {t(model.warningKey)}
+    </p>
+  );
+}
+
+/**
  * Un grupo del picker (categoría "karaoke" o "cleanup"): botones para los
  * modelos instalados, la descripción del modelo seleccionado, y una tarjeta
  * de descarga por cada modelo que falta.
@@ -59,6 +76,14 @@ function ModelCategoryGroup({
               onClick={() => onSelectModel(model.id)}
             >
               {model.name}
+              {/* border y color heredados (border-current): el chip tiene que
+                  leerse tanto sobre el botón activo (fondo acento) como sobre
+                  el inactivo. */}
+              {model.warningKey && (
+                <span className="rounded-sm border border-current px-1 text-[0.65rem] uppercase tracking-wide">
+                  {t("audio.karaoke.slowBadge")}
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -68,6 +93,9 @@ function ModelCategoryGroup({
           {t(selected.descriptionKey)}
         </p>
       )}
+      {models.map((model) => (
+        <ModelWarning key={`warning-${model.id}`} model={model} />
+      ))}
       {missing.map((model) => (
         <PackDownload
           key={model.id}

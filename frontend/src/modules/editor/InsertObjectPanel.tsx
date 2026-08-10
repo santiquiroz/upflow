@@ -15,6 +15,11 @@ import type { BrushPoint } from "./maskCanvas";
 
 const SCALE_MIN = 10;
 const SCALE_MAX = 200;
+// "Cuánto funde el borde", en %: 0 funde solo la costura, 100 rehace el objeto
+// entero (el comportamiento anterior a la armonización por perfil continuo).
+const BLEND_MIN = 0;
+const BLEND_MAX = 100;
+const DEFAULT_BLEND = 35;
 // Por defecto el objeto entra ocupando un tercio del ancho de la imagen destino.
 const DEFAULT_TARGET_FRACTION = 1 / 3;
 // Con targetMaskToken el backend ignora la geometria: van los defaults del schema.
@@ -106,6 +111,7 @@ export function InsertObjectPanel({ targetInfo }: { targetInfo: InitImageRespons
   const [scale, setScale] = useState(100);
   const [matchColor, setMatchColor] = useState(true);
   const [harmonize, setHarmonize] = useState(false);
+  const [blend, setBlend] = useState(DEFAULT_BLEND);
   const [modelId, setModelId] = useState<string | null>(null);
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState<BusyState>("idle");
@@ -265,6 +271,7 @@ export function InsertObjectPanel({ targetInfo }: { targetInfo: InitImageRespons
       sourceMaskToken: maskToken,
       matchColor,
       harmonize,
+      harmonizeBlend: blend / 100,
       modelId: harmonize && modelId ? modelId : undefined,
       prompt: harmonize && prompt.trim() !== "" ? prompt.trim() : undefined,
     };
@@ -477,6 +484,25 @@ export function InsertObjectPanel({ targetInfo }: { targetInfo: InitImageRespons
                 </option>
               ))}
             </select>
+          </label>
+        )}
+        {harmonize && (
+          <label className="flex max-w-xs flex-col gap-1 text-sm text-text">
+            <span>
+              {t("editor.insert.blend")}{" "}
+              <span className="font-mono-tabular text-text-dim">{blend}</span>
+            </span>
+            <input
+              type="range"
+              min={BLEND_MIN}
+              max={BLEND_MAX}
+              step={5}
+              value={blend}
+              disabled={busy !== "idle"}
+              aria-label={t("editor.insert.blend")}
+              onChange={(event) => setBlend(Number(event.target.value))}
+            />
+            <span className="text-xs text-text-faint">{t("editor.insert.blendHint")}</span>
           </label>
         )}
         {harmonize && (

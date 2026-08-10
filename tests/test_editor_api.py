@@ -191,6 +191,103 @@ async def test_insert_object_replace_mode_fits_the_target_object_bbox() -> None:
     assert composite.getpixel((2, 2))[2] > 200
 
 
+# --- armonización fase 2: máscara continua ----------------------------------
+
+
+class RecordingManager:
+    """Manager falso con un modelo de inpainting DEDICADO instalado."""
+
+    def __init__(self, models_path) -> None:
+        from types import SimpleNamespace
+
+        pipeline_dir = models_path / "gen--fake--inpaint"
+        pipeline_dir.mkdir(parents=True, exist_ok=True)
+        (pipeline_dir / "model_index.json").write_text(
+            '{"_class_name": "StableDiffusionXLInpaintPipeline"}', encoding="utf-8"
+        )
+        entry = SimpleNamespace(file_path="gen--fake--inpaint", kind=None, source="hf:x/y")
+        self.registry = SimpleNamespace(get=lambda model_id: entry)
+        self.calls: list[dict] = []
+
+    async def create_job(self, **kwargs):
+        from types import SimpleNamespace
+
+        self.calls.append(kwargs)
+        return SimpleNamespace(id="job-1")
+
+
+def _harmonize_request(manager):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(generation_job_manager=manager)),
+        # current_user_from_request lee esto cuando no hay auth multi-usuario
+        state=SimpleNamespace(user=None),
+        scope={"type": "http"},
+    )
+
+
+async def _run_harmonize(manager, **overrides):
+    from app.api.editor_routes import insert_object
+    from app.schemas import InsertObjectRequest
+
+    target_token = await _upload_png(Image.new("RGB", (160, 160), (0, 0, 255)), "target.png")
+    source_token = await _upload_png(Image.new("RGB", (80, 80), (255, 0, 0)), "source.png")
+    mask_token = await _upload_png(Image.new("L", (80, 80), 255), "mask.png")
+
+    payload = dict(
+        targetToken=target_token, sourceToken=source_token, sourceMaskToken=mask_token,
+        x=40, y=40, width=80, height=80, featherPx=0, matchColor=False,
+        harmonize=True, modelId="gen--fake--inpaint",
+    )
+    payload.update(overrides)
+    return await insert_object(InsertObjectRequest(**payload), request=_harmonize_request(manager))
+
+
+@pytest.mark.asyncio
+async def test_harmonize_defaults_to_the_continuous_mask_and_skips_engine_dilation() -> None:
+    settings = get_settings()
+    manager = RecordingManager(settings.models_path)
+
+    response = await _run_harmonize(manager)
+
+    assert response.job_id == "job-1"
+    call = manager.calls[0]
+    # el perfil continuo ya trae su dilatación y su caída: re-dilatarlo en el
+    # motor empujaría la costura hacia adentro y borraría el centro preservado
+    assert call["mask_dilate_px"] == 0
+    assert call["mask_feather_px"] == 0
+    mask = np.asarray(Image.open(call["mask_image_path"]).convert("L"))
+    assert mask.max() == 255
+    assert mask[80, 80] == 0  # centro del objeto: preservado
+
+
+@pytest.mark.asyncio
+async def test_harmonize_blend_one_keeps_the_uniform_mask_and_engine_defaults() -> None:
+    settings = get_settings()
+    manager = RecordingManager(settings.models_path)
+
+    await _run_harmonize(manager, harmonizeBlend=1.0)
+
+    call = manager.calls[0]
+    # comportamiento viejo alcanzable: máscara uniforme y el motor prepara como siempre
+    assert "mask_dilate_px" not in call and "mask_feather_px" not in call
+    mask = np.asarray(Image.open(call["mask_image_path"]).convert("L"))
+    assert (mask[40:120, 40:120] == 255).all()
+
+
+@pytest.mark.asyncio
+async def test_insert_object_request_rejects_a_blend_outside_zero_one() -> None:
+    import pydantic
+
+    from app.schemas import InsertObjectRequest
+
+    with pytest.raises(pydantic.ValidationError):
+        InsertObjectRequest(
+            targetToken="a", sourceToken="b", sourceMaskToken="c", harmonizeBlend=1.4
+        )
+
+
 @pytest.mark.asyncio
 async def test_insert_object_replace_mode_rejects_an_empty_target_mask() -> None:
     from app.api.editor_routes import insert_object

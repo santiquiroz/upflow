@@ -27,6 +27,7 @@ function capability(
     missingPacks: [],
     unavailableReasonKey: null,
     setupReasonKey: null,
+    activatableSettings: [],
     ...overrides,
   };
 }
@@ -55,6 +56,28 @@ const ROADMAP = capability({
   provisioning: "none",
   jobKind: null,
   unavailableReasonKey: "capability.reason.subtitles",
+});
+
+const NEEDS_FLAG = capability({
+  id: "audio.restoreSr",
+  domain: "audio",
+  labelKey: "capability.audio.restoreSr",
+  status: "needs_setup",
+  provisioning: "vendored_pack",
+  missingPacks: [],
+  setupReasonKey: "capability.setup.missingSetting",
+  activatableSettings: ["enable_audiosr"],
+});
+
+const NEEDS_PACK_AND_FLAG = capability({
+  id: "audio.restore",
+  domain: "audio",
+  labelKey: "capability.audio.restore",
+  status: "needs_setup",
+  provisioning: "vendored_pack",
+  missingPacks: ["apollo"],
+  setupReasonKey: "capability.setup.missingPack",
+  activatableSettings: ["enable_audio_restore"],
 });
 
 const NEEDS_MODEL = capability({
@@ -89,6 +112,8 @@ const TREE: CapabilityTreeResponse = {
           domain: "audio",
           labelKey: "capability.audio.denoise",
         }),
+        NEEDS_FLAG,
+        NEEDS_PACK_AND_FLAG,
       ],
       roadmap: [],
     },
@@ -140,15 +165,21 @@ function Providers({
 function renderTree({
   onSelect = vi.fn(),
   onProvision = vi.fn(),
+  onActivate = vi.fn(),
   withData = true,
 }: {
   onSelect?: (capability: CapabilityResponse) => void;
   onProvision?: (capability: CapabilityResponse) => void;
+  onActivate?: (capability: CapabilityResponse) => void;
   withData?: boolean;
 } = {}) {
   const client = queryClient(withData);
   return render(
-    <CapabilityTree onSelect={onSelect} onProvision={onProvision} />,
+    <CapabilityTree
+      onSelect={onSelect}
+      onProvision={onProvision}
+      onActivate={onActivate}
+    />,
     {
       wrapper: ({ children }) => (
         <Providers client={client}>{children}</Providers>
@@ -253,6 +284,58 @@ describe("CapabilityTree", () => {
       within(item).getByText(en["capability.setup.missingModel"]),
     ).toBeVisible();
     expect(within(item).queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it("offers turning the setting on right on the card when only the flag is missing", () => {
+    // La friccion que arregla: el pack ya esta en disco y la tarjeta mandaba a
+    // Ajustes a prender un flag a mano.
+    const onActivate = vi.fn();
+    renderTree({ onActivate });
+    fireEvent.click(
+      screen.getByRole("button", { name: en["capability.domain.audio"] }),
+    );
+
+    fireEvent.click(
+      within(itemFor(en["capability.audio.restoreSr"])).getByRole("button", {
+        name: new RegExp(en["capability.tree.activate"]),
+      }),
+    );
+
+    expect(onActivate).toHaveBeenCalledOnce();
+    expect(onActivate).toHaveBeenCalledWith(NEEDS_FLAG);
+  });
+
+  it("asks for the package first when the pack is missing too", () => {
+    // Prender el flag sin el pack no arregla nada: el orden importa.
+    renderTree();
+    fireEvent.click(
+      screen.getByRole("button", { name: en["capability.domain.audio"] }),
+    );
+
+    const item = itemFor(en["capability.audio.restore"]);
+    expect(
+      within(item).getByRole("button", {
+        name: new RegExp(en["capability.tree.download"]),
+      }),
+    ).toBeVisible();
+    expect(
+      within(item).queryByRole("button", {
+        name: new RegExp(en["capability.tree.activate"]),
+      }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not offer to turn anything on when what is missing is a model", () => {
+    renderTree();
+    fireEvent.click(
+      screen.getByRole("button", { name: en["capability.domain.image"] }),
+    );
+
+    expect(
+      within(itemFor(en["capability.image.upscale"])).queryByRole("button", {
+        name: new RegExp(en["capability.tree.activate"]),
+      }),
+    ).not.toBeInTheDocument();
   });
 
   it("selects an available capability", () => {

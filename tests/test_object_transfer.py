@@ -5,6 +5,8 @@ import pytest
 from PIL import Image
 
 from app.services.object_transfer import (
+    DEFAULT_HARMONIZE_BLEND,
+    HARMONIZE_SEAM_MIN_PX,
     PasteSpec,
     crop_object,
     match_color_mk,
@@ -160,14 +162,140 @@ def test_returned_mask_covers_dilated_paste_and_is_zero_far_away() -> None:
 
     m = np.asarray(pasted_mask)
     assert pasted_mask.mode == "L"
-    # el bbox del pegado entero queda a 255
-    assert (m[30:70, 30:70] == 255).all()
+    # el borde del pegado va al máximo (con el perfil continuo de la fase 2 el
+    # centro ya no: ver test_harmonization_mask_peaks_at_the_seam_...)
+    assert m[30, 50] > 200 and m[69, 50] > 200
+    assert m[50, 30] > 200 and m[50, 69] > 200
     # la dilatación (max(8, 10% de 40) = 8 px) también está cubierta
     assert m[25, 50] == 255
     assert m[50, 75] == 255
     # lejos del objeto, cero
     assert m[0, 0] == 0
     assert m[99, 99] == 0
+
+
+# --- (e2) F2: perfil continuo de armonizacion -------------------------------
+#
+# El objetivo de la fase 2: la mascara ya no dice "regenera todo esto" sino
+# "cuanto regenerar en cada pixel". Maxima en la costura (que es lo unico que
+# delata el pegado) y casi nula en el centro del objeto (que no tiene nada roto
+# que arreglar y es justo donde se perderia la identidad de lo pegado).
+
+PASTE_AT = 90
+OBJECT_SIDE = 120
+CANVAS = (300, 300)
+
+
+def harmonize_mask_for(blend: float) -> np.ndarray:
+    """Mascara de armonizacion de un cuadrado opaco pegado en el centro."""
+    source = solid((OBJECT_SIDE, OBJECT_SIDE), OBJECT_COLOR)
+    mask = rect_mask((OBJECT_SIDE, OBJECT_SIDE), (0, 0, OBJECT_SIDE, OBJECT_SIDE))
+    target = solid(CANVAS, TARGET_COLOR)
+    spec = PasteSpec(
+        x=PASTE_AT, y=PASTE_AT, width=OBJECT_SIDE, height=OBJECT_SIDE,
+        feather_px=0, match_color=False, harmonize_blend=blend,
+    )
+    _, harmonize = transfer_object(source, mask, target, spec)
+    return np.asarray(harmonize)
+
+
+def test_harmonization_mask_peaks_at_the_seam_and_vanishes_at_the_center() -> None:
+    m = harmonize_mask_for(DEFAULT_HARMONIZE_BLEND)
+
+    center = PASTE_AT + OBJECT_SIDE // 2
+    # el centro del objeto se preserva: la difusion diferencial re-inyecta el
+    # original ahi en cada paso
+    assert m[center, center] == 0
+    # la costura (el borde, por afuera y por adentro) es lo que se regenera
+    assert m[center, PASTE_AT - 4] == 255
+    assert m[center, PASTE_AT + 2] > 200
+    assert m.max() == 255
+
+
+def test_harmonization_mask_decays_monotonically_from_the_seam_inward() -> None:
+    m = harmonize_mask_for(DEFAULT_HARMONIZE_BLEND)
+
+    center = PASTE_AT + OBJECT_SIDE // 2
+    inward = m[center, PASTE_AT : center + 1].astype(int)
+    assert (np.diff(inward) <= 0).all()
+    assert inward[0] > 200 and inward[-1] == 0
+    # una rampa de verdad, no un escalon con dos valores
+    assert len({int(v) for v in inward if 0 < v < 255}) >= 5
+
+
+def test_harmonization_blend_one_reproduces_the_uniform_legacy_mask() -> None:
+    m = harmonize_mask_for(1.0)
+
+    # el contrato viejo: todo lo pegado a 255, mas la dilatacion, y cero lejos
+    assert (m[PASTE_AT : PASTE_AT + OBJECT_SIDE, PASTE_AT : PASTE_AT + OBJECT_SIDE] == 255).all()
+    assert m[PASTE_AT - 4, PASTE_AT + 60] == 255
+    assert m[0, 0] == 0
+
+
+def test_lower_blend_preserves_more_of_the_object() -> None:
+    interior = (slice(PASTE_AT, PASTE_AT + OBJECT_SIDE), slice(PASTE_AT, PASTE_AT + OBJECT_SIDE))
+    coverage = [harmonize_mask_for(blend)[interior].mean() for blend in (0.0, 0.2, 0.5, 1.0)]
+
+    assert coverage == sorted(coverage)
+    assert coverage[0] < coverage[-1]
+
+
+def test_blend_zero_still_regenerates_the_minimum_seam_band() -> None:
+    m = harmonize_mask_for(0.0)
+
+    center = PASTE_AT + OBJECT_SIDE // 2
+    # el piso en px existe para que un parametro en 0 no deje al modelo sin
+    # banda con la que fundir
+    assert m[center, PASTE_AT + 2] > 200
+    assert m[center, PASTE_AT + HARMONIZE_SEAM_MIN_PX + 2] == 0
+
+
+def test_edge_touching_the_target_border_is_not_treated_as_a_seam() -> None:
+    """Un objeto cortado por el borde del destino no tiene costura ahi.
+
+    Del otro lado no hay nada con que fundir: esos pixeles cuentan como
+    profundos y se preservan, igual que el centro.
+    """
+    source = solid((120, 300), OBJECT_COLOR)
+    mask = rect_mask((120, 300), (0, 0, 120, 300))
+    target = solid(CANVAS, TARGET_COLOR)
+    spec = PasteSpec(
+        x=0, y=0, width=120, height=300,
+        feather_px=0, match_color=False, harmonize_blend=DEFAULT_HARMONIZE_BLEND,
+    )
+
+    _, harmonize = transfer_object(source, mask, target, spec)
+
+    m = np.asarray(harmonize)
+    # pegado al borde izquierdo de la foto: preservado
+    assert m[150, 2] == 0
+    # el borde derecho, que si limita con el destino, es costura
+    assert m[150, 118] > 200
+
+
+def test_harmonize_blend_does_not_change_the_composite() -> None:
+    source = solid((OBJECT_SIDE, OBJECT_SIDE), OBJECT_COLOR)
+    mask = rect_mask((OBJECT_SIDE, OBJECT_SIDE), (0, 0, OBJECT_SIDE, OBJECT_SIDE))
+    target = noisy(CANVAS, (200, 80, 60), 10, seed=23)
+    base = dict(x=PASTE_AT, y=PASTE_AT, width=OBJECT_SIDE, height=OBJECT_SIDE, feather_px=4)
+
+    soft, _ = transfer_object(source, mask, target, PasteSpec(**base, harmonize_blend=0.2))
+    legacy, _ = transfer_object(source, mask, target, PasteSpec(**base, harmonize_blend=1.0))
+
+    np.testing.assert_array_equal(np.asarray(soft), np.asarray(legacy))
+
+
+@pytest.mark.parametrize("blend", [-0.1, 1.5])
+def test_out_of_range_blend_raises(blend: float) -> None:
+    source = solid((40, 40), OBJECT_COLOR)
+    mask = rect_mask((40, 40), (0, 0, 40, 40))
+    target = solid((100, 100), TARGET_COLOR)
+
+    with pytest.raises(ValueError):
+        transfer_object(
+            source, mask, target,
+            PasteSpec(x=10, y=10, width=40, height=40, harmonize_blend=blend),
+        )
 
 
 # --- (f) match_color=False --------------------------------------------------

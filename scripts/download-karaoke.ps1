@@ -1,7 +1,7 @@
 param(
     # Cual modelo del catalogo bajar. Tiene que coincidir con los ids de
     # app/services/engines/separation_models.py.
-    [ValidateSet('inst_hq_3', 'voc_ft', 'reverb_hq', 'deecho_normal', 'deecho_aggressive', 'deecho_dereverb')]
+    [ValidateSet('inst_hq_3', 'voc_ft', 'mel_band_roformer_kim', 'reverb_hq', 'deecho_normal', 'deecho_aggressive', 'deecho_dereverb', 'denoise')]
     [string]$Model = 'inst_hq_3'
 )
 
@@ -30,13 +30,22 @@ $vendorDir = Join-Path $root 'vendor\karaoke'
 #   TRvlvr/model_repo es de terceros. Verificados contra los archivos reales el
 #   2026-08-09.
 #
-# * VR De-Echo/De-Reverb (deecho_*): pesos de FoxJoy distribuidos por el mismo
-#   canal oficial de UVR, pero exportados a ONNX por un port propio y publico
-#   (github.com/santiquiroz/port-uvr-deecho-onnx, MIT, release models-v1.0). No
-#   tienen hash UVR: ese hash identifica el .pth de origen, no el .onnx
-#   re-exportado (queda anotado en el catalogo como procedencia). Se verifica el
-#   SHA-256 del release, tomado de su manifest.json y comprobado contra los
-#   archivos descargados el 2026-08-09.
+# * VR De-Echo/De-Reverb/De-Noise (deecho_*, denoise): pesos de FoxJoy
+#   distribuidos por el mismo canal oficial de UVR, pero exportados a ONNX por
+#   un port propio y publico (github.com/santiquiroz/port-uvr-deecho-onnx, MIT,
+#   release models-v1.1). No tienen hash UVR: ese hash identifica el .pth de
+#   origen, no el .onnx re-exportado (queda anotado en el catalogo como
+#   procedencia). Se verifica el SHA-256 del release, tomado de su
+#   manifest.json y comprobado contra los archivos descargados el 2026-08-10.
+#
+# * Mel-Band RoFormer (mel_band_roformer_kim): pesos de KimberleyJSN, MIT
+#   declarado en su model card de HuggingFace, exportados a ONNX por un port
+#   propio y publico (github.com/santiquiroz/port-bs-roformer-onnx, MIT,
+#   release models-v1.0). Tampoco tiene hash UVR: no es un modelo de UVR. Se
+#   verifica el SHA-256 del release, tomado de su manifest.json y comprobado
+#   contra el archivo descargado el 2026-08-10. Es el unico del pack que pesa
+#   casi 1 GB, y el unico ~20x mas lento que el resto: la UI lo advierte antes
+#   de que se pueda elegir.
 $modelos = @{
     'inst_hq_3' = @{
         File   = 'UVR-MDX-NET-Inst_HQ_3.onnx'
@@ -54,6 +63,13 @@ $modelos = @{
         Size   = '~67 MB'
         Label  = 'MDX-Net Voc FT (saca la voz)'
     }
+    'mel_band_roformer_kim' = @{
+        File   = 'mel_band_roformer_kim_T801.onnx'
+        Url    = 'https://github.com/santiquiroz/port-bs-roformer-onnx/releases/download/models-v1.0/mel_band_roformer_kim_T801.onnx'
+        Sha256 = '1b8afd7780d8a234527748821dee6bc746d346f2088751c12fd48e8c873f625a'
+        Size   = '~931 MB'
+        Label  = 'Mel-Band RoFormer by KimberleyJSN (saca la voz con la maxima calidad; ~20x mas lento que Inst HQ 3)'
+    }
     'reverb_hq' = @{
         File   = 'Reverb_HQ_By_FoxJoy.onnx'
         Url    = 'https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/Reverb_HQ_By_FoxJoy.onnx'
@@ -64,24 +80,31 @@ $modelos = @{
     }
     'deecho_normal' = @{
         File   = 'UVR-De-Echo-Normal.onnx'
-        Url    = 'https://github.com/santiquiroz/port-uvr-deecho-onnx/releases/download/models-v1.0/UVR-De-Echo-Normal.onnx'
+        Url    = 'https://github.com/santiquiroz/port-uvr-deecho-onnx/releases/download/models-v1.1/UVR-De-Echo-Normal.onnx'
         Sha256 = 'fc2f9df26060672b72324d6f77a046812361fd8a0dc79ba4f5258a944fc45e14'
         Size   = '~121 MB'
         Label  = 'UVR De-Echo Normal by FoxJoy (saca el eco moderado; la pista limpia es la salida directa)'
     }
     'deecho_aggressive' = @{
         File   = 'UVR-De-Echo-Aggressive.onnx'
-        Url    = 'https://github.com/santiquiroz/port-uvr-deecho-onnx/releases/download/models-v1.0/UVR-De-Echo-Aggressive.onnx'
+        Url    = 'https://github.com/santiquiroz/port-uvr-deecho-onnx/releases/download/models-v1.1/UVR-De-Echo-Aggressive.onnx'
         Sha256 = 'c5f95ecf29cb0be50144ea0ab461ac920854576df47c3ede82420846f699037c'
         Size   = '~121 MB'
         Label  = 'UVR De-Echo Aggressive by FoxJoy (saca el eco fuerte; puede tocar la señal)'
     }
     'deecho_dereverb' = @{
         File   = 'UVR-DeEcho-DeReverb.onnx'
-        Url    = 'https://github.com/santiquiroz/port-uvr-deecho-onnx/releases/download/models-v1.0/UVR-DeEcho-DeReverb.onnx'
+        Url    = 'https://github.com/santiquiroz/port-uvr-deecho-onnx/releases/download/models-v1.1/UVR-DeEcho-DeReverb.onnx'
         Sha256 = 'fe64dfbbeb744cf8a648a25a473ce319bbfb59771eac01f4ff47a77312839bd3'
         Size   = '~213 MB'
         Label  = 'UVR DeEcho-DeReverb by FoxJoy (saca eco Y reverb de una pasada)'
+    }
+    'denoise' = @{
+        File   = 'UVR-DeNoise.onnx'
+        Url    = 'https://github.com/santiquiroz/port-uvr-deecho-onnx/releases/download/models-v1.1/UVR-DeNoise.onnx'
+        Sha256 = '3285c155a0f8f7295ad971e1fb43fdcb9d8cdbc493c28aececcddb61af26cc63'
+        Size   = '~121 MB'
+        Label  = 'UVR DeNoise by FoxJoy (saca el ruido de fondo; la pista limpia es la resta)'
     }
 }
 
@@ -150,9 +173,13 @@ function Write-KaraokeCredits([string]$directory) {
         'Reverb HQ by FoxJoy - distributed via the official UVR Download Center'
         'github.com/Anjok07/ultimatevocalremovergui'
         ''
-        'VR De-Echo / De-Reverb: UVR-De-Echo-Normal / UVR-De-Echo-Aggressive / UVR-DeEcho-DeReverb'
+        'VR De-Echo / De-Reverb / De-Noise: UVR-De-Echo-Normal / UVR-De-Echo-Aggressive /'
+        'UVR-DeEcho-DeReverb / UVR-DeNoise'
         'Models by FoxJoy, distributed via the official UVR Download Center;'
         'ONNX port: github.com/santiquiroz/port-uvr-deecho-onnx (MIT)'
+        ''
+        'Mel-Band RoFormer by KimberleyJSN (MIT);'
+        'ONNX port: github.com/santiquiroz/port-bs-roformer-onnx'
     ) -join [Environment]::NewLine
     Set-Content -Path (Join-Path $directory 'CREDITS.txt') -Value $credits -Encoding UTF8
 }

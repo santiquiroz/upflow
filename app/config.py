@@ -375,6 +375,20 @@ class Settings(BaseSettings):
         default=3.0, alias="VR_SEPARATION_MARGIN_SECONDS"
     )
 
+    # Mel-Band RoFormer (carril de maxima calidad). Mismo troceado por bloques
+    # que VR y por el mismo motivo, con otros numeros: aca lo que crece con la
+    # duracion son los acumuladores float64 del overlap-add del driver, ~2,1 MB
+    # por segundo de audio, asi que un bloque de 240 s cuesta ~510 MB. El
+    # margen es el DOBLE del reflect-pad del driver (border = medio chunk =
+    # 4 s), que es lo que hace falta para que el tramo conservado no venga de
+    # audio espejado.
+    roformer_separation_block_seconds: float = Field(
+        default=240.0, alias="ROFORMER_SEPARATION_BLOCK_SECONDS"
+    )
+    roformer_separation_margin_seconds: float = Field(
+        default=8.0, alias="ROFORMER_SEPARATION_MARGIN_SECONDS"
+    )
+
     # GMFSS (second interpolation engine, max-quality anime frame interpolation,
     # own port santiquiroz/port-gmfss-onnx). 10x or more slower than RIFE by
     # design -- a short-clip smoke test measured closer to 20x due to

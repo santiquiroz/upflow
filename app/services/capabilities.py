@@ -92,6 +92,11 @@ class ResolvedCapability:
     # Que requisito no se cumple, para que el aviso diga algo concreto en vez de
     # "no disponible".
     setup_reason_key: str | None = None
+    # Ajustes que a esta capacidad le faltan y que la UI puede prender de un
+    # click: flag booleano, editable y aplicado en caliente. Los que necesitan
+    # reiniciar quedan FUERA a proposito -- un boton "Activar" que escribe el
+    # .env y deja la capacidad igual de rota miente.
+    activatable_settings: tuple[str, ...] = ()
 
 
 _UPSCALE_REQUIREMENTS: tuple[Requirement, ...] = (
@@ -194,6 +199,20 @@ _PRINT_CAPABILITIES: tuple[Capability, ...] = (
         # Medido el 2026-08-05 con `devstral-32k` local: 3 de 4 piezas con las
         # cotas EXACTAS y imprimibles, sin un solo reintento, 20-38 s cada una.
         # Esto es lo unico del modulo que da COTAS desde una descripcion.
+    ),
+    Capability(
+        id="print.estimateSize",
+        domain="print",
+        label_key="capability.print.estimateSize",
+        provisioning="user_supplied",
+        # No encola nada: es una pregunta de texto que se responde mientras el
+        # usuario mira la pantalla.
+        job_kind=None,
+        strategies=("model",),
+        # El MISMO servidor de modelo del carril CAD, y NADA mas. Pedir tambien
+        # OpenSCAD esconderia la sugerencia a quien tiene el modelo levantado y
+        # no instalo el CAD, siendo que estimar un tamano no es geometria.
+        requirements=(SettingRequirement("cad_llm_base_url"),),
     ),
 )
 
@@ -499,6 +518,18 @@ def _resolve_one(
             requirement.pack for requirement in unmet if isinstance(requirement, PathRequirement)
         ),
         setup_reason_key=_setup_reason_key(unmet),
+        activatable_settings=_activatable_settings(unmet),
+    )
+
+
+def _activatable_settings(unmet: tuple[Requirement, ...]) -> tuple[str, ...]:
+    from app.services.settings_service import ACTIVATABLE_FLAG_SETTINGS
+
+    return tuple(
+        requirement.setting_attr
+        for requirement in unmet
+        if isinstance(requirement, SettingRequirement)
+        and requirement.setting_attr in ACTIVATABLE_FLAG_SETTINGS
     )
 
 
@@ -507,6 +538,7 @@ def _as_resolved(
     status: CapabilityStatus,
     missing_packs: tuple[str, ...] = (),
     setup_reason_key: str | None = None,
+    activatable_settings: tuple[str, ...] = (),
 ) -> ResolvedCapability:
     return ResolvedCapability(
         id=capability.id,
@@ -519,6 +551,7 @@ def _as_resolved(
         missing_packs=missing_packs,
         unavailable_reason_key=capability.unavailable_reason_key,
         setup_reason_key=setup_reason_key,
+        activatable_settings=activatable_settings,
     )
 
 

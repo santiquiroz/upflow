@@ -589,12 +589,15 @@ Además de imagen y video, Upflow tiene un **apartado de Audio** propio (ruta `/
   |---|---|---|---|
   | Karaoke | `inst_hq_3` | Saca la instrumental; la voz es el resto | `instrumental` + `vocals` |
   | Karaoke | `voc_ft` | Saca la voz; la instrumental es el resto | `instrumental` + `vocals` |
+  | Karaoke | `mel_band_roformer_kim` | **Máxima calidad**, ~20x más lento; saca la voz, la instrumental es el resto | `instrumental` + `vocals` |
   | Limpieza | `reverb_hq` | Saca la cola de reverb; la pista limpia es la resta | `dry` + `wet` |
   | Limpieza | `deecho_normal` | Eco moderado, sin tocar el resto de la señal | `no_echo` + `echo` |
   | Limpieza | `deecho_aggressive` | Eco fuerte; pega más duro y puede apagar la señal | `no_echo` + `echo` |
   | Limpieza | `deecho_dereverb` | Eco **y** reverb de sala en una pasada | `no_reverb` + `reverb` |
 
   Los tres `deecho_*` son de **FoxJoy**, distribuidos por el canal oficial de descargas de UVR y exportados a ONNX por un port propio y público: [santiquiroz/port-uvr-deecho-onnx](https://github.com/santiquiroz/port-uvr-deecho-onnx) (MIT, paridad medida contra `python-audio-separator`: 61-65 dB SI-SDR). Son otra arquitectura (VR 5.1 CascadedNet) que los MDX-Net, pero eso no se elige: el catálogo es **una sola lista** y el backend resuelve el motor por el modelo que pediste. Medido en una RX 7800 XT (`dml:0`): **~21x tiempo real** — 5 minutos de audio en 14 segundos.
+
+  `mel_band_roformer_kim` es el **carril de máxima calidad**, y es una elección explícita, no el default: es [Mel-Band RoFormer](https://huggingface.co/KimberleyJSN/melbandroformer) de **KimberleyJSN** (MIT — el roformer vocal con mejor SDR que declara licencia permisiva: 10.98 en el multisong de MSST, por encima del BS-RoFormer de viperx, que además no declara ninguna), exportado a ONNX por otro port propio y público: [santiquiroz/port-bs-roformer-onnx](https://github.com/santiquiroz/port-bs-roformer-onnx) (MIT). Tercera arquitectura del catálogo, misma lista única. Lo que hay que saber **antes** de elegirlo, y por eso la UI lo advierte al lado del modelo: pesa **931 MB**, necesita **~2,3 GB libres** en el dispositivo (el grafo fp32 más un intermedio de atención de ~1,3 GB — si no los hay, el trabajo falla al cargar con un mensaje que lo dice, no a mitad de camino) y cuesta **~20x** lo que `inst_hq_3`. Medido de punta a punta en una RX 7800 XT (`dml:0`, sesión caliente): **50 s de GPU por minuto de audio**, contra 2,5 s de `inst_hq_3`. En CPU no es un carril viable (0,69x tiempo real, más lento que reproducir el archivo). Mismo lugar de producto que GMFSS en video: elegilo cuando la calidad de la separación importa más que la espera.
 
   La descarga se pide por stem: `GET /api/v1/audio/jobs/{id}/download?stem=<id>` (sin `stem` sirve el primero). La respuesta del job trae `stems[]` con las dos URLs ya etiquetadas.
 

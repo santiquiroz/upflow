@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.models import JobStatus
 from app.services.capability_probe import LeverStatus
 from app.services.generation_variants import Precision
+from app.services.object_transfer import DEFAULT_HARMONIZE_BLEND
 
 
 class CreateJobResponse(BaseModel):
@@ -215,6 +216,14 @@ class Shape3dJobRequest(BaseModel):
     image_token: str | None = Field(default=None, alias="imageToken")
     # En "mesh" y "photo": a cuanto escalar el lado mas largo.
     target_mm: float | None = Field(default=None, serialization_alias="targetMm")
+    # De donde salio `target_mm`. Lo declara el cliente porque es el unico que
+    # sabe si el usuario escribio la medida o acepto la sugerida: mirando el
+    # numero no hay forma de distinguirlas. Solo "user" o "estimate" — el
+    # "default" lo pone el servidor cuando no llega medida.
+    target_mm_source: str | None = Field(default=None, alias="targetMmSource")
+    # Contra que objeto comparo el modelo al estimar. Se guarda solo si la medida
+    # vino de una estimacion.
+    target_mm_reference: str | None = Field(default=None, alias="targetMmReference")
     # Solo en "cad": lo que la pieza TIENE que medir. Si no coincide, el error
     # vuelve al modelo en vez de entregar algo que no entra.
     expected_size: tuple[float, float, float] | None = Field(
@@ -237,10 +246,40 @@ class Shape3dJobResponse(BaseModel):
     advice: list[str] = Field(default_factory=list)
     error: str | None = None
     source: str = "mesh"
+    # A cuanto se escalo el lado mas largo, y DE DONDE salio esa medida
+    # ("user" / "estimate" / "default"). Las dos viajan juntas: el numero solo
+    # dejaria creer que alguien lo eligio cuando puede ser el relleno del
+    # programa.
+    target_mm: float | None = Field(default=None, serialization_alias="targetMm")
+    target_mm_source: str | None = Field(default=None, serialization_alias="targetMmSource")
+    target_mm_reference: str | None = Field(
+        default=None, serialization_alias="targetMmReference"
+    )
     # Solo en "cad": el codigo, que es la pieza EDITABLE.
     code: str | None = None
     retries: int = 0
     download_url: str | None = Field(default=None, serialization_alias="downloadUrl")
+
+
+class SizeEstimateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    # Que es el objeto. En el carril de foto sale del nombre del archivo, que es
+    # la unica senal que hay cuando no se escribio nada.
+    prompt: str = ""
+
+
+class SizeEstimateResponse(BaseModel):
+    """Una SUGERENCIA de tamano, no una cota: quien la pide la muestra y espera.
+
+    Que la respuesta no traiga campo de "aplicar" no es casual — aplicarla es
+    decision del usuario, y el servidor no tiene con que tomarla.
+    """
+
+    longest_mm: float = Field(serialization_alias="longestMm")
+    # Contra que objeto la comparo el modelo. Puede venir vacio: un numero sin
+    # referencia sigue sirviendo, y fingir una referencia seria peor.
+    reference: str = ""
 
 
 class SavedPromptResponse(BaseModel):
@@ -318,7 +357,8 @@ class SeparationModelResponse(BaseModel):
     sirve downloadUrl del job); `category` agrupa el picker de la UI
     ("karaoke" | "cleanup"). `architecture` es informativo: el usuario elige
     un modelo por lo que hace, no por como esta construido, y el backend
-    resuelve el motor solo.
+    resuelve el motor solo. `warningKey` (opcional) es lo que la UI tiene que
+    mostrar ANTES de que el usuario elija el modelo, no despues.
     """
 
     id: str
@@ -328,6 +368,7 @@ class SeparationModelResponse(BaseModel):
     category: str
     architecture: str
     description_key: str = Field(serialization_alias="descriptionKey")
+    warning_key: str | None = Field(default=None, serialization_alias="warningKey")
     stems: list[SeparationStemResponse] = Field(default_factory=list)
 
 
@@ -586,6 +627,12 @@ class CapabilityResponse(BaseModel):
         default=None, serialization_alias="unavailableReasonKey"
     )
     setup_reason_key: str | None = Field(default=None, serialization_alias="setupReasonKey")
+    # Ajustes que la tarjeta puede prender de un click sin mandar a nadie a
+    # Ajustes ni al .env. Vacio si lo que falta es un pack, un modelo o un
+    # ajuste que exige reiniciar.
+    activatable_settings: list[str] = Field(
+        default_factory=list, serialization_alias="activatableSettings"
+    )
 
 
 class CapabilityDomainResponse(BaseModel):
@@ -835,6 +882,13 @@ class InsertObjectRequest(BaseModel):
     # modelo de inpainting dedicado: uno de 4 canales fuerza strength 1.0 y
     # reinventaría el objeto recién pegado.
     harmonize: bool = False
+    # Fracción del objeto que la armonización re-genera, medida desde el borde
+    # hacia adentro. La máscara sale con intensidad continua (máxima en la
+    # costura, casi nula en el centro) y el inpaint la aplica por difusión
+    # diferencial. 1.0 = máscara uniforme, o sea el comportamiento clásico.
+    harmonize_blend: float = Field(
+        default=DEFAULT_HARMONIZE_BLEND, alias="harmonizeBlend", ge=0.0, le=1.0
+    )
     model_id: str | None = Field(default=None, alias="modelId")
     prompt: str | None = Field(default=None, max_length=2000)
     device: str | None = None
@@ -1129,6 +1183,11 @@ class GenerationJobsListResponse(BaseModel):
 class EditableSettingStatusResponse(BaseModel):
     key: str
     configured: bool
+    # Solo para los flags booleanos: un interruptor necesita saber si esta en
+    # true o false, y eso no es un secreto. Para hf_token y el texto libre viaja
+    # None -- el valor nunca sale del servidor.
+    value: str | None = None
+    requires_restart: bool = Field(default=False, serialization_alias="requiresRestart")
 
 
 class EditableSettingsResponse(BaseModel):

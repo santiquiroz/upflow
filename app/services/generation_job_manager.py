@@ -52,6 +52,23 @@ DEFAULT_VIDEO_FPS = 16
 MAX_VIDEO_FRAMES = 81
 
 
+def mask_preparation_overrides(job: GenerationJob) -> dict[str, int]:
+    """Lo que el job pide sobre la preparación de máscara del motor.
+
+    Vacío = los defaults del motor. Se omite el `None` en vez de pasarlo para que
+    el default viva en un solo lugar (GenerationRequest) y un job que no opina no
+    lo pise nunca.
+    """
+    return {
+        name: value
+        for name, value in (
+            ("mask_dilate_px", job.mask_dilate_px),
+            ("mask_feather_px", job.mask_feather_px),
+        )
+        if value is not None
+    }
+
+
 class GenerationJobManager(QueuedJobManager[GenerationJob]):
     """Standalone text-to-image job manager sobre QueuedJobManager.
 
@@ -113,6 +130,8 @@ class GenerationJobManager(QueuedJobManager[GenerationJob]):
         init_image_path: Path | None = None,
         strength: float = 0.6,
         mask_image_path: Path | None = None,
+        mask_dilate_px: int | None = None,
+        mask_feather_px: int | None = None,
         auto_upscale: bool = False,
         upscale_model_name: str | None = None,
         upscale_scale: int | None = None,
@@ -139,6 +158,7 @@ class GenerationJobManager(QueuedJobManager[GenerationJob]):
             device=device,
             init_image_path=init_image_path, strength=strength,
             mask_image_path=mask_image_path,
+            mask_dilate_px=mask_dilate_px, mask_feather_px=mask_feather_px,
             auto_upscale=auto_upscale, upscale_model_name=upscale_model_name,
             upscale_scale=upscale_scale, upscale_model_id=upscale_model_id,
             frames=frames, fps=fps,
@@ -358,6 +378,7 @@ class GenerationJobManager(QueuedJobManager[GenerationJob]):
             guidance=job.guidance, width=job.width, height=job.height, seed=job.seed,
             init_image_path=job.init_image_path, strength=job.strength,
             mask_image_path=job.mask_image_path, scheduler=job.scheduler,
+            **mask_preparation_overrides(job),
         )
 
         def on_progress(done: int, total: int) -> None:

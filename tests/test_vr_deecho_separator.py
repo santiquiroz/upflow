@@ -115,41 +115,63 @@ def read_stereo_wav(path: Path) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 
-def test_catalog_has_six_models_across_two_architectures() -> None:
+def test_catalog_has_eight_models_across_three_architectures() -> None:
     assert set(SEPARATION_MODELS) == {
         "inst_hq_3",
         "voc_ft",
+        "mel_band_roformer_kim",
         "reverb_hq",
         "deecho_normal",
         "deecho_aggressive",
         "deecho_dereverb",
+        "denoise",
     }
     architectures = {model_id: spec.architecture for model_id, spec in SEPARATION_MODELS.items()}
     assert architectures == {
         "inst_hq_3": "mdx",
         "voc_ft": "mdx",
+        "mel_band_roformer_kim": "roformer",
         "reverb_hq": "mdx",
         "deecho_normal": "vr",
         "deecho_aggressive": "vr",
         "deecho_dereverb": "vr",
+        "denoise": "vr",
     }
 
 
 def test_every_vr_model_is_a_cleanup_model_with_an_ordered_stem_pair() -> None:
     for spec in VR_MODELS.values():
         assert spec.category == "cleanup", spec.id
-        # Estos modelos predicen el DRY directo: el stem que el usuario quiere
-        # es la salida del modelo, no la resta.
-        assert spec.main_stem.source == "primary", spec.id
-        assert spec.other_stem.source == "secondary", spec.id
+        # El par cubre las DOS salidas del driver, una cada una: si las dos
+        # apuntaran al mismo source, un stem seria inalcanzable.
+        assert {stem.source for stem in spec.stems} == {"primary", "secondary"}, spec.id
         assert len({stem.id for stem in spec.stems}) == 2, spec.id
         assert all(stem.label_key for stem in spec.stems), spec.id
+
+
+def test_main_stem_is_the_clean_one_even_cuando_la_mascara_esta_invertida() -> None:
+    # La regla NO es "el stem principal es el primary". Es "el stem principal
+    # es el LIMPIO", y cual de los dos es depende de que aisla la mascara:
+    # con is_non_accom_stem la mascara saca el artefacto (el ruido), asi que lo
+    # limpio es el complemento. Ese fue exactamente el error facil de cometer
+    # al sumar De-Noise, por eso queda gateado.
+    for spec in VR_MODELS.values():
+        expected = "secondary" if spec.is_non_accom_stem else "primary"
+        assert spec.main_stem.source == expected, spec.id
+        assert spec.other_stem.source != spec.main_stem.source, spec.id
+
+    assert VR_MODELS["denoise"].is_non_accom_stem is True
+    assert VR_MODELS["denoise"].main_stem.source == "secondary"
+    assert all(
+        not spec.is_non_accom_stem for spec in VR_MODELS.values() if spec.id != "denoise"
+    )
 
 
 def test_vr_stem_ids_name_what_the_user_gets() -> None:
     assert VR_MODELS["deecho_normal"].stem_ids() == ("no_echo", "echo")
     assert VR_MODELS["deecho_aggressive"].stem_ids() == ("no_echo", "echo")
     assert VR_MODELS["deecho_dereverb"].stem_ids() == ("no_reverb", "reverb")
+    assert VR_MODELS["denoise"].stem_ids() == ("no_noise", "noise")
 
 
 def test_vr_catalog_matches_the_vendored_driver_specs() -> None:
@@ -160,12 +182,15 @@ def test_vr_catalog_matches_the_vendored_driver_specs() -> None:
         assert spec.primary_stem == driver_spec["primary_stem"], spec.id
         assert spec.nout == driver_spec["nout"], spec.id
         assert spec.filename == f"{spec.vr_model_name}.onnx", spec.id
+        # El flag que da vuelta la curva de aggression: si un re-vendoreo lo
+        # cambia upstream, el catalogo tiene que enterarse aca y no en el audio.
+        assert spec.is_non_accom_stem == driver_spec["is_non_accom_stem"], spec.id
 
 
 def test_vr_models_pin_the_port_release_and_a_full_sha256() -> None:
     for spec in VR_MODELS.values():
         assert spec.url.startswith(
-            "https://github.com/santiquiroz/port-uvr-deecho-onnx/releases/download/models-v1.0/"
+            "https://github.com/santiquiroz/port-uvr-deecho-onnx/releases/download/models-v1.1/"
         )
         assert len(spec.sha256) == 64
         # Procedencia del checkpoint de origen (hash UVR del .pth), no del onnx.
@@ -273,6 +298,53 @@ def test_an_empty_mask_puts_everything_in_the_echo_stem(tmp_path: Path) -> None:
     assert np.max(np.abs(no_echo)) == 0.0
     interior = slice(SR, -SR)
     assert np.max(np.abs(echo[:, interior] - mix[:, interior])) < 5e-3
+
+
+def test_denoise_routes_the_stems_backwards_porque_su_mascara_saca_el_ruido(
+    tmp_path: Path,
+) -> None:
+    # El MISMO mascara-todo-uno que en De-Echo deja la mezcla en el stem
+    # PRINCIPAL debe dejarla en el OTRO para De-Noise: ahi la mascara aisla el
+    # ruido, no la señal limpia. Si alguien "arregla" el par de stems para que
+    # vuelva a arrancar por el primary, este test lo caza — el usuario se
+    # bajaria el ruido creyendo que es la pista limpia.
+    settings = make_settings(tmp_path)
+    install_fake_model(settings, "denoise")
+    separator, _ = make_separator(settings, FakeMaskSession(1.0))
+
+    mix, no_noise, noise = _separate(separator, tmp_path, SR * 6, "denoise")
+
+    assert np.max(np.abs(no_noise)) == 0.0
+    interior = slice(SR, -SR)
+    assert np.max(np.abs(noise[:, interior] - mix[:, interior])) < 5e-3
+
+
+def test_denoise_with_an_empty_mask_keeps_the_whole_mix_as_clean(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    install_fake_model(settings, "denoise")
+    separator, _ = make_separator(settings, FakeMaskSession(0.0))
+
+    mix, no_noise, noise = _separate(separator, tmp_path, SR * 6, "denoise")
+
+    assert np.max(np.abs(noise)) == 0.0
+    interior = slice(SR, -SR)
+    assert np.max(np.abs(no_noise[:, interior] - mix[:, interior])) < 5e-3
+
+
+def test_the_inverted_aggression_branch_reaches_the_driver(tmp_path: Path) -> None:
+    # is_non_accom_stem viaja del catalogo al driver: con aggression 5 el
+    # exponente pasa de 1.1 a 1.9 y una mascara intermedia da OTRO numero.
+    # Un flag que se pierda en el camino no cambia formas ni tira error, solo
+    # audio distinto — por eso se mide el valor, no la firma.
+    from app.services.engines.vr_deecho.pipeline import adjust_aggression
+
+    mask = np.full((2, 673, 8), 0.5, dtype=np.float32)
+    accom = adjust_aggression(mask, 5.0, False)
+    non_accom = adjust_aggression(mask, 5.0, True)
+
+    assert np.allclose(accom[:, 100:], 0.5**1.1, atol=1e-6)
+    assert np.allclose(non_accom[:, 100:], 0.5**1.9, atol=1e-6)
+    assert VR_MODELS["denoise"].is_non_accom_stem is True
 
 
 def test_blocking_a_long_file_reconstructs_like_a_single_pass(tmp_path: Path) -> None:
@@ -550,14 +622,20 @@ async def test_capabilities_expose_one_list_with_the_architecture(tmp_path: Path
     response = await audio_capabilities(settings=settings)
     by_id = {model.id: model for model in response.separation_models}
 
-    assert len(response.separation_models) == 6
+    assert len(response.separation_models) == 8
     assert by_id["deecho_normal"].architecture == "vr"
     assert by_id["deecho_normal"].installed is True
     assert by_id["deecho_aggressive"].installed is False
     assert by_id["inst_hq_3"].architecture == "mdx"
-    # Los tres nuevos caen en el grupo Limpieza junto a reverb_hq.
+    # Los cuatro VR caen en el grupo Limpieza junto a reverb_hq.
     cleanup = [model.id for model in response.separation_models if model.category == "cleanup"]
-    assert cleanup == ["reverb_hq", "deecho_normal", "deecho_aggressive", "deecho_dereverb"]
+    assert cleanup == [
+        "reverb_hq",
+        "deecho_normal",
+        "deecho_aggressive",
+        "deecho_dereverb",
+        "denoise",
+    ]
 
 
 def _completed_vr_job(tmp_path: Path, model_id: str, main: str, other: str):

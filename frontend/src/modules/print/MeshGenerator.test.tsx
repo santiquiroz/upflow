@@ -17,6 +17,7 @@ vi.mock("../../services/print", async (importOriginal) => {
     createShape3dJob: vi.fn(),
     getShape3dJob: vi.fn(),
     cancelShape3dJob: vi.fn(),
+    estimatePrintSize: vi.fn(),
   };
 });
 
@@ -35,7 +36,12 @@ vi.mock("../../services/generation", async (importOriginal) => {
   };
 });
 
-function photoCapabilityTree(status: "available" | "needs_setup"): CapabilityTreeResponse {
+function photoCapabilityTree(
+  status: "available" | "needs_setup",
+  // La estimacion de tamano depende de OTRA cosa que el pack de foto: del
+  // servidor de modelo configurado. Por eso se controla aparte.
+  estimateStatus: "available" | "needs_setup" = "available",
+): CapabilityTreeResponse {
   return {
     domains: [
       {
@@ -53,6 +59,21 @@ function photoCapabilityTree(status: "available" | "needs_setup"): CapabilityTre
             missingPacks: status === "needs_setup" ? ["shap-e-img2img"] : [],
             unavailableReasonKey: null,
             setupReasonKey: status === "needs_setup" ? "capability.setup.missingPack" : null,
+            activatableSettings: [],
+          },
+          {
+            id: "print.estimateSize",
+            domain: "print",
+            labelKey: "capability.print.estimateSize",
+            status: estimateStatus,
+            provisioning: "user_supplied",
+            jobKind: null,
+            strategies: ["model"],
+            missingPacks: [],
+            unavailableReasonKey: null,
+            setupReasonKey:
+              estimateStatus === "needs_setup" ? "capability.setup.missingSetting" : null,
+            activatableSettings: [],
           },
         ],
         roadmap: [],
@@ -69,6 +90,9 @@ const EN_COLA: printService.Shape3dJob = {
   source: "mesh",
   code: null,
   retries: 0,
+  targetMm: 100,
+  targetMmSource: "default",
+  targetMmReference: null,
   createdAt: "2026-08-05T00:00:00Z",
   startedAt: null,
   finishedAt: null,
@@ -123,6 +147,10 @@ beforeEach(() => {
   vi.mocked(capabilitiesService.fetchCapabilityTree).mockResolvedValue(
     photoCapabilityTree("available"),
   );
+  vi.mocked(printService.estimatePrintSize).mockResolvedValue({
+    longestMm: 95,
+    reference: "standard coffee mug",
+  });
   vi.mocked(generationService.uploadGenerationInitImage).mockResolvedValue({
     initImageToken: "abc123",
     originalFilename: "foto.png",
@@ -137,6 +165,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.mocked(printService.createShape3dJob).mockReset();
   vi.mocked(printService.getShape3dJob).mockReset();
+  vi.mocked(printService.estimatePrintSize).mockReset();
   vi.mocked(capabilitiesService.fetchCapabilityTree).mockReset();
   vi.mocked(generationService.uploadGenerationInitImage).mockReset();
   vi.unstubAllGlobals();
@@ -366,5 +395,210 @@ describe("MeshGenerator photo mode", () => {
     expect(vi.mocked(printService.createShape3dJob).mock.calls[0][0]).toEqual(
       expect.objectContaining({ prompt: "algo", printer: "ender-3" }),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// La sugerencia de tamano. Lo que estos tests cuidan es lo unico que puede
+// volverla peligrosa: que se aplique sola. Una malla no tiene cotas, asi que la
+// medida es lo unico que decide si la pieza sirve — y esa decision es del
+// usuario, con la sugerencia a la vista.
+// ---------------------------------------------------------------------------
+
+const CAMPO_MEDIDA = en["gen3d.targetMm"];
+
+function escribirPedido(texto = "a coffee mug") {
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: texto } });
+}
+
+async function estimar() {
+  fireEvent.click(await screen.findByRole("button", { name: en["gen3d.estimate.action"] }));
+  return screen.findByRole("button", { name: /Use 95 mm/ });
+}
+
+describe("MeshGenerator size suggestion", () => {
+  it("does not offer to estimate when no model server is configured", async () => {
+    // Requisito duro: sin servidor, la pantalla queda igual que siempre.
+    vi.mocked(capabilitiesService.fetchCapabilityTree).mockResolvedValue(
+      photoCapabilityTree("needs_setup", "needs_setup"),
+    );
+    renderGen();
+    // El aviso del pack de foto sale del MISMO arbol de capacidades: esperarlo
+    // prueba que el arbol ya llego, que es lo unico que podria hacer aparecer
+    // el boton mas tarde.
+    irAFoto();
+    await screen.findByText(en["gen3d.photo.missingPack"]);
+    fireEvent.click(screen.getByRole("tab", { name: en["gen3d.mode.text"] }));
+    escribirPedido();
+
+    expect(
+      screen.queryByRole("button", { name: en["gen3d.estimate.action"] }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("offers to estimate once there is a model server", async () => {
+    renderGen();
+    escribirPedido();
+
+    expect(
+      await screen.findByRole("button", { name: en["gen3d.estimate.action"] }),
+    ).toBeEnabled();
+  });
+
+  it("cannot estimate with nothing to estimate about", async () => {
+    renderGen();
+
+    expect(
+      await screen.findByRole("button", { name: en["gen3d.estimate.action"] }),
+    ).toBeDisabled();
+  });
+
+  it("shows the suggestion with the object it compared against", async () => {
+    renderGen();
+    escribirPedido();
+    await estimar();
+
+    expect(screen.getByText(/95 mm for the longest side/)).toBeInTheDocument();
+    expect(screen.getByText(/standard coffee mug/)).toBeInTheDocument();
+    expect(printService.estimatePrintSize).toHaveBeenCalledWith("a coffee mug");
+  });
+
+  it("never writes the suggestion into the field on its own", async () => {
+    // ESTE es el test que importa: una medida que se aplica sola es una cota
+    // inventada, y una malla generada no tiene con que respaldarla.
+    renderGen();
+    escribirPedido();
+    await estimar();
+
+    expect(screen.getByLabelText(CAMPO_MEDIDA)).toHaveValue(null);
+  });
+
+  it("does not overwrite a size the user already typed", async () => {
+    renderGen();
+    escribirPedido();
+    fireEvent.change(screen.getByLabelText(CAMPO_MEDIDA), { target: { value: "42" } });
+    await estimar();
+
+    expect(screen.getByLabelText(CAMPO_MEDIDA)).toHaveValue(42);
+  });
+
+  it("applies the suggestion only when it is clicked", async () => {
+    renderGen();
+    escribirPedido();
+    fireEvent.click(await estimar());
+
+    expect(screen.getByLabelText(CAMPO_MEDIDA)).toHaveValue(95);
+  });
+
+  it("sends an accepted suggestion as such, with its reference", async () => {
+    // El trabajo tiene que poder decir de donde salio su medida: sin esto, el
+    // resultado no distingue una decision del usuario de una conjetura.
+    renderGen();
+    escribirPedido();
+    fireEvent.click(await estimar());
+    fireEvent.click(screen.getByRole("button", { name: en["gen3d.generate"] }));
+
+    await waitFor(() => expect(printService.createShape3dJob).toHaveBeenCalled());
+    expect(vi.mocked(printService.createShape3dJob).mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        targetMm: 95,
+        targetMmSource: "estimate",
+        targetMmReference: "standard coffee mug",
+      }),
+    );
+  });
+
+  it("stops calling it an estimate once the user edits the size by hand", async () => {
+    renderGen();
+    escribirPedido();
+    fireEvent.click(await estimar());
+    fireEvent.change(screen.getByLabelText(CAMPO_MEDIDA), { target: { value: "60" } });
+    fireEvent.click(screen.getByRole("button", { name: en["gen3d.generate"] }));
+
+    await waitFor(() => expect(printService.createShape3dJob).toHaveBeenCalled());
+    expect(vi.mocked(printService.createShape3dJob).mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        targetMm: 60,
+        targetMmSource: "user",
+        targetMmReference: undefined,
+      }),
+    );
+  });
+
+  it("says it could not estimate instead of pretending a number", async () => {
+    vi.mocked(printService.estimatePrintSize).mockRejectedValue(new Error("502"));
+    renderGen();
+    escribirPedido();
+    fireEvent.click(await screen.findByRole("button", { name: en["gen3d.estimate.action"] }));
+
+    expect(await screen.findByText(en["gen3d.estimate.failed"])).toBeInTheDocument();
+    expect(screen.getByLabelText(CAMPO_MEDIDA)).toHaveValue(null);
+  });
+
+  it("a failed estimate does not block generating", async () => {
+    vi.mocked(printService.estimatePrintSize).mockRejectedValue(new Error("502"));
+    renderGen();
+    escribirPedido();
+    fireEvent.click(await screen.findByRole("button", { name: en["gen3d.estimate.action"] }));
+    await screen.findByText(en["gen3d.estimate.failed"]);
+    fireEvent.click(screen.getByRole("button", { name: en["gen3d.generate"] }));
+
+    await waitFor(() => expect(printService.createShape3dJob).toHaveBeenCalled());
+    expect(vi.mocked(printService.createShape3dJob).mock.calls[0][0].targetMm).toBeUndefined();
+  });
+
+  it("drops a suggestion that no longer matches what is being asked for", async () => {
+    // Una sugerencia para "una taza" no puede seguir en pantalla cuando el
+    // pedido ya dice otra cosa.
+    renderGen();
+    escribirPedido();
+    await estimar();
+    escribirPedido("an M3 screw");
+
+    expect(
+      screen.queryByRole("button", { name: /Use 95 mm/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("estimates from the photo file name when it says something", async () => {
+    renderGen();
+    irAFoto();
+    await screen.findByLabelText(en["gen3d.photo.choose"]);
+    elegirFoto(new File(["png"], "coffee-mug.jpg", { type: "image/jpeg" }));
+    fireEvent.click(await screen.findByRole("button", { name: en["gen3d.estimate.action"] }));
+
+    await waitFor(() => expect(printService.estimatePrintSize).toHaveBeenCalled());
+    expect(printService.estimatePrintSize).toHaveBeenCalledWith("coffee mug");
+  });
+
+  it("does not estimate from a camera file name that says nothing", async () => {
+    renderGen();
+    irAFoto();
+    await screen.findByLabelText(en["gen3d.photo.choose"]);
+    elegirFoto(new File(["png"], "IMG_20260808_143255.jpg", { type: "image/jpeg" }));
+
+    expect(
+      await screen.findByRole("button", { name: en["gen3d.estimate.action"] }),
+    ).toBeDisabled();
+  });
+
+  it("says where the size of a finished mesh came from", async () => {
+    vi.mocked(printService.getShape3dJob).mockResolvedValue({
+      ...LISTA,
+      targetMm: 95,
+      targetMmSource: "estimate",
+      targetMmReference: "standard coffee mug",
+    });
+    renderGen();
+    generar();
+
+    expect(await screen.findByText(/the model suggested and you confirmed/i)).toBeInTheDocument();
+  });
+
+  it("says plainly when the size was nobody's decision", async () => {
+    renderGen();
+    generar();
+
+    expect(await screen.findByText(/nobody chose that size/i)).toBeInTheDocument();
   });
 });

@@ -11,14 +11,54 @@ from app.services.json_store import write_text_atomically
 
 # Primer campo real de la whitelist. Crece en subproyectos futuros sin tocar
 # el mecanismo (spec 2026-07-25-generation-third-party-models-design.md §5).
+#
+# Los tres ultimos son los que el CATALOG de capabilities declara como
+# SettingRequirement: sin ellos la tarjeta bajaba gigabytes de pack y despues
+# mandaba al usuario a editar el .env a mano para poder usar lo que acababa de
+# descargar.
 EDITABLE_SETTINGS_WHITELIST = frozenset(
-    {"hf_token", "rebar_confirmed", "enable_file_logging", "max_video_upload_mb"}
+    {
+        "hf_token",
+        "rebar_confirmed",
+        "enable_file_logging",
+        "max_video_upload_mb",
+        "enable_audiosr",
+        "enable_audio_restore",
+        "cad_llm_base_url",
+    }
 )
 
 # Settings cuyo valor NO es texto. El .env guarda strings, pero la app usa el
 # numero: `"4096" * 1024 * 1024` en Python REPITE el string en vez de
 # multiplicar, y el limite quedaria roto sin que nada falle.
 _POSITIVE_INT_SETTINGS = frozenset({"max_video_upload_mb"})
+
+
+def _is_bool_field(key: str) -> bool:
+    return Settings.model_fields[key].annotation is bool
+
+
+# Los flags. Se DERIVA del tipo declarado en Settings en vez de listarse a mano:
+# sumar un flag a la whitelist no puede olvidarse de actualizar esto. Sin el
+# conjunto, `setattr(live, "enable_audiosr", "false")` dejaba la CADENA "false"
+# en la instancia viva, que es truthy: apagar el flag lo dejaba prendido.
+EDITABLE_BOOL_SETTINGS = frozenset(
+    key for key in EDITABLE_SETTINGS_WHITELIST if _is_bool_field(key)
+)
+
+# Lo que NO aplica en caliente. El cliente del modelo CAD se cablea UNA vez en
+# el lifespan (`main.py`, `cad_client=... if settings.cad_llm_base_url else
+# None`): escribir la URL con el servidor corriendo no lo crea. Se declara para
+# poder DECIRLO en la UI, no para prohibir el cambio.
+RESTART_REQUIRED_SETTINGS = frozenset({"cad_llm_base_url"})
+
+# Los que un boton "Activar" puede prender de verdad: flag booleano, editable y
+# aplicado en caliente. Un boton que escribe el .env y deja la capacidad igual
+# de rota seria peor que no ofrecerlo.
+ACTIVATABLE_FLAG_SETTINGS = EDITABLE_BOOL_SETTINGS - RESTART_REQUIRED_SETTINGS
+
+_TRUE_LITERALS = frozenset({"true", "1", "yes", "on"})
+_FALSE_LITERALS = frozenset({"false", "0", "no", "off"})
 
 # Serializa read-modify-write del .env entre requests concurrentes.
 _ENV_WRITE_LOCK = threading.Lock()
@@ -39,6 +79,9 @@ class SettingValueError(ValueError):
 class EditableSettingStatus(TypedDict):
     key: str
     configured: bool
+    # Presente SOLO para los flags. Ver `_visible_value`.
+    value: str | None
+    requires_restart: bool
 
 
 def register_live_settings(settings: Settings) -> None:
@@ -53,8 +96,33 @@ def _env_alias(key: str) -> str:
     return field.alias or key.upper()
 
 
-def _coerce_value(key: str, value: str) -> str | int:
-    return int(value) if key in _POSITIVE_INT_SETTINGS else value
+def _coerce_value(key: str, value: str) -> str | int | bool:
+    if key in EDITABLE_BOOL_SETTINGS:
+        return value == "true"
+    if key in _POSITIVE_INT_SETTINGS:
+        return int(value)
+    return value
+
+
+def _normalize_bool(key: str, value: str) -> str:
+    text = value.strip().lower()
+    if text in _TRUE_LITERALS:
+        return "true"
+    if text in _FALSE_LITERALS:
+        return "false"
+    raise SettingValueError(
+        f"Valor inválido para {key}: es un interruptor, se espera "
+        "true o false (también valen 1/0, yes/no, on/off)."
+    )
+
+
+def normalize_value(key: str, value: str) -> str:
+    """Lo que se escribe al .env: un flag SIEMPRE queda como true/false.
+
+    Guardar el "yes" que mando el cliente dejaria el .env valido para pydantic
+    pero roto para `_coerce_value`, que compara contra "true".
+    """
+    return _normalize_bool(key, value) if key in EDITABLE_BOOL_SETTINGS else value
 
 
 def _validate_positive_int(key: str, value: str) -> None:
@@ -105,6 +173,7 @@ def _render_env_text(existing_text: str, alias: str, value: str) -> str:
 def update_setting(key: str, value: str) -> None:
     if key not in EDITABLE_SETTINGS_WHITELIST:
         raise SettingNotEditableError(f"El setting {key!r} no es editable desde la UI.")
+    value = normalize_value(key, value)
     _validate_value(key, value)
     alias = _env_alias(key)
     with _ENV_WRITE_LOCK:
@@ -126,8 +195,27 @@ def update_setting(key: str, value: str) -> None:
         configure_file_logging(get_settings())
 
 
+def _visible_value(settings: Settings, key: str) -> str | None:
+    """El valor del ajuste, o None si no se puede devolver.
+
+    Solo los flags exponen su valor: prendido o apagado no es un secreto y la UI
+    necesita el estado para dibujar el interruptor (con `configured` sola, un
+    flag apagado y uno inexistente se ven igual). Todo lo demas —hf_token, y
+    cualquier texto libre que pueda cargar una credencial— sigue saliendo como
+    `configured` y nada mas.
+    """
+    if key not in EDITABLE_BOOL_SETTINGS:
+        return None
+    return "true" if getattr(settings, key) else "false"
+
+
 def editable_settings_status(settings: Settings) -> list[EditableSettingStatus]:
     return [
-        {"key": key, "configured": bool(getattr(settings, key))}
+        {
+            "key": key,
+            "configured": bool(getattr(settings, key)),
+            "value": _visible_value(settings, key),
+            "requires_restart": key in RESTART_REQUIRED_SETTINGS,
+        }
         for key in sorted(EDITABLE_SETTINGS_WHITELIST)
     ]

@@ -11,9 +11,19 @@ import {
   getShape3dJob,
   type Shape3dJob,
 } from "../../services/print";
+import { SizeSuggestion, objectHintFromFileName } from "./SizeSuggestion";
 
 const POLL_MS = 3000;
 const MAX_CHARS = 400;
+
+// De dónde salió la medida, dicho en la pantalla del resultado. Un mapa y no una
+// clave armada al vuelo: un valor inesperado del servidor mostraría la clave
+// cruda en pantalla.
+const SIZE_SOURCE_KEYS: Record<string, string> = {
+  user: "gen3d.size.source.user",
+  estimate: "gen3d.size.source.estimate",
+  default: "gen3d.size.source.default",
+};
 
 function isBusy(job: Shape3dJob | null): boolean {
   return job !== null && (job.status === "queued" || job.status === "running");
@@ -43,6 +53,10 @@ export function MeshGenerator({
   const [photo, setPhoto] = useState<File | null>(null);
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
   const [targetMm, setTargetMm] = useState("");
+  // De dónde salió lo que hay en el campo. Arranca en "user" porque lo que se
+  // tipea es del usuario; solo aceptar una sugerencia lo cambia.
+  const [targetSource, setTargetSource] = useState<"user" | "estimate">("user");
+  const [targetReference, setTargetReference] = useState("");
   const [jobId, setJobId] = useState<string | null>(null);
   const [isFetchingStl, setIsFetchingStl] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -50,11 +64,17 @@ export function MeshGenerator({
   // El modo foto necesita su propio pack (openai/shap-e-img2img, otro repo que
   // el de texto): el estado sale del árbol de capacidades, que mira el disco.
   const capabilityTree = useCapabilityTree();
-  const photoCapability =
-    capabilityTree.data?.domains
-      .flatMap((domain) => [...domain.capabilities, ...domain.roadmap])
-      .find((capability) => capability.id === "print.generatePhoto") ?? null;
-  const photoNeedsPack = photoCapability?.status === "needs_setup";
+  const capabilities =
+    capabilityTree.data?.domains.flatMap((domain) => [
+      ...domain.capabilities,
+      ...domain.roadmap,
+    ]) ?? [];
+  const statusOf = (id: string) =>
+    capabilities.find((capability) => capability.id === id)?.status ?? null;
+  const photoNeedsPack = statusOf("print.generatePhoto") === "needs_setup";
+  // Sin servidor de modelo configurado no hay sugerencia y tampoco hay ruido:
+  // la pantalla queda exactamente como estaba.
+  const canEstimate = statusOf("print.estimateSize") === "available";
 
   const jobQuery = useQuery({
     queryKey: ["shape3dJob", jobId],
@@ -69,6 +89,11 @@ export function MeshGenerator({
 
   const canGenerate =
     mode === "photo" ? photo !== null && !photoNeedsPack : prompt.trim().length > 0;
+  // Qué objeto es, para preguntarle al modelo cuánto mide. Desde texto es la
+  // descripción; desde una foto, lo único que hay es el nombre del archivo, y
+  // solo si dice algo.
+  const sizeHint =
+    mode === "photo" ? objectHintFromFileName(photo?.name ?? "") : prompt.trim();
 
   function handlePickPhoto(event: ChangeEvent<HTMLInputElement>) {
     const picked = event.target.files?.[0];
@@ -85,7 +110,35 @@ export function MeshGenerator({
     });
   }
 
-  async function createPhotoJob(medida: number | undefined): Promise<Shape3dJob> {
+  // La medida y su procedencia viajan juntas, o no viaja ninguna: mandar el
+  // número sin decir de dónde salió es lo que haría que el resultado mienta.
+  function sizeFields() {
+    const medida = Number(targetMm);
+    if (!(medida > 0)) {
+      return {};
+    }
+    return {
+      targetMm: medida,
+      targetMmSource: targetSource,
+      targetMmReference: targetSource === "estimate" ? targetReference : undefined,
+    };
+  }
+
+  function acceptSuggestion(longestMm: number, reference: string) {
+    setTargetMm(String(longestMm));
+    setTargetSource("estimate");
+    setTargetReference(reference);
+  }
+
+  function handleTypeSize(value: string) {
+    setTargetMm(value);
+    // Tocar el campo lo vuelve una medida del usuario aunque haya salido de una
+    // sugerencia: atribuirsela al modelo seria falsear la procedencia.
+    setTargetSource("user");
+    setTargetReference("");
+  }
+
+  async function createPhotoJob(): Promise<Shape3dJob> {
     // La foto viaja por el mismo staging que la generación de imágenes: se sube
     // aparte y el job JSON lleva solo el token.
     const subida = await uploadGenerationInitImage(photo as File);
@@ -93,7 +146,7 @@ export function MeshGenerator({
       printer,
       source: "photo",
       imageToken: subida.initImageToken,
-      targetMm: medida,
+      ...sizeFields(),
     });
   }
 
@@ -103,12 +156,14 @@ export function MeshGenerator({
     }
     setError(null);
     try {
-      const medidaNumerica = Number(targetMm);
-      const medida = medidaNumerica > 0 ? medidaNumerica : undefined;
       const creado =
         mode === "photo"
-          ? await createPhotoJob(medida)
-          : await createShape3dJob({ prompt: prompt.trim(), printer, targetMm: medida });
+          ? await createPhotoJob()
+          : await createShape3dJob({
+              prompt: prompt.trim(),
+              printer,
+              ...sizeFields(),
+            });
       setJobId(creado.id);
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
@@ -243,12 +298,16 @@ export function MeshGenerator({
           type="number"
           min="1"
           value={targetMm}
-          onChange={(event) => setTargetMm(event.target.value)}
+          onChange={(event) => handleTypeSize(event.target.value)}
           aria-label={t("gen3d.targetMm")}
           placeholder="mm"
           className="w-32 rounded border border-border bg-surface px-3 py-2 text-sm text-text focus:border-accent focus:outline-none"
         />
       </label>
+
+      {/* La sugerencia va al lado del campo y NUNCA lo pisa: llena el campo solo
+          cuando el usuario hace clic en aceptarla. */}
+      {canEstimate && <SizeSuggestion hint={sizeHint} onAccept={acceptSuggestion} />}
 
       <div className="flex gap-2">
         <button
@@ -299,6 +358,16 @@ export function MeshGenerator({
               {job.sizeMm[0].toFixed(1)} × {job.sizeMm[1].toFixed(1)} ×{" "}
               {job.sizeMm[2].toFixed(1)} mm
               {job.triangleCount !== null && ` · ${job.triangleCount.toLocaleString()} △`}
+            </p>
+          )}
+          {/* Un tamaño sin decir de dónde salió miente por omisión: los 100 mm
+              por defecto no los eligió nadie. */}
+          {job.targetMmSource && SIZE_SOURCE_KEYS[job.targetMmSource] && (
+            <p className="text-xs text-text-faint">
+              {t(SIZE_SOURCE_KEYS[job.targetMmSource])}
+              {job.targetMmReference
+                ? ` ${t("gen3d.estimate.reference", { reference: job.targetMmReference })}`
+                : ""}
             </p>
           )}
           {job.blockers.map((b) => (

@@ -225,6 +225,15 @@ class Shape3dJob:
     image_path: Path | None = None
     # Solo en "mesh": la malla se escala para que su lado mas largo mida esto.
     target_mm: float | None = None
+    # De donde salio `target_mm`: "user" (la escribio el usuario), "estimate" (la
+    # sugirio el modelo y el usuario la confirmo) o "default" (la puso el
+    # programa porque habia que escalar a algo). Sin esto el resultado no puede
+    # decir si su medida es una decision o un relleno, y una malla que no tiene
+    # cotas no se puede permitir esa ambiguedad.
+    target_mm_source: str | None = None
+    # Contra que objeto comparo el modelo, cuando la medida vino de una
+    # estimacion. Es lo que la vuelve revisable en vez de un numero suelto.
+    target_mm_reference: str | None = None
     # Solo en "cad": lo que la pieza TIENE que medir. Si no coincide, el error
     # vuelve al modelo en vez de entregar algo que no entra.
     expected_size: tuple[float, float, float] | None = None
@@ -302,6 +311,12 @@ class GenerationJob:
     strength: float = 0.6
     # Máscara de inpainting (blanco=editar, negro=conservar); requiere init.
     mask_image_path: Path | None = None
+    # Preparación de la máscara en el motor. None = los defaults del motor. La
+    # armonización de objetos manda 0/0 porque su máscara ya viene con su propio
+    # perfil continuo: volver a dilatarla empujaría el 255 de la costura hacia
+    # adentro y se comería el centro que la máscara viene a preservar.
+    mask_dilate_px: int | None = None
+    mask_feather_px: int | None = None
     auto_upscale: bool = False
     upscale_model_name: str | None = None
     upscale_scale: int | None = None
@@ -330,6 +345,12 @@ class ConversionJob:
     # descarga base+inpaint oficiales, mergea (add-difference) y exporta el
     # resultado como un modelo nuevo "<repo> (inpainting)".
     inpaint_merge: bool = False
+    # Optimización por fusión de grafo: repo_id/checkpoint_path apuntan al origen
+    # torch del modelo YA instalado `source_model_id`, del que se re-exporta el
+    # UNet en fp32 para fusionarlo. El resultado se registra como variante nueva.
+    optimize: bool = False
+    source_model_id: str | None = None
+    source_model_name: str | None = None
     id: str = field(default_factory=lambda: uuid4().hex)
     status: JobStatus = JobStatus.queued
     created_at: datetime = field(default_factory=utc_now)

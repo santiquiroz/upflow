@@ -161,6 +161,16 @@ export function createInpaintVersion(modelId: string) {
   return apiPostJson(`/generation/models/${encodeURIComponent(modelId)}/create-inpaint`, {});
 }
 
+/**
+ * Crea la variante optimizada por fusión de grafo de un modelo instalado.
+ *
+ * Va por el mismo carril que una conversión: devuelve un conversionId que se
+ * consulta con getConversionStatus y se corta con cancelConversion.
+ */
+export function optimizeGenerationModel(modelId: string) {
+  return apiPostJson(`/generation/models/${encodeURIComponent(modelId)}/optimize`, {});
+}
+
 export function getConversionStatus(conversionId: string): Promise<ConversionStatusResponse> {
   return apiGet<ConversionStatusResponse>(`/generation/models/convert/${conversionId}`);
 }

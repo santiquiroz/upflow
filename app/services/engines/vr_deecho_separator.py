@@ -7,6 +7,11 @@ from typing import Any, Callable
 import numpy as np
 
 from app.services.engines.onnx_common import wrap_onnx_error
+from app.services.engines.separation_blocks import (  # noqa: F401  (reexport: los usan los tests)
+    block_ranges,
+    crossfade_window,
+    overlap_add_blocks,
+)
 from app.services.engines.separator_base import (
     OnnxStemSeparator,
     ProgressCallback,
@@ -22,9 +27,12 @@ from app.services.engines.vr_models import VR_MODELS, VR_SAMPLE_RATE, VrModelSpe
 # en app/services/engines/vr_deecho/ — aca solo se arma la sesion ONNX, se
 # acota la memoria por bloques y se cablean cancelacion y progreso.
 #
-# A diferencia de MDX estos modelos predicen DIRECTO la señal limpia (su
-# primary_stem es "No Echo"/"No Reverb"); el eco/reverb es la mascara
-# complementaria, no una resta compensada.
+# A diferencia de MDX aca no hay resta compensada: un stem es la mascara y el
+# otro su complemento. De-Echo/De-Reverb predicen DIRECTO la señal limpia; De-
+# Noise predice el RUIDO, asi que su señal limpia es el complemento. Nada de
+# eso se decide aca: sale del par ORDENADO `spec.stems` (cada stem dice de que
+# source viene) y de `spec.is_non_accom_stem`, que ademas da vuelta la curva de
+# aggression dentro del driver.
 # ---------------------------------------------------------------------------
 
 # Geometria del ventaneo del driver (vr_deecho/vr_params.py + pipeline.py). Se
@@ -63,29 +71,6 @@ def graph_windows(samples: int) -> int:
     return combined_spec_frames(samples) // _ROI_FRAMES + 1
 
 
-def block_ranges(
-    total: int, block: int, margin: int, fade: int
-) -> list[tuple[int, int, int, int]]:
-    """Bloques (lo, hi, keep_lo, keep_hi) que cubren [0, total) sin huecos.
-
-    `lo..hi` es lo que se le da al driver (incluye el margen de contexto que
-    despues se descarta); `keep_lo..keep_hi` es el tramo del resultado que
-    sobrevive. Cada bloque menos el primero ARRANCA `fade` muestras antes de su
-    tramo propio, asi la rampa de subida de uno cae exactamente sobre la de
-    bajada del anterior y las dos suman 1.
-    """
-    if total <= block:
-        return [(0, total, 0, total)]
-    ranges = []
-    for start in range(0, total, block):
-        keep_hi = min(start + block, total)
-        if start >= keep_hi:
-            break
-        keep_lo = start - fade if start > 0 else 0
-        ranges.append((max(0, start - margin), min(total, keep_hi + margin), keep_lo, keep_hi))
-    return ranges
-
-
 def fit_length(wave: np.ndarray, samples: int) -> np.ndarray:
     """El round-trip multibanda no devuelve exactamente la longitud de entrada."""
     if wave.shape[1] == samples:
@@ -93,16 +78,6 @@ def fit_length(wave: np.ndarray, samples: int) -> np.ndarray:
     if wave.shape[1] > samples:
         return wave[:, :samples]
     return np.pad(wave, ((0, 0), (0, samples - wave.shape[1])))
-
-
-def crossfade_window(length: int, fade_in: int, fade_out: int) -> np.ndarray:
-    """Rampas LINEALES complementarias: dos bloques contiguos suman 1 exacto."""
-    window = np.ones(length, dtype=np.float32)
-    if fade_in > 0:
-        window[:fade_in] = np.linspace(0.0, 1.0, fade_in, endpoint=False)
-    if fade_out > 0:
-        window[length - fade_out :] = np.linspace(1.0, 0.0, fade_out, endpoint=False)
-    return window
 
 
 def separate_padded(
@@ -137,24 +112,18 @@ class VrDeEchoSeparator(OnnxStemSeparator):
             graph_windows(hi - lo + _TAIL_PAD_SAMPLES) for lo, hi, _, _ in ranges
         )
         run_graph = self._make_run_graph(session, cancel_event, on_chunk, windows_total)
-        driver = DeEchoDriver(run_graph, aggression=spec.aggression)
+        driver = DeEchoDriver(
+            run_graph,
+            aggression=spec.aggression,
+            is_non_accom_stem=spec.is_non_accom_stem,
+        )
 
         primary = np.zeros((2, total), dtype=np.float32)
         secondary = np.zeros((2, total), dtype=np.float32)
-        for lo, hi, keep_lo, keep_hi in ranges:
-            block_primary, block_secondary = separate_padded(driver, mix[:, lo:hi])
-            window = crossfade_window(
-                keep_hi - keep_lo,
-                fade if keep_lo > 0 else 0,
-                fade if keep_hi < total else 0,
-            )
-            offset = keep_lo - lo
-            for source, destination in (
-                (block_primary, primary),
-                (block_secondary, secondary),
-            ):
-                piece = source[:, offset : offset + window.size]
-                destination[:, keep_lo:keep_hi] += piece * window
+        for block_range in ranges:
+            lo, hi = block_range[0], block_range[1]
+            stems = separate_padded(driver, mix[:, lo:hi])
+            overlap_add_blocks((primary, secondary), stems, block_range, total, fade)
 
         by_source = {"primary": primary, "secondary": secondary}
         return by_source[spec.stems[0].source], by_source[spec.stems[1].source]

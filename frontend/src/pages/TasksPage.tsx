@@ -1,4 +1,5 @@
 import { useNavigate } from "react-router-dom";
+import { useCapabilityActivation } from "../hooks/useCapabilityActivation";
 import { useCapabilityProvision } from "../hooks/useCapabilityProvision";
 import { useTranslation } from "../i18n/LocaleProvider";
 import type { CapabilityResponse } from "../lib/apiTypes";
@@ -45,10 +46,51 @@ function ProvisionBanner({
   return null;
 }
 
+function ActivationBanner({
+  capabilityId,
+  isBusy,
+  errorMessage,
+  isDone,
+}: {
+  capabilityId: string | null;
+  isBusy: boolean;
+  errorMessage: string | null;
+  isDone: boolean;
+}) {
+  const { t } = useTranslation();
+
+  if (capabilityId === null) {
+    return null;
+  }
+  if (errorMessage) {
+    return (
+      <p role="alert" className="text-sm text-danger">
+        {t("capability.activation.failed", { error: errorMessage })}
+      </p>
+    );
+  }
+  if (isBusy) {
+    return (
+      <p role="status" className="text-sm text-text-dim">
+        {t("capability.activation.running")}
+      </p>
+    );
+  }
+  if (isDone) {
+    return (
+      <p role="status" className="text-sm text-ok">
+        {t("capability.activation.done")}
+      </p>
+    );
+  }
+  return null;
+}
+
 export function TasksPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const provision = useCapabilityProvision();
+  const activation = useCapabilityActivation();
 
   function handleSelect(capability: CapabilityResponse): void {
     const surface = surfaceFor(capability);
@@ -71,9 +113,16 @@ export function TasksPage() {
         errorMessage={provision.errorMessage}
         isDone={provision.job?.status === "done"}
       />
+      <ActivationBanner
+        capabilityId={activation.capabilityId}
+        isBusy={activation.isBusy}
+        errorMessage={activation.errorMessage}
+        isDone={activation.isDone}
+      />
       <CapabilityTree
         onSelect={handleSelect}
         onProvision={(capability) => provision.provision(capability.id)}
+        onActivate={activation.activate}
       />
     </div>
   );

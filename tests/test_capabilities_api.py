@@ -378,3 +378,38 @@ def test_the_provision_status_of_an_unknown_job_answers_404_through_the_app():
         response = client.get("/api/v1/capabilities/provision/nope")
 
     assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_the_tree_tells_which_settings_the_card_can_turn_on(tmp_path: Path):
+    # La tarjeta necesita saber QUE prender; sin esto solo podia mandar a
+    # Ajustes con un texto generico.
+    pack_dir = tmp_path / "audiosr"
+    pack_dir.mkdir(parents=True)
+    settings = make_settings(tmp_path, AUDIOSR_MODEL_DIR=str(pack_dir))
+
+    response = await capability_tree(settings, FakeRegistry())
+
+    card = flat(response)["audio.restoreSr"]
+    assert card.status == "needs_setup"
+    assert card.missing_packs == []
+    assert card.activatable_settings == ["enable_audiosr"]
+
+
+@pytest.mark.asyncio
+async def test_a_card_with_nothing_to_activate_reports_an_empty_list(tmp_path: Path):
+    response = await capability_tree(make_settings(tmp_path), FakeRegistry())
+    assert flat(response)["video.upscale"].activatable_settings == []
+
+
+def test_the_tree_serializes_activatable_settings_in_camel_case():
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    with TestClient(app) as client:
+        payload = client.get("/api/v1/capabilities/tree").json()
+
+    cards = [item for group in payload["domains"] for item in group["capabilities"]]
+    assert cards
+    assert all(isinstance(card["activatableSettings"], list) for card in cards)

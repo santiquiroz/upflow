@@ -5,8 +5,12 @@ import pytest
 
 from app.config import Settings, get_settings
 from app.services import settings_service
+from app.services.capabilities import CATALOG, SettingRequirement
 from app.services.settings_service import (
+    ACTIVATABLE_FLAG_SETTINGS,
+    EDITABLE_BOOL_SETTINGS,
     EDITABLE_SETTINGS_WHITELIST,
+    RESTART_REQUIRED_SETTINGS,
     SettingNotEditableError,
     SettingValueError,
     editable_settings_status,
@@ -31,8 +35,42 @@ def clear_live_settings_registry():
 
 def test_whitelist_contains_the_ui_editable_settings() -> None:
     assert EDITABLE_SETTINGS_WHITELIST == frozenset(
-        {"hf_token", "rebar_confirmed", "enable_file_logging", "max_video_upload_mb"}
+        {
+            "hf_token",
+            "rebar_confirmed",
+            "enable_file_logging",
+            "max_video_upload_mb",
+            "enable_audiosr",
+            "enable_audio_restore",
+            "cad_llm_base_url",
+        }
     )
+
+
+def test_every_catalog_setting_requirement_is_editable() -> None:
+    # La regla que evita volver al punto de partida: si alguien suma un
+    # SettingRequirement al CATALOG sin sumarlo aca, la tarjeta vuelve a mandar
+    # al usuario a editar el .env a mano.
+    declared = {
+        requirement.setting_attr
+        for capability in CATALOG
+        for requirement in capability.requirements
+        if isinstance(requirement, SettingRequirement)
+    }
+    assert declared <= EDITABLE_SETTINGS_WHITELIST
+
+
+def test_bool_settings_are_derived_from_the_declared_field_type() -> None:
+    assert EDITABLE_BOOL_SETTINGS == frozenset(
+        {"rebar_confirmed", "enable_file_logging", "enable_audiosr", "enable_audio_restore"}
+    )
+
+
+def test_activatable_flags_exclude_the_ones_that_need_a_restart() -> None:
+    # cad_llm_base_url no es flag y ademas exige reiniciar: no puede llegar a un
+    # boton "Activar" que promete aplicar en el acto.
+    assert "cad_llm_base_url" not in ACTIVATABLE_FLAG_SETTINGS
+    assert ACTIVATABLE_FLAG_SETTINGS == EDITABLE_BOOL_SETTINGS
 
 
 def test_update_setting_rejects_key_outside_whitelist(env_file: Path) -> None:
@@ -139,19 +177,87 @@ def test_concurrent_updates_do_not_corrupt_env(env_file: Path) -> None:
     assert len([line for line in lines if line.startswith("HF_TOKEN=")]) == 1
 
 
+def _status_by_key(settings: Settings) -> dict[str, dict]:
+    return {item["key"]: item for item in editable_settings_status(settings)}
+
+
 def test_editable_settings_status_reports_configured_flag() -> None:
-    configured = editable_settings_status(Settings(_env_file=None, HF_TOKEN="x"))
-    assert configured == [
-        {"key": "enable_file_logging", "configured": False},
-        {"key": "hf_token", "configured": True},
-        # Siempre tiene valor: es un numero con default, no una credencial.
-        {"key": "max_video_upload_mb", "configured": True},
-        {"key": "rebar_confirmed", "configured": False},
+    configured = _status_by_key(Settings(_env_file=None, HF_TOKEN="x"))
+    assert [item["key"] for item in editable_settings_status(Settings(_env_file=None))] == [
+        "cad_llm_base_url",
+        "enable_audio_restore",
+        "enable_audiosr",
+        "enable_file_logging",
+        "hf_token",
+        "max_video_upload_mb",
+        "rebar_confirmed",
     ]
-    empty = editable_settings_status(Settings(_env_file=None))
-    assert empty == [
-        {"key": "enable_file_logging", "configured": False},
-        {"key": "hf_token", "configured": False},
-        {"key": "max_video_upload_mb", "configured": True},
-        {"key": "rebar_confirmed", "configured": False},
-    ]
+    assert configured["hf_token"]["configured"] is True
+    # Siempre tiene valor: es un numero con default, no una credencial.
+    assert configured["max_video_upload_mb"]["configured"] is True
+    assert configured["enable_audiosr"]["configured"] is False
+    assert _status_by_key(Settings(_env_file=None))["hf_token"]["configured"] is False
+
+
+def test_status_exposes_the_value_only_for_the_boolean_flags() -> None:
+    status = _status_by_key(
+        Settings(_env_file=None, HF_TOKEN="hf_secret", ENABLE_AUDIOSR="true", CAD_LLM_BASE_URL="http://x/v1")
+    )
+    assert status["enable_audiosr"]["value"] == "true"
+    assert status["enable_audio_restore"]["value"] == "false"
+    # El secreto NUNCA vuelve, ni siquiera enmascarado.
+    assert status["hf_token"]["value"] is None
+    assert "hf_secret" not in str(status)
+    # Texto libre tampoco: puede traer una credencial en la URL.
+    assert status["cad_llm_base_url"]["value"] is None
+    assert status["max_video_upload_mb"]["value"] is None
+
+
+def test_status_marks_which_settings_need_a_restart() -> None:
+    status = _status_by_key(Settings(_env_file=None))
+    assert status["cad_llm_base_url"]["requires_restart"] is True
+    for key in EDITABLE_BOOL_SETTINGS:
+        assert status[key]["requires_restart"] is False
+    assert RESTART_REQUIRED_SETTINGS == frozenset({"cad_llm_base_url"})
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("true", "true"),
+        ("True", "true"),
+        (" TRUE ", "true"),
+        ("1", "true"),
+        ("yes", "true"),
+        ("on", "true"),
+        ("false", "false"),
+        ("False", "false"),
+        ("0", "false"),
+        ("no", "false"),
+        ("off", "false"),
+    ],
+)
+def test_update_flag_normalizes_what_it_writes_to_env(env_file: Path, raw: str, expected: str) -> None:
+    update_setting("enable_audiosr", raw)
+    assert env_file.read_text(encoding="utf-8").strip() == f"ENABLE_AUDIOSR={expected}"
+
+
+@pytest.mark.parametrize("raw", ["", "  ", "maybe", "2", "sí", "t"])
+def test_update_flag_rejects_a_value_that_is_not_a_switch(env_file: Path, raw: str) -> None:
+    with pytest.raises(SettingValueError, match="interruptor"):
+        update_setting("enable_audiosr", raw)
+    assert not env_file.exists()
+
+
+def test_turning_a_flag_off_leaves_a_real_false_in_the_live_instance(
+    env_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # La CADENA "false" es truthy: sin coercion, apagar el flag lo dejaba
+    # prendido en todo servicio que retiene la instancia viva.
+    monkeypatch.chdir(env_file.parent)
+    live = Settings(_env_file=None, ENABLE_AUDIOSR="true")
+    register_live_settings(live)
+    update_setting("enable_audiosr", "false")
+    assert live.enable_audiosr is False
+    update_setting("enable_audiosr", "true")
+    assert live.enable_audiosr is True

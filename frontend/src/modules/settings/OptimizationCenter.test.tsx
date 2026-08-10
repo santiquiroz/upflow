@@ -24,7 +24,7 @@ function renderWithClient() {
 beforeEach(() => {
   localStorage.clear();
   vi.mocked(settingsService.fetchEditableSettings).mockResolvedValue({
-    settings: [{ key: "rebar_confirmed", configured: false }],
+    settings: [{ key: "rebar_confirmed", configured: false, value: "false", requiresRestart: false }],
   });
   vi.mocked(settingsService.patchSetting).mockResolvedValue({ key: "rebar_confirmed" });
 });
@@ -105,7 +105,7 @@ describe("OptimizationCenter", () => {
     vi.spyOn(api, "getCapabilities").mockResolvedValue({ levers: [] });
     vi.spyOn(api, "getOnnxDiagnostics").mockResolvedValue({ entries: [] });
     vi.mocked(settingsService.fetchEditableSettings).mockResolvedValue({
-      settings: [{ key: "rebar_confirmed", configured: true }],
+      settings: [{ key: "rebar_confirmed", configured: true, value: "true", requiresRestart: false }],
     });
 
     renderWithClient();

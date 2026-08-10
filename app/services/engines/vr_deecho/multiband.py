@@ -1,5 +1,5 @@
 # Vendored from santiquiroz/port-uvr-deecho-onnx driver/multiband.py @ commit
-# 23b2564 (see app/services/engines/vr_deecho/__init__.py for sync notes).
+# 02cd199 (see app/services/engines/vr_deecho/__init__.py for sync notes).
 # Imports rewritten: `from driver import dsp` -> `from
 # app.services.engines.vr_deecho import dsp`, `from driver.vr_params import
 # ...` -> `from app.services.engines.vr_deecho.vr_params import ...` (this repo

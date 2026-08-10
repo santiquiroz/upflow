@@ -78,6 +78,8 @@ from app.schemas import (
     GeneratePartRequest,
     Shape3dJobRequest,
     Shape3dJobResponse,
+    SizeEstimateRequest,
+    SizeEstimateResponse,
     GeneratedPartResponse,
     MeshRepairResponse,
     PartKindResponse,
@@ -197,6 +199,7 @@ from app.services.mesh_repair import repair_mesh
 from app.services.engines.shape3d import Shape3dUnavailable
 from app.services.parametric_parts import PartError
 from app.services.shape3d_job_manager import Shape3dJobManager
+from app.services.size_estimate import SizeEstimateUnavailable, estimate_longest_mm
 from app.services.part_catalog import PART_KINDS, build_part
 from app.services.stl_reader import StlUnreadable, read_stl
 from app.services.stl_writer import write_stl
@@ -1691,6 +1694,7 @@ async def audio_capabilities(settings: Settings = Depends(get_settings)) -> Audi
                 category=spec.category,
                 architecture=spec.architecture,
                 description_key=spec.description_key,
+                warning_key=spec.warning_key,
                 stems=[
                     SeparationStemResponse(id=stem.id, label_key=stem.label_key)
                     for stem in spec.stems
@@ -2483,13 +2487,7 @@ async def create_inpaint_version(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     else:
-        has_torch_weights = any(
-            "/" in hf_file.path
-            and hf_file.path.endswith((".safetensors", ".bin"))
-            and ".onnx" not in hf_file.path
-            for hf_file in source_files
-        )
-        if not has_torch_weights:
+        if not _repo_has_torch_weights(source_files):
             raise HTTPException(
                 status_code=400,
                 detail=(
@@ -2500,6 +2498,137 @@ async def create_inpaint_version(
     try:
         conversion_id = await converter.convert_inpaint_merge(
             source_repo, checkpoint_path=entry.checkpoint_path
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return CreateConversionResponse(
+        conversion_id=conversion_id,
+        status_url=f"/api/v1/generation/models/convert/{conversion_id}",
+    )
+
+
+def _repo_has_torch_weights(files: list) -> bool:
+    return any(
+        "/" in hf_file.path
+        and hf_file.path.endswith((".safetensors", ".bin"))
+        and ".onnx" not in hf_file.path
+        for hf_file in files
+    )
+
+
+def _optimize_source_repo(entry: ModelEntry) -> str:
+    """Repo de origen del que se pueden volver a bajar los pesos torch.
+
+    La fusión de grafo no se puede hacer sobre el ONNX fp16 instalado: hay que
+    re-exportar los pesos originales en fp32. Sin origen no hay optimización.
+    """
+    from app.services.generation_optimize import (
+        OptimizeUnsupportedError,
+        is_inpaint_merge,
+        is_optimized,
+    )
+
+    if is_optimized(entry.id):
+        raise OptimizeUnsupportedError("Este modelo ya es la versión optimizada")
+    if is_inpaint_merge(entry.id):
+        # Los pesos de un merge de inpainting sólo existen como el ONNX que
+        # produjo ESE merge: re-exportar desde el repo daría el UNet sin mergear
+        # y la variante "optimizada" sería otro modelo disfrazado.
+        raise OptimizeUnsupportedError(
+            "Una versión de inpainting no se puede optimizar: sus pesos son el "
+            "resultado del merge y no existen como modelo de origen. Optimizá el "
+            "modelo base."
+        )
+    if not entry.source.startswith("hf:"):
+        raise OptimizeUnsupportedError(
+            "Este modelo no tiene un repo de origen en Hugging Face del que "
+            "re-exportar los pesos"
+        )
+    return entry.source[3:]
+
+
+async def _optimize_architecture_for(entry: ModelEntry, settings: Settings):
+    from app.services.engines.generation_onnx import _read_declared_class_name
+    from app.services.generation_optimize import OptimizeUnsupportedError, architecture_for
+
+    try:
+        declared = _read_declared_class_name(
+            settings.models_path / (entry.file_path or "")
+        )
+    except Exception as exc:  # noqa: BLE001 - sin model_index no hay veredicto
+        raise OptimizeUnsupportedError(
+            "No se pudo leer la clase del modelo instalado"
+        ) from exc
+    return architecture_for(declared)
+
+
+@router.post(
+    "/generation/models/{model_id}/optimize",
+    response_model=CreateConversionResponse, status_code=202,
+    dependencies=[Depends(require(Permission.models_install))],
+)
+async def optimize_generation_model(
+    model_id: str,
+    request: Request,
+    converter: GenerationModelConverter = Depends(get_generation_converter),
+    registry: ModelRegistry = Depends(get_model_registry),
+    settings: Settings = Depends(get_settings),
+) -> CreateConversionResponse:
+    """Crea la variante optimizada por fusión de grafo de un modelo instalado.
+
+    Todo se valida ACÁ: la conversión tarda entre 3 y 10 minutos y pide decenas
+    de GB de RAM, así que un rechazo tiene que llegar antes de encolar, no a la
+    mitad del trabajo.
+    """
+    from app.services.generation_optimize import (
+        OptimizeUnsupportedError,
+        ensure_enough_ram,
+        optimized_model_id,
+    )
+    from app.services.model_preflight import measure_free_ram
+
+    entry = registry.get(model_id)
+    if entry is None or entry.kind != ModelKind.diffusion_onnx:
+        raise HTTPException(status_code=404, detail="Modelo de generación no encontrado")
+    if entry.status != ModelStatus.installed:
+        raise HTTPException(
+            status_code=400, detail="Este modelo todavía no terminó de instalarse"
+        )
+    existing = registry.get(optimized_model_id(model_id))
+    if existing is not None and existing.status != ModelStatus.error:
+        raise HTTPException(
+            status_code=400, detail="Este modelo ya tiene una versión optimizada"
+        )
+    try:
+        source_repo = _optimize_source_repo(entry)
+        architecture = await _optimize_architecture_for(entry, settings)
+        ensure_enough_ram(
+            architecture,
+            measure_free_ram(getattr(request.app.state, "resource_probes", {})),
+        )
+    except OptimizeUnsupportedError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        source_files = await converter.hf_client.repo_files(source_repo)
+    except Exception as exc:  # noqa: BLE001 - sin listado no hay veredicto honesto
+        raise HTTPException(
+            status_code=400, detail=f"No se pudo listar el repo de origen: {exc}"
+        ) from exc
+    if entry.checkpoint_path is None and not _repo_has_torch_weights(source_files):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "El repo de origen solo publica pesos ONNX: la optimización "
+                "necesita re-exportar los pesos PyTorch originales en fp32."
+            ),
+        )
+    try:
+        conversion_id = await converter.optimize_installed(
+            source_model_id=entry.id,
+            source_model_name=entry.name,
+            repo_id=source_repo,
+            checkpoint_path=entry.checkpoint_path,
+            installed_dir=settings.models_path / (entry.file_path or ""),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -2656,6 +2785,7 @@ def _capability_to_response(item: ResolvedCapability) -> CapabilityResponse:
         missing_packs=list(item.missing_packs),
         unavailable_reason_key=item.unavailable_reason_key,
         setup_reason_key=item.setup_reason_key,
+        activatable_settings=list(item.activatable_settings),
     )
 
 def _resolved_by_id(settings: Settings, registry: ModelRegistry, capability_id: str) -> ResolvedCapability:
@@ -3207,6 +3337,9 @@ def shape3d_job_to_response(job: Shape3dJob) -> Shape3dJobResponse:
         advice=job.advice,
         error=job.error,
         source=job.source,
+        target_mm=job.target_mm,
+        target_mm_source=job.target_mm_source,
+        target_mm_reference=job.target_mm_reference,
         code=job.code,
         retries=job.retries,
         download_url=(
@@ -3214,6 +3347,47 @@ def shape3d_job_to_response(job: Shape3dJob) -> Shape3dJobResponse:
             if job.status == JobStatus.completed and job.output_path
             else None
         ),
+    )
+
+
+@router.post(
+    "/print/estimate-size", response_model=SizeEstimateResponse,
+    dependencies=[Depends(require(Permission.jobs_create))],
+)
+async def estimate_print_size(
+    payload: SizeEstimateRequest,
+    jobs: Shape3dJobManager = Depends(get_shape3d_jobs),
+) -> SizeEstimateResponse:
+    """Cuanto mide de verdad el objeto descrito. Es una SUGERENCIA, no una cota.
+
+    No escala nada ni encola nada: devuelve un numero para que el usuario lo
+    confirme o lo cambie. Sin servidor de modelo configurado no hay sugerencia y
+    el carril de malla sigue con su default, igual que antes de que esto
+    existiera.
+    """
+    if not payload.prompt.strip():
+        raise HTTPException(status_code=400, detail="Hace falta una descripcion del objeto.")
+    if jobs.cad_client is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "No hay servidor de modelo configurado para estimar el tamano. "
+                "Levanta uno local (Ollama, LM Studio o llama.cpp server) y "
+                "apuntalo desde Ajustes."
+            ),
+        )
+    try:
+        # `to_thread` porque el cliente habla HTTP con urllib, que es bloqueante:
+        # sin esto, una estimacion lenta congela el loop entero.
+        estimacion = await asyncio.to_thread(
+            estimate_longest_mm, payload.prompt, client=jobs.cad_client
+        )
+    except SizeEstimateUnavailable as exc:
+        # 502 y no 500: el que no respondio lo que se esperaba es el servidor del
+        # modelo, que esta rio arriba de esta app.
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return SizeEstimateResponse(
+        longest_mm=estimacion.longest_mm, reference=estimacion.reference
     )
 
 
@@ -3241,6 +3415,8 @@ async def create_shape3d_job(
             printer=payload.printer,
             source=payload.source,
             target_mm=payload.target_mm,
+            target_mm_source=payload.target_mm_source,
+            target_mm_reference=payload.target_mm_reference,
             expected_size=payload.expected_size,
             image_path=image_path,
             owner=current_user_from_request(request),

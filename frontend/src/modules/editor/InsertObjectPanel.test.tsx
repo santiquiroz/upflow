@@ -414,6 +414,68 @@ describe("InsertObjectPanel", () => {
     );
   });
 
+  it("shows the edge-blend slider only with harmonize on and sends the default untouched", async () => {
+    vi.mocked(generationService.fetchGenerationCapabilities).mockResolvedValue(
+      CAPABILITIES_WITH_INPAINT,
+    );
+    vi.mocked(generationService.uploadGenerationInitImage)
+      .mockResolvedValueOnce(SOURCE)
+      .mockResolvedValueOnce(MASK);
+    vi.mocked(editorService.segmentEditorObject).mockResolvedValue(
+      new Blob(["png"], { type: "image/png" }),
+    );
+    vi.mocked(editorService.insertObject).mockResolvedValue({
+      compositeToken: "comp-1",
+      compositePngBase64: "QUJD",
+      jobId: "job-1",
+    });
+    renderWithProviders(<InsertObjectPanel targetInfo={TARGET} />);
+    openPanel();
+    await selectObjectOnPreview();
+
+    expect(screen.queryByLabelText(en["editor.insert.blend"])).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText(en["editor.insert.harmonize"]));
+    const slider = await screen.findByLabelText(en["editor.insert.blend"]);
+    // El default no obliga a tocar nada: preserva el objeto y funde la costura.
+    expect(slider).toHaveValue("35");
+
+    await clickInsert();
+
+    expect(editorService.insertObject).toHaveBeenCalledWith(
+      expect.objectContaining({ harmonize: true, harmonizeBlend: 0.35 }),
+    );
+  });
+
+  it("the edge-blend slider at 100 asks for the whole object, the classic behaviour", async () => {
+    vi.mocked(generationService.fetchGenerationCapabilities).mockResolvedValue(
+      CAPABILITIES_WITH_INPAINT,
+    );
+    vi.mocked(generationService.uploadGenerationInitImage)
+      .mockResolvedValueOnce(SOURCE)
+      .mockResolvedValueOnce(MASK);
+    vi.mocked(editorService.segmentEditorObject).mockResolvedValue(
+      new Blob(["png"], { type: "image/png" }),
+    );
+    vi.mocked(editorService.insertObject).mockResolvedValue({
+      compositeToken: "comp-1",
+      compositePngBase64: "QUJD",
+      jobId: "job-1",
+    });
+    renderWithProviders(<InsertObjectPanel targetInfo={TARGET} />);
+    openPanel();
+    await selectObjectOnPreview();
+    fireEvent.click(screen.getByLabelText(en["editor.insert.harmonize"]));
+    const slider = await screen.findByLabelText(en["editor.insert.blend"]);
+
+    fireEvent.change(slider, { target: { value: "100" } });
+    await clickInsert();
+
+    expect(editorService.insertObject).toHaveBeenCalledWith(
+      expect.objectContaining({ harmonizeBlend: 1 }),
+    );
+  });
+
   it("draws the ghost on the placement map once an object is segmented", async () => {
     vi.mocked(generationService.uploadGenerationInitImage)
       .mockResolvedValueOnce(SOURCE)

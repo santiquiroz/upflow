@@ -2,7 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Download, Trash2 } from "lucide-react";
 import { useTranslation } from "../../i18n/LocaleProvider";
 import { useState } from "react";
-import { createInpaintVersion } from "../../services/generation";
+import { createInpaintVersion, optimizeGenerationModel } from "../../services/generation";
 import { useGenerationModelInstall } from "../../hooks/useGenerationJob";
 import { DEFAULT_INSTALL_POLL_INTERVAL_MS, useDeleteModel, useInstalledModels } from "../../hooks/useModels";
 import type { ModelResponse } from "../../lib/apiTypes";
@@ -64,16 +64,36 @@ function isInpaintVariant(model: ModelResponse): boolean {
   return model.name.includes("(inpainting)");
 }
 
+function isOptimizedVariant(model: ModelResponse): boolean {
+  return model.name.includes("(optimized)");
+}
+
+// La fusión de grafo re-exporta los pesos de origen: una variante de inpainting
+// no los tiene (sus pesos son el resultado del merge) y la optimizada ya pasó por
+// acá. El servidor rechaza los dos casos igual; esto evita ofrecer el botón.
+function canOptimize(model: ModelResponse): boolean {
+  return (
+    model.status === "installed" && !isInpaintVariant(model) && !isOptimizedVariant(model)
+  );
+}
+
+const SECONDARY_ACTION_CLASS =
+  "rounded-sm border border-border bg-surface px-2 py-1.5 text-xs text-text-dim transition-[border-color,color] duration-fast hover:border-accent hover:text-text disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent";
+
 function DiffusionModelRow({
   model,
   onRequestDelete,
   onCreateInpaint,
   inpaintPending,
+  onOptimize,
+  optimizePending,
 }: {
   model: ModelResponse;
   onRequestDelete: (model: ModelResponse) => void;
   onCreateInpaint: (model: ModelResponse) => void;
   inpaintPending: boolean;
+  onOptimize: (model: ModelResponse) => void;
+  optimizePending: boolean;
 }) {
   const { t } = useTranslation();
   return (
@@ -83,13 +103,24 @@ function DiffusionModelRow({
         <span className="font-mono-tabular text-xs text-text-dim">{formatModelSize(model.sizeBytes)}</span>
       </div>
       <div className="flex shrink-0 items-center gap-2">
-        {!isInpaintVariant(model) && (
+        {canOptimize(model) && (
+          <button
+            type="button"
+            title={t("models.optimize.hint")}
+            disabled={optimizePending}
+            onClick={() => onOptimize(model)}
+            className={SECONDARY_ACTION_CLASS}
+          >
+            {t("models.optimize.button")}
+          </button>
+        )}
+        {!isInpaintVariant(model) && !isOptimizedVariant(model) && (
           <button
             type="button"
             title={t("models.createInpaint.hint")}
             disabled={inpaintPending}
             onClick={() => onCreateInpaint(model)}
-            className="rounded-sm border border-border bg-surface px-2 py-1.5 text-xs text-text-dim transition-[border-color,color] duration-fast hover:border-accent hover:text-text disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+            className={SECONDARY_ACTION_CLASS}
           >
             {t("models.createInpaint.button")}
           </button>
@@ -117,11 +148,15 @@ function DiffusionModelsList({
   onRequestDelete,
   onCreateInpaint,
   inpaintPending,
+  onOptimize,
+  optimizePending,
 }: {
   models: ModelResponse[];
   onRequestDelete: (model: ModelResponse) => void;
   onCreateInpaint: (model: ModelResponse) => void;
   inpaintPending: boolean;
+  onOptimize: (model: ModelResponse) => void;
+  optimizePending: boolean;
 }) {
   if (models.length === 0) {
     return <DiffusionModelsEmptyState />;
@@ -135,6 +170,8 @@ function DiffusionModelsList({
           onRequestDelete={onRequestDelete}
           onCreateInpaint={onCreateInpaint}
           inpaintPending={inpaintPending}
+          onOptimize={onOptimize}
+          optimizePending={optimizePending}
         />
       ))}
     </ul>
@@ -167,6 +204,15 @@ export function GenerationModelsSection({ pollIntervalMs = DEFAULT_INSTALL_POLL_
       // esta misma lista con su progreso apenas se refresca. Invalidar también
       // las conversiones activas engancha la barra de progreso AL INSTANTE —
       // sin esto solo aparecía tras recargar la página (visto real).
+      queryClient.invalidateQueries({ queryKey: ["models"] });
+      queryClient.invalidateQueries({ queryKey: ["generation-active-conversions"] });
+    },
+  });
+  const optimizeMutation = useMutation({
+    mutationFn: (model: ModelResponse) => optimizeGenerationModel(model.id),
+    onSuccess: () => {
+      // Misma razón que el merge: la variante aparece en esta lista con su
+      // progreso apenas se refrescan modelos y conversiones activas.
       queryClient.invalidateQueries({ queryKey: ["models"] });
       queryClient.invalidateQueries({ queryKey: ["generation-active-conversions"] });
     },
@@ -209,12 +255,21 @@ export function GenerationModelsSection({ pollIntervalMs = DEFAULT_INSTALL_POLL_
         onRequestDelete={setPendingDelete}
         onCreateInpaint={(model) => inpaintMutation.mutate(model)}
         inpaintPending={inpaintMutation.isPending}
+        onOptimize={(model) => optimizeMutation.mutate(model)}
+        optimizePending={optimizeMutation.isPending}
       />
       {inpaintMutation.isError && (
         <p className="text-sm text-danger">
           {inpaintMutation.error instanceof Error
             ? inpaintMutation.error.message
             : t("models.createInpaint.failed")}
+        </p>
+      )}
+      {optimizeMutation.isError && (
+        <p role="alert" className="text-sm text-danger">
+          {optimizeMutation.error instanceof Error
+            ? optimizeMutation.error.message
+            : t("models.optimize.failed")}
         </p>
       )}
       {deleteMutation.isError && <DeleteFailedNote error={deleteMutation.error} />}

@@ -66,6 +66,18 @@ JOB_DIMENSION_MULTIPLE = 64
 JOB_DIMENSION_MAX = 1024
 
 
+def _mask_preparation_for(harmonize_blend: float) -> dict[str, int]:
+    """Preparación de máscara que le toca al motor según el perfil pedido.
+
+    El perfil continuo ya trae su propia dilatación y su propia caída: volver a
+    dilatarlo en el motor (MaxFilter de 8 px) empujaría el 255 de la costura
+    hacia adentro y se comería justo el centro que la máscara viene a preservar.
+    Con el perfil uniforme clásico se dejan los defaults del motor, para que el
+    comportamiento viejo siga siendo exactamente el viejo.
+    """
+    return {} if harmonize_blend >= 1.0 else {"mask_dilate_px": 0, "mask_feather_px": 0}
+
+
 def _snap_job_dimensions(width: int, height: int) -> tuple[int, int]:
     scale = min(1.0, JOB_DIMENSION_MAX / max(width, height, 1))
 
@@ -85,9 +97,12 @@ async def insert_object(payload: InsertObjectRequest, request: Request) -> Inser
     """Pega un objeto recortado de otra imagen en el destino, integrado.
 
     Fase 0 (siempre): composite con feather + igualación de color MK.
-    Fase 1 (harmonize=True): pase de inpaint 9ch a strength parcial sobre la
-    zona pegada — exige un modelo de inpainting dedicado, porque uno de 4
-    canales fuerza strength 1.0 y reinventaría el objeto recién pegado.
+    Fase 1 (harmonize=True): pase de inpaint 9ch sobre la zona pegada — exige un
+    modelo de inpainting dedicado, porque uno de 4 canales fuerza strength 1.0 y
+    reinventaría el objeto recién pegado.
+    Fase 2 (harmonizeBlend < 1): esa zona no va a intensidad plana sino con un
+    perfil continuo (máximo en la costura, casi cero en el centro) que el inpaint
+    aplica por difusión diferencial — se re-genera la unión, no el objeto.
     """
     import asyncio
     import base64
@@ -162,11 +177,13 @@ async def insert_object(payload: InsertObjectRequest, request: Request) -> Inser
             spec = PasteSpec(
                 x=left, y=top, width=max(8, right - left), height=max(8, bottom - top),
                 feather_px=payload.feather_px, match_color=payload.match_color,
+                harmonize_blend=payload.harmonize_blend,
             )
         else:
             spec = PasteSpec(
                 x=payload.x, y=payload.y, width=payload.width, height=payload.height,
                 feather_px=payload.feather_px, match_color=payload.match_color,
+                harmonize_blend=payload.harmonize_blend,
             )
         composite, paste_mask = transfer_object(source, source_mask, target, spec)
         if target_object is not None:
@@ -210,6 +227,7 @@ async def insert_object(payload: InsertObjectRequest, request: Request) -> Inser
                 init_image_path=composite_path,
                 strength=HARMONIZE_STRENGTH,
                 mask_image_path=paste_mask_path,
+                **_mask_preparation_for(payload.harmonize_blend),
                 owner=current_user_from_request(request),
             )
         except QueueFullError as exc:

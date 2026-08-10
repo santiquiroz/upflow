@@ -1205,3 +1205,37 @@ async def test_capabilities_never_offer_error_entries(tmp_path: Path) -> None:
     )
 
     assert response.models == []
+
+
+# ---------------------------------------------------------------------------
+# preparación de máscara: lo que el job le pide al motor
+# ---------------------------------------------------------------------------
+
+
+def test_a_job_without_an_opinion_leaves_the_engine_defaults_alone() -> None:
+    from app.services.generation_job_manager import mask_preparation_overrides
+
+    assert mask_preparation_overrides(make_generation_job()) == {}
+
+
+def test_a_job_can_switch_off_the_engine_mask_preparation() -> None:
+    """La armonización de objetos manda 0/0: su máscara ya trae su perfil."""
+    from app.services.generation_job_manager import mask_preparation_overrides
+
+    job = make_generation_job(mask_dilate_px=0, mask_feather_px=0)
+
+    assert mask_preparation_overrides(job) == {"mask_dilate_px": 0, "mask_feather_px": 0}
+
+
+def test_the_engine_request_carries_the_job_mask_preparation() -> None:
+    from app.services.engines.generation_onnx import GenerationRequest
+    from app.services.generation_job_manager import mask_preparation_overrides
+
+    job = make_generation_job(mask_dilate_px=0, mask_feather_px=0)
+
+    request = GenerationRequest(
+        prompt=job.prompt, negative_prompt=None, steps=1, guidance=1.0,
+        width=64, height=64, seed=None, **mask_preparation_overrides(job),
+    )
+
+    assert request.mask_dilate_px == 0 and request.mask_feather_px == 0

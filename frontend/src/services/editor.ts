@@ -53,6 +53,9 @@ export interface InsertObjectParams {
   featherPx?: number;
   matchColor?: boolean;
   harmonize?: boolean;
+  // 0..1: qué fracción del objeto re-genera la armonización, desde el borde
+  // hacia adentro. 1 = el objeto entero (comportamiento clásico).
+  harmonizeBlend?: number;
   modelId?: string;
   prompt?: string;
   device?: string;

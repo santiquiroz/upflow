@@ -1,19 +1,30 @@
-"""Modelos VR (UVR 5.1 CascadedNet) del catalogo de separacion: De-Echo y
-De-Reverb de FoxJoy, los tres de la familia "Limpieza".
+"""Modelos VR (UVR 5.1 CascadedNet) del catalogo de separacion: De-Echo,
+De-Reverb y De-Noise de FoxJoy, los cuatro de la familia "Limpieza".
 
 Politica de origen: los PESOS son de FoxJoy, distribuidos por el canal oficial
 de descargas de Ultimate Vocal Remover (los .pth del release
 all_public_uvr_models); los .onnx son un port propio, publico y MIT
-(github.com/santiquiroz/port-uvr-deecho-onnx, release models-v1.0), conversion
+(github.com/santiquiroz/port-uvr-deecho-onnx, release models-v1.1), conversion
 mecanica de formato sin re-entrenar nada. `source_uvr_hash` deja anotado de que
 checkpoint salio cada grafo (MD5 de los ultimos 10000 KiB del .pth, que es como
 UVR identifica sus modelos); `sha256` es el del .onnx del release, tomado del
 manifest.json de ESE release y verificado contra los archivos descargados el
-2026-08-09.
+2026-08-10.
 
-A diferencia de MDX, aca el modelo predice DIRECTO la señal limpia (su
-primary_stem es "No Echo" / "No Reverb") y el eco/reverb sale de la mascara
-complementaria — no hay resta compensada, por eso no hay `compensate`.
+A diferencia de MDX, aca no hay resta compensada (por eso no hay `compensate`):
+un stem es la mascara y el otro es su complemento. CUAL de los dos es la señal
+limpia depende del modelo y NO se puede adivinar del grafo:
+
+* De-Echo / De-Reverb: la mascara predice DIRECTO la señal limpia
+  (primary_stem "No Echo" / "No Reverb"), el eco/reverb es el complemento.
+* De-Noise: la mascara predice el RUIDO (primary_stem "Other"), asi que la
+  señal limpia es el COMPLEMENTO. Por eso su `stems` arranca con el stem de
+  source "secondary" — el orden del par es "lo que el usuario quiere primero",
+  no "primary primero".
+
+Ese mismo dato (primary_stem "Other" esta en NON_ACCOM_STEMS de UVR) ademas da
+vuelta la curva de aggression a `1 - aggr`, y va en `is_non_accom_stem`: el
+separador se lo pasa al driver y el port lo gatea contra la tabla de UVR.
 
 El catalogo COMPLETO (MDX + VR) se arma en separation_models.py; este modulo
 solo aporta la mitad VR.
@@ -37,14 +48,20 @@ VR_SAMPLE_RATE = 44100
 # sin TTA ni post-process). "Aggressive" es OTRO checkpoint, no otra aggression.
 VR_DEFAULT_AGGRESSION = 5.0
 
+# models-v1.1 = los 4 grafos + su manifest. v1.0 (los 3 primeros) sigue
+# publicado y con los MISMOS bytes; se repunta todo a v1.1 para que un solo tag
+# describa el set completo. No fuerza re-descarga: el provisioner y el .ps1
+# verifican el archivo que ya esta en disco por SHA-256, no por URL.
 _RELEASE_BASE = (
-    "https://github.com/santiquiroz/port-uvr-deecho-onnx/releases/download/models-v1.0"
+    "https://github.com/santiquiroz/port-uvr-deecho-onnx/releases/download/models-v1.1"
 )
 
 _STEM_NO_ECHO = "audio.stem.no_echo"
 _STEM_ECHO = "audio.stem.echo"
 _STEM_NO_REVERB = "audio.stem.no_reverb"
 _STEM_REVERB = "audio.stem.reverb"
+_STEM_NO_NOISE = "audio.stem.no_noise"
+_STEM_NOISE = "audio.stem.noise"
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,6 +78,11 @@ class VrModelSpec(SeparationModelSpec):
     nout: int
     # Curva de aggression que se aplica a la mascara despues de inferir.
     aggression: float
+    # `primary_stem in NON_ACCOM_STEMS` de UVR. Da vuelta el exponente de la
+    # aggression a `1 - aggr`. No es cosmetico: con el valor equivocado sale
+    # una mascara silenciosamente distinta, no un error. El port lo gatea
+    # contra la tabla del propio UVR (tests/test_aggression.py).
+    is_non_accom_stem: bool = False
 
     architecture: ClassVar[Architecture] = "vr"
 
@@ -118,6 +140,27 @@ VR_MODELS: dict[str, VrModelSpec] = {
         stems=(
             SeparationStem("no_reverb", _STEM_NO_REVERB, "primary"),
             SeparationStem("reverb", _STEM_REVERB, "secondary"),
+        ),
+    ),
+    "denoise": VrModelSpec(
+        id="denoise",
+        name="UVR DeNoise by FoxJoy",
+        filename="UVR-DeNoise.onnx",
+        url=f"{_RELEASE_BASE}/UVR-DeNoise.onnx",
+        sha256="3285c155a0f8f7295ad971e1fb43fdcb9d8cdbc493c28aececcddb61af26cc63",
+        vr_model_name="UVR-DeNoise",
+        source_uvr_hash="44c55d8b5d2e3edea98c2b2bf93071c7",
+        nout=48,
+        aggression=VR_DEFAULT_AGGRESSION,
+        # El unico del catalogo VR cuya mascara saca el RUIDO y no la señal
+        # limpia; de ahi el par de stems invertido y is_non_accom_stem.
+        primary_stem="Noise",
+        is_non_accom_stem=True,
+        category="cleanup",
+        description_key="audio.karaoke.model.denoise.description",
+        stems=(
+            SeparationStem("no_noise", _STEM_NO_NOISE, "secondary"),
+            SeparationStem("noise", _STEM_NOISE, "primary"),
         ),
     ),
 }

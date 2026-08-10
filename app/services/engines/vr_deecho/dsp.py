@@ -1,5 +1,5 @@
 # Vendored from santiquiroz/port-uvr-deecho-onnx driver/dsp.py @ commit
-# 23b2564 (see app/services/engines/vr_deecho/__init__.py for sync notes).
+# 02cd199 (see app/services/engines/vr_deecho/__init__.py for sync notes).
 # Verbatim except this header -- no internal `driver.*` imports to rewrite.
 """librosa-compatible STFT/iSTFT and polyphase resampling in pure numpy/scipy.
 

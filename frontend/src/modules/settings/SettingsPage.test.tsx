@@ -48,7 +48,7 @@ function renderPage(engine: EngineInfoResponse = ENGINE_INFO) {
   vi.mocked(api.getHealth).mockResolvedValue(HEALTH);
   vi.mocked(api.getDevices).mockResolvedValue(DEVICES);
   vi.mocked(settingsService.fetchEditableSettings).mockResolvedValue({
-    settings: [{ key: "hf_token", configured: false }],
+    settings: [{ key: "hf_token", configured: false, value: null, requiresRestart: false }],
   });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   function Wrapper({ children }: { children: ReactNode }) {
@@ -115,7 +115,7 @@ describe("SettingsPage", () => {
     vi.mocked(api.getDevices).mockResolvedValue(DEVICES);
     vi.mocked(api.getEngineInfo).mockRejectedValue(new Error("network down"));
     vi.mocked(settingsService.fetchEditableSettings).mockResolvedValue({
-      settings: [{ key: "hf_token", configured: false }],
+      settings: [{ key: "hf_token", configured: false, value: null, requiresRestart: false }],
     });
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<SettingsPage />, {

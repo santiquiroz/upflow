@@ -154,6 +154,61 @@ def test_dilation_widens_what_gets_replaced() -> None:
     assert int(with_dilation[220, 245, 0]) > 200
 
 
+def test_a_prepared_gradient_mask_reaches_the_model_intact_without_dilation() -> None:
+    """La máscara de armonización de objetos ya viene con su perfil.
+
+    El motor la recibe con dilate/feather en 0 justamente para no pisarlo: la
+    difusión diferencial necesita el degradado tal cual (máximo en la costura,
+    casi nulo en el centro) para saber cuánto re-generar en cada píxel.
+    """
+    from app.services.object_transfer import PasteSpec, harmonization_mask
+
+    photo = base_photo((512, 512))
+    alpha = np.zeros((200, 200), dtype=np.float32)
+    alpha[:, :] = 1.0
+    prepared = harmonization_mask(
+        (512, 512), alpha, PasteSpec(x=150, y=150, width=200, height=200, harmonize_blend=0.35)
+    )
+    seen: list[Image.Image] = []
+
+    run_masked_edit(
+        photo, prepared, RecordingModel(),
+        MaskedEditSettings(dilate_px=0, feather_px=0, padding_px=48, target_side=512),
+        on_prepared=lambda _image, mask: seen.append(mask),
+    )
+
+    received = np.asarray(seen[0].convert("L"))
+    # el degradado llega vivo: hay muchos niveles intermedios, no un binario
+    assert len(np.unique(received)) > 20
+    assert received.max() == 255
+    assert received.min() == 0
+
+
+def test_engine_dilation_would_flatten_a_prepared_gradient_mask() -> None:
+    """Por qué la armonización manda 0/0 y no los defaults del motor."""
+    from app.services.object_transfer import PasteSpec, harmonization_mask
+
+    photo = base_photo((512, 512))
+    alpha = np.ones((200, 200), dtype=np.float32)
+    prepared = harmonization_mask(
+        (512, 512), alpha, PasteSpec(x=150, y=150, width=200, height=200, harmonize_blend=0.35)
+    )
+    masks: dict[str, np.ndarray] = {}
+
+    for name, settings in (
+        ("prepared", MaskedEditSettings(0, 0, 48, 512)),
+        ("dilated", MaskedEditSettings(8, 8, 48, 512)),
+    ):
+        run_masked_edit(
+            photo, prepared, RecordingModel(), settings,
+            on_prepared=lambda _i, m, key=name: masks.__setitem__(key, np.asarray(m.convert("L"))),
+        )
+
+    # el MaxFilter del motor empuja el 255 de la costura hacia adentro y sube el
+    # centro preservado: el perfil continuo se aplana
+    assert masks["dilated"].mean() > masks["prepared"].mean()
+
+
 def test_target_side_is_snapped_to_a_multiple_of_64() -> None:
     photo = base_photo((900, 600))
     mask = mask_with_box((900, 600), (400, 300, 460, 340))
