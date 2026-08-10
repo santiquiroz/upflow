@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as api from "../../lib/api";
@@ -101,6 +101,41 @@ const FULL_CAPABILITIES: AudioCapabilities = {
       labelKey: "audio.mastering.preset.voice.label",
       descriptionKey: "audio.mastering.preset.voice.description",
       targetLufs: -16,
+    },
+  ],
+  cleanupOverprocessingThreshold: 3,
+  cleanupSteps: [
+    {
+      id: "denoise",
+      name: "UVR DeNoise by FoxJoy",
+      family: "denoise",
+      covers: ["denoise"],
+      installed: true,
+      descriptionKey: "audio.karaoke.model.denoise.description",
+    },
+    {
+      id: "deecho_normal",
+      name: "UVR De-Echo Normal by FoxJoy",
+      family: "deecho",
+      covers: ["deecho"],
+      installed: true,
+      descriptionKey: "audio.karaoke.model.deecho_normal.description",
+    },
+    {
+      id: "deecho_dereverb",
+      name: "UVR DeEcho-DeReverb by FoxJoy",
+      family: "deecho",
+      covers: ["deecho", "dereverb"],
+      installed: true,
+      descriptionKey: "audio.karaoke.model.deecho_dereverb.description",
+    },
+    {
+      id: "reverb_hq",
+      name: "Reverb HQ by FoxJoy",
+      family: "dereverb",
+      covers: ["dereverb"],
+      installed: true,
+      descriptionKey: "audio.karaoke.model.reverb_hq.description",
     },
   ],
   separationModels: [
@@ -467,6 +502,139 @@ describe("AudioPanel", () => {
   });
 });
 
+/**
+ * El cuerpo de una AccordionSection, para acotar las aserciones a SU seccion.
+ * Hace falta desde que los modelos de limpieza aparecen en dos lugares: el
+ * picker de Karaoke (una pasada, dos stems) y la cadena de Limpieza.
+ */
+function bodyOf(header: HTMLElement): HTMLElement {
+  const id = header.getAttribute("aria-controls");
+  return document.getElementById(id ?? "") as HTMLElement;
+}
+
+describe("AudioPanel cadena de limpieza", () => {
+  it("submits the cleanup chain together with the rest of the chain", async () => {
+    // La limpieza dejó de ser exclusiva: convive con mastering en el MISMO job.
+    vi.mocked(audioService.createAudioJob).mockResolvedValue({
+      jobId: "aud-c", status: "queued", statusUrl: "/x", downloadUrl: null,
+    });
+    renderPanel();
+    selectFile();
+
+    fireEvent.click(
+      await screen.findByRole("checkbox", { name: /clean up the recording/i }),
+    );
+    fireEvent.click(screen.getByRole("checkbox", { name: /UVR DeNoise/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /^mastering/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Streaming" }));
+
+    const submitButton = screen.getByRole("button", { name: /enhance audio/i });
+    await waitFor(() => expect(submitButton).not.toBeDisabled());
+    fireEvent.click(submitButton);
+
+    await waitFor(() => expect(audioService.createAudioJob).toHaveBeenCalled());
+    const sent = vi.mocked(audioService.createAudioJob).mock.calls[0][0];
+    expect(sent.cleanupSteps).toEqual(["denoise"]);
+    expect(sent.master).toBe("streaming");
+    expect(sent.separate).toBeUndefined();
+  });
+
+  it("lets a cleanup-only job through without denoise or restore", async () => {
+    vi.mocked(audioService.createAudioJob).mockResolvedValue({
+      jobId: "aud-c2", status: "queued", statusUrl: "/x", downloadUrl: null,
+    });
+    renderPanel();
+    selectFile();
+
+    const submitButton = screen.getByRole("button", { name: /enhance audio/i });
+    expect(submitButton).toBeDisabled();
+
+    fireEvent.click(
+      await screen.findByRole("checkbox", { name: /clean up the recording/i }),
+    );
+    fireEvent.click(screen.getByRole("checkbox", { name: /UVR De-Echo Normal/i }));
+    await waitFor(() => expect(submitButton).not.toBeDisabled());
+    fireEvent.click(submitButton);
+
+    await waitFor(() => expect(audioService.createAudioJob).toHaveBeenCalled());
+    const sent = vi.mocked(audioService.createAudioJob).mock.calls[0][0];
+    expect(sent.denoise).toBeNull();
+    expect(sent.restore).toBeNull();
+    expect(sent.cleanupSteps).toEqual(["deecho_normal"]);
+  });
+
+  it("sends the chain in catalog order no matter the ticking order", async () => {
+    vi.mocked(audioService.createAudioJob).mockResolvedValue({
+      jobId: "aud-c3", status: "queued", statusUrl: "/x", downloadUrl: null,
+    });
+    renderPanel();
+    selectFile();
+
+    fireEvent.click(
+      await screen.findByRole("checkbox", { name: /clean up the recording/i }),
+    );
+    fireEvent.click(screen.getByRole("checkbox", { name: /Reverb HQ/i }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /UVR DeNoise/i }));
+
+    const submitButton = screen.getByRole("button", { name: /enhance audio/i });
+    await waitFor(() => expect(submitButton).not.toBeDisabled());
+    fireEvent.click(submitButton);
+
+    await waitFor(() => expect(audioService.createAudioJob).toHaveBeenCalled());
+    const sent = vi.mocked(audioService.createAudioJob).mock.calls[0][0];
+    expect(sent.cleanupSteps).toEqual(["denoise", "reverb_hq"]);
+  });
+
+  it("sends no cleanup steps while the section is off", async () => {
+    vi.mocked(audioService.createAudioJob).mockResolvedValue({
+      jobId: "aud-c4", status: "queued", statusUrl: "/x", downloadUrl: null,
+    });
+    renderPanel();
+    selectFile();
+    fireEvent.click(await screen.findByRole("button", { name: "DeepFilterNet" }));
+
+    const submitButton = screen.getByRole("button", { name: /enhance audio/i });
+    await waitFor(() => expect(submitButton).not.toBeDisabled());
+    fireEvent.click(submitButton);
+
+    await waitFor(() => expect(audioService.createAudioJob).toHaveBeenCalled());
+    expect(vi.mocked(audioService.createAudioJob).mock.calls[0][0].cleanupSteps).toEqual([]);
+  });
+
+  it("says the noise reduction section is for voice, not for music", async () => {
+    // La confusión reportada: "Reducción de ruido" no decía en ningún lado que
+    // sus modelos están entrenados con habla y en música apagan instrumentos.
+    renderPanel();
+
+    expect(
+      await screen.findByText(/These models learned to recognise speech/i),
+    ).toBeInTheDocument();
+    // El titulo de la seccion tambien lo nombra: la etiqueta dejo de ser un
+    // "quitar ruido" generico que se lee como valido para cualquier material.
+    expect(
+      screen.getByRole("button", { name: /^Noise reduction \(voice\)/ }),
+    ).toBeInTheDocument();
+  });
+
+  it("describes the chosen denoise mode, naming its material", async () => {
+    renderPanel();
+    fireEvent.click(await screen.findByRole("button", { name: "DeepFilterNet" }));
+
+    expect(
+      await screen.findByText(/the stronger of the two.*in music it can mute instruments/i),
+    ).toBeInTheDocument();
+  });
+
+  it("hides the cleanup section when the backend reports no catalog", async () => {
+    // Misma política que Acabado y Restauración: la sección existe cuando el
+    // backend reporta su catálogo, no antes.
+    renderPanel({ denoiseModes: ["rnnoise"], restoreAvailable: false, restoreModes: [] });
+
+    await screen.findByRole("button", { name: "RNNoise" });
+    expect(screen.queryByRole("button", { name: /^cleanup/i })).not.toBeInTheDocument();
+  });
+});
+
 describe("AudioPanel modo karaoke", () => {
   async function openKaraoke() {
     fireEvent.click(await screen.findByRole("button", { name: /^Karaoke/ }));
@@ -540,13 +708,16 @@ describe("AudioPanel modo karaoke", () => {
     fireEvent.click(await openKaraoke());
 
     // Los tres De-Echo caen en Limpieza junto a Reverb HQ, en UNA sola lista.
-    expect(screen.getByText("Cleanup")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "UVR De-Echo Normal by FoxJoy" }));
-    expect(await screen.findByText(/moderate echo/i)).toBeInTheDocument();
+    // La leyenda dice ademas la FORMA de la salida: aca cada modelo corre solo
+    // y devuelve dos stems, a diferencia de la seccion Limpieza encadenable.
+    expect(screen.getByText("Cleanup (one pass, two stems)")).toBeInTheDocument();
+    const karaoke = within(bodyOf(screen.getByRole("button", { name: /^Karaoke/ })));
+    fireEvent.click(karaoke.getByRole("button", { name: "UVR De-Echo Normal by FoxJoy" }));
+    expect(await karaoke.findByText(/moderate echo/i)).toBeInTheDocument();
     expect(screen.getByText("No echo + Echo")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "UVR DeEcho-DeReverb by FoxJoy" }));
-    expect(await screen.findByText(/echo AND room reverb/i)).toBeInTheDocument();
+    fireEvent.click(karaoke.getByRole("button", { name: "UVR DeEcho-DeReverb by FoxJoy" }));
+    expect(await karaoke.findByText(/echo AND room reverb/i)).toBeInTheDocument();
     expect(screen.getByText("No echo or reverb + Echo and reverb")).toBeInTheDocument();
   });
 
@@ -690,11 +861,12 @@ describe("AudioPanel modo karaoke", () => {
     fireEvent.click(await openKaraoke());
 
     // Dos grupos: los modelos karaoke y la pasada de limpieza, separados.
-    expect(screen.getByText("Cleanup")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Reverb HQ by FoxJoy" }));
+    expect(screen.getByText("Cleanup (one pass, two stems)")).toBeInTheDocument();
+    const karaoke = within(bodyOf(screen.getByRole("button", { name: /^Karaoke/ })));
+    fireEvent.click(karaoke.getByRole("button", { name: "Reverb HQ by FoxJoy" }));
 
     expect(
-      await screen.findByText(/second pass to clean up the instrumental/i),
+      await karaoke.findByText(/second pass to clean up the instrumental/i),
     ).toBeInTheDocument();
     // El resumen de la sección nombra los stems del modelo elegido.
     expect(screen.getByText("No reverb (dry) + Reverb (wet)")).toBeInTheDocument();

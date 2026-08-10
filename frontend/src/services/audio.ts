@@ -17,6 +17,11 @@ export interface CreateAudioJobParams {
   voiceDelivery?: string | null;
   voicePresenceDb?: number | null;
   master?: string | null;
+  /**
+   * Cadena de limpieza: ids del catálogo. El orden que se mande da igual — lo
+   * fija el catálogo del backend, igual que en la cadena de voz.
+   */
+  cleanupSteps?: string[];
   /** Modo karaoke: exclusivo, el backend rechaza combinarlo con otros pasos. */
   separate?: boolean;
   separationModel?: string | null;
@@ -43,6 +48,11 @@ function buildAudioJobFormData(params: CreateAudioJobParams): FormData {
     if (params.separationModel) {
       formData.append("separation_model", params.separationModel);
     }
+  }
+  // Misma regla que voice_steps: una selección vacía NO se manda, porque el
+  // campo ausente significa "sin cadena de limpieza".
+  if (params.cleanupSteps && params.cleanupSteps.length > 0) {
+    formData.append("cleanup_steps", params.cleanupSteps.join(","));
   }
   appendVoiceFields(formData, params);
   return formData;

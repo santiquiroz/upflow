@@ -558,7 +558,33 @@ export const en = {
     "Brings the audio to the volume platforms ask for, measured against the EBU R128 " +
     "standard. It measures first and corrects with that measurement, which is how a " +
     "real master is done: a single pass makes the volume pump.",
-  "audio.section.denoise": "Denoise",
+  "audio.section.denoise": "Noise reduction (voice)",
+  "audio.denoise.tooltip":
+    "Noise reduction models built for VOICE: DeepFilterNet and RNNoise are trained on speech, so they pull a voice out of its background noise very well and treat instruments as noise in music. To clean up music, use the Cleanup section.",
+  "audio.denoise.voiceOnlyHint":
+    "For voice and dialogue. These models learned to recognise speech: in a mix with music they can mute whole instruments. If what you want to clean is music, use the Cleanup section.",
+  "audio.denoise.mode.deepfilter.description":
+    "DeepFilterNet — the stronger of the two, runs as its own model. For voice and dialogue; in music it can mute instruments.",
+  "audio.denoise.mode.rnnoise.description":
+    "RNNoise — lighter and faster, runs inside ffmpeg. For voice and dialogue; in music it can mute instruments.",
+  "audio.section.cleanup": "Cleanup",
+  "audio.cleanup.tooltip":
+    "Strips defects out of a recording with mask models from Ultimate Vocal Remover's catalog: background noise, echo and reverb. Works on ANY audio, music included — this is the section for cleaning up music. The steps chain together and return a single clean file.",
+  "audio.cleanup.activate": "Clean up the recording",
+  "audio.cleanup.chainHint":
+    "Pick which defects to strip. The passes run in a fixed order, because each one works better on what the previous one left: noise first, then echo, reverb last.",
+  "audio.cleanup.summary.none": "Not used",
+  "audio.cleanup.summary.one": "1 pass",
+  "audio.cleanup.summary.many": "{{count}} passes",
+  "audio.cleanup.replaces": "Picking this one turns off {{models}}: they do the same job.",
+  "audio.cleanup.overprocessed":
+    "{{count}} chained passes. Each one discards part of the signal for good, so the result may sound over-processed. It still runs if that is what you want.",
+  "audio.cleanup.singleOutputNote":
+    "The chain returns a single file: the clean audio. To hear what a pass removed, run that model on its own from Karaoke, which hands back both stems.",
+  "audio.cleanup.task.denoise": "Remove background noise",
+  "audio.cleanup.task.deecho": "Remove echo",
+  "audio.cleanup.task.deecho_dereverb": "Remove echo and reverb",
+  "audio.cleanup.task.dereverb": "Remove reverb",
   "audio.section.mastering": "Mastering",
   "audio.section.restore": "Restore",
   "audio.section.device": "Device",
@@ -568,7 +594,7 @@ export const en = {
   "audio.section.karaoke": "Karaoke",
   "audio.karaoke.toggle": "Split the audio into two stems",
   "audio.karaoke.tooltip":
-    "Split the mix into two files with a separation model from Ultimate Vocal Remover's catalog: karaoke (instrumental + vocals) or cleanup passes that strip reverb or echo.",
+    "Split the mix into TWO files with a separation model from Ultimate Vocal Remover's catalog: karaoke (instrumental + vocals), or a single cleanup pass when you want to hear separately what it strips (the echo, the reverb, the noise). To clean up and keep one file, use the Cleanup section.",
   "audio.karaoke.summary.on": "Vocals + instrumental",
   "audio.karaoke.exclusiveNote":
     "Karaoke runs alone: the other steps would apply to an ambiguous stem. Ask for them in a second job on the stem you want.",
@@ -577,7 +603,9 @@ export const en = {
   "audio.karaoke.credit":
     "Models distributed via Ultimate Vocal Remover's official download center: Anjok07 & aufr33 (MIT), and Reverb HQ / De-Echo / De-Reverb / De-Noise by FoxJoy (ONNX port: santiquiroz/port-uvr-deecho-onnx, MIT). Mel-Band RoFormer is by KimberleyJSN (MIT), ONNX port: santiquiroz/port-bs-roformer-onnx.",
   "audio.karaoke.category.karaoke": "Karaoke",
-  "audio.karaoke.category.cleanup": "Cleanup",
+  "audio.karaoke.category.cleanup": "Cleanup (one pass, two stems)",
+  "audio.karaoke.cleanupGroupHint":
+    "Here each cleanup model runs ON ITS OWN and hands back both stems, so you can hear what it removed. To chain several cleanups and keep a single clean file, use the Cleanup section.",
   "audio.karaoke.slowBadge": "Slow",
   "audio.karaoke.model.mel_band_roformer_kim.description":
     "Extracts the vocals at the highest quality in the catalog (Mel-Band RoFormer); the instrumental is the remainder.",

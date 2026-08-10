@@ -65,6 +65,12 @@ function ModelCategoryGroup({
       <legend className="font-heading text-xs font-semibold uppercase tracking-wide text-text-dim">
         {t(`audio.karaoke.category.${category}`)}
       </legend>
+      {/* Los mismos modelos viven en la sección Limpieza, encadenables. Acá
+          corren de a UNO y devuelven los dos stems; sin decirlo, las dos
+          secciones se leen como la misma cosa duplicada. */}
+      {category === "cleanup" && (
+        <p className="text-xs text-text-faint">{t("audio.karaoke.cleanupGroupHint")}</p>
+      )}
       {installed.length > 0 && (
         <div className="flex flex-wrap gap-2">
           {installed.map((model) => (

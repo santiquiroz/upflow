@@ -48,10 +48,28 @@ AUDIO_STAGE_WEIGHTS: dict[str, tuple[str, float]] = {
     "finalizing": ("Writing output", 5),
 }
 
+# Marcador, no una etapa: build_audio_stages lo expande en UNA etapa por pasada
+# de la cadena de limpieza, porque cuantas hay depende del job. Mismo patron que
+# build_conversion_stages con los componentes exportados.
+AUDIO_CLEANUP_STAGE_SLOT = "cleanup"
+
+# Peso TOTAL de la cadena, repartido en partes iguales entre sus pasadas: todas
+# son una inferencia completa sobre el archivo entero, asi que ninguna vale mas
+# que otra. Comparable al de "separating" (80) porque es exactamente el mismo
+# trabajo, repetido.
+AUDIO_CLEANUP_TOTAL_WEIGHT = 80.0
+
 AUDIO_STAGE_ORDER: tuple[str, ...] = (
-    "decoding", "separating", "denoising", "restoring", "voicing", "mastering",
-    "finalizing",
+    "decoding", "separating", AUDIO_CLEANUP_STAGE_SLOT, "denoising", "restoring",
+    "voicing", "mastering", "finalizing",
 )
+
+
+def cleanup_stage_key(model_id: str) -> str:
+    # Sin ':' a proposito: la UI muestra la clave de la etapa activa cruda
+    # (JobCard.humanizeStage solo cambia '_' por espacio), y "cleanup_denoise"
+    # se lee, "cleanup:denoise" no.
+    return f"cleanup_{model_id}"
 
 GENERATION_STAGE_DEFS: tuple[tuple[str, str, float], ...] = (
     ("generating", "Generating", 85.0),
@@ -121,6 +139,8 @@ def _audio_stage_active(job: AudioJob, key: str) -> bool:
         # El modo karaoke corre solo (lo garantiza el manager): mostrar las
         # etapas de la cadena clasica seria pintar pasos que nunca van a correr.
         return key in ("decoding", "finalizing")
+    if key == AUDIO_CLEANUP_STAGE_SLOT:
+        return bool(job.cleanup_steps)
     if key == "denoising":
         return bool(job.denoise)
     if key == "restoring":
@@ -135,13 +155,45 @@ def _audio_stage_active(job: AudioJob, key: str) -> bool:
     return True
 
 
-def build_audio_stages(job: AudioJob) -> list[Stage]:
-    raw_stages = [
-        (key, *AUDIO_STAGE_WEIGHTS[key])
-        for key in AUDIO_STAGE_ORDER
-        if _audio_stage_active(job, key)
+def _cleanup_raw_stages(job: AudioJob) -> list[tuple[str, str, float]]:
+    """Una etapa por pasada, nombrada con el modelo que la corre.
+
+    El usuario ve QUE modelo esta corriendo ahora, que es lo unico que hace
+    entendible una espera de varios minutos repetida tres veces.
+    """
+    from app.services.engines.separation_models import SEPARATION_MODELS
+
+    steps = job.cleanup_steps
+    weight = AUDIO_CLEANUP_TOTAL_WEIGHT / len(steps)
+    return [
+        (
+            cleanup_stage_key(model_id),
+            f"Cleaning up: {_cleanup_stage_name(SEPARATION_MODELS, model_id)}",
+            weight,
+        )
+        for model_id in steps
     ]
-    return _normalize_weights(raw_stages)
+
+
+def _cleanup_stage_name(catalog: dict[str, Any], model_id: str) -> str:
+    spec = catalog.get(model_id)
+    return spec.name if spec is not None else model_id
+
+
+def _audio_raw_stages(job: AudioJob) -> list[tuple[str, str, float]]:
+    raw_stages: list[tuple[str, str, float]] = []
+    for key in AUDIO_STAGE_ORDER:
+        if not _audio_stage_active(job, key):
+            continue
+        if key == AUDIO_CLEANUP_STAGE_SLOT:
+            raw_stages.extend(_cleanup_raw_stages(job))
+            continue
+        raw_stages.append((key, *AUDIO_STAGE_WEIGHTS[key]))
+    return raw_stages
+
+
+def build_audio_stages(job: AudioJob) -> list[Stage]:
+    return _normalize_weights(_audio_raw_stages(job))
 
 
 def apply_stage_transition(stages: list[Stage], current_stage_key: str) -> list[Stage]:
@@ -284,15 +336,19 @@ def apply_image_tile_progress(job: UpscaleJob, tiles_done: int, tiles_total: int
     job.metadata["progress"] = compute_progress(stages, current_fraction=fraction)
 
 
-def apply_audio_chunk_progress(job: AudioJob, chunks_done: int, chunks_total: int) -> None:
+def apply_audio_chunk_progress(
+    job: AudioJob, chunks_done: int, chunks_total: int, stage_key: str = "separating"
+) -> None:
     # Mirrors apply_image_tile_progress -- called between chunks from the
     # separator's worker thread, so this stays a direct metadata write rather
     # than _write_stage_metadata (which would re-stamp stageStartedAt on every
     # chunk). Sin framesDone/framesTotal a proposito: "frames" mentiria para
     # chunks y FramesReadout ya saltea los jobs de audio.
-    stages = apply_stage_transition(build_audio_stages(job), "separating")
+    # stage_key con default "separating" para el modo separacion; la cadena de
+    # limpieza pasa la clave de la pasada que esta corriendo, porque son varias.
+    stages = apply_stage_transition(build_audio_stages(job), stage_key)
     fraction = frame_stage_fraction(chunks_done, chunks_total)
-    job.metadata["stage"] = "separating"
+    job.metadata["stage"] = stage_key
     job.metadata["stages"] = [asdict(stage) for stage in stages]
     job.metadata["progress"] = compute_progress(stages, current_fraction=fraction)
 

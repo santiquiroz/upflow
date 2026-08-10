@@ -39,12 +39,23 @@ _OUTPUT_FORMAT_CODEC_ARGS: dict[str, list[str]] = {
 
 
 class AudioPipeline:
-    """Orchestrates the standalone audio chain: decode -> [denoise] -> [restore].
+    """Orquesta la cadena de audio standalone:
 
-    Denoise runs first (clean the noise), restore second (rebuild the band the
-    codec dropped). Each step is optional; the manager guarantees at least one
-    is requested. Intermediate files live in a per-job temp dir removed in
-    finally, so a failure never leaks work files.
+        decode -> [limpieza] -> [denoise] -> [restore] -> [voz] -> [mastering]
+
+    El orden es causal, no una lista de opciones:
+
+    * La LIMPIEZA va primero (apenas decodificado) porque sus modelos son
+      mascaras entrenadas sobre material de banda completa: cualquier paso
+      previo que ya haya recortado el espectro les cambia justamente la entrada
+      que aprendieron a leer. Ademas es el paso que QUITA defectos, y quitar
+      antes de reconstruir evita reconstruir un defecto.
+    * denoise/restore reconstruyen la senal; voz y mastering la nivelan. Nivelar
+      va ultimo siempre: mide sobre la senal terminada.
+
+    Cada paso es opcional; el manager garantiza que se pidio al menos uno. Los
+    archivos intermedios viven en un temp dir por job que se borra en finally,
+    asi un fallo nunca deja trabajo colgado.
     """
 
     def __init__(
@@ -75,10 +86,19 @@ class AudioPipeline:
     async def _run_chain(self, job: AudioJob, work_dir: Path) -> Path:
         advance_audio_stage(job, "decoding")
         current = work_dir / "decoded.wav"
-        await self._decode_to_wav(job.source_path, current, force_stereo=job.separate)
+        # La cadena de limpieza corre los mismos motores que la separacion, asi
+        # que necesita el mismo decode: 44100 estereo.
+        await self._decode_to_wav(
+            job.source_path,
+            current,
+            force_stereo=job.separate or bool(job.cleanup_steps),
+        )
 
         if job.separate:
             return await self._run_separation(job, work_dir, current)
+
+        if job.cleanup_steps:
+            current = await self._run_cleanup_chain(job, work_dir, current)
 
         if job.denoise:
             advance_audio_stage(job, "denoising")
@@ -129,6 +149,75 @@ class AudioPipeline:
         self._validate_output(output_path)
         complete_audio_stages(job)
         return output_path
+
+    async def _run_cleanup_chain(self, job: AudioJob, work_dir: Path, decoded: Path) -> Path:
+        """Una pasada por paso, encadenadas: la salida limpia alimenta la siguiente.
+
+        Devuelve UN archivo. El stem removido de cada pasada (el eco, la reverb,
+        el ruido) se escribe en el work dir y muere con el: en modo cadena no hay
+        `stems[]` ni `?stem=`. Quien quiera escuchar lo que una pasada saco corre
+        ESE modelo solo en modo separacion, que sigue existiendo y para eso esta.
+
+        La cancelacion no necesita nada especial: cada pasada es un await sobre
+        el separador, que ya la maneja adentro (cancel_event + espera del hilo),
+        y entre pasadas cae en el await siguiente.
+        """
+        from app.services.cleanup_chain import cleanup_steps_from_selection, is_overprocessing
+        from app.services.engines.separation_models import SEPARATION_MODELS
+        from app.services.progress import cleanup_stage_key
+
+        steps = cleanup_steps_from_selection(job.cleanup_steps)
+        job.metadata["cleanupPasses"] = len(steps)
+        if is_overprocessing(len(steps)):
+            # El aviso viaja en el job, no solo en la UI: un agente por MCP toma
+            # la misma decision con la misma informacion que alguien mirando la
+            # pantalla.
+            job.metadata["cleanupOverprocessed"] = (
+                f"{len(steps)} pasadas con perdida encadenadas: el resultado "
+                "puede sonar sobreprocesado."
+            )
+
+        current = decoded
+        device = job.device or self.settings.default_device
+        for index, step in enumerate(steps):
+            spec = SEPARATION_MODELS[step.model_id]
+            separator = self._require_separator(spec.architecture, step.model_id)
+            stage_key = cleanup_stage_key(step.model_id)
+            advance_audio_stage(job, stage_key)
+            # main_stem es, por contrato del catalogo, el stem que el usuario
+            # quiere — en los modelos de limpieza, el audio SIN el defecto.
+            clean = work_dir / f"cleanup-{index}-{step.model_id}.wav"
+            removed = work_dir / f"cleanup-{index}-{step.model_id}-removed.wav"
+            await separator.run(
+                current,
+                clean,
+                removed,
+                device,
+                model_id=step.model_id,
+                on_chunk=lambda done, total, key=stage_key: apply_audio_chunk_progress(
+                    job, done, total, key
+                ),
+            )
+            current = clean
+
+        return await self._match_denoiser_sample_rate(job, work_dir, current)
+
+    async def _match_denoiser_sample_rate(
+        self, job: AudioJob, work_dir: Path, current: Path
+    ) -> Path:
+        """Vuelve a 48 kHz cuando despues de la limpieza corre el denoise clasico.
+
+        Los separadores emiten SIEMPRE 44100 (es su sample rate de
+        entrenamiento), y DeepFilterNet/RNNoise estan especificados a 48000, que
+        es a lo que decodifica el resto del pipeline. Sin esto la combinacion
+        limpieza + reduccion de ruido le entregaria al denoiser una tasa que no
+        es la suya. Solo se paga cuando ambas cosas se piden juntas.
+        """
+        if not job.denoise:
+            return current
+        resampled = work_dir / "cleaned-48k.wav"
+        await self._decode_to_wav(current, resampled)
+        return resampled
 
     async def _run_separation(self, job: AudioJob, work_dir: Path, decoded: Path) -> Path:
         """Modo separacion: DOS salidas nombradas por stem, mismo formato ambas.

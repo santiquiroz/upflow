@@ -235,6 +235,31 @@ describe("createAudioJob voice fields", () => {
     expect(body.has("voice_presence_db")).toBe(false);
   });
 
+  it("sends the cleanup chain as a comma separated list", async () => {
+    mockAccepted();
+    await createAudioJob({ ...baseParams(), cleanupSteps: ["denoise", "reverb_hq"] });
+    expect(sentBody().get("cleanup_steps")).toBe("denoise,reverb_hq");
+  });
+
+  it("omits cleanup_steps entirely when nothing is selected", async () => {
+    mockAccepted();
+    await createAudioJob({ ...baseParams(), cleanupSteps: [] });
+    expect(sentBody().has("cleanup_steps")).toBe(false);
+  });
+
+  it("sends the cleanup chain alongside master in the same job", async () => {
+    // Esto es lo que la limpieza gana al dejar de ser un modo exclusivo.
+    mockAccepted();
+    await createAudioJob({
+      ...baseParams(),
+      cleanupSteps: ["denoise"],
+      master: "streaming",
+    });
+    const body = sentBody();
+    expect(body.get("cleanup_steps")).toBe("denoise");
+    expect(body.get("master")).toBe("streaming");
+  });
+
   it("sends the delivery target and the presence amount", async () => {
     mockAccepted();
     await createAudioJob({

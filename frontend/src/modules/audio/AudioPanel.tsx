@@ -12,9 +12,11 @@ import { useTranslation } from "../../i18n/LocaleProvider";
 import { denoiseLabel, restoreLabel } from "../../lib/audioLabels";
 import type { DeviceInfoResponse, MasteringPreset } from "../../lib/apiTypes";
 import { formatDeviceSummary } from "../enhance/accordionSummaries";
+import { CleanupChainPanel, cleanupSummaryKey } from "./CleanupChainPanel";
 import { KaraokeSection } from "./KaraokeSection";
 import { VoiceChainPanel, voiceSummaryKey } from "./VoiceChainPanel";
 import { joinAsChoices, selectableSectionKeys } from "./selectionHint";
+import { useCleanupSelection } from "./useCleanupSelection";
 import { useVoiceSelection } from "./useVoiceSelection";
 
 type AudioOutputFormat = "flac" | "wav" | "mp3";
@@ -35,8 +37,12 @@ function outputFormatOptions(
   }));
 }
 
-const DENOISE_TOOLTIP =
-  "Remove background noise with an AI denoiser. DeepFilterNet is stronger; RNNoise is lighter. Runs before restoration.";
+// La clave del tooltip y no la frase: este texto dice para QUE material sirve la
+// sección, que es justo lo que faltaba (ambos motores están entrenados con habla
+// y en música apagan instrumentos), y esa aclaración tiene que existir en los
+// dos idiomas.
+const DENOISE_TOOLTIP = "audio.denoise.tooltip";
+const CLEANUP_TOOLTIP = "audio.cleanup.tooltip";
 const RESTORE_TOOLTIP =
   "Reconstruct high frequencies lost to lossy compression (MP3/AAC). Apollo is fast band-restore; AudioSR is diffusion super-resolution — much higher quality ceiling but far slower (minutes per minute of audio on GPU). Experimental — quality varies by source.";
 const DEVICE_TOOLTIP = "Pick the compute device that runs the restoration model (CPU or a DirectML GPU).";
@@ -201,6 +207,11 @@ export function AudioPanel() {
   const capabilitiesQuery = useAudioCapabilities();
   const voiceCatalogQuery = useVoiceCatalog();
   const voice = useVoiceSelection(voiceCatalogQuery.data);
+  const cleanupCatalog = capabilitiesQuery.data?.cleanupSteps;
+  const cleanup = useCleanupSelection(
+    cleanupCatalog,
+    capabilitiesQuery.data?.cleanupOverprocessingThreshold,
+  );
   const {
     phase,
     job,
@@ -254,6 +265,7 @@ export function AudioPanel() {
           voiceDelivery: null,
           voicePresenceDb: null,
           master: null,
+          cleanupSteps: [],
           separate: true,
           separationModel: effectiveSeparationModel,
         }
@@ -266,6 +278,7 @@ export function AudioPanel() {
           voiceDelivery: voice.delivery,
           voicePresenceDb: voice.isEnabled("presence") ? voice.presenceDb : null,
           master,
+          cleanupSteps: cleanup.enabledIds,
         };
     submitMany(files.map((file) => ({ file, ...comunes })));
   }
@@ -279,6 +292,7 @@ export function AudioPanel() {
     denoise !== null ||
     restore !== null ||
     master !== null ||
+    cleanup.enabledIds.length > 0 ||
     voice.enabledIds.length > 0;
   const separationReady = !separate || effectiveSeparationModel !== null;
   const canSubmit =
@@ -322,18 +336,47 @@ export function AudioPanel() {
               : "flex flex-col gap-6"
           }
         >
+        {/* Igual que Acabado y Restauración: la sección existe cuando el
+            backend reporta su catálogo, no antes. */}
+        {cleanupCatalog !== undefined && cleanupCatalog.length > 0 && (
+          <AccordionSection
+            title={t("audio.section.cleanup")}
+            summary={t(cleanupSummaryKey(cleanup.enabledIds.length), {
+              count: cleanup.enabledIds.length,
+            })}
+            tooltip={t(CLEANUP_TOOLTIP)}
+            defaultOpen
+          >
+            <CleanupChainPanel steps={cleanupCatalog} selection={cleanup} />
+          </AccordionSection>
+        )}
         <AccordionSection
           title={t("audio.section.denoise")}
           summary={denoiseLabel(denoise)}
-          tooltip={DENOISE_TOOLTIP}
+          tooltip={t(DENOISE_TOOLTIP)}
+          // Las DOS abiertas de entrada: la confusión que esto arregla es
+          // elegir "reducción de ruido" para música, y solo se disuelve viendo
+          // las dos secciones juntas con lo que dice cada una.
           defaultOpen
         >
+          {/* La aclaración va visible y no solo en el tooltip: ambos motores
+              están entrenados con habla, y en música apagan instrumentos. Sin
+              decirlo, la sección se lee como "quitar ruido de cualquier cosa" y
+              se elige para música, que es la confusión que esto arregla. */}
+          <p className="mb-2 text-xs leading-relaxed text-text-dim">
+            {t("audio.denoise.voiceOnlyHint")}
+          </p>
           <ModeSegmentedControl
             legend={t("audio.section.denoise")}
             options={buildDenoiseOptions(denoiseModes, t("audio.mode.none"))}
             value={denoise}
             onChange={setDenoise}
           />
+          {denoise !== null && (
+            <p role="status" className="mt-2 text-xs text-text-dim">
+              {t(`audio.denoise.mode.${denoise}.description`)}
+            </p>
+          )}
         </AccordionSection>
         {masteringPresets.length > 0 && (
           <AccordionSection
@@ -425,6 +468,7 @@ export function AudioPanel() {
                   selectableSectionKeys({
                     masteringAvailable: masteringPresets.length > 0,
                     restoreAvailable,
+                    cleanupAvailable: (cleanupCatalog ?? []).some((step) => step.installed),
                   }).map((key) => t(key)),
                   locale,
                 ),

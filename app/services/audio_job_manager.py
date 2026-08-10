@@ -60,6 +60,7 @@ class AudioJobManager(QueuedJobManager[AudioJob]):
         voice_delivery: str | None = None,
         voice_presence_db: float | None = None,
         master: str | None = None,
+        cleanup_steps: list[str] | None = None,
         separate: bool = False,
         separation_model: str | None = None,
         job_id: str | None = None,
@@ -74,16 +75,23 @@ class AudioJobManager(QueuedJobManager[AudioJob]):
                 master=master,
                 voice_delivery=voice_delivery,
                 voice_presence_db=voice_presence_db,
+                cleanup_steps=cleanup_steps or [],
             )
             selected_voice_steps: list[str] = []
+            selected_cleanup_steps: list[str] = []
         else:
             if separation_model is not None:
                 raise ValueError(
                     "separation_model solo aplica cuando separate=true."
                 )
-            self._validate_modes(denoise, restore)
+            selected_cleanup_steps = self._validate_cleanup_selection(cleanup_steps or [])
             selected_voice_steps = self._validate_voice_selection(
                 voice_steps or [], voice_delivery
+            )
+            self._validate_modes(
+                denoise,
+                restore,
+                has_other_work=bool(selected_cleanup_steps or selected_voice_steps or master),
             )
         self._validate_output_format(output_format)
         await self._validate_device(device)
@@ -102,6 +110,7 @@ class AudioJobManager(QueuedJobManager[AudioJob]):
             voice_delivery=voice_delivery,
             voice_presence_db=voice_presence_db,
             master=master,
+            cleanup_steps=selected_cleanup_steps,
             separate=separate,
             separation_model=separation_model,
             owner_id=owner.id if owner is not None else None,
@@ -122,9 +131,21 @@ class AudioJobManager(QueuedJobManager[AudioJob]):
         master: str | None,
         voice_delivery: str | None,
         voice_presence_db: float | None,
+        cleanup_steps: list[str],
     ) -> str:
         from app.services.engines.separation_models import SEPARATION_MODELS
 
+        # La cadena de limpieza tiene su propio motivo, distinto del de los
+        # demas pasos: no es que se aplicaria a un stem ambiguo, es que las dos
+        # cosas tienen FORMA de salida distinta — la separacion entrega dos
+        # archivos y la cadena uno. Mezclarlas no tiene una respuesta correcta.
+        if cleanup_steps:
+            raise ValueError(
+                "La separacion entrega DOS archivos y la cadena de limpieza UNO; "
+                "pedir las dos en el mismo trabajo no define que se entrega. "
+                "Corre la separacion y despues la limpieza sobre el stem que "
+                "quieras, o pedi la limpieza sola."
+            )
         # voice_delivery por truthiness ("" de un form cuenta como ausente);
         # voice_presence_db por is-not-None (un 0.0 explicito tambien se rechaza).
         if (
@@ -159,9 +180,32 @@ class AudioJobManager(QueuedJobManager[AudioJob]):
         installed = self.settings.karaoke_installed_models()
         return installed[0] if installed else DEFAULT_SEPARATION_MODEL
 
-    def _validate_modes(self, denoise: str | None, restore: str | None) -> None:
-        if denoise is None and restore is None:
-            raise ValueError("At least one of denoise or restore must be requested")
+    def _validate_cleanup_selection(self, selected: list[str]) -> list[str]:
+        """Los pasos de limpieza YA normalizados: en orden de catalogo y sin
+        redundancias. Se guardan asi en el job para que pipeline, mapa de etapas
+        y respuesta de la API vean exactamente la misma cadena."""
+        from app.services.cleanup_chain import cleanup_steps_from_selection
+
+        # UnknownCleanupStep y RedundantCleanupSelection son ValueError: la ruta
+        # ya los convierte en 400 con su mensaje, sin traducirlos aca.
+        steps = cleanup_steps_from_selection(selected)
+        installed = set(self.settings.karaoke_installed_models())
+        missing = [step.model_id for step in steps if step.model_id not in installed]
+        if missing:
+            raise ValueError(missing_pack_message("karaoke", variant=missing[0]))
+        return [step.model_id for step in steps]
+
+    def _validate_modes(
+        self, denoise: str | None, restore: str | None, *, has_other_work: bool = False
+    ) -> None:
+        # Un job de limpieza, de voz o de mastering solo es una entrega valida:
+        # el pedido es que el archivo pase por ALGO, no que pase por denoise o
+        # restore en particular.
+        if denoise is None and restore is None and not has_other_work:
+            raise ValueError(
+                "Pedi al menos un paso: limpieza, reduccion de ruido, "
+                "restauracion, mejora de voz o acabado."
+            )
         if denoise is not None:
             self._validate_denoise(denoise)
         if restore is not None:

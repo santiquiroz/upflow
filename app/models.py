@@ -135,9 +135,16 @@ class AudioJob:
     # Acabado profesional: normaliza la sonoridad al estandar elegido (EBU R128).
     # None = no se toca el volumen, que es el comportamiento de siempre.
     master: str | None = None
-    # Modo separacion (karaoke o limpieza): divide la mezcla en dos stems.
-    # Exclusivo en v1 — el manager rechaza combinarlo con los demas pasos
-    # porque se aplicarian a un stem ambiguo.
+    # Cadena de limpieza: ids de modelos de cleanup_chain.CLEANUP_CHAIN, una
+    # pasada por id. Igual que voice_steps, el orden lo fija el catalogo y no el
+    # request; el manager los guarda YA normalizados (ordenados y sin
+    # redundancias) para que pipeline, etapas y respuesta vean lo mismo.
+    # Produce UN archivo: los stems removidos de cada pasada no se guardan.
+    cleanup_steps: list[str] = field(default_factory=list)
+    # Modo separacion (karaoke): divide la mezcla en dos stems y devuelve los
+    # dos. Exclusivo — el manager rechaza combinarlo con los demas pasos porque
+    # se aplicarian a un stem ambiguo, y con cleanup_steps porque una cadena
+    # produce un archivo y la separacion dos.
     separate: bool = False
     # Id del catalogo de separacion (separation_models.SEPARATION_MODELS).
     # El manager lo resuelve al default cuando separate=True y no viene.

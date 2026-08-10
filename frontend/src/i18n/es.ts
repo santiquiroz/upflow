@@ -553,7 +553,33 @@ export const es = {
     "Deja el audio al volumen que piden las plataformas, medido según el estándar EBU " +
     "R128. Se mide primero y se corrige después con esa medición, que es como se hace " +
     "un master de verdad: en una sola pasada el volumen bombea.",
-  "audio.section.denoise": "Reducción de ruido",
+  "audio.section.denoise": "Reducción de ruido (voz)",
+  "audio.denoise.tooltip":
+    "Modelos de reducción de ruido pensados para VOZ: DeepFilterNet y RNNoise están entrenados con habla, así que separan una voz de su ruido de fondo muy bien y en música tratan a los instrumentos como ruido. Para limpiar música usá la sección Limpieza.",
+  "audio.denoise.voiceOnlyHint":
+    "Para voz y diálogo. Estos modelos aprendieron a reconocer habla: en una mezcla con música pueden apagar instrumentos enteros. Si lo que querés limpiar es música, usá la sección Limpieza.",
+  "audio.denoise.mode.deepfilter.description":
+    "DeepFilterNet — el más fuerte de los dos, corre como modelo aparte. Para voz y diálogo; en música puede apagar instrumentos.",
+  "audio.denoise.mode.rnnoise.description":
+    "RNNoise — más liviano y rápido, va dentro de ffmpeg. Para voz y diálogo; en música puede apagar instrumentos.",
+  "audio.section.cleanup": "Limpieza",
+  "audio.cleanup.tooltip":
+    "Saca defectos de una grabación con modelos de máscara del catálogo de Ultimate Vocal Remover: ruido de fondo, eco y reverb. Sirve para CUALQUIER audio, música incluida — es la sección para limpiar música. Los pasos se encadenan y devuelven un solo archivo limpio.",
+  "audio.cleanup.activate": "Limpiar la grabación",
+  "audio.cleanup.chainHint":
+    "Elegí qué defectos sacar. Las pasadas corren en un orden fijo, porque cada una trabaja mejor sobre lo que dejó la anterior: primero el ruido, después el eco, la reverb al final.",
+  "audio.cleanup.summary.none": "Sin usar",
+  "audio.cleanup.summary.one": "1 pasada",
+  "audio.cleanup.summary.many": "{{count}} pasadas",
+  "audio.cleanup.replaces": "Elegir este apaga a {{models}}: hacen la misma tarea.",
+  "audio.cleanup.overprocessed":
+    "{{count}} pasadas encadenadas. Cada una descarta parte de la señal para siempre, así que el resultado puede sonar sobreprocesado. Se corre igual si es lo que querés.",
+  "audio.cleanup.singleOutputNote":
+    "La cadena devuelve un solo archivo: el audio limpio. Si querés escuchar lo que una pasada sacó, corré ese modelo solo desde Karaoke, que entrega los dos stems.",
+  "audio.cleanup.task.denoise": "Quitar el ruido de fondo",
+  "audio.cleanup.task.deecho": "Quitar el eco",
+  "audio.cleanup.task.deecho_dereverb": "Quitar el eco y la reverb",
+  "audio.cleanup.task.dereverb": "Quitar la reverb",
   "audio.section.mastering": "Acabado",
   "audio.section.restore": "Restauración",
   "audio.section.device": "Dispositivo",
@@ -563,7 +589,7 @@ export const es = {
   "audio.section.karaoke": "Karaoke",
   "audio.karaoke.toggle": "Dividir el audio en dos stems",
   "audio.karaoke.tooltip":
-    "Divide la mezcla en dos archivos con un modelo de separación del catálogo de Ultimate Vocal Remover: karaoke (instrumental + voz) o pasadas de limpieza que sacan reverb o eco.",
+    "Divide la mezcla en DOS archivos con un modelo de separación del catálogo de Ultimate Vocal Remover: karaoke (instrumental + voz), o una única pasada de limpieza cuando querés escuchar por separado lo que saca (el eco, la reverb, el ruido). Para limpiar y quedarte con un solo archivo, usá la sección Limpieza.",
   "audio.karaoke.summary.on": "Voz + instrumental",
   "audio.karaoke.exclusiveNote":
     "El modo karaoke corre solo: los demás pasos se aplicarían a un stem ambiguo. Pedilos en un segundo trabajo sobre el stem que quieras.",
@@ -572,7 +598,9 @@ export const es = {
   "audio.karaoke.credit":
     "Modelos distribuidos por el canal oficial de descargas de Ultimate Vocal Remover: Anjok07 & aufr33 (MIT), y Reverb HQ / De-Echo / De-Reverb / De-Noise de FoxJoy (port a ONNX: santiquiroz/port-uvr-deecho-onnx, MIT). Mel-Band RoFormer es de KimberleyJSN (MIT), port a ONNX: santiquiroz/port-bs-roformer-onnx.",
   "audio.karaoke.category.karaoke": "Karaoke",
-  "audio.karaoke.category.cleanup": "Limpieza",
+  "audio.karaoke.category.cleanup": "Limpieza (una pasada, dos stems)",
+  "audio.karaoke.cleanupGroupHint":
+    "Acá cada modelo de limpieza corre SOLO y devuelve los dos stems, para escuchar qué sacó. Para encadenar varias limpiezas y quedarte con un único archivo limpio, usá la sección Limpieza.",
   "audio.karaoke.slowBadge": "Lento",
   "audio.karaoke.model.mel_band_roformer_kim.description":
     "Extrae la voz con la máxima calidad del catálogo (Mel-Band RoFormer); la instrumental es el resto.",

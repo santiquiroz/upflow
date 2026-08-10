@@ -202,6 +202,74 @@ async def test_process_audio_separate_sends_karaoke_flag(
     assert result["jobId"] == "a1"
 
 
+async def test_process_audio_forwards_the_cleanup_chain(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    source = tmp_path / "cancion.mp3"
+    source.write_bytes(b"mp3-bytes")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/audio/jobs"
+        body = request.read()
+        # Viaja tal cual llego: el ORDEN lo fija el catalogo del backend, asi
+        # que la tool no reordena ni valida por su cuenta.
+        assert b'name="cleanup_steps"' in body
+        assert b"reverb_hq,denoise" in body
+        # Se combina con el resto de la cadena en el MISMO job.
+        assert b'name="master"' in body
+        return httpx.Response(202, json={"jobId": "a2", "status": "queued"})
+
+    install_mock(monkeypatch, handler)
+    from app.mcp.server import upflow_process_audio
+
+    result = json.loads(
+        await upflow_process_audio(
+            str(source), cleanup_steps="reverb_hq,denoise", master="streaming"
+        )
+    )
+    assert result["jobId"] == "a2"
+
+
+async def test_process_audio_redundant_cleanup_propagates_the_api_400(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Sin whitelist local: la exclusion por familia es una regla del catalogo
+    # del backend, y el 400 de la API es la unica fuente de verdad.
+    source = tmp_path / "cancion.mp3"
+    source.write_bytes(b"mp3-bytes")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400,
+            json={
+                "detail": (
+                    "Pasos de limpieza redundantes: 'deecho_normal' y "
+                    "'deecho_aggressive' hacen la misma tarea (quitar eco)."
+                )
+            },
+        )
+
+    install_mock(monkeypatch, handler)
+    from app.mcp.server import upflow_process_audio
+
+    result = await upflow_process_audio(
+        str(source), cleanup_steps="deecho_normal,deecho_aggressive"
+    )
+    assert result.startswith("Error")
+    assert "redundantes" in result
+
+
+async def test_process_audio_cleanup_docstring_states_the_fixed_order() -> None:
+    # La docstring ES el contrato para un agente: si no dice que el orden es
+    # fijo y que hay exclusividad, el agente va a intentar imponer los suyos.
+    from app.mcp.server import upflow_process_audio
+
+    doc = upflow_process_audio.__doc__ or ""
+    assert "ORDEN es FIJO" in doc
+    assert "EXCLUSIVIDAD" in doc
+    assert "deecho_dereverb" in doc
+
+
 async def test_download_result_audio_stem_passes_query(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

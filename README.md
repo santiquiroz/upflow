@@ -574,9 +574,10 @@ Con eso activado, un job de video con `keep_audio=true` puede pedir `audio_enhan
 
 ## Apartado de Audio (mejora standalone + restauración de compresión)
 
-Además de imagen y video, Upflow tiene un **apartado de Audio** propio (ruta `/audio`): subís un archivo de audio (wav/mp3/flac/m4a/ogg/opus), elegís la mejora y descargás el resultado. La cadena es `entrada → [denoise] → [restore] → salida`, cada paso opcional.
+Además de imagen y video, Upflow tiene un **apartado de Audio** propio (ruta `/audio`): subís un archivo de audio (wav/mp3/flac/m4a/ogg/opus), elegís la mejora y descargás el resultado. La cadena es `entrada → [limpieza] → [denoise] → [restore] → [voz] → [acabado] → salida`, cada paso opcional y todos combinables en el mismo trabajo (la única excepción es la separación de stems, que corre sola porque entrega dos archivos).
 
-- **Denoise** — quita ruido: `deepfilter` (DeepFilterNet3) o `rnnoise`. Es el mismo motor que ya se usa en video (ver sección anterior); requiere `ENABLE_AUDIO_ENHANCE=true` + `download-deepfilternet.ps1`.
+- **Limpieza (cadena)** — saca defectos de una grabación encadenando modelos de máscara del catálogo de UVR, y devuelve **un solo archivo**. Sirve para **cualquier** audio, música incluida: es la sección para limpiar música. Campo `cleanup_steps` (CSV de ids); combinable con denoise/restore/voz/acabado en el mismo trabajo. Ver "Cadena de limpieza" abajo.
+- **Denoise (para VOZ)** — quita ruido de fondo: `deepfilter` (DeepFilterNet3) o `rnnoise`. Los dos están **entrenados con habla**: separan una voz de su ruido muy bien, y en música tratan a los instrumentos como ruido y pueden apagarlos — para música, usar la cadena de limpieza. Es el mismo motor que ya se usa en video (ver sección anterior); requiere `ENABLE_AUDIO_ENHANCE=true` + `download-deepfilternet.ps1`.
 - **Restore (EXPERIMENTAL)** — dos motores, elegibles por job:
   - `apollo`: reconstruye la banda de agudos perdida por compresión de códec (audio de WhatsApp/Telegram/redes). Rápido y liviano (~74 MB). Requiere `ENABLE_AUDIO_RESTORE=true` + `scripts/download-apollo.ps1`.
   - `audiosr`: **super-resolución de audio general por difusión latente** (cualquier banda → 48 kHz, UNet de 258M params). Techo de calidad muy superior a Apollo pero ~2 min de proceso por minuto de audio en GPU (50 pasos DDIM con CFG). Port ONNX propio — el primero conocido de AudioSR: [santiquiroz/port-audiosr-onnx](https://github.com/santiquiroz/port-audiosr-onnx). Requiere `ENABLE_AUDIOSR=true` + `scripts/download-audiosr-onnx.ps1` (~2.6 GB).
@@ -599,7 +600,22 @@ Además de imagen y video, Upflow tiene un **apartado de Audio** propio (ruta `/
 
   `mel_band_roformer_kim` es el **carril de máxima calidad**, y es una elección explícita, no el default: es [Mel-Band RoFormer](https://huggingface.co/KimberleyJSN/melbandroformer) de **KimberleyJSN** (MIT — el roformer vocal con mejor SDR que declara licencia permisiva: 10.98 en el multisong de MSST, por encima del BS-RoFormer de viperx, que además no declara ninguna), exportado a ONNX por otro port propio y público: [santiquiroz/port-bs-roformer-onnx](https://github.com/santiquiroz/port-bs-roformer-onnx) (MIT). Tercera arquitectura del catálogo, misma lista única. Lo que hay que saber **antes** de elegirlo, y por eso la UI lo advierte al lado del modelo: pesa **931 MB**, necesita **~2,3 GB libres** en el dispositivo (el grafo fp32 más un intermedio de atención de ~1,3 GB — si no los hay, el trabajo falla al cargar con un mensaje que lo dice, no a mitad de camino) y cuesta **~20x** lo que `inst_hq_3`. Medido de punta a punta en una RX 7800 XT (`dml:0`, sesión caliente): **50 s de GPU por minuto de audio**, contra 2,5 s de `inst_hq_3`. En CPU no es un carril viable (0,69x tiempo real, más lento que reproducir el archivo). Mismo lugar de producto que GMFSS en video: elegilo cuando la calidad de la separación importa más que la espera.
 
-  La descarga se pide por stem: `GET /api/v1/audio/jobs/{id}/download?stem=<id>` (sin `stem` sirve el primero). La respuesta del job trae `stems[]` con las dos URLs ya etiquetadas.
+  La descarga se pide por stem: `GET /api/v1/audio/jobs/{id}/download?stem=<id>` (sin `stem` sirve el primero). La respuesta del job trae `stems[]` con las dos URLs ya etiquetadas. **El contrato de dos salidas es exclusivo de este modo**: la cadena de limpieza entrega un archivo y no trae `stems[]`.
+
+### Cadena de limpieza (`cleanup_steps`)
+
+Los modelos del grupo "Limpieza" no son separadores aunque compartan motor: un separador parte una mezcla en dos cosas que querés, y estos **quitan un defecto** — entra audio, sale el mismo audio sin ruido, sin eco o sin reverb. Por eso además de correrse sueltos (modo separación, para escuchar qué sacan) se pueden **encadenar**, que es el flujo que la gente hace a mano en UVR.
+
+`POST /api/v1/audio/jobs` con `cleanup_steps=<csv de ids>` corre **una pasada por id** y devuelve **un archivo**: el audio limpio. Los stems removidos de las pasadas intermedias no se guardan.
+
+- **El orden lo fija el catálogo, no el request.** `denoise` → `deecho_*` → `reverb_hq`, siempre, mandes los ids en el orden que los mandes. Tiene causalidad: el ruido de banda ancha está en todo el espectro y en todo el tiempo, así que confunde a los modelos que vienen después; el eco son reflejos **discretos** y se modelan mientras sigan siendo copias reconocibles; la reverb es la **cola difusa** que queda cuando los reflejos ya no se distinguen, y sacarla primero le borraría al de-echo el material del que deduce los reflejos.
+- **Exclusión por familia.** `deecho_normal` y `deecho_aggressive` son el mismo modelo en dos intensidades: elegí uno. `deecho_dereverb` hace eco **y** reverb en una pasada, así que excluye a los dos de-echo **y** a `reverb_hq`. Una combinación redundante devuelve `400` nombrando el par — no se normaliza en silencio, porque elegir un ganador entre dos intensidades sería inventar una decisión de calidad que es del usuario.
+- **Se combina** con `denoise`/`restore`/`voice_steps`/`master` en el mismo trabajo. Corre después del decode y **antes** de todos ellos: limpiar antes de reconstruir y de nivelar.
+- **Cada pasada es con pérdida** (son máscaras: descartan señal y no la devuelven). Desde la tercera, el job marca `metadata.cleanupOverprocessed` y la UI avisa que el resultado puede sonar sobreprocesado. No bloquea.
+- `separate=true` **+** `cleanup_steps` devuelve `400`: la separación entrega dos archivos y la cadena uno, así que la combinación no define qué se entrega. Encadenalo en dos trabajos.
+- El catálogo, en orden de ejecución, sale de `GET /api/v1/audio/capabilities` → `cleanupSteps[]` (`id`, `name`, `family`, `covers`, `installed`, `descriptionKey`) más `cleanupOverprocessingThreshold`. `covers` es lo que le permite a un cliente aplicar la exclusión sin hard-codear ids.
+
+  Medido en una RX 7800 XT (`dml:0`), cadena de 2 pasadas sobre 12 s de audio estéreo 44,1 kHz: **4,44 s totales** — 0,10 s de decode, 2,17 s la pasada de `denoise`, 2,21 s la de `deecho_normal`. Cada pasada es una inferencia completa sobre el archivo entero, así que el costo es lineal en la cantidad de pasos.
 
 ```powershell
 # Restore experimental: descargar el modelo Apollo (~74 MB) y habilitarlo
@@ -607,7 +623,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\download-apollo.ps1
 # en .env:  ENABLE_AUDIO_RESTORE=true
 ```
 
-API: `POST /api/v1/audio/jobs` (multipart: `file`, `denoise?`, `restore?`, `output_format?` default `flac`, `device?`) → 202; `GET /api/v1/audio/jobs/{id}` (estado + progreso), `.../download` (resultado), `GET /api/v1/audio/capabilities` (qué motores están instalados; `restoreModes` lista los modos listos). El mismo `restore=apollo|audiosr` se puede pedir en un job de video vía el campo `audio_restore` (con `keep_audio=true`), aplicado después del denoise; el formato de salida de esa pista restaurada se controla con `audio_output_format` (ver "Crear un job de video" arriba).
+API: `POST /api/v1/audio/jobs` (multipart: `file`, `cleanup_steps?` (CSV), `denoise?`, `restore?`, `voice_steps?` (CSV), `master?`, `output_format?` default `flac`, `device?`) → 202; `GET /api/v1/audio/jobs/{id}` (estado + progreso), `.../download` (resultado), `GET /api/v1/audio/capabilities` (qué motores están instalados; `restoreModes` lista los modos listos). El mismo `restore=apollo|audiosr` se puede pedir en un job de video vía el campo `audio_restore` (con `keep_audio=true`), aplicado después del denoise; el formato de salida de esa pista restaurada se controla con `audio_output_format` (ver "Crear un job de video" arriba).
 
 > **Nota experimental:** el restore es un port ONNX del modelo Apollo (ver `docs/` y la guía del port). Funciona y es multi-provider, pero la calidad de reconstrucción y el rendimiento GPU aún se están evaluando — por eso va detrás de un flag y con badge "Experimental" en la UI.
 

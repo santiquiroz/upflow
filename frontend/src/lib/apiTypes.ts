@@ -158,6 +158,11 @@ export interface AudioJob {
   separate?: boolean;
   separationModel?: string | null;
   /**
+   * Cadena de limpieza YA normalizada (orden del catálogo, sin redundancias):
+   * es la cadena que realmente corre, no la lista que se envió.
+   */
+  cleanupSteps?: string[];
+  /**
    * Solo en jobs de separación completados: las DOS descargas con el label
    * del catálogo, ordenadas (la primera es la que el usuario quiere y
    * coincide con downloadUrl).
@@ -212,6 +217,21 @@ export interface SeparationModel {
   stems: SeparationStem[];
 }
 
+// Mirrors app/schemas.py::CleanupStepResponse. La lista llega en ORDEN DE
+// EJECUCIÓN (quitar ruido → quitar eco → quitar reverb): el orden tiene
+// causalidad y lo fija el backend, la UI no lo reordena ni lo reenvía.
+// `covers` son todas las familias que el paso resuelve en su pasada; dos pasos
+// que comparten una entrada de `covers` se excluyen entre sí, y esa es la única
+// regla que la UI necesita — sin ids hard-codeados.
+export interface CleanupStep {
+  id: string;
+  name: string;
+  family: string;
+  covers: string[];
+  installed: boolean;
+  descriptionKey: string;
+}
+
 export interface AudioCapabilities {
   /** Acabado profesional (EBU R128). Siempre presente: lo hace ffmpeg. */
   masteringPresets?: MasteringPreset[];
@@ -220,6 +240,10 @@ export interface AudioCapabilities {
   restoreModes: string[];
   /** Catálogo de modelos de separación karaoke (instalados o no). */
   separationModels?: SeparationModel[];
+  /** Cadena de limpieza, en orden de ejecución. */
+  cleanupSteps?: CleanupStep[];
+  /** Desde cuántas pasadas avisar que el resultado puede sonar procesado. */
+  cleanupOverprocessingThreshold?: number;
 }
 
 // Mirrors app/schemas.py::VoiceStepResponse. La copia viaja como clave de

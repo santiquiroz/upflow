@@ -48,6 +48,7 @@ from app.schemas import (
     AudioTrackResponse,
     CapabilityDomainResponse,
     CapabilityResponse,
+    CleanupStepResponse,
     CapabilityTreeResponse,
     ConversionStatusResponse,
     CreateConversionResponse,
@@ -263,12 +264,12 @@ def sanitize_filename(filename: str | None, default: str) -> str:
     return _escape_reserved_stem(stripped)
 
 
-def _parse_voice_steps(raw: object) -> list[str]:
+def _parse_chain_steps(raw: object) -> list[str]:
     """Los pasos llegan como lista separada por comas en un campo de formulario.
 
-    El ORDEN de lo que llega no importa: steps_from_selection lo reordena segun
-    el catalogo, porque la cadena tiene causalidad y un request no deberia poder
-    invertirla.
+    Lo usan las DOS cadenas (voz y limpieza). El ORDEN de lo que llega no
+    importa en ninguna: cada catalogo reordena segun su propia causalidad, y un
+    request no deberia poder invertirla.
 
     Acepta `object` y no `str | None` a proposito: los tests de ruta de este
     repo llaman las corrutinas DIRECTO, sin pasar por FastAPI, asi que un
@@ -522,6 +523,7 @@ def audio_job_to_response(job: AudioJob) -> AudioJobResponse:
         restore=job.restore,
         device=job.device,
         output_format=job.output_format,
+        cleanup_steps=list(job.cleanup_steps),
         separate=job.separate,
         separation_model=job.separation_model,
         created_at=job.created_at,
@@ -1086,6 +1088,9 @@ async def create_audio_job(
     voice_delivery: str | None = Form(default=None),
     master: str | None = Form(default=None),
     voice_presence_db: float | None = Form(default=None),
+    # Cadena de limpieza: CSV de ids del catalogo (GET /audio/capabilities ->
+    # cleanupSteps). El orden que llegue da igual, lo fija el catalogo.
+    cleanup_steps: str | None = Form(default=None),
     separate: bool = Form(default=False),
     separation_model: str | None = Form(default=None),
     audio_jobs: AudioJobManager = Depends(get_audio_job_manager),
@@ -1108,12 +1113,13 @@ async def create_audio_job(
             restore=restore,
             device=device,
             output_format=output_format,
-            voice_steps=_parse_voice_steps(voice_steps),
+            voice_steps=_parse_chain_steps(voice_steps),
             voice_delivery=voice_delivery if isinstance(voice_delivery, str) else None,
             master=master if isinstance(master, str) and master else None,
             voice_presence_db=(
                 voice_presence_db if isinstance(voice_presence_db, (int, float)) else None
             ),
+            cleanup_steps=_parse_chain_steps(cleanup_steps),
             # isinstance y no truthiness: llamada directa (tests) => el default
             # es el FieldInfo de Form(), que es truthy.
             separate=separate if isinstance(separate, bool) else False,
@@ -1669,10 +1675,23 @@ async def audio_capabilities(settings: Settings = Depends(get_settings)) -> Audi
         mode for mode in sorted(AUDIO_RESTORE_MODES) if settings.audio_restore_mode_available(mode)
     ]
     from app.services.audio_mastering import MASTERING_PRESETS
+    from app.services.cleanup_chain import OVERPROCESSING_PASS_THRESHOLD, cleanup_catalog
     from app.services.engines.separation_models import SEPARATION_MODELS
 
     installed_separation_models = set(settings.karaoke_installed_models())
     return AudioCapabilitiesResponse(
+        cleanup_steps=[
+            CleanupStepResponse(
+                id=step.model_id,
+                name=SEPARATION_MODELS[step.model_id].name,
+                family=step.family,
+                covers=list(step.covers),
+                installed=step.model_id in installed_separation_models,
+                description_key=SEPARATION_MODELS[step.model_id].description_key,
+            )
+            for step in cleanup_catalog()
+        ],
+        cleanup_overprocessing_threshold=OVERPROCESSING_PASS_THRESHOLD,
         denoise_modes=denoise_modes,
         restore_available=bool(restore_modes),
         restore_modes=restore_modes,

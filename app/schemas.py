@@ -88,6 +88,11 @@ class AudioJobResponse(BaseModel):
     restore: str | None = None
     device: str | None = None
     output_format: str = Field(default="flac", serialization_alias="outputFormat")
+    # Cadena de limpieza YA normalizada (orden del catalogo, sin redundancias):
+    # es la cadena que realmente se va a correr, no la lista que llego.
+    cleanup_steps: list[str] = Field(
+        default_factory=list, serialization_alias="cleanupSteps"
+    )
     separate: bool = False
     separation_model: str | None = Field(default=None, serialization_alias="separationModel")
     created_at: datetime = Field(serialization_alias="createdAt")
@@ -372,6 +377,25 @@ class SeparationModelResponse(BaseModel):
     stems: list[SeparationStemResponse] = Field(default_factory=list)
 
 
+class CleanupStepResponse(BaseModel):
+    """Un paso de la cadena de limpieza (cleanup_chain.CLEANUP_CHAIN).
+
+    La lista viene en el ORDEN DE EJECUCION, que tiene causalidad documentada:
+    quitar ruido, quitar eco, quitar reverb. `family` es lo que ataca el paso y
+    `covers` todas las familias que resuelve en su pasada (deecho_dereverb
+    resuelve dos): dos pasos que comparten una entrada de `covers` son
+    excluyentes, y esa es la regla que la UI aplica sin hard-codear ids.
+    `name` es nombre propio del modelo y va tal cual; la copia viaja como clave.
+    """
+
+    id: str
+    name: str
+    family: str
+    covers: list[str] = Field(default_factory=list)
+    installed: bool
+    description_key: str = Field(serialization_alias="descriptionKey")
+
+
 class AudioCapabilitiesResponse(BaseModel):
     denoise_modes: list[str] = Field(serialization_alias="denoiseModes")
     restore_available: bool = Field(serialization_alias="restoreAvailable")
@@ -385,6 +409,17 @@ class AudioCapabilitiesResponse(BaseModel):
     # el picker y los botones de descarga por modelo con esto.
     separation_models: list[SeparationModelResponse] = Field(
         default_factory=list, serialization_alias="separationModels"
+    )
+    # Cadena de limpieza, en ORDEN DE EJECUCION. Los mismos modelos aparecen en
+    # separationModels con category "cleanup": alli se corren de a uno para
+    # quedarse con los DOS stems; aca se encadenan para quedarse con uno limpio.
+    cleanup_steps: list[CleanupStepResponse] = Field(
+        default_factory=list, serialization_alias="cleanupSteps"
+    )
+    # A partir de cuantas pasadas avisar que el resultado puede sonar
+    # sobreprocesado. Viaja como dato para que el umbral tenga una sola fuente.
+    cleanup_overprocessing_threshold: int = Field(
+        default=3, serialization_alias="cleanupOverprocessingThreshold"
     )
 
 

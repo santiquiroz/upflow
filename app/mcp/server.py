@@ -418,20 +418,39 @@ async def upflow_process_audio(
     voice_presence_db: float = 0.0,
     output_format: str = "flac",
     device: str = "",
+    cleanup_steps: str = "",
     separate: bool = False,
     separation_model: str = "",
 ) -> str:
-    """Crea un job de procesamiento de audio: denoise, restauración (Apollo/
-    AudioSR), cadena de voz, mastering, o separación voz/instrumental
-    (karaoke). Devuelve jobId (seguir con upflow_wait_job, descargar con
-    upflow_download_result).
+    """Crea un job de procesamiento de audio: limpieza (quitar ruido/eco/reverb
+    de música), denoise, restauración (Apollo/AudioSR), cadena de voz,
+    mastering, o separación voz/instrumental (karaoke). Devuelve jobId (seguir
+    con upflow_wait_job, descargar con upflow_download_result).
+
+    cleanup_steps: CSV de ids de la CADENA DE LIMPIEZA (upflow_capabilities(audio)
+    → cleanupSteps). Encadena una pasada por id sobre CUALQUIER audio y devuelve
+    UN archivo limpio (los stems removidos no se guardan). Se combina libremente
+    con denoise/restore/voice_steps/master en el mismo job.
+      * El ORDEN es FIJO y lo pone el catálogo, no el CSV: quitar ruido primero
+        (el ruido de banda ancha confunde a todo lo que venga después), quitar
+        eco después (reflejos discretos), quitar reverb al final (cola difusa).
+        Mandarlos en otro orden da exactamente la misma cadena.
+      * EXCLUSIVIDAD por familia: deecho_normal y deecho_aggressive son el mismo
+        modelo en dos intensidades (elegí uno), y deecho_dereverb hace eco y
+        reverb en una sola pasada, así que excluye a los dos de-echo y también a
+        reverb_hq. Una combinación redundante devuelve 400 nombrando el par.
+      * Cada pasada es CON PÉRDIDA (son máscaras: descartan señal). Desde la
+        tercera, el job marca metadata.cleanupOverprocessed.
 
     separate=True (karaoke): separa el audio en instrumental + voces (dos
     salidas; bajar cada una con upflow_download_result y su stem). Es
-    EXCLUSIVO: no se combina con denoise/restore/voice/master en el mismo
-    job — encadená un segundo job sobre el stem que quieras.
+    EXCLUSIVO: no se combina con denoise/restore/voice/master ni con
+    cleanup_steps en el mismo job (la separación entrega dos archivos y la
+    cadena uno) — encadená un segundo job sobre el stem que quieras.
     separation_model: id del catálogo (upflow_capabilities(audio) →
-    separationModels); vacío = el default instalado.
+    separationModels); vacío = el default instalado. Los modelos de limpieza
+    también están ahí: correrlos por separate=True es la forma de escuchar QUÉ
+    sacó una pasada, porque devuelve los dos stems.
     Modos válidos: upflow_capabilities(audio) y upflow_capabilities(voice_catalog).
     voice_steps: CSV de pasos de la cadena de voz en orden.
     output_format: wav | flac | mp3.
@@ -452,6 +471,7 @@ async def upflow_process_audio(
             "master": master,
             "voice_steps": voice_steps,
             "voice_delivery": voice_delivery,
+            "cleanup_steps": cleanup_steps,
             "device": device,
         }
         data.update({key: value for key, value in optional.items() if value})
