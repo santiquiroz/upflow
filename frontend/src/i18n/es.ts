@@ -529,14 +529,14 @@ export const es = {
   "audio.section.karaoke": "Karaoke",
   "audio.karaoke.toggle": "Dividir el audio en dos stems",
   "audio.karaoke.tooltip":
-    "Divide la mezcla en dos archivos con un modelo de separación MDX-Net del catálogo de Ultimate Vocal Remover: karaoke (instrumental + voz) o pasadas de limpieza como quitar reverb.",
+    "Divide la mezcla en dos archivos con un modelo de separación del catálogo de Ultimate Vocal Remover: karaoke (instrumental + voz) o pasadas de limpieza que sacan reverb o eco.",
   "audio.karaoke.summary.on": "Voz + instrumental",
   "audio.karaoke.exclusiveNote":
     "El modo karaoke corre solo: los demás pasos se aplicarían a un stem ambiguo. Pedilos en un segundo trabajo sobre el stem que quieras.",
   "audio.karaoke.modelMissing": "El modelo {{name}} todavía no está descargado.",
   "audio.karaoke.noModels": "Descargá al menos un modelo de separación para habilitar el karaoke.",
   "audio.karaoke.credit":
-    "Modelos distribuidos por el canal oficial de descargas de Ultimate Vocal Remover: Anjok07 & aufr33 (MIT) y Reverb HQ de FoxJoy.",
+    "Modelos distribuidos por el canal oficial de descargas de Ultimate Vocal Remover: Anjok07 & aufr33 (MIT), y Reverb HQ / De-Echo / De-Reverb de FoxJoy (port a ONNX: santiquiroz/port-uvr-deecho-onnx, MIT).",
   "audio.karaoke.category.karaoke": "Karaoke",
   "audio.karaoke.category.cleanup": "Limpieza",
   "audio.karaoke.model.inst_hq_3.description":
@@ -545,10 +545,20 @@ export const es = {
     "Extrae la voz; la instrumental es el resto.",
   "audio.karaoke.model.reverb_hq.description":
     "Quitar reverb — segunda pasada para limpiar la instrumental de una pista vieja.",
+  "audio.karaoke.model.deecho_normal.description":
+    "Saca el eco moderado (colas de delay) sin tocar el resto de la señal. Empezá por acá.",
+  "audio.karaoke.model.deecho_aggressive.description":
+    "Saca el eco fuerte. Pega más duro que Normal y puede apagar la señal — usalo cuando Normal deja eco.",
+  "audio.karaoke.model.deecho_dereverb.description":
+    "Saca eco Y reverb de sala en una sola pasada. La limpieza más amplia de las tres.",
   "audio.stem.instrumental": "Instrumental",
   "audio.stem.vocals": "Voces",
   "audio.stem.dry": "Sin reverb (dry)",
   "audio.stem.wet": "Reverb (wet)",
+  "audio.stem.no_echo": "Sin eco",
+  "audio.stem.echo": "Eco",
+  "audio.stem.no_reverb": "Sin eco ni reverb",
+  "audio.stem.reverb": "Eco y reverb",
   "audio.karaoke.download.instrumental": "Instrumental",
   "audio.karaoke.download.vocals": "Voces",
   "audio.mastering.none": "Sin nivelar",

@@ -196,13 +196,16 @@ export interface SeparationStem {
 // Mirrors app/schemas.py::SeparationModelResponse. `name` es nombre propio del
 // modelo: se muestra tal cual, no se traduce. `stems` viene ordenado: el
 // primero es el que el usuario quiere (downloadUrl del job); `category`
-// agrupa el picker ("karaoke" | "cleanup").
+// agrupa el picker ("karaoke" | "cleanup") y `architecture` ("mdx" | "vr") es
+// informativa: el usuario elige por lo que el modelo hace, el backend resuelve
+// el motor.
 export interface SeparationModel {
   id: string;
   name: string;
   installed: boolean;
   primaryStem: string;
   category: string;
+  architecture: string;
   descriptionKey: string;
   stems: SeparationStem[];
 }

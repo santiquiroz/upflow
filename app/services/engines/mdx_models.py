@@ -1,4 +1,4 @@
-"""Catalogo de modelos MDX-Net de separacion de stems (karaoke y limpieza).
+"""Modelos MDX-Net del catalogo de separacion de stems (karaoke y limpieza).
 
 Politica de origen: modelos distribuidos por el canal oficial de descargas de
 Ultimate Vocal Remover (el Download Center de la app), con credito por autor —
@@ -9,59 +9,41 @@ TRvlvr/application_data, indexado por el hash UVR (MD5 de los ultimos
 10000 KiB del .onnx); los hashes se verificaron contra los archivos
 reales el 2026-08-09.
 
-Modulo de datos puro (sin imports de app.*): lo consumen config, engine,
-rutas y el script de descarga sin riesgo de ciclos.
+El catalogo COMPLETO (MDX + VR) se arma en separation_models.py; este modulo
+solo aporta la mitad MDX. Modulo de datos puro (sin imports de app.services
+fuera de separation_spec).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Literal
+from typing import ClassVar
+
+from app.services.engines.separation_spec import (
+    STEM_INSTRUMENTAL,
+    STEM_VOCALS,
+    Architecture,
+    SeparationModelSpec,
+    SeparationStem,
+)
 
 MDX_SAMPLE_RATE = 44100
 MDX_HOP = 1024
 
 
 @dataclass(frozen=True, slots=True)
-class MdxStem:
-    # Id que viaja en download?stem= y en las respuestas de la API.
-    id: str
-    # La copia la traduce el frontend; el backend solo manda la clave.
-    label_key: str
-    # De donde sale el audio: "primary" = lo que el modelo infiere;
-    # "secondary" = la resta compensada (mezcla - primario * compensate).
-    source: Literal["primary", "secondary"]
-
-
-@dataclass(frozen=True, slots=True)
-class MdxModelSpec:
-    id: str
-    # Nombre propio del modelo: se muestra tal cual, no se traduce.
-    name: str
-    filename: str
-    url: str
-    # Hash UVR: MD5 de los ultimos 10000 KiB del archivo.
+class MdxModelSpec(SeparationModelSpec):
+    # Hash UVR: MD5 de los ultimos 10000 KiB del archivo. El hash UVR solo cubre
+    # la cola y el mirror TRvlvr/model_repo es de terceros, por eso el catalogo
+    # pinea ADEMAS el sha256 de la clase base.
     uvr_hash: str
-    # SHA-256 del archivo completo: el hash UVR solo cubre la cola y el mirror
-    # TRvlvr/model_repo es de terceros; el script de descarga pinea ambos.
-    sha256: str
     n_fft: int
     dim_f: int
     dim_t: int
-    compensate: float
-    # Que stem SACA el modelo (nombre UVR: "Instrumental" | "Vocals" |
-    # "Reverb"); el otro se obtiene restando:
     # secundario = mezcla - primario * compensate.
-    primary_stem: str
-    # "karaoke" (separar voz/instrumental) o "cleanup" (pasada de limpieza,
-    # p.ej. quitar reverb). La UI agrupa el picker con esto.
-    category: str
-    # Que hace el modelo, dicho para el usuario; el frontend traduce.
-    description_key: str
-    # Stems de cara al usuario, ORDENADOS: el primero es el que el usuario
-    # quiere (lo sirve downloadUrl); el segundo va en ?stem=<id>.
-    stems: tuple[MdxStem, MdxStem]
+    compensate: float
+
+    architecture: ClassVar[Architecture] = "mdx"
 
     @property
     def chunk_samples(self) -> int:
@@ -75,28 +57,12 @@ class MdxModelSpec:
     def gen_samples(self) -> int:
         return self.chunk_samples - 2 * self.trim_samples
 
-    @property
-    def main_stem(self) -> MdxStem:
-        return self.stems[0]
-
-    @property
-    def other_stem(self) -> MdxStem:
-        return self.stems[1]
-
-    def stem_ids(self) -> tuple[str, str]:
-        return (self.stems[0].id, self.stems[1].id)
-
 
 _RELEASE_BASE = (
     "https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models"
 )
 
-DEFAULT_SEPARATION_MODEL = "inst_hq_3"
-
-_STEM_INSTRUMENTAL = "audio.stem.instrumental"
-_STEM_VOCALS = "audio.stem.vocals"
-
-SEPARATION_MODELS: dict[str, MdxModelSpec] = {
+MDX_MODELS: dict[str, MdxModelSpec] = {
     "inst_hq_3": MdxModelSpec(
         id="inst_hq_3",
         name="MDX-Net Inst HQ 3",
@@ -112,8 +78,8 @@ SEPARATION_MODELS: dict[str, MdxModelSpec] = {
         category="karaoke",
         description_key="audio.karaoke.model.inst_hq_3.description",
         stems=(
-            MdxStem("instrumental", _STEM_INSTRUMENTAL, "primary"),
-            MdxStem("vocals", _STEM_VOCALS, "secondary"),
+            SeparationStem("instrumental", STEM_INSTRUMENTAL, "primary"),
+            SeparationStem("vocals", STEM_VOCALS, "secondary"),
         ),
     ),
     "voc_ft": MdxModelSpec(
@@ -131,8 +97,8 @@ SEPARATION_MODELS: dict[str, MdxModelSpec] = {
         category="karaoke",
         description_key="audio.karaoke.model.voc_ft.description",
         stems=(
-            MdxStem("instrumental", _STEM_INSTRUMENTAL, "secondary"),
-            MdxStem("vocals", _STEM_VOCALS, "primary"),
+            SeparationStem("instrumental", STEM_INSTRUMENTAL, "secondary"),
+            SeparationStem("vocals", STEM_VOCALS, "primary"),
         ),
     ),
     # Limpieza post-karaoke: el modelo saca la COLA DE REVERB (wet); la pista
@@ -152,26 +118,8 @@ SEPARATION_MODELS: dict[str, MdxModelSpec] = {
         category="cleanup",
         description_key="audio.karaoke.model.reverb_hq.description",
         stems=(
-            MdxStem("dry", "audio.stem.dry", "secondary"),
-            MdxStem("wet", "audio.stem.wet", "primary"),
+            SeparationStem("dry", "audio.stem.dry", "secondary"),
+            SeparationStem("wet", "audio.stem.wet", "primary"),
         ),
     ),
 }
-
-
-def model_file(model_dir: Path, model_id: str) -> Path:
-    return model_dir / SEPARATION_MODELS[model_id].filename
-
-
-def installed_model_ids(model_dir: Path) -> list[str]:
-    return [
-        model_id
-        for model_id in SEPARATION_MODELS
-        if model_file(model_dir, model_id).exists()
-    ]
-
-
-def first_installed_model_path(model_dir: Path) -> Path | None:
-    for model_id in installed_model_ids(model_dir):
-        return model_file(model_dir, model_id)
-    return None

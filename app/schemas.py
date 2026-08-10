@@ -310,13 +310,15 @@ class SeparationStemResponse(BaseModel):
 
 
 class SeparationModelResponse(BaseModel):
-    """Un modelo del catalogo de separacion (mdx_models.SEPARATION_MODELS).
+    """Un modelo del catalogo de separacion (separation_models.SEPARATION_MODELS).
 
     `name` es nombre propio del modelo y viaja tal cual (no se traduce);
     `installed` sale de mirar el disco, como todas las capacidades.
     `stems` viene ORDENADO: el primero es el que el usuario quiere (el que
     sirve downloadUrl del job); `category` agrupa el picker de la UI
-    ("karaoke" | "cleanup").
+    ("karaoke" | "cleanup"). `architecture` es informativo: el usuario elige
+    un modelo por lo que hace, no por como esta construido, y el backend
+    resuelve el motor solo.
     """
 
     id: str
@@ -324,6 +326,7 @@ class SeparationModelResponse(BaseModel):
     installed: bool
     primary_stem: str = Field(serialization_alias="primaryStem")
     category: str
+    architecture: str
     description_key: str = Field(serialization_alias="descriptionKey")
     stems: list[SeparationStemResponse] = Field(default_factory=list)
 

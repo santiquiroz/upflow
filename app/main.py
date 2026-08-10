@@ -32,6 +32,7 @@ from app.services.engines.audio_enhance import AudioEnhancer
 from app.services.engines.generation_onnx import GenerationEngine
 from app.services.engines.gmfss_engine import GmfssEngine
 from app.services.engines.mdx_separator import MdxSeparator
+from app.services.engines.vr_deecho_separator import VrDeEchoSeparator
 from app.services.engines.onnx_upscaler import OnnxUpscaler
 from app.services.engines.onnx_video_upscaler import OnnxVideoUpscaler
 from app.services.engines.realesrgan_ncnn import RealEsrganNcnnEngine
@@ -178,13 +179,16 @@ async def lifespan(app: FastAPI):
         quota_service=quota_service,
     )
     voice_enhancer = VoiceEnhancer(settings)
-    mdx_separator = MdxSeparator(settings, gpu_coordinator)
+    separators = {
+        "mdx": MdxSeparator(settings, gpu_coordinator),
+        "vr": VrDeEchoSeparator(settings, gpu_coordinator),
+    }
     audio_pipeline = AudioPipeline(
         settings,
         audio_enhancers,
         restorers,
         voice_enhancer=voice_enhancer,
-        separator=mdx_separator,
+        separators=separators,
     )
     audio_job_manager = AudioJobManager(
         settings,

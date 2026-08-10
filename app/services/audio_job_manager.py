@@ -123,7 +123,7 @@ class AudioJobManager(QueuedJobManager[AudioJob]):
         voice_delivery: str | None,
         voice_presence_db: float | None,
     ) -> str:
-        from app.services.engines.mdx_models import SEPARATION_MODELS
+        from app.services.engines.separation_models import SEPARATION_MODELS
 
         # voice_delivery por truthiness ("" de un form cuenta como ausente);
         # voice_presence_db por is-not-None (un 0.0 explicito tambien se rechaza).
@@ -154,7 +154,7 @@ class AudioJobManager(QueuedJobManager[AudioJob]):
         """Vacio = primer modelo instalado: la capability marca disponible con
         cualquier modelo, asi que el default fijo daria un 400 enganoso. Sin
         ninguno instalado cae al default del catalogo (mensaje missing-pack)."""
-        from app.services.engines.mdx_models import DEFAULT_SEPARATION_MODEL
+        from app.services.engines.separation_models import DEFAULT_SEPARATION_MODEL
 
         installed = self.settings.karaoke_installed_models()
         return installed[0] if installed else DEFAULT_SEPARATION_MODEL

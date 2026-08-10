@@ -534,14 +534,14 @@ export const en = {
   "audio.section.karaoke": "Karaoke",
   "audio.karaoke.toggle": "Split the audio into two stems",
   "audio.karaoke.tooltip":
-    "Split the mix into two files with an MDX-Net separation model from Ultimate Vocal Remover's catalog: karaoke (instrumental + vocals) or cleanup passes such as removing reverb.",
+    "Split the mix into two files with a separation model from Ultimate Vocal Remover's catalog: karaoke (instrumental + vocals) or cleanup passes that strip reverb or echo.",
   "audio.karaoke.summary.on": "Vocals + instrumental",
   "audio.karaoke.exclusiveNote":
     "Karaoke runs alone: the other steps would apply to an ambiguous stem. Ask for them in a second job on the stem you want.",
   "audio.karaoke.modelMissing": "The {{name}} model is not downloaded yet.",
   "audio.karaoke.noModels": "Download at least one separation model to enable karaoke.",
   "audio.karaoke.credit":
-    "Models distributed via Ultimate Vocal Remover's official download center: Anjok07 & aufr33 (MIT) and Reverb HQ by FoxJoy.",
+    "Models distributed via Ultimate Vocal Remover's official download center: Anjok07 & aufr33 (MIT), and Reverb HQ / De-Echo / De-Reverb by FoxJoy (ONNX port: santiquiroz/port-uvr-deecho-onnx, MIT).",
   "audio.karaoke.category.karaoke": "Karaoke",
   "audio.karaoke.category.cleanup": "Cleanup",
   "audio.karaoke.model.inst_hq_3.description":
@@ -550,10 +550,20 @@ export const en = {
     "Extracts the vocals; the instrumental is the remainder.",
   "audio.karaoke.model.reverb_hq.description":
     "Remove reverb — a second pass to clean up the instrumental of an old track.",
+  "audio.karaoke.model.deecho_normal.description":
+    "Remove moderate echo (delay tails) while leaving the rest of the signal alone. Start here.",
+  "audio.karaoke.model.deecho_aggressive.description":
+    "Remove strong echo. Hits harder than Normal and can dull the signal — use it when Normal leaves echo behind.",
+  "audio.karaoke.model.deecho_dereverb.description":
+    "Remove echo AND room reverb in a single pass. The broadest cleanup of the three.",
   "audio.stem.instrumental": "Instrumental",
   "audio.stem.vocals": "Vocals",
   "audio.stem.dry": "No reverb (dry)",
   "audio.stem.wet": "Reverb (wet)",
+  "audio.stem.no_echo": "No echo",
+  "audio.stem.echo": "Echo",
+  "audio.stem.no_reverb": "No echo or reverb",
+  "audio.stem.reverb": "Echo and reverb",
   "audio.karaoke.download.instrumental": "Instrumental",
   "audio.karaoke.download.vocals": "Vocals",
   "audio.mastering.none": "Not levelled",

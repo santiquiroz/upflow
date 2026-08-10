@@ -75,6 +75,16 @@ const REVERB_STEMS = [
   { id: "wet", labelKey: "audio.stem.wet" },
 ];
 
+const DEECHO_STEMS = [
+  { id: "no_echo", labelKey: "audio.stem.no_echo" },
+  { id: "echo", labelKey: "audio.stem.echo" },
+];
+
+const DEREVERB_STEMS = [
+  { id: "no_reverb", labelKey: "audio.stem.no_reverb" },
+  { id: "reverb", labelKey: "audio.stem.reverb" },
+];
+
 const FULL_CAPABILITIES: AudioCapabilities = {
   denoiseModes: ["deepfilter", "rnnoise"],
   restoreAvailable: true,
@@ -100,6 +110,7 @@ const FULL_CAPABILITIES: AudioCapabilities = {
       installed: true,
       primaryStem: "Instrumental",
       category: "karaoke",
+      architecture: "mdx",
       descriptionKey: "audio.karaoke.model.inst_hq_3.description",
       stems: KARAOKE_STEMS,
     },
@@ -109,6 +120,7 @@ const FULL_CAPABILITIES: AudioCapabilities = {
       installed: false,
       primaryStem: "Vocals",
       category: "karaoke",
+      architecture: "mdx",
       descriptionKey: "audio.karaoke.model.voc_ft.description",
       stems: KARAOKE_STEMS,
     },
@@ -118,8 +130,39 @@ const FULL_CAPABILITIES: AudioCapabilities = {
       installed: true,
       primaryStem: "Reverb",
       category: "cleanup",
+      architecture: "mdx",
       descriptionKey: "audio.karaoke.model.reverb_hq.description",
       stems: REVERB_STEMS,
+    },
+    {
+      id: "deecho_normal",
+      name: "UVR De-Echo Normal by FoxJoy",
+      installed: true,
+      primaryStem: "No Echo",
+      category: "cleanup",
+      architecture: "vr",
+      descriptionKey: "audio.karaoke.model.deecho_normal.description",
+      stems: DEECHO_STEMS,
+    },
+    {
+      id: "deecho_aggressive",
+      name: "UVR De-Echo Aggressive by FoxJoy",
+      installed: false,
+      primaryStem: "No Echo",
+      category: "cleanup",
+      architecture: "vr",
+      descriptionKey: "audio.karaoke.model.deecho_aggressive.description",
+      stems: DEECHO_STEMS,
+    },
+    {
+      id: "deecho_dereverb",
+      name: "UVR DeEcho-DeReverb by FoxJoy",
+      installed: true,
+      primaryStem: "No Reverb",
+      category: "cleanup",
+      architecture: "vr",
+      descriptionKey: "audio.karaoke.model.deecho_dereverb.description",
+      stems: DEREVERB_STEMS,
     },
   ],
 };
@@ -454,9 +497,48 @@ describe("AudioPanel modo karaoke", () => {
     await openKaraoke();
 
     expect(screen.getByText(/MDX-Net Voc FT.*not downloaded/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /download/i })).toBeInTheDocument();
+    expect(
+      screen.getByText(/UVR De-Echo Aggressive by FoxJoy.*not downloaded/i),
+    ).toBeInTheDocument();
+    // Una tarjeta de descarga por cada modelo que falta, de la arquitectura
+    // que sea: el usuario no elige arquitecturas, elige modelos.
+    expect(screen.getAllByRole("button", { name: /download/i })).toHaveLength(2);
     // El instalado es un boton de seleccion, no una tarjeta de descarga.
     expect(screen.getByRole("button", { name: "MDX-Net Inst HQ 3" })).toBeInTheDocument();
+  });
+
+  it("lists the three cleanup passes and tells them apart", async () => {
+    renderPanel(FULL_CAPABILITIES);
+    fireEvent.click(await openKaraoke());
+
+    // Los tres De-Echo caen en Limpieza junto a Reverb HQ, en UNA sola lista.
+    expect(screen.getByText("Cleanup")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "UVR De-Echo Normal by FoxJoy" }));
+    expect(await screen.findByText(/moderate echo/i)).toBeInTheDocument();
+    expect(screen.getByText("No echo + Echo")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "UVR DeEcho-DeReverb by FoxJoy" }));
+    expect(await screen.findByText(/echo AND room reverb/i)).toBeInTheDocument();
+    expect(screen.getByText("No echo or reverb + Echo and reverb")).toBeInTheDocument();
+  });
+
+  it("submits the selected de-echo model", async () => {
+    vi.mocked(audioService.createAudioJob).mockResolvedValue({
+      jobId: "de-1",
+      status: "queued",
+      statusUrl: "/x",
+      downloadUrl: null,
+    });
+    renderPanel(FULL_CAPABILITIES);
+    selectFile();
+    fireEvent.click(await openKaraoke());
+    fireEvent.click(screen.getByRole("button", { name: "UVR De-Echo Normal by FoxJoy" }));
+    fireEvent.click(screen.getByRole("button", { name: /enhance audio/i }));
+
+    await waitFor(() => expect(audioService.createAudioJob).toHaveBeenCalled());
+    const payload = vi.mocked(audioService.createAudioJob).mock.calls[0][0];
+    expect(payload.separate).toBe(true);
+    expect(payload.separationModel).toBe("deecho_normal");
   });
 
   it("keeps the CTA disabled when karaoke is on but no model is installed", async () => {
@@ -471,6 +553,7 @@ describe("AudioPanel modo karaoke", () => {
           installed: false,
           primaryStem: "Instrumental",
           category: "karaoke",
+          architecture: "mdx",
           descriptionKey: "audio.karaoke.model.inst_hq_3.description",
           stems: KARAOKE_STEMS,
         },

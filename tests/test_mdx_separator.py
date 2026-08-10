@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from app.config import Settings
-from app.services.engines.mdx_models import (
+from app.services.engines.separation_models import (
     DEFAULT_SEPARATION_MODEL,
     SEPARATION_MODELS,
     installed_model_ids,

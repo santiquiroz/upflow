@@ -357,8 +357,23 @@ class Settings(BaseSettings):
 
     # Karaoke (separacion voz/instrumental, MDX-Net de UVR por ONNX). Sin flag
     # de habilitacion a proposito: descargar un modelo = poder usarlo. El
-    # catalogo de modelos vive en app/services/engines/mdx_models.py.
+    # catalogo de modelos vive en app/services/engines/separation_models.py.
     karaoke_model_dir: str = Field(default="vendor/karaoke", alias="KARAOKE_MODEL_DIR")
+
+    # Limpieza de eco/reverb (modelos VR): el espectrograma combinado 4band_v3
+    # cuesta ~6,5 MB por segundo de audio contando intermedios, asi que las
+    # pistas largas se procesan por bloques. Medido sobre una pista de 5 min
+    # (RX 7800 XT, dml:0): bloque 60 s = +706 MB de RSS, 120 s = +1065 MB,
+    # sin bloques = +1961 MB, todos al mismo tiempo de proceso (~14 s).
+    # Bajarlo recorta memoria a costa de mas costuras (cruzadas, no secas).
+    vr_separation_block_seconds: float = Field(
+        default=120.0, alias="VR_SEPARATION_BLOCK_SECONDS"
+    )
+    # Contexto que se procesa y se descarta a cada lado del bloque, del que
+    # ademas sale el crossfade entre bloques contiguos.
+    vr_separation_margin_seconds: float = Field(
+        default=3.0, alias="VR_SEPARATION_MARGIN_SECONDS"
+    )
 
     # GMFSS (second interpolation engine, max-quality anime frame interpolation,
     # own port santiquiroz/port-gmfss-onnx). 10x or more slower than RIFE by
@@ -837,7 +852,7 @@ class Settings(BaseSettings):
         return resolve_against_project_root(self.karaoke_model_dir)
 
     def karaoke_installed_models(self) -> list[str]:
-        from app.services.engines.mdx_models import installed_model_ids
+        from app.services.engines.separation_models import installed_model_ids
 
         return installed_model_ids(self.karaoke_model_dir_path)
 
@@ -848,7 +863,7 @@ class Settings(BaseSettings):
     def karaoke_installed_model(self) -> str:
         # Para el PathRequirement del catalogo de capacidades: la ruta del
         # primer modelo instalado, o "" (= no cumplido) si no hay ninguno.
-        from app.services.engines.mdx_models import first_installed_model_path
+        from app.services.engines.separation_models import first_installed_model_path
 
         path = first_installed_model_path(self.karaoke_model_dir_path)
         return str(path) if path is not None else ""

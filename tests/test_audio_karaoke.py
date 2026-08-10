@@ -19,7 +19,10 @@ from app.services.audio_job_manager import AudioJobManager
 from app.services.audio_pipeline import AudioPipeline
 from app.services.capabilities import resolve_capabilities
 from app.services.device_semaphores import DeviceSemaphores
-from app.services.engines.mdx_models import DEFAULT_SEPARATION_MODEL, SEPARATION_MODELS
+from app.services.engines.separation_models import (
+    DEFAULT_SEPARATION_MODEL,
+    SEPARATION_MODELS,
+)
 from app.services.pack_provisioner import build_command
 from app.services.progress import build_audio_stages
 from app.services.storage import StorageService
@@ -83,9 +86,12 @@ class CommandRecordingPipeline(AudioPipeline):
 
 
 def make_pipeline(
-    settings: Settings, separator: FakeSeparator | None = None
+    settings: Settings,
+    separator: FakeSeparator | None = None,
+    architecture: str = "mdx",
 ) -> CommandRecordingPipeline:
-    return CommandRecordingPipeline(settings, {}, {}, separator=separator)
+    separators = {architecture: separator} if separator is not None else None
+    return CommandRecordingPipeline(settings, {}, {}, separators=separators)
 
 
 def make_manager(settings: Settings, separator: FakeSeparator | None = None) -> AudioJobManager:
@@ -297,7 +303,7 @@ async def test_pipeline_without_separator_fails_loudly(tmp_path: Path) -> None:
     pipeline = make_pipeline(settings, separator=None)
     job = make_separate_job(write_upload_source(settings))
 
-    with pytest.raises(RuntimeError, match="sin\\s+motor de separacion"):
+    with pytest.raises(RuntimeError, match="sin ese motor de separacion"):
         await pipeline.run(job)
 
 
@@ -626,5 +632,9 @@ class TestPackKaraokePorVariante:
         for spec in SEPARATION_MODELS.values():
             assert f"'{spec.id}'" in validate_set_line
             assert spec.filename in script
-            assert spec.uvr_hash in script
+            assert spec.url in script
             assert spec.sha256 in script
+            # El hash UVR solo existe para los MDX (identifica el .onnx que UVR
+            # distribuye); los VR se bajan del port, que exporta el grafo.
+            if getattr(spec, "uvr_hash", None):
+                assert spec.uvr_hash in script

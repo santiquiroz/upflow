@@ -9,7 +9,7 @@ from fastapi import HTTPException
 
 from app.api.routes import audio_job_to_response, download_audio_job
 from app.models import JobStatus
-from app.services.engines.mdx_models import SEPARATION_MODELS
+from app.services.engines.separation_models import SEPARATION_MODELS
 from app.services.engines.mdx_separator import MdxSeparator
 from app.services.gpu_session_coordinator import GpuSessionCoordinator
 from tests.test_audio_karaoke import (
@@ -43,8 +43,10 @@ from tests.test_mdx_separator import (
 # ---------------------------------------------------------------------------
 
 
-def test_catalog_has_three_models() -> None:
-    assert set(SEPARATION_MODELS) == {"inst_hq_3", "voc_ft", "reverb_hq"}
+def test_catalog_still_has_the_three_mdx_models() -> None:
+    from app.services.engines.mdx_models import MDX_MODELS
+
+    assert set(MDX_MODELS) == {"inst_hq_3", "voc_ft", "reverb_hq"}
 
 
 def test_reverb_hq_spec_matches_the_validated_spike() -> None:
@@ -284,7 +286,7 @@ async def test_capabilities_expose_labels_category_and_stem_order(tmp_path: Path
     response = await audio_capabilities(settings=settings)
     by_id = {model.id: model for model in response.separation_models}
 
-    assert set(by_id) == {"inst_hq_3", "voc_ft", "reverb_hq"}
+    assert {"inst_hq_3", "voc_ft", "reverb_hq"} <= set(by_id)
     reverb = by_id["reverb_hq"]
     assert reverb.installed is True
     assert reverb.category == "cleanup"

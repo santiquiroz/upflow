@@ -583,6 +583,20 @@ Además de imagen y video, Upflow tiene un **apartado de Audio** propio (ruta `/
 
   Ambos motores son ONNX **multi-provider** (corren en cualquier GPU DirectX12 —AMD/NVIDIA/Intel— o CPU, igual que los modelos de imagen HF). Si un modelo no está instalado, ese modo simplemente no aparece — la app nunca se rompe por esto. **Preservan estéreo/surround**: en vez de downmixear a mono antes de restaurar, decodifican Mid/Side (restauran solo el Mid, el Side queda intacto) en estéreo, y en 5.1/7.1 restauran frente/rears por par M/S + centro directo + LFE intacto, con RMS-match por canal contra el original al final; un layout de canales no reconocido cae a mono con warning explícito (nunca en silencio).
 - **Formato de salida** — `output_format: wav|flac|mp3`, default **`flac`** (sin pérdida, ~50% más liviano que WAV). `wav` para compatibilidad con editores viejos, `mp3` solo si el tamaño del archivo importa más que la calidad.
+- **Separación de stems (karaoke y limpieza)** — parte la mezcla en **dos archivos** con un modelo del catálogo de [Ultimate Vocal Remover](https://github.com/Anjok07/ultimatevocalremovergui). Corre **solo** (los demás pasos se aplicarían a un stem ambiguo): pedilos en un segundo trabajo sobre el stem que quieras. Cada modelo se baja por separado con `scripts/download-karaoke.ps1 -Model <id>` (o con el botón de descarga que la propia UI muestra al lado del modelo que falta); tener uno instalado alcanza para habilitar el modo.
+
+  | Grupo | Id | Qué hace | Stems (el 1º es el que baja `downloadUrl`) |
+  |---|---|---|---|
+  | Karaoke | `inst_hq_3` | Saca la instrumental; la voz es el resto | `instrumental` + `vocals` |
+  | Karaoke | `voc_ft` | Saca la voz; la instrumental es el resto | `instrumental` + `vocals` |
+  | Limpieza | `reverb_hq` | Saca la cola de reverb; la pista limpia es la resta | `dry` + `wet` |
+  | Limpieza | `deecho_normal` | Eco moderado, sin tocar el resto de la señal | `no_echo` + `echo` |
+  | Limpieza | `deecho_aggressive` | Eco fuerte; pega más duro y puede apagar la señal | `no_echo` + `echo` |
+  | Limpieza | `deecho_dereverb` | Eco **y** reverb de sala en una pasada | `no_reverb` + `reverb` |
+
+  Los tres `deecho_*` son de **FoxJoy**, distribuidos por el canal oficial de descargas de UVR y exportados a ONNX por un port propio y público: [santiquiroz/port-uvr-deecho-onnx](https://github.com/santiquiroz/port-uvr-deecho-onnx) (MIT, paridad medida contra `python-audio-separator`: 61-65 dB SI-SDR). Son otra arquitectura (VR 5.1 CascadedNet) que los MDX-Net, pero eso no se elige: el catálogo es **una sola lista** y el backend resuelve el motor por el modelo que pediste. Medido en una RX 7800 XT (`dml:0`): **~21x tiempo real** — 5 minutos de audio en 14 segundos.
+
+  La descarga se pide por stem: `GET /api/v1/audio/jobs/{id}/download?stem=<id>` (sin `stem` sirve el primero). La respuesta del job trae `stems[]` con las dos URLs ya etiquetadas.
 
 ```powershell
 # Restore experimental: descargar el modelo Apollo (~74 MB) y habilitarlo

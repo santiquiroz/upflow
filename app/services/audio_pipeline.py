@@ -20,7 +20,7 @@ from app.services.progress import (
 )
 
 if TYPE_CHECKING:
-    from app.services.engines.mdx_separator import MdxSeparator
+    from app.services.engines.separator_base import OnnxStemSeparator
 
 logger = logging.getLogger(__name__)
 
@@ -53,13 +53,16 @@ class AudioPipeline:
         audio_enhancers: dict[str, AudioEnhancer],
         restorers: dict[str, AudioRestorer],
         voice_enhancer: VoiceEnhancer | None = None,
-        separator: "MdxSeparator | None" = None,
+        separators: "dict[str, OnnxStemSeparator] | None" = None,
     ) -> None:
         self.settings = settings
         self.audio_enhancers = audio_enhancers
         self.restorers = restorers
         self.voice_enhancer = voice_enhancer
-        self.separator = separator
+        # Motor de separacion por ARQUITECTURA del modelo ("mdx" | "vr"). El
+        # usuario elige un id de modelo, nunca una arquitectura: el catalogo
+        # dice cual es y aca se resuelve el motor.
+        self.separators = separators or {}
 
     async def run(self, job: AudioJob) -> Path:
         work_dir = self.settings.temp_path / f"audio-{job.id}"
@@ -131,22 +134,15 @@ class AudioPipeline:
         """Modo separacion: DOS salidas nombradas por stem, mismo formato ambas.
 
         job.output_path (lo devuelto) es el stem principal del modelo (el que
-        el usuario quiere: instrumental en karaoke, dry en reverb_hq); el
+        el usuario quiere: instrumental en karaoke, dry/no_echo en limpieza); el
         restante queda en job.secondary_output_path. El manager ya garantizo
         que el modo corre solo.
         """
-        from app.services.engines.mdx_models import (
+        from app.services.engines.separation_models import (
             DEFAULT_SEPARATION_MODEL,
             SEPARATION_MODELS,
         )
 
-        if self.separator is None:
-            # Mismo criterio que la cadena de voz: pedir la separacion y que se
-            # ignore en silencio seria peor que fallar.
-            raise RuntimeError(
-                "El job pide separacion pero el pipeline se construyo sin "
-                "motor de separacion."
-            )
         advance_audio_stage(job, "separating")
         model_id = job.separation_model or DEFAULT_SEPARATION_MODEL
         spec = SEPARATION_MODELS.get(model_id)
@@ -156,9 +152,10 @@ class AudioPipeline:
             raise RuntimeError(
                 f"Modelo de separacion desconocido: {model_id!r}. Validos: {known}."
             )
+        separator = self._require_separator(spec.architecture, model_id)
         main_wav = work_dir / f"{spec.main_stem.id}.wav"
         other_wav = work_dir / f"{spec.other_stem.id}.wav"
-        await self.separator.run(
+        await separator.run(
             decoded,
             main_wav,
             other_wav,
@@ -180,6 +177,17 @@ class AudioPipeline:
         job.secondary_output_path = other_out
         complete_audio_stages(job)
         return main_out
+
+    def _require_separator(self, architecture: str, model_id: str):
+        # Mismo criterio que la cadena de voz: pedir la separacion y que se
+        # ignore en silencio seria peor que fallar.
+        separator = self.separators.get(architecture)
+        if separator is None:
+            raise RuntimeError(
+                f"El job pide el modelo {model_id!r} (arquitectura {architecture}) "
+                "pero el pipeline se construyo sin ese motor de separacion."
+            )
+        return separator
 
     def _voice_steps_without_double_loudnorm(self, job: AudioJob) -> list[str]:
         """Con mastering activo, el paso `loudness` de la cadena de voz sobra.
@@ -247,7 +255,7 @@ class AudioPipeline:
         self, source_path: Path, output_wav: Path, force_stereo: bool = False
     ) -> None:
         output_wav.parent.mkdir(parents=True, exist_ok=True)
-        # El separador MDX trabaja a 44100 estereo: decodificar directo a eso
+        # Los separadores trabajan a 44100 estereo: decodificar directo a eso
         # evita un resample extra y le baja el surround a 2 canales a ffmpeg,
         # que tiene el downmix canonico.
         sample_rate = 44100 if force_stereo else DECODE_SAMPLE_RATE

@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from app.config import Settings, resolve_against_project_root
 from app.services.capabilities import CATALOG, PathRequirement
-from app.services.engines.mdx_models import SEPARATION_MODELS
+from app.services.engines.separation_models import SEPARATION_MODELS
 from app.services.install_queue_base import SingleWorkerJobQueue
 from app.services.process_runner import run_guarded_process
 
@@ -45,7 +45,7 @@ PACK_SCRIPTS: dict[str, str] = {
     # comparte el renderer pero cambia el prior y el encoder de entrada.
     "shap-e-img2img": "download-shap-e-img2img.ps1",
     # Separacion voz/instrumental. Pack-familia: un .onnx por modelo del
-    # catalogo (mdx_models.py) y el script recibe cual por parametro.
+    # catalogo (separation_models.py) y el script recibe cual por parametro.
     "karaoke": "download-karaoke.ps1",
     # El nombre sigue al directorio vendorizado (vendor/kokoro), no al script:
     # es la convencion que ya usan gmfss y audiosr.

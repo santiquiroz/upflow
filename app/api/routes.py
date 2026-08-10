@@ -475,7 +475,7 @@ def video_job_to_response(job: VideoUpscaleJob) -> VideoJobResponse:
 def _audio_separation_spec(job: AudioJob):
     if not job.separate or job.separation_model is None:
         return None
-    from app.services.engines.mdx_models import SEPARATION_MODELS
+    from app.services.engines.separation_models import SEPARATION_MODELS
 
     return SEPARATION_MODELS.get(job.separation_model)
 
@@ -1666,7 +1666,7 @@ async def audio_capabilities(settings: Settings = Depends(get_settings)) -> Audi
         mode for mode in sorted(AUDIO_RESTORE_MODES) if settings.audio_restore_mode_available(mode)
     ]
     from app.services.audio_mastering import MASTERING_PRESETS
-    from app.services.engines.mdx_models import SEPARATION_MODELS
+    from app.services.engines.separation_models import SEPARATION_MODELS
 
     installed_separation_models = set(settings.karaoke_installed_models())
     return AudioCapabilitiesResponse(
@@ -1689,6 +1689,7 @@ async def audio_capabilities(settings: Settings = Depends(get_settings)) -> Audi
                 installed=spec.id in installed_separation_models,
                 primary_stem=spec.primary_stem,
                 category=spec.category,
+                architecture=spec.architecture,
                 description_key=spec.description_key,
                 stems=[
                     SeparationStemResponse(id=stem.id, label_key=stem.label_key)

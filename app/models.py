@@ -139,7 +139,7 @@ class AudioJob:
     # Exclusivo en v1 — el manager rechaza combinarlo con los demas pasos
     # porque se aplicarian a un stem ambiguo.
     separate: bool = False
-    # Id del catalogo de modelos de separacion (mdx_models.SEPARATION_MODELS).
+    # Id del catalogo de separacion (separation_models.SEPARATION_MODELS).
     # El manager lo resuelve al default cuando separate=True y no viene.
     separation_model: str | None = None
     # Standalone-module output format (Fase C Task 9): "wav" (lossless, no
