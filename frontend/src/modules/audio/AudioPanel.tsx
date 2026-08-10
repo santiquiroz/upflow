@@ -1,7 +1,9 @@
+import { useQuery } from "@tanstack/react-query";
 import { AudioWaveform, UploadCloud } from "lucide-react";
 import { useState, type ChangeEvent, type DragEvent } from "react";
 import { AccordionSection } from "../../components/AccordionSection";
-import { CPU_DEVICE, DevicePicker } from "../../components/DevicePicker";
+import { DevicePicker } from "../../components/DevicePicker";
+import { getDevices } from "../../lib/api";
 import { FormatOptionFieldset, type FormatOption } from "../../components/FormatOptionFieldset";
 import { JobCard } from "../../components/JobCard";
 import { useAudioCapabilities, useAudioJob, type AudioJobPhase } from "../../hooks/useAudioJob";
@@ -180,7 +182,18 @@ export function AudioPanel() {
   const [denoise, setDenoise] = useState<string | null>(null);
   const [restore, setRestore] = useState<string | null>(null);
   const [outputFormat, setOutputFormat] = useState<AudioOutputFormat>("flac");
-  const [device, setDevice] = useState<DeviceInfoResponse | null>(CPU_DEVICE);
+  // null = el dispositivo por defecto del backend (la GPU si hay una), igual
+  // que los paneles de imagen y video. Antes arrancaba fijo en CPU y mandaba
+  // device="cpu" pisando ese default: un restore quedaba ~10x mas lento sin
+  // que nada lo dijera, con el badge "Default" colgando de la GPU.
+  const [device, setDevice] = useState<DeviceInfoResponse | null>(null);
+  // Misma clave que DevicePicker: sale del cache de react-query, sin pedido extra.
+  const devicesQuery = useQuery({ queryKey: ["devices"], queryFn: getDevices });
+  const backendDefault =
+    devicesQuery.data?.devices.find((d) => d.id === devicesQuery.data?.defaultDeviceId) ?? null;
+  const effectiveDevice = device ?? backendDefault;
+  const hasGpu = (devicesQuery.data?.devices ?? []).some((d) => d.kind === "gpu");
+  const runsOnCpuWithGpuAvailable = hasGpu && effectiveDevice?.kind === "cpu";
   const [master, setMaster] = useState<string | null>(null);
   const [separate, setSeparate] = useState(false);
   const [separationModel, setSeparationModel] = useState<string | null>(null);
@@ -389,10 +402,13 @@ export function AudioPanel() {
         </div>
         <AccordionSection
           title={t("audio.section.device")}
-          summary={formatDeviceSummary(device, t)}
+          summary={formatDeviceSummary(effectiveDevice, t)}
           tooltip={DEVICE_TOOLTIP}
         >
           <DevicePicker value={device?.id ?? null} onChange={setDevice} requiresGpu={false} allowAuto={false} />
+          {runsOnCpuWithGpuAvailable && (
+            <p className="mt-2 text-xs text-warn">{t("audio.device.cpuSlowerHint")}</p>
+          )}
         </AccordionSection>
         <FormatOptionFieldset
           legend={t("audio.section.outputFormat")}

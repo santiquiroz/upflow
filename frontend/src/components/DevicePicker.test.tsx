@@ -65,10 +65,22 @@ describe("DevicePicker", () => {
   it("calls onChange with the selected device", async () => {
     const { onChange } = renderPicker([CPU_DEVICE, GPU_DEVICE], "dml:0", false);
 
-    const gpuOption = await screen.findByRole("radio", { name: /AMD Radeon RX 7900/ });
-    fireEvent.click(gpuOption);
+    // Se elige el que NO es default: el default ya viene marcado, y un radio
+    // que ya esta checked no dispara change.
+    const cpuOption = await screen.findByRole("radio", { name: /CPU/ });
+    fireEvent.click(cpuOption);
 
-    expect(onChange).toHaveBeenCalledWith(GPU_DEVICE);
+    expect(onChange).toHaveBeenCalledWith(CPU_DEVICE);
+  });
+
+  it("marks the backend default as selected when nothing was chosen yet", async () => {
+    // value=null significa "el que elija el backend": si no se pinta marcado,
+    // el badge Default cuelga de una fila y corre otra (paso real con audio).
+    renderPicker([CPU_DEVICE, GPU_DEVICE], "dml:0", false);
+
+    const gpuOption = await screen.findByRole("radio", { name: /AMD Radeon RX 7900/ });
+    expect(gpuOption).toBeChecked();
+    expect(screen.getByRole("radio", { name: /CPU/ })).not.toBeChecked();
   });
 
   it("shows an Auto option ahead of the real devices", async () => {

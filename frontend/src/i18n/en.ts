@@ -530,6 +530,8 @@ export const en = {
   "audio.section.mastering": "Mastering",
   "audio.section.restore": "Restore",
   "audio.section.device": "Device",
+  "audio.device.cpuSlowerHint":
+    "On CPU the restoration models run roughly 10x slower than on your GPU. Pick the GPU unless it is busy.",
   "audio.section.outputFormat": "Output format",
   "audio.section.karaoke": "Karaoke",
   "audio.karaoke.toggle": "Split the audio into two stems",

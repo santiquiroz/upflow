@@ -525,6 +525,8 @@ export const es = {
   "audio.section.mastering": "Acabado",
   "audio.section.restore": "Restauración",
   "audio.section.device": "Dispositivo",
+  "audio.device.cpuSlowerHint":
+    "En CPU los modelos de restauración corren unas 10 veces más lento que en tu GPU. Elegí la GPU salvo que la estés usando para otra cosa.",
   "audio.section.outputFormat": "Formato de salida",
   "audio.section.karaoke": "Karaoke",
   "audio.karaoke.toggle": "Dividir el audio en dos stems",

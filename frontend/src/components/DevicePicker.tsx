@@ -106,6 +106,11 @@ export function DevicePicker({ value, onChange, requiresGpu, allowAuto = true }:
 
   const devices = devicesQuery.data?.devices ?? [];
   const defaultDeviceId = devicesQuery.data?.defaultDeviceId;
+  // value=null significa "el que el backend elija", y ese es defaultDeviceId:
+  // pintarlo como seleccionado es lo unico honesto. Antes no quedaba ninguna
+  // opcion marcada mientras el badge "Default" colgaba de otra fila, que es
+  // como un job de audio termino corriendo en CPU con la GPU marcada Default.
+  const selectedId = value ?? defaultDeviceId ?? null;
   // Auto is never disabled here -- real compatibility (e.g. a builtin ncnn
   // model with no GPU present at all) is enforced server-side and surfaces
   // as a submit-time error instead.
@@ -118,7 +123,7 @@ export function DevicePicker({ value, onChange, requiresGpu, allowAuto = true }:
         <DeviceOption
           key={device.id}
           device={device}
-          isSelected={device.id === value}
+          isSelected={device.id === selectedId}
           isDefault={device.id === defaultDeviceId}
           isDisabled={device.id !== AUTO_DEVICE_ID && requiresGpu && isCpuDevice(device)}
           onChange={onChange}

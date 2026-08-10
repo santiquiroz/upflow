@@ -310,9 +310,26 @@ describe("AudioPanel", () => {
       "href",
       "/api/v1/audio/jobs/aud-1/download",
     );
+    // device=null a proposito: sin eleccion explicita manda el default del
+    // backend (la GPU si hay). Mandar "cpu" fijo dejaba el restore ~10x mas
+    // lento en silencio (reporte de campo 2026-08-10).
     expect(vi.mocked(audioService.createAudioJob).mock.calls[0][0]).toEqual(
-      expect.objectContaining({ denoise: "deepfilter", restore: "apollo", device: "cpu" }),
+      expect.objectContaining({ denoise: "deepfilter", restore: "apollo", device: null }),
     );
+  });
+
+  it("advierte que la CPU es mas lenta solo cuando hay GPU y se eligio CPU", async () => {
+    renderPanel(FULL_CAPABILITIES);
+
+    fireEvent.click(await screen.findByRole("button", { name: /^Device/ }));
+
+    // Por defecto corre en la GPU (default del backend): no hay que avisar nada.
+    expect(await screen.findByRole("radio", { name: /AMD Radeon/ })).toBeChecked();
+    expect(screen.queryByText(/10 veces más lento|10x slower/i)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("radio", { name: /CPU/ }));
+
+    expect(await screen.findByText(/10 veces más lento|10x slower/i)).toBeInTheDocument();
   });
 
   it("shows format options with friendly descriptions and defaults to FLAC", async () => {
