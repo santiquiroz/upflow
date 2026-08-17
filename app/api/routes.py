@@ -40,6 +40,7 @@ from app.schemas import (
     VulkanInstallStatusResponse,
     CreateDownloadJobRequest,
     DownloadJobResponse,
+    DownloadJobsListResponse,
     MediaProbeResponse,
     AnalyzeVideoResponse,
     AudioCapabilitiesResponse,
@@ -81,6 +82,7 @@ from app.schemas import (
     GeneratePartRequest,
     Shape3dJobRequest,
     Shape3dJobResponse,
+    Shape3dJobsListResponse,
     SizeEstimateRequest,
     SizeEstimateResponse,
     GeneratedPartResponse,
@@ -113,6 +115,7 @@ from app.schemas import (
     SubtitleTrackResponse,
     SupportedModelResponse,
     TranscribeJobResponse,
+    TranscribeJobsListResponse,
     UpdateCheckResponse,
     UpdateSettingRequest,
     UpdateSettingResponse,
@@ -492,14 +495,13 @@ def _audio_separation_spec(job: AudioJob):
 
 
 def _audio_stem_downloads(job: AudioJob) -> list[AudioStemDownloadResponse] | None:
-    """Las DOS descargas de un job de separacion completado, ordenadas: la
-    primera es la que el usuario quiere (la misma que downloadUrl)."""
+    """Una descarga por stem de un job de separacion completado, ORDENADAS: la
+    primera es la que el usuario quiere (la misma que downloadUrl).
+
+    Son tantas como declare el modelo — dos en karaoke y limpieza, cuatro en
+    los multi-stem — y salen del catalogo, no de contar archivos."""
     spec = _audio_separation_spec(job)
-    if (
-        spec is None
-        or job.status != JobStatus.completed
-        or job.secondary_output_path is None
-    ):
+    if spec is None or job.status != JobStatus.completed or not job.stem_output_paths:
         return None
     base = f"/api/v1/audio/jobs/{job.id}/download"
     return [
@@ -509,12 +511,15 @@ def _audio_stem_downloads(job: AudioJob) -> list[AudioStemDownloadResponse] | No
 
 
 def _audio_vocals_download_url(job: AudioJob) -> str | None:
-    # Compat v0.59: solo cuando el par de stems realmente incluye "vocals"
-    # (los modelos karaoke). reverb_hq no tiene voz que ofrecer aca.
-    if job.status != JobStatus.completed or job.secondary_output_path is None:
+    # Compat v0.59, y SOLO eso: el campo promete que downloadUrl trae la
+    # instrumental y esto la voz. Un modelo multi-stem rompe esa promesa —
+    # downloadUrl trae bateria — asi que ahi no se emite y el cliente usa
+    # `stems`. Emitirlo igual daria una URL que funciona debajo de un nombre
+    # que miente.
+    if job.status != JobStatus.completed or not job.stem_output_paths:
         return None
     spec = _audio_separation_spec(job)
-    if spec is not None and "vocals" not in spec.stem_ids():
+    if spec is not None and spec.stem_ids() != ("instrumental", "vocals"):
         return None
     return f"/api/v1/audio/jobs/{job.id}/download?stem=vocals"
 
@@ -1271,6 +1276,22 @@ async def create_download_job(
     return download_job_to_response(job)
 
 
+@router.get("/download/jobs", response_model=DownloadJobsListResponse)
+async def list_download_jobs(
+    all_users: bool = Query(default=False, alias="all"),
+    download_jobs: DownloadJobManager = Depends(get_download_job_manager),
+    current_user: AuthenticatedUser = Depends(require(Permission.jobs_read_own)),
+) -> DownloadJobsListResponse:
+    """Las descargas del usuario.
+
+    Sin esto, recargar el navegador perdia la descarga: seguia corriendo en el
+    servidor pero la UI no tenia como preguntar cual quedo viva.
+    """
+    _require_read_all_if_requested(all_users, current_user)
+    visible = [job for job in download_jobs.jobs.values() if all_users or job.owner_id == current_user.id]
+    return DownloadJobsListResponse(jobs=[download_job_to_response(job) for job in visible])
+
+
 @router.get(
     "/download/jobs/{job_id}",
     response_model=DownloadJobResponse,
@@ -1438,6 +1459,22 @@ async def create_transcribe_job(
         status_url=f"/api/v1/transcribe/jobs/{job.id}",
         download_url=None,
     )
+
+
+@router.get("/transcribe/jobs", response_model=TranscribeJobsListResponse)
+async def list_transcribe_jobs(
+    all_users: bool = Query(default=False, alias="all"),
+    transcribe_jobs: TranscribeJobManager = Depends(get_transcribe_job_manager),
+    current_user: AuthenticatedUser = Depends(require(Permission.jobs_read_own)),
+) -> TranscribeJobsListResponse:
+    """Los trabajos de transcripcion del usuario.
+
+    Sin esto, recargar el navegador perdia el trabajo: seguia corriendo en el
+    servidor pero la UI no tenia como preguntar cual quedo vivo.
+    """
+    _require_read_all_if_requested(all_users, current_user)
+    visible = [job for job in transcribe_jobs.jobs.values() if all_users or job.owner_id == current_user.id]
+    return TranscribeJobsListResponse(jobs=[transcribe_job_to_response(job) for job in visible])
 
 
 @router.get(
@@ -1854,14 +1891,19 @@ def _valid_stems_for(job: AudioJob) -> tuple[str, ...]:
 
 
 def _stem_output_path(job: AudioJob, stem: str, valid_stems: tuple[str, ...]) -> Path:
-    if stem == valid_stems[0]:
+    # El mapa por id es la fuente de verdad: con cuatro stems, "el que no es el
+    # primero" no identifica un archivo. output_path solo cubre el caso legacy
+    # de un job sin mapa (separacion previa a stem_output_paths, o sin modelo
+    # del catalogo), donde el primer stem ES la unica salida.
+    path = job.stem_output_paths.get(stem)
+    if path is not None:
+        return path
+    if stem == valid_stems[0] and job.output_path is not None:
         return job.output_path
-    if job.secondary_output_path is None:
-        raise HTTPException(
-            status_code=409,
-            detail=f"This job did not run separation; there is no {stem} stem",
-        )
-    return job.secondary_output_path
+    raise HTTPException(
+        status_code=409,
+        detail=f"This job did not run separation; there is no {stem} stem",
+    )
 
 
 @router.get("/audio/jobs/{job_id}/download", dependencies=[Depends(require(Permission.jobs_read_own))])
@@ -3398,6 +3440,7 @@ def shape3d_job_to_response(job: Shape3dJob) -> Shape3dJobResponse:
             if job.status == JobStatus.completed and job.output_path
             else None
         ),
+        owner_id=job.owner_id,
     )
 
 
@@ -3479,6 +3522,22 @@ async def create_shape3d_job(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return shape3d_job_to_response(job)
+
+
+@router.get("/print/generate", response_model=Shape3dJobsListResponse)
+async def list_shape3d_jobs(
+    all_users: bool = Query(default=False, alias="all"),
+    jobs: Shape3dJobManager = Depends(get_shape3d_jobs),
+    current_user: AuthenticatedUser = Depends(require(Permission.jobs_read_own)),
+) -> Shape3dJobsListResponse:
+    """Las piezas generadas por el usuario.
+
+    Generar una malla son minutos: sin listado, recargar el navegador dejaba el
+    trabajo corriendo en el servidor y sin forma de volver a el.
+    """
+    _require_read_all_if_requested(all_users, current_user)
+    visible = [job for job in jobs.jobs.values() if all_users or job.owner_id == current_user.id]
+    return Shape3dJobsListResponse(jobs=[shape3d_job_to_response(job) for job in visible])
 
 
 @router.get(

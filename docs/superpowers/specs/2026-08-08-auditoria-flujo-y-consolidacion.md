@@ -89,9 +89,12 @@ su frame — solape imposible a nivel API ORT+DML; (3) cualquier llamada ORT
 concurrente sobre el device DML produce DEVICE REMOVAL (DXGI 887A0005), no
 contención — endurece el hallazgo GMFSS histórico. El presupuesto de
 optimización futuro está en el cómputo mismo (los 82 ms), no en el I/O.
-Micro-candidato pendiente de A/B controlado: cachear io_binding+buffers por
-(sesión, shape) en _infer_iobinding (+5% nominal). Spike:
-scratchpad/spike-overlap/ de la sesión 2026-08-09.
+El micro-candidato de cachear `io_binding` + buffers por `(sesión, shape)` en
+`_infer_iobinding` también quedó **DESCARTADO con medición**: A/B pareado de 30
+pares, orden ABBA, mediana **+0.15%**, IC95 bootstrap **[-0.79%, +1.45%]** y
+17/30 pares ganados, con salida bit-idéntica. Se descarta por falta de ganancia
+medible, no por riesgo. Spike: `scratchpad/spike-overlap/` de la sesión
+2026-08-09.
 
 ## Descartado con medición (v0.57.0)
 

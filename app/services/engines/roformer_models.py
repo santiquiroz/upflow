@@ -44,6 +44,7 @@ from dataclasses import dataclass
 from typing import ClassVar
 
 from app.services.engines.separation_spec import (
+    RESIDUAL,
     STEM_INSTRUMENTAL,
     STEM_VOCALS,
     Architecture,
@@ -118,8 +119,8 @@ ROFORMER_MODELS: dict[str, RoformerModelSpec] = {
         # Mismo par que voc_ft, y por el mismo motivo: el modelo saca la voz,
         # pero en karaoke lo que el usuario se lleva primero es la instrumental.
         stems=(
-            SeparationStem("instrumental", STEM_INSTRUMENTAL, "secondary"),
-            SeparationStem("vocals", STEM_VOCALS, "primary"),
+            SeparationStem("instrumental", STEM_INSTRUMENTAL, RESIDUAL),
+            SeparationStem("vocals", STEM_VOCALS, 0),
         ),
     ),
 }

@@ -102,8 +102,8 @@ VR_MODELS: dict[str, VrModelSpec] = {
         category="cleanup",
         description_key="audio.karaoke.model.deecho_normal.description",
         stems=(
-            SeparationStem("no_echo", _STEM_NO_ECHO, "primary"),
-            SeparationStem("echo", _STEM_ECHO, "secondary"),
+            SeparationStem("no_echo", _STEM_NO_ECHO, 0),
+            SeparationStem("echo", _STEM_ECHO, 1),
         ),
     ),
     "deecho_aggressive": VrModelSpec(
@@ -120,8 +120,8 @@ VR_MODELS: dict[str, VrModelSpec] = {
         category="cleanup",
         description_key="audio.karaoke.model.deecho_aggressive.description",
         stems=(
-            SeparationStem("no_echo", _STEM_NO_ECHO, "primary"),
-            SeparationStem("echo", _STEM_ECHO, "secondary"),
+            SeparationStem("no_echo", _STEM_NO_ECHO, 0),
+            SeparationStem("echo", _STEM_ECHO, 1),
         ),
     ),
     "deecho_dereverb": VrModelSpec(
@@ -138,8 +138,8 @@ VR_MODELS: dict[str, VrModelSpec] = {
         category="cleanup",
         description_key="audio.karaoke.model.deecho_dereverb.description",
         stems=(
-            SeparationStem("no_reverb", _STEM_NO_REVERB, "primary"),
-            SeparationStem("reverb", _STEM_REVERB, "secondary"),
+            SeparationStem("no_reverb", _STEM_NO_REVERB, 0),
+            SeparationStem("reverb", _STEM_REVERB, 1),
         ),
     ),
     "denoise": VrModelSpec(
@@ -159,8 +159,8 @@ VR_MODELS: dict[str, VrModelSpec] = {
         category="cleanup",
         description_key="audio.karaoke.model.denoise.description",
         stems=(
-            SeparationStem("no_noise", _STEM_NO_NOISE, "secondary"),
-            SeparationStem("noise", _STEM_NOISE, "primary"),
+            SeparationStem("no_noise", _STEM_NO_NOISE, 1),
+            SeparationStem("noise", _STEM_NOISE, 0),
         ),
     ),
 }

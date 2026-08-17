@@ -7,8 +7,16 @@ def test_families_dict():
     assert len(FAMILIES) == 7
     expected_keys = {"image", "video", "audio", "generation", "transcribe", "download", "shape3d"}
     assert set(FAMILIES.keys()) == expected_keys
-    listables = {name for name, family in FAMILIES.items() if family.has_list}
-    assert listables == {"image", "video", "audio", "generation"}
+
+
+def test_every_family_lists_at_its_base_path():
+    """Las 7 listan con un GET a su base_path: ya no hay familias que obliguen a
+    guardar el jobId al crearlas. shape3d es la rara — su listado es
+    /print/generate, no /print/generate/jobs."""
+    assert all(family.base_path.startswith("/api/v1/") for family in FAMILIES.values())
+    assert FAMILIES["transcribe"].base_path == "/api/v1/transcribe/jobs"
+    assert FAMILIES["download"].base_path == "/api/v1/download/jobs"
+    assert FAMILIES["shape3d"].base_path == "/api/v1/print/generate"
 
 
 def test_family_or_raise_valid():

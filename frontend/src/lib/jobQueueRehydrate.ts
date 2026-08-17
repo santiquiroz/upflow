@@ -15,17 +15,18 @@ interface RawJob {
   status: JobStatus;
   originalFilename?: string;
   prompt?: string;
+  mediaTitle?: string | null;
+  url?: string;
 }
 
-// Transcripcion, descarga y 3D NO se rehidratan: su API no expone un endpoint de
-// lista (ver app/mcp/jobs.py::FAMILIES, has_list=False), asi que tras recargar
-// el navegador no hay forma de preguntar "que quedo corriendo" sin inventar
-// rutas nuevas. Se siguen en la cola durante la sesion en que se crean.
 export interface JobFetchers {
   fetchImageJobs: () => Promise<{ jobs: RawJob[] }>;
   fetchVideoJobs: () => Promise<{ jobs: RawJob[] }>;
   fetchAudioJobs: () => Promise<{ jobs: RawJob[] }>;
   fetchGenerationJobs: () => Promise<{ jobs: RawJob[] }>;
+  fetchTranscribeJobs: () => Promise<{ jobs: RawJob[] }>;
+  fetchDownloadJobs: () => Promise<{ jobs: RawJob[] }>;
+  fetchShape3dJobs: () => Promise<{ jobs: RawJob[] }>;
 }
 
 export const defaultJobFetchers: JobFetchers = {
@@ -33,7 +34,19 @@ export const defaultJobFetchers: JobFetchers = {
   fetchVideoJobs: () => apiGet<{ jobs: RawJob[] }>("/video/jobs?all=false"),
   fetchAudioJobs: () => apiGet<{ jobs: RawJob[] }>("/audio/jobs?all=false"),
   fetchGenerationJobs: () => apiGet<{ jobs: RawJob[] }>("/generation/jobs?all=false"),
+  fetchTranscribeJobs: () => apiGet<{ jobs: RawJob[] }>("/transcribe/jobs?all=false"),
+  fetchDownloadJobs: () => apiGet<{ jobs: RawJob[] }>("/download/jobs?all=false"),
+  fetchShape3dJobs: () => apiGet<{ jobs: RawJob[] }>("/print/generate?all=false"),
 };
+
+// Cada familia nombra su trabajo con lo que el usuario reconoce: el archivo que
+// subio, el prompt que escribio o el titulo (o la URL) de lo que pidio bajar. Un
+// prompt vacio es real — el modo foto del 3D no tiene texto — asi que se descarta
+// como candidato en vez de mostrarse en blanco.
+export function displayName(raw: RawJob, id: string): string {
+  const candidates = [raw.originalFilename, raw.prompt, raw.mediaTitle, raw.url];
+  return candidates.find((name) => typeof name === "string" && name.trim() !== "") ?? id;
+}
 
 function toTracked(raw: RawJob, kind: TrackedJobKind, index: number): TrackedJob | null {
   const id = raw.jobId ?? raw.id;
@@ -43,8 +56,7 @@ function toTracked(raw: RawJob, kind: TrackedJobKind, index: number): TrackedJob
   return {
     id,
     kind,
-    // Un trabajo de generacion no tiene archivo de entrada: su nombre es el prompt.
-    fileName: raw.originalFilename ?? raw.prompt ?? id,
+    fileName: displayName(raw, id),
     createdAt: index,
   };
 }
@@ -74,6 +86,9 @@ export async function rehydrateJobQueue(
     pending(fetchers.fetchVideoJobs, "video"),
     pending(fetchers.fetchAudioJobs, "audio"),
     pending(fetchers.fetchGenerationJobs, "generation"),
+    pending(fetchers.fetchTranscribeJobs, "transcribe"),
+    pending(fetchers.fetchDownloadJobs, "download"),
+    pending(fetchers.fetchShape3dJobs, "shape3d"),
   ]);
 
   const yaSeguidos = new Set(store.getSnapshot().map((job) => job.id));

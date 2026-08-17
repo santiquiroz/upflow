@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 from pathlib import Path
+from collections.abc import Sequence
 from typing import Callable
 
 import pytest
@@ -54,21 +55,23 @@ def install_fake_model(settings: Settings, model_id: str = "inst_hq_3") -> Path:
 
 class FakeSeparator:
     def __init__(self) -> None:
-        self.calls: list[tuple[Path, Path, Path, str, str]] = []
+        self.calls: list[tuple[Path, tuple[Path, ...], str, str]] = []
 
     async def run(
         self,
         input_wav: Path,
-        instrumental_wav: Path,
-        vocals_wav: Path,
+        outputs: Sequence[Path],
         device: str,
         model_id: str = DEFAULT_SEPARATION_MODEL,
         on_chunk: Callable[[int, int], None] | None = None,
     ) -> None:
-        self.calls.append((input_wav, instrumental_wav, vocals_wav, device, model_id))
-        instrumental_wav.parent.mkdir(parents=True, exist_ok=True)
-        instrumental_wav.write_bytes(b"fake-instrumental")
-        vocals_wav.write_bytes(b"fake-vocals")
+        # Un archivo por stem, sean dos o cuatro: el fake no puede asumir el
+        # numero, que es justo lo que el motor real dejo de asumir.
+        outputs = tuple(outputs)
+        self.calls.append((input_wav, outputs, device, model_id))
+        for index, output in enumerate(outputs):
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_bytes(f"fake-stem-{index}".encode())
 
 
 class CommandRecordingPipeline(AudioPipeline):
@@ -240,10 +243,13 @@ async def test_separation_produces_instrumental_and_vocals_outputs(tmp_path: Pat
     output_path = await pipeline.run(job)
 
     assert output_path.name == f"{job.id}.instrumental.flac"
-    assert job.secondary_output_path is not None
-    assert job.secondary_output_path.name == f"{job.id}.vocals.flac"
+    assert set(job.stem_output_paths) == {"instrumental", "vocals"}
+    assert job.stem_output_paths["vocals"].name == f"{job.id}.vocals.flac"
+    # El principal esta en el mapa Y es el que el pipeline devuelve: no hay
+    # stem que viva solo en uno de los dos.
+    assert job.stem_output_paths["instrumental"] == output_path
     assert output_path.exists()
-    assert job.secondary_output_path.exists()
+    assert job.stem_output_paths["vocals"].exists()
 
 
 async def test_separation_reencodes_both_outputs_with_the_chosen_format(tmp_path: Path) -> None:
@@ -268,7 +274,7 @@ async def test_separation_wav_output_moves_without_reencode(tmp_path: Path) -> N
     # Solo el decode paso por ffmpeg: los dos stems se mueven tal cual.
     assert len(pipeline.commands) == 1
     assert output_path.exists()
-    assert job.secondary_output_path is not None and job.secondary_output_path.exists()
+    assert job.stem_output_paths["vocals"].exists()
 
 
 async def test_separation_decodes_to_stereo_44100(tmp_path: Path) -> None:
@@ -293,7 +299,7 @@ async def test_separator_receives_the_job_model_and_device(tmp_path: Path) -> No
 
     await pipeline.run(job)
 
-    (_input, _inst, _voc, device, model_id) = separator.calls[0]
+    (_input, _outputs, device, model_id) = separator.calls[0]
     assert device == "dml:0"
     assert model_id == "voc_ft"
 
@@ -333,8 +339,7 @@ async def test_chunk_progress_is_strictly_increasing_within_the_separating_band(
         async def run(
             self,
             input_wav: Path,
-            instrumental_wav: Path,
-            vocals_wav: Path,
+            outputs: Sequence[Path],
             device: str,
             model_id: str = DEFAULT_SEPARATION_MODEL,
             on_chunk: Callable[[int, int], None] | None = None,
@@ -343,9 +348,7 @@ async def test_chunk_progress_is_strictly_increasing_within_the_separating_band(
             for done in range(1, 5):
                 on_chunk(done, 4)
                 seen.append(job.metadata["progress"])
-            await super().run(
-                input_wav, instrumental_wav, vocals_wav, device, model_id=model_id
-            )
+            await super().run(input_wav, outputs, device, model_id=model_id)
 
     pipeline = make_pipeline(settings, ChunkedSeparator())
 
@@ -455,7 +458,10 @@ def test_response_exposes_vocals_download_url_when_completed(tmp_path: Path) -> 
     job = make_separate_job(tmp_path / "song.wav")
     job.status = JobStatus.completed
     job.output_path = tmp_path / f"{job.id}.instrumental.flac"
-    job.secondary_output_path = tmp_path / f"{job.id}.vocals.flac"
+    job.stem_output_paths = {
+        "instrumental": job.output_path,
+        "vocals": tmp_path / f"{job.id}.vocals.flac",
+    }
 
     serialized = audio_job_to_response(job).model_dump(by_alias=True)
 
@@ -494,8 +500,9 @@ async def make_completed_manager_job(
     job.output_path = tmp_path / "instrumental.flac"
     job.output_path.write_bytes(b"instrumental")
     if separate:
-        job.secondary_output_path = tmp_path / "vocals.flac"
-        job.secondary_output_path.write_bytes(b"vocals")
+        vocals = tmp_path / "vocals.flac"
+        vocals.write_bytes(b"vocals")
+        job.stem_output_paths = {"instrumental": job.output_path, "vocals": vocals}
     manager.jobs[job.id] = job
     return manager, job
 
@@ -513,7 +520,7 @@ async def test_download_serves_the_vocals_stem(tmp_path: Path) -> None:
 
     response = await download_audio_job(job.id, stem="vocals", audio_jobs=manager)
 
-    assert Path(response.path) == job.secondary_output_path
+    assert Path(response.path) == job.stem_output_paths["vocals"]
 
 
 async def test_download_rejects_an_unknown_stem_with_400(tmp_path: Path) -> None:

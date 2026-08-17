@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import io
 from pathlib import Path
+from collections.abc import Sequence
 from typing import Callable
 
 import pytest
@@ -62,18 +63,18 @@ class FakeSeparator:
     """Escribe stems fake y deja registro de cada pasada, con su entrada."""
 
     def __init__(self) -> None:
-        self.calls: list[tuple[Path, Path, Path, str, str]] = []
+        self.calls: list[tuple[Path, tuple[Path, ...], str, str]] = []
 
     async def run(
         self,
         input_wav: Path,
-        main_wav: Path,
-        other_wav: Path,
+        outputs: Sequence[Path],
         device: str,
         model_id: str = "denoise",
         on_chunk: Callable[[int, int], None] | None = None,
     ) -> None:
-        self.calls.append((input_wav, main_wav, other_wav, device, model_id))
+        main_wav, other_wav = tuple(outputs)
+        self.calls.append((input_wav, tuple(outputs), device, model_id))
         main_wav.parent.mkdir(parents=True, exist_ok=True)
         main_wav.write_bytes(b"fake-clean")
         other_wav.write_bytes(b"fake-removed")
@@ -339,9 +340,9 @@ async def test_each_pass_feeds_the_next_one(tmp_path: Path) -> None:
 
     await pipeline.run(job)
 
-    assert [call[4] for call in separator.calls] == ["denoise", "deecho_normal"]
+    assert [call[3] for call in separator.calls] == ["denoise", "deecho_normal"]
     # La entrada de la segunda pasada es la salida limpia de la primera.
-    first_clean_output = separator.calls[0][1]
+    first_clean_output = separator.calls[0][1][0]
     second_input = separator.calls[1][0]
     assert second_input == first_clean_output
 
@@ -357,7 +358,7 @@ async def test_the_chain_produces_a_single_output_and_no_stems(tmp_path: Path) -
 
     assert output_path.name == f"{job.id}.flac"
     # Sin secundario: los stems removidos mueren con el work dir.
-    assert job.secondary_output_path is None
+    assert job.stem_output_paths == {}
     assert [p.name for p in settings.outputs_path.iterdir()] == [f"{job.id}.flac"]
 
 
@@ -491,7 +492,7 @@ async def test_chunk_progress_advances_within_the_pass_that_is_running(
     per_pass: dict[str, list[float]] = {}
 
     class ChunkedSeparator(FakeSeparator):
-        async def run(self, input_wav, main_wav, other_wav, device, model_id="denoise", on_chunk=None):  # type: ignore[no-untyped-def]
+        async def run(self, input_wav, outputs, device, model_id="denoise", on_chunk=None):  # type: ignore[no-untyped-def]
             assert on_chunk is not None
             seen: list[float] = []
             for done in range(1, 5):
@@ -499,7 +500,7 @@ async def test_chunk_progress_advances_within_the_pass_that_is_running(
                 seen.append(job.metadata["progress"])
                 assert job.metadata["stage"] == cleanup_stage_key(model_id)
             per_pass[model_id] = seen
-            await super().run(input_wav, main_wav, other_wav, device, model_id=model_id)
+            await super().run(input_wav, outputs, device, model_id=model_id)
 
     await make_pipeline(settings, ChunkedSeparator()).run(job)
 
@@ -537,11 +538,11 @@ async def test_cancelling_between_passes_stops_the_chain(tmp_path: Path) -> None
     started: list[str] = []
 
     class SlowSeparator(FakeSeparator):
-        async def run(self, input_wav, main_wav, other_wav, device, model_id="denoise", on_chunk=None):  # type: ignore[no-untyped-def]
+        async def run(self, input_wav, outputs, device, model_id="denoise", on_chunk=None):  # type: ignore[no-untyped-def]
             started.append(model_id)
             # Punto de suspension real: es donde aterriza el cancel del manager.
             await asyncio.sleep(0.05)
-            await super().run(input_wav, main_wav, other_wav, device, model_id=model_id)
+            await super().run(input_wav, outputs, device, model_id=model_id)
 
     pipeline = make_pipeline(settings, SlowSeparator())
     task = asyncio.ensure_future(pipeline.run(job))
@@ -559,9 +560,9 @@ async def test_cancelling_leaves_no_output_behind(tmp_path: Path) -> None:
     job = make_cleanup_job(write_upload_source(settings), ["denoise", "deecho_normal"])
 
     class SlowSeparator(FakeSeparator):
-        async def run(self, input_wav, main_wav, other_wav, device, model_id="denoise", on_chunk=None):  # type: ignore[no-untyped-def]
+        async def run(self, input_wav, outputs, device, model_id="denoise", on_chunk=None):  # type: ignore[no-untyped-def]
             await asyncio.sleep(0.05)
-            await super().run(input_wav, main_wav, other_wav, device, model_id=model_id)
+            await super().run(input_wav, outputs, device, model_id=model_id)
 
     task = asyncio.ensure_future(make_pipeline(settings, SlowSeparator()).run(job))
     await asyncio.sleep(0.02)

@@ -99,7 +99,9 @@ def run_separation(
 ) -> tuple[np.ndarray, np.ndarray]:
     instrumental = tmp_path / "out" / "instrumental.wav"
     vocals = tmp_path / "out" / "vocals.wav"
-    asyncio.run(separator.run(mix_path, instrumental, vocals, "cpu", model_id=model_id))
+    asyncio.run(
+        separator.run(mix_path, (instrumental, vocals), "cpu", model_id=model_id)
+    )
     return read_stereo_wav(instrumental), read_stereo_wav(vocals)
 
 
@@ -286,8 +288,7 @@ def test_run_reports_chunk_progress_with_exact_totals(tmp_path: Path) -> None:
     asyncio.run(
         separator.run(
             tmp_path / "mix.wav",
-            instrumental,
-            vocals,
+            (instrumental, vocals),
             "cpu",
             model_id="inst_hq_3",
             on_chunk=lambda done, total: calls.append((done, total)),
@@ -325,7 +326,7 @@ def test_a_second_cancel_still_waits_for_the_worker_thread(tmp_path: Path) -> No
     async def scenario() -> bool:
         task = asyncio.create_task(
             separator.run(
-                tmp_path / "mix.wav", instrumental, vocals, "cpu", model_id="inst_hq_3"
+                tmp_path / "mix.wav", (instrumental, vocals), "cpu", model_id="inst_hq_3"
             )
         )
         await asyncio.to_thread(entered.wait, 10)

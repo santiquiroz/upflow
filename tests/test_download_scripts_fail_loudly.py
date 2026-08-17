@@ -31,6 +31,11 @@ from app.services.pack_provisioner import PACK_SCRIPTS
 RAIZ = Path(__file__).resolve().parent.parent
 SCRIPTS = RAIZ / "scripts"
 CONVERSION_DE_VOZ = SCRIPTS / "download-voice-conversion.ps1"
+FFMPEG = SCRIPTS / "download-ffmpeg.ps1"
+MAGPIE = SCRIPTS / "download-magpie.ps1"
+SHAP_E = SCRIPTS / "download-shap-e.ps1"
+SHAP_E_IMG2IMG = SCRIPTS / "download-shap-e-img2img.ps1"
+TRANSLATION = SCRIPTS / "download-translation.ps1"
 
 
 # ---------------------------------------------------------------------------
@@ -123,6 +128,45 @@ class TestElScriptDeConversionDeVoz:
         assert re.search(r"^\s*throw ", bloque, re.MULTILINE)
 
 
+class TestLosScriptsCorregidos:
+    def test_magpie_exige_la_licencia_gpl_para_terminar_bien(self) -> None:
+        texto = MAGPIE.read_text(encoding="utf-8")
+        chequeo_temprano = texto[: texto.index("$zipPath")]
+        assert "$licensePath" in chequeo_temprano
+        assert "GPL-3.0" in texto
+        assert "Write-Warning" not in texto
+
+    def test_translation_exige_los_tres_grafos_onnx(self) -> None:
+        texto = TRANSLATION.read_text(encoding="utf-8")
+        for archivo in (
+            "encoder_model.onnx",
+            "decoder_model.onnx",
+            "decoder_with_past_model.onnx",
+        ):
+            assert archivo in texto
+        bloque_final = texto[texto.index("& $venv") :]
+        assert "$LASTEXITCODE" in bloque_final
+        assert "$faltantes.Count -gt 0" in bloque_final
+        assert re.search(r"^\s*throw ", bloque_final, re.MULTILINE)
+
+    @pytest.mark.parametrize("script", [SHAP_E, SHAP_E_IMG2IMG], ids=lambda s: s.name)
+    def test_shap_e_revisa_el_codigo_de_python(self, script: Path) -> None:
+        texto = script.read_text(encoding="utf-8")
+        bloque_final = texto[texto.index("& $venv $scriptPy") :]
+        assert "$LASTEXITCODE" in bloque_final
+        assert re.search(r"\$downloadExitCode\s+-ne\s+0", bloque_final)
+        assert re.search(r"^\s*throw ", bloque_final, re.MULTILINE)
+
+    def test_ffmpeg_rechaza_raices_ambiguas_y_verifica_los_binarios(self) -> None:
+        texto = FFMPEG.read_text(encoding="utf-8")
+        assert "Select-Object -First 1" not in texto
+        assert re.search(r"\$ffmpegRoots\.Count\s+-ne\s+1", texto)
+        bloque_final = texto[texto.index("$requeridosFinales") :]
+        for archivo in ("ffmpeg.exe", "ffprobe.exe", "LICENSE.txt"):
+            assert archivo in bloque_final
+        assert re.search(r"^\s*throw ", bloque_final, re.MULTILINE)
+
+
 # ---------------------------------------------------------------------------
 # Y ademas se corre de verdad. Leer el .ps1 no prueba que PowerShell lo ejecute
 # como uno cree -- en este repo ya paso que el texto se veia perfecto y el
@@ -184,6 +228,18 @@ def correr(raiz: Path, *, stub_descarga: str = "") -> subprocess.CompletedProces
     )
 
 
+def correr_script(script: Path, raiz: Path, *, preparacion: str) -> subprocess.CompletedProcess:
+    (raiz / "scripts").mkdir(parents=True, exist_ok=True)
+    copia = raiz / "scripts" / script.name
+    shutil.copy2(script, copia)
+    comando = f"{preparacion}\n& '{copia}'"
+    return subprocess.run(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", comando],
+        capture_output=True,
+        timeout=180,
+    )
+
+
 STUB_QUE_BAJA_BASURA = (
     "function Invoke-WebRequest { param([string]$Uri,[string]$OutFile,[switch]$UseBasicParsing) "
     "Set-Content -LiteralPath $OutFile -Value 'no soy un modelo' }"
@@ -234,3 +290,43 @@ class TestElScriptCorridoDeVerdad:
         assert resultado.returncode != 0
         salida = (resultado.stderr + resultado.stdout).decode("utf-8", "replace")
         assert "SpeechT5" in salida, salida[-800:]
+
+
+@pytestmark_ps
+class TestLosScriptsCorregidosCorridosDeVerdad:
+    def test_magpie_falla_si_esta_el_exe_pero_no_se_puede_bajar_la_licencia(
+        self, tmp_path: Path
+    ) -> None:
+        magpie = tmp_path / "vendor" / "magpie"
+        magpie.mkdir(parents=True)
+        (magpie / "Magpie.exe").write_bytes(b"exe")
+
+        resultado = correr_script(
+            MAGPIE,
+            tmp_path,
+            preparacion="function Invoke-WebRequest { throw 'sin red' }",
+        )
+
+        assert resultado.returncode != 0
+        salida = (resultado.stderr + resultado.stdout).decode("utf-8", "replace")
+        assert "GPL-3.0" in salida
+        assert not (magpie / "LICENSE").exists()
+
+    def test_ffmpeg_falla_si_el_zip_tiene_dos_raices(self, tmp_path: Path) -> None:
+        preparacion = """
+function Invoke-WebRequest {
+    param([string]$Uri, [string]$OutFile)
+    Set-Content -LiteralPath $OutFile -Value 'zip falso'
+}
+function Expand-Archive {
+    param([string]$Path, [string]$DestinationPath, [switch]$Force)
+    New-Item -ItemType Directory -Force -Path (Join-Path $DestinationPath 'raiz-a') | Out-Null
+    New-Item -ItemType Directory -Force -Path (Join-Path $DestinationPath 'raiz-b') | Out-Null
+}
+"""
+
+        resultado = correr_script(FFMPEG, tmp_path, preparacion=preparacion)
+
+        assert resultado.returncode != 0
+        salida = (resultado.stderr + resultado.stdout).decode("utf-8", "replace")
+        assert "unico directorio raiz" in salida

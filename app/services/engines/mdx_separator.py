@@ -18,6 +18,7 @@ from app.services.engines.separator_base import (
     ProgressCallback,
     SeparationCancelled,
     normalize_stem_peaks,  # noqa: F401  (reexport: la usan los tests del motor)
+    stems_in_catalog_order,
 )
 
 # ---------------------------------------------------------------------------
@@ -28,8 +29,8 @@ from app.services.engines.separator_base import (
 # [1, 4, dim_f, dim_t] (re/im por canal, 3 bins graves a cero) -> modelo ->
 # iSTFT -> se descarta trim = n_fft/2 por borde y se concatena.
 #
-# El modelo saca UN stem (su primary_stem); el otro es la resta:
-# secundario = mezcla - primario * compensate.
+# El modelo saca UN stem (su primary_stem), que es su salida 0; el otro se
+# declara RESIDUAL en el catalogo y sale de mezcla - primario * compensate.
 #
 # Todo lo que no es DSP (hilo, cancelacion, cache de sesiones, I/O estereo a
 # 44100) vive en OnnxStemSeparator, compartido con el motor VR.
@@ -87,17 +88,16 @@ def model_output_to_audio(output: np.ndarray, spec: MdxModelSpec) -> np.ndarray:
 
 def stems_from_primary(
     mix: np.ndarray, primary: np.ndarray, spec: MdxModelSpec
-) -> tuple[np.ndarray, np.ndarray]:
-    """Audio de los DOS stems en el orden del spec (primero = downloadUrl).
+) -> tuple[np.ndarray, ...]:
+    """Audio de los stems en el orden del spec (primero = downloadUrl).
 
-    Cada SeparationStem declara su fuente: "primary" es lo que el modelo infiere
-    y "secondary" la resta compensada. Asi voc_ft (saca la voz, se quiere la
-    instrumental) y reverb_hq (saca el reverb, se quiere la pista limpia)
-    invierten sin ningun caso especial aca.
+    MDX-Net infiere UNA sola cosa, asi que su unica salida es la 0 y el otro
+    stem se declara RESIDUAL. `compensate` entra como escala del residuo porque
+    el stem inferido sale sistematicamente atenuado. Asi voc_ft (saca la voz,
+    se quiere la instrumental) y reverb_hq (saca el reverb, se quiere la pista
+    limpia) invierten sin ningun caso especial aca.
     """
-    residual = mix - primary * spec.compensate
-    by_source = {"primary": primary, "secondary": residual}
-    return by_source[spec.stems[0].source], by_source[spec.stems[1].source]
+    return stems_in_catalog_order(mix, (primary,), spec, spec.compensate)
 
 
 class MdxSeparator(OnnxStemSeparator):
@@ -113,7 +113,7 @@ class MdxSeparator(OnnxStemSeparator):
         spec: MdxModelSpec,
         cancel_event: threading.Event,
         on_chunk: ProgressCallback | None,
-    ) -> tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, ...]:
         primary = self._run_chunks(mix, session, spec, cancel_event, on_chunk)
         return stems_from_primary(mix, primary, spec)
 

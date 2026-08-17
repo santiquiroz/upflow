@@ -13,6 +13,9 @@ function respuestas(overrides: Partial<Record<string, unknown>> = {}) {
     video: { jobs: [] },
     audio: { jobs: [] },
     generation: { jobs: [] },
+    transcribe: { jobs: [] },
+    download: { jobs: [] },
+    shape3d: { jobs: [] },
     ...overrides,
   };
 }
@@ -23,6 +26,9 @@ function fetchers(data: Record<string, unknown>) {
     fetchVideoJobs: vi.fn().mockResolvedValue(data.video),
     fetchAudioJobs: vi.fn().mockResolvedValue(data.audio),
     fetchGenerationJobs: vi.fn().mockResolvedValue(data.generation),
+    fetchTranscribeJobs: vi.fn().mockResolvedValue(data.transcribe),
+    fetchDownloadJobs: vi.fn().mockResolvedValue(data.download),
+    fetchShape3dJobs: vi.fn().mockResolvedValue(data.shape3d),
   };
 }
 
@@ -81,12 +87,124 @@ describe("rehydrateJobQueue", () => {
           video: { jobs: [{ jobId: "v1", status: "running", originalFilename: "b.mkv" }] },
           audio: { jobs: [{ id: "a1", status: "running", originalFilename: "c.flac" }] },
           generation: { jobs: [{ id: "g1", status: "running", prompt: "un zorro" }] },
+          transcribe: { jobs: [{ id: "t1", status: "running", originalFilename: "d.wav" }] },
+          download: { jobs: [{ id: "d1", status: "running", mediaTitle: "Un clip" }] },
+          shape3d: { jobs: [{ id: "s1", status: "running", prompt: "una traba" }] },
         }),
       ),
     );
 
     const kinds = store.getSnapshot().map((j) => j.kind).sort();
-    expect(kinds).toEqual(["audio", "generation", "image", "video"]);
+    expect(kinds).toEqual([
+      "audio",
+      "download",
+      "generation",
+      "image",
+      "shape3d",
+      "transcribe",
+      "video",
+    ]);
+  });
+
+  it("brings back a transcription that survived the reload", async () => {
+    const store = createJobQueueStore();
+    await rehydrateJobQueue(
+      store,
+      fetchers(
+        respuestas({
+          transcribe: {
+            jobs: [
+              { id: "t1", status: "running", originalFilename: "charla.wav" },
+              { id: "t2", status: "completed", originalFilename: "vieja.wav" },
+            ],
+          },
+        }),
+      ),
+    );
+
+    expect(store.getSnapshot().map((j) => j.id)).toEqual(["t1"]);
+    expect(store.getSnapshot()[0].fileName).toBe("charla.wav");
+    expect(store.getSnapshot()[0].kind).toBe("transcribe");
+  });
+
+  it("names a download by its title, and falls back to the URL", async () => {
+    // Una descarga no sube ningun archivo: su nombre es lo que el probe encontro,
+    // y si no encontro nada, la URL que el usuario pego.
+    const store = createJobQueueStore();
+    await rehydrateJobQueue(
+      store,
+      fetchers(
+        respuestas({
+          download: {
+            jobs: [
+              { id: "d1", status: "running", mediaTitle: "Un clip", url: "https://x/1" },
+              { id: "d2", status: "queued", mediaTitle: null, url: "https://x/2" },
+            ],
+          },
+        }),
+      ),
+    );
+
+    expect(store.getSnapshot().map((j) => j.fileName)).toEqual(["Un clip", "https://x/2"]);
+    expect(store.getSnapshot().map((j) => j.kind)).toEqual(["download", "download"]);
+  });
+
+  it("keeps a 3D job identifiable even in photo mode, which has no prompt", async () => {
+    const store = createJobQueueStore();
+    await rehydrateJobQueue(
+      store,
+      fetchers(
+        respuestas({
+          shape3d: {
+            jobs: [
+              { id: "s1", status: "running", prompt: "una traba" },
+              { id: "s2", status: "queued", prompt: "" },
+            ],
+          },
+        }),
+      ),
+    );
+
+    expect(store.getSnapshot().map((j) => j.fileName)).toEqual(["una traba", "s2"]);
+    expect(store.getSnapshot().map((j) => j.kind)).toEqual(["shape3d", "shape3d"]);
+  });
+
+  it("leaves out finished jobs of the three families that had no listing", async () => {
+    const store = createJobQueueStore();
+    await rehydrateJobQueue(
+      store,
+      fetchers(
+        respuestas({
+          transcribe: { jobs: [{ id: "t1", status: "completed", originalFilename: "a.wav" }] },
+          download: { jobs: [{ id: "d1", status: "failed", mediaTitle: "Un clip" }] },
+          shape3d: { jobs: [{ id: "s1", status: "cancelled", prompt: "una traba" }] },
+        }),
+      ),
+    );
+
+    expect(store.getSnapshot()).toEqual([]);
+  });
+
+  it("does not duplicate a job that its own page is already tracking", async () => {
+    // Las tres familias nuevas reusan la query key de su pagina: si la pagina ya
+    // lo seguia, la rehidratacion no puede agregar una segunda entrada.
+    const store = createJobQueueStore();
+    store.addTrackedJob({ id: "t1", kind: "transcribe", fileName: "charla.wav", createdAt: 1 });
+    store.addTrackedJob({ id: "d1", kind: "download", fileName: "Un clip", createdAt: 2 });
+    store.addTrackedJob({ id: "s1", kind: "shape3d", fileName: "una traba", createdAt: 3 });
+
+    await rehydrateJobQueue(
+      store,
+      fetchers(
+        respuestas({
+          transcribe: { jobs: [{ id: "t1", status: "running", originalFilename: "charla.wav" }] },
+          download: { jobs: [{ id: "d1", status: "running", mediaTitle: "Un clip" }] },
+          shape3d: { jobs: [{ id: "s1", status: "running", prompt: "una traba" }] },
+        }),
+      ),
+    );
+
+    expect(store.getSnapshot().map((j) => j.id)).toEqual(["s1", "d1", "t1"]);
   });
 
   it("uses the prompt as the name of a generation job, which has no file", async () => {
@@ -142,6 +260,9 @@ describe("rehydrateJobQueue", () => {
     calls.fetchVideoJobs = vi.fn().mockRejectedValue(new Error("sin red"));
     calls.fetchAudioJobs = vi.fn().mockRejectedValue(new Error("sin red"));
     calls.fetchGenerationJobs = vi.fn().mockRejectedValue(new Error("sin red"));
+    calls.fetchTranscribeJobs = vi.fn().mockRejectedValue(new Error("sin red"));
+    calls.fetchDownloadJobs = vi.fn().mockRejectedValue(new Error("sin red"));
+    calls.fetchShape3dJobs = vi.fn().mockRejectedValue(new Error("sin red"));
 
     await expect(rehydrateJobQueue(store, calls)).resolves.toBeUndefined();
     expect(store.getSnapshot()).toEqual([]);

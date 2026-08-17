@@ -149,13 +149,45 @@ async def test_upscale_image_missing_file_is_actionable(
     assert "no-existe.png" in result
 
 
-async def test_list_jobs_rejects_families_without_listing(
+def listing_mock(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Un listado de un job por familia, anotando que rutas se pidieron."""
+    visitadas: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        visitadas.append(request.url.path)
+        return httpx.Response(200, json={"jobs": [{"id": "x1", "jobId": "x1", "status": "running"}]})
+
+    install_mock(monkeypatch, handler)
+    return visitadas
+
+
+async def test_list_jobs_lists_the_families_that_had_no_listing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    install_mock(monkeypatch, lambda request: httpx.Response(200, json={"jobs": []}))
-    result = await upflow_list_jobs("transcribe")
-    assert result.startswith("Error")
-    assert "upflow_job_status" in result
+    """Antes devolvian un error pidiendo guardar el jobId: un job de esas tres
+    familias quedaba inalcanzable si el agente lo perdia."""
+    visitadas = listing_mock(monkeypatch)
+
+    for name, path in (
+        ("transcribe", "/api/v1/transcribe/jobs"),
+        ("download", "/api/v1/download/jobs"),
+        ("shape3d", "/api/v1/print/generate"),
+    ):
+        result = json.loads(await upflow_list_jobs(name))
+        assert result[name][0]["jobId"] == "x1"
+        assert visitadas[-1] == path
+
+
+async def test_list_jobs_without_family_covers_the_seven(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    listing_mock(monkeypatch)
+
+    result = json.loads(await upflow_list_jobs())
+
+    assert set(result) == {
+        "image", "video", "audio", "generation", "transcribe", "download", "shape3d",
+    }
 
 
 async def test_download_result_transcribe_passes_format_params(

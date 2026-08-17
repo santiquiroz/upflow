@@ -16,12 +16,13 @@ from app.services.engines.roformer_separator import (
     RoformerSeparator,
     driver_spec,
     graph_chunks,
-    stems_from_vocals,
+    stems_from_graph,
 )
 from app.services.engines.separation_models import (
     DEFAULT_SEPARATION_MODEL,
     SEPARATION_MODELS,
 )
+from app.services.engines.separation_spec import RESIDUAL, SeparationStem
 from app.services.gpu_session_coordinator import GpuSessionCoordinator
 from tests.test_audio_karaoke import (
     FakeSeparator,
@@ -123,18 +124,28 @@ def read_stereo_wav(path: Path) -> np.ndarray:
     return sf.read(str(path), dtype="float32", always_2d=True)[0].T
 
 
+def _separate_all(
+    separator: RoformerSeparator,
+    tmp_path: Path,
+    samples: int,
+    spec,
+    model_id: str,
+    **kwargs,
+) -> tuple[np.ndarray, list[np.ndarray]]:
+    """La mezcla y UN array por stem del catalogo, en ese orden."""
+    mix = write_stereo_wav(tmp_path / "mix.wav", samples)
+    outputs = [tmp_path / "out" / f"{stem.id}.wav" for stem in spec.stems]
+    asyncio.run(
+        separator.run(tmp_path / "mix.wav", outputs, "cpu", model_id=model_id, **kwargs)
+    )
+    return mix, [read_stereo_wav(path) for path in outputs]
+
+
 def _separate(
     separator: RoformerSeparator, tmp_path: Path, samples: int, **kwargs
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    mix = write_stereo_wav(tmp_path / "mix.wav", samples)
-    main_path = tmp_path / "out" / "main.wav"
-    other_path = tmp_path / "out" / "other.wav"
-    asyncio.run(
-        separator.run(
-            tmp_path / "mix.wav", main_path, other_path, "cpu", model_id=MODEL_ID, **kwargs
-        )
-    )
-    return mix, read_stereo_wav(main_path), read_stereo_wav(other_path)
+    mix, stems = _separate_all(separator, tmp_path, samples, SPEC, MODEL_ID, **kwargs)
+    return mix, stems[0], stems[1]
 
 
 # ---------------------------------------------------------------------------
@@ -160,9 +171,11 @@ def test_the_user_gets_the_instrumental_first_and_the_vocals_second() -> None:
     # El modelo infiere la VOZ, pero en karaoke lo que el usuario se lleva
     # primero es la instrumental — mismo par que voc_ft, mismo motivo.
     assert SPEC.stem_ids() == ("instrumental", "vocals")
-    assert SPEC.main_stem.source == "secondary"
-    assert SPEC.other_stem.source == "primary"
-    assert {stem.source for stem in SPEC.stems} == {"primary", "secondary"}
+    # El grafo emite UNA salida (la voz, indice 0) y la instrumental se declara
+    # RESIDUAL: es el complemento, no una segunda salida del modelo.
+    assert SPEC.main_stem.source == RESIDUAL
+    assert SPEC.stems[1].source == 0
+    assert {stem.source for stem in SPEC.stems} == {0, RESIDUAL}
     assert all(stem.label_key for stem in SPEC.stems)
 
 
@@ -215,7 +228,7 @@ def test_the_residual_is_a_plain_subtraction_with_no_compensate_factor() -> None
     mix = rng.standard_normal((2, 512))
     vocals = rng.standard_normal((2, 512))
 
-    instrumental, returned_vocals = stems_from_vocals(mix, vocals, SPEC)
+    instrumental, returned_vocals = stems_from_graph(mix, (vocals,), SPEC)
 
     assert np.array_equal(returned_vocals, vocals)
     # Exacto: mezcla - voz. Cualquier factor rompe la igualdad bit a bit.
@@ -261,6 +274,152 @@ def test_an_empty_mask_puts_the_whole_mix_in_the_instrumental_stem(tmp_path: Pat
     assert np.max(np.abs(vocals)) == 0.0
     interior = slice(SR, -SR)
     assert np.max(np.abs(instrumental[:, interior] - mix[:, interior])) < 5e-3
+
+
+# ---------------------------------------------------------------------------
+# Grafos multi-stem: el mismo motor, cuatro salidas y ningun residual
+#
+# El grafo de 4 stems del port (bs_roformer_musdb18_4stem, T=1101) NO esta en
+# el catalogo porque sus pesos no son redistribuibles — ver README. Lo que si
+# tiene que estar cubierto es el CONTRATO: que el motor cosa N acumuladores en
+# vez de quedarse con `separated[0]`, y que cada archivo salga de SU salida del
+# grafo y no de la misma. Un fake declarado aca es suficiente para eso y no
+# depende de que el .onnx exista.
+# ---------------------------------------------------------------------------
+
+FOUR_STEM_ID = "roformer_four_stem_fixture"
+FOUR_STEM_LABELS = ("drums", "bass", "other", "vocals")
+
+
+class FakeMultiStemSession(FakeMaskSession):
+    """Una mascara real DISTINTA por stem: la salida n vale `reals[n]`.
+
+    Con eso cada stem sale siendo su propio multiplo escalar de la mezcla, asi
+    que un archivo servido desde la salida equivocada se ve como un factor
+    equivocado en vez de pasar desapercibido.
+    """
+
+    def __init__(self, reals: tuple[float, ...]) -> None:
+        super().__init__(stems=len(reals))
+        self.reals = reals
+
+    def run(self, output_names, feeds):
+        self.calls += 1
+        spec_input = feeds["spec"]
+        self.shapes.append(tuple(spec_input.shape))
+        mask = np.empty((1, self.stems, *spec_input.shape[1:]), dtype=np.float32)
+        for index, real in enumerate(self.reals):
+            mask[:, index, ..., 0] = real
+            mask[:, index, ..., 1] = 0.0
+        return [mask]
+
+
+def four_stem_spec():
+    """Los numeros reales del grafo de 4 stems del port, con sus 4 salidas."""
+    from app.services.engines.roformer_models import RoformerModelSpec
+
+    return RoformerModelSpec(
+        id=FOUR_STEM_ID,
+        name="BS-RoFormer 4 stems (fixture)",
+        filename=f"{FOUR_STEM_ID}.onnx",
+        url=f"https://example.invalid/{FOUR_STEM_ID}.onnx",
+        sha256="0" * 64,
+        n_fft=2048,
+        hop_length=441,
+        chunk_size=485100,
+        num_overlap=2,
+        graph_stems=FOUR_STEM_LABELS,
+        graph_mb=1,
+        intermediate_mb=1,
+        primary_stem="Drums / Bass / Other / Vocals",
+        category="karaoke",
+        description_key="audio.karaoke.model.four_stem.description",
+        stems=tuple(
+            SeparationStem(label, f"audio.stem.{label}", index)
+            for index, label in enumerate(FOUR_STEM_LABELS)
+        ),
+    )
+
+
+@pytest.fixture()
+def four_stem_model(monkeypatch: pytest.MonkeyPatch):
+    spec = four_stem_spec()
+    monkeypatch.setitem(ROFORMER_MODELS, FOUR_STEM_ID, spec)
+    monkeypatch.setitem(SEPARATION_MODELS, FOUR_STEM_ID, spec)
+    return spec
+
+
+def test_a_four_stem_model_declares_no_residual(four_stem_model) -> None:
+    # Un modelo que infiere los cuatro stems no tiene "el resto": los cuatro
+    # son salidas reales, numeradas en el orden en que el grafo las apila.
+    assert four_stem_model.stem_ids() == FOUR_STEM_LABELS
+    assert [stem.source for stem in four_stem_model.stems] == [0, 1, 2, 3]
+    assert RESIDUAL not in {stem.source for stem in four_stem_model.stems}
+
+
+def test_a_four_stem_graph_writes_one_file_per_stem(
+    tmp_path: Path, four_stem_model
+) -> None:
+    settings = make_settings(tmp_path)
+    install_fake_model(settings, FOUR_STEM_ID)
+    separator, _ = make_separator(settings, FakeMultiStemSession((0.1, 0.2, 0.3, 0.4)))
+
+    mix, stems = _separate_all(
+        separator, tmp_path, SR * 6, four_stem_model, FOUR_STEM_ID
+    )
+
+    assert len(stems) == 4
+    assert all(stem.shape == mix.shape for stem in stems)
+    for label in FOUR_STEM_LABELS:
+        assert (tmp_path / "out" / f"{label}.wav").exists()
+
+
+def test_each_of_the_four_stems_comes_from_its_own_graph_output(
+    tmp_path: Path, four_stem_model
+) -> None:
+    # La regresion concreta que esto ataja: quedarse con `separated[0]` dejaba
+    # los cuatro archivos con el mismo audio.
+    reals = (0.1, 0.2, 0.3, 0.4)
+    settings = make_settings(tmp_path)
+    install_fake_model(settings, FOUR_STEM_ID)
+    separator, _ = make_separator(settings, FakeMultiStemSession(reals))
+
+    mix, stems = _separate_all(
+        separator, tmp_path, SR * 6, four_stem_model, FOUR_STEM_ID
+    )
+
+    interior = slice(SR, -SR)
+    for real, stem in zip(reals, stems):
+        assert np.max(np.abs(stem[:, interior] - real * mix[:, interior])) < 5e-3
+
+
+def test_four_masks_that_sum_to_identity_reconstruct_the_mix(
+    tmp_path: Path, four_stem_model
+) -> None:
+    settings = make_settings(tmp_path)
+    install_fake_model(settings, FOUR_STEM_ID)
+    separator, _ = make_separator(settings, FakeMultiStemSession((0.25,) * 4))
+
+    mix, stems = _separate_all(
+        separator, tmp_path, SR * 6, four_stem_model, FOUR_STEM_ID
+    )
+
+    interior = slice(SR, -SR)
+    total = sum(stem for stem in stems)
+    assert np.max(np.abs(total[:, interior] - mix[:, interior])) < 5e-3
+
+
+def test_a_graph_that_emits_the_wrong_number_of_stems_fails_loudly(
+    tmp_path: Path, four_stem_model
+) -> None:
+    # Un .onnx que no coincide con lo que declara el catalogo tiene que doler
+    # al primer bloque, no producir tres archivos silenciosos.
+    settings = make_settings(tmp_path)
+    install_fake_model(settings, FOUR_STEM_ID)
+    separator, _ = make_separator(settings, FakeMaskSession(1.0, 0.0, stems=2))
+
+    with pytest.raises(RuntimeError, match="El grafo emitio 2 stems"):
+        _separate_all(separator, tmp_path, SR * 6, four_stem_model, FOUR_STEM_ID)
 
 
 # ---------------------------------------------------------------------------
@@ -381,8 +540,7 @@ def test_cancelling_stops_between_chunks_without_leaving_the_thread_running(
         task = asyncio.create_task(
             separator.run(
                 tmp_path / "mix.wav",
-                tmp_path / "out" / "a.wav",
-                tmp_path / "out" / "b.wav",
+                (tmp_path / "out" / "a.wav", tmp_path / "out" / "b.wav"),
                 "cpu",
                 model_id=MODEL_ID,
             )
@@ -413,8 +571,7 @@ def test_mono_input_is_duplicated_to_stereo(tmp_path: Path) -> None:
     asyncio.run(
         separator.run(
             tmp_path / "mono.wav",
-            tmp_path / "out" / "a.wav",
-            tmp_path / "out" / "b.wav",
+            (tmp_path / "out" / "a.wav", tmp_path / "out" / "b.wav"),
             "cpu",
             model_id=MODEL_ID,
         )
@@ -527,8 +684,7 @@ def test_the_roformer_engine_refuses_a_model_of_another_architecture(
         asyncio.run(
             separator.run(
                 tmp_path / "mix.wav",
-                tmp_path / "a.wav",
-                tmp_path / "b.wav",
+                (tmp_path / "a.wav", tmp_path / "b.wav"),
                 "cpu",
                 model_id="inst_hq_3",
             )
@@ -546,8 +702,7 @@ def test_the_roformer_engine_reports_a_missing_model_as_a_missing_pack(
         asyncio.run(
             separator.run(
                 tmp_path / "mix.wav",
-                tmp_path / "a.wav",
-                tmp_path / "b.wav",
+                (tmp_path / "a.wav", tmp_path / "b.wav"),
                 "cpu",
                 model_id=MODEL_ID,
             )
@@ -567,10 +722,10 @@ async def test_pipeline_routes_the_roformer_model_to_the_roformer_engine(
     output_path = await pipeline.run(job)
 
     assert roformer.calls and not mdx.calls and not vr.calls
-    assert roformer.calls[0][4] == MODEL_ID
+    assert roformer.calls[0][3] == MODEL_ID
     assert output_path.name == f"{job.id}.instrumental.flac"
-    assert job.secondary_output_path is not None
-    assert job.secondary_output_path.name == f"{job.id}.vocals.flac"
+    assert job.stem_output_paths["vocals"].name == f"{job.id}.vocals.flac"
+    assert job.stem_output_paths["instrumental"] == output_path
 
 
 async def test_a_roformer_job_without_its_engine_fails_loudly(tmp_path: Path) -> None:

@@ -1,8 +1,11 @@
 """Modelo unificado de jobs sobre las 7 familias de la API.
 
 La API expone 7 familias job-based con rutas y formas ligeramente distintas
-(`jobId` vs `id`, con/sin list endpoint). Este módulo normaliza todo a un
-solo contrato para las tools MCP: status/wait/cancel/download genéricos.
+(`jobId` vs `id`). Este módulo normaliza todo a un solo contrato para las
+tools MCP: status/wait/cancel/download genéricos.
+
+Las 7 listan sus jobs en su `base_path` (GET), así que no hay familias
+"solo consultables por id".
 """
 
 from __future__ import annotations
@@ -20,22 +23,17 @@ class JobFamily:
     name: str
     base_path: str
     id_field: str
-    has_list: bool
     default_output_name: str
 
 
 FAMILIES: dict[str, JobFamily] = {
-    "image": JobFamily("image", "/api/v1/jobs", "jobId", True, "upscaled.png"),
-    "video": JobFamily("video", "/api/v1/video/jobs", "jobId", True, "upscaled.mp4"),
-    "audio": JobFamily("audio", "/api/v1/audio/jobs", "id", True, "audio.flac"),
-    "generation": JobFamily(
-        "generation", "/api/v1/generation/jobs", "id", True, "generated.png"
-    ),
-    "transcribe": JobFamily(
-        "transcribe", "/api/v1/transcribe/jobs", "id", False, "transcript.txt"
-    ),
-    "download": JobFamily("download", "/api/v1/download/jobs", "id", False, "media.bin"),
-    "shape3d": JobFamily("shape3d", "/api/v1/print/generate", "id", False, "pieza.stl"),
+    "image": JobFamily("image", "/api/v1/jobs", "jobId", "upscaled.png"),
+    "video": JobFamily("video", "/api/v1/video/jobs", "jobId", "upscaled.mp4"),
+    "audio": JobFamily("audio", "/api/v1/audio/jobs", "id", "audio.flac"),
+    "generation": JobFamily("generation", "/api/v1/generation/jobs", "id", "generated.png"),
+    "transcribe": JobFamily("transcribe", "/api/v1/transcribe/jobs", "id", "transcript.txt"),
+    "download": JobFamily("download", "/api/v1/download/jobs", "id", "media.bin"),
+    "shape3d": JobFamily("shape3d", "/api/v1/print/generate", "id", "pieza.stl"),
 }
 
 FAMILY_NAMES = sorted(FAMILIES)

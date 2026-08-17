@@ -144,7 +144,7 @@ def test_every_vr_model_is_a_cleanup_model_with_an_ordered_stem_pair() -> None:
         assert spec.category == "cleanup", spec.id
         # El par cubre las DOS salidas del driver, una cada una: si las dos
         # apuntaran al mismo source, un stem seria inalcanzable.
-        assert {stem.source for stem in spec.stems} == {"primary", "secondary"}, spec.id
+        assert {stem.source for stem in spec.stems} == {0, 1}, spec.id
         assert len({stem.id for stem in spec.stems}) == 2, spec.id
         assert all(stem.label_key for stem in spec.stems), spec.id
 
@@ -156,12 +156,12 @@ def test_main_stem_is_the_clean_one_even_cuando_la_mascara_esta_invertida() -> N
     # limpio es el complemento. Ese fue exactamente el error facil de cometer
     # al sumar De-Noise, por eso queda gateado.
     for spec in VR_MODELS.values():
-        expected = "secondary" if spec.is_non_accom_stem else "primary"
+        expected = 1 if spec.is_non_accom_stem else 0
         assert spec.main_stem.source == expected, spec.id
-        assert spec.other_stem.source != spec.main_stem.source, spec.id
+        assert spec.stems[1].source != spec.main_stem.source, spec.id
 
     assert VR_MODELS["denoise"].is_non_accom_stem is True
-    assert VR_MODELS["denoise"].main_stem.source == "secondary"
+    assert VR_MODELS["denoise"].main_stem.source == 1
     assert all(
         not spec.is_non_accom_stem for spec in VR_MODELS.values() if spec.id != "denoise"
     )
@@ -268,7 +268,13 @@ def _separate(
     main_path = tmp_path / "out" / "main.wav"
     other_path = tmp_path / "out" / "other.wav"
     asyncio.run(
-        separator.run(tmp_path / "mix.wav", main_path, other_path, "cpu", model_id=model_id, **kwargs)
+        separator.run(
+            tmp_path / "mix.wav",
+            (main_path, other_path),
+            "cpu",
+            model_id=model_id,
+            **kwargs,
+        )
     )
     return mix, read_stereo_wav(main_path), read_stereo_wav(other_path)
 
@@ -446,8 +452,7 @@ def test_cancelling_stops_between_windows_without_leaving_the_thread_running(
         task = asyncio.create_task(
             separator.run(
                 tmp_path / "mix.wav",
-                tmp_path / "out" / "a.wav",
-                tmp_path / "out" / "b.wav",
+                (tmp_path / "out" / "a.wav", tmp_path / "out" / "b.wav"),
                 "cpu",
                 model_id="deecho_normal",
             )
@@ -478,8 +483,7 @@ def test_mono_input_is_duplicated_to_stereo(tmp_path: Path) -> None:
     asyncio.run(
         separator.run(
             tmp_path / "mono.wav",
-            tmp_path / "out" / "a.wav",
-            tmp_path / "out" / "b.wav",
+            (tmp_path / "out" / "a.wav", tmp_path / "out" / "b.wav"),
             "cpu",
             model_id="deecho_normal",
         )
@@ -499,8 +503,7 @@ def test_the_vr_engine_refuses_an_mdx_model_id(tmp_path: Path) -> None:
         asyncio.run(
             separator.run(
                 tmp_path / "mix.wav",
-                tmp_path / "a.wav",
-                tmp_path / "b.wav",
+                (tmp_path / "a.wav", tmp_path / "b.wav"),
                 "cpu",
                 model_id="inst_hq_3",
             )
@@ -516,8 +519,7 @@ def test_the_vr_engine_reports_a_missing_model_as_a_missing_pack(tmp_path: Path)
         asyncio.run(
             separator.run(
                 tmp_path / "mix.wav",
-                tmp_path / "a.wav",
-                tmp_path / "b.wav",
+                (tmp_path / "a.wav", tmp_path / "b.wav"),
                 "cpu",
                 model_id="deecho_dereverb",
             )
@@ -552,10 +554,10 @@ async def test_pipeline_routes_a_vr_model_to_the_vr_engine(tmp_path: Path) -> No
     output_path = await pipeline.run(job)
 
     assert vr.calls and not mdx.calls
-    assert vr.calls[0][4] == "deecho_normal"
+    assert vr.calls[0][3] == "deecho_normal"
     assert output_path.name == f"{job.id}.no_echo.flac"
-    assert job.secondary_output_path is not None
-    assert job.secondary_output_path.name == f"{job.id}.echo.flac"
+    assert job.stem_output_paths["echo"].name == f"{job.id}.echo.flac"
+    assert job.stem_output_paths["no_echo"] == output_path
 
 
 async def test_pipeline_still_routes_an_mdx_model_to_the_mdx_engine(tmp_path: Path) -> None:
@@ -580,8 +582,8 @@ async def test_pipeline_names_dereverb_outputs_no_reverb_and_reverb(tmp_path: Pa
     output_path = await pipeline.run(job)
 
     assert output_path.name == f"{job.id}.no_reverb.flac"
-    assert job.secondary_output_path is not None
-    assert job.secondary_output_path.name == f"{job.id}.reverb.flac"
+    assert job.stem_output_paths["reverb"].name == f"{job.id}.reverb.flac"
+    assert job.stem_output_paths["no_reverb"] == output_path
 
 
 async def test_a_vr_job_without_a_vr_engine_fails_loudly(tmp_path: Path) -> None:
@@ -643,8 +645,9 @@ def _completed_vr_job(tmp_path: Path, model_id: str, main: str, other: str):
     job.status = JobStatus.completed
     job.output_path = tmp_path / f"{job.id}.{main}.flac"
     job.output_path.write_bytes(b"main")
-    job.secondary_output_path = tmp_path / f"{job.id}.{other}.flac"
-    job.secondary_output_path.write_bytes(b"other")
+    other_path = tmp_path / f"{job.id}.{other}.flac"
+    other_path.write_bytes(b"other")
+    job.stem_output_paths = {main: job.output_path, other: other_path}
     return job
 
 
@@ -675,7 +678,7 @@ async def test_download_serves_each_deecho_stem_by_id(tmp_path: Path) -> None:
     default = await download_audio_job(job.id, audio_jobs=manager)
 
     assert Path(clean.path) == job.output_path
-    assert Path(tail.path) == job.secondary_output_path
+    assert Path(tail.path) == job.stem_output_paths["reverb"]
     assert Path(default.path) == job.output_path
 
 

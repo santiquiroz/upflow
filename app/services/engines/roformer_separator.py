@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Sequence
 from typing import Any, Callable
 
 import numpy as np
@@ -18,6 +19,7 @@ from app.services.engines.separator_base import (
     OnnxStemSeparator,
     ProgressCallback,
     SeparationCancelled,
+    stems_in_catalog_order,
 )
 
 # ---------------------------------------------------------------------------
@@ -63,17 +65,17 @@ def graph_chunks(samples: int, spec: RoformerModelSpec) -> int:
     return plan_chunks(samples, spec.chunk_size, spec.num_overlap).num_chunks
 
 
-def stems_from_vocals(
-    mix: np.ndarray, vocals: np.ndarray, spec: RoformerModelSpec
-) -> tuple[np.ndarray, np.ndarray]:
-    """Los DOS stems en el orden del catalogo (primero = downloadUrl).
+def stems_from_graph(
+    mix: np.ndarray, graph_outputs: Sequence[np.ndarray], spec: RoformerModelSpec
+) -> tuple[np.ndarray, ...]:
+    """Los stems en el orden del catalogo (primero = downloadUrl).
 
-    El residual es `mezcla - vocals` y NADA MAS: sin el factor `compensate` de
-    MDX-Net. El modelo infiere un solo stem y su complemento es exacto.
+    Cuando el grafo emite un solo stem, el otro se declara RESIDUAL y sale de
+    `mezcla - stem` y NADA MAS: sin el factor `compensate` de MDX-Net, porque
+    el complemento de estos grafos es exacto. Cuando emite los cuatro, no hay
+    residuo que calcular y el catalogo no declara ninguno.
     """
-    residual = mix - vocals
-    by_source = {"primary": vocals, "secondary": residual}
-    return by_source[spec.stems[0].source], by_source[spec.stems[1].source]
+    return stems_in_catalog_order(mix, graph_outputs, spec)
 
 
 def free_memory_mb(device: str) -> int | None:
@@ -108,21 +110,27 @@ class RoformerSeparator(OnnxStemSeparator):
         spec: RoformerModelSpec,
         cancel_event: threading.Event,
         on_chunk: ProgressCallback | None,
-    ) -> tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, ...]:
         total = mix.shape[1]
         block, margin, fade = self._block_geometry(spec, total)
         ranges = block_ranges(total, block, margin, fade)
         chunks_total = sum(graph_chunks(hi - lo, spec) for lo, hi, _, _ in ranges)
-        run_graph = self._make_run_graph(session, cancel_event, on_chunk, chunks_total)
+        run_graph = self._make_run_graph(
+            session, cancel_event, on_chunk, chunks_total, len(spec.graph_stems)
+        )
         driver = RoformerDriver(run_graph, driver_spec(spec))
 
-        vocals = np.zeros((2, total), dtype=np.float32)
+        # Un acumulador por salida del grafo: el driver devuelve
+        # [num_stems, C, N] y los N se cosen por bloques exactamente igual.
+        outputs = tuple(
+            np.zeros((2, total), dtype=np.float32) for _ in spec.graph_stems
+        )
         for block_range in ranges:
             lo, hi = block_range[0], block_range[1]
             separated = driver.separate(mix[:, lo:hi])
-            block_vocals = separated[0].astype(np.float32)
-            overlap_add_blocks((vocals,), (block_vocals,), block_range, total, fade)
-        return stems_from_vocals(mix, vocals, spec)
+            block_stems = tuple(stem.astype(np.float32) for stem in separated)
+            overlap_add_blocks(outputs, block_stems, block_range, total, fade)
+        return stems_from_graph(mix, outputs, spec)
 
     def _block_geometry(
         self, spec: RoformerModelSpec, total: int
@@ -158,6 +166,7 @@ class RoformerSeparator(OnnxStemSeparator):
         cancel_event: threading.Event,
         on_chunk: ProgressCallback | None,
         chunks_total: int,
+        graph_stems: int,
     ) -> Callable[[np.ndarray], np.ndarray]:
         """El seam donde entran cancelacion y progreso: el driver llama a esto
         una vez por chunk de 8 s (~1,85 s de GPU en una RX 7800 XT). Con el
@@ -180,10 +189,19 @@ class RoformerSeparator(OnnxStemSeparator):
                 raise wrap_onnx_error(
                     "Mel-Band RoFormer separation inference failed", exc
                 ) from exc
+            mask = np.asarray(output)
+            # Un .onnx que no coincide con lo que declara el catalogo se cachaa
+            # en la PRIMERA llamada: dejarlo pasar lo convierte en un error de
+            # broadcast dentro del driver a mitad del archivo.
+            if mask.shape[1] != graph_stems:
+                raise RuntimeError(
+                    f"El grafo emitio {mask.shape[1]} stems y el catalogo declara "
+                    f"{graph_stems}: el .onnx instalado no es el del catalogo."
+                )
             done += 1
             if on_chunk is not None:
                 on_chunk(min(done, chunks_total), chunks_total)
-            return np.asarray(output)
+            return mask
 
         return run_graph
 

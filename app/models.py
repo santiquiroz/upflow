@@ -141,10 +141,11 @@ class AudioJob:
     # redundancias) para que pipeline, etapas y respuesta vean lo mismo.
     # Produce UN archivo: los stems removidos de cada pasada no se guardan.
     cleanup_steps: list[str] = field(default_factory=list)
-    # Modo separacion (karaoke): divide la mezcla en dos stems y devuelve los
-    # dos. Exclusivo — el manager rechaza combinarlo con los demas pasos porque
-    # se aplicarian a un stem ambiguo, y con cleanup_steps porque una cadena
-    # produce un archivo y la separacion dos.
+    # Modo separacion (karaoke): parte la mezcla en los stems que declare el
+    # modelo elegido — dos en karaoke y limpieza, cuatro en los multi-stem — y
+    # los devuelve TODOS. Exclusivo: el manager rechaza combinarlo con los
+    # demas pasos porque se aplicarian a un stem ambiguo, y con cleanup_steps
+    # porque una cadena produce un archivo y la separacion varios.
     separate: bool = False
     # Id del catalogo de separacion (separation_models.SEPARATION_MODELS).
     # El manager lo resuelve al default cuando separate=True y no viene.
@@ -165,10 +166,15 @@ class AudioJob:
     finished_at: datetime | None = None
     error: str | None = None
     output_path: Path | None = None
-    # Solo con separate: output_path es el stem principal del modelo (el que
-    # el usuario quiere — instrumental en karaoke, dry en reverb_hq) y esto el
-    # restante (vocals / wet).
-    secondary_output_path: Path | None = None
+    # Solo con separate: TODOS los stems por id, en el orden del catalogo. El
+    # primero es tambien output_path (el que sirve downloadUrl sin ?stem=), asi
+    # que esta duplicado a proposito — este dict es la fuente de verdad de
+    # ?stem=<id> y no hay ningun stem que viva solo en output_path.
+    #
+    # Es un dict y no un segundo Path porque los modelos multi-stem entregan
+    # cuatro: con un unico `secondary_output_path` los tres ultimos se servian
+    # todos desde el mismo archivo.
+    stem_output_paths: dict[str, Path] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
     owner_id: str | None = None
 

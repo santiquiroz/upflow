@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from typing import ClassVar
 
 from app.services.engines.separation_spec import (
+    RESIDUAL,
     STEM_INSTRUMENTAL,
     STEM_VOCALS,
     Architecture,
@@ -78,8 +79,8 @@ MDX_MODELS: dict[str, MdxModelSpec] = {
         category="karaoke",
         description_key="audio.karaoke.model.inst_hq_3.description",
         stems=(
-            SeparationStem("instrumental", STEM_INSTRUMENTAL, "primary"),
-            SeparationStem("vocals", STEM_VOCALS, "secondary"),
+            SeparationStem("instrumental", STEM_INSTRUMENTAL, 0),
+            SeparationStem("vocals", STEM_VOCALS, RESIDUAL),
         ),
     ),
     "voc_ft": MdxModelSpec(
@@ -97,8 +98,8 @@ MDX_MODELS: dict[str, MdxModelSpec] = {
         category="karaoke",
         description_key="audio.karaoke.model.voc_ft.description",
         stems=(
-            SeparationStem("instrumental", STEM_INSTRUMENTAL, "secondary"),
-            SeparationStem("vocals", STEM_VOCALS, "primary"),
+            SeparationStem("instrumental", STEM_INSTRUMENTAL, RESIDUAL),
+            SeparationStem("vocals", STEM_VOCALS, 0),
         ),
     ),
     # Limpieza post-karaoke: el modelo saca la COLA DE REVERB (wet); la pista
@@ -118,8 +119,8 @@ MDX_MODELS: dict[str, MdxModelSpec] = {
         category="cleanup",
         description_key="audio.karaoke.model.reverb_hq.description",
         stems=(
-            SeparationStem("dry", "audio.stem.dry", "secondary"),
-            SeparationStem("wet", "audio.stem.wet", "primary"),
+            SeparationStem("dry", "audio.stem.dry", RESIDUAL),
+            SeparationStem("wet", "audio.stem.wet", 0),
         ),
     ),
 }

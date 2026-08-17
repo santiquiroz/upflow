@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import threading
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Callable, ClassVar
 
@@ -14,18 +15,22 @@ from app.services.engines.separation_models import (
     DEFAULT_SEPARATION_MODEL,
     model_file,
 )
-from app.services.engines.separation_spec import SeparationModelSpec
+from app.services.engines.separation_spec import RESIDUAL, SeparationModelSpec
 from app.services.missing_pack import missing_pack_message
 
 # ---------------------------------------------------------------------------
 # Lo que comparten TODOS los motores de separacion, sea cual sea la
 # arquitectura del modelo: el ciclo de vida del hilo con cancelacion
 # cooperativa, la cache de sesiones ONNX por device+modelo, el I/O estereo a
-# 44100 y el contrato publico `run(input, main, other, device, model_id,
-# on_chunk)` — que es lo unico que ve el pipeline.
+# 44100 y el contrato publico `run(input, outputs, device, model_id, on_chunk)`
+# — que es lo unico que ve el pipeline.
 #
-# Lo que NO comparten (el DSP entre la mezcla y los dos stems) queda en
-# `_separate_stems`, el unico metodo que cada motor implementa.
+# `outputs` es una SECUENCIA alineada con `spec.stems`, no un par: hay modelos
+# de dos stems (karaoke, limpieza) y de cuatro (bateria/bajo/resto/voz), y el
+# ciclo de vida es el mismo para ambos.
+#
+# Lo que NO comparten (el DSP entre la mezcla y las salidas del modelo) queda
+# en `_separate_stems`, el unico metodo que cada motor implementa.
 # ---------------------------------------------------------------------------
 
 SEPARATION_SAMPLE_RATE = 44100
@@ -37,19 +42,48 @@ class SeparationCancelled(RuntimeError):
     pass
 
 
-def normalize_stem_peaks(
-    main: np.ndarray, other: np.ndarray
-) -> tuple[np.ndarray, np.ndarray]:
-    """Factor UNICO para ambos stems, solo si algun pico supera 1.0.
+def normalize_stem_peaks(stems: Sequence[np.ndarray]) -> tuple[np.ndarray, ...]:
+    """Factor UNICO para todos los stems, solo si algun pico supera 1.0.
 
     La resta compensada supera +-1.0 donde el modelo queda fuera de fase con la
     mezcla; un factor compartido preserva el balance relativo y evita que el
-    encode entero final (flac/mp3) recorte esos picos.
+    encode entero final (flac/mp3) recorte esos picos. Compartido entre TODOS
+    los stems y no por stem: normalizar cada uno por su cuenta cambiaria la
+    mezcla relativa entre ellos.
     """
-    peak = max(float(np.max(np.abs(main))), float(np.max(np.abs(other))))
+    peak = max(float(np.max(np.abs(stem))) for stem in stems)
     if peak <= 1.0:
-        return main, other
-    return main / peak, other / peak
+        return tuple(stems)
+    return tuple(stem / peak for stem in stems)
+
+
+def stems_in_catalog_order(
+    mix: np.ndarray,
+    model_outputs: Sequence[np.ndarray],
+    spec: SeparationModelSpec,
+    residual_scale: float = 1.0,
+) -> tuple[np.ndarray, ...]:
+    """Las salidas del modelo, reordenadas y completadas como pide el catalogo.
+
+    Cada `SeparationStem` dice de donde sale su audio: un indice de
+    `model_outputs`, o RESIDUAL (lo que queda de la mezcla al restarle todo lo
+    que el modelo si infiere, escalado por `residual_scale` — el `compensate`
+    de MDX-Net, 1.0 en todo lo demas).
+
+    Con esto los tres motores comparten el mismo mapeo: da igual que el modelo
+    emita una salida y su complemento se calcule, que emita dos mascaras
+    complementarias, o que emita cuatro stems y no haya residuo.
+    """
+    residual: np.ndarray | None = None
+    resolved = []
+    for stem in spec.stems:
+        if stem.source == RESIDUAL:
+            if residual is None:
+                residual = mix - residual_scale * sum(model_outputs)
+            resolved.append(residual)
+            continue
+        resolved.append(model_outputs[stem.source])
+    return tuple(resolved)
 
 
 class OnnxStemSeparator(OnnxAudioRestorer):
@@ -77,21 +111,20 @@ class OnnxStemSeparator(OnnxAudioRestorer):
     async def run(
         self,
         input_wav: Path,
-        main_wav: Path,
-        other_wav: Path,
+        outputs: Sequence[Path],
         device: str,
         model_id: str | None = None,
         on_chunk: ProgressCallback | None = None,
     ) -> None:
-        # main_wav recibe el stem que el usuario quiere (spec.main_stem) y
-        # other_wav el restante, en el orden que declara el catalogo.
+        # `outputs` va alineado 1 a 1 con spec.stems: el primero recibe el stem
+        # que el usuario quiere (spec.main_stem) y el resto los demas, en el
+        # orden que declara el catalogo.
         cancel_event = threading.Event()
         worker = asyncio.ensure_future(
             asyncio.to_thread(
                 self._separate_and_save,
                 input_wav,
-                main_wav,
-                other_wav,
+                tuple(outputs),
                 device,
                 model_id or self.default_model_id,
                 cancel_event,
@@ -111,26 +144,29 @@ class OnnxStemSeparator(OnnxAudioRestorer):
                 with contextlib.suppress(BaseException):
                     await asyncio.shield(worker)
             raise
-        self._ensure_output_file(main_wav)
-        self._ensure_output_file(other_wav)
+        for output in outputs:
+            self._ensure_output_file(output)
 
     def _separate_and_save(
         self,
         input_wav: Path,
-        main_wav: Path,
-        other_wav: Path,
+        outputs: tuple[Path, ...],
         device: str,
         model_id: str,
         cancel_event: threading.Event,
         on_chunk: ProgressCallback | None = None,
     ) -> None:
         spec = self._require_model(model_id)
+        if len(outputs) != len(spec.stems):
+            raise RuntimeError(
+                f"{spec.id} declara {len(spec.stems)} stems "
+                f"{spec.stem_ids()} y se pidieron {len(outputs)} archivos de salida"
+            )
         mix = self._load_stereo(input_wav)
         session = self._get_session(device, model_id)
         stems = self._separate_stems(mix, session, spec, cancel_event, on_chunk)
-        main, other = normalize_stem_peaks(*stems)
-        self._save_stereo(main_wav, main)
-        self._save_stereo(other_wav, other)
+        for output, audio in zip(outputs, normalize_stem_peaks(stems)):
+            self._save_stereo(output, audio)
 
     def _separate_stems(
         self,
@@ -139,8 +175,8 @@ class OnnxStemSeparator(OnnxAudioRestorer):
         spec: Any,
         cancel_event: threading.Event,
         on_chunk: ProgressCallback | None,
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Los DOS stems en el orden del catalogo (primero = downloadUrl)."""
+    ) -> tuple[np.ndarray, ...]:
+        """Un stem por entrada de `spec.stems`, en ese orden (primero = downloadUrl)."""
         raise NotImplementedError
 
     def _require_model(self, model_id: str) -> SeparationModelSpec:

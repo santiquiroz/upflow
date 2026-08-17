@@ -224,19 +224,13 @@ async def upflow_download_result(
 
 @mcp.tool(name="upflow_list_jobs", annotations={"title": "Listar jobs", **READ_ONLY})
 async def upflow_list_jobs(family: str = "") -> str:
-    """Lista jobs propios. family vacío = todas las familias listables
-    (image, video, audio, generation). transcribe/download/shape3d no tienen
-    endpoint de listado — guardá sus jobId al crearlos."""
+    """Lista jobs propios. family vacío = las 7 familias (image, video, audio,
+    generation, transcribe, download, shape3d)."""
     try:
         results: dict[str, Any] = {}
-        wanted = [family] if family else [f for f in FAMILY_NAMES if FAMILIES[f].has_list]
+        wanted = [family] if family else list(FAMILY_NAMES)
         for name in wanted:
             fam = family_or_raise(name)
-            if not fam.has_list:
-                return (
-                    f"Error: la familia '{name}' no tiene listado en la API. "
-                    "Consultá jobs puntuales con upflow_job_status."
-                )
             payload = await client.api_get(fam.base_path)
             raw_jobs = payload.get("jobs", []) if isinstance(payload, dict) else []
             results[name] = [normalize_job(fam, job) for job in raw_jobs]

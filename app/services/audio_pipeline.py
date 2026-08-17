@@ -255,8 +255,7 @@ class AudioPipeline:
             removed = work_dir / f"cleanup-{index}-{step.model_id}-removed.wav"
             await separator.run(
                 current,
-                clean,
-                removed,
+                (clean, removed),
                 device,
                 model_id=step.model_id,
                 on_chunk=lambda done, total, key=stage_key: apply_audio_chunk_progress(
@@ -285,12 +284,14 @@ class AudioPipeline:
         return resampled
 
     async def _run_separation(self, job: AudioJob, work_dir: Path, decoded: Path) -> Path:
-        """Modo separacion: DOS salidas nombradas por stem, mismo formato ambas.
+        """Modo separacion: UNA salida por stem del modelo, mismo formato todas.
 
-        job.output_path (lo devuelto) es el stem principal del modelo (el que
-        el usuario quiere: instrumental en karaoke, dry/no_echo en limpieza); el
-        restante queda en job.secondary_output_path. El manager ya garantizo
-        que el modo corre solo.
+        Son dos en karaoke y limpieza y cuatro en los multi-stem; el numero lo
+        pone el catalogo y aca no se asume ninguno. job.output_path (lo
+        devuelto) es el stem principal del modelo (el que el usuario quiere:
+        instrumental en karaoke, dry/no_echo en limpieza) y job.stem_output_paths
+        los tiene TODOS por id, ese incluido. El manager ya garantizo que el
+        modo corre solo.
         """
         from app.services.engines.separation_models import (
             DEFAULT_SEPARATION_MODEL,
@@ -307,12 +308,10 @@ class AudioPipeline:
                 f"Modelo de separacion desconocido: {model_id!r}. Validos: {known}."
             )
         separator = self._require_separator(spec.architecture, model_id)
-        main_wav = work_dir / f"{spec.main_stem.id}.wav"
-        other_wav = work_dir / f"{spec.other_stem.id}.wav"
+        stem_wavs = [work_dir / f"{stem.id}.wav" for stem in spec.stems]
         await separator.run(
             decoded,
-            main_wav,
-            other_wav,
+            stem_wavs,
             job.device or self.settings.default_device,
             model_id=spec.id,
             on_chunk=lambda done, total: apply_audio_chunk_progress(job, done, total),
@@ -322,15 +321,15 @@ class AudioPipeline:
         output_format = job.output_format
         outputs_dir = self.settings.outputs_path
         outputs_dir.mkdir(parents=True, exist_ok=True)
-        main_out = outputs_dir / f"{job.id}.{spec.main_stem.id}.{output_format}"
-        other_out = outputs_dir / f"{job.id}.{spec.other_stem.id}.{output_format}"
-        await self._write_output(main_wav, main_out, output_format, job.lossy_quality)
-        await self._write_output(other_wav, other_out, output_format, job.lossy_quality)
-        self._validate_output(main_out)
-        self._validate_output(other_out)
-        job.secondary_output_path = other_out
+        outputs: dict[str, Path] = {}
+        for stem, stem_wav in zip(spec.stems, stem_wavs):
+            encoded = outputs_dir / f"{job.id}.{stem.id}.{output_format}"
+            await self._write_output(stem_wav, encoded, output_format, job.lossy_quality)
+            self._validate_output(encoded)
+            outputs[stem.id] = encoded
+        job.stem_output_paths = outputs
         complete_audio_stages(job)
-        return main_out
+        return outputs[spec.main_stem.id]
 
     def _require_separator(self, architecture: str, model_id: str):
         # Mismo criterio que la cadena de voz: pedir la separacion y que se

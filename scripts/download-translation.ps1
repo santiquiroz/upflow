@@ -20,7 +20,21 @@ if ($Pair -notmatch '^[a-z]{2,3}-[a-z]{2,3}$') {
 }
 
 $destino = Join-Path $root "vendor\translation\opus-mt-$Pair"
-if (Test-Path (Join-Path $destino 'onnx')) {
+$requeridos = @{
+    'encoder ONNX'          = Join-Path $destino 'onnx\encoder_model.onnx'
+    'decoder ONNX'          = Join-Path $destino 'onnx\decoder_model.onnx'
+    'decoder con past ONNX' = Join-Path $destino 'onnx\decoder_with_past_model.onnx'
+}
+
+function Get-ModelosFaltantes {
+    return @($requeridos.Keys | Where-Object {
+        -not (Test-Path -LiteralPath $requeridos[$_] -PathType Leaf) -or
+        (Get-Item -LiteralPath $requeridos[$_]).Length -eq 0
+    } | Sort-Object)
+}
+
+$faltantes = @(Get-ModelosFaltantes)
+if ($faltantes.Count -eq 0) {
     Write-Host "ya esta: opus-mt-$Pair en $destino"
     exit 0
 }
@@ -39,8 +53,13 @@ snapshot_download(repo, local_dir=destino, allow_patterns=[
 print('listo:', destino)
 "@ "onnx-community/opus-mt-$Pair" $destino
 
-if (-not (Test-Path (Join-Path $destino 'onnx'))) {
-    throw "La descarga termino pero falta la carpeta onnx en $destino."
+if ($LASTEXITCODE -ne 0) {
+    throw "La descarga de opus-mt-$Pair fallo (codigo $LASTEXITCODE)."
+}
+
+$faltantes = @(Get-ModelosFaltantes)
+if ($faltantes.Count -gt 0) {
+    throw "La descarga de opus-mt-$Pair quedo incompleta; falta: $($faltantes -join ', ')."
 }
 $total = (Get-ChildItem -Path $destino -File -Recurse | Measure-Object -Property Length -Sum).Sum
 Write-Host ("Total: {0:N1} MB" -f ($total / 1MB))

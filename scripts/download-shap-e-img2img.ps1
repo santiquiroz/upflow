@@ -66,8 +66,12 @@ print(ruta)
 '@ | Set-Content -Path $scriptPy -Encoding UTF8
 
 & $venv $scriptPy
+$downloadExitCode = $LASTEXITCODE
 Remove-Item -Force $scriptPy -ErrorAction SilentlyContinue
 
+if ($downloadExitCode -ne 0) {
+    throw "La descarga de Shap-E img2img fallo (codigo $downloadExitCode)."
+}
 if (-not (Test-Path (Join-Path $destino 'model_index.json'))) {
     throw "La descarga termino pero falta model_index.json en $destino."
 }

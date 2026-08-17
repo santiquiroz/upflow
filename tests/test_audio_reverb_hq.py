@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from app.api.routes import audio_job_to_response, download_audio_job
 from app.models import JobStatus
 from app.services.engines.separation_models import SEPARATION_MODELS
+from app.services.engines.separation_spec import RESIDUAL
 from app.services.engines.mdx_separator import MdxSeparator
 from app.services.gpu_session_coordinator import GpuSessionCoordinator
 from tests.test_audio_karaoke import (
@@ -63,12 +64,20 @@ def test_reverb_hq_spec_matches_the_validated_spike() -> None:
     assert spec.category == "cleanup"
 
 
-def test_every_spec_declares_one_primary_and_one_secondary_stem() -> None:
+def test_every_spec_maps_each_stem_to_a_distinct_source() -> None:
+    # El numero de stems lo pone cada modelo (dos en karaoke y limpieza,
+    # cuatro en los multi-stem); lo que NO puede pasar en ninguno es que dos
+    # stems compartan origen, porque uno de los dos seria inalcanzable.
     for spec in SEPARATION_MODELS.values():
-        sources = sorted(stem.source for stem in spec.stems)
-        assert sources == ["primary", "secondary"], spec.id
-        assert len({stem.id for stem in spec.stems}) == 2, spec.id
+        sources = [stem.source for stem in spec.stems]
+        assert len(set(sources)) == len(sources), spec.id
+        assert len({stem.id for stem in spec.stems}) == len(spec.stems), spec.id
         assert all(stem.label_key for stem in spec.stems), spec.id
+        # Cada indice tiene que apuntar a una salida que exista. El ORDEN no
+        # se exige: el catalogo ordena por lo que el usuario quiere primero, y
+        # denoise invierte el par a proposito.
+        indices = [source for source in sources if source != RESIDUAL]
+        assert all(0 <= index < len(sources) for index in indices), spec.id
 
 
 def test_karaoke_models_put_the_instrumental_first() -> None:
@@ -81,8 +90,8 @@ def test_reverb_hq_puts_the_dry_stem_first_and_wet_is_the_model_output() -> None
     spec = SEPARATION_MODELS["reverb_hq"]
 
     assert spec.stem_ids() == ("dry", "wet")
-    assert spec.main_stem.source == "secondary"  # dry = mezcla - wet * 1.035
-    assert spec.other_stem.source == "primary"
+    assert spec.main_stem.source == RESIDUAL  # dry = mezcla - wet * 1.035
+    assert spec.stems[1].source == 0
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +118,9 @@ def test_reverb_identity_model_puts_wet_second_and_dry_is_the_residual(
     dry_path = tmp_path / "out" / "dry.wav"
     wet_path = tmp_path / "out" / "wet.wav"
     asyncio.run(
-        separator.run(tmp_path / "mix.wav", dry_path, wet_path, "cpu", model_id="reverb_hq")
+        separator.run(
+            tmp_path / "mix.wav", (dry_path, wet_path), "cpu", model_id="reverb_hq"
+        )
     )
 
     import soundfile as sf
@@ -138,8 +149,9 @@ async def test_pipeline_names_reverb_outputs_dry_and_wet(tmp_path: Path) -> None
     output_path = await pipeline.run(job)
 
     assert output_path.name == f"{job.id}.dry.flac"
-    assert job.secondary_output_path is not None
-    assert job.secondary_output_path.name == f"{job.id}.wet.flac"
+    assert set(job.stem_output_paths) == {"dry", "wet"}
+    assert job.stem_output_paths["wet"].name == f"{job.id}.wet.flac"
+    assert job.stem_output_paths["dry"] == output_path
 
 
 async def test_manager_accepts_reverb_hq_when_installed(tmp_path: Path) -> None:
@@ -167,8 +179,9 @@ def _completed_reverb_job(tmp_path: Path):
     job.status = JobStatus.completed
     job.output_path = tmp_path / f"{job.id}.dry.flac"
     job.output_path.write_bytes(b"dry")
-    job.secondary_output_path = tmp_path / f"{job.id}.wet.flac"
-    job.secondary_output_path.write_bytes(b"wet")
+    wet = tmp_path / f"{job.id}.wet.flac"
+    wet.write_bytes(b"wet")
+    job.stem_output_paths = {"dry": job.output_path, "wet": wet}
     return job
 
 
@@ -191,7 +204,10 @@ def test_karaoke_response_keeps_vocals_url_and_gains_stems(tmp_path: Path) -> No
     job = make_separate_job(tmp_path / "song.wav")  # inst_hq_3
     job.status = JobStatus.completed
     job.output_path = tmp_path / "instrumental.flac"
-    job.secondary_output_path = tmp_path / "vocals.flac"
+    job.stem_output_paths = {
+        "instrumental": job.output_path,
+        "vocals": tmp_path / "vocals.flac",
+    }
 
     serialized = audio_job_to_response(job).model_dump(by_alias=True)
 
@@ -241,7 +257,7 @@ async def test_download_serves_each_reverb_stem_by_id(tmp_path: Path) -> None:
     wet = await download_audio_job(job.id, stem="wet", audio_jobs=manager)
 
     assert Path(dry.path) == job.output_path
-    assert Path(wet.path) == job.secondary_output_path
+    assert Path(wet.path) == job.stem_output_paths["wet"]
 
 
 async def test_download_rejects_a_karaoke_stem_on_a_reverb_job(tmp_path: Path) -> None:
@@ -261,8 +277,9 @@ async def test_download_rejects_a_reverb_stem_on_a_karaoke_job(tmp_path: Path) -
     job.status = JobStatus.completed
     job.output_path = tmp_path / "instrumental.flac"
     job.output_path.write_bytes(b"instrumental")
-    job.secondary_output_path = tmp_path / "vocals.flac"
-    job.secondary_output_path.write_bytes(b"vocals")
+    vocals = tmp_path / "vocals.flac"
+    vocals.write_bytes(b"vocals")
+    job.stem_output_paths = {"instrumental": job.output_path, "vocals": vocals}
     manager.jobs[job.id] = job
 
     with pytest.raises(HTTPException) as excinfo:

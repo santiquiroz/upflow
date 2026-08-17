@@ -122,13 +122,14 @@ class AudioJobResponse(BaseModel):
     error: str | None = None
     owner_id: str | None = Field(default=None, serialization_alias="ownerId")
     download_url: str | None = Field(default=None, serialization_alias="downloadUrl")
-    # Solo en jobs de separacion completados: las DOS descargas con el label
-    # del catalogo, ORDENADAS (la primera es la que el usuario quiere y
-    # coincide con downloadUrl).
+    # Solo en jobs de separacion completados: UNA descarga por stem con el
+    # label del catalogo, ORDENADAS (la primera es la que el usuario quiere y
+    # coincide con downloadUrl). Son dos en karaoke y limpieza y cuatro en los
+    # multi-stem: el cliente recorre la lista, no la desestructura.
     stems: list[AudioStemDownloadResponse] | None = None
-    # Compat v0.59 (karaoke): downloadUrl baja la instrumental y esto la voz.
-    # Solo se llena cuando el modelo del job tiene un stem "vocals"; para
-    # reverb_hq usar `stems`.
+    # Compat v0.59 (karaoke 2 stems): downloadUrl baja la instrumental y esto
+    # la voz. Solo se llena cuando el modelo del job es exactamente ese par;
+    # para reverb_hq y para los multi-stem usar `stems`.
     vocals_download_url: str | None = Field(
         default=None, serialization_alias="vocalsDownloadUrl"
     )
@@ -283,6 +284,13 @@ class Shape3dJobResponse(BaseModel):
     code: str | None = None
     retries: int = 0
     download_url: str | None = Field(default=None, serialization_alias="downloadUrl")
+    # Quien lo pidio. Sin esto, el listado con ?all=true le muestra al admin
+    # trabajos ajenos sin decirle de quien son.
+    owner_id: str | None = Field(default=None, serialization_alias="ownerId")
+
+
+class Shape3dJobsListResponse(BaseModel):
+    jobs: list[Shape3dJobResponse] = Field(default_factory=list)
 
 
 class SizeEstimateRequest(BaseModel):
@@ -786,6 +794,10 @@ class DownloadJobResponse(BaseModel):
     output_directory: str = Field(default="", serialization_alias="outputDirectory")
     error: str | None = None
     owner_id: str | None = Field(default=None, serialization_alias="ownerId")
+
+
+class DownloadJobsListResponse(BaseModel):
+    jobs: list[DownloadJobResponse] = Field(default_factory=list)
 
 
 class MediaProbeResponse(BaseModel):

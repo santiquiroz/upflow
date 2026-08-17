@@ -15,15 +15,28 @@ $zipPath = Join-Path $tempDir 'ffmpeg-win64.zip'
 # aviso. Ej.: '-vsync' fue removido (2026-07), usar '-fps_mode' en su lugar.
 $downloadUrl = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip'
 
-New-Item -ItemType Directory -Force -Path $vendorDir | Out-Null
+if (Test-Path $vendorDir) {
+    Remove-Item -Recurse -Force $vendorDir
+}
+New-Item -ItemType Directory -Path $vendorDir | Out-Null
 New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
 
 Invoke-WebRequest -Uri $downloadUrl -OutFile $zipPath
 Expand-Archive -Path $zipPath -DestinationPath $vendorDir -Force
 
-$ffmpegRoot = Get-ChildItem $vendorDir -Directory | Select-Object -First 1
-if (-not $ffmpegRoot) {
-    throw 'FFmpeg archive extracted but no directory was found.'
+$ffmpegRoots = @(Get-ChildItem -LiteralPath $vendorDir -Directory)
+if ($ffmpegRoots.Count -ne 1) {
+    $encontrados = @($ffmpegRoots | ForEach-Object { $_.Name }) -join ', '
+    throw "El zip de FFmpeg debe contener un unico directorio raiz; se encontraron $($ffmpegRoots.Count): $encontrados"
+}
+$ffmpegRoot = $ffmpegRoots[0]
+
+$requeridosEnZip = @('bin\ffmpeg.exe', 'bin\ffprobe.exe', 'doc', 'presets', 'LICENSE.txt')
+$faltantesEnZip = @($requeridosEnZip | Where-Object {
+    -not (Test-Path -LiteralPath (Join-Path $ffmpegRoot.FullName $_))
+})
+if ($faltantesEnZip.Count -gt 0) {
+    throw "El directorio raiz de FFmpeg esta incompleto; falta: $($faltantesEnZip -join ', ')."
 }
 
 $targetDir = Join-Path $root 'vendor\ffmpeg'
@@ -35,6 +48,14 @@ Copy-Item -Recurse -Force (Join-Path $ffmpegRoot.FullName 'bin') (Join-Path $tar
 Copy-Item -Recurse -Force (Join-Path $ffmpegRoot.FullName 'doc') (Join-Path $targetDir 'doc')
 Copy-Item -Recurse -Force (Join-Path $ffmpegRoot.FullName 'presets') (Join-Path $targetDir 'presets')
 Copy-Item -Force (Join-Path $ffmpegRoot.FullName 'LICENSE.txt') (Join-Path $targetDir 'LICENSE.txt')
+
+$requeridosFinales = @('bin\ffmpeg.exe', 'bin\ffprobe.exe', 'LICENSE.txt')
+$faltantesFinales = @($requeridosFinales | Where-Object {
+    -not (Test-Path -LiteralPath (Join-Path $targetDir $_) -PathType Leaf)
+})
+if ($faltantesFinales.Count -gt 0) {
+    throw "La instalacion de FFmpeg quedo incompleta; falta: $($faltantesFinales -join ', ')."
+}
 
 Write-Host 'FFmpeg downloaded to:' $targetDir
 Write-Host 'ffmpeg:' (Join-Path $targetDir 'bin\ffmpeg.exe')

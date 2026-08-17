@@ -16,6 +16,7 @@ from app.services.engines.separator_base import (
     OnnxStemSeparator,
     ProgressCallback,
     SeparationCancelled,
+    stems_in_catalog_order,
 )
 from app.services.engines.vr_deecho import DeEchoDriver
 from app.services.engines.vr_models import VR_MODELS, VR_SAMPLE_RATE, VrModelSpec
@@ -104,7 +105,7 @@ class VrDeEchoSeparator(OnnxStemSeparator):
         spec: VrModelSpec,
         cancel_event: threading.Event,
         on_chunk: ProgressCallback | None,
-    ) -> tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, ...]:
         total = mix.shape[1]
         block, margin, fade = self._block_geometry(total)
         ranges = block_ranges(total, block, margin, fade)
@@ -125,8 +126,9 @@ class VrDeEchoSeparator(OnnxStemSeparator):
             stems = separate_padded(driver, mix[:, lo:hi])
             overlap_add_blocks((primary, secondary), stems, block_range, total, fade)
 
-        by_source = {"primary": primary, "secondary": secondary}
-        return by_source[spec.stems[0].source], by_source[spec.stems[1].source]
+        # Las DOS mascaras son salidas reales del modelo (0 y 1); aca no
+        # hay residuo que calcular.
+        return stems_in_catalog_order(mix, (primary, secondary), spec)
 
     def _block_geometry(self, total: int) -> tuple[int, int, int]:
         """(bloque, margen, crossfade) en muestras.
