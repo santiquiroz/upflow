@@ -229,6 +229,20 @@ Todos los endpoints viven bajo `/api/v1`. Los campos de formulario (subida) van 
 | `GET` | `/api/v1/video/jobs/{job_id}` | Estado de un job de video, incluye `metadata` (stage, fps, dimensiones, `outputFps`) |
 | `GET` | `/api/v1/video/jobs/{job_id}/download` | Descarga el video resultante (`404`/`409` igual que arriba) |
 
+**Listar trabajos** — las siete familias listan con el MISMO contrato, que es lo que vuelve seguro exponerlo en multiusuario: por defecto devuelve **solo los propios**, y `?all=true` devuelve los de todos pero exige el permiso `jobs:read_all` (sin él, `403`). Los terminados siguen apareciendo hasta que la poda los retira.
+
+| Familia | Endpoint |
+|---|---|
+| Imagen | `GET /api/v1/jobs` |
+| Video | `GET /api/v1/video/jobs` |
+| Audio | `GET /api/v1/audio/jobs` |
+| Generación | `GET /api/v1/generation/jobs` |
+| Transcripción | `GET /api/v1/transcribe/jobs` |
+| Descargas | `GET /api/v1/download/jobs` |
+| 3D | `GET /api/v1/print/generate` |
+
+Es lo que usa la interfaz para recuperar la cola al recargar el navegador: sin listado, un trabajo en curso seguía corriendo en el servidor pero se perdía de vista para siempre.
+
 **Crear un job de imagen** — campos de formulario: `file` (requerido), `model_name` (default `realesrgan-x4plus`, ignorado si se manda `model_id`), `model_id` (opcional: id de un modelo ONNX instalado desde HF, ver sección Modelos), `device` (opcional: `cpu`/`dml:N`, ver sección Dispositivos; omitido = `DEFAULT_DEVICE`), `scale` (default `4`), `output_format` (`png`/`jpg`/`jpeg`/`webp`, default `png`):
 
 ```bash

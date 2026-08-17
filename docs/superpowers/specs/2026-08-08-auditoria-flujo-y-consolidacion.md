@@ -36,21 +36,27 @@ el **roadmap de consolidación** pendiente con esfuerzo/riesgo.
    `fft`), pero quedaba armado para fallar. Mismo escape que
    `AudioEnhancer._escape_filter_path`.
 
-## Decidido NO tocar (requiere decisión del dueño)
+## Requería decisión del dueño — los tres cerrados
 
-- **Doble loudnorm** (`voice_chain` paso `loudness` + `audio_mastering`): un job
-  con `voice_steps=["...","loudness"]` **y** `master` aplica loudnorm dos veces
-  (la segunda mide audio ya normalizado; además la del voice_chain es single-pass,
-  la forma que el propio docstring de mastering explica que "bombea"). Es cambio
-  de comportamiento audible → decidir si el paso `loudness` debe deshabilitarse
-  cuando hay `master`, o quitarse del catálogo de voz.
+- **Doble loudnorm** (`voice_chain` paso `loudness` + `audio_mastering`): **HECHO
+  v0.56.1**. `effective_voice_steps` saca `loudness` cuando hay `master` (el
+  mastering ya normaliza, en dos pasadas, la forma que no bombea), y el mapa de
+  etapas usa la MISMA función, así que la interfaz tampoco anuncia una etapa que
+  no va a correr. Tests: `test_review_fixes_2026_08.py` (se salta con mastering,
+  se queda sin mastering, y el caso en que la etapa de voz desaparece entera).
 - **Descargas por token sin ownership** (`/print/repaired/{token}`,
-  `/print/parts/{token}`): cualquiera con el token de 32 hex baja el archivo.
-  Irrelevante en single-user; en multi-user conviene atar el token al owner.
-- **Base class `QueuedJobManager`**: la revisión dejó la tabla comparativa de
-  los 8 managers (qué comparten, qué varía). El fix (1) hoy vive copiado en 5
-  lugares — la base class lo dejaría en uno. Esfuerzo M, riesgo medio; hacerlo
-  en una sesión dedicada con la suite verde antes y después.
+  `/print/parts/{token}`): **HECHO**. `_register_print_token` anota el dueño al
+  emitir y `_require_print_token_owner` lo exige al bajar, con 404 —no 403— para
+  que "no existe" y "no es tuyo" sean indistinguibles. Cubierto desde
+  2026-08-17 por `tests/test_print_token_ownership.py` (11 tests: dueño, ajeno,
+  admin, token bien formado sin emitir con el archivo YA en disco, token no-hex,
+  y el techo del registro). Verificado por mutación: quitando el control, 4 de
+  esos tests fallan — antes de escribirlos el control no tenía ninguna prueba,
+  que es lo mismo que no tener evidencia de que funciona.
+- **Base class `QueuedJobManager`**: **HECHO** (`services/job_manager_base.py`).
+  Los 5 managers de media comparten cola, workers, la máquina de estados de
+  cancelación (incluida la re-verificación dentro de la ventana del semáforo) y
+  los hooks de cuota; los 6 installers comparten `SingleWorkerJobQueue`.
 
 ## Roadmap de consolidación (por prioridad payoff/riesgo)
 
