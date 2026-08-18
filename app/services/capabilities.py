@@ -250,10 +250,14 @@ CATALOG: tuple[Capability, ...] = (
         id="video.subtitles",
         domain="video",
         label_key="capability.video.subtitles",
-        provisioning="none",
-        job_kind=None,
+        provisioning="registry",
+        job_kind="transcribe",
         strategies=("model",),
-        unavailable_reason_key="capability.reason.subtitles",
+        # MISMO requisito que `audio.transcribe`, porque es el mismo trabajo: los
+        # subtitulos son esa transcripcion alineada y muxeada (o quemada) al
+        # video. Mientras esto dijo "no implementado", la app ya devolvia .srt,
+        # .vtt, muxeo suave y quemado en la imagen.
+        requirements=(RegistryRequirement((ModelKind.asr_onnx,)),),
     ),
     # --- imagen ------------------------------------------------------------
     Capability(
@@ -377,10 +381,16 @@ CATALOG: tuple[Capability, ...] = (
         id="audio.stems",
         domain="audio",
         label_key="capability.audio.stems",
-        provisioning="none",
-        job_kind=None,
+        provisioning="vendored_pack",
+        job_kind="audio",
         strategies=("model",),
-        unavailable_reason_key="capability.reason.stems",
+        # Requisito PROPIO y no el de karaoke: separar en cuatro pistas y separar
+        # la voz son capacidades distintas, y tener instalado un modelo de dos
+        # stems no habilita esta. Apunta al primer modelo de MAS de dos pistas
+        # que este completo en disco.
+        requirements=(
+            PathRequirement("karaoke_installed_multistem_model", "karaoke"),
+        ),
     ),
     # --- generacion --------------------------------------------------------
     Capability(
@@ -438,19 +448,26 @@ CATALOG: tuple[Capability, ...] = (
         id="generate.textTo3d",
         domain="generate",
         label_key="capability.generate.textTo3d",
-        provisioning="none",
-        job_kind=None,
+        provisioning="vendored_pack",
+        job_kind="print",
         strategies=("model",),
-        unavailable_reason_key="capability.reason.noOnnxPath",
+        # MISMA implementacion que `print.generate`, vista desde el dominio de
+        # generacion: quien mira "Generar" tiene que ver que el 3D existe. El
+        # requisito es el mismo indice a proposito, no una copia — si un dia
+        # cambia el motor, cambia en los dos lados o el arbol vuelve a mentir.
+        requirements=(PathRequirement("shape3d_model_index", "shap-e"),),
     ),
     Capability(
         id="generate.imageTo3d",
         domain="generate",
         label_key="capability.generate.imageTo3d",
-        provisioning="none",
-        job_kind=None,
+        provisioning="vendored_pack",
+        job_kind="print",
         strategies=("model",),
-        unavailable_reason_key="capability.reason.noOnnxPath",
+        # Misma implementacion que `print.generatePhoto`, ver textTo3d arriba.
+        requirements=(
+            PathRequirement("shape3d_img2img_model_index", "shap-e-img2img"),
+        ),
     ),
     Capability(
         id="generate.textToSound",

@@ -48,14 +48,17 @@ const NEEDS_PACK = capability({
   setupReasonKey: "capability.setup.missingPack",
 });
 
+// El ejemplo de "todavia no se puede" tiene que ser una capacidad que de verdad
+// no este hecha. Antes era video.subtitles, que se envio (transcripcion alineada,
+// muxeo y quemado) y dejo este fixture describiendo un estado inexistente.
 const ROADMAP = capability({
-  id: "video.subtitles",
-  domain: "video",
-  labelKey: "capability.video.subtitles",
+  id: "print.slice",
+  domain: "print",
+  labelKey: "capability.print.slice",
   status: "not_implemented",
   provisioning: "none",
   jobKind: null,
-  unavailableReasonKey: "capability.reason.subtitles",
+  unavailableReasonKey: "capability.reason.noSlicerPack",
 });
 
 const NEEDS_FLAG = capability({
@@ -237,7 +240,7 @@ describe("CapabilityTree", () => {
       "data-status",
       "needs_setup",
     );
-    expect(itemFor(en["capability.video.subtitles"])).toHaveAttribute(
+    expect(itemFor(en["capability.print.slice"])).toHaveAttribute(
       "data-status",
       "not_implemented",
     );
@@ -247,7 +250,7 @@ describe("CapabilityTree", () => {
     renderTree();
 
     expect(
-      screen.getByText(en["capability.reason.subtitles"]),
+      screen.getByText(en["capability.reason.noSlicerPack"]),
     ).toBeVisible();
   });
 
@@ -255,7 +258,7 @@ describe("CapabilityTree", () => {
     renderTree();
 
     expect(
-      within(itemFor(en["capability.video.subtitles"])).queryByRole("button"),
+      within(itemFor(en["capability.print.slice"])).queryByRole("button"),
     ).not.toBeInTheDocument();
   });
 
@@ -362,11 +365,11 @@ describe("CapabilityTree", () => {
     }
 
     expect(
-      within(roadmapSection).getByText(en["capability.video.subtitles"]),
+      within(roadmapSection).getByText(en["capability.print.slice"]),
     ).toBeVisible();
     expect(
       within(screen.getByTestId("live-capabilities")).queryByText(
-        en["capability.video.subtitles"],
+        en["capability.print.slice"],
       ),
     ).not.toBeInTheDocument();
     expect(

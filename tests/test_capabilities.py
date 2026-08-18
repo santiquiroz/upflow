@@ -315,12 +315,16 @@ def test_grouping_separates_the_roadmap_from_the_live_capabilities(tmp_path: Pat
     grouped = group_by_domain(resolve_capabilities(make_settings(tmp_path), FakeRegistry()))
     generate = next(group for group in grouped if group.domain == "generate")
 
-    # textToVideo salio del roadmap al enviarse en la v0.27.0; dejarlo aca
-    # congelaba una mentira en la pantalla de entrada.
+    # Una capacidad sale del roadmap el dia que se envia, y dejarla aca congela
+    # una mentira en la pantalla de entrada. Ya paso con textToVideo (v0.27.0) y
+    # ahora con las dos de 3D: Shap-E genera mallas desde texto y desde foto, asi
+    # que decir "no hay camino" era falso mientras el modulo de impresion lo hacia.
     assert {item.id for item in generate.roadmap} >= {
-        "generate.imageTo3d",
+        "generate.textToSound",
+        "generate.soundToSound",
     }
-    assert "generate.textToVideo" not in {item.id for item in generate.roadmap}
+    ya_enviadas = {"generate.textToVideo", "generate.textTo3d", "generate.imageTo3d"}
+    assert ya_enviadas.isdisjoint({item.id for item in generate.roadmap})
     for item in generate.capabilities:
         assert item.status != "not_implemented"
     for item in generate.roadmap:

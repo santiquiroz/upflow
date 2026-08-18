@@ -988,7 +988,6 @@ export const en = {
   "capability.print.generatePhoto": "Photo to mesh",
   "capability.print.estimateSize": "Suggested real size for a generated mesh",
   "capability.setup.shapE": "Needs the Shap-E model (MIT, ~1.3 GB). Runs on the processor: about two minutes per part.",
-  "capability.reason.printRepairPending": "Not built yet: closing a mesh without inventing geometry that was never there.",
   "capability.reason.noSlicerPack": "Needs a slicer that ships with the app, the way ffmpeg does.",
 
   "capability.video.upscale": "Upscale video",
@@ -1014,15 +1013,6 @@ export const en = {
   "capability.generate.soundToSound": "Sound to sound",
 
   // Motivos honestos: dicen QUE falta, sin prometer fecha.
-  "capability.reason.subtitles":
-    "Needs a speech recognition model plus the timing pass that turns the " +
-    "transcript into a subtitle track. Transcription comes first: subtitles are " +
-    "that result, aligned and muxed into the container.",
-  "capability.reason.stems":
-    "The runtime is already here: MDX-Net models run on ONNX Runtime, measured on " +
-    "both DirectML and CPU. What is still missing is matching the spectrogram " +
-    "convention the model expects — a first attempt ran but produced noise, so " +
-    "shipping it now would mean shipping a broken feature.",
   "capability.reason.noOnnxPath":
     "No confirmed path to a runnable ONNX model yet. The model existing is not " +
     "enough: it also has to be executable by ONNX Runtime, and this hit the same " +

@@ -983,7 +983,6 @@ export const es = {
   "capability.print.generatePhoto": "De foto a malla",
   "capability.print.estimateSize": "Tamaño real sugerido para una malla generada",
   "capability.setup.shapE": "Necesita el modelo Shap-E (MIT, ~1,3 GB). Corre en el procesador: unos dos minutos por pieza.",
-  "capability.reason.printRepairPending": "Todavía no está hecho: cerrar una malla sin inventar geometría que nunca estuvo.",
   "capability.reason.noSlicerPack": "Necesita un laminador que viaje con la app, como viaja ffmpeg.",
 
   "capability.video.upscale": "Reescalar video",
@@ -1009,15 +1008,6 @@ export const es = {
   "capability.generate.soundToSound": "Sonido a sonido",
 
   // Motivos honestos: dicen QUE falta, sin prometer fecha.
-  "capability.reason.subtitles":
-    "Necesita un modelo de reconocimiento de voz más el paso de sincronizado que " +
-    "convierte la transcripción en una pista de subtítulos. La transcripción va " +
-    "primero: los subtítulos son ese resultado, alineado y muxeado al contenedor.",
-  "capability.reason.stems":
-    "El runtime ya está: los modelos MDX-Net corren sobre ONNX Runtime, medido en " +
-    "DirectML y en CPU. Lo que falta es acertar la convención de espectrograma que " +
-    "el modelo espera — un primer intento corrió pero devolvió ruido, así que " +
-    "publicarlo ahora sería publicar algo roto.",
   "capability.reason.noOnnxPath":
     "Todavía no hay un camino confirmado a un ONNX ejecutable. Que el modelo " +
     "exista no alcanza: también tiene que poder correrlo ONNX Runtime, y acá se " +

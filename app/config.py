@@ -935,6 +935,25 @@ class Settings(BaseSettings):
         return str(path) if path is not None else ""
 
     @property
+    def karaoke_installed_multistem_model(self) -> str:
+        # Igual que `karaoke_installed_model` pero solo cuenta los que separan en
+        # MAS de dos pistas: "Separar stems" y "Karaoke" son capacidades
+        # distintas, y tener instalado un modelo de voz/instrumental no habilita
+        # la de cuatro pistas.
+        from app.services.engines.separation_models import (
+            SEPARATION_MODELS,
+            model_file,
+        )
+
+        carpeta = self.karaoke_model_dir_path
+        for model_id, spec in SEPARATION_MODELS.items():
+            if len(spec.stems) <= 2:
+                continue
+            if all((carpeta / archivo).exists() for archivo in spec.files):
+                return str(model_file(carpeta, model_id))
+        return ""
+
+    @property
     def gmfss_model_dir_path(self) -> Path:
         return resolve_against_project_root(self.gmfss_model_dir)
 
