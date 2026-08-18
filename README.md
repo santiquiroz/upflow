@@ -452,7 +452,7 @@ Todas las variables leen de `.env` (ver [`.env.example`](.env.example) con los d
 
 | Variable | Default | Descripción |
 |---|---|---|
-| `APP_NAME` | `Upflow` | Nombre interno del proceso FastAPI (`.env.example` lo sobreescribe a `Image Upscaler AMD`) |
+| `APP_NAME` | `Upflow` | Nombre interno del proceso FastAPI |
 | `APP_HOST` | `127.0.0.1` | Host de bind de uvicorn |
 | `APP_PORT` | `8090` | Puerto de bind de uvicorn |
 | `MAX_UPLOAD_MB` | `50` | Tamaño máximo de subida para imágenes (MB) |
