@@ -1,3 +1,5 @@
+import { isMultiUrl, parseUrlList } from "../modules/download/urlList";
+import { uploadSequentially } from "../lib/sequentialUploads";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Download as DownloadIcon, FolderOpen, Loader2, Music, Video } from "lucide-react";
 import { useState } from "react";
@@ -128,6 +130,8 @@ export function DownloadPage() {
   const [includePlaylist, setIncludePlaylist] = useState(false);
   const [playlistLimit, setPlaylistLimit] = useState(10);
   const [jobId, setJobId] = useState<string | null>(null);
+  const [pendientes, setPendientes] = useState(0);
+  const [fallidas, setFallidas] = useState(0);
 
   // Automatico y no un boton: las calidades solo pueden reflejar la realidad si el
   // probe corrio, y con un boton manual la lista se ve "quemada" cuando nadie lo toca.
@@ -142,17 +146,50 @@ export function DownloadPage() {
     staleTime: 5 * 60 * 1000,
   });
 
+  function opcionesComunes(destino: string) {
+    return {
+      url: destino,
+      maxHeight,
+      audioOnly,
+      audioFormat,
+      audioBitrateKbps: bitrateSelectable(audioFormat) ? audioBitrate : null,
+      videoContainer,
+      includePlaylist,
+      playlistLimit: clampPlaylistLimit(playlistLimit),
+    };
+  }
+
+  /** Varias URLs pegadas: una descarga por línea, de a una.
+   *
+   * De a una y no todas juntas por lo mismo que los archivos: en paralelo se
+   * pelean el ancho de banda y la cola del servidor rechaza las últimas. La
+   * primera se sigue en vivo en esta pantalla; el resto entra a la cola global.
+   */
+  async function encolarVarias(destinos: string[]) {
+    const [primera, ...resto] = destinos;
+    setPendientes(resto.length);
+    setFallidas(0);
+    await create.mutateAsync(primera).catch(() => undefined);
+    const { failed } = await uploadSequentially(
+      resto,
+      async (destino) => {
+        const job = await createDownloadJob(opcionesComunes(destino));
+        jobQueueStore.addTrackedJob({
+          id: job.id,
+          kind: "download",
+          fileName: job.mediaTitle ?? job.url,
+          createdAt: Date.now(),
+        });
+      },
+      setPendientes,
+    );
+    setFallidas(failed);
+  }
+
   const create = useMutation({
-    mutationFn: () =>
+    mutationFn: (destino: string = url) =>
       createDownloadJob({
-        url,
-        maxHeight,
-        audioOnly,
-        audioFormat,
-        audioBitrateKbps: bitrateSelectable(audioFormat) ? audioBitrate : null,
-        videoContainer,
-        includePlaylist,
-        playlistLimit: clampPlaylistLimit(playlistLimit),
+        ...opcionesComunes(destino),
       }),
     onSuccess: (job) => {
       setJobId(job.id);
@@ -184,6 +221,10 @@ export function DownloadPage() {
   const notice = playlistNotice(probeData, includePlaylist, playlistLimit);
   const heights = offeredHeights(probeData);
   const urlLooksValid = isProbablyUrl(url);
+  const varias = isMultiUrl(url);
+  // Con una lista pegada, la vista previa no aplica (es por URL) y alcanza con
+  // que la primera linea tenga forma de URL para habilitar el boton.
+  const puedeDescargar = varias ? isProbablyUrl(parseUrlList(url)[0] ?? "") : urlLooksValid;
 
   return (
     <div className="flex flex-col gap-4">
@@ -384,12 +425,30 @@ export function DownloadPage() {
 
           <button
             type="button"
-            onClick={() => create.mutate()}
-            disabled={!urlLooksValid || create.isPending}
+            onClick={() => {
+              const destinos = parseUrlList(url);
+              if (destinos.length > 1) {
+                void encolarVarias(destinos);
+                return;
+              }
+              create.mutate(url);
+            }}
+            disabled={!puedeDescargar || create.isPending}
             className="self-start flex items-center gap-1.5 rounded border px-3 py-1.5 text-sm transition-[background-color,border-color] duration-fast disabled:opacity-50 disabled:cursor-not-allowed border-accent bg-surface-2 text-text"
           >
-            <DownloadIcon className="h-4 w-4" /> {t("download.submit")}
+            <DownloadIcon className="h-4 w-4" />{" "}
+            {varias ? t("download.submitMany", { count: parseUrlList(url).length }) : t("download.submit")}
           </button>
+          {pendientes > 0 && (
+            <p role="status" className="text-xs text-text-dim">
+              {t("download.pending", { count: pendientes })}
+            </p>
+          )}
+          {pendientes === 0 && fallidas > 0 && (
+            <p role="alert" className="text-xs text-danger">
+              {t("download.failedMany", { count: fallidas })}
+            </p>
+          )}
           {create.isError && (
             <span className="text-xs text-danger">{(create.error as Error).message}</span>
           )}

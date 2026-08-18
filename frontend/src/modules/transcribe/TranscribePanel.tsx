@@ -47,26 +47,26 @@ function isJobBusy(phase: TranscribeJobPhase): boolean {
 }
 
 function AudioDropzone({
-  file,
-  onFileSelected,
+  files,
+  onFilesSelected,
 }: {
-  file: File | null;
-  onFileSelected: (file: File) => void;
+  files: File[];
+  onFilesSelected: (files: File[]) => void;
 }) {
   const { t } = useTranslation();
 
   function handleDrop(event: DragEvent<HTMLLabelElement>): void {
     event.preventDefault();
-    const dropped = event.dataTransfer.files[0];
-    if (dropped) {
-      onFileSelected(dropped);
+    const dropped = Array.from(event.dataTransfer.files);
+    if (dropped.length > 0) {
+      onFilesSelected(dropped);
     }
   }
 
   function handleChange(event: ChangeEvent<HTMLInputElement>): void {
-    const selected = event.target.files?.[0];
-    if (selected) {
-      onFileSelected(selected);
+    const selected = Array.from(event.target.files ?? []);
+    if (selected.length > 0) {
+      onFilesSelected(selected);
     }
   }
 
@@ -83,7 +83,11 @@ function AudioDropzone({
         strokeWidth={1.5}
       />
       <span className="text-sm text-text">
-        {file ? file.name : t("transcribe.file.drop")}
+        {files.length === 0
+          ? t("transcribe.file.drop")
+          : files.length === 1
+            ? files[0].name
+            : t("enhance.batch.selected", { count: files.length })}
       </span>
       <span className="text-xs text-text-faint">
         {t("transcribe.file.formats")}
@@ -92,6 +96,7 @@ function AudioDropzone({
         id="transcribe-file-input"
         type="file"
         accept="audio/*"
+        multiple
         aria-label={t("transcribe.file.inputLabel")}
         className="sr-only"
         onChange={handleChange}
@@ -408,7 +413,10 @@ export function TranscribePanel({
   searchDebounceMs,
 }: TranscribePanelProps) {
   const { t } = useTranslation();
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
+  // El primero manda para lo que depende del archivo (si tiene imagen, y por
+  // lo tanto si se puede pedir video con subtitulos); el lote usa todos.
+  const file = files[0] ?? null;
   const [modelId, setModelId] = useState("");
   const [language, setLanguage] = useState("");
   const [outputMode, setOutputMode] = useState<TranscribeOutputMode>("text");
@@ -426,7 +434,18 @@ export function TranscribePanel({
   // Los pares que se pueden bajar. Con cero instalados la traduccion quedaba
   // escondida y sin forma de conseguirse: un callejon sin salida silencioso.
   const paresInstalables = translationPairsQuery.data?.installable ?? [];
-  const { phase, job, errorMessage, submit, cancel, reset, uploadPercent } =
+  const {
+    phase,
+    job,
+    errorMessage,
+    submit,
+    submitMany,
+    pendingUploads,
+    failedUploads,
+    cancel,
+    reset,
+    uploadPercent,
+  } =
     useTranscribeJob(pollIntervalMs);
 
   const models = modelsQuery.data ?? [];
@@ -445,8 +464,8 @@ export function TranscribePanel({
       ? (devicesQuery.data?.defaultDeviceId ?? "")
       : (devices[0]?.id ?? "");
 
-  function handleFileSelected(selected: File): void {
-    setFile(selected);
+  function handleFilesSelected(elegidos: File[]): void {
+    setFiles(elegidos);
     reset();
   }
 
@@ -473,6 +492,19 @@ export function TranscribePanel({
     }
     if (params.outputMode === "dubbed_video") {
       params.targetLanguage = dubLanguage || translationTargets[0] || "";
+    }
+    if (files.length > 1) {
+      // Un trabajo por archivo con los mismos ajustes. `outputMode` se resuelve
+      // POR archivo: pedir video con subtitulos de un .wav no tiene sentido, y
+      // en un lote mezclado el usuario elige una sola vez.
+      submitMany(
+        files.map((archivo) => ({
+          ...params,
+          file: archivo,
+          ...(params.outputMode && !hasPicture(archivo) ? { outputMode: undefined } : {}),
+        })),
+      );
+      return;
     }
     submit(params);
   }
@@ -515,8 +547,8 @@ export function TranscribePanel({
           {models.length > 0 && (
             <>
               <AudioDropzone
-                file={file}
-                onFileSelected={handleFileSelected}
+                files={files}
+                onFilesSelected={handleFilesSelected}
               />
 
               <label className="flex flex-col gap-2">
@@ -670,6 +702,18 @@ export function TranscribePanel({
           installablePairs={paresInstalables}
           onPairInstalled={() => void translationPairsQuery.refetch()}
         />
+        {pendingUploads > 0 && (
+          <p role="status" className="text-xs text-text-dim">
+            {t("enhance.batch.pending", { count: pendingUploads })}
+          </p>
+        )}
+        {pendingUploads === 0 && failedUploads > 0 && (
+          <p role="alert" className="text-xs text-danger">
+            {t(failedUploads === 1 ? "enhance.batch.failedOne" : "enhance.batch.failed", {
+              count: failedUploads,
+            })}
+          </p>
+        )}
       </div>
 
       <AsrModelSearch

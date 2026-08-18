@@ -1,10 +1,10 @@
+import { submitBatch } from "../lib/batchSubmit";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "../i18n/LocaleProvider";
 import { useRef, useState } from "react";
 import type { AudioCapabilities, AudioJob, JobStatus } from "../lib/apiTypes";
 import { isTerminalJobStatus } from "../lib/jobStatus";
 import { jobQueueStore, type JobQueueStore } from "../lib/jobQueueStore";
-import { uploadSequentially } from "../lib/sequentialUploads";
 import {
   cancelAudioJob,
   createAudioJob,
@@ -118,32 +118,20 @@ export function useAudioJob(
   }
 
   async function submitMany(paramsList: CreateAudioJobParams[]): Promise<void> {
-    if (paramsList.length === 0) {
-      return;
-    }
-    const [primero, ...resto] = paramsList;
-    setPendingUploads(resto.length);
-    setFailedUploads(0);
     setJobId(null);
-    pendingFileNameRef.current = primero.file.name;
-    // Se espera al primero: sin esto los archivos llegan al servidor en un
-    // orden distinto del que eligio el usuario.
-    await uploadMutation.mutateAsync(primero).catch(() => undefined);
-
-    const { failed } = await uploadSequentially(
-      resto,
-      async (params) => {
-        const creado = await createAudioJob(params);
-        queue.addTrackedJob({
-          id: creado.jobId,
-          kind: "audio",
-          fileName: params.file.name,
-          createdAt: Date.now(),
-        });
+    await submitBatch({
+      paramsList,
+      kind: "audio",
+      queue,
+      fileNameOf: (params) => params.file.name,
+      uploadFirst: (params) => uploadMutation.mutateAsync(params),
+      createRest: async (params) => (await createAudioJob(params)).jobId,
+      onPendingChange: setPendingUploads,
+      onFailedChange: setFailedUploads,
+      onFirstStarted: (nombre) => {
+        pendingFileNameRef.current = nombre;
       },
-      setPendingUploads,
-    );
-    setFailedUploads(failed);
+    });
   }
 
   // Best-effort: a 409 (job already finished) needs no surfaced error since the

@@ -1,3 +1,4 @@
+import { submitBatch } from "../lib/batchSubmit";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import type {
@@ -40,6 +41,9 @@ export interface UseTranscribeJobResult {
   // dibujar un porcentaje inventado seria mentir sobre lo que falta.
   uploadPercent: number | null;
   submit: (params: CreateTranscribeJobParams) => void;
+  submitMany: (paramsList: CreateTranscribeJobParams[]) => void;
+  pendingUploads: number;
+  failedUploads: number;
   cancel: () => void;
   reset: () => void;
 }
@@ -77,6 +81,8 @@ export function useTranscribeJob(
   queue: JobQueueStore = jobQueueStore,
 ): UseTranscribeJobResult {
   const [jobId, setJobId] = useState<string | null>(null);
+  const [pendingUploads, setPendingUploads] = useState(0);
+  const [failedUploads, setFailedUploads] = useState(0);
   const queryClient = useQueryClient();
   const pendingFileNameRef = useRef<string>("");
 
@@ -120,6 +126,23 @@ export function useTranscribeJob(
     createMutation.mutate(params);
   }
 
+  async function submitMany(paramsList: CreateTranscribeJobParams[]): Promise<void> {
+    setJobId(null);
+    await submitBatch({
+      paramsList,
+      kind: "transcribe",
+      queue,
+      fileNameOf: (params) => params.file.name,
+      uploadFirst: (params) => createMutation.mutateAsync(params),
+      createRest: async (params) => (await createTranscribeJob(params)).jobId,
+      onPendingChange: setPendingUploads,
+      onFailedChange: setFailedUploads,
+      onFirstStarted: (nombre) => {
+        pendingFileNameRef.current = nombre;
+      },
+    });
+  }
+
   function cancel(): void {
     if (jobId === null) {
       // Cortar la subida no es un error: el usuario pidio que se cortara.
@@ -157,6 +180,9 @@ export function useTranscribeJob(
       jobQuery.data,
     ),
     submit,
+    submitMany: (paramsList) => void submitMany(paramsList),
+    pendingUploads,
+    failedUploads,
     cancel,
     reset,
   };

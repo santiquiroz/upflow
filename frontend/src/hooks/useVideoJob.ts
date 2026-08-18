@@ -3,6 +3,7 @@ import { useTranslation } from "../i18n/LocaleProvider";
 import { useRef, useState } from "react";
 import type { CreateVideoJobParams } from "../lib/api";
 import { cancelVideoJob, createVideoJob, getVideoCapabilities, getVideoJob } from "../lib/api";
+import { submitBatch } from "../lib/batchSubmit";
 import type { JobStatus, VideoCapabilities, VideoJobResponse } from "../lib/apiTypes";
 import { isTerminalJobStatus } from "../lib/jobStatus";
 import { jobQueueStore, type JobQueueStore } from "../lib/jobQueueStore";
@@ -19,6 +20,9 @@ export interface UseVideoJobResult {
   // dibujar un porcentaje inventado seria mentir sobre lo que falta.
   uploadPercent: number | null;
   submit: (params: CreateVideoJobParams) => void;
+  submitMany: (paramsList: CreateVideoJobParams[]) => void;
+  pendingUploads: number;
+  failedUploads: number;
   cancel: () => void;
   reset: () => void;
 }
@@ -69,6 +73,8 @@ export function useVideoJob(
   const queryClient = useQueryClient();
 
   const [uploadPercent, setUploadPercent] = useState<number | null>(null);
+  const [pendingUploads, setPendingUploads] = useState(0);
+  const [failedUploads, setFailedUploads] = useState(0);
   // Mientras se sube todavia no hay jobId: cortar el envio es lo unico que
   // "cancelar" puede significar en ese momento.
   const uploadAbortRef = useRef<AbortController | null>(null);
@@ -105,6 +111,25 @@ export function useVideoJob(
     uploadMutation.mutate(params);
   }
 
+  async function submitMany(paramsList: CreateVideoJobParams[]): Promise<void> {
+    setJobId(null);
+    await submitBatch({
+      paramsList,
+      kind: "video",
+      queue,
+      // Un lote sube archivos, nunca tokens de analisis: el analisis es por
+      // archivo y solo existe cuando el usuario eligio uno solo.
+      fileNameOf: (params) => params.fileName ?? params.file?.name ?? "",
+      uploadFirst: (params) => uploadMutation.mutateAsync(params),
+      createRest: async (params) => (await createVideoJob(params)).jobId,
+      onPendingChange: setPendingUploads,
+      onFailedChange: setFailedUploads,
+      onFirstStarted: (nombre) => {
+        pendingFileNameRef.current = nombre;
+      },
+    });
+  }
+
   // Best-effort: a 409 (job already finished) needs no surfaced error since the
   // running poll is the source of truth and reconciles the status on refetch.
   function cancel(): void {
@@ -132,6 +157,9 @@ export function useVideoJob(
     job: jobQuery.data,
     errorMessage: resolveErrorMessage(uploadMutation.error, jobQuery.error, jobQuery.data, t),
     submit,
+    submitMany: (paramsList) => void submitMany(paramsList),
+    pendingUploads,
+    failedUploads,
     cancel,
     reset,
   };

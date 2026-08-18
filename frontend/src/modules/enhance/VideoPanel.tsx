@@ -270,20 +270,26 @@ function AdvancedVideoControls({
   );
 }
 
-function Dropzone({ file, onFileSelected }: { file: File | null; onFileSelected: (file: File) => void }) {
+function Dropzone({
+  files,
+  onFilesSelected,
+}: {
+  files: File[];
+  onFilesSelected: (files: File[]) => void;
+}) {
   const { t } = useTranslation();
   function handleDrop(event: DragEvent<HTMLLabelElement>) {
     event.preventDefault();
-    const dropped = event.dataTransfer.files[0];
-    if (dropped) {
-      onFileSelected(dropped);
+    const dropped = Array.from(event.dataTransfer.files);
+    if (dropped.length > 0) {
+      onFilesSelected(dropped);
     }
   }
 
   function handleInputChange(event: ChangeEvent<HTMLInputElement>) {
-    const selected = event.target.files?.[0];
-    if (selected) {
-      onFileSelected(selected);
+    const selected = Array.from(event.target.files ?? []);
+    if (selected.length > 0) {
+      onFilesSelected(selected);
     }
   }
 
@@ -295,9 +301,22 @@ function Dropzone({ file, onFileSelected }: { file: File | null; onFileSelected:
       className="flex cursor-pointer flex-col items-center gap-2 rounded border border-dashed border-border bg-surface px-6 py-10 text-center transition-[border-color] duration-fast hover:border-accent"
     >
       <UploadCloud aria-hidden="true" className="h-6 w-6 text-text-faint" strokeWidth={1.5} />
-      <span className="text-sm text-text">{file ? file.name : t("enhance.video.dropzone")}</span>
+      <span className="text-sm text-text">
+        {files.length === 0
+          ? t("enhance.video.dropzone")
+          : files.length === 1
+            ? files[0].name
+            : t("enhance.batch.selected", { count: files.length })}
+      </span>
       <span className="text-xs text-text-faint">MP4, MKV, MOV</span>
-      <input id="video-file-input" type="file" accept="video/*" className="sr-only" onChange={handleInputChange} />
+      <input
+        id="video-file-input"
+        type="file"
+        accept="video/*"
+        multiple
+        className="sr-only"
+        onChange={handleInputChange}
+      />
     </label>
   );
 }
@@ -325,7 +344,9 @@ function resolveModelForProfile(
 
 export function VideoPanel() {
   const { t } = useTranslation();
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
+  // El primero manda para el analisis y la vista previa; el lote usa todos.
+  const file = files[0] ?? null;
   const [rejectedUpload, setRejectedUpload] = useState<string | null>(null);
   const [profile, setProfile] = useState<VideoProfileResponse | null>(null);
   const [model, setModel] = useState<ModelResponse | null>(null);
@@ -355,7 +376,8 @@ export function VideoPanel() {
   const engineQuery = useQuery({ queryKey: ["engine"], queryFn: getEngineInfo });
   const capabilitiesQuery = useAudioCapabilities();
   const videoCapabilitiesQuery = useVideoCapabilities();
-  const { phase, job, errorMessage, submit, cancel, reset, uploadPercent } = useVideoJob();
+  const { phase, job, errorMessage, submit, submitMany, pendingUploads, failedUploads, cancel, reset, uploadPercent } =
+    useVideoJob();
 
   const requiresGpu = resolveRequiresGpu(model);
   const restoreModes = capabilitiesQuery.data?.restoreModes ?? [];
@@ -420,7 +442,11 @@ export function VideoPanel() {
     setInterpEngine(resolveDefaultInterpEngine(interpEngines));
   }, [interpEngines, interpEngine]);
 
-  async function handleFileSelected(selected: File) {
+  async function handleFilesSelected(elegidos: File[]) {
+    const selected = elegidos[0];
+    if (!selected) {
+      return;
+    }
     // El limite de video es de 2 GB: dejar que se suba entero para recien ahi
     // rechazarlo es minutos de espera tirados.
     const limitMb = engineQuery.data?.maxVideoUploadMb ?? null;
@@ -431,12 +457,12 @@ export function VideoPanel() {
           limit: `${limitMb} MB`,
         })} ${t("upload.tooLarge.admin")}`,
       );
-      setFile(null);
+      setFiles([]);
       return;
     }
     setRejectedUpload(null);
     const selectionId = ++fileSelectionIdRef.current;
-    setFile(selected);
+    setFiles(elegidos);
     reset();
     setAnalyzeResult(null);
     setSourceDimensions(null);
@@ -453,6 +479,14 @@ export function VideoPanel() {
         // Browser metadata is best-effort. The controls still show the selected
         // height or multiplier without pretending an exact output size.
       });
+
+    if (elegidos.length > 1) {
+      // Con varios archivos no hay analisis: las pistas de audio y subtitulos
+      // se eligen POR archivo, y en un lote los ajustes son unos solos. Cada
+      // video sube entero, que es exactamente lo que hacia antes de que
+      // existiera el analisis.
+      return;
+    }
 
     try {
       const result = await analyzeVideo(selected);
@@ -516,20 +550,20 @@ export function VideoPanel() {
     );
   }
 
-  function handleSubmit() {
-    if (!file || !profile || scale === null) {
-      return;
-    }
-    const resolvedAudioRestore = keepAudio && restoreAvailable ? audioRestore : null;
-    submit({
-      ...(analyzeResult ? { uploadToken: analyzeResult.uploadToken } : { file }),
-      fileName: file.name,
-      profileKey: profile.key,
+  function ajustesComunes(
+    perfil: VideoProfileResponse,
+    escala: number,
+    resolvedAudioRestore: string | null,
+  ) {
+    // Todo lo que NO depende del archivo. El lote los comparte y el envio de a
+    // uno los reusa, asi no hay dos listas de ajustes que se desincronicen.
+    return {
+      profileKey: perfil.key,
       modelId: model?.id ?? null,
       device: device?.id ?? null,
       backend,
       videoEncoder,
-      scale,
+      scale: escala,
       ...(outputMode === "resolution" ? { targetHeight } : {}),
       outputContainer,
       videoCodec,
@@ -542,6 +576,27 @@ export function VideoPanel() {
       audioRestore: resolvedAudioRestore,
       audioOutputFormat: resolvedAudioRestore ? audioOutputFormat : null,
       interpEngine: fpsBoostActive ? interpEngine : "rife",
+    };
+  }
+
+  function handleSubmit() {
+    if (!file || !profile || scale === null) {
+      return;
+    }
+    const resolvedAudioRestore = keepAudio && restoreAvailable ? audioRestore : null;
+    const comunes = ajustesComunes(profile, scale, resolvedAudioRestore);
+    if (files.length > 1) {
+      // Un trabajo por archivo con los MISMOS ajustes, y sin uploadToken: ese
+      // token es del analisis, que solo corre cuando hay un archivo solo.
+      submitMany(
+        files.map((archivo) => ({ file: archivo, fileName: archivo.name, ...comunes })),
+      );
+      return;
+    }
+    submit({
+      ...(analyzeResult ? { uploadToken: analyzeResult.uploadToken } : { file }),
+      fileName: file.name,
+      ...comunes,
       audioTrackIndices: selectedAudioIndices.length > 0 ? selectedAudioIndices : undefined,
       keepSubtitles,
     });
@@ -554,7 +609,7 @@ export function VideoPanel() {
   return (
     <div className="grid grid-cols-[1fr_320px] gap-6 max-[900px]:grid-cols-1">
       <div className="flex flex-col gap-6">
-        <Dropzone file={file} onFileSelected={handleFileSelected} />
+        <Dropzone files={files} onFilesSelected={handleFilesSelected} />
         {rejectedUpload && (
           <p role="alert" className="text-xs text-danger">
             {rejectedUpload}
@@ -703,7 +758,7 @@ export function VideoPanel() {
             className="inline-flex w-fit items-center gap-2 rounded bg-accent px-4 py-2 text-sm font-medium text-bg transition-[background-color,opacity] duration-fast hover:bg-accent-hover active:bg-accent-press disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
           >
             <Film aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />
-            Upscale video
+            {files.length > 1 ? t("enhance.batch.submit", { count: files.length }) : t("enhance.video.submit")}
           </button>
         </div>
       </div>
@@ -715,6 +770,18 @@ export function VideoPanel() {
         onCancel={cancel}
         uploadPercent={uploadPercent}
       />
+      {pendingUploads > 0 && (
+        <p role="status" className="text-xs text-text-dim">
+          {t("enhance.batch.pending", { count: pendingUploads })}
+        </p>
+      )}
+      {pendingUploads === 0 && failedUploads > 0 && (
+        <p role="alert" className="text-xs text-danger">
+          {t(failedUploads === 1 ? "enhance.batch.failedOne" : "enhance.batch.failed", {
+            count: failedUploads,
+          })}
+        </p>
+      )}
     </div>
   );
 }
