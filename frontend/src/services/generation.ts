@@ -28,6 +28,7 @@ export interface CreateGenerationJobParams {
   upscaleModelId: string | null;
   initImageToken?: string;
   strength?: number;
+  tiledDetail?: boolean;
   // Máscara de inpainting (blanco=editar, negro=conservar); requiere initImageToken.
   maskImageToken?: string;
   frames?: number;
@@ -50,6 +51,8 @@ function buildRequestBody(params: CreateGenerationJobParams): Record<string, unk
   if (params.initImageToken) {
     body.initImageToken = params.initImageToken;
     if (params.strength !== undefined) body.strength = params.strength;
+    // Solo cuando está pedido: el campo ausente significa "el img2img normal".
+    if (params.tiledDetail) body.tiledDetail = true;
     if (params.maskImageToken) body.maskImageToken = params.maskImageToken;
   }
   if (params.frames !== undefined) body.frames = params.frames;

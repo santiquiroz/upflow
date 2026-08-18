@@ -1141,6 +1141,9 @@ export const es = {
   "generation.initImage.required":
     "Agregá una imagen de partida para habilitar la generación de imagen a imagen.",
   "generation.strength.label": "Fuerza de transformación",
+  "generation.tiledDetail.label": "Detalle por tiles (foto a su tamano real)",
+  "generation.tiledDetail.hint": "Recorre la imagen entera de a pedazos en vez de reducirla al tamano del modelo. Tarda un rato: es una pasada por cada pedazo.",
+  "generation.tiledDetail.warning": "Agrega textura INVENTADA: los poros, pelos y letras chicas que aparezcan no estaban en el original. Para una copia fiel, usa el reescalado del modulo de imagen.",
   "generation.strength.hint":
     "Los valores bajos conservan más la imagen de partida; los altos se alejan más.",
   "compat.asr.readyOnnx":

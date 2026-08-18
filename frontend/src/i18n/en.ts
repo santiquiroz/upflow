@@ -1146,6 +1146,9 @@ export const en = {
   "generation.initImage.required":
     "Add a starting image to enable image-to-image generation.",
   "generation.strength.label": "Transformation strength",
+  "generation.tiledDetail.label": "Tiled detail (photo at its real size)",
+  "generation.tiledDetail.hint": "Walks the whole image piece by piece instead of shrinking it to the model's size. It takes a while: one pass per piece.",
+  "generation.tiledDetail.warning": "Adds INVENTED texture: the pores, hairs and small lettering that show up were not in the original. For a faithful copy, use the upscaler in the image module.",
   "generation.strength.hint":
     "Lower values stay closer to the starting image; higher values move further away.",
   "compat.asr.readyOnnx":

@@ -129,6 +129,7 @@ class GenerationJobManager(QueuedJobManager[GenerationJob]):
         device: str | None = None,
         init_image_path: Path | None = None,
         strength: float = 0.6,
+        tiled_detail: bool = False,
         mask_image_path: Path | None = None,
         mask_dilate_px: int | None = None,
         mask_feather_px: int | None = None,
@@ -148,6 +149,7 @@ class GenerationJobManager(QueuedJobManager[GenerationJob]):
             self._validate_inpaint(model_id, init_image_path, mask_image_path, strength)
         elif init_image_path is not None:
             self._validate_img2img(model_id, init_image_path, strength)
+        self._validate_tiled_detail(tiled_detail, init_image_path, mask_image_path)
         if auto_upscale:
             self._validate_upscale_params(upscale_model_name, upscale_scale, upscale_model_id)
         if owner is not None and self.quota_service is not None:
@@ -157,6 +159,7 @@ class GenerationJobManager(QueuedJobManager[GenerationJob]):
             guidance=guidance, width=width, height=height, seed=seed, scheduler=scheduler,
             device=device,
             init_image_path=init_image_path, strength=strength,
+            tiled_detail=tiled_detail,
             mask_image_path=mask_image_path,
             mask_dilate_px=mask_dilate_px, mask_feather_px=mask_feather_px,
             auto_upscale=auto_upscale, upscale_model_name=upscale_model_name,
@@ -227,6 +230,26 @@ class GenerationJobManager(QueuedJobManager[GenerationJob]):
                 raise ValueError(
                     f"{label} must be a multiple of {multiple} between {MIN_DIMENSION} and {MAX_DIMENSION}"
                 )
+
+    @staticmethod
+    def _validate_tiled_detail(
+        tiled_detail: bool, init_image_path: Path | None, mask_image_path: Path | None
+    ) -> None:
+        """El pase por tiles agrega detalle A una imagen: sin imagen no hay que."""
+        if not tiled_detail:
+            return
+        if init_image_path is None:
+            raise ValueError(
+                "El detalle generativo por tiles necesita una imagen de partida."
+            )
+        if mask_image_path is not None:
+            # Los dos recorren la imagen por pedazos con criterios distintos —uno
+            # por la marca, el otro por la grilla— y combinarlos no define que se
+            # edita.
+            raise ValueError(
+                "El detalle por tiles y la edicion con mascara no se pueden pedir "
+                "en el mismo trabajo."
+            )
 
     def _validate_img2img(
         self, model_id: str, init_image_path: Path, strength: float
@@ -377,6 +400,7 @@ class GenerationJobManager(QueuedJobManager[GenerationJob]):
             prompt=job.prompt, negative_prompt=job.negative_prompt, steps=job.steps,
             guidance=job.guidance, width=job.width, height=job.height, seed=job.seed,
             init_image_path=job.init_image_path, strength=job.strength,
+            tiled_detail=job.tiled_detail,
             mask_image_path=job.mask_image_path, scheduler=job.scheduler,
             **mask_preparation_overrides(job),
         )

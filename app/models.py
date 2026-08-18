@@ -338,6 +338,10 @@ class GenerationJob:
     init_image_path: Path | None = None
     # Cuanto se aparta del original: 0 lo devuelve casi igual, 1 lo ignora.
     strength: float = 0.6
+    # Pase generativo por tiles: recorre la imagen a su tamaño real en vez de
+    # reducirla, para AGREGARLE detalle en vez de reinterpretarla. Inventa
+    # textura que no estaba, y por eso se pide explícitamente.
+    tiled_detail: bool = False
     # Máscara de inpainting (blanco=editar, negro=conservar); requiere init.
     mask_image_path: Path | None = None
     # Preparación de la máscara en el motor. None = los defaults del motor. La

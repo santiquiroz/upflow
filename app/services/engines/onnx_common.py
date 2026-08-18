@@ -149,6 +149,7 @@ def blend_tiles(
     width: int,
     channels: int,
     scale: int,
+    feather: int | None = None,
 ) -> np.ndarray:
     """Stitch inferred tiles (y0, x0, tile_h, tile_w, output_tile) back into a
     single HWC uint8 canvas with a linear-feather weighted blend across the
@@ -161,7 +162,13 @@ def blend_tiles(
     canvas_h, canvas_w = height * scale, width * scale
     accumulator = np.zeros((canvas_h, canvas_w, channels), dtype=np.float32)
     weight_sum = np.zeros((canvas_h, canvas_w, 1), dtype=np.float32)
-    feather = scale * TILE_OVERLAP_PX
+    # El default es el solape del reescalador clasico. Se puede pisar porque el
+    # pase generativo solapa mucho mas, y con un feather angosto la parte del
+    # medio del solape queda promediando dos tiles al 50%: en salida de difusion
+    # —donde cada tile inventa su propia textura— eso se ve como una banda
+    # borrosa, no como una costura suave.
+    if feather is None:
+        feather = scale * TILE_OVERLAP_PX
     for y0, x0, tile_h, tile_w, output_tile in tiles:
         out_h, out_w = tile_h * scale, tile_w * scale
         weights = tile_weights(

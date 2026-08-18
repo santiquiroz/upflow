@@ -331,6 +331,9 @@ class GenerationRequest:
     # Cuanto se aparta del original: 0 lo devuelve casi igual, 1 lo ignora casi
     # por completo. Solo se usa con init_image_path.
     strength: float = 0.6
+    # Pase generativo por tiles sobre la imagen a su tamaño real, en vez de
+    # reducirla a width/height. Solo con init_image_path.
+    tiled_detail: bool = False
     # Máscara de inpainting (blanco=editar, negro=conservar). Requiere
     # init_image_path; presente = modo inpaint.
     mask_image_path: Path | None = None
@@ -435,6 +438,11 @@ class GenerationEngine:
                 pipeline, request, output_path, _on_step, run_lock
             )
 
+        if request.tiled_detail and request.init_image_path is not None:
+            return self._run_tiled_detail_blocking(
+                pipeline, request, output_path, _on_step, run_lock, progress_cb
+            )
+
         call_kwargs: dict[str, Any] = {
             "prompt": request.prompt,
             "num_inference_steps": request.steps,
@@ -468,6 +476,80 @@ class GenerationEngine:
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         result.images[0].save(output_path)
+        return output_path
+
+    def _run_tiled_detail_blocking(
+        self,
+        pipeline: Any,
+        request: GenerationRequest,
+        output_path: Path,
+        on_step: Callable[[int, Any, Any], None],
+        run_lock: threading.Lock,
+        progress_cb: Callable[[int, int], None],
+    ) -> Path:
+        """Detalle generativo por tiles, a la resolucion real de la imagen.
+
+        El img2img normal REDUCE la entrada a width/height, asi que sobre una
+        foto grande devuelve algo mas chico que el original: sirve para
+        reinterpretar, no para agregarle detalle. Aca la imagen se recorre por
+        tiles a su tamaño y cada uno pasa por el mismo modelo.
+
+        Que INVENTA textura no es un detalle a esconder: con `strength` acotado
+        (ver `generative_detail.MAX_STRENGTH`) agrega poros y pelos que no
+        estaban en el original, y sin acotar reinterpreta la escena.
+        """
+        import numpy as np
+        from PIL import Image
+
+        from app.services.generative_detail import (
+            DEFAULT_OVERLAP,
+            DEFAULT_TILE,
+            add_generative_detail,
+            clamp_strength,
+        )
+
+        with Image.open(request.init_image_path) as source:
+            base = np.asarray(source.convert("RGB"))
+
+        strength = clamp_strength(request.strength)
+
+        def run_tile(recorte: "np.ndarray", _plan) -> "np.ndarray":
+            call_kwargs: dict[str, Any] = {
+                "prompt": request.prompt,
+                "num_inference_steps": request.steps,
+                "guidance_scale": request.guidance,
+                "callback": on_step,
+                "callback_steps": 1,
+                "image": Image.fromarray(recorte),
+                "strength": strength,
+            }
+            if request.negative_prompt:
+                call_kwargs["negative_prompt"] = request.negative_prompt
+            if request.seed is not None:
+                # La MISMA semilla en todos los tiles: con semillas distintas,
+                # dos tiles vecinos inventan texturas que no se parecen y el
+                # solape las promedia en una banda borrosa.
+                call_kwargs["generator"] = _build_seed_generator(request.seed)
+            with run_lock:
+                _apply_scheduler(pipeline, request.scheduler)
+                result = pipeline(**call_kwargs)
+            return np.asarray(result.images[0].convert("RGB"))
+
+        try:
+            salida = add_generative_detail(
+                base,
+                run_tile=run_tile,
+                tile=DEFAULT_TILE,
+                overlap=DEFAULT_OVERLAP,
+                on_progress=progress_cb,
+            )
+        except GenerationCancelled:
+            raise
+        except Exception as exc:
+            raise _wrap_generation_error(exc) from exc
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        Image.fromarray(salida).save(output_path)
         return output_path
 
     def _run_masked_edit_blocking(

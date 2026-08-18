@@ -266,6 +266,60 @@ describe("GeneratePanel", () => {
     );
   });
 
+  it("no pide el pase por tiles salvo que se lo pidan", async () => {
+    vi.mocked(generationService.createGenerationJob).mockResolvedValue({ ...BASE_JOB });
+    vi.mocked(generationService.getGenerationJob).mockResolvedValue({ ...BASE_JOB });
+
+    renderPanel();
+    await fillPromptAndModel();
+    await uploadInitImage();
+    const submitButton = screen.getByRole("button", { name: /^generate$/i });
+    await waitFor(() => expect(submitButton).not.toBeDisabled());
+    fireEvent.click(submitButton);
+
+    // Es una pasada por cada pedazo de la imagen: no puede ser el default.
+    await waitFor(() => expect(generationService.createGenerationJob).toHaveBeenCalled());
+    expect(vi.mocked(generationService.createGenerationJob).mock.calls[0][0]).toEqual(
+      expect.objectContaining({ tiledDetail: false }),
+    );
+  });
+
+  it("avisa que el detalle por tiles es inventado antes de correrlo", async () => {
+    renderPanel();
+    await fillPromptAndModel();
+    await uploadInitImage();
+
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: en["generation.tiledDetail.label"] }),
+    );
+
+    // Es la diferencia entre esto y el reescalado del modulo de imagen: quien
+    // quiere una foto fiel tiene que poder elegir el otro.
+    expect(screen.getByRole("status")).toHaveTextContent(
+      en["generation.tiledDetail.warning"],
+    );
+  });
+
+  it("manda el pase por tiles cuando se lo tilda", async () => {
+    vi.mocked(generationService.createGenerationJob).mockResolvedValue({ ...BASE_JOB });
+    vi.mocked(generationService.getGenerationJob).mockResolvedValue({ ...BASE_JOB });
+
+    renderPanel();
+    await fillPromptAndModel();
+    await uploadInitImage();
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: en["generation.tiledDetail.label"] }),
+    );
+    const submitButton = screen.getByRole("button", { name: /^generate$/i });
+    await waitFor(() => expect(submitButton).not.toBeDisabled());
+    fireEvent.click(submitButton);
+
+    await waitFor(() => expect(generationService.createGenerationJob).toHaveBeenCalled());
+    expect(vi.mocked(generationService.createGenerationJob).mock.calls[0][0]).toEqual(
+      expect.objectContaining({ tiledDetail: true }),
+    );
+  });
+
   it("blocks image-to-image generation without an uploaded image and explains why", async () => {
     renderPanel();
     await fillPromptAndModel();

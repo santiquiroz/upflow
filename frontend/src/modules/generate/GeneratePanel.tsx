@@ -409,6 +409,48 @@ function StrengthControl({ value, onChange }: { value: number; onChange: (value:
   );
 }
 
+/** Recorrer la foto entera por tiles en vez de reducirla al tamaño del modelo.
+ *
+ * El img2img normal REDUCE la imagen de partida a width×height, así que sobre
+ * una foto grande devuelve algo más chico: sirve para reinterpretar, no para
+ * agregarle detalle. Con esto se recorre a su tamaño real, de a pedazos.
+ *
+ * El texto dice que INVENTA lo que agrega. No es un descargo legal: es la
+ * diferencia entre esto y el reescalado del módulo de imagen, y alguien que
+ * quiere una foto fiel tiene que poder elegir el otro.
+ */
+function TiledDetailControl({
+  value,
+  onChange,
+}: {
+  value: boolean;
+  onChange: (value: boolean) => void;
+}) {
+  const { t } = useTranslation();
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <label className="flex items-center gap-2 text-xs font-medium text-text">
+        <input
+          type="checkbox"
+          checked={value}
+          onChange={(event) => onChange(event.target.checked)}
+          className="h-3.5 w-3.5 accent-accent"
+        />
+        {t("generation.tiledDetail.label")}
+      </label>
+      <p className="text-[11px] leading-relaxed text-text-faint">
+        {t("generation.tiledDetail.hint")}
+      </p>
+      {value && (
+        <p role="status" className="text-[11px] leading-relaxed text-warn">
+          {t("generation.tiledDetail.warning")}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function GeneratePanel() {
   const { t } = useTranslation();
   const [mode, setMode] = useState<GenerationMode>("text-to-image");
@@ -430,6 +472,7 @@ export function GeneratePanel() {
   const [isInitImageUploading, setIsInitImageUploading] = useState(false);
   const [initImageError, setInitImageError] = useState<string | null>(null);
   const [strength, setStrength] = useState(DEFAULT_STRENGTH);
+  const [tiledDetail, setTiledDetail] = useState(false);
   const [frames, setFrames] = useState(17);
   const [fps, setFps] = useState(16);
   const initImageUploadSequence = useRef(0);
@@ -478,6 +521,7 @@ export function GeneratePanel() {
       params.initImageToken = initImage.initImageToken;
       if (!isVideo) {
         params.strength = strength;
+        params.tiledDetail = tiledDetail;
       }
     }
     return params;
@@ -630,6 +674,9 @@ export function GeneratePanel() {
               onFileSelected={(file) => void handleInitImageSelected(file)}
             />
             {!isVideo && <StrengthControl value={strength} onChange={setStrength} />}
+            {!isVideo && (
+              <TiledDetailControl value={tiledDetail} onChange={setTiledDetail} />
+            )}
           </div>
         )}
         <SavedPrompts

@@ -974,6 +974,9 @@ class CreateGenerationJobRequest(BaseModel):
     mask_image_token: str | None = Field(default=None, alias="maskImageToken")
     # None = default por modo: 0.85 con máscara (inpainting), 0.6 sin (img2img).
     strength: float | None = Field(default=None, gt=0, le=1)
+    # Recorrer la imagen a su tamaño real por tiles en vez de reducirla: agrega
+    # detalle en vez de reinterpretar. Requiere imagen de partida.
+    tiled_detail: bool = Field(default=False, alias="tiledDetail")
     auto_upscale: bool = Field(default=False, alias="autoUpscale")
     upscale_model_name: str | None = Field(default=None, alias="upscaleModelName")
     upscale_scale: int | None = Field(default=None, alias="upscaleScale", ge=2, le=4)
@@ -1059,6 +1062,7 @@ class GenerationJobResponse(BaseModel):
     execution_provider: str | None = Field(default=None, serialization_alias="executionProvider")
     # Solo con imagen de partida (img2img/inpaint); None en texto a imagen.
     strength: float | None = None
+    tiled_detail: bool = Field(default=False, serialization_alias="tiledDetail")
     auto_upscale: bool = Field(default=False, serialization_alias="autoUpscale")
     created_at: datetime = Field(serialization_alias="createdAt")
     started_at: datetime | None = Field(default=None, serialization_alias="startedAt")
