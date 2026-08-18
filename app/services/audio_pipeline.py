@@ -307,15 +307,8 @@ class AudioPipeline:
             raise RuntimeError(
                 f"Modelo de separacion desconocido: {model_id!r}. Validos: {known}."
             )
-        separator = self._require_separator(spec.architecture, model_id)
         stem_wavs = [work_dir / f"{stem.id}.wav" for stem in spec.stems]
-        await separator.run(
-            decoded,
-            stem_wavs,
-            job.device or self.settings.default_device,
-            model_id=spec.id,
-            on_chunk=lambda done, total: apply_audio_chunk_progress(job, done, total),
-        )
+        await self._separate_with(job, spec, decoded, stem_wavs, work_dir)
 
         advance_audio_stage(job, "finalizing")
         output_format = job.output_format
@@ -330,6 +323,49 @@ class AudioPipeline:
         job.stem_output_paths = outputs
         complete_audio_stages(job)
         return outputs[spec.main_stem.id]
+
+    async def _separate_with(self, job, spec, decoded: Path, stem_wavs, work_dir: Path) -> None:
+        """El modelo pedido, o el promedio de varios cuando se pidio ensemble."""
+        if not job.ensemble_models:
+            await self._run_separator(job, spec, decoded, stem_wavs)
+            return
+        await self._run_ensemble(job, spec, decoded, stem_wavs, work_dir)
+
+    async def _run_separator(self, job, spec, decoded: Path, stem_wavs) -> None:
+        separator = self._require_separator(spec.architecture, spec.id)
+        await separator.run(
+            decoded,
+            stem_wavs,
+            job.device or self.settings.default_device,
+            model_id=spec.id,
+            on_chunk=lambda done, total: apply_audio_chunk_progress(job, done, total),
+        )
+
+    async def _run_ensemble(self, job, spec, decoded: Path, stem_wavs, work_dir: Path) -> None:
+        """Corre todos los modelos y promedia stem por stem.
+
+        Cada arquitectura falla distinto: la señal que comparten se suma en fase
+        y sus artefactos, que no estan correlacionados, se cancelan en parte.
+        """
+        from app.services.engines.separation_models import SEPARATION_MODELS
+        from app.services.engines.stem_ensemble import average_stem_files
+
+        specs = [spec] + [SEPARATION_MODELS[model_id] for model_id in job.ensemble_models]
+        por_modelo: list[list[Path]] = []
+        for indice, actual in enumerate(specs):
+            salidas = [work_dir / f"{actual.id}.{stem.id}.wav" for stem in actual.stems]
+            await self._run_separator(job, actual, decoded, salidas)
+            por_modelo.append(salidas)
+
+        advance_audio_stage(job, "finalizing")
+        for posicion, destino in enumerate(stem_wavs):
+            # El orden de los stems lo fija el catalogo y los modelos ya se
+            # validaron con los MISMOS ids, asi que la posicion alcanza para
+            # aparear "el instrumental de este" con "el instrumental de aquel".
+            average_stem_files([salidas[posicion] for salidas in por_modelo], destino)
+        for salidas in por_modelo:
+            for sobrante in salidas:
+                sobrante.unlink(missing_ok=True)
 
     def _require_separator(self, architecture: str, model_id: str):
         # Mismo criterio que la cadena de voz: pedir la separacion y que se

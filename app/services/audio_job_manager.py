@@ -22,6 +22,10 @@ from app.services.restorer_registry import validate_restore_mode_ready
 
 logger = logging.getLogger(__name__)
 
+# Tres es el techo por lo mismo que en la comparacion: cada modelo mas es una
+# pasada completa sobre el tema, y la mejora del cuarto no se oye.
+MAX_ENSEMBLE_MODELS = 3
+
 
 class AudioJobManager(QueuedJobManager[AudioJob]):
     """Standalone audio job manager sobre QueuedJobManager (cola acotada, N
@@ -69,6 +73,7 @@ class AudioJobManager(QueuedJobManager[AudioJob]):
         cleanup_steps: list[str] | None = None,
         separate: bool = False,
         separation_model: str | None = None,
+        ensemble_models: list[str] | None = None,
         job_id: str | None = None,
         owner: AuthenticatedUser | None = None,
     ) -> AudioJob:
@@ -88,6 +93,7 @@ class AudioJobManager(QueuedJobManager[AudioJob]):
                 voice_presence_db=voice_presence_db,
                 cleanup_steps=cleanup_steps or [],
             )
+            selected_ensemble = self._validate_ensemble(separation_model, ensemble_models or [])
             selected_voice_steps: list[str] = []
             selected_cleanup_steps: list[str] = []
         else:
@@ -95,6 +101,9 @@ class AudioJobManager(QueuedJobManager[AudioJob]):
                 raise ValueError(
                     "separation_model solo aplica cuando separate=true."
                 )
+            if ensemble_models:
+                raise ValueError("ensemble_models solo aplica cuando separate=true.")
+            selected_ensemble = []
             selected_cleanup_steps = self._validate_cleanup_selection(cleanup_steps or [])
             selected_voice_steps = self._validate_voice_selection(
                 voice_steps or [], voice_delivery
@@ -126,6 +135,7 @@ class AudioJobManager(QueuedJobManager[AudioJob]):
             cleanup_steps=selected_cleanup_steps,
             separate=separate,
             separation_model=separation_model,
+            ensemble_models=selected_ensemble,
             owner_id=owner.id if owner is not None else None,
         )
         if job_id is not None:
@@ -183,6 +193,41 @@ class AudioJobManager(QueuedJobManager[AudioJob]):
         if model_id not in self.settings.karaoke_installed_models():
             raise ValueError(missing_pack_message("karaoke", variant=model_id))
         return model_id
+
+    def _validate_ensemble(self, primary: str, extras: list[str]) -> list[str]:
+        """Los modelos extra a combinar, o vacio.
+
+        La regla dura es que TODOS declaren los mismos stems: promediar un
+        instrumental con un bajo no da un instrumental mejor, da una suma sin
+        sentido que ademas nadie puede etiquetar.
+        """
+        from app.services.engines.separation_models import SEPARATION_MODELS
+
+        elegidos = [model_id for model_id in dict.fromkeys(extras) if model_id != primary]
+        if not elegidos:
+            return []
+        if len(elegidos) + 1 > MAX_ENSEMBLE_MODELS:
+            raise ValueError(
+                f"Se pueden combinar hasta {MAX_ENSEMBLE_MODELS} modelos; "
+                "mas es esperar el doble por una diferencia que no se oye."
+            )
+        instalados = self.settings.karaoke_installed_models()
+        stems_esperados = SEPARATION_MODELS[primary].stem_ids()
+        for model_id in elegidos:
+            spec = SEPARATION_MODELS.get(model_id)
+            if spec is None:
+                known = ", ".join(sorted(SEPARATION_MODELS))
+                raise ValueError(
+                    f"Modelo de separacion desconocido: {model_id!r}. Validos: {known}."
+                )
+            if model_id not in instalados:
+                raise ValueError(missing_pack_message("karaoke", variant=model_id))
+            if spec.stem_ids() != stems_esperados:
+                raise ValueError(
+                    f"{model_id!r} entrega {spec.stem_ids()} y {primary!r} entrega "
+                    f"{stems_esperados}: solo se combinan modelos con las mismas pistas."
+                )
+        return elegidos
 
     def _default_installed_model(self) -> str:
         """Vacio = primer modelo instalado: la capability marca disponible con

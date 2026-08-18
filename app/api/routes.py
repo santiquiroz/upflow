@@ -552,6 +552,7 @@ def audio_job_to_response(job: AudioJob) -> AudioJobResponse:
         cleanup_steps=list(job.cleanup_steps),
         separate=job.separate,
         separation_model=job.separation_model,
+        ensemble_models=list(job.ensemble_models),
         created_at=job.created_at,
         started_at=job.started_at,
         finished_at=job.finished_at,
@@ -1122,6 +1123,8 @@ async def create_audio_job(
     cleanup_steps: str | None = Form(default=None),
     separate: bool = Form(default=False),
     separation_model: str | None = Form(default=None),
+    # CSV de ids extra a combinar con el principal ("maxima calidad").
+    ensemble_models: str | None = Form(default=None),
     audio_jobs: AudioJobManager = Depends(get_audio_job_manager),
     storage: StorageService = Depends(get_storage),
     settings: Settings = Depends(get_settings),
@@ -1162,6 +1165,7 @@ async def create_audio_job(
             separation_model=(
                 separation_model if isinstance(separation_model, str) and separation_model else None
             ),
+            ensemble_models=_parse_chain_steps(ensemble_models),
             job_id=token,
             owner=current_user,
         )

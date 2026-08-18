@@ -27,6 +27,8 @@ export interface CreateAudioJobParams {
   /** Modo karaoke: exclusivo, el backend rechaza combinarlo con otros pasos. */
   separate?: boolean;
   separationModel?: string | null;
+  /** Modelos EXTRA a combinar con el principal. Vacío = un solo modelo. */
+  ensembleModels?: string[];
 }
 
 function buildAudioJobFormData(params: CreateAudioJobParams): FormData {
@@ -52,6 +54,11 @@ function buildAudioJobFormData(params: CreateAudioJobParams): FormData {
     formData.append("separate", "true");
     if (params.separationModel) {
       formData.append("separation_model", params.separationModel);
+    }
+    // Vacío NO se manda: el campo ausente significa "un solo modelo", misma
+    // regla que las demás listas de esta API.
+    if (params.ensembleModels && params.ensembleModels.length > 0) {
+      formData.append("ensemble_models", params.ensembleModels.join(","));
     }
   }
   // Misma regla que voice_steps: una selección vacía NO se manda, porque el

@@ -150,6 +150,10 @@ class AudioJob:
     # Id del catalogo de separacion (separation_models.SEPARATION_MODELS).
     # El manager lo resuelve al default cuando separate=True y no viene.
     separation_model: str | None = None
+    # Modelos EXTRA a combinar con el principal ("maxima calidad"). Vacio = un
+    # solo modelo, que es el caso normal. Todos tienen que declarar los mismos
+    # stems: promediar un instrumental con un bajo no da nada.
+    ensemble_models: list[str] = field(default_factory=list)
     # Standalone-module output format (Fase C Task 9): "wav" (lossless, no
     # re-encode -- current is already PCM from decode/denoise/restore),
     # "flac" (lossless, ~50% smaller, default), "mp3" / "m4a" (con perdida). See

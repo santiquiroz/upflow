@@ -108,6 +108,11 @@ class AudioJobResponse(BaseModel):
     )
     separate: bool = False
     separation_model: str | None = Field(default=None, serialization_alias="separationModel")
+    # Los modelos extra que se combinaron. Viaja para que el resultado diga con
+    # que se hizo: dos archivos del mismo modelo principal pueden no ser iguales.
+    ensemble_models: list[str] = Field(
+        default_factory=list, serialization_alias="ensembleModels"
+    )
     created_at: datetime = Field(serialization_alias="createdAt")
     started_at: datetime | None = Field(default=None, serialization_alias="startedAt")
     finished_at: datetime | None = Field(default=None, serialization_alias="finishedAt")

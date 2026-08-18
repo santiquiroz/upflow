@@ -14,6 +14,7 @@ import type { DeviceInfoResponse, LossyQuality, MasteringPreset } from "../../li
 import { formatDeviceSummary } from "../enhance/accordionSummaries";
 import { CleanupChainPanel, cleanupSummaryKey } from "./CleanupChainPanel";
 import { KaraokeSection } from "./KaraokeSection";
+import { EnsembleSection } from "./EnsembleSection";
 import { ModelComparison } from "./ModelComparison";
 import { VoiceChainPanel, voiceSummaryKey } from "./VoiceChainPanel";
 import {
@@ -228,6 +229,7 @@ export function AudioPanel() {
   const [master, setMaster] = useState<string | null>(null);
   const [separate, setSeparate] = useState(false);
   const [separationModel, setSeparationModel] = useState<string | null>(null);
+  const [ensembleModels, setEnsembleModels] = useState<string[]>([]);
 
   const capabilitiesQuery = useAudioCapabilities();
   const voiceCatalogQuery = useVoiceCatalog();
@@ -295,6 +297,7 @@ export function AudioPanel() {
           cleanupSteps: [],
           separate: true,
           separationModel: effectiveSeparationModel,
+          ensembleModels,
         }
       : {
           denoise,
@@ -355,6 +358,14 @@ export function AudioPanel() {
             selectedModel={effectiveSeparationModel}
             onSelectModel={setSeparationModel}
           />
+          {separate && (
+            <EnsembleSection
+              models={separationModels}
+              selectedModel={effectiveSeparationModel}
+              chosen={ensembleModels}
+              onChange={setEnsembleModels}
+            />
+          )}
           {separate && <ModelComparison file={files[0] ?? null} models={separationModels} />}
         </AccordionSection>
         {separate && (
