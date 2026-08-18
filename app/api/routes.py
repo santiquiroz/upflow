@@ -36,6 +36,8 @@ from app.models import (
     Shape3dJob,
 )
 from app.schemas import (
+    AudioComparisonResponse,
+    ComparisonEntryResponse,
     InstallVulkanModelRequest,
     VulkanInstallStatusResponse,
     CreateDownloadJobRequest,
@@ -178,6 +180,8 @@ from app.services.pack_provisioner import (
 )
 from app.services.settings_service import editable_settings_status, update_setting
 from app.services.storage import StorageService
+from app.services.audio_compare import start_comparison, validate_models
+from app.services.audio_excerpt import DEFAULT_EXCERPT_SECONDS
 from app.services.download_job_manager import (
     DownloadJobManager,
     describe_failure,
@@ -1179,6 +1183,64 @@ async def create_audio_job(
         status=job.status,
         status_url=f"/api/v1/audio/jobs/{job.id}",
         download_url=None,
+    )
+
+
+@router.post(
+    "/audio/compare",
+    response_model=AudioComparisonResponse,
+    status_code=202,
+    dependencies=[Depends(require(Permission.jobs_create))],
+)
+async def compare_separation_models(
+    request: Request,
+    file: UploadFile = File(...),
+    # CSV como el resto de las listas en formularios de esta API.
+    models: str = Form(...),
+    excerpt_seconds: int = Form(default=DEFAULT_EXCERPT_SECONDS),
+    offset_seconds: float | None = Form(default=None),
+    audio_jobs: AudioJobManager = Depends(get_audio_job_manager),
+    storage: StorageService = Depends(get_storage),
+    settings: Settings = Depends(get_settings),
+) -> AudioComparisonResponse:
+    """Corre N separadores sobre el mismo fragmento del archivo del usuario.
+
+    Que modelo anda mejor depende del material, y los rankings publicados
+    promedian sobre un dataset que no es el suyo.
+    """
+    original_name = Path(file.filename or "upload.wav").name
+    safe_name = sanitize_filename(original_name, default="upload.wav")
+    source = settings.uploads_path / f"{uuid4().hex}-{safe_name}"
+    try:
+        elegidos = validate_models(
+            _parse_chain_steps(models), set(settings.karaoke_installed_models())
+        )
+        await storage.save_upload(file, source, max_mb=settings.max_audio_upload_mb)
+        comparison = await start_comparison(
+            source,
+            original_name,
+            elegidos,
+            audio_jobs=audio_jobs,
+            settings=settings,
+            excerpt_seconds=excerpt_seconds,
+            offset_seconds=offset_seconds,
+            owner=current_user_from_request(request),
+        )
+    except (QueueFullError, QuotaExceededError) as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        # El original no se guarda: lo unico que se compara es el fragmento, y
+        # cada trabajo ya tiene su copia.
+        source.unlink(missing_ok=True)
+    return AudioComparisonResponse(
+        entries=[
+            ComparisonEntryResponse(model_id=entry.model_id, job_id=entry.job_id)
+            for entry in comparison.entries
+        ],
+        offset_seconds=comparison.offset_seconds,
+        excerpt_seconds=comparison.excerpt_seconds,
     )
 
 

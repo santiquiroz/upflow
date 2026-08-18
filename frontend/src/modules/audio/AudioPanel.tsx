@@ -14,6 +14,7 @@ import type { DeviceInfoResponse, LossyQuality, MasteringPreset } from "../../li
 import { formatDeviceSummary } from "../enhance/accordionSummaries";
 import { CleanupChainPanel, cleanupSummaryKey } from "./CleanupChainPanel";
 import { KaraokeSection } from "./KaraokeSection";
+import { ModelComparison } from "./ModelComparison";
 import { VoiceChainPanel, voiceSummaryKey } from "./VoiceChainPanel";
 import {
   convertibleFileCount,
@@ -354,6 +355,7 @@ export function AudioPanel() {
             selectedModel={effectiveSeparationModel}
             onSelectModel={setSeparationModel}
           />
+          {separate && <ModelComparison file={files[0] ?? null} models={separationModels} />}
         </AccordionSection>
         {separate && (
           <p role="status" className="text-xs text-text-dim">

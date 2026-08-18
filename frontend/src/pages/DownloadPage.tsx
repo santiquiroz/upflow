@@ -459,6 +459,7 @@ export function DownloadPage() {
               selectedModel={modeloElegido}
               onSelectModel={setSeparationModel}
               toggleKey="download.thenSeparate"
+              collapseModels
             />
             {thenSeparate && (
               <p className="mt-2 text-xs text-text-dim">{t("download.thenSeparateNote")}</p>

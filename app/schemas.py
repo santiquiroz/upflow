@@ -810,6 +810,25 @@ class DownloadJobResponse(BaseModel):
     followup_error: str | None = Field(default=None, serialization_alias="followupError")
 
 
+class ComparisonEntryResponse(BaseModel):
+    model_id: str = Field(serialization_alias="modelId")
+    job_id: str = Field(serialization_alias="jobId")
+
+    # `model_` es prefijo reservado de pydantic: sin esto, `model_id` dispara un
+    # warning de campo protegido en cada import.
+    model_config = ConfigDict(protected_namespaces=())
+
+
+class AudioComparisonResponse(BaseModel):
+    """Los trabajos que compara, uno por modelo, sobre el MISMO fragmento."""
+
+    entries: list[ComparisonEntryResponse] = Field(default_factory=list)
+    # Desde donde se corto. Viaja porque el default lo elige el servidor (el
+    # medio del tema) y sin decirlo el usuario no sabe que esta oyendo.
+    offset_seconds: float = Field(serialization_alias="offsetSeconds")
+    excerpt_seconds: int = Field(serialization_alias="excerptSeconds")
+
+
 class DownloadJobsListResponse(BaseModel):
     jobs: list[DownloadJobResponse] = Field(default_factory=list)
 

@@ -85,6 +85,41 @@ export function createAudioJob(
   return apiPostForm<CreateJobResponse>("/audio/jobs", buildAudioJobFormData(params), options);
 }
 
+export interface CompareModelsParams {
+  file: File;
+  models: string[];
+  excerptSeconds?: number;
+  offsetSeconds?: number | null;
+}
+
+export interface ComparisonEntry {
+  modelId: string;
+  jobId: string;
+}
+
+export interface AudioComparison {
+  entries: ComparisonEntry[];
+  offsetSeconds: number;
+  excerptSeconds: number;
+}
+
+/** Corre varios separadores sobre el mismo fragmento del archivo del usuario. */
+export function compareSeparationModels(
+  params: CompareModelsParams,
+  options: UploadOptions = {},
+): Promise<AudioComparison> {
+  const formData = new FormData();
+  formData.append("file", params.file);
+  formData.append("models", params.models.join(","));
+  if (params.excerptSeconds !== undefined) {
+    formData.append("excerpt_seconds", String(params.excerptSeconds));
+  }
+  if (params.offsetSeconds !== undefined && params.offsetSeconds !== null) {
+    formData.append("offset_seconds", String(params.offsetSeconds));
+  }
+  return apiPostForm<AudioComparison>("/audio/compare", formData, options);
+}
+
 export function getAudioJob(jobId: string): Promise<AudioJob> {
   return apiGet<AudioJob>(`/audio/jobs/${jobId}`);
 }

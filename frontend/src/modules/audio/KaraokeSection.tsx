@@ -128,6 +128,7 @@ export function KaraokeSection({
   selectedModel,
   onSelectModel,
   toggleKey = "audio.karaoke.toggle",
+  collapseModels = false,
 }: {
   enabled: boolean;
   onToggle: (enabled: boolean) => void;
@@ -136,6 +137,10 @@ export function KaraokeSection({
   onSelectModel: (modelId: string) => void;
   /** El mismo control en descargas dice otra cosa: ahi separar es lo que sigue. */
   toggleKey?: string;
+  /** Esconde el catalogo mientras el modo esta apagado. Fuera del modulo de
+   *  audio —donde separar es una opcion mas— dejarlo siempre a la vista es
+   *  volcar una pantalla de modelos sobre alguien que no pidio ninguno. */
+  collapseModels?: boolean;
 }) {
   const { t } = useTranslation();
   const installed = models.filter((model) => model.installed);
@@ -158,7 +163,7 @@ export function KaraokeSection({
         </p>
       )}
 
-      {orderedCategories(models).map((category) => (
+      {(!collapseModels || enabled) && orderedCategories(models).map((category) => (
         <ModelCategoryGroup
           key={category}
           category={category}
@@ -168,7 +173,9 @@ export function KaraokeSection({
         />
       ))}
 
-      <p className="text-xs text-text-faint">{t("audio.karaoke.credit")}</p>
+      {(!collapseModels || enabled) && (
+        <p className="text-xs text-text-faint">{t("audio.karaoke.credit")}</p>
+      )}
     </div>
   );
 }
