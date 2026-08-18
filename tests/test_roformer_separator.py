@@ -159,7 +159,7 @@ def test_the_roformer_model_joins_the_karaoke_group_without_becoming_the_default
     assert DEFAULT_SEPARATION_MODEL == "inst_hq_3"
     assert SPEC.category == "karaoke"
     karaoke = [spec.id for spec in SEPARATION_MODELS.values() if spec.category == "karaoke"]
-    assert karaoke == ["inst_hq_3", "voc_ft", MODEL_ID]
+    assert karaoke == ["inst_hq_3", "voc_ft", MODEL_ID, "umx_4stem"]
 
 
 def test_the_roformer_entry_declares_its_own_architecture() -> None:
@@ -189,11 +189,15 @@ def test_the_roformer_entry_pins_the_port_release_and_a_full_sha256() -> None:
     assert not hasattr(SPEC, "uvr_hash")
 
 
-def test_only_the_slow_lane_carries_a_warning() -> None:
-    # La advertencia es lo que la UI muestra ANTES de elegir. Si algun dia otro
-    # modelo la necesita, este test dice donde actualizar la expectativa.
+def test_only_the_lanes_with_a_catch_carry_a_warning() -> None:
+    # La advertencia es lo que la UI muestra ANTES de elegir, y la propiedad que
+    # protege este test no es cuantas hay sino CUALES: la lleva el que cuesta
+    # ~20x (este) y el que separa peor a cambio de dar cuatro pistas (umx). El
+    # default y las pasadas de limpieza no advierten nada, porque no tienen
+    # ninguna contra que el usuario deba saber de antemano.
     warned = [spec.id for spec in SEPARATION_MODELS.values() if spec.warning_key]
-    assert warned == [MODEL_ID]
+    assert warned == [MODEL_ID, "umx_4stem"]
+    assert SEPARATION_MODELS[DEFAULT_SEPARATION_MODEL].warning_key is None
     assert SPEC.warning_key == "audio.karaoke.model.mel_band_roformer_kim.warning"
 
 
@@ -772,4 +776,4 @@ async def test_capabilities_expose_the_warning_only_for_the_slow_model(
     assert by_id["inst_hq_3"].warning_key is None
     assert [stem.id for stem in by_id[MODEL_ID].stems] == ["instrumental", "vocals"]
     karaoke = [model.id for model in response.separation_models if model.category == "karaoke"]
-    assert karaoke == ["inst_hq_3", "voc_ft", MODEL_ID]
+    assert karaoke == ["inst_hq_3", "voc_ft", MODEL_ID, "umx_4stem"]

@@ -26,13 +26,16 @@ from typing import ClassVar, Literal
 # Arquitecturas soportadas. Viaja en la API para que la UI pueda explicar de
 # donde sale cada modelo, pero el usuario NUNCA la elige: elige un id de modelo
 # y el pipeline resuelve el motor.
-Architecture = Literal["mdx", "vr", "roformer"]
+Architecture = Literal["mdx", "vr", "roformer", "umx"]
 
 STEM_INSTRUMENTAL = "audio.stem.instrumental"
 STEM_VOCALS = "audio.stem.vocals"
-# No hay constantes de bateria/bajo/resto porque no hay modelo que las use: el
-# CONTRATO aguanta N stems, pero el catalogo hoy es todo de dos. Agregarlas
-# antes de tiempo dejaria claves de i18n muertas prometiendo algo que no esta.
+# Estas tres existen desde que hay un modelo que las emite (umxhq, 2026-08-17).
+# Antes no estaban a proposito: una clave de i18n sin modelo detras promete algo
+# que no se puede hacer.
+STEM_DRUMS = "audio.stem.drums"
+STEM_BASS = "audio.stem.bass"
+STEM_OTHER = "audio.stem.other"
 
 # Un stem que NO sale del modelo sino de restarle a la mezcla todo lo que el
 # modelo si infiere. Es el complemento exacto, y solo existe cuando el modelo
@@ -98,6 +101,18 @@ class SeparationModelSpec:
     # Lo fija la subclase, no los datos: una entrada no puede declarar una
     # arquitectura que no coincida con sus propios parametros.
     architecture: ClassVar[Architecture]
+
+    @property
+    def files(self) -> tuple[str, ...]:
+        """TODOS los archivos que el modelo necesita en disco.
+
+        Casi siempre es uno, y por eso `filename` sigue siendo el campo; umxhq
+        son cuatro grafos (uno por pista) que no sirven de a uno. Lo que decide
+        si el modelo esta instalado es esta lista, no `filename`: con un solo
+        archivo presente de cuatro, el picker lo ofrecia y el trabajo moria al
+        cargar la segunda sesion.
+        """
+        return (self.filename,)
 
     @property
     def main_stem(self) -> SeparationStem:

@@ -115,11 +115,12 @@ def read_stereo_wav(path: Path) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 
-def test_catalog_has_eight_models_across_three_architectures() -> None:
+def test_catalog_has_nine_models_across_four_architectures() -> None:
     assert set(SEPARATION_MODELS) == {
         "inst_hq_3",
         "voc_ft",
         "mel_band_roformer_kim",
+        "umx_4stem",
         "reverb_hq",
         "deecho_normal",
         "deecho_aggressive",
@@ -131,6 +132,7 @@ def test_catalog_has_eight_models_across_three_architectures() -> None:
         "inst_hq_3": "mdx",
         "voc_ft": "mdx",
         "mel_band_roformer_kim": "roformer",
+        "umx_4stem": "umx",
         "reverb_hq": "mdx",
         "deecho_normal": "vr",
         "deecho_aggressive": "vr",
@@ -624,7 +626,7 @@ async def test_capabilities_expose_one_list_with_the_architecture(tmp_path: Path
     response = await audio_capabilities(settings=settings)
     by_id = {model.id: model for model in response.separation_models}
 
-    assert len(response.separation_models) == 8
+    assert len(response.separation_models) == 9
     assert by_id["deecho_normal"].architecture == "vr"
     assert by_id["deecho_normal"].installed is True
     assert by_id["deecho_aggressive"].installed is False

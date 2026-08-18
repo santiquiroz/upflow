@@ -638,10 +638,29 @@ class TestPackKaraokePorVariante:
         )
         for spec in SEPARATION_MODELS.values():
             assert f"'{spec.id}'" in validate_set_line
-            assert spec.filename in script
-            assert spec.url in script
-            assert spec.sha256 in script
+            # TODOS los archivos, no solo `filename`: umxhq son cuatro grafos y
+            # con uno solo en el script el boton bajaria un modelo inservible.
+            for archivo in spec.files:
+                assert archivo in script, f"{spec.id}: falta {archivo} en el ps1"
+            # La URL viaja entera para los de un archivo y como base + nombre
+            # para los de varios; lo que importa es que se pueda armar.
+            assert spec.url.rsplit("/", 1)[0] in script
+            for sha in _hashes_declarados(spec):
+                assert sha in script, f"{spec.id}: falta un sha256 en el ps1"
             # El hash UVR solo existe para los MDX (identifica el .onnx que UVR
             # distribuye); los VR se bajan del port, que exporta el grafo.
             if getattr(spec, "uvr_hash", None):
                 assert spec.uvr_hash in script
+
+
+def _hashes_declarados(spec) -> tuple[str, ...]:
+    """El sha256 de cada archivo del modelo.
+
+    Un modelo de un archivo declara uno; umxhq declara cuatro, uno por grafo.
+    Verificar solo el primero dejaria pasar un ps1 que baja tres archivos
+    buenos y uno corrupto sin que nadie se entere hasta que el trabajo falle.
+    """
+    graphs = getattr(spec, "graphs", None)
+    if graphs:
+        return tuple(sha for _, _, sha in graphs)
+    return (spec.sha256,)

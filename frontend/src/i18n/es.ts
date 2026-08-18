@@ -761,6 +761,10 @@ export const es = {
     "Extrae la voz con la máxima calidad del catálogo (Mel-Band RoFormer); la instrumental es el resto.",
   "audio.karaoke.model.mel_band_roformer_kim.warning":
     "Máxima calidad, unas 20x más lento que Inst HQ 3: medido en 50 s de GPU por cada minuto de audio, contra 2,5 s de Inst HQ 3. Descarga 931 MB y necesita ~2,3 GB libres de VRAM.",
+  "audio.karaoke.model.umx_4stem.description":
+    "Separa la canción en CUATRO pistas de una: voz, batería, bajo y todo lo demás.",
+  "audio.karaoke.model.umx_4stem.warning":
+    "Único del catálogo que da cuatro pistas. Es un modelo más viejo y separa peor que los de voz: deja más cruce entre pistas. Rápido igual (unos 13 s por canción de 4 minutos) y descarga 136 MB en cuatro archivos.",
   "audio.karaoke.model.inst_hq_3.description":
     "Extrae la instrumental (pista de karaoke); la voz es el resto.",
   "audio.karaoke.model.voc_ft.description":
@@ -777,6 +781,9 @@ export const es = {
     "Saca el ruido de fondo constante — hiss, zumbido y ruido de sala. Es otro trabajo que los De-Echo: apunta al ruido parejo, no a los reflejos.",
   "audio.stem.instrumental": "Instrumental",
   "audio.stem.vocals": "Voces",
+  "audio.stem.drums": "Batería",
+  "audio.stem.bass": "Bajo",
+  "audio.stem.other": "Resto",
   "audio.stem.dry": "Sin reverb (dry)",
   "audio.stem.wet": "Reverb (wet)",
   "audio.stem.no_echo": "Sin eco",

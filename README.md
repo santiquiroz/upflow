@@ -43,6 +43,7 @@ la app y no 40 GB de modelos.
 | | |
 |---|---|
 | **Karaoke y pistas** | Separá la voz de la instrumental para cantar encima, o quedate solo con la voz. |
+| **Cuatro pistas** | Voz, batería, bajo y resto, cada una en su archivo. |
 | **Limpiar** | Ruido, eco y reverberación, encadenables en una sola pasada. |
 | **Restaurar** | Recuperá una grabación vieja o de baja calidad; hay un modo que directamente reinventa el agudo que se perdió. |
 | **Nivelar** | Volumen al estándar de entrega de Spotify, YouTube o emisión (EBU R128). |

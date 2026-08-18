@@ -33,6 +33,7 @@ from app.services.engines.generation_onnx import GenerationEngine
 from app.services.engines.gmfss_engine import GmfssEngine
 from app.services.engines.mdx_separator import MdxSeparator
 from app.services.engines.roformer_separator import RoformerSeparator
+from app.services.engines.umx_separator import UmxSeparator
 from app.services.engines.vr_deecho_separator import VrDeEchoSeparator
 from app.services.engines.onnx_upscaler import OnnxUpscaler
 from app.services.engines.onnx_video_upscaler import OnnxVideoUpscaler
@@ -184,6 +185,7 @@ async def lifespan(app: FastAPI):
         "mdx": MdxSeparator(settings, gpu_coordinator),
         "vr": VrDeEchoSeparator(settings, gpu_coordinator),
         "roformer": RoformerSeparator(settings, gpu_coordinator),
+        "umx": UmxSeparator(settings, gpu_coordinator),
     }
     audio_pipeline = AudioPipeline(
         settings,

@@ -16,6 +16,7 @@ from pathlib import Path
 from app.services.engines.mdx_models import MDX_MODELS
 from app.services.engines.roformer_models import ROFORMER_MODELS
 from app.services.engines.separation_spec import SeparationModelSpec
+from app.services.engines.umx_models import UMX_MODELS
 from app.services.engines.vr_models import VR_MODELS
 
 DEFAULT_SEPARATION_MODEL = "inst_hq_3"
@@ -28,6 +29,7 @@ DEFAULT_SEPARATION_MODEL = "inst_hq_3"
 SEPARATION_MODELS: dict[str, SeparationModelSpec] = {
     **MDX_MODELS,
     **ROFORMER_MODELS,
+    **UMX_MODELS,
     **VR_MODELS,
 }
 
@@ -37,10 +39,12 @@ def model_file(model_dir: Path, model_id: str) -> Path:
 
 
 def installed_model_ids(model_dir: Path) -> list[str]:
+    # `files` y no `filename`: umxhq son cuatro grafos y con uno solo presente
+    # el picker lo ofreceria para que el trabajo muera al cargar el segundo.
     return [
         model_id
-        for model_id in SEPARATION_MODELS
-        if model_file(model_dir, model_id).exists()
+        for model_id, spec in SEPARATION_MODELS.items()
+        if all((model_dir / archivo).exists() for archivo in spec.files)
     ]
 
 

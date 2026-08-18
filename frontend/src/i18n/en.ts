@@ -766,6 +766,10 @@ export const en = {
     "Extracts the vocals at the highest quality in the catalog (Mel-Band RoFormer); the instrumental is the remainder.",
   "audio.karaoke.model.mel_band_roformer_kim.warning":
     "Highest quality, about 20x slower than Inst HQ 3: measured at 50 s of GPU time for each minute of audio, against 2.5 s for Inst HQ 3. Downloads 931 MB and needs ~2.3 GB of free VRAM.",
+  "audio.karaoke.model.umx_4stem.description":
+    "Splits the song into FOUR tracks at once: vocals, drums, bass and everything else.",
+  "audio.karaoke.model.umx_4stem.warning":
+    "The only four-track model here. It is an older model and separates less cleanly than the vocal ones: more bleed between tracks. Still fast (about 13 s for a 4-minute song) and downloads 136 MB across four files.",
   "audio.karaoke.model.inst_hq_3.description":
     "Extracts the instrumental (karaoke track); the vocals are the remainder.",
   "audio.karaoke.model.voc_ft.description":
@@ -782,6 +786,9 @@ export const en = {
     "Remove steady background noise — hiss, hum and room tone. A different job from the De-Echo models: it targets constant noise, not reflections.",
   "audio.stem.instrumental": "Instrumental",
   "audio.stem.vocals": "Vocals",
+  "audio.stem.drums": "Drums",
+  "audio.stem.bass": "Bass",
+  "audio.stem.other": "Other",
   "audio.stem.dry": "No reverb (dry)",
   "audio.stem.wet": "Reverb (wet)",
   "audio.stem.no_echo": "No echo",

@@ -1,7 +1,7 @@
 param(
     # Cual modelo del catalogo bajar. Tiene que coincidir con los ids de
     # app/services/engines/separation_models.py.
-    [ValidateSet('inst_hq_3', 'voc_ft', 'mel_band_roformer_kim', 'reverb_hq', 'deecho_normal', 'deecho_aggressive', 'deecho_dereverb', 'denoise')]
+    [ValidateSet('inst_hq_3', 'voc_ft', 'mel_band_roformer_kim', 'umx_4stem', 'reverb_hq', 'deecho_normal', 'deecho_aggressive', 'deecho_dereverb', 'denoise')]
     [string]$Model = 'inst_hq_3'
 )
 
@@ -69,6 +69,20 @@ $modelos = @{
         Sha256 = '1b8afd7780d8a234527748821dee6bc746d346f2088751c12fd48e8c873f625a'
         Size   = '~931 MB'
         Label  = 'Mel-Band RoFormer by KimberleyJSN (saca la voz con la maxima calidad; ~20x mas lento que Inst HQ 3)'
+    }
+    # umxhq son CUATRO grafos, uno por pista, y no sirven de a uno: por eso
+    # esta entrada declara Files en vez de File. Pesos MIT declarados sobre los
+    # .pth en el record de Zenodo, exportados a ONNX en un port propio.
+    'umx_4stem' = @{
+        Files  = @(
+            @{ File = 'umxhq_vocals.onnx'; Sha256 = 'd1297b08e1849f0264da64d995d7489d85e07160b659ccce19b55b7e553ff854' }
+            @{ File = 'umxhq_drums.onnx';  Sha256 = 'b5472fe5f683cfa27e44caa82859984400788e4dd8ea7602a721fa4ea365e8c2' }
+            @{ File = 'umxhq_bass.onnx';   Sha256 = 'cb9d14b180ed2e7dcf1c76acfa96cc373f6228c71b80a0f3096e282e9106c040' }
+            @{ File = 'umxhq_other.onnx';  Sha256 = '2650bc0def77e52de6ffeb32c5bb6063e84896e80a32cc33e53ebea010a54034' }
+        )
+        BaseUrl = 'https://github.com/santiquiroz/port-openunmix-onnx/releases/download/models-v1.0'
+        Size   = '~136 MB (4 archivos)'
+        Label  = 'Open-Unmix umxhq (separa en CUATRO pistas: voz, bateria, bajo y resto)'
     }
     'reverb_hq' = @{
         File   = 'Reverb_HQ_By_FoxJoy.onnx'
@@ -185,6 +199,38 @@ function Write-KaraokeCredits([string]$directory) {
 }
 
 $info = $modelos[$Model]
+
+# Un modelo puede ser UN archivo (el caso normal) o varios que no sirven sueltos.
+if ($info.ContainsKey('Files')) {
+    New-Item -ItemType Directory -Force -Path $vendorDir | Out-Null
+    foreach ($parte in $info.Files) {
+        $rutaParte = Join-Path $vendorDir $parte.File
+        $esperado = @{ Sha256 = $parte.Sha256 }
+        if (Test-Path $rutaParte) {
+            $fallo = Get-ModelIntegrityError $rutaParte $esperado
+            if ($null -eq $fallo) {
+                Write-Host "Ya esta: $($parte.File)"
+                continue
+            }
+            Write-Host "El archivo existente no pasa la verificacion ($fallo); se vuelve a bajar."
+            Remove-Item -Force $rutaParte
+        }
+        $temporalParte = "$rutaParte.download"
+        Write-Host "Descargando $($parte.File)..."
+        Invoke-WebRequest -Uri "$($info.BaseUrl)/$($parte.File)" -OutFile $temporalParte -UseBasicParsing
+        $fallo = Get-ModelIntegrityError $temporalParte $esperado
+        if ($null -ne $fallo) {
+            Remove-Item -Force $temporalParte -ErrorAction SilentlyContinue
+            throw "La descarga de $($parte.File) no paso la verificacion: $fallo."
+        }
+        Move-Item -Force $temporalParte $rutaParte
+    }
+    Write-KaraokeCredits $vendorDir
+    Write-Host "Modelo de separacion listo en: $vendorDir"
+    Write-Host "$($info.Label)"
+    return
+}
+
 $destino = Join-Path $vendorDir $info.File
 
 if (Test-Path $destino) {
