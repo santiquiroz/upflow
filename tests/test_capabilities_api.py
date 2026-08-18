@@ -137,12 +137,16 @@ async def test_every_capability_reports_its_strategies(tmp_path: Path):
 class FakeProvisioner:
     def __init__(self) -> None:
         self.requested: list[str] = []
+        # (pack, variante) de cada pedido: audiosr viaja con la precision que
+        # eligio el backend, y el resto de los packs con None.
+        self.pedidos: list[tuple[str, str | None]] = []
         self._jobs: dict[str, object] = {}
 
-    async def provision(self, pack: str) -> str:
+    async def provision(self, pack: str, variant: str | None = None) -> str:
         from app.services.pack_provisioner import ProvisionJob
 
         self.requested.append(pack)
+        self.pedidos.append((pack, variant))
         job = ProvisionJob(id=f"job-{len(self.requested)}", pack=pack)
         self._jobs[job.id] = job
         return job.id
@@ -259,6 +263,43 @@ async def test_provisioning_audiosr_starts_its_pack(tmp_path: Path):
 
     assert provisioner.requested == ["audiosr"]
     assert response.pack == "audiosr"
+    # El default_device de make_settings es GPU, asi que la tarjeta pide fp16 sin
+    # que el usuario elija nada: es la mitad de descarga y de disco.
+    assert provisioner.pedidos == [("audiosr", "fp16")]
+
+
+@pytest.mark.asyncio
+async def test_provisioning_audiosr_on_a_cpu_box_asks_for_fp32(tmp_path: Path):
+    # El pack fp16 no sirve en CPU (el EP tiene muchos menos kernels fp16), asi
+    # que en una maquina sin GPU el mismo boton tiene que bajar el otro.
+    from app.api.routes import provision_capability
+
+    settings = make_settings(
+        tmp_path, AUDIOSR_MODEL_DIR=str(tmp_path / "audiosr"), DEFAULT_DEVICE="cpu"
+    )
+    provisioner = FakeProvisioner()
+
+    await provision_capability(
+        "audio.restoreSr", FakeRequest(provisioner), settings, FakeRegistry()
+    )
+
+    assert provisioner.pedidos == [("audiosr", "fp32")]
+
+
+@pytest.mark.asyncio
+async def test_provisioning_any_other_pack_sends_no_variant(tmp_path: Path):
+    # Mandar una variante a un script que no declara el parametro rompe la
+    # descarga en la linea de comandos, no en un test.
+    from app.api.routes import provision_capability
+
+    settings = make_settings(tmp_path, RIFE_BINARY=str(tmp_path / "nope.exe"))
+    provisioner = FakeProvisioner()
+
+    await provision_capability(
+        "video.interpolate", FakeRequest(provisioner), settings, FakeRegistry()
+    )
+
+    assert provisioner.pedidos == [("rife", None)]
 
 
 @pytest.mark.asyncio

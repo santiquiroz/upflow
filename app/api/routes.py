@@ -170,7 +170,12 @@ from app.services.model_installer import ModelInstaller
 from app.services.model_preflight import preflight_upscaler
 from app.services.missing_pack import missing_pack_message
 from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry, ModelStatus
-from app.services.pack_provisioner import PackProvisioner, ProvisionJob, UnknownPackError
+from app.services.pack_provisioner import (
+    PackProvisioner,
+    ProvisionJob,
+    UnknownPackError,
+    default_variant,
+)
 from app.services.settings_service import editable_settings_status, update_setting
 from app.services.storage import StorageService
 from app.services.download_job_manager import (
@@ -2933,7 +2938,9 @@ async def provision_capability(
     pack = _pack_to_provision(item)
     provisioner: PackProvisioner = request.app.state.pack_provisioner
     try:
-        job_id = await provisioner.provision(pack)
+        job_id = await provisioner.provision(
+            pack, default_variant(pack, settings.default_device)
+        )
     except UnknownPackError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     job = provisioner.status(job_id)

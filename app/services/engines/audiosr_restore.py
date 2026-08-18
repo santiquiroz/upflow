@@ -72,8 +72,9 @@ class AudioSrRestorer(OnnxAudioRestorer):
             raise RuntimeError(
                 "The uploaded audio decoded to zero samples; the file is empty or corrupted"
             )
-        sessions = self._get_sessions(device)
         assets = AudioSrAssets.load(self.settings.audiosr_model_dir_path)
+        _require_precision_matches_device(assets, device)
+        sessions = self._get_sessions(device)
         throttle = 0.0 if is_cpu_device(device) else self.settings.audiosr_gpu_throttle_seconds
 
         driver = AudioSrDriver(assets, _session_runner(sessions))
@@ -108,6 +109,26 @@ class AudioSrRestorer(OnnxAudioRestorer):
             )
             for name in GRAPH_NAMES
         }
+
+
+def _require_precision_matches_device(assets: AudioSrAssets, device: str) -> None:
+    """El pack fp16 no sirve en CPU, y hay que decirlo ANTES de crear la sesion.
+
+    El EP de CPU tiene muchos menos kernels fp16: los que faltan revientan a
+    mitad de la corrida con un error de ONNX Runtime que no dice como salir de
+    ahi, y los que existen suelen ser mas lentos que fp32. Como el pack se elige
+    al instalar y el dispositivo se elige por trabajo, las dos decisiones pueden
+    contradecirse mucho despues.
+    """
+    if not is_cpu_device(device):
+        return
+    if assets.manifest.get("precision") != "fp16":
+        return
+    raise RuntimeError(
+        "El pack de AudioSR instalado es fp16 y solo sirve en GPU. Para correrlo "
+        "en CPU hay que reinstalarlo en fp32 (el boton de descarga usa la "
+        "precision que corresponde al dispositivo por defecto)."
+    )
 
 
 def _session_runner(sessions: dict[str, Any]):

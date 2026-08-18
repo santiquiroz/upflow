@@ -79,6 +79,27 @@ en disco, que es exactamente el ahorro que se buscaba. Las salidas posibles:
    y es la mejor experiencia; requiere publicar y versionar assets nuevos.
 3. **No hacer nada.** 9% no justifica el riesgo por sí solo.
 
-La recomendación es la 2 para quien corre en GPU, que es el caso normal de esta
-app — pero cambia lo que se descarga y lo que se ejecuta para todos, así que es
-decisión del dueño, no un ajuste que se mete solo.
+**Se tomó la 2, autorizada por el dueño el 2026-08-17.** Los grafos fp16 se
+publicaron en
+[`models-fp16-v1.0`](https://github.com/santiquiroz/port-audiosr-onnx/releases/tag/models-fp16-v1.0)
+con los mismos nombres de archivo que los fp32, así que el motor no cambió: lo
+único que decide es de qué release baja el script.
+
+Cómo quedó:
+
+- `scripts/download-audiosr-onnx.ps1 -Precision fp32|fp16`. Si ya hay un pack de
+  la otra precisión instalado, borra los grafos viejos antes de bajar: mezclar
+  las dos deja archivos de ambas y un manifest que describe solo una.
+- `pack_provisioner.default_variant()` elige por el dispositivo por defecto —
+  fp16 en GPU, fp32 en CPU — y el botón de la tarjeta la pasa. Nadie tiene que
+  saber qué es fp16 para beneficiarse.
+- El manifest fp16 declara `precision` y sus `required_files` incluyen los tres
+  `.data` nuevos, así que `AudioSrAssets.is_complete` valida el pack correcto sin
+  tocar código.
+- La contradicción que quedaba —pack elegido al instalar, dispositivo elegido por
+  trabajo— se cierra con una guarda: correr un pack fp16 en CPU falla ANTES de
+  crear la sesión, con un mensaje que dice reinstalar en fp32. Sin eso el usuario
+  vería un error de kernel de ONNX Runtime a mitad de la corrida.
+
+El manifest fp16 lleva además el SHA-256 de cada asset y el de los grafos fp32 de
+los que salió, así que la procedencia se verifica en las dos direcciones.

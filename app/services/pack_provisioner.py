@@ -60,6 +60,10 @@ PACK_SCRIPTS: dict[str, str] = {
 PACK_PARAMETERS: dict[str, str] = {
     "translation": "-Pair",
     "karaoke": "-Model",
+    # audiosr no es una familia: es EL mismo modelo en dos precisiones. fp16 pesa
+    # la mitad (2.51 -> 1.26 GiB) y corre 9% mas rapido con la salida a 59.4 dB de
+    # la fp32, pero solo en GPU: el EP de CPU tiene muchos menos kernels fp16.
+    "audiosr": "-Precision",
 }
 
 # La variante llega desde una peticion HTTP y termina en una linea de comandos:
@@ -67,6 +71,7 @@ PACK_PARAMETERS: dict[str, str] = {
 VARIANT_PATTERNS: dict[str, re.Pattern[str]] = {
     "translation": re.compile(r"^[a-z]{2,3}-[a-z]{2,3}$"),
     "karaoke": re.compile(r"^[a-z0-9_]{1,32}$"),
+    "audiosr": re.compile(r"^fp(16|32)$"),
 }
 
 # Catalogos CERRADOS por pack: la variante tiene que existir, no solo tener la
@@ -74,6 +79,7 @@ VARIANT_PATTERNS: dict[str, re.Pattern[str]] = {
 # publica un modelo por par de idiomas, la URL se arma con el par).
 VARIANT_CATALOGS: dict[str, frozenset[str]] = {
     "karaoke": frozenset(SEPARATION_MODELS),
+    "audiosr": frozenset({"fp16", "fp32"}),
 }
 
 # Los scripts descargan cientos de MB desde GitHub releases. El techo es un
@@ -147,6 +153,20 @@ def _powershell_safe_env() -> dict[str, str]:
     env = dict(os.environ)
     env.pop("PSModulePath", None)
     return env
+
+
+def default_variant(pack: str, default_device: str) -> str | None:
+    """Que variante bajar cuando el usuario aprieta el boton y no elige nada.
+
+    Solo audiosr tiene una respuesta que dependa de la maquina: fp16 pesa la
+    mitad y corre un 9% mas rapido con la salida a 59.4 dB de la fp32
+    (inaudible), pero el EP de CPU tiene muchos menos kernels fp16 y los que
+    hay suelen ser mas lentos. Asi que la precision sigue al dispositivo por
+    defecto, que es el que va a correr el modelo en la practica.
+    """
+    if pack != "audiosr":
+        return None
+    return "fp32" if default_device.strip().lower().startswith("cpu") else "fp16"
 
 
 def build_command(pack: str, variant: str | None = None) -> list[str]:
