@@ -874,7 +874,7 @@ describe("AudioPanel modo karaoke", () => {
     // este modelo mostraria un texto que nadie eligio para el.
     const sinInsignia = {
       ...FULL_CAPABILITIES,
-      separationModels: FULL_CAPABILITIES.separationModels.map((model) =>
+      separationModels: (FULL_CAPABILITIES.separationModels ?? []).map((model) =>
         model.id === "mel_band_roformer_kim"
           ? { ...model, badgeKey: null }
           : model,
