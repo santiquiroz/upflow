@@ -1200,6 +1200,8 @@ export const en = {
   "transcribe.output.video": "Video with a subtitle track",
   "transcribe.output.videoBurned": "Video with the subtitles burned in",
   "transcribe.output.dubbed": "Video dubbed into another language",
+  "transcribe.output.karaoke": "Karaoke (no vocals, lyrics on screen)",
+  "transcribe.output.karaokeHint": "Strips the vocals, transcribes the lyrics with their timing and builds the video. If the file has no picture, a background is generated.",
   "transcribe.dub.language": "Dub into",
   "transcribe.dub.hint": "Each line is translated and spoken in its own slot. Needs the installed language pair.",
   "transcribe.dub.overflow": "{{count}} lines ran past their slot: they were said as fast as they could still be understood.",

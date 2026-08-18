@@ -115,7 +115,10 @@ def ffmpeg_falso(monkeypatch):
         Path(command[-1]).write_bytes(b"fragmento")
         return b"", b"", 0
 
+    # Los dos: el corte lo lanza `audio_compare` y el ffprobe de duracion vive
+    # en `audio_excerpt`, que es de donde tambien lo toma el karaoke.
     monkeypatch.setattr("app.services.audio_compare.run_guarded_process", correr)
+    monkeypatch.setattr("app.services.audio_excerpt.run_guarded_process", correr)
     return llamadas
 
 

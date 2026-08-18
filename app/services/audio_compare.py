@@ -12,7 +12,6 @@ comparacion dejaria de ser entre modelos.
 
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,10 +19,9 @@ from uuid import uuid4
 
 from app.config import Settings
 from app.services.audio_excerpt import (
-    build_duration_probe_command,
     build_excerpt_command,
     centered_offset,
-    parse_duration_seconds,
+    probe_duration_seconds,
 )
 from app.services.auth.identity import AuthenticatedUser
 from app.services.download_chain import AudioJobCreator, link_or_copy
@@ -64,19 +62,6 @@ def validate_models(model_ids: list[str], installed: set[str]) -> list[str]:
             "Estos modelos no estan instalados: " + ", ".join(faltantes)
         )
     return unicos
-
-
-async def probe_duration_seconds(source: Path, settings: Settings) -> float | None:
-    command = build_duration_probe_command(settings.ffprobe_binary_path, source)
-    stdout, _stderr, returncode = await run_guarded_process(
-        command, settings.subprocess_timeout
-    )
-    if returncode != 0:
-        return None
-    try:
-        return parse_duration_seconds(json.loads(stdout.decode("utf-8", errors="ignore")))
-    except json.JSONDecodeError:
-        return None
 
 
 async def cut_excerpt(

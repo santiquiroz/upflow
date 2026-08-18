@@ -12,12 +12,14 @@ import type {
 } from "../lib/apiTypes";
 
 // "text" deja solo la transcripcion; "video" suma la pista de subtitulos al
-// contenedor sin re-encodear; "video_burned" la pinta en la imagen.
+// contenedor sin re-encodear; "video_burned" la pinta en la imagen; "karaoke"
+// ademas saca la voz y —si no hay imagen— fabrica el fondo.
 export type TranscribeOutputMode =
   | "text"
   | "video"
   | "video_burned"
-  | "dubbed_video";
+  | "dubbed_video"
+  | "karaoke";
 
 export interface CreateTranscribeJobParams {
   file: File;

@@ -7,8 +7,12 @@ es donde estan las dos cosas a la vez, que es justo el caso dificil.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
+
+from app.config import Settings
+from app.services.process_runner import run_guarded_process
 
 # 30 s alcanzan para oir la diferencia entre dos separadores y son ~8x mas
 # baratos que un tema de 4 minutos, que es el punto de probar antes.
@@ -77,3 +81,21 @@ def build_excerpt_command(
         "pcm_s16le",
         str(destination),
     ]
+
+
+async def probe_duration_seconds(source: Path, settings: Settings) -> float | None:
+    """Cuanto dura, o None si no se pudo saber.
+
+    None y no un numero inventado: los que lo llaman deciden distinto segun eso
+    (el fragmento arranca en cero; el karaoke usa la duracion del instrumental).
+    """
+    command = build_duration_probe_command(settings.ffprobe_binary_path, source)
+    stdout, _stderr, returncode = await run_guarded_process(
+        command, settings.subprocess_timeout
+    )
+    if returncode != 0:
+        return None
+    try:
+        return parse_duration_seconds(json.loads(stdout.decode("utf-8", errors="ignore")))
+    except json.JSONDecodeError:
+        return None

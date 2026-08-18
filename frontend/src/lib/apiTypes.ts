@@ -812,7 +812,8 @@ export interface TranscribeJob {
   modelId: string;
   language: string | null;
   device: string | null;
-  /** "text" | "video" | "video_burned" | "dubbed_video". Opcional: backends anteriores no lo mandan. */
+  /** "text" | "video" | "video_burned" | "dubbed_video" | "karaoke". Opcional:
+   *  backends anteriores no lo mandan. */
   outputMode?: string;
   /** Solo en doblaje: a qué idioma se habló. */
   targetLanguage?: string | null;

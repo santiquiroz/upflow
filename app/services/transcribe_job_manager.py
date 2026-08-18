@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,17 @@ from app.services.dub_mux import build_dub_mux_command
 from app.services.dubbing_pipeline import DubbingPipeline, DubbingUnavailable
 from app.services.engines.tts_kokoro import SAMPLE_RATE as TTS_SAMPLE_RATE
 from app.services.engines.tts_kokoro import KokoroTtsEngine, available_voices
+from app.services.audio_excerpt import probe_duration_seconds
+from app.services.media_decode import (
+    SEPARATION_CHANNELS,
+    SEPARATION_SAMPLE_RATE,
+    build_decode_to_wav_command,
+)
+from app.services.karaoke_video import (
+    build_karaoke_command,
+    build_picture_probe_command,
+    has_real_picture,
+)
 from app.services.subtitle_burn import build_subtitle_burn_command
 from app.services.translate import TranslationEngine
 from app.services.vendor_paths import kokoro_dir, translation_dir
@@ -25,9 +37,10 @@ from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
 from app.services.engines.transcribe_onnx import is_english_only, TranscribeRequest
 from app.services.model_registry import ModelKind, ModelRegistry
 
-# Los tres destinos que puede tener un trabajo: solo el texto, el video con la
-# pista de subtitulos sumada, o el video con el texto pintado en la imagen.
-OUTPUT_MODES = ("text", "video", "video_burned", "dubbed_video")
+# Los destinos que puede tener un trabajo: solo el texto, el video con la pista
+# de subtitulos sumada, el video con el texto pintado en la imagen, el doblaje, y
+# el karaoke (instrumental + letra sincronizada, todo en una pasada).
+OUTPUT_MODES = ("text", "video", "video_burned", "dubbed_video", "karaoke")
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +63,7 @@ class TranscribeJobManager(QueuedJobManager[TranscribeJob]):
         registry: ModelRegistry,
         devices: DevicesService | None = None,
         quota_service: QuotaService | None = None,
+        separators: dict[str, Any] | None = None,
     ) -> None:
         # Un solo worker a propósito: la transcripción es CPU/GPU-bound y gatea
         # por device igual; N workers solo sumarían contención.
@@ -58,6 +72,10 @@ class TranscribeJobManager(QueuedJobManager[TranscribeJob]):
         self.device_semaphores = device_semaphores
         self.registry = registry
         self.devices = devices
+        # Los mismos motores que usa el modulo de audio. El karaoke necesita
+        # separar, y montar un segundo juego de motores duplicaria la carga de
+        # los .onnx en VRAM.
+        self.separators = separators or {}
 
     async def create_job(
         self,
@@ -197,6 +215,8 @@ class TranscribeJobManager(QueuedJobManager[TranscribeJob]):
             job.subtitled_video_path = await self._burn_subtitles_into_video(job)
         elif job.output_mode == "dubbed_video":
             job.subtitled_video_path = await self._dub_video(job)
+        elif job.output_mode == "karaoke":
+            job.subtitled_video_path = await self._build_karaoke_video(job)
 
     async def _mux_subtitles_into_video(self, job: TranscribeJob) -> Path:
         """Suma la pista de subtitulos al contenedor SIN re-encodear el video.
@@ -290,6 +310,92 @@ class TranscribeJobManager(QueuedJobManager[TranscribeJob]):
             sample_rate=TTS_SAMPLE_RATE,
             available_voices=available_voices(kokoro_dir(self.settings)),
         )
+
+    async def _build_karaoke_video(self, job: TranscribeJob) -> Path:
+        """Instrumental + letra sincronizada, en un solo trabajo.
+
+        Las tres piezas ya existian sueltas; lo que faltaba era el empalme, que
+        es pegarle a la imagen la pista INSTRUMENTAL en vez de la original.
+
+        La letra sale de la transcripcion del audio COMPLETO, no del instrumental
+        —ahi justamente no hay voz que transcribir— y eso ya paso antes de llegar
+        aca, que es por que este paso corre al final y no al principio.
+        """
+        instrumental = await self._separate_instrumental(job)
+        subtitles = self._write_subtitle_file(job)
+        picture = job.source_path if await self._has_picture(job.source_path) else None
+        duration = await probe_duration_seconds(instrumental, self.settings) or 0.0
+        destination = self.settings.outputs_path / f"{job.id}.karaoke.mp4"
+        command = build_karaoke_command(
+            ffmpeg=str(self.settings.ffmpeg_binary_path),
+            picture=picture,
+            duration_seconds=duration,
+            instrumental=instrumental,
+            subtitles=subtitles,
+            destination=destination,
+        )
+        await self._run_ffmpeg(command, destination, "armar el video de karaoke")
+        # El instrumental y su carpeta ya cumplieron: quedan pintados adentro del
+        # mp4, y dejarlos suma el peso de un wav sin comprimir por cada karaoke.
+        instrumental.unlink(missing_ok=True)
+        instrumental.parent.rmdir()
+        return destination
+
+    async def _separate_instrumental(self, job: TranscribeJob) -> Path:
+        """El stem principal del modelo de karaoke, decodificado y separado."""
+        from app.services.engines.separation_models import (
+            DEFAULT_SEPARATION_MODEL,
+            SEPARATION_MODELS,
+        )
+
+        spec = SEPARATION_MODELS[DEFAULT_SEPARATION_MODEL]
+        separator = self.separators.get(spec.architecture)
+        if separator is None:
+            # Pedir karaoke y recibir un video con la voz intacta seria peor que
+            # fallar diciendo que falta el motor.
+            raise RuntimeError(
+                "El karaoke necesita el motor de separacion "
+                f"{spec.architecture!r} y el servidor se construyo sin el."
+            )
+        work_dir = self.settings.outputs_path / f"{job.id}.karaoke"
+        work_dir.mkdir(parents=True, exist_ok=True)
+        decoded = work_dir / "mezcla.wav"
+        await self._decode_for_separation(job.source_path, decoded)
+        stem_wavs = [work_dir / f"{stem.id}.wav" for stem in spec.stems]
+        await separator.run(
+            decoded,
+            stem_wavs,
+            job.device or self.settings.default_device,
+            model_id=spec.id,
+        )
+        decoded.unlink(missing_ok=True)
+        # El primero del catalogo es el stem principal: el instrumental.
+        principal = stem_wavs[0]
+        for sobrante in stem_wavs[1:]:
+            sobrante.unlink(missing_ok=True)
+        return principal
+
+    async def _decode_for_separation(self, source: Path, destination: Path) -> None:
+        command = build_decode_to_wav_command(
+            ffmpeg=str(self.settings.ffmpeg_binary_path),
+            source=source,
+            destination=destination,
+            sample_rate=SEPARATION_SAMPLE_RATE,
+            channels=SEPARATION_CHANNELS,
+        )
+        await self._run_ffmpeg(command, destination, "decodificar el audio a separar")
+
+    async def _has_picture(self, source: Path) -> bool:
+        command = build_picture_probe_command(self.settings.ffprobe_binary_path, source)
+        stdout, _stderr, returncode = await run_guarded_process(
+            command, self.settings.subprocess_timeout
+        )
+        if returncode != 0:
+            return False
+        try:
+            return has_real_picture(json.loads(stdout.decode("utf-8", errors="ignore")))
+        except json.JSONDecodeError:
+            return False
 
     def _write_subtitle_file(self, job: TranscribeJob) -> Path:
         subtitle_path = self.settings.outputs_path / f"{job.id}.srt"

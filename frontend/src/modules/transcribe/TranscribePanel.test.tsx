@@ -237,19 +237,56 @@ describe("TranscribePanel", () => {
 
   it("offers the video outputs only when the input is a video", async () => {
     // Pedir "video con subtitulos" para un .wav no tiene sentido: no hay imagen
-    // a la que pegarle nada.
+    // a la que pegarle nada. Se afirma la PROPIEDAD y no el mecanismo: antes el
+    // selector entero se escondia, y eso dejo de ser cierto cuando aparecio un
+    // modo de salida en video que no necesita video de entrada.
     renderPanel();
     await selectAudioFile();
+    const conAudio = await screen.findByLabelText(en["transcribe.output.label"]);
 
     expect(
-      screen.queryByLabelText(en["transcribe.output.label"]),
+      within(conAudio).queryByRole("option", { name: en["transcribe.output.video"] }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(conAudio).queryByRole("option", { name: en["transcribe.output.videoBurned"] }),
     ).not.toBeInTheDocument();
 
     await selectVideoFile();
+    const conVideo = await screen.findByLabelText(en["transcribe.output.label"]);
 
     expect(
-      await screen.findByLabelText(en["transcribe.output.label"]),
+      within(conVideo).getByRole("option", { name: en["transcribe.output.video"] }),
     ).toBeInTheDocument();
+  });
+
+  it("offers karaoke for an audio file, which needs no picture of its own", async () => {
+    // Es el unico modo con video de SALIDA que no pide video de ENTRADA: el
+    // fondo lo genera el servidor.
+    renderPanel();
+    await selectAudioFile();
+    const selector = await screen.findByLabelText(en["transcribe.output.label"]);
+
+    expect(
+      within(selector).getByRole("option", { name: en["transcribe.output.karaoke"] }),
+    ).toBeInTheDocument();
+  });
+
+  it("sends karaoke for an audio file instead of dropping it", async () => {
+    renderPanel();
+    await selectAudioFile();
+    const selector = await screen.findByLabelText(en["transcribe.output.label"]);
+    fireEvent.change(selector, { target: { value: "karaoke" } });
+
+    fireEvent.click(screen.getByRole("button", { name: en["transcribe.submit"] }));
+
+    // El filtro que descarta modos de video para archivos sin imagen no puede
+    // llevarse puesto al unico que si funciona sin ella.
+    await waitFor(() =>
+      expect(transcribeService.createTranscribeJob).toHaveBeenCalledWith(
+        expect.objectContaining({ outputMode: "karaoke" }),
+        expect.anything(),
+      ),
+    );
   });
 
   it("sends the chosen output mode", async () => {

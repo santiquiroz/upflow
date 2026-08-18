@@ -117,6 +117,22 @@ function hasPicture(file: File | null): boolean {
   return VIDEO_EXTENSIONS.some((extension) => nombre.endsWith(extension));
 }
 
+/** Si el modo pedido tiene sentido para ESTE archivo.
+ *
+ * El karaoke es el unico modo con video de salida que no necesita video de
+ * entrada: cuando no hay imagen, el fondo lo genera el servidor. Los otros
+ * pegan el texto sobre una imagen que tiene que existir.
+ */
+function modeFitsFile(mode: TranscribeOutputMode | undefined, file: File | null): boolean {
+  if (!mode || mode === "text") {
+    return true;
+  }
+  if (mode === "karaoke") {
+    return file !== null;
+  }
+  return hasPicture(file);
+}
+
 function phaseLabelKey(phase: TranscribeJobPhase): string {
   switch (phase) {
     case "uploading":
@@ -487,7 +503,7 @@ export function TranscribePanel({
     }
     // Un audio no tiene imagen: pedir video ahi seria mandar al backend a
     // fallar por algo que la pantalla ya sabe.
-    if (outputMode !== "text" && hasPicture(file)) {
+    if (outputMode !== "text" && modeFitsFile(outputMode, file)) {
       params.outputMode = outputMode;
     }
     if (params.outputMode === "dubbed_video") {
@@ -501,7 +517,7 @@ export function TranscribePanel({
         files.map((archivo) => ({
           ...params,
           file: archivo,
-          ...(params.outputMode && !hasPicture(archivo) ? { outputMode: undefined } : {}),
+          ...(modeFitsFile(params.outputMode, archivo) ? {} : { outputMode: undefined }),
         })),
       );
       return;
@@ -593,7 +609,7 @@ export function TranscribePanel({
                 )}
               </label>
 
-              {hasPicture(file) && (
+              {file !== null && (
                 <label className="flex flex-col gap-2">
                   <span className="font-heading text-xs font-semibold uppercase tracking-wide text-text-dim">
                     {t("transcribe.output.label")}
@@ -606,16 +622,28 @@ export function TranscribePanel({
                     className="rounded border border-border bg-surface px-3 py-2 text-sm text-text focus:border-accent focus:outline-none"
                   >
                     <option value="text">{t("transcribe.output.text")}</option>
-                    <option value="video">{t("transcribe.output.video")}</option>
-                    <option value="video_burned">
-                      {t("transcribe.output.videoBurned")}
-                    </option>
-                    {translationTargets.length > 0 && (
-                      <option value="dubbed_video">
-                        {t("transcribe.output.dubbed")}
-                      </option>
+                    {/* Los tres que pintan sobre la imagen del original solo
+                        aparecen si hay imagen; el karaoke se la fabrica. */}
+                    {hasPicture(file) && (
+                      <>
+                        <option value="video">{t("transcribe.output.video")}</option>
+                        <option value="video_burned">
+                          {t("transcribe.output.videoBurned")}
+                        </option>
+                        {translationTargets.length > 0 && (
+                          <option value="dubbed_video">
+                            {t("transcribe.output.dubbed")}
+                          </option>
+                        )}
+                      </>
                     )}
+                    <option value="karaoke">{t("transcribe.output.karaoke")}</option>
                   </select>
+                  {outputMode === "karaoke" && (
+                    <span className="text-xs text-text-faint">
+                      {t("transcribe.output.karaokeHint")}
+                    </span>
+                  )}
                   {outputMode === "video_burned" && (
                     <span className="text-xs text-text-faint">
                       {t("transcribe.output.hint")}

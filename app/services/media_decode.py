@@ -22,8 +22,14 @@ def needs_decoding(source: Path) -> bool:
     return source.suffix.lower() not in SOUNDFILE_READABLE
 
 
+# Los separadores trabajan a 44100 estereo. No es negociable como el 16k mono de
+# la transcripcion: entrarle otra cosa al grafo lo hace remuestrear por dentro.
+SEPARATION_SAMPLE_RATE = 44100
+SEPARATION_CHANNELS = 2
+
+
 def build_decode_to_wav_command(
-    *, ffmpeg: str, source: Path, destination: Path, sample_rate: int
+    *, ffmpeg: str, source: Path, destination: Path, sample_rate: int, channels: int = 1
 ) -> list[str]:
     return [
         str(ffmpeg),
@@ -31,11 +37,11 @@ def build_decode_to_wav_command(
         "-y",
         "-i",
         str(source),
-        # El modelo toma un solo canal a 16 kHz; convertir aca evita que el
-        # remuestreo lo haga numpy despues, mas lento y con peor calidad.
+        # Convertir aca y no despues: el remuestreo en numpy es mas lento y de
+        # peor calidad, y ffmpeg tiene el downmix canonico del surround.
         "-vn",
         "-ac",
-        "1",
+        str(channels),
         "-acodec",
         "pcm_s16le",
         "-ar",

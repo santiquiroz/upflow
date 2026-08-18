@@ -219,6 +219,9 @@ async def lifespan(app: FastAPI):
         registry=model_registry,
         devices=devices_service,
         quota_service=quota_service,
+        # Los MISMOS motores que el modulo de audio: el karaoke separa, y un
+        # segundo juego duplicaria los .onnx en VRAM.
+        separators=separators,
     )
     download_jobs = DownloadJobManager(
         settings,

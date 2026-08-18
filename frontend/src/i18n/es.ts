@@ -1195,6 +1195,8 @@ export const es = {
   "transcribe.output.video": "Video con pista de subtítulos",
   "transcribe.output.videoBurned": "Video con los subtítulos quemados",
   "transcribe.output.dubbed": "Video doblado a otro idioma",
+  "transcribe.output.karaoke": "Karaoke (sin voz, con la letra en pantalla)",
+  "transcribe.output.karaokeHint": "Separa la voz, transcribe la letra con sus tiempos y arma el video. Si el archivo no tiene imagen, se genera un fondo.",
   "transcribe.dub.language": "Doblar a",
   "transcribe.dub.hint": "Cada línea se traduce y se dice en su propio hueco. Necesita el par de idiomas instalado.",
   "transcribe.dub.overflow": "{{count}} líneas se salieron de su hueco: se dijeron tan rápido como todavía se entienden.",
