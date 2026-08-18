@@ -219,3 +219,57 @@ def test_sin_motor_de_separacion_falla_diciendolo(tmp_path: Path, ffmpeg_falso) 
 
     # Pedir karaoke y recibir un video con la voz intacta seria peor que fallar.
     assert "separacion" in str(error.value)
+
+
+def test_un_armado_fallido_no_deja_el_wav_ocupando_disco(tmp_path: Path, monkeypatch) -> None:
+    gestor = manager(tmp_path, SeparadorFalso())
+    job = job_de_karaoke(tmp_path)
+
+    async def falla_al_armar(command, _timeout, **_kwargs):
+        if "-filter_complex" in command:
+            return b"", b"ffmpeg exploto", 1
+        if "attached_pic" in " ".join(command):
+            return json.dumps({"streams": []}).encode(), b"", 0
+        if "-show_entries" in command:
+            return json.dumps({"format": {"duration": "200.0"}}).encode(), b"", 0
+        Path(command[-1]).write_bytes(b"salida")
+        return b"", b"", 0
+
+    for modulo in ("transcribe_job_manager", "audio_excerpt"):
+        monkeypatch.setattr(f"app.services.{modulo}.run_guarded_process", falla_al_armar)
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(gestor._build_karaoke_video(job))
+
+    # El wav sin comprimir es el archivo mas pesado que produce el trabajo: un
+    # fallo no puede costar disco para siempre.
+    assert not (gestor.settings.outputs_path / f"{job.id}.karaoke").exists()
+
+
+def test_una_separacion_fallida_tampoco_deja_la_carpeta(tmp_path: Path, ffmpeg_falso) -> None:
+    class Explota(SeparadorFalso):
+        async def run(self, *args, **kwargs):
+            raise RuntimeError("el modelo reviento")
+
+    gestor = manager(tmp_path, Explota())
+    job = job_de_karaoke(tmp_path)
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(gestor._build_karaoke_video(job))
+
+    assert not (gestor.settings.outputs_path / f"{job.id}.karaoke").exists()
+
+
+def test_el_principal_lo_decide_el_catalogo_y_no_la_posicion(tmp_path: Path, ffmpeg_falso) -> None:
+    from app.services.engines.separation_models import (
+        DEFAULT_SEPARATION_MODEL,
+        SEPARATION_MODELS,
+    )
+
+    gestor = manager(tmp_path, SeparadorFalso())
+    job = job_de_karaoke(tmp_path)
+
+    salida = asyncio.run(gestor._separate_instrumental(job))
+
+    esperado = SEPARATION_MODELS[DEFAULT_SEPARATION_MODEL].main_stem.id
+    assert salida.name == f"{esperado}.wav"

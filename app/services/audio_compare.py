@@ -106,13 +106,19 @@ async def start_comparison(
     owner: AuthenticatedUser | None = None,
 ) -> Comparison:
     excerpt = settings.uploads_path / f"{uuid4().hex}-fragmento.wav"
-    usado = await cut_excerpt(
-        source,
-        excerpt,
-        settings,
-        excerpt_seconds=excerpt_seconds,
-        offset_seconds=offset_seconds,
-    )
+    try:
+        usado = await cut_excerpt(
+            source,
+            excerpt,
+            settings,
+            excerpt_seconds=excerpt_seconds,
+            offset_seconds=offset_seconds,
+        )
+    except Exception:
+        # ffmpeg puede haber escrito un archivo a medias antes de fallar, y ese
+        # nombre no lo conoce nadie mas.
+        excerpt.unlink(missing_ok=True)
+        raise
     entries: list[ComparisonEntry] = []
     try:
         for model_id in model_ids:

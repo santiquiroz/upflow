@@ -50,6 +50,20 @@ logger = logging.getLogger(__name__)
 _LANGUAGE_LENGTH = 2
 
 
+def _discard_work_dir(work_dir: Path) -> None:
+    """Borra la carpeta de trabajo con lo que tenga adentro, sin poder fallar.
+
+    Sin poder fallar porque se llama desde rutas de limpieza: que la limpieza
+    tape el error original seria cambiar un mensaje util por uno de permisos.
+    """
+    try:
+        for archivo in work_dir.glob("*"):
+            archivo.unlink(missing_ok=True)
+        work_dir.rmdir()
+    except OSError:
+        logger.exception("no se pudo limpiar %s", work_dir)
+
+
 class TranscribeJobManager(QueuedJobManager[TranscribeJob]):
     queue_full_message = "Transcribe job queue is full; try again later"
     worker_name_prefix = "transcribe-worker"
@@ -322,23 +336,25 @@ class TranscribeJobManager(QueuedJobManager[TranscribeJob]):
         aca, que es por que este paso corre al final y no al principio.
         """
         instrumental = await self._separate_instrumental(job)
-        subtitles = self._write_subtitle_file(job)
-        picture = job.source_path if await self._has_picture(job.source_path) else None
-        duration = await probe_duration_seconds(instrumental, self.settings) or 0.0
-        destination = self.settings.outputs_path / f"{job.id}.karaoke.mp4"
-        command = build_karaoke_command(
-            ffmpeg=str(self.settings.ffmpeg_binary_path),
-            picture=picture,
-            duration_seconds=duration,
-            instrumental=instrumental,
-            subtitles=subtitles,
-            destination=destination,
-        )
-        await self._run_ffmpeg(command, destination, "armar el video de karaoke")
-        # El instrumental y su carpeta ya cumplieron: quedan pintados adentro del
-        # mp4, y dejarlos suma el peso de un wav sin comprimir por cada karaoke.
-        instrumental.unlink(missing_ok=True)
-        instrumental.parent.rmdir()
+        try:
+            subtitles = self._write_subtitle_file(job)
+            picture = job.source_path if await self._has_picture(job.source_path) else None
+            duration = await probe_duration_seconds(instrumental, self.settings) or 0.0
+            destination = self.settings.outputs_path / f"{job.id}.karaoke.mp4"
+            command = build_karaoke_command(
+                ffmpeg=str(self.settings.ffmpeg_binary_path),
+                picture=picture,
+                duration_seconds=duration,
+                instrumental=instrumental,
+                subtitles=subtitles,
+                destination=destination,
+            )
+            await self._run_ffmpeg(command, destination, "armar el video de karaoke")
+        finally:
+            # En `finally` y no despues del ffmpeg: si el armado falla, el wav sin
+            # comprimir y su carpeta se quedan para siempre, y son los archivos
+            # mas pesados que produce el trabajo. Un fallo no puede costar disco.
+            _discard_work_dir(instrumental.parent)
         return destination
 
     async def _separate_instrumental(self, job: TranscribeJob) -> Path:
@@ -359,20 +375,28 @@ class TranscribeJobManager(QueuedJobManager[TranscribeJob]):
             )
         work_dir = self.settings.outputs_path / f"{job.id}.karaoke"
         work_dir.mkdir(parents=True, exist_ok=True)
-        decoded = work_dir / "mezcla.wav"
-        await self._decode_for_separation(job.source_path, decoded)
-        stem_wavs = [work_dir / f"{stem.id}.wav" for stem in spec.stems]
-        await separator.run(
-            decoded,
-            stem_wavs,
-            job.device or self.settings.default_device,
-            model_id=spec.id,
-        )
+        try:
+            decoded = work_dir / "mezcla.wav"
+            await self._decode_for_separation(job.source_path, decoded)
+            stem_wavs = [work_dir / f"{stem.id}.wav" for stem in spec.stems]
+            await separator.run(
+                decoded,
+                stem_wavs,
+                job.device or self.settings.default_device,
+                model_id=spec.id,
+            )
+        except Exception:
+            # Un fallo de decodificado o de separacion deja la carpeta con lo que
+            # alcanzo a escribir, y nadie mas conoce ese nombre.
+            _discard_work_dir(work_dir)
+            raise
         decoded.unlink(missing_ok=True)
-        # El primero del catalogo es el stem principal: el instrumental.
-        principal = stem_wavs[0]
-        for sobrante in stem_wavs[1:]:
-            sobrante.unlink(missing_ok=True)
+        # `main_stem` y no `[0]`: la posicion es hoy la misma, pero cual es el
+        # principal lo decide el catalogo.
+        principal = work_dir / f"{spec.main_stem.id}.wav"
+        for sobrante in stem_wavs:
+            if sobrante != principal:
+                sobrante.unlink(missing_ok=True)
         return principal
 
     async def _decode_for_separation(self, source: Path, destination: Path) -> None:
