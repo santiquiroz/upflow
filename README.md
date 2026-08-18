@@ -37,13 +37,17 @@ la app y no 40 GB de modelos.
 | **Reescalar** | Fotos y anime, de a una o por lote, 2× a 4×. |
 | **Borrar cosas** | Pintá lo que sobra —o tocá el objeto para seleccionarlo solo— y desaparece. |
 | **Generar** | Texto a imagen e imagen a imagen con Stable Diffusion, SDXL o Flux. |
+| **Detalle inventado** | Más textura de la que había, dibujada por IA. No es una copia más fiel: para eso está el reescalado. |
 
 ### 🔊 Audio y voz
 
 | | |
 |---|---|
 | **Karaoke y pistas** | Separá la voz de la instrumental para cantar encima, o quedate solo con la voz. |
+| **Karaoke completo** | El video listo: sin voz, con la letra sincronizada en pantalla. |
 | **Cuatro pistas** | Voz, batería, bajo y resto, cada una en su archivo. |
+| **Probar antes** | Corré dos o tres separadores sobre 30 s de tu tema y elegí con el oído. |
+| **Máxima calidad** | Combiná varios separadores en uno: se refuerza lo que coinciden. |
 | **Limpiar** | Ruido, eco y reverberación, encadenables en una sola pasada. |
 | **Restaurar** | Recuperá una grabación vieja o de baja calidad; hay un modo que directamente reinventa el agudo que se perdió. |
 | **Nivelar** | Volumen al estándar de entrega de Spotify, YouTube o emisión (EBU R128). |
@@ -64,7 +68,8 @@ la app y no 40 GB de modelos.
 ### ✨ Además
 
 - **Generar video** desde un texto o una imagen, local.
-- **Descargar** de internet lo que vas a procesar, sin salir de la app.
+- **Descargar** de internet lo que vas a procesar, sin salir de la app — y encadenar: pegás un link y te llegan las pistas separadas.
+- **Varios archivos de una**: elegís un montón y quedan encolados, sin repetir el proceso uno por uno.
 - **Tiempo real**: reescalá en vivo lo que estés mirando o jugando, en una ventana superpuesta.
 - **API REST y servidor MCP**: encolá trabajos desde otro programa, o dejá que un agente de IA use la app como herramienta.
 - **Varios usuarios** con permisos y cuotas, si la compartís en tu red.
