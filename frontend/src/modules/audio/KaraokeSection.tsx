@@ -127,12 +127,15 @@ export function KaraokeSection({
   models,
   selectedModel,
   onSelectModel,
+  toggleKey = "audio.karaoke.toggle",
 }: {
   enabled: boolean;
   onToggle: (enabled: boolean) => void;
   models: SeparationModel[];
   selectedModel: string | null;
   onSelectModel: (modelId: string) => void;
+  /** El mismo control en descargas dice otra cosa: ahi separar es lo que sigue. */
+  toggleKey?: string;
 }) {
   const { t } = useTranslation();
   const installed = models.filter((model) => model.installed);
@@ -146,7 +149,7 @@ export function KaraokeSection({
           onChange={(event) => onToggle(event.target.checked)}
           className="h-4 w-4 accent-accent"
         />
-        {t("audio.karaoke.toggle")}
+        {t(toggleKey)}
       </label>
 
       {enabled && installed.length === 0 && (

@@ -6,6 +6,7 @@ import logging
 import socket
 import threading
 from pathlib import Path
+from typing import Awaitable, Callable
 from urllib.parse import urlparse
 
 from app.config import Settings
@@ -33,6 +34,11 @@ logger = logging.getLogger(__name__)
 # local con la URL como disfraz: exactamente la forma de un SSRF/LFI.
 ALLOWED_SCHEMES = frozenset({"http", "https"})
 
+# Que hacer con lo bajado. Es una funcion inyectada y no un import de audio para
+# que este manager siga sin saber que existe la separacion: lo unico que sabe es
+# que alguien puede querer seguir trabajando sobre el archivo.
+FollowUpStarter = Callable[[DownloadJob, AuthenticatedUser | None], Awaitable[list[str]]]
+
 
 class DownloadJobManager:
     def __init__(
@@ -40,13 +46,19 @@ class DownloadJobManager:
         settings: Settings,
         *,
         quota_service: QuotaService | None = None,
+        follow_up: FollowUpStarter | None = None,
     ) -> None:
         self.settings = settings
         self.quota_service = quota_service
+        self.follow_up = follow_up
         self.jobs: dict[str, DownloadJob] = {}
         self.queue: asyncio.Queue[DownloadJob] = asyncio.Queue(maxsize=settings.max_queue_size)
         self._worker_task: asyncio.Task[None] | None = None
         self._cancel_events: dict[str, threading.Event] = {}
+        # El usuario que pidio la descarga, para admitir el encadenado a su nombre.
+        # Vive aca y no en el job por lo mismo que los eventos de cancelacion: es
+        # estado de ejecucion, no parte de lo que la descarga es.
+        self._owners: dict[str, AuthenticatedUser] = {}
 
     async def start(self) -> None:
         if self._worker_task is None:
@@ -77,6 +89,8 @@ class DownloadJobManager:
         include_playlist: bool = False,
         playlist_limit: int = 10,
         subtitle_languages: list[str] | None = None,
+        then_separate: bool = False,
+        then_separation_model: str | None = None,
         owner: AuthenticatedUser | None = None,
     ) -> DownloadJob:
         validate_url(url)
@@ -103,8 +117,12 @@ class DownloadJobManager:
             include_playlist=include_playlist,
             playlist_limit=playlist_limit,
             subtitle_languages=list(subtitle_languages or []),
+            then_separate=then_separate,
+            then_separation_model=then_separation_model,
             owner_id=owner.id if owner is not None else None,
         )
+        if owner is not None:
+            self._owners[job.id] = owner
         try:
             self.queue.put_nowait(job)
         except asyncio.QueueFull as exc:
@@ -146,6 +164,7 @@ class DownloadJobManager:
         try:
             await asyncio.to_thread(self._download_blocking, job, cancel_event)
             job.status = JobStatus.completed
+            await self._start_follow_up(job)
         except fetch_engine.FetchCancelled:
             # No es un fallo: lo pidio el usuario. Reportarlo como error mostraria un
             # rojo por algo intencional.
@@ -160,7 +179,23 @@ class DownloadJobManager:
         finally:
             job.finished_at = utc_now()
             self._cancel_events.pop(job.id, None)
+            self._owners.pop(job.id, None)
             self._record_quota_usage(job)
+
+    async def _start_follow_up(self, job: DownloadJob) -> None:
+        """Encadena lo que se haya pedido, sin poder hacer fallar la descarga.
+
+        Un fallo aca —cuota agotada, modelo sin instalar— NO vuelve roja una
+        descarga que salio bien y cuyo archivo esta en disco: se cuenta aparte, en
+        `followup_error`, y la descarga sigue siendo un resultado utilizable.
+        """
+        if not job.then_separate or self.follow_up is None:
+            return
+        try:
+            job.followup_job_ids = await self.follow_up(job, self._owners.get(job.id))
+        except Exception as exc:  # noqa: BLE001 - el motivo va al usuario
+            job.followup_error = str(exc)
+            logger.exception("follow-up for download job %s failed", job.id)
 
     def _record_quota_usage(self, job: DownloadJob) -> None:
         # Sin esto check_admission deja pasar el primer trabajo y despues nada

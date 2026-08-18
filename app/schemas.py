@@ -767,6 +767,10 @@ class CreateDownloadJobRequest(BaseModel):
     include_playlist: bool = Field(default=False, alias="includePlaylist")
     playlist_limit: int = Field(default=10, alias="playlistLimit")
     subtitle_languages: list[str] = Field(default_factory=list, alias="subtitleLanguages")
+    # Separar en pistas al terminar de bajar, sin volver a pasar por el modulo de
+    # audio. El modelo es opcional: sin el manda el default del catalogo.
+    then_separate: bool = Field(default=False, alias="thenSeparate")
+    then_separation_model: str | None = Field(default=None, alias="thenSeparationModel")
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -797,6 +801,13 @@ class DownloadJobResponse(BaseModel):
     output_directory: str = Field(default="", serialization_alias="outputDirectory")
     error: str | None = None
     owner_id: str | None = Field(default=None, serialization_alias="ownerId")
+    then_separate: bool = Field(default=False, serialization_alias="thenSeparate")
+    # Los ids de separacion que disparo. La UI los mete en su cola: sin esto la
+    # descarga termina y las pistas aparecen sin que nada las anuncie.
+    followup_job_ids: list[str] = Field(
+        default_factory=list, serialization_alias="followupJobIds"
+    )
+    followup_error: str | None = Field(default=None, serialization_alias="followupError")
 
 
 class DownloadJobsListResponse(BaseModel):

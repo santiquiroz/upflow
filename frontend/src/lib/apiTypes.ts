@@ -917,4 +917,9 @@ export interface DownloadJob {
   outputDirectory: string;
   error: string | null;
   ownerId: string | null;
+  thenSeparate: boolean;
+  /** Los trabajos de separacion que disparo esta descarga, para seguirlos. */
+  followupJobIds: string[];
+  /** La descarga salio bien pero el encadenado no. No es un fallo de descarga. */
+  followupError: string | null;
 }

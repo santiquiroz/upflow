@@ -554,6 +554,9 @@ describe("download job details", () => {
     outputDirectory: "",
     error: null,
     ownerId: null,
+    thenSeparate: false,
+    followupJobIds: [],
+    followupError: null,
   };
 
   it("shows where the media came from and how much has arrived", () => {

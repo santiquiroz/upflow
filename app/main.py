@@ -49,6 +49,7 @@ from app.services.media_tools import MediaTools
 from app.services.model_installer import ModelInstaller
 from app.services.asr_installer import AsrModelInstaller
 from app.services.engines.transcribe_onnx import TranscribeEngine
+from app.services.download_chain import start_separation_followups
 from app.services.download_job_manager import DownloadJobManager
 from app.services.transcribe_job_manager import TranscribeJobManager
 from app.services.engines.shape3d import Shape3dEngine
@@ -219,7 +220,16 @@ async def lifespan(app: FastAPI):
         devices=devices_service,
         quota_service=quota_service,
     )
-    download_jobs = DownloadJobManager(settings, quota_service=quota_service)
+    download_jobs = DownloadJobManager(
+        settings,
+        quota_service=quota_service,
+        follow_up=lambda job, owner: start_separation_followups(
+            job,
+            audio_jobs=audio_job_manager,
+            uploads_path=settings.uploads_path,
+            owner=owner,
+        ),
+    )
     generation_installer.enqueue_conversion = generation_converter.convert_from_hf
     await job_manager.start()
     await video_job_manager.start()

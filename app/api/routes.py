@@ -1212,6 +1212,9 @@ def download_job_to_response(job: DownloadJob) -> DownloadJobResponse:
         # la carpeta que el usuario ya ve en Ajustes, y sin ella la UI decia el nombre
         # del archivo sin decir donde buscarlo.
         output_directory=str(job.output_paths[0].parent) if job.output_paths else "",
+        then_separate=job.then_separate,
+        followup_job_ids=list(job.followup_job_ids),
+        followup_error=job.followup_error,
         error=job.error,
         owner_id=job.owner_id,
     )
@@ -1272,6 +1275,8 @@ async def create_download_job(
             include_playlist=payload.include_playlist,
             playlist_limit=payload.playlist_limit,
             subtitle_languages=payload.subtitle_languages,
+            then_separate=payload.then_separate,
+            then_separation_model=payload.then_separation_model,
             owner=current_user_from_request(request),
         )
     except ValueError as exc:

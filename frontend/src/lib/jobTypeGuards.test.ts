@@ -116,6 +116,9 @@ const TRANSCRIBE_JOB: TranscribeJob = {
 
 const DOWNLOAD_JOB: DownloadJob = {
   ownerId: null,
+  thenSeparate: false,
+  followupJobIds: [],
+  followupError: null,
   id: "dl-1",
   status: "queued",
   url: "https://example.com/x",

@@ -56,7 +56,9 @@ describe("submitBatch", () => {
     // que eligió el usuario, y la cola queda desordenada respecto de la pantalla.
     const { store } = colaFalsa();
     const orden: string[] = [];
-    let liberar: (() => void) | null = null;
+    // `!` y no `| null`: TypeScript no ve que el ejecutor del Promise corre ya
+    // mismo, asi que sin esto reduce el tipo a null y `liberar()` no compila.
+    let liberar!: () => void;
     const primeroTermina = new Promise<void>((resolve) => {
       liberar = resolve;
     });
@@ -78,7 +80,7 @@ describe("submitBatch", () => {
 
     await Promise.resolve();
     expect(orden).toEqual(["arranca primero"]);
-    liberar?.();
+    liberar();
     await promesa;
     expect(orden).toEqual(["arranca primero", "termina primero", "arranca segundo"]);
   });

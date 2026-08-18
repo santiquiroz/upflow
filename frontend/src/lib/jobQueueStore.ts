@@ -40,6 +40,13 @@ export function createJobQueueStore(): JobQueueStore {
   }
 
   function addTrackedJob(job: TrackedJob): void {
+    // Registrar dos veces el mismo id siempre es un error: son dos entradas para
+    // un solo trabajo. Importa desde que hay trabajos que la pantalla descubre
+    // sondeando (los que encadena una descarga), donde el mismo id vuelve a
+    // llegar en cada respuesta hasta que el usuario se va.
+    if (jobs.some((tracked) => tracked.id === job.id)) {
+      return;
+    }
     jobs = [job, ...jobs];
     emitChange();
   }

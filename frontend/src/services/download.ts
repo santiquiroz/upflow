@@ -11,6 +11,8 @@ export interface DownloadRequest {
   includePlaylist?: boolean;
   playlistLimit?: number;
   subtitleLanguages?: string[];
+  thenSeparate?: boolean;
+  thenSeparationModel?: string | null;
 }
 
 /** Qué hay en la URL, sin descargar. Es lo que deja ver una playlist de 200 antes de disparar 200. */

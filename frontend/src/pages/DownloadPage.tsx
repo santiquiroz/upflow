@@ -9,6 +9,8 @@ import { DeterminateProgressBar } from "../components/DeterminateProgressBar";
 import { IndeterminateProgressBar } from "../components/IndeterminateProgressBar";
 import type { DownloadJob, MediaProbe } from "../lib/apiTypes";
 import { jobQueueStore } from "../lib/jobQueueStore";
+import { KaraokeSection } from "../modules/audio/KaraokeSection";
+import { useAudioCapabilities } from "../hooks/useAudioJob";
 import {
   cancelDownloadJob,
   createDownloadJob,
@@ -111,6 +113,20 @@ function JobProgress({ job, onCancel }: { job: DownloadJob; onCancel: () => void
 
       {job.error && <span className="text-xs text-danger">{job.error}</span>}
 
+      {/* La descarga salio bien y el encadenado no: en amarillo y aparte, porque
+          el archivo esta en disco y pintar todo de rojo diria lo contrario. */}
+      {job.followupError && (
+        <span role="status" className="text-xs text-warn">
+          {t("download.followupFailed", { reason: job.followupError })}
+        </span>
+      )}
+
+      {job.followupJobIds.length > 0 && (
+        <span role="status" className="text-xs text-text-dim">
+          {t("download.followupStarted", { count: job.followupJobIds.length })}
+        </span>
+      )}
+
       {!done && (
         <button type="button" onClick={onCancel} className="self-start rounded border border-border bg-surface px-3 py-1.5 text-sm text-text-dim hover:border-text-faint">{t("download.cancel")}</button>
       )}
@@ -129,6 +145,8 @@ export function DownloadPage() {
   const [videoContainer, setVideoContainer] = useState<VideoContainer>("mp4");
   const [includePlaylist, setIncludePlaylist] = useState(false);
   const [playlistLimit, setPlaylistLimit] = useState(10);
+  const [thenSeparate, setThenSeparate] = useState(false);
+  const [separationModel, setSeparationModel] = useState<string | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
   const [pendientes, setPendientes] = useState(0);
   const [fallidas, setFallidas] = useState(0);
@@ -137,6 +155,14 @@ export function DownloadPage() {
   // probe corrio, y con un boton manual la lista se ve "quemada" cuando nadie lo toca.
   // Con debounce para no pedirle al sitio una consulta por cada tecla -- ese exceso es
   // justo lo que hace que YouTube corte la sesion por una hora.
+  const capacidades = useAudioCapabilities();
+  const modelosSeparacion = capacidades.data?.separationModels ?? [];
+  // Sin eleccion explicita manda el primero instalado, igual que en el modulo de
+  // audio: el default del servidor y el que muestra la pantalla tienen que ser
+  // el mismo, o el usuario elige uno y le corre otro.
+  const modeloElegido =
+    separationModel ?? modelosSeparacion.find((modelo) => modelo.installed)?.id ?? null;
+
   const settledUrl = useDebouncedValue(url, 700);
   const probe = useQuery({
     queryKey: ["download-probe", settledUrl],
@@ -156,6 +182,8 @@ export function DownloadPage() {
       videoContainer,
       includePlaylist,
       playlistLimit: clampPlaylistLimit(playlistLimit),
+      thenSeparate,
+      thenSeparationModel: thenSeparate ? modeloElegido : null,
     };
   }
 
@@ -422,6 +450,20 @@ export function DownloadPage() {
               )}
             </div>
           )}
+
+          <div className="rounded border border-border bg-surface-2 p-3">
+            <KaraokeSection
+              enabled={thenSeparate}
+              onToggle={setThenSeparate}
+              models={modelosSeparacion}
+              selectedModel={modeloElegido}
+              onSelectModel={setSeparationModel}
+              toggleKey="download.thenSeparate"
+            />
+            {thenSeparate && (
+              <p className="mt-2 text-xs text-text-dim">{t("download.thenSeparateNote")}</p>
+            )}
+          </div>
 
           <button
             type="button"

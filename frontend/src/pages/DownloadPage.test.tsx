@@ -3,8 +3,16 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DownloadJob, MediaProbe } from "../lib/apiTypes";
+import * as audioService from "../services/audio";
 import * as downloadService from "../services/download";
 import { DownloadPage } from "./DownloadPage";
+
+// La pantalla ofrece separar en pistas al terminar, y el catalogo de modelos lo
+// sirve el modulo de audio: sin esto la lista llega vacia y el picker no aparece.
+vi.mock("../services/audio", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/audio")>();
+  return { ...actual, fetchAudioCapabilities: vi.fn() };
+});
 
 vi.mock("../services/download", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../services/download")>();
@@ -33,6 +41,9 @@ function makeProbe(overrides: Partial<MediaProbe> = {}): MediaProbe {
 
 function makeJob(overrides: Partial<DownloadJob> = {}): DownloadJob {
   return {
+    thenSeparate: false,
+    followupJobIds: [],
+    followupError: null,
     id: "job-1",
     status: "running",
     url: "https://example.com/v",
@@ -58,6 +69,20 @@ function makeJob(overrides: Partial<DownloadJob> = {}): DownloadJob {
   };
 }
 
+const MODELO_INSTALADO = {
+  id: "inst_hq_3",
+  name: "MDX-Net Inst HQ 3",
+  installed: true,
+  primaryStem: "Instrumental",
+  category: "karaoke",
+  architecture: "mdx",
+  descriptionKey: "audio.karaoke.model.inst_hq_3.description",
+  stems: [
+    { id: "instrumental", labelKey: "audio.stem.instrumental" },
+    { id: "vocals", labelKey: "audio.stem.vocals" },
+  ],
+};
+
 function renderPage() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   function Wrapper({ children }: { children: ReactNode }) {
@@ -71,6 +96,7 @@ function typeUrl(value: string) {
 }
 
 afterEach(() => {
+  vi.mocked(audioService.fetchAudioCapabilities).mockReset();
   vi.mocked(downloadService.probeMedia).mockReset();
   vi.mocked(downloadService.createDownloadJob).mockReset();
   vi.mocked(downloadService.getDownloadJob).mockReset();
@@ -154,6 +180,66 @@ describe("DownloadPage", () => {
         expect.objectContaining({ maxHeight: 720, audioOnly: false }),
       ),
     );
+  });
+
+  it("no pide separar en pistas si no se lo pidieron", async () => {
+    vi.mocked(downloadService.createDownloadJob).mockResolvedValue(makeJob());
+    vi.mocked(downloadService.getDownloadJob).mockResolvedValue(makeJob());
+    renderPage();
+    typeUrl("https://youtube.com/watch?v=x");
+
+    fireEvent.click(screen.getByRole("button", { name: /Download/i }));
+
+    // Separar es caro: tiene que ser una eleccion, nunca el default.
+    await waitFor(() =>
+      expect(downloadService.createDownloadJob).toHaveBeenCalledWith(
+        expect.objectContaining({ thenSeparate: false, thenSeparationModel: null }),
+      ),
+    );
+  });
+
+  it("pide separar en pistas con el modelo instalado sin que haya que elegirlo", async () => {
+    vi.mocked(audioService.fetchAudioCapabilities).mockResolvedValue({
+      denoiseModes: [],
+      restoreAvailable: false,
+      restoreModes: [],
+      separationModels: [MODELO_INSTALADO],
+    });
+    vi.mocked(downloadService.createDownloadJob).mockResolvedValue(makeJob());
+    vi.mocked(downloadService.getDownloadJob).mockResolvedValue(makeJob());
+    renderPage();
+    typeUrl("https://youtube.com/watch?v=x");
+    fireEvent.click(await screen.findByRole("checkbox", { name: /stems/i }));
+
+    fireEvent.click(screen.getByRole("button", { name: /Download/i }));
+
+    // El default del servidor y el que muestra la pantalla tienen que ser el
+    // mismo, o el usuario ve uno elegido y le corre otro.
+    await waitFor(() =>
+      expect(downloadService.createDownloadJob).toHaveBeenCalledWith(
+        expect.objectContaining({ thenSeparate: true, thenSeparationModel: "inst_hq_3" }),
+      ),
+    );
+  });
+
+  it("una separación fallida no vuelve fallida la descarga", async () => {
+    vi.mocked(downloadService.createDownloadJob).mockResolvedValue(makeJob());
+    vi.mocked(downloadService.getDownloadJob).mockResolvedValue(
+      makeJob({
+        status: "completed",
+        outputFiles: ["un-tema.mp3"],
+        thenSeparate: true,
+        followupError: "el modelo no está instalado",
+      }),
+    );
+    renderPage();
+    typeUrl("https://youtube.com/watch?v=x");
+    fireEvent.click(screen.getByRole("button", { name: /Download/i }));
+
+    // El archivo está en disco: pintar la descarga de rojo mentiría sobre lo
+    // único que sí pasó.
+    expect(await screen.findByText(/el modelo no está instalado/)).toBeInTheDocument();
+    expect(screen.getByText("completed")).toBeInTheDocument();
   });
 
   it("muestra el motivo cuando el sitio rompe la extracción", async () => {

@@ -407,3 +407,92 @@ async def test_the_container_reaches_the_fetch_request(tmp_path: Path, monkeypat
     manager._download_blocking(job, threading.Event())
 
     assert captured["request"].video_container == "mkv"
+
+
+# ---------------------------------------------------------------------------
+# Encadenado: bajar y seguir trabajando sobre lo bajado
+# ---------------------------------------------------------------------------
+
+
+def manager_con_encadenado(tmp_path: Path, resultado):
+    llamadas: list[tuple] = []
+
+    async def follow_up(job, owner):
+        llamadas.append((job.id, owner))
+        if isinstance(resultado, Exception):
+            raise resultado
+        return resultado
+
+    manager = DownloadJobManager(
+        Settings(RUNTIME_DIR=str(tmp_path), _env_file=None), follow_up=follow_up
+    )
+    return manager, llamadas
+
+
+async def test_sin_pedirlo_no_se_encadena_nada(tmp_path: Path, monkeypatch):
+    manager, llamadas = manager_con_encadenado(tmp_path, ["no-deberia"])
+    job = await manager.create_job(url="https://example.com/v")
+    monkeypatch.setattr(manager, "_download_blocking", lambda *a, **k: None)
+
+    await manager._run_job(job)
+
+    assert llamadas == []
+    assert job.followup_job_ids == []
+
+
+async def test_pedirlo_encadena_y_deja_los_ids_para_seguirlos(tmp_path: Path, monkeypatch):
+    manager, llamadas = manager_con_encadenado(tmp_path, ["a1", "a2"])
+    job = await manager.create_job(url="https://example.com/v", then_separate=True)
+    monkeypatch.setattr(manager, "_download_blocking", lambda *a, **k: None)
+
+    await manager._run_job(job)
+
+    assert len(llamadas) == 1
+    # Sin los ids la descarga termina y las pistas salen sin que nada las anuncie.
+    assert job.followup_job_ids == ["a1", "a2"]
+
+
+async def test_un_encadenado_fallido_no_vuelve_roja_la_descarga(tmp_path: Path, monkeypatch):
+    manager, _ = manager_con_encadenado(tmp_path, RuntimeError("modelo no instalado"))
+    job = await manager.create_job(url="https://example.com/v", then_separate=True)
+    monkeypatch.setattr(manager, "_download_blocking", lambda *a, **k: None)
+
+    await manager._run_job(job)
+
+    # El archivo esta en disco: llamar fallida a la descarga seria mentir sobre
+    # lo unico que si paso.
+    assert job.status == JobStatus.completed
+    assert job.error is None
+    assert job.followup_error == "modelo no instalado"
+
+
+async def test_una_descarga_fallida_no_encadena(tmp_path: Path, monkeypatch):
+    manager, llamadas = manager_con_encadenado(tmp_path, ["no-deberia"])
+    job = await manager.create_job(url="https://example.com/v", then_separate=True)
+
+    def explota(*args, **kwargs):
+        raise RuntimeError("404")
+
+    monkeypatch.setattr(manager, "_download_blocking", explota)
+    await manager._run_job(job)
+
+    # Separar un archivo que no existe no falla distinto: falla peor, tarde y
+    # con un mensaje sobre audio.
+    assert job.status == JobStatus.failed
+    assert llamadas == []
+
+
+async def test_el_encadenado_corre_a_nombre_de_quien_pidio_la_descarga(tmp_path: Path, monkeypatch):
+    manager, llamadas = manager_con_encadenado(tmp_path, [])
+    usuario = type("U", (), {"id": "u-7"})()
+    job = await manager.create_job(
+        url="https://example.com/v", then_separate=True, owner=usuario
+    )
+    monkeypatch.setattr(manager, "_download_blocking", lambda *a, **k: None)
+
+    await manager._run_job(job)
+
+    # Sin esto la separacion —la parte cara— no le cuenta a nadie en su cuota.
+    assert llamadas[0][1] is usuario
+    # Y el registro no se queda con el usuario despues de terminar.
+    assert manager._owners == {}

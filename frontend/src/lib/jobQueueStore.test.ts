@@ -63,6 +63,32 @@ describe("createJobQueueStore", () => {
     expect(listener).not.toHaveBeenCalled();
   });
 
+  it("ignora un id que ya esta en la cola en vez de duplicarlo", () => {
+    const store = createJobQueueStore();
+    store.addTrackedJob(makeJob({ id: "job-1", fileName: "primero.png" }));
+
+    store.addTrackedJob(makeJob({ id: "job-1", fileName: "otro-nombre.png" }));
+
+    // Dos entradas para un solo trabajo siempre es un error. Importa desde que
+    // hay trabajos que la pantalla descubre sondeando (los que encadena una
+    // descarga): ahi el mismo id vuelve a llegar en cada respuesta.
+    expect(store.getSnapshot()).toHaveLength(1);
+    expect(store.getSnapshot()[0].fileName).toBe("primero.png");
+  });
+
+  it("no avisa a los suscriptores cuando el id repetido se descarta", () => {
+    const store = createJobQueueStore();
+    store.addTrackedJob(makeJob({ id: "job-1" }));
+    const listener = vi.fn();
+    store.subscribe(listener);
+
+    store.addTrackedJob(makeJob({ id: "job-1" }));
+
+    // Sin esto, un sondeo por segundo dispara un re-render por segundo que no
+    // cambia nada de lo que se ve.
+    expect(listener).not.toHaveBeenCalled();
+  });
+
   it("keeps two independent store instances isolated from each other", () => {
     const storeA = createJobQueueStore();
     const storeB = createJobQueueStore();

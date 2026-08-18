@@ -305,6 +305,15 @@ class DownloadJob:
     output_paths: list[Path] = field(default_factory=list)
     error: str | None = None
     owner_id: str | None = None
+    # Separar en pistas apenas termine de bajar. Es un pedido del usuario, no una
+    # etapa del motor: la descarga sigue siendo un trabajo entero por si sola.
+    then_separate: bool = False
+    then_separation_model: str | None = None
+    # Los trabajos de separacion que disparo, para que la UI los siga.
+    followup_job_ids: list[str] = field(default_factory=list)
+    # Que la descarga salga bien y el encadenado no es un estado real: la descarga
+    # queda completed y esto dice por que no hay pistas.
+    followup_error: str | None = None
 
 
 @dataclass(slots=True)

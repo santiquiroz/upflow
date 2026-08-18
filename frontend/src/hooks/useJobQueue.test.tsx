@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as api from "../lib/api";
 import type { GenerationJob, JobResponse, VideoJobResponse } from "../lib/apiTypes";
 import { createJobQueueStore } from "../lib/jobQueueStore";
+import * as audioService from "../services/audio";
 import * as downloadService from "../services/download";
 import * as generationService from "../services/generation";
 import * as printService from "../services/print";
@@ -26,6 +27,11 @@ vi.mock("../services/transcribe", async (importOriginal) => {
   return { ...actual, getTranscribeJob: vi.fn(), cancelTranscribeJob: vi.fn() };
 });
 
+vi.mock("../services/audio", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/audio")>();
+  return { ...actual, getAudioJob: vi.fn(), cancelAudioJob: vi.fn() };
+});
+
 vi.mock("../services/download", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../services/download")>();
   return { ...actual, getDownloadJob: vi.fn(), cancelDownloadJob: vi.fn() };
@@ -35,6 +41,50 @@ vi.mock("../services/print", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../services/print")>();
   return { ...actual, getShape3dJob: vi.fn(), cancelShape3dJob: vi.fn() };
 });
+
+const BASE_AUDIO_JOB = {
+  id: "au-1",
+  status: "queued" as const,
+  originalFilename: "un-tema.mp3",
+  denoise: null,
+  restore: null,
+  device: null,
+  createdAt: "2026-01-01T00:00:00Z",
+  startedAt: null,
+  finishedAt: null,
+  progressPct: null,
+  stages: null,
+  error: null,
+  ownerId: null,
+  downloadUrl: null,
+};
+
+const DESCARGA_TERMINADA = {
+  id: "dl-1",
+  status: "completed" as const,
+  url: "https://example.com/x",
+  maxHeight: 1080,
+  audioOnly: true,
+  audioFormat: "mp3",
+  audioBitrateKbps: null,
+  videoContainer: "mp4",
+  mediaTitle: "Un tema",
+  mediaUploader: null,
+  extractor: "youtube",
+  createdAt: "2026-01-01T00:00:00Z",
+  startedAt: "2026-01-01T00:00:00Z",
+  finishedAt: "2026-01-01T00:01:00Z",
+  progressPct: 100,
+  downloadedBytes: 100,
+  totalBytes: 100,
+  outputFiles: ["un-tema.mp3"],
+  outputDirectory: "C:/uploads",
+  error: null,
+  ownerId: null,
+  thenSeparate: true,
+  followupJobIds: [] as string[],
+  followupError: null as string | null,
+};
 
 const POLL_INTERVAL_MS = 10;
 
@@ -132,6 +182,58 @@ describe("useJobQueue", () => {
     const { result } = renderHook(() => useJobQueue(store, POLL_INTERVAL_MS), { wrapper: createWrapper() });
 
     expect(result.current.entries).toEqual([]);
+  });
+
+  it("mete en la cola los trabajos que encadeno una descarga", async () => {
+    const store = createJobQueueStore();
+    store.addTrackedJob({ id: "dl-1", kind: "download", fileName: "un-tema", createdAt: 1 });
+    vi.mocked(downloadService.getDownloadJob).mockResolvedValue({
+      ...DESCARGA_TERMINADA,
+      followupJobIds: ["au-1"],
+    });
+    vi.mocked(audioService.getAudioJob).mockResolvedValue(BASE_AUDIO_JOB);
+
+    const { result } = renderHook(() => useJobQueue(store, POLL_INTERVAL_MS), { wrapper: createWrapper() });
+
+    // Nadie pidio ese trabajo por pantalla: sin registrarlo, las pistas salen en
+    // silencio y no hay donde ver el progreso ni bajarlas.
+    await waitFor(() => expect(result.current.entries).toHaveLength(2));
+    const encadenado = result.current.entries.find((entry) => entry.id === "au-1");
+    expect(encadenado?.kind).toBe("audio");
+    // El nombre sale del archivo bajado, no del id.
+    expect(encadenado?.fileName).toBe("un-tema.mp3");
+  });
+
+  it("no duplica el encadenado aunque el sondeo lo repita", async () => {
+    const store = createJobQueueStore();
+    store.addTrackedJob({ id: "dl-1", kind: "download", fileName: "un-tema", createdAt: 1 });
+    vi.mocked(downloadService.getDownloadJob).mockResolvedValue({
+      ...DESCARGA_TERMINADA,
+      followupJobIds: ["au-1"],
+    });
+    vi.mocked(audioService.getAudioJob).mockResolvedValue({
+      ...BASE_AUDIO_JOB,
+      status: "running" as const,
+    });
+
+    const { result } = renderHook(() => useJobQueue(store, POLL_INTERVAL_MS), { wrapper: createWrapper() });
+    await waitFor(() => expect(result.current.entries).toHaveLength(2));
+    // El id vuelve a llegar en CADA respuesta hasta que el usuario se va: la
+    // guarda tiene que aguantar los sondeos, no solo la primera vez.
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS * 5));
+
+    expect(result.current.entries.filter((entry) => entry.id === "au-1")).toHaveLength(1);
+  });
+
+  it("una descarga sin encadenado no agrega nada", async () => {
+    const store = createJobQueueStore();
+    store.addTrackedJob({ id: "dl-1", kind: "download", fileName: "un-tema", createdAt: 1 });
+    vi.mocked(downloadService.getDownloadJob).mockResolvedValue(DESCARGA_TERMINADA);
+
+    const { result } = renderHook(() => useJobQueue(store, POLL_INTERVAL_MS), { wrapper: createWrapper() });
+
+    await waitFor(() => expect(result.current.entries[0]?.status).toBe("completed"));
+    expect(result.current.entries).toHaveLength(1);
   });
 
   it("aggregates image and video jobs ordered newest first", async () => {
@@ -248,6 +350,9 @@ describe("useJobQueue", () => {
       outputDirectory: "",
       error: null,
       ownerId: null,
+      thenSeparate: false,
+      followupJobIds: [],
+      followupError: null,
     });
     vi.mocked(printService.getShape3dJob).mockResolvedValue({
       id: "3d-1",

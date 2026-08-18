@@ -170,6 +170,9 @@ const DOWNLOAD_JOB: DownloadJob = {
   outputDirectory: "",
   error: null,
   ownerId: null,
+  thenSeparate: false,
+  followupJobIds: [],
+  followupError: null,
 };
 
 const SHAPE3D_JOB: Shape3dJob = {

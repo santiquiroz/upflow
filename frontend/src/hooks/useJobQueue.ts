@@ -1,8 +1,8 @@
 import { useQueries, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "../i18n/LocaleProvider";
-import { useSyncExternalStore } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import { cancelJob, cancelVideoJob, getJob, getVideoJob } from "../lib/api";
-import type { JobStatus } from "../lib/apiTypes";
+import type { DownloadJob, JobStatus } from "../lib/apiTypes";
 import { isTerminalJobStatus } from "../lib/jobStatus";
 import type { AnyQueuedJob } from "../lib/jobTypeGuards";
 import { jobQueueStore, type JobQueueStore, type TrackedJob } from "../lib/jobQueueStore";
@@ -89,6 +89,32 @@ function readDownloadUrl(data: TrackedJobResponse | undefined): string | null {
   return data.downloadUrl ?? null;
 }
 
+/** Los trabajos que una descarga encadeno, listos para entrar a la cola.
+ *
+ * Una descarga con "separar al terminar" produce trabajos de audio que nadie
+ * pidio por pantalla: sin registrarlos, las pistas salen en silencio y el
+ * usuario no tiene donde ver el progreso ni bajarlas.
+ *
+ * Los nombres salen de los archivos bajados, en el mismo orden: el servidor
+ * dispara un trabajo por archivo. Si faltara alguno, el titulo del medio es
+ * mejor etiqueta que un id.
+ */
+function followUpJobsOf(
+  tracked: TrackedJob,
+  data: TrackedJobResponse | undefined,
+): TrackedJob[] {
+  if (!data || !("followupJobIds" in data)) {
+    return [];
+  }
+  const job = data as DownloadJob;
+  return job.followupJobIds.map((id, index) => ({
+    id,
+    kind: "audio" as const,
+    fileName: job.outputFiles[index] ?? job.mediaTitle ?? tracked.fileName,
+    createdAt: Date.now(),
+  }));
+}
+
 function toQueueEntry(
   tracked: TrackedJob,
   data: TrackedJobResponse | undefined,
@@ -131,6 +157,15 @@ export function useJobQueue(
   const entries = trackedJobs
     .map((tracked, index) => toQueueEntry(tracked, results[index]?.data, results[index]?.error, t))
     .sort(byNewestFirst);
+
+  // En un efecto y no al vuelo: agregar a la cola durante el render es escribir
+  // en un store mientras se lee. `addTrackedJob` ignora ids repetidos, asi que
+  // reejecutarlo en cada sondeo no duplica nada.
+  useEffect(() => {
+    trackedJobs.forEach((tracked, index) => {
+      followUpJobsOf(tracked, results[index]?.data).forEach(store.addTrackedJob);
+    });
+  });
 
   function dismiss(id: string): void {
     store.removeTrackedJob(id);
