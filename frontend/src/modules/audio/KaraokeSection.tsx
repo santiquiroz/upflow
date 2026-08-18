@@ -85,9 +85,9 @@ function ModelCategoryGroup({
               {/* border y color heredados (border-current): el chip tiene que
                   leerse tanto sobre el botón activo (fondo acento) como sobre
                   el inactivo. */}
-              {model.warningKey && (
+              {model.badgeKey && (
                 <span className="rounded-sm border border-current px-1 text-[0.65rem] uppercase tracking-wide">
-                  {t("audio.karaoke.slowBadge")}
+                  {t(model.badgeKey)}
                 </span>
               )}
             </button>

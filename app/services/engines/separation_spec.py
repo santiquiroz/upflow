@@ -98,6 +98,13 @@ class SeparationModelSpec:
     # parametros obligatorios despues de este).
     warning_key: str | None = field(default=None, kw_only=True)
 
+    # Etiqueta corta del picker, al lado del nombre. La declara el modelo porque
+    # cada advertencia es distinta: uno avisa que es LENTO y otro que separa
+    # PEOR. Mientras hubo un solo modelo con advertencia, la interfaz dibujaba
+    # "Lento" fijo — y al llegar el segundo empezo a llamar lento al mas rapido
+    # del catalogo.
+    badge_key: str | None = field(default=None, kw_only=True)
+
     # Lo fija la subclase, no los datos: una entrada no puede declarar una
     # arquitectura que no coincida con sus propios parametros.
     architecture: ClassVar[Architecture]

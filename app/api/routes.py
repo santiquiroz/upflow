@@ -1788,6 +1788,7 @@ async def audio_capabilities(settings: Settings = Depends(get_settings)) -> Audi
                 architecture=spec.architecture,
                 description_key=spec.description_key,
                 warning_key=spec.warning_key,
+                badge_key=spec.badge_key,
                 stems=[
                     SeparationStemResponse(id=stem.id, label_key=stem.label_key)
                     for stem in spec.stems

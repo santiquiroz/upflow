@@ -237,6 +237,9 @@ export interface SeparationModel {
   architecture: string;
   descriptionKey: string;
   warningKey?: string | null;
+  // La etiqueta corta del picker la manda el modelo: una advertencia puede ser
+  // "lento" o "separa peor", y dibujarla fija llamaba lento al mas rapido.
+  badgeKey?: string | null;
   stems: SeparationStem[];
 }
 

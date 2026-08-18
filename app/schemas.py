@@ -401,6 +401,9 @@ class SeparationModelResponse(BaseModel):
     architecture: str
     description_key: str = Field(serialization_alias="descriptionKey")
     warning_key: str | None = Field(default=None, serialization_alias="warningKey")
+    # Etiqueta corta del picker. La manda el modelo y no la arma la UI: cada
+    # advertencia dice algo distinto ("lento" contra "separa peor").
+    badge_key: str | None = Field(default=None, serialization_alias="badgeKey")
     stems: list[SeparationStemResponse] = Field(default_factory=list)
 
 

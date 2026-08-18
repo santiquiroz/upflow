@@ -176,6 +176,7 @@ const FULL_CAPABILITIES: AudioCapabilities = {
       architecture: "roformer",
       descriptionKey: "audio.karaoke.model.mel_band_roformer_kim.description",
       warningKey: "audio.karaoke.model.mel_band_roformer_kim.warning",
+      badgeKey: "audio.karaoke.badge.slow",
       stems: KARAOKE_STEMS,
     },
     {
@@ -852,7 +853,11 @@ describe("AudioPanel modo karaoke", () => {
     ).toHaveAttribute("aria-pressed", "false");
   });
 
-  it("marks the slow model's button with a badge and leaves the others clean", async () => {
+  it("shows each model's own badge, not one hardcoded label", async () => {
+    // La insignia sale de `badgeKey` y no de "tiene warningKey". Mientras hubo un
+    // solo modelo con advertencia —el lento— dibujar "Slow" fijo funcionaba de
+    // casualidad; con el segundo, el catalogo empezo a llamar lento al modelo mas
+    // rapido de los dos.
     renderPanel(FULL_CAPABILITIES);
     fireEvent.click(await openKaraoke());
 
@@ -861,6 +866,25 @@ describe("AudioPanel modo karaoke", () => {
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: /MDX-Net Inst HQ 3/ }),
+    ).not.toHaveTextContent("Slow");
+  });
+
+  it("shows no badge for a model that warns without declaring one", async () => {
+    // La regresion concreta: si la insignia volviera a colgar de `warningKey`,
+    // este modelo mostraria un texto que nadie eligio para el.
+    const sinInsignia = {
+      ...FULL_CAPABILITIES,
+      separationModels: FULL_CAPABILITIES.separationModels.map((model) =>
+        model.id === "mel_band_roformer_kim"
+          ? { ...model, badgeKey: null }
+          : model,
+      ),
+    };
+    renderPanel(sinInsignia);
+    fireEvent.click(await openKaraoke());
+
+    expect(
+      await screen.findByRole("button", { name: /Mel-Band RoFormer by KimberleyJSN/ }),
     ).not.toHaveTextContent("Slow");
   });
 

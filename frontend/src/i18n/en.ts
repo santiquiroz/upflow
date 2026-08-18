@@ -761,7 +761,8 @@ export const en = {
   "audio.karaoke.category.cleanup": "Cleanup (one pass, two stems)",
   "audio.karaoke.cleanupGroupHint":
     "Here each cleanup model runs ON ITS OWN and hands back both stems, so you can hear what it removed. To chain several cleanups and keep a single clean file, use the Cleanup section.",
-  "audio.karaoke.slowBadge": "Slow",
+  "audio.karaoke.badge.slow": "Slow",
+  "audio.karaoke.badge.lessPrecise": "Less precise",
   "audio.karaoke.model.mel_band_roformer_kim.description":
     "Extracts the vocals at the highest quality in the catalog (Mel-Band RoFormer); the instrumental is the remainder.",
   "audio.karaoke.model.mel_band_roformer_kim.warning":

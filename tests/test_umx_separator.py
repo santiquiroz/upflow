@@ -163,3 +163,25 @@ def test_el_id_del_modelo_lo_rutea_al_motor_umx() -> None:
     # cosa, el job iría a un motor que no sabe cargar cuatro grafos.
     assert UMX_MODELS[MODELO].architecture == "umx"
     assert spec().category == "karaoke"
+
+
+def test_cada_modelo_que_advierte_declara_su_propia_etiqueta() -> None:
+    """La etiqueta del picker no puede estar cableada en la interfaz.
+
+    Mientras hubo UN solo modelo con advertencia —el lento— la interfaz dibujaba
+    "Lento" fijo cada vez que había `warningKey`. Al llegar el segundo, esa
+    equivalencia se volvió falsa y el catálogo empezó a llamar lento al modelo
+    MÁS RÁPIDO de los que advierten algo (19x tiempo real contra 1.2x).
+    """
+    advierten = [s for s in SEPARATION_MODELS.values() if s.warning_key]
+
+    assert len(advierten) >= 2, "con uno solo este test no prueba nada"
+    for spec in advierten:
+        assert spec.badge_key, f"{spec.id} advierte pero no dice qué mostrar"
+    # Y no puede ser la misma para todos: si lo fuera, volvería a ser un texto fijo.
+    assert len({spec.badge_key for spec in advierten}) == len(advierten)
+
+
+def test_el_de_cuatro_pistas_no_se_anuncia_como_lento() -> None:
+    # Es el más rápido de los que advierten: la contra es que separa peor.
+    assert SEPARATION_MODELS[MODELO].badge_key == "audio.karaoke.badge.lessPrecise"

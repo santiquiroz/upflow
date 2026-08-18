@@ -78,6 +78,8 @@ UMX_MODELS: dict[str, UmxModelSpec] = {
         category="karaoke",
         description_key="audio.karaoke.model.umx_4stem.description",
         warning_key="audio.karaoke.model.umx_4stem.warning",
+        # No es "lento": es el mas RAPIDO de los que advierten algo.
+        badge_key="audio.karaoke.badge.lessPrecise",
         stems=(
             SeparationStem(id="vocals", label_key=STEM_VOCALS, source=0),
             SeparationStem(id="drums", label_key=STEM_DRUMS, source=1),

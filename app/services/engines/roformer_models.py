@@ -116,6 +116,7 @@ ROFORMER_MODELS: dict[str, RoformerModelSpec] = {
         # La UI la muestra SIEMPRE, no solo con el modelo ya elegido: descubrir
         # el 20x cuando el trabajo ya arranco no es una eleccion informada.
         warning_key="audio.karaoke.model.mel_band_roformer_kim.warning",
+        badge_key="audio.karaoke.badge.slow",
         # Mismo par que voc_ft, y por el mismo motivo: el modelo saca la voz,
         # pero en karaoke lo que el usuario se lleva primero es la instrumental.
         stems=(
