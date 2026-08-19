@@ -18,6 +18,7 @@ from fetchflow import engine as fetch_engine
 # describe_failure vive en la libreria: limpiar la decoracion de terminal de yt-dlp y
 # traducir un rate limit le sirve a cualquiera que la use, no solo a Upflow.
 from fetchflow.errors import describe_failure
+from fetchflow.potoken import PoTokenCache, PoTokenUnavailable
 from fetchflow.options import (
     FetchRequest,
     build_plan,
@@ -59,6 +60,10 @@ class DownloadJobManager:
         # Vive aca y no en el job por lo mismo que los eventos de cancelacion: es
         # estado de ejecucion, no parte de lo que la descarga es.
         self._owners: dict[str, AuthenticatedUser] = {}
+        # El token se comparte entre descargas: acuñar cuesta segundos y sirve
+        # horas, asi que una playlist no puede pagarlo una vez por item.
+        command = settings.po_token_command()
+        self._po_tokens = PoTokenCache(command) if command else None
 
     async def start(self) -> None:
         if self._worker_task is None:
@@ -197,6 +202,21 @@ class DownloadJobManager:
             job.followup_error = str(exc)
             logger.exception("follow-up for download job %s failed", job.id)
 
+    def _po_token(self):
+        """El token de YouTube, o None si no hay acuñador instalado.
+
+        None y no una excepcion: sin acuñador, los sitios que no piden token
+        siguen funcionando igual, y romper TODAS las descargas por una que no va
+        a andar seria peor. El 403 de YouTube ya se traduce a un motivo legible.
+        """
+        if self._po_tokens is None:
+            return None
+        try:
+            return self._po_tokens.get()
+        except PoTokenUnavailable as exc:
+            logger.warning("no se pudo acuñar el PO Token: %s", exc)
+            return None
+
     def _record_quota_usage(self, job: DownloadJob) -> None:
         # Sin esto check_admission deja pasar el primer trabajo y despues nada
         # se descuenta nunca: la cuota queda decorativa (mismo motivo que en
@@ -231,7 +251,12 @@ class DownloadJobManager:
             playlist_limit=job.playlist_limit,
             subtitle_languages=tuple(job.subtitle_languages),
         )
-        plan = build_plan(request, self.settings.ffmpeg_binary_path.parent)
+        plan = build_plan(
+            request,
+            self.settings.ffmpeg_binary_path.parent,
+            po_token=self._po_token(),
+            js_runtimes=self.settings.yt_dlp_js_runtimes() or None,
+        )
 
         def on_progress(progress: fetch_engine.FetchProgress) -> None:
             job.downloaded_bytes = progress.downloaded_bytes

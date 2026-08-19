@@ -31,6 +31,7 @@ PACK_LABELS: dict[str, str] = {
     "openscad": "OpenSCAD, que convierte el codigo en la pieza",
     "wan-video": "los modelos de generacion de video",
     "magpie": "el overlay de tiempo real",
+    "ceca": "las descargas de YouTube",
     "shap-e": "el modelo de generacion 3D",
     "shap-e-img2img": "el modelo de foto a 3D",
     "karaoke": "el modelo de separacion de voz e instrumental",

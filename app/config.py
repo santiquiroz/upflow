@@ -319,6 +319,15 @@ class Settings(BaseSettings):
     enable_interpolation: bool = Field(default=False, alias="ENABLE_INTERPOLATION")
     allowed_fps_multipliers: str = Field(default="2,3,4", alias="ALLOWED_FPS_MULTIPLIERS")
 
+    # El motor JS que yt-dlp necesita para resolver el desafio de YouTube, y que
+    # ademas corre el acuñador de PO Token: un solo binario para los dos roles,
+    # que es por que se vendoriza Deno y no el acuñador ya compilado (~40 MB
+    # contra ~150 MB entre los dos).
+    deno_binary: str = Field(default="vendor/deno/deno.exe", alias="DENO_BINARY")
+    # El acuñador: https://github.com/santiquiroz/ceca (MIT). Codigo fuente, que
+    # corre Deno; no un ejecutable aparte.
+    ceca_entrypoint: str = Field(default="vendor/ceca/main.ts", alias="CECA_ENTRYPOINT")
+
     deepfilter_binary: str = Field(
         default="vendor/deepfilternet/deep-filter.exe", alias="DEEPFILTER_BINARY"
     )
@@ -858,6 +867,50 @@ class Settings(BaseSettings):
             and self.rife_models_path.exists()
             and (self.rife_models_path / self.rife_model).exists()
         )
+
+    @property
+    def deno_binary_path(self) -> Path:
+        return resolve_against_project_root(self.deno_binary)
+
+    @property
+    def ceca_entrypoint_path(self) -> Path:
+        return resolve_against_project_root(self.ceca_entrypoint)
+
+    def po_token_available(self) -> bool:
+        """Si se puede acuñar el token que YouTube exige para entregar el medio.
+
+        Hacen falta los DOS: el motor JS y el acuñador. Con uno solo no alcanza,
+        y decir que esta disponible cuando falta cualquiera manda a diagnosticar
+        la descarga en vez de la instalacion.
+        """
+        return self.deno_binary_path.exists() and self.ceca_entrypoint_path.exists()
+
+    def po_token_command(self) -> list[str]:
+        """El comando que imprime el token, o vacio si falta algo."""
+        if not self.po_token_available():
+            return []
+        return [
+            str(self.deno_binary_path),
+            "run",
+            # Permisos acotados: este proceso ejecuta JavaScript que baja de
+            # YouTube, asi que puede hablar por red pero no tocar el disco.
+            "--allow-net",
+            "--allow-env",
+            "--allow-read",
+            "--allow-sys",
+            "--no-check",
+            str(self.ceca_entrypoint_path),
+        ]
+
+    def yt_dlp_js_runtimes(self) -> dict:
+        """El motor JS para yt-dlp, apuntado al vendorizado.
+
+        Con la ruta explicita y no por PATH: la app trae el suyo y no puede
+        depender de que el equipo tenga uno instalado.
+        """
+        if not self.deno_binary_path.exists():
+            return {}
+        return {"deno": {"path": str(self.deno_binary_path)}}
 
     @property
     def deepfilter_binary_path(self) -> Path:

@@ -40,6 +40,9 @@ PACK_SCRIPTS: dict[str, str] = {
     # los pesos y el binario ya viene con el pack sdcpp.
     "wan-video": "download-wan-video.ps1",
     "magpie": "download-magpie.ps1",
+    # Motor JS + acuñador de PO Token: las dos cosas que YouTube empezo a exigir
+    # para entregar el medio. Un solo pack porque una sin la otra no sirve.
+    "ceca": "download-ceca.ps1",
     "shap-e": "download-shap-e.ps1",
     # Foto a 3D. Es OTRO repo HF que el de texto (openai/shap-e-img2img):
     # comparte el renderer pero cambia el prior y el encoder de entrada.

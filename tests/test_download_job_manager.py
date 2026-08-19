@@ -357,7 +357,10 @@ async def test_the_fetch_request_carries_every_knob(tmp_path: Path, monkeypatch)
         "probe",
         lambda url: SimpleNamespace(title="t", uploader="u", extractor="e"),
     )
-    def capture(request, ffmpeg_dir):
+    def capture(request, ffmpeg_dir, **extra):
+        # **extra y no la firma exacta: lo que este test afirma es el CONTENIDO
+        # del pedido, y clavarle la firma lo hace fallar cada vez que el plan
+        # aprende una opcion nueva sin que el pedido cambie en nada.
         captured["request"] = request
         return FetchPlan()
 
@@ -393,7 +396,10 @@ async def test_the_container_reaches_the_fetch_request(tmp_path: Path, monkeypat
         lambda url: SimpleNamespace(title="t", uploader="u", extractor="e"),
     )
 
-    def capture(request, ffmpeg_dir):
+    def capture(request, ffmpeg_dir, **extra):
+        # **extra y no la firma exacta: lo que este test afirma es el CONTENIDO
+        # del pedido, y clavarle la firma lo hace fallar cada vez que el plan
+        # aprende una opcion nueva sin que el pedido cambie en nada.
         captured["request"] = request
         return FetchPlan()
 
@@ -496,3 +502,64 @@ async def test_el_encadenado_corre_a_nombre_de_quien_pidio_la_descarga(tmp_path:
     assert llamadas[0][1] is usuario
     # Y el registro no se queda con el usuario despues de terminar.
     assert manager._owners == {}
+
+
+# ---------------------------------------------------------------------------
+# El PO Token que YouTube exige
+# ---------------------------------------------------------------------------
+
+
+def test_sin_acunador_instalado_no_hay_token(tmp_path: Path):
+    settings = Settings(RUNTIME_DIR=str(tmp_path), _env_file=None)
+    settings.__dict__["deno_binary"] = str(tmp_path / "no-esta.exe")
+
+    assert settings.po_token_command() == []
+    # Vacio y no una ruta a algo inexistente: el que llama decide sin tener que
+    # chequear el disco de nuevo.
+    assert settings.yt_dlp_js_runtimes() == {}
+
+
+def test_hacen_falta_las_dos_piezas(tmp_path: Path):
+    settings = Settings(RUNTIME_DIR=str(tmp_path), _env_file=None)
+    deno = tmp_path / "deno.exe"
+    deno.write_bytes(b"x")
+    settings.__dict__["deno_binary"] = str(deno)
+    settings.__dict__["ceca_entrypoint"] = str(tmp_path / "falta.ts")
+
+    # Con el motor JS pero sin acuñador no se puede acuñar nada. Decir que esta
+    # disponible mandaria a diagnosticar la descarga en vez de la instalacion.
+    assert not settings.po_token_available()
+    assert settings.po_token_command() == []
+
+
+def test_el_acunador_corre_con_permisos_acotados(tmp_path: Path):
+    settings = Settings(RUNTIME_DIR=str(tmp_path), _env_file=None)
+    for nombre, attr in (("deno.exe", "deno_binary"), ("main.ts", "ceca_entrypoint")):
+        ruta = tmp_path / nombre
+        ruta.write_bytes(b"x")
+        settings.__dict__[attr] = str(ruta)
+
+    command = settings.po_token_command()
+
+    # Este proceso ejecuta JavaScript que baja de YouTube: puede hablar por red,
+    # pero no se le da permiso de escritura.
+    assert "--allow-net" in command
+    assert not any(arg.startswith("--allow-write") for arg in command)
+    assert "--allow-all" not in command
+
+
+async def test_un_acunador_roto_no_rompe_las_descargas(tmp_path: Path, monkeypatch):
+    manager = make_manager(tmp_path)
+
+    class AcunadorRoto:
+        def get(self):
+            from fetchflow.potoken import PoTokenUnavailable
+
+            raise PoTokenUnavailable("se cayo")
+
+    manager._po_tokens = AcunadorRoto()
+
+    # Sin token se sigue igual: los sitios que no lo piden funcionan, y romper
+    # TODAS las descargas por una que no va a andar seria peor. El 403 de
+    # YouTube ya se traduce a un motivo legible.
+    assert manager._po_token() is None
