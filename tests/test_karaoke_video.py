@@ -273,3 +273,34 @@ def test_el_principal_lo_decide_el_catalogo_y_no_la_posicion(tmp_path: Path, ffm
 
     esperado = SEPARATION_MODELS[DEFAULT_SEPARATION_MODEL].main_stem.id
     assert salida.name == f"{esperado}.wav"
+
+
+def test_la_letra_del_karaoke_sale_en_ass_con_resaltado(tmp_path: Path, ffmpeg_falso) -> None:
+    from app.services.subtitles import TranscriptSegment
+
+    gestor = manager(tmp_path, SeparadorFalso())
+    job = job_de_karaoke(tmp_path)
+    job.segments = [
+        TranscriptSegment(start=0.0, end=2.0, text="hola mundo"),
+        TranscriptSegment(start=2.0, end=4.0, text="chau"),
+    ]
+
+    asyncio.run(gestor._build_karaoke_video(job))
+
+    ass = (gestor.settings.outputs_path / f"{job.id}.ass").read_text(encoding="utf-8")
+    # Lo que separa un karaoke de un video con subtitulos: SRT no puede expresar
+    # esto sin emitir una linea por palabra, parpadeando.
+    assert "{\k" in ass
+    assert "hola" in ass and "mundo" in ass
+
+
+def test_el_karaoke_no_usa_el_srt_de_linea_entera(tmp_path: Path, ffmpeg_falso) -> None:
+    gestor = manager(tmp_path, SeparadorFalso())
+    job = job_de_karaoke(tmp_path)
+
+    asyncio.run(gestor._build_karaoke_video(job))
+
+    quemado = next(c for c in ffmpeg_falso if "-filter_complex" in c)
+    filtro = quemado[quemado.index("-filter_complex") + 1]
+    assert ".ass" in filtro
+    assert ".srt" not in filtro

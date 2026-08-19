@@ -12,6 +12,7 @@ from app.services.dubbing_pipeline import DubbingPipeline, DubbingUnavailable
 from app.services.engines.tts_kokoro import SAMPLE_RATE as TTS_SAMPLE_RATE
 from app.services.engines.tts_kokoro import KokoroTtsEngine, available_voices
 from app.services.audio_excerpt import probe_duration_seconds
+from app.services.karaoke_subtitles import render_karaoke_ass, split_line_proportionally
 from app.services.media_decode import (
     SEPARATION_CHANNELS,
     SEPARATION_SAMPLE_RATE,
@@ -337,7 +338,7 @@ class TranscribeJobManager(QueuedJobManager[TranscribeJob]):
         """
         instrumental = await self._separate_instrumental(job)
         try:
-            subtitles = self._write_subtitle_file(job)
+            subtitles = self._write_karaoke_subtitle_file(job)
             picture = job.source_path if await self._has_picture(job.source_path) else None
             duration = await probe_duration_seconds(instrumental, self.settings) or 0.0
             destination = self.settings.outputs_path / f"{job.id}.karaoke.mp4"
@@ -420,6 +421,27 @@ class TranscribeJobManager(QueuedJobManager[TranscribeJob]):
             return has_real_picture(json.loads(stdout.decode("utf-8", errors="ignore")))
         except json.JSONDecodeError:
             return False
+
+    def _write_karaoke_subtitle_file(self, job: TranscribeJob) -> Path:
+        """La letra en ASS, con cada palabra encendiendose a su tiempo.
+
+        ASS y no SRT porque SRT no tiene forma de expresar esto: habria que
+        emitir una linea por palabra, parpadeando, que es peor que no resaltar.
+
+        Mientras el motor entregue tiempos por LINEA, el reparto entre palabras
+        es proporcional a la cantidad de letras. Es una aproximacion —una nota
+        sostenida sobre una palabra corta se corre— y se reemplaza sola cuando
+        los segmentos traigan tiempos por palabra.
+        """
+        lineas = [
+            split_line_proportionally(segmento.text, segmento.start, segmento.end)
+            for segmento in job.segments
+            if getattr(segmento, "text", "").strip()
+        ]
+        destino = self.settings.outputs_path / f"{job.id}.ass"
+        destino.parent.mkdir(parents=True, exist_ok=True)
+        destino.write_text(render_karaoke_ass(lineas), encoding="utf-8")
+        return destino
 
     def _write_subtitle_file(self, job: TranscribeJob) -> Path:
         subtitle_path = self.settings.outputs_path / f"{job.id}.srt"
