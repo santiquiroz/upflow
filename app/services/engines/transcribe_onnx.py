@@ -13,6 +13,7 @@ from typing import Any
 
 from app.config import Settings
 from app.services.media_decode import build_decode_to_wav_command, needs_decoding
+from app.services.engines.whisper_alignment import align_words, attach_words_to_segments
 from app.services.subtitles import (
     TranscriptSegment,
     merge_chunk_segments,
@@ -233,7 +234,9 @@ class TranscribeEngine:
             for index, chunk in enumerate(chunks):
                 if cancel_event.is_set():
                     raise TranscribeCancelled()
-                per_chunk.append(self._transcribe_chunk(model, processor, chunk, request))
+                per_chunk.append(
+                    self._transcribe_chunk(model, processor, chunk, request, model_dir)
+                )
                 progress_cb(index + 1, len(chunks))
 
             return merge_chunk_segments(per_chunk, chunk_seconds=CHUNK_SECONDS)
@@ -242,7 +245,12 @@ class TranscribeEngine:
                 decoded.unlink(missing_ok=True)
 
     def _transcribe_chunk(
-        self, model: Any, processor: Any, chunk: Any, request: TranscribeRequest
+        self,
+        model: Any,
+        processor: Any,
+        chunk: Any,
+        request: TranscribeRequest,
+        model_dir: Path | None = None,
     ) -> list[TranscriptSegment]:
         features = processor(
             chunk, sampling_rate=TARGET_SAMPLE_RATE, return_tensors="pt"
@@ -261,11 +269,55 @@ class TranscribeEngine:
         )[0]
         offsets = decoded.get("offsets") if isinstance(decoded, dict) else None
         if offsets:
-            return segments_from_offsets(list(offsets), chunk_seconds=CHUNK_SECONDS)
+            segmentos = segments_from_offsets(list(offsets), chunk_seconds=CHUNK_SECONDS)
+            return self._with_word_timings(
+                segmentos,
+                model,
+                processor,
+                features,
+                tokens,
+                model_dir,
+                audio_seconds=len(chunk) / TARGET_SAMPLE_RATE,
+            )
         # Sin offsets todavia se puede entregar la transcripcion: el chunk entero
         # pasa a ser un solo segmento. Peor granularidad, nunca texto perdido.
         text = decoded.get("text") if isinstance(decoded, dict) else decoded
         return [TranscriptSegment(start=0.0, end=float(CHUNK_SECONDS), text=str(text or ""))]
+
+    def _with_word_timings(
+        self,
+        segments: list[TranscriptSegment],
+        model: Any,
+        processor: Any,
+        features: Any,
+        tokens: Any,
+        model_dir: Path | None,
+        audio_seconds: float | None = None,
+    ) -> list[TranscriptSegment]:
+        """Le agrega a cada segmento los tiempos de sus palabras.
+
+        NUNCA hace fallar la transcripcion: alinear es una mejora del karaoke, y
+        perder el texto entero porque no se pudo alinear seria cambiar algo que
+        funciona por algo que decora. Si falla, se devuelven los segmentos como
+        estaban y el karaoke reparte por cantidad de letras.
+        """
+        if model_dir is None or not segments:
+            return segments
+        if not getattr(self.settings, "enable_word_alignment", False):
+            return segments
+        try:
+            palabras = align_words(
+                model=model,
+                processor=processor,
+                features=features,
+                tokens=tokens,
+                model_dir=model_dir,
+                audio_seconds=audio_seconds,
+            )
+        except Exception:  # noqa: BLE001 - alinear no puede tumbar el trabajo
+            logger.warning("no se pudieron alinear las palabras", exc_info=True)
+            return segments
+        return attach_words_to_segments(segments, palabras)
 
     def _get_model(self, model_id: str, model_dir: Path, device: str) -> tuple[Any, Any]:
         self.gpu_coordinator.acquire(device, self)

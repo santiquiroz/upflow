@@ -135,3 +135,22 @@ def split_line_proportionally(
         cronometrado.append(KaraokeWord(text=palabra, start=cursor, end=siguiente))
         cursor = siguiente
     return KaraokeLine(start=start, end=end, words=tuple(cronometrado))
+
+
+def line_from_segment(segment) -> KaraokeLine:
+    """La linea de karaoke de un segmento, usando lo mejor que tenga.
+
+    Con tiempos por palabra de verdad se usan esos. Sin ellos se reparte por
+    cantidad de letras, que es una aproximacion visible en notas sostenidas. La
+    decision vive aca y no en el que llama para que no haya dos criterios.
+    """
+    palabras = getattr(segment, "words", ()) or ()
+    if not palabras:
+        return split_line_proportionally(segment.text, segment.start, segment.end)
+    return KaraokeLine(
+        start=segment.start,
+        end=segment.end,
+        words=tuple(
+            KaraokeWord(text=p.word, start=p.start, end=p.end) for p in palabras
+        ),
+    )

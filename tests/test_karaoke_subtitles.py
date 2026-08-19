@@ -176,3 +176,53 @@ def test_las_palabras_no_dejan_huecos_entre_si() -> None:
 
 def test_una_linea_vacia_no_inventa_palabras() -> None:
     assert split_line_proportionally("   ", 0.0, 1.0).words == ()
+
+
+# ---------------------------------------------------------------------------
+# Que tiempos gana
+# ---------------------------------------------------------------------------
+
+
+def test_los_tiempos_por_palabra_le_ganan_al_reparto_por_letras() -> None:
+    from app.services.karaoke_subtitles import line_from_segment
+    from app.services.subtitles import TranscriptSegment, WordSpan
+
+    # Una nota sostenida: "oh" dura casi toda la linea. El reparto por letras la
+    # daria corta por ser de dos letras, y ahi se ve el error.
+    segmento = TranscriptSegment(
+        start=0.0,
+        end=4.0,
+        text="oh si",
+        words=(WordSpan("oh", 0.0, 3.5), WordSpan("si", 3.5, 4.0)),
+    )
+
+    linea = line_from_segment(segmento)
+
+    assert linea.words[0].end == 3.5
+    aproximada = split_line_proportionally("oh si", 0.0, 4.0)
+    assert linea.words[0].end != aproximada.words[0].end
+
+
+def test_sin_tiempos_por_palabra_cae_al_reparto() -> None:
+    from app.services.karaoke_subtitles import line_from_segment
+    from app.services.subtitles import TranscriptSegment
+
+    linea = line_from_segment(TranscriptSegment(start=0.0, end=2.0, text="hola mundo"))
+
+    # Aproximado, pero resalta: mejor que una linea en blanco.
+    assert len(linea.words) == 2
+    assert linea.words[-1].end == pytest.approx(2.0)
+
+
+def test_una_sola_palabra_no_se_confunde_con_no_tener_tiempos() -> None:
+    from app.services.karaoke_subtitles import line_from_segment
+    from app.services.subtitles import TranscriptSegment, WordSpan
+
+    segmento = TranscriptSegment(
+        start=1.0, end=2.0, text="hola", words=(WordSpan("hola", 1.2, 1.8),)
+    )
+
+    linea = line_from_segment(segmento)
+
+    # Con el reparto habria arrancado en 1.0; el tiempo real dice 1.2.
+    assert linea.words[0].start == 1.2

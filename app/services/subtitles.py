@@ -15,10 +15,27 @@ from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True, slots=True)
+class WordSpan:
+    """Una palabra con su tiempo propio.
+
+    Existe para el resaltado del karaoke: con tiempos por linea solo se puede
+    repartir la linea entre sus palabras por cantidad de letras, y una nota
+    sostenida sobre una palabra corta corre visiblemente el resaltado.
+    """
+
+    word: str
+    start: float
+    end: float
+
+
+@dataclass(frozen=True, slots=True)
 class TranscriptSegment:
     start: float
     end: float
     text: str = field(default="")
+    # Vacio = el modelo no entrego tiempos por palabra. Los consumidores tienen
+    # que poder distinguir "no hay" de "hay una sola palabra".
+    words: tuple[WordSpan, ...] = field(default=())
 
     def __post_init__(self) -> None:
         if self.end < self.start:

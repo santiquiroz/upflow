@@ -12,7 +12,7 @@ from app.services.dubbing_pipeline import DubbingPipeline, DubbingUnavailable
 from app.services.engines.tts_kokoro import SAMPLE_RATE as TTS_SAMPLE_RATE
 from app.services.engines.tts_kokoro import KokoroTtsEngine, available_voices
 from app.services.audio_excerpt import probe_duration_seconds
-from app.services.karaoke_subtitles import render_karaoke_ass, split_line_proportionally
+from app.services.karaoke_subtitles import line_from_segment, render_karaoke_ass
 from app.services.media_decode import (
     SEPARATION_CHANNELS,
     SEPARATION_SAMPLE_RATE,
@@ -428,13 +428,12 @@ class TranscribeJobManager(QueuedJobManager[TranscribeJob]):
         ASS y no SRT porque SRT no tiene forma de expresar esto: habria que
         emitir una linea por palabra, parpadeando, que es peor que no resaltar.
 
-        Mientras el motor entregue tiempos por LINEA, el reparto entre palabras
-        es proporcional a la cantidad de letras. Es una aproximacion —una nota
-        sostenida sobre una palabra corta se corre— y se reemplaza sola cuando
-        los segmentos traigan tiempos por palabra.
+        Cuando el segmento trae tiempos por palabra se usan esos; si no, se
+        reparte por cantidad de letras, que es una aproximacion visible en notas
+        sostenidas. Ver `line_from_segment`.
         """
         lineas = [
-            split_line_proportionally(segmento.text, segmento.start, segmento.end)
+            line_from_segment(segmento)
             for segmento in job.segments
             if getattr(segmento, "text", "").strip()
         ]
