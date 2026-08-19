@@ -44,7 +44,7 @@ la app y no 40 GB de modelos.
 | | |
 |---|---|
 | **Karaoke y pistas** | Separá la voz de la instrumental para cantar encima, o quedate solo con la voz. |
-| **Karaoke completo** | El video listo: sin voz, con la letra sincronizada en pantalla. |
+| **Karaoke completo** | El video listo: sin voz, con la letra encendiéndose palabra por palabra. |
 | **Cuatro pistas** | Voz, batería, bajo y resto, cada una en su archivo. |
 | **Probar antes** | Corré dos o tres separadores sobre 30 s de tu tema y elegí con el oído. |
 | **Máxima calidad** | Combiná varios separadores en uno: se refuerza lo que coinciden. |
