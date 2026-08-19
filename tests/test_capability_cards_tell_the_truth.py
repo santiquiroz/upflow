@@ -234,3 +234,32 @@ def test_el_pack_que_ofrece_se_puede_instalar_desde_la_app(tmp_path: Path, monke
     # sin salida: la tarjeta le dice qué falta y nada se lo puede dar.
     for pack in tarjeta.missing_packs:
         assert pack in PACK_SCRIPTS
+
+
+def test_ninguna_tarjeta_de_video_culpa_a_onnx() -> None:
+    """La generacion de video corre por Vulkan, no por ONNX.
+
+    `textToVideo` ya habia corregido este motivo por describir una ruta que
+    nunca fue la suya, y el hermano `videoToVideo` se quedo con el texto viejo.
+    Decir "no hay camino a un ONNX ejecutable" en un dominio que demostrablemente
+    no usa ONNX hace pensar que falta algo que no falta.
+    """
+    de_video = [c for c in CATALOG if "Video" in c.id or "video" in c.id]
+    assert de_video, "sin tarjetas de video este test no prueba nada"
+
+    culpan_a_onnx = [
+        c.id for c in de_video if c.unavailable_reason_key == "capability.reason.noOnnxPath"
+    ]
+
+    assert culpan_a_onnx == []
+
+
+def test_lo_no_construido_no_se_confunde_con_lo_no_descargado() -> None:
+    # Una tarjeta `none` no tiene pack ni modelo que baje nadie: si su motivo
+    # sonara a "falta instalar algo", el usuario buscaria un boton que no existe.
+    sin_implementar = [c for c in CATALOG if c.provisioning == "none"]
+    assert sin_implementar
+
+    for capability in sin_implementar:
+        assert capability.unavailable_reason_key, capability.id
+        assert capability.requirements == (), capability.id

@@ -476,7 +476,12 @@ CATALOG: tuple[Capability, ...] = (
         provisioning="none",
         job_kind=None,
         strategies=("model",),
-        unavailable_reason_key="capability.reason.noOnnxPath",
+        # NO es el techo de ONNX. Ese motivo quedo del hermano `textToVideo`,
+        # donde ya se corrigio por describir una ruta que nunca fue la de esa
+        # feature: la generacion de video corre por el lane Vulkan de sd.cpp, sin
+        # ONNX. Decir aca "no hay camino a un ONNX ejecutable" hace pensar que el
+        # dominio entero depende de algo que demostrablemente no usa.
+        unavailable_reason_key="capability.reason.notBuiltYet",
     ),
     Capability(
         id="generate.textTo3d",

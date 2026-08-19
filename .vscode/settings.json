@@ -1,0 +1,16 @@
+{
+  "//": "El intérprete es el venv del proyecto, fijo. Sin esto VS Code elige solo, y llega a elegir el Python EMBEBIDO de installer/build/ — una copia transitoria que el empaquetado borra y recrea en cada release. Su servidor de lenguaje deja tomado un .dll ahí adentro y el empaquetado falla con 'Access to the path is denied', siempre DESPUÉS de compilar el frontend, que es la parte cara. Pasó cuatro veces.",
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
+
+  "//2": "Y aunque lo elija bien, indexar esas carpetas no aporta nada: son artefactos de build y dependencias vendorizadas.",
+  "python.analysis.exclude": [
+    "**/installer/build/**",
+    "**/vendor/**",
+    "**/runtime/**"
+  ],
+  "files.watcherExclude": {
+    "**/installer/build/**": true,
+    "**/vendor/**": true,
+    "**/runtime/**": true
+  }
+}

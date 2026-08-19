@@ -1024,6 +1024,10 @@ export const es = {
   "capability.generate.soundToSound": "Sonido a sonido",
 
   // Motivos honestos: dicen QUE falta, sin prometer fecha.
+  "capability.reason.notBuiltYet":
+    "Todavía no está construida. No es que falte un modelo ni un paquete: la " +
+    "función no existe en la app, así que no hay nada que descargar para " +
+    "activarla.",
   "capability.reason.noOnnxPath":
     "Todavía no hay un camino confirmado a un ONNX ejecutable. Que el modelo " +
     "exista no alcanza: también tiene que poder correrlo ONNX Runtime, y acá se " +
