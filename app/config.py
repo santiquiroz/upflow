@@ -323,12 +323,12 @@ class Settings(BaseSettings):
     # ademas corre el acuñador de PO Token: un solo binario para los dos roles,
     # que es por que se vendoriza Deno y no el acuñador ya compilado (~40 MB
     # contra ~150 MB entre los dos).
-    # Alineacion palabra por palabra para el karaoke. APAGADA por defecto: el
-    # codigo esta probado sobre atenciones sinteticas y la cirugia del grafo
-    # coincide con transformers a 1e-06, pero la CALIDAD de las marcas sobre voz
-    # real todavia no se midio. Prenderla sin eso arriesga un karaoke corrido, que
-    # es peor que uno aproximado: el aproximado se nota parejo y este no.
-    enable_word_alignment: bool = Field(default=False, alias="ENABLE_WORD_ALIGNMENT")
+    # Alineacion palabra por palabra para el karaoke. Prendida porque se MIDIO
+    # contra una verdad conocida (`scripts/bench-word-alignment.py`): 147 ms de
+    # error medio contra los 320 ms del reparto por letras, y 259 vs 583 en p90.
+    # Le gana al fallback en todo el rango, que es lo unico que justifica el costo
+    # de una pasada mas del decoder.
+    enable_word_alignment: bool = Field(default=True, alias="ENABLE_WORD_ALIGNMENT")
 
     deno_binary: str = Field(default="vendor/deno/deno.exe", alias="DENO_BINARY")
     # El acuñador: https://github.com/santiquiroz/ceca (MIT). Codigo fuente, que
