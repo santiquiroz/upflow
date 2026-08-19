@@ -76,6 +76,9 @@ Name: "video"; Description: "Generar VIDEO desde texto o desde una imagen, en tu
 Name: "epnvidia"; Description: "Acelerador NVIDIA: usa TensorRT-RTX en vez de DirectML (descarga ~93 MB; requiere RTX 30xx o mas nueva)"; Types: custom
 Name: "epintel"; Description: "Acelerador Intel: usa OpenVINO en la grafica integrada o Arc (descarga ~116 MB, ocupa ~60 MB)"; Types: custom
 Name: "realtime"; Description: "Tiempo real: reescalar en vivo juegos y video en una ventana superpuesta (descarga ~10 MB, no necesita drivers)"; Types: full custom
+; En `full` y no solo en `custom`: sin esto las descargas de YouTube fallan con
+; un 403, y "Completa (recomendada)" tiene que dejar la app andando entera.
+Name: "youtube"; Description: "Descargar de YouTube: motor JS y el token que YouTube empezo a exigir (~93 MB)"; Types: full custom
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
@@ -146,6 +149,8 @@ begin
     Selected := Selected + 'ep-intel' + #13#10;
   if WizardIsComponentSelected('realtime') then
     Selected := Selected + 'magpie' + #13#10;
+  if WizardIsComponentSelected('youtube') then
+    Selected := Selected + 'ceca' + #13#10;
 
   PackPath := ExpandConstant('{app}\' + OptionalPacksFile);
   SaveStringToFile(PackPath, Selected, False);

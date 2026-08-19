@@ -382,6 +382,11 @@ $script:OptionalPacks = @(
         Key     = 'magpie'
         Feature = 'Tiempo real: reescalar en vivo juegos y video en una ventana superpuesta'
         Size    = '~10 MB'
+    },
+    @{
+        Key     = 'ceca'
+        Feature = 'Descargar de YouTube (motor JS + acunador del token que YouTube exige)'
+        Size    = '~93 MB'
     }
 )
 
