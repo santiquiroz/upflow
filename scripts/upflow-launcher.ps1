@@ -387,6 +387,11 @@ $script:OptionalPacks = @(
         Key     = 'ceca'
         Feature = 'Descargar de YouTube (motor JS + acunador del token que YouTube exige)'
         Size    = '~93 MB'
+    },
+    @{
+        Key     = 'openvoice'
+        Feature = 'Cambiar una voz por otra (OpenVoice, reemplaza al modelo viejo)'
+        Size    = '~128 MB'
     }
 )
 

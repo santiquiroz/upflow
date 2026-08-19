@@ -79,6 +79,7 @@ Name: "realtime"; Description: "Tiempo real: reescalar en vivo juegos y video en
 ; En `full` y no solo en `custom`: sin esto las descargas de YouTube fallan con
 ; un 403, y "Completa (recomendada)" tiene que dejar la app andando entera.
 Name: "youtube"; Description: "Descargar de YouTube: motor JS y el token que YouTube empezo a exigir (~93 MB)"; Types: full custom
+Name: "voz"; Description: "Cambiar una voz por otra: le das una grabacion y una muestra, y devuelve lo mismo con esa voz (~128 MB)"; Types: full custom
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
@@ -151,6 +152,8 @@ begin
     Selected := Selected + 'magpie' + #13#10;
   if WizardIsComponentSelected('youtube') then
     Selected := Selected + 'ceca' + #13#10;
+  if WizardIsComponentSelected('voz') then
+    Selected := Selected + 'openvoice' + #13#10;
 
   PackPath := ExpandConstant('{app}\' + OptionalPacksFile);
   SaveStringToFile(PackPath, Selected, False);
