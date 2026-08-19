@@ -45,10 +45,15 @@ def assert_usable_audio(audio: Any) -> None:
         raise VoiceConversionUnavailable("La conversion devolvio audio invalido (NaN).")
 
 
-def assert_convertible(audio: Any) -> None:
+def assert_convertible(audio: Any, *, sample_rate: int = SAMPLE_RATE) -> None:
+    """`sample_rate` es parametro porque no todos los motores trabajan a 16 kHz.
+
+    Con el valor fijo, un motor a 22050 calculaba mal la duracion y dejaba pasar
+    audios de casi el doble del maximo.
+    """
     if audio.size == 0:
         raise VoiceConversionUnavailable("No hay audio que convertir.")
-    seconds = audio.size / SAMPLE_RATE
+    seconds = audio.size / sample_rate
     if seconds > MAX_SECONDS:
         raise VoiceConversionUnavailable(
             f"El audio dura {seconds:.0f} s y el maximo es {MAX_SECONDS} s. "

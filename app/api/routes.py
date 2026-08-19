@@ -203,6 +203,7 @@ import tempfile
 
 import numpy
 
+from app.services.engines.openvoice_convert import OpenVoiceConversionEngine
 from app.services.engines.voice_convert import (
     MAX_SECONDS as VOICE_MAX_SECONDS,
     SAMPLE_RATE as VOICE_SAMPLE_RATE,
@@ -3163,29 +3164,55 @@ async def delete_saved_prompt(
 # Convierte una grabacion para que suene como otra. Devuelve el WAV directo, sin
 # job: el maximo son 60 s de audio y la conversion tarda menos que eso.
 
-_VOICE_CONVERSION = VoiceConversionEngine(Path(get_settings().runtime_dir).parent / "vendor")
+_VENDOR_ROOT = Path(get_settings().runtime_dir).parent / "vendor"
+_VOICE_CONVERSION = VoiceConversionEngine(_VENDOR_ROOT)
+_OPENVOICE_CONVERSION = OpenVoiceConversionEngine(_VENDOR_ROOT)
 
 
-def get_voice_conversion() -> VoiceConversionEngine:
+def get_voice_conversion():
+    """El mejor motor de conversion que este instalado.
+
+    OpenVoice primero: es mucho mas nuevo que SpeechT5 y clona mejor. El viejo
+    NO se borra — quien ya lo tenia bajado no se queda sin la funcion porque
+    salio otro modelo, y bajar 128 MB para recuperar algo que ya andaba seria
+    una molestia gratuita.
+    """
+    if _OPENVOICE_CONVERSION.available():
+        return _OPENVOICE_CONVERSION
     return _VOICE_CONVERSION
+
+
+def voice_conversion_sample_rate(engine) -> int:
+    """A que frecuencia trabaja el motor que toco.
+
+    SpeechT5 usa 16 kHz y OpenVoice 22050. Entrarle audio a la otra frecuencia no
+    falla: cambia el tono de la voz, y ese sintoma se le atribuye al conversor.
+    """
+    return getattr(engine, "SAMPLE_RATE", None) or getattr(
+        type(engine), "sample_rate", VOICE_SAMPLE_RATE
+    )
 
 
 @router.get("/voice/conversion/capabilities", response_model=VoiceConversionCapabilitiesResponse)
 async def voice_conversion_capabilities(
-    engine: VoiceConversionEngine = Depends(get_voice_conversion),
+    engine=Depends(get_voice_conversion),
 ) -> VoiceConversionCapabilitiesResponse:
     if not engine.available():
+        # Se nombra el pack de OpenVoice y no el viejo: es el que conviene bajar
+        # a quien todavia no tiene ninguno.
         return VoiceConversionCapabilitiesResponse(
             available=False,
-            reason=missing_pack_message("voice-conversion"),
-            missing_pack="voice-conversion",
+            reason=missing_pack_message("openvoice"),
+            missing_pack="openvoice",
             max_seconds=VOICE_MAX_SECONDS,
         )
     return VoiceConversionCapabilitiesResponse(available=True, max_seconds=VOICE_MAX_SECONDS)
 
 
-async def _decoded_upload(upload: UploadFile, settings: Settings) -> Any:
-    """Deja el audio en mono 16 kHz, que es lo unico que el modelo entiende."""
+async def _decoded_upload(
+    upload: UploadFile, settings: Settings, *, sample_rate: int = VOICE_SAMPLE_RATE
+) -> Any:
+    """Deja el audio en mono a la frecuencia que pida el motor."""
     import soundfile
 
     suffix = Path(upload.filename or "audio").suffix or ".wav"
@@ -3199,7 +3226,7 @@ async def _decoded_upload(upload: UploadFile, settings: Settings) -> Any:
                 ffmpeg=str(settings.ffmpeg_binary_path),
                 source=origen,
                 destination=destino,
-                sample_rate=VOICE_SAMPLE_RATE,
+                sample_rate=sample_rate,
             )
             # run_guarded_process y no create_subprocess_exec pelado: un upload
             # malformado podia dejar este ffmpeg colgado sin techo bloqueando el
@@ -3213,8 +3240,8 @@ async def _decoded_upload(upload: UploadFile, settings: Settings) -> Any:
             origen = destino
         data, rate = soundfile.read(str(origen), dtype="float32", always_2d=True)
         mono = data.mean(axis=1)
-        if rate != VOICE_SAMPLE_RATE:
-            objetivo = int(len(mono) * VOICE_SAMPLE_RATE / rate)
+        if rate != sample_rate:
+            objetivo = int(len(mono) * sample_rate / rate)
             mono = numpy.interp(
                 numpy.linspace(0, len(mono) - 1, objetivo), numpy.arange(len(mono)), mono
             ).astype("float32")
@@ -3227,26 +3254,27 @@ async def _decoded_upload(upload: UploadFile, settings: Settings) -> Any:
 async def convert_voice(
     source: UploadFile = File(...),
     reference: UploadFile = File(...),
-    engine: VoiceConversionEngine = Depends(get_voice_conversion),
+    engine=Depends(get_voice_conversion),
     settings_dep: Settings = Depends(get_settings),
 ) -> Response:
     if not engine.available():
         raise HTTPException(
             status_code=409,
             detail={
-                "reason": missing_pack_message("voice-conversion"),
-                "missingPack": "voice-conversion",
+                "reason": missing_pack_message("openvoice"),
+                "missingPack": "openvoice",
             },
         )
-    origen = await _decoded_upload(source, settings_dep)
-    muestra = await _decoded_upload(reference, settings_dep)
+    frecuencia = voice_conversion_sample_rate(engine)
+    origen = await _decoded_upload(source, settings_dep, sample_rate=frecuencia)
+    muestra = await _decoded_upload(reference, settings_dep, sample_rate=frecuencia)
     try:
         convertido = await asyncio.to_thread(engine.convert, source=origen, reference=muestra)
     except VoiceConversionUnavailable as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     buffer = io.BytesIO()
-    soundfile.write(buffer, convertido, VOICE_SAMPLE_RATE, format="WAV", subtype="PCM_16")
+    soundfile.write(buffer, convertido, frecuencia, format="WAV", subtype="PCM_16")
     return Response(
         content=buffer.getvalue(),
         media_type="audio/wav",

@@ -123,7 +123,15 @@ def test_converting_without_the_model_is_a_409_naming_the_pack(tmp_path) -> None
             )
         assert response.status_code == 409
         detalle = response.json()["detail"]
-        assert detalle["missingPack"] == "voice-conversion"
+        # El pack que nombra tiene que existir en el provisioner, o el boton de
+        # la pantalla de Tareas no puede ofrecerlo y el usuario queda sin salida.
+        # Se afirma ESO y no un nombre fijo: el nombre cambio cuando OpenVoice
+        # paso a ser el motor preferido, y mandar a bajar el modelo peor seria
+        # el bug, no el cambio.
+        from app.services.pack_provisioner import PACK_SCRIPTS
+
+        assert detalle["missingPack"] in PACK_SCRIPTS
+        assert detalle["missingPack"] == "openvoice"
         assert ".ps1" not in detalle["reason"]
     finally:
         app.dependency_overrides.pop(get_voice_conversion, None)

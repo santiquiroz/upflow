@@ -32,6 +32,7 @@ PACK_LABELS: dict[str, str] = {
     "wan-video": "los modelos de generacion de video",
     "magpie": "el overlay de tiempo real",
     "ceca": "las descargas de YouTube",
+    "openvoice": "cambiar una voz por otra",
     "shap-e": "el modelo de generacion 3D",
     "shap-e-img2img": "el modelo de foto a 3D",
     "karaoke": "el modelo de separacion de voz e instrumental",

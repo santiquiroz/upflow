@@ -43,6 +43,10 @@ PACK_SCRIPTS: dict[str, str] = {
     # Motor JS + acuñador de PO Token: las dos cosas que YouTube empezo a exigir
     # para entregar el medio. Un solo pack porque una sin la otra no sirve.
     "ceca": "download-ceca.ps1",
+    # Conversion de timbre con OpenVoice (pesos MIT, a diferencia de casi todos
+    # los clonadores de voz). Convive con el pack de SpeechT5 en vez de
+    # reemplazarlo: quien ya lo tenia bajado no se queda sin la funcion.
+    "openvoice": "download-openvoice.ps1",
     "shap-e": "download-shap-e.ps1",
     # Foto a 3D. Es OTRO repo HF que el de texto (openai/shap-e-img2img):
     # comparte el renderer pero cambia el prior y el encoder de entrada.
