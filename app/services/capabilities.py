@@ -60,7 +60,25 @@ class SettingRequirement:
     setting_attr: str
 
 
-Requirement = PathRequirement | RegistryRequirement | SettingRequirement
+@dataclass(frozen=True, slots=True)
+class AnyOfRequirement:
+    """Varias formas de tener la MISMA capacidad; alcanza con una.
+
+    Existe porque una funcion puede tener mas de un motor. La conversion de voz
+    corre con OpenVoice o con SpeechT5, y con la lista plana de antes la tarjeta
+    exigia las piezas de SpeechT5 aunque OpenVoice estuviera instalado y
+    funcionando: decia "falta bajar" sobre algo que ya andaba, y encima mandaba a
+    bajar 400 MB del modelo viejo.
+
+    El orden importa: la PRIMERA opcion es la preferida, y es la unica que se
+    ofrece descargar cuando no hay ninguna. Ofrecer las dos seria pedirle al
+    usuario que baje dos motores para una sola funcion.
+    """
+
+    options: tuple[tuple["Requirement", ...], ...]
+
+
+Requirement = PathRequirement | RegistryRequirement | SettingRequirement | AnyOfRequirement
 
 
 @dataclass(frozen=True, slots=True)
@@ -362,10 +380,26 @@ CATALOG: tuple[Capability, ...] = (
         # solo el modelo de conversion: con el vocoder o el x-vector faltando, la
         # tarjeta decia "disponible" y el motor rechazaba el trabajo. El x-vector
         # ademas apunta al ARCHIVO -- una descarga cortada deja la carpeta.
+        # DOS motores, y alcanza con uno. OpenVoice va primero porque es el que
+        # la ruta prefiere y el que conviene bajar a quien no tiene ninguno: son
+        # 128 MB contra los 400+ del camino viejo, y clona mejor.
+        #
+        # SpeechT5 sigue contando: quien ya lo tenia bajado NO puede ver
+        # "falta descargar" sobre una funcion que le anda.
         requirements=(
-            PathRequirement("voice_conversion_model_path", "voice-conversion"),
-            PathRequirement("voice_conversion_vocoder_path", "voice-conversion"),
-            PathRequirement("voice_conversion_xvector_path", "voice-conversion"),
+            AnyOfRequirement(
+                options=(
+                    (
+                        PathRequirement("openvoice_converter_path", "openvoice"),
+                        PathRequirement("openvoice_speaker_path", "openvoice"),
+                    ),
+                    (
+                        PathRequirement("voice_conversion_model_path", "voice-conversion"),
+                        PathRequirement("voice_conversion_vocoder_path", "voice-conversion"),
+                        PathRequirement("voice_conversion_xvector_path", "voice-conversion"),
+                    ),
+                ),
+            ),
         ),
     ),
     Capability(
@@ -493,6 +527,24 @@ CATALOG: tuple[Capability, ...] = (
 DOMAIN_ORDER: tuple[Domain, ...] = ("video", "image", "audio", "generate", "print")
 
 
+def iter_path_requirements(capability: Capability):
+    """TODOS los requisitos de ruta, incluidos los que estan dentro de una alternativa.
+
+    Recorrer `capability.requirements` a secas deja fuera los anidados, y las
+    invariantes que se verifican sobre ellos —que cada ruta nombre el pack que
+    realmente la produce— dejarian de cubrirlos justo donde se agrego la
+    alternativa.
+    """
+    for requirement in capability.requirements:
+        if isinstance(requirement, AnyOfRequirement):
+            for opcion in requirement.options:
+                for pieza in opcion:
+                    if isinstance(pieza, PathRequirement):
+                        yield pieza
+        elif isinstance(requirement, PathRequirement):
+            yield requirement
+
+
 def _path_exists(settings: Settings, requirement: PathRequirement) -> bool:
     raw = getattr(settings, requirement.setting_attr, None)
     if not raw:
@@ -521,6 +573,11 @@ def _is_met(
     settings: Settings,
     installed_kinds: frozenset[ModelKind],
 ) -> bool:
+    if isinstance(requirement, AnyOfRequirement):
+        return any(
+            all(_is_met(pieza, settings, installed_kinds) for pieza in opcion)
+            for opcion in requirement.options
+        )
     if isinstance(requirement, PathRequirement):
         return _path_exists(settings, requirement)
     if isinstance(requirement, SettingRequirement):
@@ -531,9 +588,10 @@ def _is_met(
 def _setup_reason_key(unmet: tuple[Requirement, ...]) -> str:
     # El paquete faltante manda sobre el modelo faltante: sin el binario no
     # sirve de nada instalar un modelo, asi que es lo primero que hay que decir.
-    if any(isinstance(requirement, PathRequirement) for requirement in unmet):
+    piezas = _preferred_pieces(unmet)
+    if any(isinstance(requirement, PathRequirement) for requirement in piezas):
         return "capability.setup.missingPack"
-    if any(isinstance(requirement, SettingRequirement) for requirement in unmet):
+    if any(isinstance(requirement, SettingRequirement) for requirement in piezas):
         return "capability.setup.missingSetting"
     return "capability.setup.missingModel"
 
@@ -565,6 +623,21 @@ def _resolve_one(
     )
 
 
+def _preferred_pieces(unmet: tuple[Requirement, ...]) -> tuple[Requirement, ...]:
+    """Los requisitos a mostrar, resolviendo cada alternativa a su opcion preferida.
+
+    Sin esto, una capacidad con dos motores no ofreceria ningun pack: el
+    requisito compuesto no es un PathRequirement y los filtros lo saltean.
+    """
+    piezas: list[Requirement] = []
+    for requirement in unmet:
+        if isinstance(requirement, AnyOfRequirement):
+            piezas.extend(requirement.options[0] if requirement.options else ())
+        else:
+            piezas.append(requirement)
+    return tuple(piezas)
+
+
 def _missing_packs(unmet: tuple[Requirement, ...]) -> tuple[str, ...]:
     """Sin repetir: un pack que trae varias piezas falta UNA vez.
 
@@ -573,7 +646,7 @@ def _missing_packs(unmet: tuple[Requirement, ...]) -> tuple[str, ...]:
     """
     packs = [
         requirement.pack
-        for requirement in unmet
+        for requirement in _preferred_pieces(unmet)
         if isinstance(requirement, PathRequirement)
     ]
     return tuple(dict.fromkeys(packs))
@@ -584,7 +657,7 @@ def _activatable_settings(unmet: tuple[Requirement, ...]) -> tuple[str, ...]:
 
     return tuple(
         requirement.setting_attr
-        for requirement in unmet
+        for requirement in _preferred_pieces(unmet)
         if isinstance(requirement, SettingRequirement)
         and requirement.setting_attr in ACTIVATABLE_FLAG_SETTINGS
     )

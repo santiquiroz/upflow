@@ -157,3 +157,80 @@ def test_no_quedan_claves_de_motivo_sin_capacidad_que_las_use() -> None:
         assert declaradas == usadas, (
             f"{idioma}: sobran {declaradas - usadas}, faltan {usadas - declaradas}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Una funcion con DOS motores: alcanza con tener uno
+# ---------------------------------------------------------------------------
+
+
+def _voice_convert_card(settings, monkeypatch, *, openvoice: bool, speecht5: bool):
+    """La tarjeta de conversion de voz con cada motor presente o ausente."""
+    import app.services.capabilities as cap_mod
+
+    original = cap_mod._path_exists
+
+    def falso(s, requirement):
+        if requirement.setting_attr.startswith("openvoice"):
+            return openvoice
+        if requirement.setting_attr.startswith("voice_conversion"):
+            return speecht5
+        return original(s, requirement)
+
+    monkeypatch.setattr(cap_mod, "_path_exists", falso)
+
+    class RegistroVacio:
+        def list(self):
+            return []
+
+    resueltas = cap_mod.resolve_capabilities(settings, RegistroVacio())
+    return next(c for c in resueltas if c.id == "audio.voiceConvert")
+
+
+def test_con_openvoice_solo_la_tarjeta_no_pide_bajar_nada(tmp_path: Path, monkeypatch):
+    """El bug que motivo `AnyOfRequirement`.
+
+    La tarjeta declaraba las tres piezas de SpeechT5 y no sabia que existia
+    OpenVoice: con el pack nuevo instalado y funcionando, la pantalla decia
+    "falta descargar" y mandaba a bajar 400+ MB del modelo viejo para una
+    funcion que ya andaba.
+    """
+    settings = Settings(RUNTIME_DIR=str(tmp_path), _env_file=None)
+
+    tarjeta = _voice_convert_card(settings, monkeypatch, openvoice=True, speecht5=False)
+
+    assert tarjeta.status == "available"
+    assert tarjeta.missing_packs == ()
+
+
+def test_con_speecht5_solo_sigue_disponible(tmp_path: Path, monkeypatch):
+    # Quien ya lo tenia bajado no puede ver "falta descargar" porque salio otro
+    # motor: seria pedirle 128 MB para recuperar algo que le funcionaba.
+    settings = Settings(RUNTIME_DIR=str(tmp_path), _env_file=None)
+
+    tarjeta = _voice_convert_card(settings, monkeypatch, openvoice=False, speecht5=True)
+
+    assert tarjeta.status == "available"
+
+
+def test_sin_ningun_motor_ofrece_el_que_conviene(tmp_path: Path, monkeypatch):
+    settings = Settings(RUNTIME_DIR=str(tmp_path), _env_file=None)
+
+    tarjeta = _voice_convert_card(settings, monkeypatch, openvoice=False, speecht5=False)
+
+    assert tarjeta.status == "needs_setup"
+    # UNO solo, y el preferido: ofrecer los dos seria pedir dos motores para una
+    # sola funcion, y ofrecer el viejo seria mandar a bajar 400 MB de mas.
+    assert tarjeta.missing_packs == ("openvoice",)
+
+
+def test_el_pack_que_ofrece_se_puede_instalar_desde_la_app(tmp_path: Path, monkeypatch):
+    from app.services.pack_provisioner import PACK_SCRIPTS
+
+    settings = Settings(RUNTIME_DIR=str(tmp_path), _env_file=None)
+    tarjeta = _voice_convert_card(settings, monkeypatch, openvoice=False, speecht5=False)
+
+    # Nombrar un pack que el provisioner no conoce deja al usuario sin boton y
+    # sin salida: la tarjeta le dice qué falta y nada se lo puede dar.
+    for pack in tarjeta.missing_packs:
+        assert pack in PACK_SCRIPTS

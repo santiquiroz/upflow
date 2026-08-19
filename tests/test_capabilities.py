@@ -594,10 +594,14 @@ class TestLaConversionDeVozPideLasTresPiezas:
 
         settings = make_settings(tmp_path / "runtime")
         capacidad = next(c for c in CATALOG if c.id == "audio.voiceConvert")
+        from app.services.capabilities import iter_path_requirements
+
+        # Los requisitos de este motor viven dentro de una alternativa desde que
+        # la conversion tiene DOS motores; recorrer solo el primer nivel los
+        # dejaria afuera y la invariante pasaria a no verificar nada.
         declaradas = {
             resolve_against_project_root(str(getattr(settings, r.setting_attr)))
-            for r in capacidad.requirements
-            if isinstance(r, PathRequirement)
+            for r in iter_path_requirements(capacidad)
         }
 
         exigidas = set(VoiceConversionEngine(_vendor_de(settings)).required_paths())
@@ -617,7 +621,11 @@ class TestLaConversionDeVozPideLasTresPiezas:
         conversion = _find(resolve_capabilities(settings, FakeRegistry()), "audio.voiceConvert")
 
         assert conversion.status == "needs_setup"
-        assert conversion.missing_packs == ("voice-conversion",)
+        # Se ofrece OpenVoice y NO el pack incompleto: a quien no tiene un motor
+        # entero conviene darle el que pesa 128 MB y clona mejor, no mandarlo a
+        # completar 400 MB del viejo. La propiedad que este test cuida sigue
+        # siendo la misma: con una pieza faltante, la funcion no se anuncia lista.
+        assert conversion.missing_packs == ("openvoice",)
 
     def test_con_las_tres_queda_disponible(self, tmp_path: Path) -> None:
         settings = make_settings(tmp_path / "runtime")
@@ -719,11 +727,15 @@ def test_every_path_requirement_names_a_pack_that_can_produce_it() -> None:
         "kokoro_model_file": "kokoro",
         "rife_default_model_path": "rife",
     }
+    # `iter_path_requirements` y no `capability.requirements`: los requisitos que
+    # viven dentro de una alternativa (una funcion con dos motores) quedarian
+    # fuera de esta invariante justo donde se agrego la alternativa.
+    from app.services.capabilities import iter_path_requirements
+
     declarado = {
         requirement.setting_attr: requirement.pack
         for capability in CATALOG
-        for requirement in capability.requirements
-        if isinstance(requirement, PathRequirement)
+        for requirement in iter_path_requirements(capability)
     }
 
     for atributo, pack in esperado.items():
@@ -732,12 +744,15 @@ def test_every_path_requirement_names_a_pack_that_can_produce_it() -> None:
 
 
 def test_a_pack_that_covers_several_pieces_is_offered_once(tmp_path: Path) -> None:
-    # Tres requisitos del mismo pack no son tres botones de descarga.
+    # Varios requisitos del mismo pack no son varios botones de descarga. El pack
+    # que se ofrece cambio a `openvoice` al haber dos motores; lo que se cuida
+    # aca es que aparezca UNA vez, no cual es.
     settings = make_settings(tmp_path / "runtime")
 
     conversion = _find(resolve_capabilities(settings, FakeRegistry()), "audio.voiceConvert")
 
-    assert conversion.missing_packs == ("voice-conversion",)
+    assert len(conversion.missing_packs) == 1
+    assert conversion.missing_packs == ("openvoice",)
 
 
 # ---------------------------------------------------------------------------

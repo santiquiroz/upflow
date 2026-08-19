@@ -876,6 +876,21 @@ class Settings(BaseSettings):
         )
 
     @property
+    def openvoice_converter_path(self) -> Path:
+        """OpenVoice V2 (MIT, santiquiroz/port-openvoice-onnx). Se baja aparte.
+
+        Cuelga de `vendor_dir` como el resto de los packs y no de la raiz del
+        proyecto: con una ruta fija, un runtime apuntado a otro lado —o un test
+        con su propio vendor— seguiria viendo los archivos de la instalacion
+        real, y la tarjeta diria "disponible" mirando otra maquina.
+        """
+        return self.vendor_dir / "openvoice" / "openvoice_converter.onnx"
+
+    @property
+    def openvoice_speaker_path(self) -> Path:
+        return self.vendor_dir / "openvoice" / "openvoice_speaker.onnx"
+
+    @property
     def deno_binary_path(self) -> Path:
         return resolve_against_project_root(self.deno_binary)
 
