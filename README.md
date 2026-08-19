@@ -68,7 +68,7 @@ la app y no 40 GB de modelos.
 ### ✨ Además
 
 - **Generar video** desde un texto o una imagen, local.
-- **Descargar** de internet lo que vas a procesar, sin salir de la app — y encadenar: pegás un link y te llegan las pistas separadas.
+- **Descargar** de internet lo que vas a procesar, sin salir de la app — y encadenar: pegás un link y te llegan las pistas separadas. YouTube incluido: el token que ahora exige lo acuña [ceca](https://github.com/santiquiroz/ceca), sin cuentas ni cookies de nadie.
 - **Varios archivos de una**: elegís un montón y quedan encolados, sin repetir el proceso uno por uno.
 - **Tiempo real**: reescalá en vivo lo que estés mirando o jugando, en una ventana superpuesta.
 - **API REST y servidor MCP**: encolá trabajos desde otro programa, o dejá que un agente de IA use la app como herramienta.
