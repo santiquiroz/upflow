@@ -231,11 +231,64 @@ function Enable-EmbeddedPythonSitePackages {
     Set-Content -Path $pthFile.FullName -Value $lines -Encoding ascii
 }
 
+function Stop-ProcessesUsing {
+    param([string]$Directory)
+
+    # Sin `?.`: ese operador es de PowerShell 7 y en Windows PowerShell 5.1 es un
+    # error de PARSEO, que rompe el script entero antes de ejecutar una linea.
+    $resuelto = Resolve-Path $Directory -ErrorAction SilentlyContinue
+    if (-not $resuelto) { return }
+    $prefijo = $resuelto.Path
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($prefijo, [StringComparison]::OrdinalIgnoreCase) } |
+        ForEach-Object {
+            Write-Host "   cerrando proceso $($_.ProcessId) que usa el Python de build"
+            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+    # El handle no se libera en el mismo instante que muere el proceso.
+    Start-Sleep -Milliseconds 700
+}
+
+function Remove-BuildPythonDir {
+    param([string]$Directory)
+
+    # Un editor abierto sobre el repo puede haber elegido este Python embebido
+    # como interprete y mantener un proceso encima (el servidor de lenguaje de VS
+    # Code lo hace). Ese proceso tiene tomado un .dll y el borrado falla con
+    # "Access to the path is denied" a mitad del empaquetado, DESPUES de compilar
+    # el frontend, que es lo caro.
+    #
+    # Matarlo una vez no alcanza: el editor lo vuelve a levantar en menos de lo
+    # que tarda liberarse el handle, asi que es una carrera. Se reintenta, y si
+    # igual no se puede, la carpeta se APARTA con otro nombre en vez de abortar:
+    # renombrar si funciona con handles abiertos, y lo unico que se necesita es
+    # que la ruta quede libre.
+    for ($intento = 1; $intento -le 4; $intento++) {
+        Stop-ProcessesUsing $Directory
+        try {
+            Remove-Item -Recurse -Force $Directory -ErrorAction Stop
+            return
+        } catch {
+            Write-Host "   intento $intento de borrar el Python de build fallo; reintentando"
+        }
+    }
+
+    $apartada = "$Directory.old-$(Get-Random)"
+    try {
+        Rename-Item -Path $Directory -NewName (Split-Path -Leaf $apartada) -ErrorAction Stop
+        Write-Host "   no se pudo borrar; apartada como $(Split-Path -Leaf $apartada)"
+    } catch {
+        throw ("No se pudo liberar $Directory. Suele ser un editor abierto sobre " +
+               "el repo usando ese Python como interprete: cerralo o apunta el " +
+               "interprete a .venv.")
+    }
+}
+
 function Initialize-EmbeddedPython {
     New-Item -ItemType Directory -Force -Path $installerCacheDir | Out-Null
 
     if (Test-Path $installerPythonDir) {
-        Remove-Item -Recurse -Force $installerPythonDir
+        Remove-BuildPythonDir $installerPythonDir
     }
     New-Item -ItemType Directory -Force -Path $installerPythonDir | Out-Null
 
