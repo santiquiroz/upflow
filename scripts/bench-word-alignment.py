@@ -25,8 +25,18 @@ import soundfile as sf
 
 RAIZ = Path(__file__).resolve().parents[1]
 AQUI = RAIZ / "runtime" / "bench"
-BANCO = AQUI / "bench_words"
-PALABRAS = ["hello", "world", "this", "is", "a", "test", "of", "word", "level", "timing"]
+BANCOS = {
+    "en": {
+        "modelo": "whisper-tiny-en",
+        "palabras": ["hello", "world", "this", "is", "a", "test", "of", "word",
+                     "level", "timing"],
+    },
+    "es": {
+        "modelo": "whisper-tiny",
+        "palabras": ["hola", "mundo", "esto", "es", "una", "prueba", "de",
+                     "tiempos", "por", "palabra"],
+    },
+}
 SILENCIO_ENTRE = 0.25
 SR = 16000
 # Debajo de esto se considera silencio de relleno del sintetizador.
@@ -42,13 +52,15 @@ def recortar_silencio(audio: np.ndarray) -> tuple[np.ndarray, int, int]:
     return audio[primero:ultimo], primero, ultimo
 
 
-def construir() -> tuple[np.ndarray, list[tuple[str, float, float]]]:
+def construir(idioma: str) -> tuple[np.ndarray, list[tuple[str, float, float]]]:
+    banco = AQUI / f"bench_words_{idioma}"
+    palabras_del_banco = BANCOS[idioma]["palabras"]
     pistas: list[np.ndarray] = []
     verdad: list[tuple[str, float, float]] = []
     cursor = 0.0
     silencio = np.zeros(int(SILENCIO_ENTRE * SR), dtype=np.float32)
-    for palabra in PALABRAS:
-        audio, _ = sf.read(BANCO / f"{palabra}.wav", dtype="float32")
+    for palabra in palabras_del_banco:
+        audio, _ = sf.read(banco / f"{palabra}.wav", dtype="float32")
         recortado, _, _ = recortar_silencio(audio)
         inicio = cursor
         fin = cursor + len(recortado) / SR
@@ -60,8 +72,13 @@ def construir() -> tuple[np.ndarray, list[tuple[str, float, float]]]:
 
 
 def main() -> int:
-    señal, verdad = construir()
-    mezcla = AQUI / "bench_mix.wav"
+    idioma = sys.argv[1] if len(sys.argv) > 1 else "en"
+    if idioma not in BANCOS:
+        print(f"idioma desconocido: {idioma}. Validos: {', '.join(BANCOS)}")
+        return 2
+    señal, verdad = construir(idioma)
+    print(f"idioma: {idioma}")
+    mezcla = AQUI / f"bench_mix_{idioma}.wav"
     sf.write(mezcla, señal, SR)
     print(f"banco: {len(verdad)} palabras, {len(señal)/SR:.2f} s")
 
@@ -71,12 +88,15 @@ def main() -> int:
 
     from app.services.engines.whisper_alignment import align_words
 
-    D = AQUI / "whisper-tiny-en"
+    D = AQUI / BANCOS[idioma]["modelo"]
     model = ORTModelForSpeechSeq2Seq.from_pretrained(str(D), use_merged=False)
     proc = AutoProcessor.from_pretrained(str(D))
 
     feats = proc(señal, sampling_rate=SR, return_tensors="pt").input_features
-    tokens = model.generate(input_features=feats, max_new_tokens=200, return_timestamps=True)
+    extra = {} if idioma == "en" else {"language": idioma}
+    tokens = model.generate(
+        input_features=feats, max_new_tokens=200, return_timestamps=True, **extra
+    )
     texto = proc.batch_decode(tokens, skip_special_tokens=True)[0]
     print("transcripcion:", texto.strip())
 
@@ -116,11 +136,11 @@ def main() -> int:
     print(f"error medio : {arr.mean()*1000:.0f} ms")
     print(f"error p90   : {np.percentile(arr,90)*1000:.0f} ms")
     print(f"error maximo: {arr.max()*1000:.0f} ms")
-    comparar_con_el_reparto()
+    comparar_con_el_reparto(idioma)
     return 0
 
 
-def comparar_con_el_reparto() -> None:
+def comparar_con_el_reparto(idioma: str) -> None:
     """El mismo banco, medido contra la aproximacion que ya usa el karaoke.
 
     Sin esto el numero de la alineacion no dice nada: 147 ms de error puede ser
@@ -135,7 +155,7 @@ def comparar_con_el_reparto() -> None:
     sys.path.insert(0, str(RAIZ))
     from app.services.karaoke_subtitles import split_line_proportionally
 
-    _, verdad = construir()
+    _, verdad = construir(idioma)
     texto = " ".join(p for p, _, _ in verdad)
     linea = split_line_proportionally(texto, verdad[0][1], verdad[-1][2])
     errores = [
