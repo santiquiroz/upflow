@@ -29,6 +29,9 @@ PACK_LABELS: dict[str, str] = {
     "migan": "el modelo de borrado rapido",
     "sdcpp": "el motor de generacion por Vulkan",
     "openscad": "OpenSCAD, que convierte el codigo en la pieza",
+    # No se baja con un script: pesa mas que toda la app y quien modela en 3D
+    # ya lo tiene. Lo instala el usuario y Upflow lo encuentra solo.
+    "blender": "Blender 4.2 o superior, que hace el trabajo de mallas",
     "wan-video": "los modelos de generacion de video",
     "magpie": "el overlay de tiempo real",
     "ceca": "las descargas de YouTube",
@@ -39,6 +42,19 @@ PACK_LABELS: dict[str, str] = {
     "kokoro": "el modelo de voz",
     "voice-conversion": "el modelo de conversion de voz",
     "translation": "el par de idiomas para traducir",
+}
+
+
+# Los que NO baja la app. Son programas completos, con su instalador y su
+# licencia propia, que el usuario pone en su maquina — OpenSCAD es GPL-2.0 y
+# Blender tambien, y ademas pesan mas que Upflow entero. Mandar a apretar un
+# boton de descarga que no existe es peor que no decir nada: manda a buscar en
+# la pantalla equivocada.
+USER_SUPPLIED_PACKS: frozenset[str] = frozenset({"openscad", "blender"})
+
+_HOW_TO_GET = {
+    False: "Se baja desde la app, con el boton de descargar.",
+    True: "Lo instalas vos desde su sitio oficial; Upflow lo encuentra solo despues.",
 }
 
 
@@ -74,5 +90,5 @@ def missing_pack_message(
 ) -> str:
     """La frase que lee el usuario. Termina donde puede actuar, no en un comando."""
     que = f"{label_for(pack)} ({variant})" if variant else label_for(pack)
-    frase = f"Falta {que}. Se baja desde la app, con el boton de descargar."
+    frase = f"Falta {que}. {_HOW_TO_GET[pack in USER_SUPPLIED_PACKS]}"
     return f"{frase} {detail}".strip() if detail else frase
