@@ -698,25 +698,58 @@ async def upflow_text_to_speech(text: str, voice: str, destination_path: str) ->
 # ---------------------------------------------------------------- 3D
 
 
+@mcp.tool(name="upflow_init_image", annotations={"title": "Subir imagen de partida", "readOnlyHint": False, "destructiveHint": False, "openWorldHint": False})
+async def upflow_init_image(file_path: str) -> str:
+    """Sube una imagen local y devuelve su imageToken, reutilizable.
+
+    Es la puerta de entrada de todo lo que parte de una imagen: img2img,
+    inpaint, selección por clic, insertar objeto y foto a malla. Sin esto,
+    esos carriles solo existen para quien usa la pantalla.
+    """
+    try:
+        name, content = client.read_upload(file_path)
+        payload = await client.api_post(
+            "/api/v1/generation/init-image",
+            files={"file": (name, content, "application/octet-stream")},
+            timeout=client.UPLOAD_TIMEOUT,
+        )
+        return _dump(payload)
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
 @mcp.tool(name="upflow_generate_3d", annotations={"title": "Generar modelo 3D", **CREATES_JOB})
 async def upflow_generate_3d(
-    prompt: str,
+    prompt: str = "",
     source: str = "mesh",
     printer: str = "ender-3",
     target_mm: float = 0.0,
+    image_path: str = "",
 ) -> str:
-    """Genera un modelo 3D imprimible desde texto (~2 min). Devuelve jobId
-    (family shape3d) — el estado incluye canPrint/sizeMm/blockers, descargar
-    STL con upflow_download_result.
+    """Genera un modelo 3D imprimible desde texto o desde una foto (~2 min).
+    Devuelve jobId (family shape3d) — el estado incluye canPrint/sizeMm/
+    blockers, descargar STL con upflow_download_result.
 
-    source: mesh (Shap-E, orgánico) | cad (OpenSCAD vía LLM, piezas exactas).
-    target_mm: tamaño objetivo del eje mayor (solo mesh).
+    source: mesh (Shap-E desde texto) | photo (Shap-E img2img) | cad (OpenSCAD
+    vía LLM, única vía con cotas exactas).
+    image_path: obligatorio con source=photo; se sube solo. Un DIBUJO PLANO
+    sale mal — las zonas sin pistas de volumen salen como losas. Para modelado
+    de personaje usá upflow_reference_scene, no esto.
+    target_mm: tamaño objetivo del eje mayor (mesh y photo).
     printer: upflow_capabilities(printers).
     """
     try:
         body: dict[str, Any] = {"prompt": prompt, "printer": printer, "source": source}
         if target_mm:
             body["target_mm"] = target_mm
+        if image_path:
+            subida = await client.api_post(
+                "/api/v1/generation/init-image",
+                files={"file": (*client.read_upload(image_path), "application/octet-stream")},
+                timeout=client.UPLOAD_TIMEOUT,
+            )
+            body["imageToken"] = subida.get("initImageToken") or subida.get("token")
+            body["source"] = "photo"
         created = await client.api_post("/api/v1/print/generate", json_body=body)
         return _dump(normalize_job(FAMILIES["shape3d"], created))
     except Exception as exc:
@@ -766,6 +799,101 @@ async def upflow_check_stl(file_path: str, printer: str = "ender-3") -> str:
             files={"file": (name, content, "application/octet-stream")},
             timeout=client.UPLOAD_TIMEOUT,
         )
+        return _dump(payload)
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
+# ---------------------------------------------------------- modelado 3D
+#
+# Este carril NO genera el personaje: prepara el andamiaje para modelarlo. Es
+# deterministico —lo hace Blender, no un modelo— y por eso sale igual las mil
+# veces. Las piezas son atomicas para poder medir entre paso y paso: encadenar
+# operaciones de malla sin auditar en el medio es aplicar parches sin compilar.
+
+
+@mcp.tool(name="upflow_model3d_capabilities", annotations={"title": "Que hay para modelado 3D", **READ_ONLY})
+async def upflow_model3d_capabilities() -> str:
+    """Dice si hay Blender, cuál, y qué operaciones desbloquea.
+
+    Blender no se baja desde la app: lo instala el usuario. Preguntá esto
+    antes de encadenar nada del carril, porque sin Blender no hay carril.
+    """
+    try:
+        return _dump(await client.api_get("/api/v1/model3d/capabilities"))
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
+@mcp.tool(name="upflow_audit_mesh", annotations={"title": "Auditar malla", **READ_ONLY})
+async def upflow_audit_mesh(file_path: str) -> str:
+    """Mide una malla sin tocarla: STL, OBJ, PLY, GLB, GLTF o FBX.
+
+    Devuelve caras, cuádruples vs triángulos, n-gons, aristas no-manifold,
+    islas sueltas, UVs y medidas, más blockers (impiden seguir) y warnings
+    (saldría mejor de otra forma). Sincrónico.
+    """
+    try:
+        name, content = client.read_upload(file_path)
+        payload = await client.api_post(
+            "/api/v1/model3d/audit",
+            files={"file": (name, content, "application/octet-stream")},
+            timeout=client.UPLOAD_TIMEOUT,
+        )
+        return _dump(payload)
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
+@mcp.tool(name="upflow_sheet_views", annotations={"title": "Partir hoja de turnaround", "readOnlyHint": False, "destructiveHint": False, "openWorldHint": False})
+async def upflow_sheet_views(file_path: str, expected_views: int = 4) -> str:
+    """Parte una hoja de turnaround en sus vistas y devuelve un token.
+
+    Descarta sola la barra de altura y la paleta de color. Nombra las vistas
+    por POSICIÓN (front, side, back, side_left): es una convención, no una
+    deducción — mirá el resultado y renombrá si la hoja va en otro orden.
+    Revisá `warnings`: si detectó menos vistas de las esperadas puede haber
+    dos dibujadas superpuestas, y esas no se separan solas.
+    El token alimenta upflow_reference_scene.
+    """
+    try:
+        name, content = client.read_upload(file_path)
+        payload = await client.api_post(
+            "/api/v1/model3d/sheet/views",
+            data={"expectedViews": expected_views},
+            files={"file": (name, content, "application/octet-stream")},
+            timeout=client.UPLOAD_TIMEOUT,
+        )
+        return _dump(payload)
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
+@mcp.tool(name="upflow_reference_scene", annotations={"title": "Escena de referencia en Blender", "readOnlyHint": False, "destructiveHint": False, "openWorldHint": False})
+async def upflow_reference_scene(
+    token: str,
+    height_meters: float = 1.70,
+    destination_path: str = "",
+) -> str:
+    """Arma el .blend con las vistas alineadas a escala real, listo para modelar.
+
+    token: el que devolvió upflow_sheet_views.
+    height_meters: cuánto mide el personaje de verdad. Escala por la TINTA del
+    dibujo, no por el tamaño del archivo, así que el margen del recorte no
+    miente sobre la altura.
+    Deja los pies en el origen, cada vista detrás de su cámara, la colección
+    bloqueada para no agarrarla con el ratón y fuera del render final.
+    Si pasás destination_path, baja el .blend ahí y devuelve outputPath.
+    """
+    try:
+        payload = await client.api_post(
+            "/api/v1/model3d/reference-scene",
+            json_body={"token": token, "heightMeters": height_meters},
+        )
+        if destination_path and payload.get("downloadUrl"):
+            destino = client.resolve_output_path(destination_path, "escena.blend")
+            await client.api_download(payload["downloadUrl"], destino)
+            payload["outputPath"] = str(destino)
         return _dump(payload)
     except Exception as exc:
         return format_tool_error(exc)

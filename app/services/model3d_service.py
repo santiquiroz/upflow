@@ -85,6 +85,22 @@ def split_views(
     return detectadas
 
 
+def views_from_dir(views_dir: Path, *, names: tuple[str, ...] = VIEW_ORDER) -> list[DetectedView]:
+    """Rearma las vistas leyendo recortes ya escritos, midiendo cada uno.
+
+    La caja de tinta se vuelve a medir en vez de recibirse: si viniera del
+    cliente, cualquiera podria fijar una escala arbitraria en la escena.
+    """
+    vistas: list[DetectedView] = []
+    for nombre in names:
+        recorte = views_dir / f"{nombre}.png"
+        if not recorte.exists():
+            continue
+        with Image.open(recorte) as imagen:
+            vistas.append(DetectedView(name=nombre, image=recorte, ink=ink_bounds(imagen.convert("RGB"))))
+    return vistas
+
+
 def sheet_warnings(sheet_path: Path, *, expected_views: int = len(VIEW_ORDER)) -> list[str]:
     """Lo que la hoja tiene de raro, dicho antes de que arruine la escena.
 

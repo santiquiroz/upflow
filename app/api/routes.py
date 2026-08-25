@@ -127,6 +127,14 @@ from app.schemas import (
     VideoJobsListResponse,
     VideoProfileResponse,
     VoiceCatalogResponse,
+    BlenderBuildResponse,
+    MeshAuditResponse,
+    Model3dCapabilitiesResponse,
+    PlacedViewResponse,
+    ReferenceSceneRequest,
+    ReferenceSceneResponse,
+    SheetViewResponse,
+    SheetViewsResponse,
 )
 from app.services.asr_installer import AsrModelInstaller
 from app.services.audio_conversion import (
@@ -170,7 +178,22 @@ from app.services.job_manager import JobManager
 from app.services.media_tools import MediaTools
 from app.services.model_installer import ModelInstaller
 from app.services.model_preflight import preflight_upscaler
-from app.services.missing_pack import missing_pack_message
+from app.services.blender_service import (
+    MINIMUM_VERSION as BLENDER_MINIMUM_VERSION,
+    BlenderBuild,
+    BlenderError,
+    probe as blender_probe,
+)
+from app.services.missing_pack import MissingPack, missing_pack_message
+from app.services.model3d_service import (
+    VIEW_ORDER,
+    audit_mesh as model3d_audit_mesh,
+    build_reference_scene as model3d_build_reference_scene,
+    sheet_warnings,
+    split_views,
+    views_from_dir,
+)
+from app.services.turnaround import EmptySheetError
 from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry, ModelStatus
 from app.services.pack_provisioner import (
     PackProvisioner,
@@ -3502,6 +3525,174 @@ async def download_generated_part(
     if not archivo.exists():
         raise HTTPException(status_code=404, detail="Pieza no encontrada")
     return FileResponse(path=archivo, filename="pieza.stl", media_type="model/stl")
+
+
+# ------------------------------------------------------------- modelado 3D
+#
+# Este carril no genera el personaje: prepara el andamiaje para modelarlo, y lo
+# hace Blender, que el usuario instala aparte. Por eso todo empieza por
+# /capabilities: sin Blender no hay carril, y decirlo es parte del producto.
+
+
+def _blender_missing_message(build: BlenderBuild | None) -> str:
+    if build is None:
+        return missing_pack_message("blender")
+    minimo = ".".join(str(parte) for parte in BLENDER_MINIMUM_VERSION)
+    return f"Blender {build.version_string} es anterior a {minimo}, que es la version minima."
+
+
+def _model3d_views_dir(settings_dep: Settings, token: str) -> Path:
+    return settings_dep.outputs_path / f"{token}.views"
+
+
+@router.get("/model3d/capabilities", response_model=Model3dCapabilitiesResponse)
+async def model3d_capabilities(
+    settings_dep: Settings = Depends(get_settings),
+) -> Model3dCapabilitiesResponse:
+    """Que hay para modelar en esta maquina. NUNCA falla por falta de Blender."""
+    build = await asyncio.to_thread(blender_probe, settings_dep)
+    usable = build is not None and build.meets_minimum
+    return Model3dCapabilitiesResponse(
+        blender=BlenderBuildResponse(
+            found=build is not None,
+            path=str(build.path) if build is not None else None,
+            version=build.version_string if build is not None else None,
+            meets_minimum=usable,
+        ),
+        unlocked=["audit", "referenceScene"] if usable else [],
+        missing=None if usable else _blender_missing_message(build),
+    )
+
+
+@router.post("/model3d/audit", response_model=MeshAuditResponse)
+async def audit_mesh_route(
+    file: UploadFile = File(...),
+    settings_dep: Settings = Depends(get_settings),
+    storage: StorageService = Depends(get_storage),
+) -> MeshAuditResponse:
+    """Mide una malla y devuelve el veredicto, sin tocarla."""
+    safe_name = sanitize_filename(Path(file.filename or "malla.stl").name, default="malla.stl")
+    destino = settings_dep.uploads_path / f"{uuid4().hex}-{safe_name}"
+    try:
+        await storage.save_upload(file, destino, max_mb=settings_dep.max_upload_mb)
+        reporte = await asyncio.to_thread(model3d_audit_mesh, settings_dep, destino)
+    except MissingPack as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BlenderError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        # Igual que en /print/check: el veredicto ya no necesita el archivo, y
+        # guardarlo llenaria el disco en una tarde.
+        destino.unlink(missing_ok=True)
+
+    reporte.pop("mesh", None)
+    return MeshAuditResponse(**reporte)
+
+
+@router.post("/model3d/sheet/views", response_model=SheetViewsResponse, status_code=201)
+async def split_sheet_views(
+    request: Request,
+    file: UploadFile = File(...),
+    expected_views: int = Form(default=len(VIEW_ORDER), alias="expectedViews"),
+    settings_dep: Settings = Depends(get_settings),
+    storage: StorageService = Depends(get_storage),
+) -> SheetViewsResponse:
+    """Parte una hoja de turnaround y deja los recortes listos para la escena."""
+    safe_name = sanitize_filename(Path(file.filename or "hoja.png").name, default="hoja.png")
+    subida = settings_dep.uploads_path / f"{uuid4().hex}-{safe_name}"
+    token = uuid4().hex
+    try:
+        await storage.save_upload(file, subida, max_mb=settings_dep.max_upload_mb)
+        avisos = await asyncio.to_thread(sheet_warnings, subida, expected_views=expected_views)
+        vistas = await asyncio.to_thread(split_views, subida, _model3d_views_dir(settings_dep, token))
+    except EmptySheetError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        # Los RECORTES se quedan —los necesita la escena—, la hoja original no.
+        subida.unlink(missing_ok=True)
+
+    _register_print_token(request, token)
+    return SheetViewsResponse(
+        token=token,
+        views=[
+            SheetViewResponse(
+                name=vista.name,
+                image=vista.image.name,
+                width_px=vista.ink.width,
+                height_px=vista.ink.height,
+                ink_box=vista.ink.as_tuple(),
+            )
+            for vista in vistas
+        ],
+        warnings=avisos,
+    )
+
+
+@router.post("/model3d/reference-scene", response_model=ReferenceSceneResponse, status_code=201)
+async def build_model3d_reference_scene(
+    payload: ReferenceSceneRequest,
+    request: Request,
+    settings_dep: Settings = Depends(get_settings),
+    current_user: AuthenticatedUser = Depends(get_current_user),
+) -> ReferenceSceneResponse:
+    """Arma el .blend con las vistas alineadas a escala real."""
+    if not re.fullmatch(r"[0-9a-f]{32}", payload.token):
+        raise HTTPException(status_code=404, detail="Vistas no encontradas")
+    _require_print_token_owner(request, payload.token, current_user, "Vistas no encontradas")
+
+    # La altura se valida ANTES de tocar el disco: es el request lo que esta mal,
+    # y no depende de que los recortes existan.
+    if payload.height_meters <= 0:
+        raise HTTPException(status_code=400, detail="La altura tiene que ser mayor que cero")
+
+    views_dir = _model3d_views_dir(settings_dep, payload.token)
+    vistas = views_from_dir(views_dir) if views_dir.exists() else []
+    if not vistas:
+        raise HTTPException(status_code=404, detail="Vistas no encontradas")
+
+    destino = settings_dep.outputs_path / f"{payload.token}.scene.blend"
+    try:
+        resultado = await asyncio.to_thread(
+            model3d_build_reference_scene,
+            settings_dep,
+            vistas,
+            destino,
+            height_meters=payload.height_meters,
+        )
+    except MissingPack as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BlenderError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return ReferenceSceneResponse(
+        token=payload.token,
+        download_url=f"/api/v1/model3d/scene/{payload.token}",
+        height_meters=resultado["heightMeters"],
+        # Solo el nombre del archivo: la ruta absoluta del servidor no le sirve
+        # a nadie del otro lado y cuenta de mas sobre la maquina.
+        placed=[
+            PlacedViewResponse(**{**colocada, "image": Path(colocada["image"]).name})
+            for colocada in resultado["placed"]
+        ],
+    )
+
+
+@router.get("/model3d/scene/{token}")
+async def download_reference_scene(
+    token: str,
+    request: Request,
+    settings_dep: Settings = Depends(get_settings),
+    current_user: AuthenticatedUser = Depends(get_current_user),
+) -> FileResponse:
+    if not re.fullmatch(r"[0-9a-f]{32}", token):
+        raise HTTPException(status_code=404, detail="Escena no encontrada")
+    _require_print_token_owner(request, token, current_user, "Escena no encontrada")
+    archivo = settings_dep.outputs_path / f"{token}.scene.blend"
+    if not archivo.exists():
+        raise HTTPException(status_code=404, detail="Escena no encontrada")
+    return FileResponse(
+        path=archivo, filename="escena.blend", media_type="application/x-blender"
+    )
 
 
 def get_shape3d_jobs(request: Request) -> Shape3dJobManager:
