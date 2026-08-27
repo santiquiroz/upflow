@@ -7,6 +7,7 @@ import { AudioPage } from "./modules/audio/AudioPage";
 import { DownloadPage } from "./pages/DownloadPage";
 import { EditorPage } from "./modules/editor/EditorPage";
 import { GeneratePage } from "./modules/generate/GeneratePage";
+import { KaraokePage } from "./modules/karaoke/KaraokePage";
 import { TranscribePage } from "./modules/transcribe/TranscribePage";
 import { EnhanceRoute } from "./pages/EnhanceRoute";
 import { LoginPage } from "./pages/LoginPage";
@@ -70,6 +71,9 @@ export function App() {
         <KeepMounted active={pathname === "/transcribe"}>
           <TranscribePage />
         </KeepMounted>
+        <KeepMounted active={pathname === "/karaoke"}>
+          <KaraokePage />
+        </KeepMounted>
         <KeepMounted active={pathname === "/download"}>
           <DownloadPage />
         </KeepMounted>
@@ -85,6 +89,7 @@ export function App() {
           <Route path="/enhance/:medium" element={null} />
           <Route path="/audio" element={null} />
           <Route path="/transcribe" element={null} />
+          <Route path="/karaoke" element={null} />
           <Route path="/download" element={null} />
           <Route path="/generate" element={null} />
           <Route path="/editor" element={null} />

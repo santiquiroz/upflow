@@ -61,27 +61,17 @@ def has_real_picture(probe_json: dict[str, Any]) -> bool:
     return not int(disposition.get("attached_pic") or 0)
 
 
-def build_karaoke_command(
-    *,
-    ffmpeg: str,
-    picture: Path | None,
-    duration_seconds: float,
-    instrumental: Path,
-    subtitles: Path,
-    destination: Path,
-    crf: int = DEFAULT_CRF,
-    preset: str = DEFAULT_PRESET,
+# Que puede ser el fondo del karaoke. "source" es el video original del que
+# salio el audio; "image" y "video" son archivos que el usuario eligio; y
+# "generated" es el fondo liso que fabrica ffmpeg cuando no hay nada mejor.
+BACKGROUND_KINDS = ("source", "image", "video", "generated")
+
+
+def _background_input(
+    kind: str, background: Path | None, duration_seconds: float
 ) -> list[str]:
-    """Una sola pasada: fondo (o el video original) + letra quemada + instrumental.
-
-    Sin `picture` el fondo lo genera ffmpeg mismo (`lavfi`), que evita escribir
-    un archivo de video liso a disco solo para volver a leerlo.
-    """
-    if picture is not None and Path(destination) == Path(picture):
-        raise ValueError("El destino no puede ser el mismo archivo de origen.")
-
-    if picture is None:
-        entrada_video = [
+    if kind == "generated":
+        return [
             "-f",
             "lavfi",
             # La duracion va en la ENTRADA y no al final: `color` es una fuente
@@ -91,8 +81,54 @@ def build_karaoke_command(
             "-i",
             f"color=c={BACKGROUND_COLOR}:s={BACKGROUND_SIZE}:r={BACKGROUND_FPS}",
         ]
-    else:
-        entrada_video = ["-i", str(picture)]
+    if background is None:
+        raise ValueError(f"El fondo {kind!r} necesita un archivo y no llego ninguno.")
+    if kind == "image":
+        # Una imagen fija no tiene duracion: `-loop 1` la vuelve una fuente
+        # continua y `-t` la corta al largo del instrumental.
+        return [
+            "-loop",
+            "1",
+            "-framerate",
+            str(BACKGROUND_FPS),
+            "-t",
+            str(duration_seconds),
+            "-i",
+            str(background),
+        ]
+    if kind == "video":
+        # Un video de fondo mas corto que la cancion se repite (`-stream_loop
+        # -1` = infinito); el `-shortest` de salida corta en el instrumental.
+        return ["-stream_loop", "-1", "-i", str(background)]
+    if kind == "source":
+        return ["-i", str(background)]
+    raise ValueError(
+        f"Fondo desconocido: {kind!r}. Validos: {', '.join(BACKGROUND_KINDS)}."
+    )
+
+
+def build_karaoke_command(
+    *,
+    ffmpeg: str,
+    background_kind: str = "generated",
+    background: Path | None = None,
+    duration_seconds: float,
+    instrumental: Path,
+    subtitles: Path,
+    destination: Path,
+    crf: int = DEFAULT_CRF,
+    preset: str = DEFAULT_PRESET,
+) -> list[str]:
+    """Una sola pasada: fondo + letra quemada + instrumental.
+
+    El fondo puede ser el video original, una imagen o video elegidos, o el
+    liso que genera ffmpeg mismo (`lavfi`), que evita escribir un archivo de
+    video liso a disco solo para volver a leerlo.
+    """
+    if background is not None and Path(destination) == Path(background):
+        raise ValueError("El destino no puede ser el mismo archivo de origen.")
+
+    entrada_video = _background_input(background_kind, background, duration_seconds)
 
     return [
         str(ffmpeg),

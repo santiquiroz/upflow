@@ -968,6 +968,62 @@ class TranscribeJobsListResponse(BaseModel):
     jobs: list[TranscribeJobResponse] = Field(default_factory=list)
 
 
+class KaraokeLyricLine(BaseModel):
+    index: int
+    start: float
+    end: float
+    text: str
+    translation: str = ""
+
+
+class KaraokeJobResponse(BaseModel):
+    id: str
+    status: JobStatus
+    # La fase del NEGOCIO: preparing | review | rendering | completed |
+    # failed | cancelled. `status` solo cuenta la pasada actual por la cola.
+    phase: str
+    original_filename: str = Field(serialization_alias="originalFilename")
+    asr_model_id: str = Field(serialization_alias="asrModelId")
+    separation_model_id: str | None = Field(
+        default=None, serialization_alias="separationModelId"
+    )
+    cleanup_steps: list[str] = Field(default_factory=list, serialization_alias="cleanupSteps")
+    restore_mode: str | None = Field(default=None, serialization_alias="restoreMode")
+    language: str | None = None
+    romanize: bool = False
+    translate_to: str | None = Field(default=None, serialization_alias="translateTo")
+    device: str | None = None
+    background_kind: str = Field(default="generated", serialization_alias="backgroundKind")
+    created_at: datetime = Field(serialization_alias="createdAt")
+    started_at: datetime | None = Field(default=None, serialization_alias="startedAt")
+    finished_at: datetime | None = Field(default=None, serialization_alias="finishedAt")
+    progress_pct: float | None = Field(default=None, serialization_alias="progressPct")
+    error: str | None = None
+    owner_id: str | None = Field(default=None, serialization_alias="ownerId")
+    # Solo en `review`: la letra editable y el instrumental para escuchar.
+    lines: list[KaraokeLyricLine] = Field(default_factory=list)
+    instrumental_url: str | None = Field(default=None, serialization_alias="instrumentalUrl")
+    # Si el archivo original trae imagen real que sirva de fondo.
+    source_has_picture: bool | None = Field(
+        default=None, serialization_alias="sourceHasPicture"
+    )
+    download_url: str | None = Field(default=None, serialization_alias="downloadUrl")
+
+
+class KaraokeJobsListResponse(BaseModel):
+    jobs: list[KaraokeJobResponse] = Field(default_factory=list)
+
+
+class KaraokeLyricEdit(BaseModel):
+    index: int
+    text: str | None = None
+    translation: str | None = None
+
+
+class KaraokeLyricsUpdateRequest(BaseModel):
+    lines: list[KaraokeLyricEdit] = Field(default_factory=list)
+
+
 class ProvisionJobResponse(BaseModel):
     job_id: str = Field(serialization_alias="jobId")
     pack: str

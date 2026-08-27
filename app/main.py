@@ -51,6 +51,7 @@ from app.services.asr_installer import AsrModelInstaller
 from app.services.engines.transcribe_onnx import TranscribeEngine
 from app.services.download_chain import start_separation_followups
 from app.services.download_job_manager import DownloadJobManager
+from app.services.karaoke_job_manager import KaraokeJobManager
 from app.services.transcribe_job_manager import TranscribeJobManager
 from app.services.engines.shape3d import Shape3dEngine
 from app.services.openscad_llm import OpenAiCompatibleClient
@@ -223,6 +224,16 @@ async def lifespan(app: FastAPI):
         # segundo juego duplicaria los .onnx en VRAM.
         separators=separators,
     )
+    karaoke_jobs = KaraokeJobManager(
+        settings,
+        transcribe_engine,
+        device_semaphores,
+        registry=model_registry,
+        separators=separators,
+        restorers=restorers,
+        devices=devices_service,
+        quota_service=quota_service,
+    )
     download_jobs = DownloadJobManager(
         settings,
         quota_service=quota_service,
@@ -282,6 +293,7 @@ async def lifespan(app: FastAPI):
     )
     await retention_sweeper.start()
     await transcribe_jobs.start()
+    await karaoke_jobs.start()
     await shape3d_jobs.start()
     await download_jobs.start()
 
@@ -323,6 +335,7 @@ async def lifespan(app: FastAPI):
     app.state.asr_installer = asr_installer
     app.state.transcribe_engine = transcribe_engine
     app.state.transcribe_jobs = transcribe_jobs
+    app.state.karaoke_jobs = karaoke_jobs
     app.state.shape3d_jobs = shape3d_jobs
     app.state.download_jobs = download_jobs
     app.state.user_store = user_store
@@ -342,6 +355,7 @@ async def lifespan(app: FastAPI):
         await pack_provisioner.stop()
         await asr_installer.stop()
         await transcribe_jobs.stop()
+        await karaoke_jobs.stop()
         await shape3d_jobs.stop()
         await download_jobs.stop()
 

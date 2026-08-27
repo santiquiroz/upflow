@@ -227,6 +227,50 @@ class TranscribeJob:
 
 
 @dataclass(slots=True)
+class KaraokeJob:
+    """Cancion a video de karaoke, en DOS pasadas con revision en el medio.
+
+    `status` es el estado de CADA pasada por la cola (queued/running/...);
+    `phase` es el estado del NEGOCIO (preparing → review → rendering →
+    completed). La separacion importa: un fallo en el render vuelve a `review`
+    sin perder el instrumental, que es lo caro.
+    """
+
+    source_path: Path
+    original_filename: str
+    asr_model_id: str
+    separation_model_id: str | None = None
+    cleanup_steps: list[str] = field(default_factory=list)
+    restore_mode: str | None = None
+    language: str | None = None
+    romanize: bool = False
+    translate_to: str | None = None
+    device: str | None = None
+    phase: str = "preparing"
+    segments: list[Any] = field(default_factory=list)
+    # Traducciones por INDICE de segmento; vacias donde no hubo que traducir.
+    translated_lines: list[str] = field(default_factory=list)
+    instrumental_path: Path | None = None
+    work_dir: Path | None = None
+    # Parametros de la etapa de render; llegan con el endpoint de render.
+    background_kind: str = "generated"
+    background_path: Path | None = None
+    subtitle_size: str = "medium"
+    subtitle_position: str = "bottom"
+    subtitle_color: str = "#FFFF00"
+    subtitle_highlight_color: str = "#FFFFFF"
+    id: str = field(default_factory=lambda: uuid4().hex)
+    status: JobStatus = JobStatus.queued
+    created_at: datetime = field(default_factory=utc_now)
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    progress_pct: float | None = None
+    output_path: Path | None = None
+    error: str | None = None
+    owner_id: str | None = None
+
+
+@dataclass(slots=True)
 class Shape3dJob:
     """Texto a malla 3D.
 

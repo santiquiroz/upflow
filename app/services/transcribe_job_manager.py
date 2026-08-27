@@ -351,7 +351,8 @@ class TranscribeJobManager(QueuedJobManager[TranscribeJob]):
             destination = self.settings.outputs_path / f"{job.id}.karaoke.mp4"
             command = build_karaoke_command(
                 ffmpeg=str(self.settings.ffmpeg_binary_path),
-                picture=picture,
+                background_kind="source" if picture is not None else "generated",
+                background=picture,
                 duration_seconds=duration,
                 instrumental=instrumental,
                 subtitles=subtitles,

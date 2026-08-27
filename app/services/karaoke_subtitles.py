@@ -18,12 +18,89 @@ from dataclasses import dataclass
 # primera linea.
 CENTISECONDS_PER_SECOND = 100
 
-# Blanco con borde negro grueso: es lo que se lee sobre cualquier fondo, que es
-# el caso real cuando el video de atras lo puso el usuario.
-DEFAULT_STYLE = (
-    "Style: Karaoke,Arial,48,&H00FFFFFF,&H0000FFFF,&H00000000,&H80000000,"
-    "-1,0,0,0,100,100,0,0,1,3,1,2,40,40,60,1"
-)
+# Tamaños en puntos ASS sobre PlayRes 1280x720; libass escala al video real.
+FONT_SIZES = {"small": 36, "medium": 48, "large": 64}
+# Numpad ASS: 2 = abajo-centro, 8 = arriba-centro.
+ALIGNMENT_BY_POSITION = {"bottom": 2, "top": 8}
+# La traduccion acompaña, no compite: mas chica que la linea principal.
+TRANSLATION_FONT_RATIO = 0.7
+
+
+@dataclass(frozen=True, slots=True)
+class KaraokeStyle:
+    """Lo que el usuario puede tocar del subtitulo.
+
+    `base_color` es el texto ANTES de cantarse y `highlight_color` el ya
+    cantado. En ASS eso es al reves de lo que suena: el karaoke `\\k` arranca
+    en SecondaryColour y se rellena hacia PrimaryColour.
+    """
+
+    size: str = "medium"
+    position: str = "bottom"
+    base_color: str = "#FFFF00"
+    highlight_color: str = "#FFFFFF"
+
+
+def hex_to_ass_color(color: str) -> str:
+    """`#RRGGBB` a `&H00BBGGRR`: ASS guarda los canales al reves y con alfa."""
+    value = color.strip().lstrip("#")
+    if len(value) != 6 or any(c not in "0123456789abcdefABCDEF" for c in value):
+        raise ValueError(f"Color invalido: {color!r}. Se espera #RRGGBB.")
+    rr, gg, bb = value[0:2], value[2:4], value[4:6]
+    return f"&H00{bb.upper()}{gg.upper()}{rr.upper()}"
+
+
+def _font_size(style: KaraokeStyle) -> int:
+    if style.size not in FONT_SIZES:
+        raise ValueError(
+            f"Tamaño invalido: {style.size!r}. Validos: {', '.join(FONT_SIZES)}."
+        )
+    return FONT_SIZES[style.size]
+
+
+def _alignment(style: KaraokeStyle) -> int:
+    if style.position not in ALIGNMENT_BY_POSITION:
+        raise ValueError(
+            f"Posicion invalida: {style.position!r}. "
+            f"Validas: {', '.join(ALIGNMENT_BY_POSITION)}."
+        )
+    return ALIGNMENT_BY_POSITION[style.position]
+
+
+def _style_line(
+    name: str, font_size: int, primary: str, secondary: str, alignment: int, margin_v: int
+) -> str:
+    # Borde negro grueso: es lo que se lee sobre cualquier fondo, que es el
+    # caso real cuando el video de atras lo puso el usuario.
+    return (
+        f"Style: {name},Arial,{font_size},{primary},{secondary},&H00000000,"
+        f"&H80000000,-1,0,0,0,100,100,0,0,1,3,1,{alignment},40,40,{margin_v},1"
+    )
+
+
+def build_style_lines(style: KaraokeStyle) -> list[str]:
+    """El estilo principal y el de la traduccion, coherentes entre si.
+
+    Con alineacion abajo, MarginV mas grande = mas arriba: la principal va a 60
+    y la traduccion debajo a 16. Arriba es al reves, asi que la traduccion baja
+    sumando el alto de la principal.
+    """
+    principal = _font_size(style)
+    traduccion = int(round(principal * TRANSLATION_FONT_RATIO))
+    alignment = _alignment(style)
+    primary = hex_to_ass_color(style.highlight_color)
+    secondary = hex_to_ass_color(style.base_color)
+    if alignment == ALIGNMENT_BY_POSITION["bottom"]:
+        margen_principal, margen_traduccion = 60, 16
+    else:
+        margen_principal = 40
+        margen_traduccion = margen_principal + principal + 12
+    return [
+        _style_line("Karaoke", principal, primary, secondary, alignment, margen_principal),
+        _style_line(
+            "Translation", traduccion, primary, secondary, alignment, margen_traduccion
+        ),
+    ]
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,7 +147,7 @@ def karaoke_durations(words: list[KaraokeWord], line_start: float) -> list[int]:
     return duraciones
 
 
-def line_to_dialogue(line: KaraokeLine) -> str:
+def line_to_dialogue(line: KaraokeLine, style_name: str = "Karaoke") -> str:
     if not line.words:
         return ""
     duraciones = karaoke_durations(list(line.words), line.start)
@@ -80,18 +157,28 @@ def line_to_dialogue(line: KaraokeLine) -> str:
     ).strip()
     return (
         f"Dialogue: 0,{ass_timestamp(line.start)},{ass_timestamp(line.end)},"
-        f"Karaoke,,0,0,0,,{texto}"
+        f"{style_name},,0,0,0,,{texto}"
     )
 
 
 def render_karaoke_ass(
-    lines: list[KaraokeLine], *, width: int = 1280, height: int = 720
+    lines: list[KaraokeLine],
+    *,
+    width: int = 1280,
+    height: int = 720,
+    translations: list[str] | None = None,
+    style: KaraokeStyle | None = None,
 ) -> str:
     """El archivo .ass completo.
 
     `PlayResX/Y` viajan porque libass escala los tamaños de fuente respecto de
     esa resolucion: sin declararla, la letra sale de otro tamaño segun el video.
+
+    `translations` acompaña por INDICE a `lines`: la linea traducida hereda los
+    tiempos de la original y se resalta proporcional por letras — los tiempos
+    por palabra solo existen de verdad en el idioma que se canta.
     """
+    estilo = style or KaraokeStyle()
     cabecera = [
         "[Script Info]",
         "ScriptType: v4.00+",
@@ -103,12 +190,20 @@ def render_karaoke_ass(
         "Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,"
         "BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,"
         "BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding",
-        DEFAULT_STYLE,
+        *build_style_lines(estilo),
         "",
         "[Events]",
         "Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text",
     ]
     dialogos = [d for d in (line_to_dialogue(linea) for linea in lines) if d]
+    if translations:
+        for linea, traduccion in zip(lines, translations):
+            if not (traduccion or "").strip():
+                continue
+            traducida = split_line_proportionally(traduccion, linea.start, linea.end)
+            dialogo = line_to_dialogue(traducida, style_name="Translation")
+            if dialogo:
+                dialogos.append(dialogo)
     return "\n".join(cabecera + dialogos) + "\n"
 
 

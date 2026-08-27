@@ -69,7 +69,8 @@ def test_el_probe_de_imagen_pregunta_por_la_caratula() -> None:
 def comando(**extra):
     base = dict(
         ffmpeg="ffmpeg",
-        picture=None,
+        background_kind="generated",
+        background=None,
         duration_seconds=210.5,
         instrumental=Path("inst.wav"),
         subtitles=Path("letra.srt"),
@@ -79,8 +80,12 @@ def comando(**extra):
     return build_karaoke_command(**base)
 
 
+def con_video_original(**extra):
+    return comando(background_kind="source", background=Path("clip.mp4"), **extra)
+
+
 def test_el_audio_sale_del_instrumental_y_no_del_video() -> None:
-    args = comando(picture=Path("clip.mp4"))
+    args = con_video_original()
 
     # ESTE es el punto del karaoke. Sin el map explicito ffmpeg toma la pista
     # del video, o sea la voz original, y el resultado es el tema con letra.
@@ -100,10 +105,37 @@ def test_sin_imagen_el_fondo_lo_genera_ffmpeg() -> None:
 
 
 def test_con_imagen_no_se_genera_ningun_fondo() -> None:
-    args = comando(picture=Path("clip.mp4"))
+    args = con_video_original()
 
     assert "lavfi" not in args
     assert "clip.mp4" in args
+
+
+def test_fondo_imagen_se_lupea_a_la_duracion_del_instrumental() -> None:
+    args = comando(background_kind="image", background=Path("fondo.png"))
+
+    # `-loop 1` vuelve continua la imagen fija y `-t` la corta al instrumental.
+    assert "-loop" in args
+    assert "210.5" in args
+    assert "fondo.png" in args
+
+
+def test_fondo_video_se_repite_hasta_el_final_de_la_cancion() -> None:
+    args = comando(background_kind="video", background=Path("fondo.mp4"))
+
+    stream_loop = args.index("-stream_loop")
+    assert args[stream_loop + 1] == "-1"
+    assert "-shortest" in args
+
+
+def test_fondo_con_archivo_faltante_se_rechaza() -> None:
+    with pytest.raises(ValueError):
+        comando(background_kind="image", background=None)
+
+
+def test_fondo_desconocido_se_rechaza() -> None:
+    with pytest.raises(ValueError):
+        comando(background_kind="hologram", background=Path("x.mp4"))
 
 
 def test_la_letra_se_quema_en_la_imagen() -> None:
@@ -119,12 +151,16 @@ def test_la_letra_se_quema_en_la_imagen() -> None:
 def test_el_corte_lo_pone_el_mas_corto_de_los_dos() -> None:
     # El video original puede durar mas o menos que el instrumental: sin esto
     # queda cola muda o audio sin imagen.
-    assert "-shortest" in comando(picture=Path("clip.mp4"))
+    assert "-shortest" in con_video_original()
 
 
 def test_no_se_escribe_encima_del_original() -> None:
     with pytest.raises(ValueError):
-        comando(picture=Path("out.mp4"), destination=Path("out.mp4"))
+        comando(
+            background_kind="source",
+            background=Path("out.mp4"),
+            destination=Path("out.mp4"),
+        )
 
 
 # ---------------------------------------------------------------------------
