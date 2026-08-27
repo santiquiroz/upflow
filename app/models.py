@@ -206,6 +206,9 @@ class TranscribeJob:
     output_mode: str = "text"
     # Solo en modo doblaje: a que idioma hablar. Sin esto no hay nada que doblar.
     target_language: str | None = None
+    # Letra japonesa a romaji Hepburn sobre los segmentos ya cronometrados:
+    # aplica parejo a la transcripcion y a cualquier subtitulo que salga de ella.
+    romanize: bool = False
     # Cuantas lineas del doblaje no entraron en su hueco ni al maximo de
     # velocidad. Se cuenta para avisarlo en vez de entregar un doblaje corrido.
     dub_overflow_segments: int | None = None

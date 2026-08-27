@@ -1165,9 +1165,9 @@ export const en = {
   "transcribe.page.title": "Transcribe",
   "transcribe.page.description":
     "Turn an audio file into editable text with an installed speech recognition model.",
-  "transcribe.file.drop": "Drop an audio file here or click to browse",
-  "transcribe.file.formats": "WAV, MP3, FLAC, M4A, OGG, and OPUS",
-  "transcribe.file.inputLabel": "Choose an audio file to transcribe",
+  "transcribe.file.drop": "Drop an audio or video file here or click to browse",
+  "transcribe.file.formats": "WAV, MP3, FLAC, M4A, OGG, OPUS — or a video (MP4, MKV, MOV, WEBM…)",
+  "transcribe.file.inputLabel": "Choose an audio or video file to transcribe",
   "transcribe.model.label": "Speech recognition model",
   "transcribe.language.label": "Audio language",
   "transcribe.language.englishOnly": "That model only understands English. For another language pick a multilingual one: the ones that do NOT end in .en",
@@ -1178,6 +1178,10 @@ export const en = {
   "transcribe.language.fr": "French (fr)",
   "transcribe.language.de": "German (de)",
   "transcribe.language.it": "Italian (it)",
+  "transcribe.language.ja": "Japanese (ja)",
+  "transcribe.romanize.label": "Romaji lyrics",
+  "transcribe.romanize.hint":
+    "Converts Japanese to Hepburn romaji in the text and the subtitles, so you can sing along without reading kana.",
   "transcribe.device.label": "Device",
   "transcribe.device.loading": "Loading devices…",
   "transcribe.device.loadFailed":

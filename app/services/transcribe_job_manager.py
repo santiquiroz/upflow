@@ -13,6 +13,7 @@ from app.services.engines.tts_kokoro import SAMPLE_RATE as TTS_SAMPLE_RATE
 from app.services.engines.tts_kokoro import KokoroTtsEngine, available_voices
 from app.services.audio_excerpt import probe_duration_seconds
 from app.services.karaoke_subtitles import line_from_segment, render_karaoke_ass
+from app.services.romanization import romanize_segments
 from app.services.media_decode import (
     SEPARATION_CHANNELS,
     SEPARATION_SAMPLE_RATE,
@@ -104,6 +105,7 @@ class TranscribeJobManager(QueuedJobManager[TranscribeJob]):
         owner: AuthenticatedUser | None = None,
         output_mode: str = "text",
         target_language: str | None = None,
+        romanize: bool = False,
     ) -> TranscribeJob:
         self._validate_model(model_id)
         self._validate_output_mode(output_mode)
@@ -123,6 +125,7 @@ class TranscribeJobManager(QueuedJobManager[TranscribeJob]):
             owner_id=owner.id if owner is not None else None,
             output_mode=output_mode,
             target_language=target_language,
+            romanize=romanize,
         )
         if job_id is not None:
             job.id = job_id
@@ -221,6 +224,10 @@ class TranscribeJobManager(QueuedJobManager[TranscribeJob]):
             device=device,
             progress_cb=on_progress,
         )
+        if job.romanize:
+            # Antes de derivar NADA: texto, .srt y .ass tienen que contar la
+            # misma historia, y la unica fuente comun son los segmentos.
+            segments = romanize_segments(list(segments))
         job.segments = segments
         job.text = segments_to_text(segments)
         job.output_path = self._write_transcript(job, job.text)

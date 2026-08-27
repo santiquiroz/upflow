@@ -1511,6 +1511,7 @@ async def create_transcribe_job(
     device: str | None = Form(default=None),
     output_mode: str = Form(default="text"),
     target_language: str | None = Form(default=None),
+    romanize: bool = Form(default=False),
     transcribe_jobs: TranscribeJobManager = Depends(get_transcribe_job_manager),
     storage: StorageService = Depends(get_storage),
     settings: Settings = Depends(get_settings),
@@ -1538,6 +1539,7 @@ async def create_transcribe_job(
             target_language=(
                 target_language if isinstance(target_language, str) and target_language else None
             ),
+            romanize=romanize is True,
         )
     except QueueFullError as exc:
         raise HTTPException(status_code=429, detail=str(exc)) from exc

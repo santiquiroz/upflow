@@ -565,6 +565,34 @@ describe("TranscribePanel", () => {
     ).toEqual(expect.objectContaining({ language: "es" }));
   });
 
+  it("sends romanize when Japanese and the romaji checkbox are selected", async () => {
+    renderPanel();
+    const languageSelect = await screen.findByRole("combobox", {
+      name: en["transcribe.language.label"],
+    });
+    fireEvent.change(languageSelect, { target: { value: "ja" } });
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: en["transcribe.romanize.label"] }),
+    );
+    await submitAudio();
+
+    expect(
+      vi.mocked(transcribeService.createTranscribeJob).mock.calls[0][0],
+    ).toEqual(expect.objectContaining({ language: "ja", romanize: true }));
+  });
+
+  it("hides the romaji checkbox for non-Japanese languages", async () => {
+    renderPanel();
+    const languageSelect = await screen.findByRole("combobox", {
+      name: en["transcribe.language.label"],
+    });
+    fireEvent.change(languageSelect, { target: { value: "es" } });
+
+    expect(
+      screen.queryByRole("checkbox", { name: en["transcribe.romanize.label"] }),
+    ).not.toBeInTheDocument();
+  });
+
   it("shows the backend error from a failed job", async () => {
     vi.mocked(transcribeService.getTranscribeJob).mockResolvedValue(
       job({

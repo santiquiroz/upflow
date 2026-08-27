@@ -40,7 +40,7 @@ interface TranscribePanelProps {
   searchDebounceMs?: number;
 }
 
-const LANGUAGE_OPTIONS = ["es", "en", "pt", "fr", "de", "it"] as const;
+const LANGUAGE_OPTIONS = ["es", "en", "pt", "fr", "de", "it", "ja"] as const;
 
 function isJobBusy(phase: TranscribeJobPhase): boolean {
   return phase === "uploading" || phase === "queued" || phase === "running";
@@ -95,7 +95,7 @@ function AudioDropzone({
       <input
         id="transcribe-file-input"
         type="file"
-        accept="audio/*"
+        accept="audio/*,video/*"
         multiple
         aria-label={t("transcribe.file.inputLabel")}
         className="sr-only"
@@ -435,6 +435,7 @@ export function TranscribePanel({
   const file = files[0] ?? null;
   const [modelId, setModelId] = useState("");
   const [language, setLanguage] = useState("");
+  const [romanize, setRomanize] = useState(false);
   const [outputMode, setOutputMode] = useState<TranscribeOutputMode>("text");
   const [dubLanguage, setDubLanguage] = useState("");
   const [deviceId, setDeviceId] = useState("cpu");
@@ -497,6 +498,9 @@ export function TranscribePanel({
       params.language = "en";
     } else if (language) {
       params.language = language;
+    }
+    if (language === "ja" && !soloIngles && romanize) {
+      params.romanize = true;
     }
     if (selectedDeviceId) {
       params.device = selectedDeviceId;
@@ -608,6 +612,25 @@ export function TranscribePanel({
                   <span className="text-xs text-warn">{t("transcribe.language.englishOnly")}</span>
                 )}
               </label>
+
+              {/* Solo con japones elegido: en cualquier otro idioma no hay
+                  nada que transliterar y el checkbox seria ruido. */}
+              {language === "ja" && !soloIngles && (
+                <div className="flex flex-col gap-1">
+                  <label className="flex items-center gap-2 text-sm text-text">
+                    <input
+                      type="checkbox"
+                      checked={romanize}
+                      onChange={(event) => setRomanize(event.target.checked)}
+                      className="accent-accent"
+                    />
+                    {t("transcribe.romanize.label")}
+                  </label>
+                  <span className="text-xs text-text-faint">
+                    {t("transcribe.romanize.hint")}
+                  </span>
+                </div>
+              )}
 
               {file !== null && (
                 <label className="flex flex-col gap-2">

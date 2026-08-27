@@ -29,6 +29,8 @@ export interface CreateTranscribeJobParams {
   outputMode?: TranscribeOutputMode;
   // Solo en doblaje: sin esto no hay a que idioma hablar.
   targetLanguage?: string;
+  // Letra japonesa a romaji Hepburn, en el texto y en los subtitulos.
+  romanize?: boolean;
 }
 
 function buildTranscribeJobFormData(params: CreateTranscribeJobParams): FormData {
@@ -46,6 +48,9 @@ function buildTranscribeJobFormData(params: CreateTranscribeJobParams): FormData
   }
   if (params.targetLanguage) {
     formData.append("target_language", params.targetLanguage);
+  }
+  if (params.romanize) {
+    formData.append("romanize", "true");
   }
   return formData;
 }
