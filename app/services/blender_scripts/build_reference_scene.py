@@ -211,6 +211,11 @@ def main() -> None:
     ]
 
     os.makedirs(os.path.dirname(os.path.abspath(salida)), exist_ok=True)
+    # Las imagenes van EMPAQUETADAS dentro del .blend. Blender guarda rutas
+    # relativas por defecto, asi que un archivo descargado y movido a otra
+    # carpeta pierde sus referencias y muestra las vistas en magenta. Un
+    # .blend que se rompe al moverlo no es un entregable.
+    bpy.ops.file.pack_all()
     bpy.ops.wm.save_as_mainfile(filepath=salida)
 
     emit(

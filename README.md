@@ -681,7 +681,9 @@ API: `POST /api/v1/audio/jobs` (multipart: `file`, `cleanup_steps?` (CSV), `deno
 
 Upflow expone toda su funcionalidad como **tools MCP** (Model Context Protocol) para que agentes de IA (Claude Code, Claude Desktop, o cualquier cliente MCP) puedan reescalar, transcribir, generar y procesar medios directamente.
 
-- **24 tools** sobre las 7 familias de jobs de la API: upscale de imagen/video, audio (denoise/restore/master), transcripción/doblaje, descargas (yt-dlp), generación de imágenes/video, TTS y 3D imprimible.
+- **54 tools** que cubren la API entera: upscale de imagen/video, audio (denoise/restore/master), transcripción/doblaje, descargas (yt-dlp), generación de imágenes/video, TTS, 3D imprimible, **modelado 3D con Blender**, edición de imagen (seleccionar por clic, insertar objeto), reparación de mallas, prompts guardados, conversión y optimización de modelos, y ajustes/diagnóstico del sistema.
+- `upflow_init_image` sube una imagen y devuelve su token: es la puerta de entrada de **todo lo que parte de una imagen** —img2img, inpaint, selección por clic, insertar objeto, foto a malla—, que antes solo existía para quien usaba la pantalla.
+- `upflow_segment_object` no reenvía lo que devuelve la ruta: `/editor/segment` contesta un PNG crudo, inservible para encadenar, así que la tool vuelve a subir la máscara y entrega el token que consume `upflow_insert_object`.
 - Modelo de jobs unificado: `upflow_job_status` / `upflow_wait_job` / `upflow_cancel_job` / `upflow_download_result` funcionan igual para cualquier familia (`image | video | audio | generation | transcribe | download | shape3d`).
 - Las tools de creación aceptan **rutas de archivo locales** y resuelven la subida (multipart o staging por token) por sí solas.
 - Es un cliente HTTP fino: el servidor Upflow tiene que estar corriendo; MCP y la web UI ven exactamente los mismos jobs.
