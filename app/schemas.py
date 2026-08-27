@@ -194,6 +194,87 @@ class MeshRepairResponse(BaseModel):
     download_url: str = Field(serialization_alias="downloadUrl")
 
 
+class BlenderBuildResponse(BaseModel):
+    found: bool
+    path: str | None = None
+    version: str | None = None
+    meets_minimum: bool = Field(default=False, serialization_alias="meetsMinimum")
+
+
+class Model3dCapabilitiesResponse(BaseModel):
+    blender: BlenderBuildResponse
+    # Que se puede hacer HOY en esta maquina. Vacio no es un error: es el carril
+    # apagado, y la pantalla lo dice en vez de esconderlo.
+    unlocked: list[str] = Field(default_factory=list)
+    missing: str | None = None
+
+
+class MeshAuditResponse(BaseModel):
+    # Mismo motivo que PlacedViewResponse: lo arma el reporte del script de
+    # Blender, que ya viene en camelCase.
+    model_config = ConfigDict(populate_by_name=True)
+
+    vertices: int
+    faces: int
+    tris: int
+    quads: int
+    ngons: int
+    non_manifold_edges: int = Field(alias="nonManifoldEdges")
+    boundary_edges: int = Field(alias="boundaryEdges")
+    loose_verts: int = Field(alias="looseVerts")
+    shells: int
+    dims: tuple[float, float, float]
+    thinnest_axis_ratio: float = Field(alias="thinnestAxisRatio")
+    has_uvs: bool = Field(alias="hasUvs")
+    # Lo que impide seguir, separado de lo que solo saldria mejor de otra forma.
+    # Mezclarlos entrena a ignorar los dos.
+    blockers: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    ok: bool
+
+
+class SheetViewResponse(BaseModel):
+    name: str
+    image: str
+    width_px: int = Field(serialization_alias="widthPx")
+    height_px: int = Field(serialization_alias="heightPx")
+    ink_box: tuple[int, int, int, int] = Field(serialization_alias="inkBox")
+
+
+class SheetViewsResponse(BaseModel):
+    token: str
+    views: list[SheetViewResponse]
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ReferenceSceneRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    token: str
+    height_meters: float = Field(default=1.70, alias="heightMeters")
+
+
+class PlacedViewResponse(BaseModel):
+    # `alias` y no solo `serialization_alias`: esto se construye con lo que
+    # reporto el script de Blender, que ya habla camelCase. Con alias de salida
+    # unicamente, cada campo habria que renombrarlo a mano en la ruta.
+    model_config = ConfigDict(populate_by_name=True)
+
+    view: str
+    image: str
+    ink_height_meters: float = Field(alias="inkHeightMeters")
+    plane_height_meters: float = Field(alias="planeHeightMeters")
+    plane_width_meters: float = Field(alias="planeWidthMeters")
+    scaled_by_ink: bool = Field(alias="scaledByInk")
+
+
+class ReferenceSceneResponse(BaseModel):
+    token: str
+    download_url: str = Field(serialization_alias="downloadUrl")
+    height_meters: float = Field(serialization_alias="heightMeters")
+    placed: list[PlacedViewResponse]
+
+
 class PartParamResponse(BaseModel):
     name: str
     label_key: str = Field(serialization_alias="labelKey")

@@ -114,6 +114,17 @@ async def api_post(
     return response.content
 
 
+async def api_patch(path: str, *, json_body: Any | None = None) -> Any:
+    response = await _request("PATCH", path, json=json_body)
+    return response.json() if response.content else {"ok": True}
+
+
+async def api_delete(path: str) -> Any:
+    """Un 204 no trae cuerpo, y devolver None obligaria a cada tool a chequearlo."""
+    response = await _request("DELETE", path)
+    return response.json() if response.content else {"ok": True}
+
+
 async def api_download(path: str, destination: Path, *, params: dict[str, Any] | None = None) -> Path:
     destination.parent.mkdir(parents=True, exist_ok=True)
     client = _get_client()

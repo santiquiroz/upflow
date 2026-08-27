@@ -16,4 +16,6 @@ installer/build/
 
 # Config local de Claude Code: por maquina, no del repo.
 .claude/
+# Rutas absolutas del venv y del uvx de cada maquina.
+.mcp.json
 .spike-ep-venv/

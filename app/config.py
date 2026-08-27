@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import os
+import re
 import secrets
+import shutil
+import sys
 from functools import lru_cache
 from pathlib import Path
 from typing import TypedDict
@@ -251,6 +254,47 @@ VIDEO_PROFILE_CATALOG: list[VideoProfile] = [
 ]
 
 
+def _blender_executable_name() -> str:
+    return "blender.exe" if sys.platform == "win32" else "blender"
+
+
+def _blender_install_globs() -> tuple[str, ...]:
+    """Donde el instalador oficial de Blender deja el binario, por plataforma.
+
+    Con comodin de version a proposito: Blender instala en carpetas con el
+    numero adentro ("Blender 5.2"), asi que una ruta fija envejece con cada
+    version y deja de encontrar una instalacion que si esta.
+    """
+    if sys.platform == "win32":
+        return (
+            r"C:/Program Files/Blender Foundation/Blender */blender.exe",
+            r"C:/Program Files/Blender Foundation/Blender/blender.exe",
+        )
+    if sys.platform == "darwin":
+        return ("/Applications/Blender.app/Contents/MacOS/Blender",)
+    return ("/usr/bin/blender", "/usr/local/bin/blender", "/snap/bin/blender")
+
+
+def _newest_matching(patterns: tuple[str, ...]) -> Path | None:
+    """La instalacion de version mas alta, no la primera alfabetica.
+
+    Ordenar por texto pone "Blender 10.0" antes que "Blender 5.2", que es
+    exactamente al reves de lo que se quiere.
+    """
+    import glob
+
+    encontrados = [Path(ruta) for patron in patterns for ruta in glob.glob(patron)]
+    existentes = [ruta for ruta in encontrados if ruta.exists()]
+    if not existentes:
+        return None
+    return max(existentes, key=lambda ruta: _version_key(ruta.parent.name))
+
+
+def _version_key(nombre: str) -> tuple[int, ...]:
+    numeros = re.findall(r"\d+", nombre)
+    return tuple(int(n) for n in numeros) or (0,)
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
@@ -285,6 +329,9 @@ class Settings(BaseSettings):
     ncnn_upscale_threads: str = Field(default="2:24:12", alias="NCNN_UPSCALE_THREADS")
     subprocess_timeout: float = Field(default=86400, alias="SUBPROCESS_TIMEOUT")
     frame_stall_timeout_seconds: float = Field(default=900, alias="FRAME_STALL_TIMEOUT_SECONDS")
+    # Vacio = se busca solo (vendor, PATH, instalacion del sistema). Se pone a
+    # mano solo cuando hay varias instalaciones y importa cual.
+    blender_binary: str = Field(default="", alias="BLENDER_BINARY")
     ffmpeg_binary: str = Field(default="vendor/ffmpeg/bin/ffmpeg.exe", alias="FFMPEG_BINARY")
     ffprobe_binary: str = Field(default="vendor/ffmpeg/bin/ffprobe.exe", alias="FFPROBE_BINARY")
     ffmpeg_decode_threads: int = Field(
@@ -762,6 +809,42 @@ class Settings(BaseSettings):
         if vendorizado.exists():
             return vendorizado
         return Path(r"C:/Program Files/OpenSCAD/openscad.exe")
+
+    @property
+    def blender_binary_path(self) -> Path:
+        """El binario de Blender.
+
+        Es GPL, asi que corre como PROCESO APARTE y nunca se enlaza — mismo
+        trato que OpenSCAD y Magpie, por la misma razon.
+
+        No se vendoriza: pesa mas que toda la app y quien modela en 3D ya lo
+        tiene. El orden de busqueda va de lo explicito a lo adivinado, y la
+        ruta devuelta puede NO existir: quien pregunta decide si eso es un
+        error o solo una capacidad apagada.
+        """
+        if self.blender_binary:
+            return resolve_against_project_root(self.blender_binary)
+
+        vendorizado = Path(self.runtime_dir).parent / "vendor" / "blender" / _blender_executable_name()
+        if vendorizado.exists():
+            return vendorizado
+
+        en_path = shutil.which("blender")
+        if en_path:
+            return Path(en_path)
+
+        instalado = _newest_matching(_blender_install_globs())
+        return instalado or Path(_blender_executable_name())
+
+    @property
+    def blender_scripts_dir(self) -> Path:
+        """Los scripts que corren DENTRO de Blender.
+
+        Van en su propia carpeta y bajo GPL-2.0-or-later, separados del resto
+        del arbol MIT: usan `bpy` a fondo y la Fundacion Blender considera
+        derivada a una extension distribuida asi.
+        """
+        return Path(__file__).resolve().parent / "services" / "blender_scripts"
 
     @property
     def kokoro_model_path(self) -> Path:

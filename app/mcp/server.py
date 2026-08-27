@@ -698,25 +698,58 @@ async def upflow_text_to_speech(text: str, voice: str, destination_path: str) ->
 # ---------------------------------------------------------------- 3D
 
 
+@mcp.tool(name="upflow_init_image", annotations={"title": "Subir imagen de partida", "readOnlyHint": False, "destructiveHint": False, "openWorldHint": False})
+async def upflow_init_image(file_path: str) -> str:
+    """Sube una imagen local y devuelve su imageToken, reutilizable.
+
+    Es la puerta de entrada de todo lo que parte de una imagen: img2img,
+    inpaint, selección por clic, insertar objeto y foto a malla. Sin esto,
+    esos carriles solo existen para quien usa la pantalla.
+    """
+    try:
+        name, content = client.read_upload(file_path)
+        payload = await client.api_post(
+            "/api/v1/generation/init-image",
+            files={"file": (name, content, "application/octet-stream")},
+            timeout=client.UPLOAD_TIMEOUT,
+        )
+        return _dump(payload)
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
 @mcp.tool(name="upflow_generate_3d", annotations={"title": "Generar modelo 3D", **CREATES_JOB})
 async def upflow_generate_3d(
-    prompt: str,
+    prompt: str = "",
     source: str = "mesh",
     printer: str = "ender-3",
     target_mm: float = 0.0,
+    image_path: str = "",
 ) -> str:
-    """Genera un modelo 3D imprimible desde texto (~2 min). Devuelve jobId
-    (family shape3d) — el estado incluye canPrint/sizeMm/blockers, descargar
-    STL con upflow_download_result.
+    """Genera un modelo 3D imprimible desde texto o desde una foto (~2 min).
+    Devuelve jobId (family shape3d) — el estado incluye canPrint/sizeMm/
+    blockers, descargar STL con upflow_download_result.
 
-    source: mesh (Shap-E, orgánico) | cad (OpenSCAD vía LLM, piezas exactas).
-    target_mm: tamaño objetivo del eje mayor (solo mesh).
+    source: mesh (Shap-E desde texto) | photo (Shap-E img2img) | cad (OpenSCAD
+    vía LLM, única vía con cotas exactas).
+    image_path: obligatorio con source=photo; se sube solo. Un DIBUJO PLANO
+    sale mal — las zonas sin pistas de volumen salen como losas. Para modelado
+    de personaje usá upflow_reference_scene, no esto.
+    target_mm: tamaño objetivo del eje mayor (mesh y photo).
     printer: upflow_capabilities(printers).
     """
     try:
         body: dict[str, Any] = {"prompt": prompt, "printer": printer, "source": source}
         if target_mm:
             body["target_mm"] = target_mm
+        if image_path:
+            subida = await client.api_post(
+                "/api/v1/generation/init-image",
+                files={"file": (*client.read_upload(image_path), "application/octet-stream")},
+                timeout=client.UPLOAD_TIMEOUT,
+            )
+            body["imageToken"] = subida.get("initImageToken") or subida.get("token")
+            body["source"] = "photo"
         created = await client.api_post("/api/v1/print/generate", json_body=body)
         return _dump(normalize_job(FAMILIES["shape3d"], created))
     except Exception as exc:
@@ -767,6 +800,309 @@ async def upflow_check_stl(file_path: str, printer: str = "ender-3") -> str:
             timeout=client.UPLOAD_TIMEOUT,
         )
         return _dump(payload)
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
+# ---------------------------------------------------------- modelado 3D
+#
+# Este carril NO genera el personaje: prepara el andamiaje para modelarlo. Es
+# deterministico —lo hace Blender, no un modelo— y por eso sale igual las mil
+# veces. Las piezas son atomicas para poder medir entre paso y paso: encadenar
+# operaciones de malla sin auditar en el medio es aplicar parches sin compilar.
+
+
+@mcp.tool(name="upflow_model3d_capabilities", annotations={"title": "Que hay para modelado 3D", **READ_ONLY})
+async def upflow_model3d_capabilities() -> str:
+    """Dice si hay Blender, cuál, y qué operaciones desbloquea.
+
+    Blender no se baja desde la app: lo instala el usuario. Preguntá esto
+    antes de encadenar nada del carril, porque sin Blender no hay carril.
+    """
+    try:
+        return _dump(await client.api_get("/api/v1/model3d/capabilities"))
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
+@mcp.tool(name="upflow_audit_mesh", annotations={"title": "Auditar malla", **READ_ONLY})
+async def upflow_audit_mesh(file_path: str) -> str:
+    """Mide una malla sin tocarla: STL, OBJ, PLY, GLB, GLTF o FBX.
+
+    Devuelve caras, cuádruples vs triángulos, n-gons, aristas no-manifold,
+    islas sueltas, UVs y medidas, más blockers (impiden seguir) y warnings
+    (saldría mejor de otra forma). Sincrónico.
+    """
+    try:
+        name, content = client.read_upload(file_path)
+        payload = await client.api_post(
+            "/api/v1/model3d/audit",
+            files={"file": (name, content, "application/octet-stream")},
+            timeout=client.UPLOAD_TIMEOUT,
+        )
+        return _dump(payload)
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
+@mcp.tool(name="upflow_sheet_views", annotations={"title": "Partir hoja de turnaround", "readOnlyHint": False, "destructiveHint": False, "openWorldHint": False})
+async def upflow_sheet_views(file_path: str, expected_views: int = 4) -> str:
+    """Parte una hoja de turnaround en sus vistas y devuelve un token.
+
+    Descarta sola la barra de altura y la paleta de color. Nombra las vistas
+    por POSICIÓN (front, side, back, side_left): es una convención, no una
+    deducción — mirá el resultado y renombrá si la hoja va en otro orden.
+    Revisá `warnings`: si detectó menos vistas de las esperadas puede haber
+    dos dibujadas superpuestas, y esas no se separan solas.
+    El token alimenta upflow_reference_scene.
+    """
+    try:
+        name, content = client.read_upload(file_path)
+        payload = await client.api_post(
+            "/api/v1/model3d/sheet/views",
+            data={"expectedViews": expected_views},
+            files={"file": (name, content, "application/octet-stream")},
+            timeout=client.UPLOAD_TIMEOUT,
+        )
+        return _dump(payload)
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
+@mcp.tool(name="upflow_reference_scene", annotations={"title": "Escena de referencia en Blender", "readOnlyHint": False, "destructiveHint": False, "openWorldHint": False})
+async def upflow_reference_scene(
+    token: str,
+    height_meters: float = 1.70,
+    destination_path: str = "",
+) -> str:
+    """Arma el .blend con las vistas alineadas a escala real, listo para modelar.
+
+    token: el que devolvió upflow_sheet_views.
+    height_meters: cuánto mide el personaje de verdad. Escala por la TINTA del
+    dibujo, no por el tamaño del archivo, así que el margen del recorte no
+    miente sobre la altura.
+    Deja los pies en el origen, cada vista detrás de su cámara, la colección
+    bloqueada para no agarrarla con el ratón y fuera del render final.
+    Si pasás destination_path, baja el .blend ahí y devuelve outputPath.
+    """
+    try:
+        payload = await client.api_post(
+            "/api/v1/model3d/reference-scene",
+            json_body={"token": token, "heightMeters": height_meters},
+        )
+        if destination_path and payload.get("downloadUrl"):
+            destino = client.resolve_output_path(destination_path, "escena.blend")
+            await client.api_download(payload["downloadUrl"], destino)
+            payload["outputPath"] = str(destino)
+        return _dump(payload)
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
+# ------------------------------------------------------------ editor de imagen
+#
+# Todo lo que parte de una imagen empieza por upflow_init_image: el token que
+# devuelve es la moneda comun de estas tools.
+
+
+@mcp.tool(name="upflow_segment_object", annotations={"title": "Seleccionar objeto por clic", "readOnlyHint": False, "destructiveHint": False, "openWorldHint": False})
+async def upflow_segment_object(
+    image_token: str,
+    x: float,
+    y: float,
+    destination_path: str = "",
+    device: str = "",
+) -> str:
+    """Recorta el objeto que hay en un punto de la imagen y devuelve su máscara.
+
+    x e y van en píxeles de la imagen ORIGINAL (la que subió
+    upflow_init_image, que devuelve su width/height), no de ninguna vista
+    escalada.
+
+    La ruta devuelve un PNG en escala de grises, no JSON — inservible para
+    encadenar. Así que la máscara se vuelve a subir sola y lo que devuelve
+    esta tool es `maskToken`, que es lo que consume upflow_insert_object.
+    Con destination_path además queda el PNG en disco para poder mirarlo.
+
+    Requiere el pack de selección por toque (MobileSAM): si no está,
+    upflow_capabilities("editor") lo dice antes de intentar.
+    """
+    try:
+        cuerpo: dict[str, Any] = {"imageToken": image_token, "x": x, "y": y}
+        if device:
+            cuerpo["device"] = device
+        mascara = await client.api_post("/api/v1/editor/segment", json_body=cuerpo)
+        if not isinstance(mascara, bytes):
+            return _dump(mascara)
+
+        if destination_path:
+            destino = client.resolve_output_path(destination_path, "mascara.png")
+            destino.parent.mkdir(parents=True, exist_ok=True)
+            destino.write_bytes(mascara)
+
+        subida = await client.api_post(
+            "/api/v1/generation/init-image",
+            files={"file": ("mascara.png", mascara, "image/png")},
+            timeout=client.UPLOAD_TIMEOUT,
+        )
+        salida = {"maskToken": subida.get("initImageToken"), "bytes": len(mascara)}
+        if destination_path:
+            salida["outputPath"] = str(client.resolve_output_path(destination_path, "mascara.png"))
+        return _dump(salida)
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
+@mcp.tool(name="upflow_insert_object", annotations={"title": "Insertar objeto en otra imagen", **CREATES_JOB})
+async def upflow_insert_object(
+    target_token: str,
+    source_token: str,
+    source_mask_token: str,
+    x: int = 0,
+    y: int = 0,
+    width: int = 8,
+    height: int = 8,
+    target_mask_token: str = "",
+    feather_px: int = 6,
+    match_color: bool = True,
+    harmonize: bool = False,
+    harmonize_blend: float = 0.35,
+    model_id: str = "",
+    prompt: str = "",
+) -> str:
+    """Pega un objeto de una imagen en otra, con su máscara.
+
+    target_token / source_token: destino y origen, de upflow_init_image.
+    source_mask_token: la máscara del objeto en el ORIGEN, de
+    upflow_segment_object. Tiene que medir exactamente lo mismo que el origen.
+
+    x, y, width, height: el rectángulo destino en píxeles del destino. El
+    objeto se ajusta ADENTRO conservando su proporción y centrado, no se
+    estira — el resultado suele ser más chico que la caja. Los valores por
+    defecto (8x8 en 0,0) no sirven para nada real: mandá una caja de verdad.
+
+    target_mask_token: modo reemplazo — la máscara de un objeto que ya está en
+    el destino. Con esto x/y/width/height se IGNORAN: posición y tamaño salen
+    de esa máscara.
+
+    harmonize: segunda pasada de inpaint sobre la costura. Exige model_id de un
+    modelo de inpainting real (9 canales); uno normal se rechaza. Crea un job
+    de la familia generation.
+    """
+    try:
+        cuerpo: dict[str, Any] = {
+            "targetToken": target_token,
+            "sourceToken": source_token,
+            "sourceMaskToken": source_mask_token,
+            "x": x,
+            "y": y,
+            "width": width,
+            "height": height,
+            "featherPx": feather_px,
+            "matchColor": match_color,
+            "harmonize": harmonize,
+            "harmonizeBlend": harmonize_blend,
+        }
+        if target_mask_token:
+            cuerpo["targetMaskToken"] = target_mask_token
+        if model_id:
+            cuerpo["modelId"] = model_id
+        if prompt:
+            cuerpo["prompt"] = prompt
+        return _dump(await client.api_post("/api/v1/editor/insert-object", json_body=cuerpo))
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
+# ------------------------------------------------------------ mallas y piezas
+
+
+@mcp.tool(name="upflow_repair_mesh", annotations={"title": "Reparar malla", "readOnlyHint": False, "destructiveHint": False, "openWorldHint": False})
+async def upflow_repair_mesh(file_path: str, destination_path: str = "") -> str:
+    """Cierra los agujeros de una malla rota y vuelve a MEDIRLA.
+
+    La malla reparada se entrega IGUAL cuando no quedó cerrada, y el reporte
+    lo dice: quien pide decide si le sirve. Decir "reparada" sobre algo que
+    sigue abierto sería el peor falso positivo.
+    Sincrónico. Con destination_path baja el STL reparado.
+    """
+    try:
+        name, content = client.read_upload(file_path)
+        payload = await client.api_post(
+            "/api/v1/print/repair",
+            files={"file": (name, content, "application/octet-stream")},
+            timeout=client.UPLOAD_TIMEOUT,
+        )
+        if destination_path and payload.get("downloadUrl"):
+            destino = client.resolve_output_path(destination_path, "pieza-reparada.stl")
+            await client.api_download(payload["downloadUrl"], destino)
+            payload["outputPath"] = str(destino)
+        return _dump(payload)
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
+@mcp.tool(name="upflow_estimate_size", annotations={"title": "Estimar tamaño real de un objeto", **READ_ONLY})
+async def upflow_estimate_size(prompt: str) -> str:
+    """Cuánto mide de verdad el objeto que describís, en milímetros.
+
+    Sirve para elegir target_mm sin inventarlo. Es una ESTIMACIÓN de un
+    modelo de lenguaje contra un objeto de referencia, no una cota: para una
+    pieza que tiene que encajar está el carril paramétrico.
+    """
+    try:
+        return _dump(await client.api_post("/api/v1/print/estimate-size", json_body={"prompt": prompt}))
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
+# ------------------------------------------------------------ prompts guardados
+
+
+@mcp.tool(name="upflow_prompt_presets", annotations={"title": "Prompts de ejemplo", **READ_ONLY})
+async def upflow_prompt_presets() -> str:
+    """Catálogo fijo de prompts de ejemplo por modo, que trae la app."""
+    try:
+        return _dump(await client.api_get("/api/v1/generation/prompt-presets"))
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
+@mcp.tool(name="upflow_saved_prompts", annotations={"title": "Prompts guardados", **READ_ONLY})
+async def upflow_saved_prompts() -> str:
+    """Los prompts que guardó este usuario. El `id` sirve para borrarlos."""
+    try:
+        return _dump(await client.api_get("/api/v1/generation/saved-prompts"))
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
+@mcp.tool(name="upflow_save_prompt", annotations={"title": "Guardar un prompt", "readOnlyHint": False, "destructiveHint": False, "openWorldHint": False})
+async def upflow_save_prompt(
+    name: str,
+    prompt: str,
+    negative_prompt: str = "",
+    mode: str = "",
+) -> str:
+    """Guarda un prompt con nombre. Devuelve su `id`, que es el ÚNICO
+    identificador para borrarlo después — anotalo si vas a necesitarlo."""
+    try:
+        cuerpo: dict[str, Any] = {"name": name, "prompt": prompt}
+        if negative_prompt:
+            cuerpo["negativePrompt"] = negative_prompt
+        if mode:
+            cuerpo["mode"] = mode
+        return _dump(await client.api_post("/api/v1/generation/saved-prompts", json_body=cuerpo))
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
+@mcp.tool(name="upflow_delete_saved_prompt", annotations={"title": "Borrar un prompt guardado", "readOnlyHint": False, "destructiveHint": True, "openWorldHint": False})
+async def upflow_delete_saved_prompt(prompt_id: str) -> str:
+    """Borra un prompt guardado. Un segundo borrado del mismo id da 404, no
+    error real: significa que ya no estaba."""
+    try:
+        return _dump(await client.api_delete(f"/api/v1/generation/saved-prompts/{prompt_id}"))
     except Exception as exc:
         return format_tool_error(exc)
 
@@ -873,6 +1209,342 @@ async def upflow_provision_pack(pack: str = "", capability_id: str = "", job_id:
                 await client.api_post(f"/api/v1/capabilities/{capability_id}/provision")
             )
         return _dump(await client.api_post(f"/api/v1/packs/{pack}/provision"))
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
+# ------------------------------------------------ MCP REST faltantes: modelos y sistema
+#
+# Bloque aislado para que estos equivalentes REST no se mezclen con los tools
+# de impresión ni con el grupo de prompts guardados que se editan en paralelo.
+
+
+PREFLIGHT_ENDPOINTS = {
+    "upscaler": "/api/v1/models/preflight",
+    "generation": "/api/v1/generation/models/preflight",
+}
+
+
+@mcp.tool(name="upflow_convert_model", annotations={"title": "Convertir modelo de generación", **CREATES_JOB})
+async def upflow_convert_model(repo_id: str, precision: str = "") -> str:
+    """Inicia la conversión de un repo de Hugging Face a un modelo ONNX de
+    generación. Devuelve conversionId; consultalo con upflow_conversion_status.
+
+    precision vacío usa fp16, el default de la API. La conversión puede tardar
+    varios minutos y sigue corriendo aunque el cliente cambie de sección.
+    """
+    try:
+        body: dict[str, Any] = {"repo_id": repo_id}
+        if precision:
+            body["precision"] = precision
+        return _dump(
+            await client.api_post(
+                "/api/v1/generation/models/convert", json_body=body
+            )
+        )
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
+@mcp.tool(name="upflow_conversion_status", annotations={"title": "Estado de conversión de modelo", **READ_ONLY})
+async def upflow_conversion_status(conversion_id: str) -> str:
+    """Consulta progreso, etapa, resultado o error de una conversión.
+
+    Repetí la consulta mientras status no sea terminal; modelId aparece cuando
+    el modelo convertido quedó registrado.
+    """
+    try:
+        return _dump(
+            await client.api_get(
+                f"/api/v1/generation/models/convert/{conversion_id}"
+            )
+        )
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
+@mcp.tool(
+    name="upflow_cancel_conversion",
+    annotations={
+        "title": "Cancelar conversión de modelo",
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "openWorldHint": False,
+    },
+)
+async def upflow_cancel_conversion(conversion_id: str) -> str:
+    """Solicita detener una conversión en curso.
+
+    El corte ocurre al terminar el submodelo actual; si la conversión ya acabó,
+    la API responde que no queda trabajo por cancelar.
+    """
+    try:
+        return _dump(
+            await client.api_post(
+                f"/api/v1/generation/models/convert/{conversion_id}/cancel"
+            )
+        )
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
+@mcp.tool(name="upflow_list_conversions", annotations={"title": "Conversiones de modelos activas", **READ_ONLY})
+async def upflow_list_conversions() -> str:
+    """Lista las conversiones que siguen activas para recuperar sus ids y
+    volver a enganchar el seguimiento después de perder el estado de la UI."""
+    try:
+        return _dump(
+            await client.api_get("/api/v1/generation/models/conversions")
+        )
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
+@mcp.tool(name="upflow_create_inpaint_model", annotations={"title": "Crear variante de inpainting", **CREATES_JOB})
+async def upflow_create_inpaint_model(model_id: str) -> str:
+    """Crea una variante de inpainting a partir de un modelo de generación
+    instalado que conserve un origen compatible en Hugging Face.
+
+    Devuelve conversionId para seguirla con upflow_conversion_status; la API
+    rechaza modelos ya inpaint o sin los pesos de origen necesarios.
+    """
+    try:
+        return _dump(
+            await client.api_post(
+                f"/api/v1/generation/models/{model_id}/create-inpaint"
+            )
+        )
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
+@mcp.tool(name="upflow_optimize_model", annotations={"title": "Optimizar modelo de generación", **CREATES_JOB})
+async def upflow_optimize_model(model_id: str) -> str:
+    """Crea la variante optimizada por fusión de grafo de un modelo ONNX
+    instalado. La API valida origen, arquitectura, RAM libre y pesos antes de
+    encolar; devuelve conversionId para upflow_conversion_status."""
+    try:
+        return _dump(
+            await client.api_post(
+                f"/api/v1/generation/models/{model_id}/optimize"
+            )
+        )
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
+@mcp.tool(name="upflow_model_preflight", annotations={"title": "Preflight de modelo instalable", **READ_ONLY})
+async def upflow_model_preflight(
+    kind: str,
+    repo_id: str,
+    width: int = 512,
+    height: int = 512,
+) -> str:
+    """Evalúa compatibilidad y recursos antes de instalar un modelo.
+
+    kind: upscaler | generation. El preflight de generación usa width/height
+    para estimar el costo; el de upscaler solo necesita repo_id. Devuelve las
+    mediciones reales disponibles y deja en null lo que no pudo medir.
+    """
+    try:
+        path = PREFLIGHT_ENDPOINTS.get(kind)
+        if path is None:
+            return (
+                f"Error: kind '{kind}' inválido. "
+                f"Válidos: {', '.join(sorted(PREFLIGHT_ENDPOINTS))}"
+            )
+        params: dict[str, Any] = {"repoId": repo_id}
+        if kind == "generation":
+            params.update({"width": width, "height": height})
+        return _dump(await client.api_get(path, params=params))
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
+@mcp.tool(name="upflow_settings", annotations={"title": "Ajustes editables", **READ_ONLY})
+async def upflow_settings() -> str:
+    """Lista qué ajustes admite cambiar la instalación, si están configurados,
+    cuáles exigen reinicio y el valor visible de los flags no secretos."""
+    try:
+        return _dump(await client.api_get("/api/v1/settings"))
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
+@mcp.tool(
+    name="upflow_update_setting",
+    annotations={
+        "title": "Actualizar ajuste global",
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "openWorldHint": False,
+    },
+)
+async def upflow_update_setting(key: str, value: str) -> str:
+    """Cambia la configuración de la app para todos los usuarios de esta
+    instalación. Consultá upflow_settings para saber qué claves son editables
+    y si el cambio exige reiniciar antes de que tenga efecto."""
+    try:
+        return _dump(
+            await client.api_patch(
+                "/api/v1/settings", json_body={"key": key, "value": value}
+            )
+        )
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
+@mcp.tool(
+    name="upflow_rescan",
+    annotations={"title": "Reescanear capacidades", **CREATES_JOB},
+)
+async def upflow_rescan() -> str:
+    """Vuelve a detectar binarios, modelos y demás capacidades locales después
+    de una instalación o cambio externo, y devuelve el catálogo actualizado."""
+    try:
+        return _dump(await client.api_post("/api/v1/capabilities/rescan"))
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
+@mcp.tool(name="upflow_update_check", annotations={"title": "Buscar actualización de Upflow", **READ_ONLY})
+async def upflow_update_check() -> str:
+    """Consulta si existe una versión más reciente y devuelve la versión local,
+    la última publicada, fecha de comprobación y enlace de la release."""
+    try:
+        return _dump(await client.api_get("/api/v1/update-check"))
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
+@mcp.tool(name="upflow_onnx_diagnostics", annotations={"title": "Diagnósticos ONNX", **READ_ONLY})
+async def upflow_onnx_diagnostics() -> str:
+    """Lista las combinaciones modelo/dispositivo diagnosticables y los
+    reportes cacheados de operaciones que cayeron a CPU."""
+    try:
+        return _dump(
+            await client.api_get("/api/v1/capabilities/onnx-diagnostics")
+        )
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
+@mcp.tool(
+    name="upflow_onnx_scan",
+    annotations={"title": "Escanear fallback ONNX", **CREATES_JOB},
+)
+async def upflow_onnx_scan(model_id: str, device_id: str) -> str:
+    """Ejecuta el diagnóstico de un modelo ONNX en un dispositivo concreto y
+    señala qué operaciones terminaron en CPU. Usá los ids de
+    upflow_onnx_diagnostics para elegir una combinación válida."""
+    try:
+        return _dump(
+            await client.api_post(
+                "/api/v1/capabilities/onnx-diagnostics/"
+                f"{model_id}/{device_id}/scan"
+            )
+        )
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
+@mcp.tool(
+    name="upflow_fix_lever",
+    annotations={"title": "Aplicar reparación de capacidad", **CREATES_JOB},
+)
+async def upflow_fix_lever(lever_id: str) -> str:
+    """Aplica la reparación ofrecida por una palanca de capacidad y devuelve su
+    estado actualizado. Solo sirve para palancas marcadas como fixable por el
+    catálogo de capacidades."""
+    try:
+        return _dump(
+            await client.api_post(f"/api/v1/capabilities/{lever_id}/fix")
+        )
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
+@mcp.tool(
+    name="upflow_provision_capability",
+    annotations={
+        "title": "Provisionar capacidad",
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "openWorldHint": True,
+    },
+)
+async def upflow_provision_capability(capability_id: str) -> str:
+    """Descarga el primer pack pendiente de una capacidad resoluble.
+
+    Devuelve jobId; seguí el progreso con upflow_provision_pack(job_id=...).
+    Si la capacidad ya está lista o no tiene un pack pendiente, la API explica
+    por qué no puede provisionarla.
+    """
+    try:
+        return _dump(
+            await client.api_post(
+                f"/api/v1/capabilities/{capability_id}/provision"
+            )
+        )
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
+@mcp.tool(name="upflow_audio_compare", annotations={"title": "Comparar separadores de audio", **CREATES_JOB})
+async def upflow_audio_compare(
+    file_path: str,
+    models: str,
+    excerpt_seconds: int = 30,
+    offset_seconds: float | None = None,
+) -> str:
+    """Corre varios modelos de separación sobre el mismo fragmento de audio
+    para comparar el material real del usuario, no un ranking genérico.
+
+    models: ids separados por comas. excerpt_seconds define la duración;
+    offset_seconds vacío deja que el servidor elija el centro del archivo.
+    Devuelve un jobId por modelo y el recorte exacto usado.
+    """
+    try:
+        name, content = client.read_upload(file_path)
+        data: dict[str, Any] = {
+            "models": models,
+            "excerpt_seconds": str(excerpt_seconds),
+        }
+        if offset_seconds is not None:
+            data["offset_seconds"] = str(offset_seconds)
+        return _dump(
+            await client.api_post(
+                "/api/v1/audio/compare",
+                data=data,
+                files={"file": (name, content, "application/octet-stream")},
+                timeout=client.UPLOAD_TIMEOUT,
+            )
+        )
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
+@mcp.tool(
+    name="upflow_realtime_start",
+    annotations={"title": "Iniciar overlay en tiempo real", **CREATES_JOB},
+)
+async def upflow_realtime_start(
+    preset: str,
+    max_frame_rate: int | None = None,
+) -> str:
+    """Inicia el overlay local de escalado en tiempo real con un preset
+    disponible en upflow_capabilities(realtime).
+
+    max_frame_rate es opcional y admite 24-480; la respuesta devuelve el pid
+    del proceso lanzado y el preset efectivo.
+    """
+    try:
+        body: dict[str, Any] = {"preset": preset}
+        if max_frame_rate is not None:
+            body["max_frame_rate"] = max_frame_rate
+        return _dump(
+            await client.api_post("/api/v1/realtime/start", json_body=body)
+        )
     except Exception as exc:
         return format_tool_error(exc)
 
