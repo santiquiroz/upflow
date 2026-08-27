@@ -54,6 +54,14 @@ vi.mock("../../hooks/useTranscribeJob", () => ({
       defaultDeviceId: "cpu",
     },
   }),
+  useAsrModelInstall: () => ({
+    phase: "idle",
+    progressPct: null,
+    errorMessage: null,
+    modelId: null,
+    install: vi.fn(),
+    reset: vi.fn(),
+  }),
 }));
 
 vi.mock("../../services/transcribe", () => ({

@@ -2,6 +2,7 @@ import { useState, type ChangeEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { UploadCloud } from "lucide-react";
 import { useTranslation } from "../../i18n/LocaleProvider";
+import { RecommendedAsrCard } from "../../components/RecommendedAsrCard";
 import { isEnglishOnly } from "../../lib/englishOnly";
 import { useAudioCapabilities } from "../../hooks/useAudioJob";
 import {
@@ -383,6 +384,7 @@ export function KaraokeStudioPanel() {
     <div className="flex flex-col gap-6">
       {jobId === null && (
         <div className="flex flex-col gap-5">
+          <RecommendedAsrCard />
           <FileDropzone file={file} onFileSelected={setFile} />
 
           <label className="flex flex-col gap-2">

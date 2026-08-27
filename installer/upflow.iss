@@ -80,6 +80,14 @@ Name: "realtime"; Description: "Tiempo real: reescalar en vivo juegos y video en
 ; un 403, y "Completa (recomendada)" tiene que dejar la app andando entera.
 Name: "youtube"; Description: "Descargar de YouTube: motor JS y el token que YouTube empezo a exigir (~93 MB)"; Types: full custom
 Name: "voz"; Description: "Cambiar una voz por otra: le das una grabacion y una muestra, y devuelve lo mismo con esa voz (~128 MB)"; Types: full custom
+; Modelo de reconocimiento de voz multilingue (whisper con tiempos por palabra):
+; sin el, Transcribir y Karaoke arrancan vacios y hay que buscarlo a mano.
+; Hijos EXCLUSIVOS: es UN modelo en tres tamaños, no tres funciones. large-v3-turbo
+; no se ofrece: su repo no publica el par encoder/decoder que la app necesita.
+Name: "whisper"; Description: "Transcribir y karaoke: modelo de voz multilingue, entiende ~100 idiomas"; Types: full custom
+Name: "whisper\small"; Description: "Calidad (recomendado para canciones) - whisper-small, ~930 MB"; Types: full custom; Flags: exclusive
+Name: "whisper\base"; Description: "Equilibrado - whisper-base, ~280 MB"; Flags: exclusive
+Name: "whisper\tiny"; Description: "Rapido y liviano - whisper-tiny, ~150 MB"; Flags: exclusive
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
@@ -154,6 +162,14 @@ begin
     Selected := Selected + 'ceca' + #13#10;
   if WizardIsComponentSelected('voz') then
     Selected := Selected + 'openvoice' + #13#10;
+  { Exclusivos: a lo sumo uno esta tildado. La clave la lee el servidor en el
+    primer arranque (enqueue_pending_asr_packs) y baja el modelo desde HF. }
+  if WizardIsComponentSelected('whisper\small') then
+    Selected := Selected + 'whisper-small' + #13#10;
+  if WizardIsComponentSelected('whisper\base') then
+    Selected := Selected + 'whisper-base' + #13#10;
+  if WizardIsComponentSelected('whisper\tiny') then
+    Selected := Selected + 'whisper-tiny' + #13#10;
 
   PackPath := ExpandConstant('{app}\' + OptionalPacksFile);
   SaveStringToFile(PackPath, Selected, False);

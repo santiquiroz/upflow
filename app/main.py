@@ -55,7 +55,10 @@ from app.services.karaoke_job_manager import KaraokeJobManager
 from app.services.transcribe_job_manager import TranscribeJobManager
 from app.services.engines.shape3d import Shape3dEngine
 from app.services.openscad_llm import OpenAiCompatibleClient
-from app.services.model_packs import enqueue_pending_model_packs
+from app.services.model_packs import (
+    enqueue_pending_asr_packs,
+    enqueue_pending_model_packs,
+)
 from app.services.shape3d_job_manager import Shape3dJobManager
 from app.services.pack_provisioner import PackProvisioner
 from app.services.model_registry import ModelRegistry
@@ -255,6 +258,7 @@ async def lifespan(app: FastAPI):
     await enqueue_pending_model_packs(model_registry, generation_converter)
     await pack_provisioner.start()
     await asr_installer.start()
+    await enqueue_pending_asr_packs(model_registry, asr_installer)
     shape3d_jobs = Shape3dJobManager(
         settings,
         Shape3dEngine(

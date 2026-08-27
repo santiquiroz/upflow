@@ -25,6 +25,7 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "../../i18n/LocaleProvider";
 import { PackDownload } from "../../components/PackDownload";
+import { RecommendedAsrCard } from "../../components/RecommendedAsrCard";
 import { isEnglishOnly } from "../../lib/englishOnly";
 import type { TranscribeJob } from "../../lib/apiTypes";
 import { fetchTranslationPairs } from "../../services/transcribe";
@@ -550,6 +551,8 @@ export function TranscribePanel({
               {t("transcribe.models.loadInstalledFailed")}
             </p>
           )}
+
+          <RecommendedAsrCard />
 
           {!modelsQuery.isLoading &&
             !modelsQuery.isError &&

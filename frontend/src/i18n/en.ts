@@ -525,6 +525,13 @@ export const en = {
   "nav.transcribe": "Transcribe",
   "nav.karaoke": "Karaoke",
 
+  "asrDefault.title": "No speech model installed",
+  "asrDefault.description":
+    "Transcribe and Karaoke need a speech recognition model. The recommended one understands ~100 languages with word-level timing (whisper-small, ~930 MB).",
+  "asrDefault.button": "Download the recommended model",
+  "asrDefault.installing": "Downloading… {{pct}}%",
+  "asrDefault.done": "Model installed: you can transcribe now.",
+
   "karaoke.page.title": "Karaoke",
   "karaoke.page.description":
     "Build a karaoke video your way: pick how to separate, clean and enhance the instrumental, review the lyrics, then render.",

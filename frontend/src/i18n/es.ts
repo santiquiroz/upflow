@@ -520,6 +520,13 @@ export const es = {
   "nav.transcribe": "Transcribir",
   "nav.karaoke": "Karaoke",
 
+  "asrDefault.title": "Sin modelo de voz instalado",
+  "asrDefault.description":
+    "Transcribir y Karaoke necesitan un modelo de reconocimiento de voz. El recomendado entiende ~100 idiomas y trae tiempos por palabra (whisper-small, ~930 MB).",
+  "asrDefault.button": "Descargar el modelo recomendado",
+  "asrDefault.installing": "Descargando… {{pct}}%",
+  "asrDefault.done": "Modelo instalado: ya podés transcribir.",
+
   "karaoke.page.title": "Karaoke",
   "karaoke.page.description":
     "Armá un video de karaoke a tu manera: elegí cómo separar, limpiar y mejorar el instrumental, revisá la letra y recién ahí renderizá.",
