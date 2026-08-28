@@ -48,6 +48,30 @@ export interface SheetViews {
   warnings: string[];
 }
 
+export interface LandmarkResponse {
+  name: string;
+  z: number;
+  front: number;
+  side: number;
+  agrees: boolean;
+  disagreementCm: number;
+}
+
+export interface WidthBandResponse {
+  z: number;
+  frontCm: number;
+  sideCm: number;
+}
+
+export interface ProportionsResponse {
+  heightMeters: number;
+  headMeters: number;
+  headsTall: number;
+  landmarks: LandmarkResponse[];
+  uncertain: string[];
+  widths: WidthBandResponse[];
+}
+
 export interface PlacedView {
   view: string;
   image: string;
@@ -83,6 +107,15 @@ export function splitSheetViews(
   formData.append("file", file);
   formData.append("expectedViews", String(expectedViews));
   return apiPostForm<SheetViews>("/model3d/sheet/views", formData, options);
+}
+
+export function fetchProportions(
+  token: string,
+  heightMeters: number,
+): Promise<ProportionsResponse> {
+  return apiGet<ProportionsResponse>(
+    `/model3d/proportions/${token}?heightMeters=${encodeURIComponent(String(heightMeters))}`,
+  );
 }
 
 export function buildReferenceScene(
