@@ -225,7 +225,6 @@ class MeshAuditResponse(BaseModel):
     loose_verts: int = Field(alias="looseVerts")
     shells: int
     dims: tuple[float, float, float]
-    thinnest_axis_ratio: float = Field(alias="thinnestAxisRatio")
     has_uvs: bool = Field(alias="hasUvs")
     # Lo que impide seguir, separado de lo que solo saldria mejor de otra forma.
     # Mezclarlos entrena a ignorar los dos.

@@ -25,7 +25,6 @@ export interface MeshAudit {
   looseVerts: number;
   shells: number;
   dims: [number, number, number];
-  thinnestAxisRatio: number;
   hasUvs: boolean;
   /** Lo que impide seguir. */
   blockers: string[];

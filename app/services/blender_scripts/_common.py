@@ -117,13 +117,19 @@ def audit(objeto: bpy.types.Object) -> dict[str, Any]:
 
     Va antes Y despues de cada operacion: encadenar operaciones sin medir entre
     medio es como aplicar parches sin compilar.
+
+    NO se reporta la relacion entre el eje mas fino y el mas grueso. Parece el
+    detector obvio de "esto salio como una plancha" y NO lo es: medido el
+    2026-08-25 sobre dos mallas generadas del mismo objeto, la que salio
+    destrozada a partir de arte plano dio 0.767 y la buena 0.649 — o sea, el
+    numero fue MAS ALTO en la peor. Lo que si distingue esos dos casos es
+    `shells` y `boundaryEdges`, que ya viajan.
     """
     bm = bmesh.new()
     bm.from_mesh(objeto.data)
     try:
         caras = bm.faces
         dims = [round(float(valor), 6) for valor in objeto.dimensions]
-        lado_mayor = max(dims) or 1.0
         return {
             "vertices": len(bm.verts),
             "faces": len(caras),
@@ -135,7 +141,6 @@ def audit(objeto: bpy.types.Object) -> dict[str, Any]:
             "looseVerts": sum(1 for vert in bm.verts if not vert.link_edges),
             "shells": count_shells(bm),
             "dims": dims,
-            "thinnestAxisRatio": round(min(dims) / lado_mayor, 4),
             "hasUvs": bool(objeto.data.uv_layers),
         }
     finally:

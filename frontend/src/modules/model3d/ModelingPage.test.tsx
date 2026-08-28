@@ -60,7 +60,6 @@ const AUDIT_OK: model3dService.MeshAudit = {
   looseVerts: 0,
   shells: 1,
   dims: [1.2, 0.8, 1.7],
-  thinnestAxisRatio: 0.47,
   hasUvs: true,
   blockers: [],
   warnings: [],
