@@ -52,26 +52,6 @@ def test_audit_mesh_calls_blender_audit_script_and_returns_result(
     assert calls == [("audit_mesh.py", {"mesh": str(mesh)})]
 
 
-def test_detect_views_names_every_panel_and_truncates_for_fewer_panels(
-    tmp_path: Path,
-) -> None:
-    four_panel_sheet = _write_sheet(tmp_path / "four-views.png", PANEL_BOXES)
-    four_views = model3d_service.detect_views(four_panel_sheet)
-
-    assert [view.name for view in four_views] == list(model3d_service.VIEW_ORDER)
-    assert [view.image for view in four_views] == [four_panel_sheet] * 4
-    assert [view.ink for view in four_views] == list(PANEL_BOXES)
-
-    three_boxes = PANEL_BOXES[:3]
-    three_panel_sheet = _write_sheet(tmp_path / "three-views.png", three_boxes)
-    three_views = model3d_service.detect_views(three_panel_sheet)
-
-    assert len(three_views) == len(three_boxes) < len(model3d_service.VIEW_ORDER)
-    assert [view.name for view in three_views] == ["front", "side", "back"]
-    assert [view.image for view in three_views] == [three_panel_sheet] * 3
-    assert [view.ink for view in three_views] == list(three_boxes)
-
-
 def test_split_views_writes_named_tight_crops_with_crop_coordinate_ink_boxes(
     tmp_path: Path,
 ) -> None:
@@ -151,3 +131,39 @@ def test_build_reference_scene_serializes_views_and_supports_height_override(
             },
         ),
     ]
+
+def _hoja(tmp_path, tamano, bloques):
+    from PIL import Image, ImageDraw
+
+    imagen = Image.new("RGB", tamano, "white")
+    dibujo = ImageDraw.Draw(imagen)
+    for caja in bloques:
+        dibujo.rectangle(caja, fill="black")
+    destino = tmp_path / "hoja.png"
+    imagen.save(destino)
+    return destino
+
+
+def test_una_hoja_sin_fondo_entre_vistas_nombra_esa_causa(tmp_path):
+    # Un solo panel que ocupa casi toda la hoja no es "una vista": es que no
+    # hubo por donde cortar. Culpar a vistas superpuestas manda a arreglar lo
+    # que no esta roto.
+    hoja = _hoja(tmp_path, (800, 400), [(10, 20, 790, 380)])
+
+    avisos = model3d_service.sheet_warnings(hoja)
+
+    assert len(avisos) == 1
+    assert "fondo" in avisos[0]
+    assert "superpuestas" not in avisos[0]
+
+
+def test_mas_vistas_que_nombres_avisa_en_vez_de_descartarlas_callado(tmp_path):
+    # zip() truncaba en silencio: en disco quedaban menos recortes que en la
+    # hoja y la respuesta no lo mencionaba.
+    bloques = [(20 + i * 145, 40, 130 + i * 145, 360) for i in range(6)]
+    hoja = _hoja(tmp_path, (900, 400), bloques)
+
+    avisos = model3d_service.sheet_warnings(hoja)
+
+    assert len(avisos) == 1
+    assert "6" in avisos[0] and "4" in avisos[0]

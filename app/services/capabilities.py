@@ -221,6 +221,36 @@ _PRINT_CAPABILITIES: tuple[Capability, ...] = (
         # Esto es lo unico del modulo que da COTAS desde una descripcion.
     ),
     Capability(
+        id="print.meshAudit",
+        domain="print",
+        label_key="capability.print.meshAudit",
+        # Blender lo pone el usuario, igual que OpenSCAD en el carril CAD: es
+        # GPL y corre como proceso aparte, nunca enlazado.
+        provisioning="user_supplied",
+        # No encola nada: mide y contesta mientras el usuario mira la pantalla.
+        job_kind=None,
+        strategies=("model",),
+        requirements=(PathRequirement("blender_binary_path", "blender"),),
+        # SALVEDAD conocida: PathRequirement prueba que el binario EXISTA, no
+        # que llegue a la version minima (4.2, `blender_service.MINIMUM_VERSION`).
+        # Con un Blender viejo instalado esta tarjeta dice "disponible" y
+        # GET /api/v1/model3d/capabilities dice "apagado" con el motivo. Se
+        # acepta a proposito: averiguar la version cuesta lanzar un proceso, y
+        # el arbol se resuelve entero en cada request.
+    ),
+    Capability(
+        id="print.modelReference",
+        domain="print",
+        label_key="capability.print.modelReference",
+        provisioning="user_supplied",
+        job_kind=None,
+        strategies=("model",),
+        requirements=(PathRequirement("blender_binary_path", "blender"),),
+        # Lo que ninguna IA 3D da y todo modelador necesita: las vistas de una
+        # hoja de personaje alineadas a escala real. Es deterministico — lo hace
+        # Blender, no un modelo — y por eso sale igual las mil veces.
+    ),
+    Capability(
         id="print.estimateSize",
         domain="print",
         label_key="capability.print.estimateSize",
@@ -649,10 +679,16 @@ def _missing_packs(unmet: tuple[Requirement, ...]) -> tuple[str, ...]:
     La conversion de voz declara tres requisitos del mismo pack; listarlo tres
     veces le daria a la pantalla tres botones para la misma descarga.
     """
+    from app.services.missing_pack import USER_SUPPLIED_PACKS
+
     packs = [
         requirement.pack
         for requirement in _preferred_pieces(unmet)
         if isinstance(requirement, PathRequirement)
+        # Lo que la app NO baja no genera boton: ofrecer "descargar" para algo
+        # que el usuario tiene que instalar el mismo manda a la pantalla
+        # equivocada. El mensaje de missing_pack ya dice adonde ir.
+        and requirement.pack not in USER_SUPPLIED_PACKS
     ]
     return tuple(dict.fromkeys(packs))
 

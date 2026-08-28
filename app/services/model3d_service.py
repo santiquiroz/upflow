@@ -19,7 +19,7 @@ from PIL import Image
 
 from app.config import Settings
 from app.services import blender_service
-from app.services.turnaround import Box, character_view_boxes, ink_bounds
+from app.services.turnaround import Box, character_view_boxes, ink_bounds, open_sheet
 
 # Como se llama cada vista en la escena. El orden es el de una hoja de
 # turnaround estandar, de izquierda a derecha.
@@ -44,22 +44,6 @@ def audit_mesh(settings: Settings, mesh_path: Path) -> dict[str, Any]:
     return blender_service.run_script(settings, AUDIT_SCRIPT, {"mesh": str(mesh_path)})
 
 
-def detect_views(sheet_path: Path, *, names: tuple[str, ...] = VIEW_ORDER) -> list[DetectedView]:
-    """Las vistas de una hoja, nombradas por posicion y ya medidas.
-
-    Nombrar por posicion es una convencion, no una deduccion: no hay forma de
-    saber mirando los pixeles si el tercer panel es la espalda o un tres
-    cuartos. Quien lo sepa —la persona o el agente— renombra despues.
-    """
-    with Image.open(sheet_path) as hoja:
-        rgb = hoja.convert("RGB")
-        cajas = character_view_boxes(rgb)
-        return [
-            DetectedView(name=nombre, image=sheet_path, ink=caja)
-            for nombre, caja in zip(names, cajas)
-        ]
-
-
 def split_views(
     sheet_path: Path,
     out_dir: Path,
@@ -73,15 +57,13 @@ def split_views(
     Blender lo haria escalar por un margen que ya no existe.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
-    with Image.open(sheet_path) as hoja:
-        rgb = hoja.convert("RGB")
-        cajas = character_view_boxes(rgb)
-        detectadas: list[DetectedView] = []
-        for nombre, caja in zip(names, cajas):
-            recorte = rgb.crop(caja.as_tuple())
-            destino = out_dir / f"{nombre}.png"
-            recorte.save(destino)
-            detectadas.append(DetectedView(name=nombre, image=destino, ink=ink_bounds(recorte)))
+    rgb = open_sheet(sheet_path)
+    detectadas: list[DetectedView] = []
+    for nombre, caja in zip(names, character_view_boxes(rgb)):
+        recorte = rgb.crop(caja.as_tuple())
+        destino = out_dir / f"{nombre}.png"
+        recorte.save(destino)
+        detectadas.append(DetectedView(name=nombre, image=destino, ink=ink_bounds(recorte)))
     return detectadas
 
 
@@ -101,7 +83,17 @@ def views_from_dir(views_dir: Path, *, names: tuple[str, ...] = VIEW_ORDER) -> l
     return vistas
 
 
-def sheet_warnings(sheet_path: Path, *, expected_views: int = len(VIEW_ORDER)) -> list[str]:
+def _cubre_casi_toda(caja: Box, sheet_path: Path, *, umbral: float = 0.9) -> bool:
+    with Image.open(sheet_path) as hoja:
+        return caja.width >= hoja.width * umbral
+
+
+def sheet_warnings(
+    sheet_path: Path,
+    *,
+    expected_views: int = len(VIEW_ORDER),
+    names: tuple[str, ...] = VIEW_ORDER,
+) -> list[str]:
     """Lo que la hoja tiene de raro, dicho antes de que arruine la escena.
 
     Contar es la unica senal confiable. Medido sobre una hoja real: dos vistas
@@ -113,15 +105,31 @@ def sheet_warnings(sheet_path: Path, *, expected_views: int = len(VIEW_ORDER)) -
     Se pregunta aparte de partir: partir devuelve vistas, esto devuelve dudas,
     y mezclarlas obligaria a revisar el resultado para saber si hubo problema.
     """
-    with Image.open(sheet_path) as hoja:
-        cajas = character_view_boxes(hoja.convert("RGB"))
+    cajas = character_view_boxes(open_sheet(sheet_path))
 
+    # Sobran paneles para los nombres que hay: `zip` los descartaria en
+    # silencio y en disco quedarian menos recortes de los que la hoja tiene.
+    if len(cajas) > len(names):
+        return [
+            f"la hoja tiene {len(cajas)} vistas y este carril sabe nombrar "
+            f"{len(names)}: las que sobran se descartan. Recorta la hoja a "
+            f"{len(names)} vistas y volve a subirla."
+        ]
     if len(cajas) == expected_views:
         return []
+    # Un solo panel que ocupa casi toda la hoja no es "una vista": es que no
+    # hubo fondo blanco por donde cortar. Culpar a vistas superpuestas manda a
+    # arreglar lo que no esta roto.
+    if len(cajas) == 1 and _cubre_casi_toda(cajas[0], sheet_path):
+        return [
+            "no se encontraron columnas de fondo entre las vistas: la hoja "
+            "salio como una sola imagen. Necesita fondo blanco entre vista y "
+            "vista."
+        ]
     return [
         f"se detectaron {len(cajas)} vistas y se esperaban {expected_views}. "
-        "Si hay dos dibujadas superpuestas no se pueden separar solas: "
-        "recortalas a mano y pasalas como imagenes sueltas."
+        "Dos vistas dibujadas superpuestas no se pueden separar solas: "
+        "separalas en la hoja y volve a subirla."
     ]
 
 

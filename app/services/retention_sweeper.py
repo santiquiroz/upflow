@@ -150,9 +150,18 @@ class RetentionSweeper:
         if not self.settings.outputs_path.exists():
             return
         cutoff = time.time() - self.settings.output_ttl_hours * 3600
-        for output_file in self.settings.outputs_path.iterdir():
-            if output_file.is_file() and output_file.stat().st_mtime < cutoff:
-                output_file.unlink(missing_ok=True)
+        for entrada in self.settings.outputs_path.iterdir():
+            if entrada.stat().st_mtime >= cutoff:
+                continue
+            if entrada.is_file():
+                entrada.unlink(missing_ok=True)
+            elif entrada.is_dir():
+                # El carril de modelado deja una CARPETA por hoja partida
+                # ({token}.views con un recorte por vista). Barrer solo
+                # archivos las dejaba acumularse para siempre: no las borra
+                # nadie mas, porque tienen que sobrevivir entre el request que
+                # parte la hoja y el que arma la escena.
+                shutil.rmtree(entrada, ignore_errors=True)
 
     def _delete_expired_uploads(self, active_source_paths: set[Path]) -> None:
         if not self.settings.uploads_path.exists():

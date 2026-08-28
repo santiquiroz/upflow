@@ -121,11 +121,20 @@ Platform = Literal["win32", "other"]
 
 
 def packs_required_by_catalog() -> frozenset[str]:
+    """Los packs del catalogo que la app TIENE que saber bajar.
+
+    Los de `USER_SUPPLIED_PACKS` quedan afuera a proposito: son programas
+    completos que instala el usuario (hoy Blender), y exigirles un script de
+    descarga obligaria a inventar uno que no queremos tener.
+    """
+    from app.services.missing_pack import USER_SUPPLIED_PACKS
+
     return frozenset(
         requirement.pack
         for capability in CATALOG
         for requirement in capability.requirements
         if isinstance(requirement, PathRequirement)
+        and requirement.pack not in USER_SUPPLIED_PACKS
     )
 
 

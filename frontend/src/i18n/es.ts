@@ -585,6 +585,7 @@ export const es = {
   "nav.models": "Modelos",
   "nav.realtime": "Tiempo real",
   "nav.print": "Chequeo",
+  "nav.modeling": "Modelado",
   "print.title": "Chequeo de impresión",
   "print.subtitle": "Soltá un STL y enterate si se imprime en tu máquina, y qué arreglarle. Sirve para cualquier STL, lo haya hecho quien lo haya hecho.",
   "print.dropzone": "Soltá un STL acá o hacé click para buscarlo",
@@ -1058,6 +1059,8 @@ export const es = {
   "capability.print.cad": "De descripción a pieza con cotas exactas",
   "capability.print.generate": "De foto o texto a malla",
   "capability.print.generatePhoto": "De foto a malla",
+  "capability.print.meshAudit": "Auditar una malla",
+  "capability.print.modelReference": "Escena de referencia para modelar",
   "capability.print.estimateSize": "Tamaño real sugerido para una malla generada",
   "capability.setup.shapE": "Necesita el modelo Shap-E (MIT, ~1,3 GB). Corre en el procesador: unos dos minutos por pieza.",
   "capability.reason.noSlicerPack": "Necesita un laminador que viaje con la app, como viaja ffmpeg.",
@@ -1335,4 +1338,35 @@ export const es = {
     "Esto produciría {{width}} × {{height}} ({{megapixels}} MP) por cuadro. Un objetivo de {{suggestedHeight}}p es una alternativa más proporcionada.",
   "video.output.warning.keepSource":
     "Esto produciría {{width}} × {{height}} ({{megapixels}} MP) por cuadro. La fuente ya tiene {{sourceHeight}}p; conservar su resolución actual es una alternativa más proporcionada.",
+  // --- modulo de modelado 3D ---------------------------------------------
+  "modeling.title": "Modelado 3D",
+  "modeling.subtitle":
+    "Prepara el andamiaje para modelar de verdad: las vistas de tu personaje alineadas a escala real en Blender, y el estado de cualquier malla dicho sin adornos.",
+  "modeling.lane.reference": "Escena de referencia",
+  "modeling.lane.audit": "Auditar malla",
+  "modeling.blender.ready": "Blender {{version}} listo",
+  "modeling.blender.missingTitle": "El carril está apagado",
+  "modeling.reference.subtitle":
+    "Soltá una hoja de personaje con sus vistas en fila y sale un .blend con todas alineadas, a escala real y cada una detrás de su cámara. Lo hace Blender, no un modelo de IA: sale igual las mil veces.",
+  "modeling.reference.dropzone": "Soltá la hoja acá o hacé click para buscarla",
+  "modeling.reference.dropzoneHint": "PNG, JPG o WEBP con fondo blanco",
+  "modeling.reference.expectedViews": "Vistas que esperás",
+  "modeling.reference.split": "Partir la hoja",
+  "modeling.reference.height": "Altura real (m)",
+  "modeling.reference.heightHint":
+    "La escala se calcula sobre el DIBUJO, no sobre el tamaño del archivo: el margen del recorte no achica al personaje.",
+  "modeling.reference.build": "Armar la escena",
+  "modeling.reference.download": "Bajar el .blend ({{height}} m)",
+  "modeling.audit.subtitle":
+    "Mide una malla sin tocarla y separa lo que impide seguir de lo que solo saldría mejor de otra forma. Mezclarlos entrena a ignorar los dos.",
+  "modeling.audit.dropzone": "Soltá una malla acá o hacé click para buscarla",
+  "modeling.audit.run": "Auditar",
+  "modeling.audit.ok": "Se puede seguir trabajando",
+  "modeling.audit.blocked": "Hay algo que impide seguir",
+  "modeling.audit.faces": "Caras",
+  "modeling.audit.quads": "Cuádruples / triángulos",
+  "modeling.audit.ngons": "N-gons",
+  "modeling.audit.shells": "Islas sueltas",
+  "modeling.audit.size": "Medidas",
+  "modeling.audit.uvs": "Tiene UVs",
 } as const;

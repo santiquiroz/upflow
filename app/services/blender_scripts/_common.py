@@ -29,15 +29,6 @@ IMPORTERS = {
     ".fbx": lambda ruta: bpy.ops.import_scene.fbx(filepath=ruta),
 }
 
-EXPORTERS = {
-    ".stl": lambda ruta: bpy.ops.wm.stl_export(filepath=ruta),
-    ".obj": lambda ruta: bpy.ops.wm.obj_export(filepath=ruta),
-    ".glb": lambda ruta: bpy.ops.export_scene.gltf(filepath=ruta, export_format="GLB"),
-    ".gltf": lambda ruta: bpy.ops.export_scene.gltf(filepath=ruta, export_format="GLTF_SEPARATE"),
-    ".fbx": lambda ruta: bpy.ops.export_scene.fbx(filepath=ruta),
-}
-
-
 def payload() -> dict[str, Any]:
     """Lo que mando el servicio, del unico argumento posterior a `--`."""
     if "--" not in sys.argv:
@@ -96,17 +87,6 @@ def join_meshes(mallas: list[bpy.types.Object]) -> bpy.types.Object:
     return principal
 
 
-def export_mesh(objeto: bpy.types.Object, ruta: str) -> None:
-    sufijo = "." + ruta.rsplit(".", 1)[-1].lower()
-    exportador = EXPORTERS.get(sufijo)
-    if exportador is None:
-        fail(f"formato de salida no soportado: {sufijo}")
-    bpy.ops.object.select_all(action="DESELECT")
-    objeto.select_set(True)
-    bpy.context.view_layer.objects.active = objeto
-    exportador(ruta)
-
-
 def count_shells(bm: bmesh.types.BMesh) -> int:
     """Islas conectadas, marcando al APILAR y no al desapilar.
 
@@ -137,13 +117,19 @@ def audit(objeto: bpy.types.Object) -> dict[str, Any]:
 
     Va antes Y despues de cada operacion: encadenar operaciones sin medir entre
     medio es como aplicar parches sin compilar.
+
+    NO se reporta la relacion entre el eje mas fino y el mas grueso. Parece el
+    detector obvio de "esto salio como una plancha" y NO lo es: medido el
+    2026-08-25 sobre dos mallas generadas del mismo objeto, la que salio
+    destrozada a partir de arte plano dio 0.767 y la buena 0.649 — o sea, el
+    numero fue MAS ALTO en la peor. Lo que si distingue esos dos casos es
+    `shells` y `boundaryEdges`, que ya viajan.
     """
     bm = bmesh.new()
     bm.from_mesh(objeto.data)
     try:
         caras = bm.faces
         dims = [round(float(valor), 6) for valor in objeto.dimensions]
-        lado_mayor = max(dims) or 1.0
         return {
             "vertices": len(bm.verts),
             "faces": len(caras),
@@ -155,7 +141,6 @@ def audit(objeto: bpy.types.Object) -> dict[str, Any]:
             "looseVerts": sum(1 for vert in bm.verts if not vert.link_edges),
             "shells": count_shells(bm),
             "dims": dims,
-            "thinnestAxisRatio": round(min(dims) / lado_mayor, 4),
             "hasUvs": bool(objeto.data.uv_layers),
         }
     finally:

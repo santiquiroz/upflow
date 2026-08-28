@@ -590,6 +590,7 @@ export const en = {
   "nav.models": "Models",
   "nav.realtime": "Realtime",
   "nav.print": "Print check",
+  "nav.modeling": "Modeling",
   "print.title": "Print check",
   "print.subtitle": "Drop an STL and find out whether it prints on your machine, and what to fix. Works with any STL, whoever made it.",
   "print.dropzone": "Drop an STL here or click to browse",
@@ -1063,6 +1064,8 @@ export const en = {
   "capability.print.cad": "Description to a part with exact sizes",
   "capability.print.generate": "Photo or text to mesh",
   "capability.print.generatePhoto": "Photo to mesh",
+  "capability.print.meshAudit": "Audit a mesh",
+  "capability.print.modelReference": "Reference scene for modeling",
   "capability.print.estimateSize": "Suggested real size for a generated mesh",
   "capability.setup.shapE": "Needs the Shap-E model (MIT, ~1.3 GB). Runs on the processor: about two minutes per part.",
   "capability.reason.noSlicerPack": "Needs a slicer that ships with the app, the way ffmpeg does.",
@@ -1340,4 +1343,35 @@ export const en = {
     "This would produce {{width}} × {{height}} ({{megapixels}} MP) per frame. A {{suggestedHeight}}p target is a more proportionate alternative.",
   "video.output.warning.keepSource":
     "This would produce {{width}} × {{height}} ({{megapixels}} MP) per frame. The source is already {{sourceHeight}}p; keeping its current resolution is a more proportionate alternative.",
+  // --- 3D modeling module ------------------------------------------------
+  "modeling.title": "3D modeling",
+  "modeling.subtitle":
+    "Sets up the scaffolding for real modeling: your character's views aligned at real scale in Blender, and any mesh's condition stated plainly.",
+  "modeling.lane.reference": "Reference scene",
+  "modeling.lane.audit": "Audit mesh",
+  "modeling.blender.ready": "Blender {{version}} ready",
+  "modeling.blender.missingTitle": "This lane is off",
+  "modeling.reference.subtitle":
+    "Drop a character sheet with its views in a row and you get a .blend with all of them aligned, at real scale, each behind its own camera. Blender does it, not an AI model: it comes out the same every time.",
+  "modeling.reference.dropzone": "Drop the sheet here or click to browse",
+  "modeling.reference.dropzoneHint": "PNG, JPG or WEBP on a white background",
+  "modeling.reference.expectedViews": "Views you expect",
+  "modeling.reference.split": "Split the sheet",
+  "modeling.reference.height": "Real height (m)",
+  "modeling.reference.heightHint":
+    "Scale is computed from the DRAWING, not the file size: the crop's margin does not shrink the character.",
+  "modeling.reference.build": "Build the scene",
+  "modeling.reference.download": "Download the .blend ({{height}} m)",
+  "modeling.audit.subtitle":
+    "Measures a mesh without touching it and separates what blocks you from what would merely come out better another way. Mixing them trains you to ignore both.",
+  "modeling.audit.dropzone": "Drop a mesh here or click to browse",
+  "modeling.audit.run": "Audit",
+  "modeling.audit.ok": "You can keep working",
+  "modeling.audit.blocked": "Something blocks you",
+  "modeling.audit.faces": "Faces",
+  "modeling.audit.quads": "Quads / triangles",
+  "modeling.audit.ngons": "N-gons",
+  "modeling.audit.shells": "Loose shells",
+  "modeling.audit.size": "Size",
+  "modeling.audit.uvs": "Has UVs",
 } as const;

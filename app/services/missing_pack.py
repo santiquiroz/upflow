@@ -45,12 +45,12 @@ PACK_LABELS: dict[str, str] = {
 }
 
 
-# Los que NO baja la app. Son programas completos, con su instalador y su
-# licencia propia, que el usuario pone en su maquina — OpenSCAD es GPL-2.0 y
-# Blender tambien, y ademas pesan mas que Upflow entero. Mandar a apretar un
-# boton de descarga que no existe es peor que no decir nada: manda a buscar en
-# la pantalla equivocada.
-USER_SUPPLIED_PACKS: frozenset[str] = frozenset({"openscad", "blender"})
+# Los que NO baja la app. Blender pesa mas que Upflow entero y no se vendoriza,
+# asi que el mensaje tiene que mandar al sitio oficial y no a un boton que no
+# existe. OpenSCAD NO va aca aunque tambien sea GPL y externo: la app SI lo
+# baja (`download-openscad.ps1` en PACK_SCRIPTS), y decirle al usuario que se
+# lo instale el mismo lo manda a hacer a mano algo que ya tiene a un click.
+USER_SUPPLIED_PACKS: frozenset[str] = frozenset({"blender"})
 
 _HOW_TO_GET = {
     False: "Se baja desde la app, con el boton de descargar.",

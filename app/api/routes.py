@@ -198,7 +198,7 @@ from app.services.model3d_service import (
     split_views,
     views_from_dir,
 )
-from app.services.turnaround import EmptySheetError
+from app.services.turnaround import EmptySheetError, UnreadableSheetError
 from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry, ModelStatus
 from app.services.pack_provisioner import (
     PackProvisioner,
@@ -3870,7 +3870,6 @@ async def model3d_capabilities(
     return Model3dCapabilitiesResponse(
         blender=BlenderBuildResponse(
             found=build is not None,
-            path=str(build.path) if build is not None else None,
             version=build.version_string if build is not None else None,
             meets_minimum=usable,
         ),
@@ -3900,7 +3899,6 @@ async def audit_mesh_route(
         # guardarlo llenaria el disco en una tarde.
         destino.unlink(missing_ok=True)
 
-    reporte.pop("mesh", None)
     return MeshAuditResponse(**reporte)
 
 
@@ -3908,9 +3906,13 @@ async def audit_mesh_route(
 async def split_sheet_views(
     request: Request,
     file: UploadFile = File(...),
-    expected_views: int = Form(default=len(VIEW_ORDER), alias="expectedViews"),
+    expected_views: int = Form(default=len(VIEW_ORDER), ge=1, le=len(VIEW_ORDER), alias="expectedViews"),
     settings_dep: Settings = Depends(get_settings),
     storage: StorageService = Depends(get_storage),
+    # Sin esto `request.state.current_user` llega vacio y `_register_print_token`
+    # anota el token a nombre de "local": con AUTH_MODE=multi el dueno real se
+    # comia un 404 al pedir la escena de su propia hoja.
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> SheetViewsResponse:
     """Parte una hoja de turnaround y deja los recortes listos para la escena."""
     safe_name = sanitize_filename(Path(file.filename or "hoja.png").name, default="hoja.png")
@@ -3921,6 +3923,8 @@ async def split_sheet_views(
         avisos = await asyncio.to_thread(sheet_warnings, subida, expected_views=expected_views)
         vistas = await asyncio.to_thread(split_views, subida, _model3d_views_dir(settings_dep, token))
     except EmptySheetError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except UnreadableSheetError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     finally:
         # Los RECORTES se quedan —los necesita la escena—, la hoja original no.
@@ -3961,7 +3965,8 @@ async def build_model3d_reference_scene(
         raise HTTPException(status_code=400, detail="La altura tiene que ser mayor que cero")
 
     views_dir = _model3d_views_dir(settings_dep, payload.token)
-    vistas = views_from_dir(views_dir) if views_dir.exists() else []
+    # Fuera del event loop: son hasta cuatro PNG que hay que decodificar y medir.
+    vistas = await asyncio.to_thread(views_from_dir, views_dir) if views_dir.exists() else []
     if not vistas:
         raise HTTPException(status_code=404, detail="Vistas no encontradas")
 

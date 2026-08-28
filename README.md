@@ -213,8 +213,9 @@ lleva a la pantalla que corresponde, con el estado preseleccionado.
 > El zip portable no tiene asistente, así que baja todo en el primer arranque. Para
 > automatizar hay `-InstallAll` y `-SkipOptional` en el launcher.
 
-- **Tasks** (`/`) — el árbol de capacidades, resuelto contra tu máquina: cuatro
-  dominios (video, imágenes, audio, generar) y sus capacidades. Una capacidad
+- **Tasks** (`/`) — el árbol de capacidades, resuelto contra tu máquina: cinco
+  dominios (video, imágenes, audio, generar, impresión y modelado 3D) y sus
+  capacidades. Una capacidad
   lista te lleva a su pantalla; una que le falta un paquete ofrece bajarlo con
   un click (corre el mismo `scripts/download-*.ps1` que antes se corría a
   mano); y las que todavía no existen se muestran **inertes, con el motivo
@@ -793,6 +794,12 @@ Los PRs son bienvenidos. Ver [`CONTRIBUTING.md`](CONTRIBUTING.md) y el [plan de 
 ## Licencia
 
 [MIT](LICENSE) © 2026 Santiago Quiroz. Hacé lo que quieras con esto.
+
+Con una excepción: `app/services/blender_scripts/` es **GPL-2.0-or-later** y
+lleva su propio `LICENSE`. Esos archivos corren DENTRO de Blender y usan `bpy` a
+fondo, y la Fundación Blender considera derivada a una extensión distribuida
+así. El resto del árbol —incluido el código que invoca a Blender como proceso
+aparte— sigue siendo MIT.
 
 ---
 

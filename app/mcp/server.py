@@ -78,6 +78,7 @@ CAPABILITY_ENDPOINTS = {
     "hardware": "/api/v1/capabilities",
     "part_kinds": "/api/v1/print/parts",
     "printers": "/api/v1/print/printers",
+    "model3d": "/api/v1/model3d/capabilities",
 }
 
 
@@ -96,6 +97,7 @@ async def upflow_capabilities(domain: str = "overview") -> str:
       voice_conversion / editor / realtime / translation / hardware
       part_kinds — piezas paramétricas 3D disponibles y sus parámetros
       printers — impresoras 3D conocidas y tamaño de cama
+      model3d — si hay Blender y qué operaciones de modelado desbloquea
     """
     try:
         path = CAPABILITY_ENDPOINTS.get(domain)
@@ -889,6 +891,10 @@ async def upflow_reference_scene(
         payload = await client.api_post(
             "/api/v1/model3d/reference-scene",
             json_body={"token": token, "heightMeters": height_meters},
+            # El servidor se da 900 s para Blender; con el techo default del
+            # cliente (120 s) el corte venia del lado equivocado y el mensaje
+            # decia "reintenta" sobre algo que estaba andando bien.
+            timeout=client.UPLOAD_TIMEOUT,
         )
         if destination_path and payload.get("downloadUrl"):
             destino = client.resolve_output_path(destination_path, "escena.blend")
