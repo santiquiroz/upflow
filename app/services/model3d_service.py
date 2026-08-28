@@ -83,6 +83,11 @@ def views_from_dir(views_dir: Path, *, names: tuple[str, ...] = VIEW_ORDER) -> l
     return vistas
 
 
+def _cubre_casi_toda(caja: Box, sheet_path: Path, *, umbral: float = 0.9) -> bool:
+    with Image.open(sheet_path) as hoja:
+        return caja.width >= hoja.width * umbral
+
+
 def sheet_warnings(
     sheet_path: Path,
     *,
@@ -112,10 +117,19 @@ def sheet_warnings(
         ]
     if len(cajas) == expected_views:
         return []
+    # Un solo panel que ocupa casi toda la hoja no es "una vista": es que no
+    # hubo fondo blanco por donde cortar. Culpar a vistas superpuestas manda a
+    # arreglar lo que no esta roto.
+    if len(cajas) == 1 and _cubre_casi_toda(cajas[0], sheet_path):
+        return [
+            "no se encontraron columnas de fondo entre las vistas: la hoja "
+            "salio como una sola imagen. Necesita fondo blanco entre vista y "
+            "vista."
+        ]
     return [
         f"se detectaron {len(cajas)} vistas y se esperaban {expected_views}. "
-        "Si hay dos dibujadas superpuestas no se pueden separar solas: "
-        "recortalas a mano y pasalas como imagenes sueltas."
+        "Dos vistas dibujadas superpuestas no se pueden separar solas: "
+        "separalas en la hoja y volve a subirla."
     ]
 
 

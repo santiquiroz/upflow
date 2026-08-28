@@ -21,7 +21,6 @@ vi.mock("../../services/model3d", async (importOriginal) => {
 const CAPABILITIES: model3dService.Model3dCapabilities = {
   blender: {
     found: true,
-    path: "C:\\Program Files\\Blender Foundation\\Blender 4.3\\blender.exe",
     version: "4.3.0",
     meetsMinimum: true,
   },
@@ -158,7 +157,6 @@ describe("ModelingPage", () => {
     vi.mocked(model3dService.fetchModel3dCapabilities).mockResolvedValue({
       blender: {
         found: false,
-        path: null,
         version: null,
         meetsMinimum: false,
       },

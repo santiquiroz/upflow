@@ -3,7 +3,6 @@ import type { UploadOptions } from "../lib/uploadRequest";
 
 export interface BlenderBuild {
   found: boolean;
-  path: string | null;
   version: string | null;
   meetsMinimum: boolean;
 }

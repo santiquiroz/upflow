@@ -891,6 +891,10 @@ async def upflow_reference_scene(
         payload = await client.api_post(
             "/api/v1/model3d/reference-scene",
             json_body={"token": token, "heightMeters": height_meters},
+            # El servidor se da 900 s para Blender; con el techo default del
+            # cliente (120 s) el corte venia del lado equivocado y el mensaje
+            # decia "reintenta" sobre algo que estaba andando bien.
+            timeout=client.UPLOAD_TIMEOUT,
         )
         if destination_path and payload.get("downloadUrl"):
             destino = client.resolve_output_path(destination_path, "escena.blend")

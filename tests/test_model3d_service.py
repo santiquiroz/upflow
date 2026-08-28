@@ -131,3 +131,39 @@ def test_build_reference_scene_serializes_views_and_supports_height_override(
             },
         ),
     ]
+
+def _hoja(tmp_path, tamano, bloques):
+    from PIL import Image, ImageDraw
+
+    imagen = Image.new("RGB", tamano, "white")
+    dibujo = ImageDraw.Draw(imagen)
+    for caja in bloques:
+        dibujo.rectangle(caja, fill="black")
+    destino = tmp_path / "hoja.png"
+    imagen.save(destino)
+    return destino
+
+
+def test_una_hoja_sin_fondo_entre_vistas_nombra_esa_causa(tmp_path):
+    # Un solo panel que ocupa casi toda la hoja no es "una vista": es que no
+    # hubo por donde cortar. Culpar a vistas superpuestas manda a arreglar lo
+    # que no esta roto.
+    hoja = _hoja(tmp_path, (800, 400), [(10, 20, 790, 380)])
+
+    avisos = model3d_service.sheet_warnings(hoja)
+
+    assert len(avisos) == 1
+    assert "fondo" in avisos[0]
+    assert "superpuestas" not in avisos[0]
+
+
+def test_mas_vistas_que_nombres_avisa_en_vez_de_descartarlas_callado(tmp_path):
+    # zip() truncaba en silencio: en disco quedaban menos recortes que en la
+    # hoja y la respuesta no lo mencionaba.
+    bloques = [(20 + i * 145, 40, 130 + i * 145, 360) for i in range(6)]
+    hoja = _hoja(tmp_path, (900, 400), bloques)
+
+    avisos = model3d_service.sheet_warnings(hoja)
+
+    assert len(avisos) == 1
+    assert "6" in avisos[0] and "4" in avisos[0]

@@ -195,8 +195,9 @@ class MeshRepairResponse(BaseModel):
 
 
 class BlenderBuildResponse(BaseModel):
+    # Sin `path`: la ruta absoluta del binario no le sirve a nadie del otro lado
+    # y cuenta de mas sobre la maquina. La version si, que es lo que decide.
     found: bool
-    path: str | None = None
     version: str | None = None
     meets_minimum: bool = Field(default=False, serialization_alias="meetsMinimum")
 

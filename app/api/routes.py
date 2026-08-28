@@ -3870,7 +3870,6 @@ async def model3d_capabilities(
     return Model3dCapabilitiesResponse(
         blender=BlenderBuildResponse(
             found=build is not None,
-            path=str(build.path) if build is not None else None,
             version=build.version_string if build is not None else None,
             meets_minimum=usable,
         ),
@@ -3966,7 +3965,8 @@ async def build_model3d_reference_scene(
         raise HTTPException(status_code=400, detail="La altura tiene que ser mayor que cero")
 
     views_dir = _model3d_views_dir(settings_dep, payload.token)
-    vistas = views_from_dir(views_dir) if views_dir.exists() else []
+    # Fuera del event loop: son hasta cuatro PNG que hay que decodificar y medir.
+    vistas = await asyncio.to_thread(views_from_dir, views_dir) if views_dir.exists() else []
     if not vistas:
         raise HTTPException(status_code=404, detail="Vistas no encontradas")
 
