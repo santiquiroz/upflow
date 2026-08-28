@@ -235,6 +235,8 @@ class MeshAuditResponse(BaseModel):
 
 class SheetViewResponse(BaseModel):
     name: str
+    # URL resoluble, no un nombre de archivo suelto: antes era un puntero que
+    # no apuntaba a nada porque ninguna ruta servia los recortes.
     image: str
     width_px: int = Field(serialization_alias="widthPx")
     height_px: int = Field(serialization_alias="heightPx")

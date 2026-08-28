@@ -3936,7 +3936,7 @@ async def split_sheet_views(
         views=[
             SheetViewResponse(
                 name=vista.name,
-                image=vista.image.name,
+                image=f"/api/v1/model3d/views/{token}/{vista.name}",
                 width_px=vista.ink.width,
                 height_px=vista.ink.height,
                 ink_box=vista.ink.as_tuple(),
@@ -3995,6 +3995,34 @@ async def build_model3d_reference_scene(
             for colocada in resultado["placed"]
         ],
     )
+
+
+@router.get("/model3d/views/{token}/{name}")
+async def download_sheet_view(
+    token: str,
+    name: str,
+    request: Request,
+    settings_dep: Settings = Depends(get_settings),
+    current_user: AuthenticatedUser = Depends(get_current_user),
+) -> FileResponse:
+    """Un recorte de la hoja partida.
+
+    Sin esto `SheetView.image` era un nombre de archivo que nadie podia
+    resolver: un puntero sin destino. Con esto la pantalla puede mostrar la
+    vista y no solo su nombre y sus pixeles.
+    """
+    if not re.fullmatch(r"[0-9a-f]{32}", token):
+        raise HTTPException(status_code=404, detail="Vista no encontrada")
+    # El nombre sale de VIEW_ORDER y no del cliente: cualquier otra cosa seria
+    # una ruta arbitraria dentro de la carpeta de salidas.
+    if name not in VIEW_ORDER:
+        raise HTTPException(status_code=404, detail="Vista no encontrada")
+    _require_print_token_owner(request, token, current_user, "Vista no encontrada")
+
+    archivo = _model3d_views_dir(settings_dep, token) / f"{name}.png"
+    if not archivo.exists():
+        raise HTTPException(status_code=404, detail="Vista no encontrada")
+    return FileResponse(path=archivo, filename=f"{name}.png", media_type="image/png")
 
 
 @router.get("/model3d/scene/{token}")

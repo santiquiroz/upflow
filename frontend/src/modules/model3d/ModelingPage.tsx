@@ -204,16 +204,27 @@ function ReferenceLane({ enabled }: { enabled: boolean }) {
       {views && (
         <div className="flex flex-col gap-3">
           <Warnings items={views.warnings} />
-          <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+          {/* La vista recortada, no solo su nombre: es la unica forma de ver
+              de un vistazo si la hoja se partio donde correspondia. */}
+          <ul className="flex flex-wrap gap-3">
             {views.views.map((vista) => (
-              <div key={vista.name} className="contents">
-                <dt className="text-text-dim">{vista.name}</dt>
-                <dd className="font-mono-tabular text-text">
+              <li
+                key={vista.name}
+                className="flex w-32 flex-col items-center gap-1 rounded border border-border bg-surface p-2"
+              >
+                <img
+                  src={vista.image}
+                  alt={vista.name}
+                  loading="lazy"
+                  className="h-32 w-full bg-white object-contain"
+                />
+                <span className="text-sm text-text">{vista.name}</span>
+                <span className="font-mono-tabular text-xs text-text-faint">
                   {vista.widthPx} × {vista.heightPx} px
-                </dd>
-              </div>
+                </span>
+              </li>
             ))}
-          </dl>
+          </ul>
           <div className="flex flex-wrap items-end gap-4">
             <label className="flex flex-col gap-1 text-sm text-text-dim">
               {t("modeling.reference.height")}
