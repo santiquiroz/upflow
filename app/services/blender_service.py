@@ -38,8 +38,10 @@ RESULT_SENTINEL = "UPFLOW_RESULT "
 # AttributeError sobre un operador que no existe.
 MINIMUM_VERSION = (4, 2)
 
-# Una malla de 200k triangulos con remesh y UV puede tardar minutos; un script
-# colgado no debe quedarse para siempre.
+# Auditar una malla grande recorre cada cara y cada arista en Python dentro de
+# Blender, y eso escala con el tamano del archivo; un script colgado no debe
+# quedarse para siempre. El numero no esta medido contra un caso limite: es un
+# techo, no un presupuesto.
 DEFAULT_TIMEOUT_S = 900
 
 VERSION_PATTERN = re.compile(r"Blender\s+(\d+)\.(\d+)(?:\.(\d+))?")
@@ -79,7 +81,9 @@ def probe(settings: Settings, *, timeout: float = 30) -> BlenderBuild | None:
     """Que Blender hay, o None si no hay ninguno usable.
 
     Devuelve None en vez de tirar: preguntar si una capacidad esta disponible
-    no es un error, y el arbol de capacidades pregunta esto en cada request.
+    no es un error. `require_build` convierte ese None en un MissingPack con el
+    mensaje que ve el usuario, y la ruta de capacidades del carril lo usa para
+    responder "apagado" sin fallar.
     """
     binario = settings.blender_binary_path
     if not binario.exists():
@@ -185,6 +189,12 @@ def run_script(
 
     salida = (proceso.stdout or "") + (proceso.stderr or "")
     resultado = extract_result(proceso.stdout or "")
+
+    if proceso.returncode != 0 or resultado is None or resultado.get("error"):
+        # La salida entera va al LOG del servidor y no al cliente: es donde
+        # esta el traceback de Blender, y ademas trae rutas absolutas de la
+        # maquina que no le sirven a nadie del otro lado.
+        logger.error("blender %s fallo (codigo %s): %s", script, proceso.returncode, salida)
 
     if proceso.returncode != 0 and resultado is None:
         raise BlenderError(f"{script} termino en {proceso.returncode}", output=salida)

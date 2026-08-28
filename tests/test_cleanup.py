@@ -352,6 +352,39 @@ def test_retention_sweeper_deletes_expired_outputs_and_keeps_fresh_ones(tmp_path
     assert fresh_output.exists()
 
 
+def test_retention_sweeper_deletes_expired_view_directories(tmp_path: Path) -> None:
+    # El carril de modelado deja una CARPETA por hoja partida. Barriendo solo
+    # archivos se acumulaban para siempre: no las borra nadie mas, porque tienen
+    # que sobrevivir entre el request que parte la hoja y el que arma la escena.
+    settings = make_settings(tmp_path, output_ttl_hours=1)
+    StorageService(settings)
+    job_manager = JobManager(
+        settings, FakeImageEngine(settings), DeviceSemaphores(settings)
+    )
+    video_job_manager = VideoJobManager(
+        settings,
+        FailingVideoUpscaler(),
+        FakeMediaTools(),
+        DeviceSemaphores(settings),
+    )
+    sweeper = RetentionSweeper(settings, job_manager, video_job_manager)
+
+    vieja = settings.outputs_path / f"{'a' * 32}.views"
+    vieja.mkdir(parents=True)
+    (vieja / "front.png").write_bytes(b"recorte")
+    fresca = settings.outputs_path / f"{'b' * 32}.views"
+    fresca.mkdir(parents=True)
+    (fresca / "front.png").write_bytes(b"recorte")
+
+    vencida = time.time() - 2 * 3600
+    os.utime(vieja, (vencida, vencida))
+
+    sweeper.sweep_once()
+
+    assert not vieja.exists()
+    assert fresca.exists()
+
+
 def test_retention_sweeper_prunes_old_finished_jobs_but_keeps_recent_and_running(tmp_path: Path) -> None:
     settings = make_settings(tmp_path, output_ttl_hours=1)
     StorageService(settings)

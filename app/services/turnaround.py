@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 
 # Por debajo de esto es tinta. El fondo de una hoja exportada nunca es 255 puro
 # en todos los pixeles: el antialias y el JPEG dejan grises muy claros que
@@ -68,6 +68,24 @@ class Box:
 
 class EmptySheetError(ValueError):
     """La hoja no tiene tinta: no hay nada que partir ni que medir."""
+
+
+class UnreadableSheetError(ValueError):
+    """El archivo no es una imagen que se pueda abrir.
+
+    Se traduce ACA y no en la capa HTTP: PIL tira `UnidentifiedImageError`,
+    `OSError` o `ValueError` segun con que se tropiece, y hacer que la ruta
+    conozca esos tres nombres la obliga a importar PIL para atraparlos.
+    """
+
+
+def open_sheet(sheet_path: Path) -> Image.Image:
+    """Abre la hoja en RGB, o dice que no se puede en vez de reventar en 500."""
+    try:
+        with Image.open(sheet_path) as hoja:
+            return hoja.convert("RGB")
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        raise UnreadableSheetError("El archivo no es una imagen legible.") from exc
 
 
 def ink_mask(image: Image.Image) -> np.ndarray:
@@ -137,7 +155,7 @@ def dominant_height_group(boxes: list[Box]) -> list[Box]:
     return sorted(mejor, key=lambda caja: caja.x0)
 
 
-def panel_boxes(image: Image.Image, *, min_gap: int = DEFAULT_MIN_GAP) -> list[Box]:
+def panel_boxes(image: Image.Image) -> list[Box]:
     """Todo bloque de dibujo separado por columnas blancas, de izquierda a derecha.
 
     Generico a proposito: descarta lo que no puede ser un dibujo —demasiado
@@ -151,7 +169,7 @@ def panel_boxes(image: Image.Image, *, min_gap: int = DEFAULT_MIN_GAP) -> list[B
 
     ancho_minimo = image.width * MIN_PANEL_WIDTH_RATIO
     cajas: list[Box] = []
-    for x0, x1 in column_runs(mascara.any(axis=0), min_gap):
+    for x0, x1 in column_runs(mascara.any(axis=0), DEFAULT_MIN_GAP):
         if (x1 - x0) < ancho_minimo:
             continue
         filas = np.where(mascara[:, x0:x1].any(axis=1))[0]
@@ -162,48 +180,11 @@ def panel_boxes(image: Image.Image, *, min_gap: int = DEFAULT_MIN_GAP) -> list[B
     return cajas
 
 
-def character_view_boxes(image: Image.Image, *, min_gap: int = DEFAULT_MIN_GAP) -> list[Box]:
+def character_view_boxes(image: Image.Image) -> list[Box]:
     """Solo las vistas del personaje: se cae la paleta, la leyenda y la nota.
 
     Las cuatro vistas de un turnaround miden lo mismo de alto porque son la
     misma figura girando. Cualquier otra cosa en la hoja mide distinto, y esa
     es toda la regla.
     """
-    return dominant_height_group(panel_boxes(image, min_gap=min_gap))
-
-
-
-
-def split_sheet(
-    sheet_path: Path,
-    out_dir: Path,
-    *,
-    min_gap: int = DEFAULT_MIN_GAP,
-) -> list[Path]:
-    """Escribe una imagen por vista, recortada al dibujo y sin rellenar.
-
-    Sin relleno a proposito: el que necesita un cuadrado —el generador de
-    mallas— lo arma despues, y el que necesita la proporcion real —la escena de
-    referencia— la necesita intacta.
-    """
-    hoja = Image.open(sheet_path).convert("RGB")
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    escritos: list[Path] = []
-    for indice, caja in enumerate(panel_boxes(hoja, min_gap=min_gap)):
-        destino = out_dir / f"view_{indice:02d}.png"
-        hoja.crop(caja.as_tuple()).save(destino)
-        escritos.append(destino)
-    return escritos
-
-
-def square_on_white(image: Image.Image, *, pad_ratio: float = 0.08) -> Image.Image:
-    """Centra la imagen en un cuadrado blanco.
-
-    Es lo que quiere un generador de mallas entrenado con renders centrados, y
-    lo que NO quiere una referencia de modelado: aca el margen es deseable.
-    """
-    lado = int(max(image.size) * (1.0 + pad_ratio * 2))
-    lienzo = Image.new("RGB", (lado, lado), (255, 255, 255))
-    lienzo.paste(image, ((lado - image.width) // 2, (lado - image.height) // 2))
-    return lienzo
+    return dominant_height_group(panel_boxes(image))

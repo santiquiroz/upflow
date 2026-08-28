@@ -52,26 +52,6 @@ def test_audit_mesh_calls_blender_audit_script_and_returns_result(
     assert calls == [("audit_mesh.py", {"mesh": str(mesh)})]
 
 
-def test_detect_views_names_every_panel_and_truncates_for_fewer_panels(
-    tmp_path: Path,
-) -> None:
-    four_panel_sheet = _write_sheet(tmp_path / "four-views.png", PANEL_BOXES)
-    four_views = model3d_service.detect_views(four_panel_sheet)
-
-    assert [view.name for view in four_views] == list(model3d_service.VIEW_ORDER)
-    assert [view.image for view in four_views] == [four_panel_sheet] * 4
-    assert [view.ink for view in four_views] == list(PANEL_BOXES)
-
-    three_boxes = PANEL_BOXES[:3]
-    three_panel_sheet = _write_sheet(tmp_path / "three-views.png", three_boxes)
-    three_views = model3d_service.detect_views(three_panel_sheet)
-
-    assert len(three_views) == len(three_boxes) < len(model3d_service.VIEW_ORDER)
-    assert [view.name for view in three_views] == ["front", "side", "back"]
-    assert [view.image for view in three_views] == [three_panel_sheet] * 3
-    assert [view.ink for view in three_views] == list(three_boxes)
-
-
 def test_split_views_writes_named_tight_crops_with_crop_coordinate_ink_boxes(
     tmp_path: Path,
 ) -> None:

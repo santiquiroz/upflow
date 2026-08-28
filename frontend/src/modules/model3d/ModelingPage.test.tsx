@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "../../i18n/LocaleProvider";
@@ -68,6 +68,30 @@ const AUDIT_OK: model3dService.MeshAudit = {
   ok: true,
 };
 
+const REFERENCE_SCENE: model3dService.ReferenceScene = {
+  token: "scene-token",
+  downloadUrl: "/api/v1/model3d/reference-scene/scene-token/download",
+  heightMeters: 1.7,
+  placed: [
+    {
+      view: "front",
+      image: "/tmp/front.png",
+      inkHeightMeters: 1.65,
+      planeHeightMeters: 1.7,
+      planeWidthMeters: 0.8,
+      scaledByInk: true,
+    },
+    {
+      view: "side",
+      image: "/tmp/side.png",
+      inkHeightMeters: 1.6,
+      planeHeightMeters: 1.7,
+      planeWidthMeters: 0.74,
+      scaledByInk: false,
+    },
+  ],
+};
+
 function renderPage() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -99,12 +123,7 @@ function selectMesh(name = "personaje.glb") {
 beforeEach(() => {
   vi.mocked(model3dService.fetchModel3dCapabilities).mockResolvedValue(CAPABILITIES);
   vi.mocked(model3dService.splitSheetViews).mockResolvedValue(SHEET_VIEWS);
-  vi.mocked(model3dService.buildReferenceScene).mockResolvedValue({
-    token: "scene-token",
-    downloadUrl: "/api/v1/model3d/reference-scene/scene-token/download",
-    heightMeters: 1.7,
-    placed: [],
-  });
+  vi.mocked(model3dService.buildReferenceScene).mockResolvedValue(REFERENCE_SCENE);
   vi.mocked(model3dService.auditMesh).mockResolvedValue(AUDIT_OK);
 });
 
@@ -116,6 +135,24 @@ afterEach(() => {
 });
 
 describe("ModelingPage", () => {
+  it("shows the capabilities loading state", () => {
+    vi.mocked(model3dService.fetchModel3dCapabilities).mockReturnValue(new Promise(() => {}));
+
+    renderPage();
+
+    expect(screen.getByRole("status")).toHaveTextContent(en["capability.tree.loading"]);
+  });
+
+  it("shows an error when capabilities cannot be loaded", async () => {
+    vi.mocked(model3dService.fetchModel3dCapabilities).mockRejectedValue(
+      new Error("capabilities unavailable"),
+    );
+
+    renderPage();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(en["capability.tree.loadFailed"]);
+  });
+
   it("reports missing Blender and keeps splitting disabled after a file is chosen", async () => {
     const missing = "Blender 4.2 or newer was not found.";
     vi.mocked(model3dService.fetchModel3dCapabilities).mockResolvedValue({
@@ -182,9 +219,38 @@ describe("ModelingPage", () => {
     await waitFor(() =>
       expect(model3dService.buildReferenceScene).toHaveBeenCalledWith("sheet-token", 1.7),
     );
+    const downloadLink = await screen.findByRole("link", { name: "Download the .blend (1.7 m)" });
+    expect(downloadLink).toHaveAttribute(
+      "href",
+      "/api/v1/model3d/reference-scene/scene-token/download",
+    );
+    const sceneResult = within(downloadLink.parentElement as HTMLElement);
+    expect(sceneResult.getByText("front")).toBeInTheDocument();
+    expect(sceneResult.getByText(`1.65 · 1.7 × 0.8 · ${en["common.yes"]}`)).toBeInTheDocument();
+    expect(sceneResult.getByText("side")).toBeInTheDocument();
+    expect(sceneResult.getByText(`1.6 · 1.7 × 0.74 · ${en["common.no"]}`)).toBeInTheDocument();
+  });
+
+  it("does not build a scene while the real height is invalid", async () => {
+    renderPage();
+    await screen.findByText("Blender 4.3.0 ready");
+    selectSheet();
+    fireEvent.click(screen.getByRole("button", { name: en["modeling.reference.split"] }));
+    const buildButton = await screen.findByRole("button", {
+      name: en["modeling.reference.build"],
+    });
+    const heightInput = screen.getByRole("spinbutton", {
+      name: en["modeling.reference.height"],
+    });
+
+    fireEvent.change(heightInput, { target: { value: "0" } });
+
+    expect(buildButton).toBeDisabled();
     expect(
-      await screen.findByRole("link", { name: "Download the .blend (1.7 m)" }),
-    ).toHaveAttribute("href", "/api/v1/model3d/reference-scene/scene-token/download");
+      screen.getByText(`${en["modeling.reference.height"]}: > 0`),
+    ).toBeInTheDocument();
+    fireEvent.click(buildButton);
+    expect(model3dService.buildReferenceScene).not.toHaveBeenCalled();
   });
 
   it("shows blockers, warnings, and the blocked audit verdict", async () => {

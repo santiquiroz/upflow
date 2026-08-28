@@ -127,6 +127,8 @@ function ReferenceLane({ enabled }: { enabled: boolean }) {
   const [scene, setScene] = useState<ReferenceScene | null>(null);
   const [isBusy, setIsBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const parsedHeightMeters = Number(heightMeters);
+  const heightIsValid = Number.isFinite(parsedHeightMeters) && parsedHeightMeters > 0;
 
   async function handleSplit() {
     if (!file) {
@@ -146,13 +148,13 @@ function ReferenceLane({ enabled }: { enabled: boolean }) {
   }
 
   async function handleBuild() {
-    if (!views) {
+    if (!views || !heightIsValid) {
       return;
     }
     setIsBusy(true);
     setError(null);
     try {
-      setScene(await buildReferenceScene(views.token, Number(heightMeters) || DEFAULT_HEIGHT_M));
+      setScene(await buildReferenceScene(views.token, parsedHeightMeters));
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
     } finally {
@@ -226,25 +228,43 @@ function ReferenceLane({ enabled }: { enabled: boolean }) {
             </label>
             <button
               type="button"
-              disabled={isBusy}
+              disabled={isBusy || !heightIsValid}
               onClick={handleBuild}
               className="rounded bg-accent px-4 py-2 text-sm font-semibold text-on-accent disabled:opacity-50"
             >
               {t("modeling.reference.build")}
             </button>
           </div>
+          {!heightIsValid && (
+            <p className="text-xs text-danger">
+              {t("modeling.reference.height")}: &gt; 0
+            </p>
+          )}
           <p className="text-xs text-text-faint">{t("modeling.reference.heightHint")}</p>
         </div>
       )}
 
       {scene && (
-        <a
-          href={`/api/v1${scene.downloadUrl.replace("/api/v1", "")}`}
-          className="flex w-fit items-center gap-2 rounded border border-ok bg-surface-2 px-4 py-2 text-sm font-semibold text-text"
-        >
-          <Download aria-hidden="true" className="h-4 w-4 text-ok" strokeWidth={1.75} />
-          {t("modeling.reference.download", { height: scene.heightMeters })}
-        </a>
+        <div className="flex flex-wrap items-start gap-4">
+          <a
+            href={scene.downloadUrl}
+            className="flex w-fit items-center gap-2 rounded border border-ok bg-surface-2 px-4 py-2 text-sm font-semibold text-text"
+          >
+            <Download aria-hidden="true" className="h-4 w-4 text-ok" strokeWidth={1.75} />
+            {t("modeling.reference.download", { height: scene.heightMeters })}
+          </a>
+          <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+            {scene.placed.map((vista) => (
+              <div key={vista.view} className="contents">
+                <dt className="text-text-dim">{vista.view}</dt>
+                <dd className="font-mono-tabular text-text">
+                  {vista.inkHeightMeters} · {vista.planeHeightMeters} × {vista.planeWidthMeters} ·{" "}
+                  {t(vista.scaledByInk ? "common.yes" : "common.no")}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </div>
       )}
 
       {error && <p className="text-sm text-danger">{error}</p>}
@@ -378,7 +398,17 @@ export function ModelingPage() {
         <p className="text-sm text-text-dim">{t("modeling.subtitle")}</p>
       </header>
 
-      {capabilities && <BlenderStatus capabilities={capabilities} />}
+      {capabilitiesQuery.isLoading ? (
+        <p role="status" className="text-sm text-text-dim">
+          {t("capability.tree.loading")}
+        </p>
+      ) : capabilitiesQuery.isError || !capabilities ? (
+        <p role="alert" className="text-sm text-danger">
+          {t("capability.tree.loadFailed")}
+        </p>
+      ) : (
+        <BlenderStatus capabilities={capabilities} />
+      )}
 
       <div role="tablist" className="flex gap-2 border-b border-border">
         {(["reference", "audit"] as const).map((id) => (

@@ -1059,6 +1059,8 @@ export const es = {
   "capability.print.cad": "De descripción a pieza con cotas exactas",
   "capability.print.generate": "De foto o texto a malla",
   "capability.print.generatePhoto": "De foto a malla",
+  "capability.print.meshAudit": "Auditar una malla",
+  "capability.print.modelReference": "Escena de referencia para modelar",
   "capability.print.estimateSize": "Tamaño real sugerido para una malla generada",
   "capability.setup.shapE": "Necesita el modelo Shap-E (MIT, ~1,3 GB). Corre en el procesador: unos dos minutos por pieza.",
   "capability.reason.noSlicerPack": "Necesita un laminador que viaje con la app, como viaja ffmpeg.",

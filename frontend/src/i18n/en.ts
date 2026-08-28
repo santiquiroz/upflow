@@ -1064,6 +1064,8 @@ export const en = {
   "capability.print.cad": "Description to a part with exact sizes",
   "capability.print.generate": "Photo or text to mesh",
   "capability.print.generatePhoto": "Photo to mesh",
+  "capability.print.meshAudit": "Audit a mesh",
+  "capability.print.modelReference": "Reference scene for modeling",
   "capability.print.estimateSize": "Suggested real size for a generated mesh",
   "capability.setup.shapE": "Needs the Shap-E model (MIT, ~1.3 GB). Runs on the processor: about two minutes per part.",
   "capability.reason.noSlicerPack": "Needs a slicer that ships with the app, the way ffmpeg does.",
