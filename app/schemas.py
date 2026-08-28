@@ -281,6 +281,13 @@ class ProportionsResponse(BaseModel):
     widths: list[WidthBandResponse]
 
 
+class RenameViewsRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    # De izquierda a derecha, un nombre por vista detectada.
+    names: list[str]
+
+
 class ReferenceSceneRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 

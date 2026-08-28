@@ -207,3 +207,40 @@ def test_las_proporciones_necesitan_las_dos_vistas(tmp_path):
 
     with pytest.raises(FileNotFoundError):
         model3d_service.measure_proportions(tmp_path)
+
+
+def test_renombrar_vistas_intercambia_sin_pisar_archivos(tmp_path):
+    # Intercambiar frente y espalda directamente pisaria un archivo con el otro,
+    # asi que el renombrado pasa por nombres temporales.
+    for nombre, ancho in (("front", 40), ("side", 20), ("back", 60)):
+        _figura(tmp_path, f"{nombre}.png", [ancho] * 6)
+    tamanos = {p.stem: p.stat().st_size for p in tmp_path.glob("*.png")}
+
+    model3d_service.rename_views(tmp_path, ["back", "side", "front"])
+
+    assert (tmp_path / "front.png").stat().st_size == tamanos["back"]
+    assert (tmp_path / "back.png").stat().st_size == tamanos["front"]
+    assert (tmp_path / "side.png").stat().st_size == tamanos["side"]
+
+
+def test_renombrar_rechaza_un_nombre_que_la_escena_no_sabe_colocar(tmp_path):
+    _figura(tmp_path, "front.png", [40] * 6)
+
+    with pytest.raises(model3d_service.UnknownViewNameError, match="front"):
+        model3d_service.rename_views(tmp_path, ["arriba"])
+
+
+def test_renombrar_rechaza_nombres_repetidos(tmp_path):
+    for nombre in ("front", "side"):
+        _figura(tmp_path, f"{nombre}.png", [40] * 6)
+
+    with pytest.raises(model3d_service.UnknownViewNameError, match="repetidos"):
+        model3d_service.rename_views(tmp_path, ["front", "front"])
+
+
+def test_renombrar_exige_un_nombre_por_vista(tmp_path):
+    for nombre in ("front", "side"):
+        _figura(tmp_path, f"{nombre}.png", [40] * 6)
+
+    with pytest.raises(model3d_service.UnknownViewNameError, match="2 vistas"):
+        model3d_service.rename_views(tmp_path, ["front"])

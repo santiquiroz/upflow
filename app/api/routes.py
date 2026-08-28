@@ -141,6 +141,7 @@ from app.schemas import (
     SheetViewResponse,
     SheetViewsResponse,
     ProportionsResponse,
+    RenameViewsRequest,
 )
 from app.services.asr_installer import AsrModelInstaller
 from app.services.audio_conversion import (
@@ -196,10 +197,12 @@ from app.services.model3d_service import (
     audit_mesh as model3d_audit_mesh,
     build_reference_scene as model3d_build_reference_scene,
     measure_proportions,
+    rename_views,
     sheet_warnings,
     split_views,
     views_from_dir,
 )
+from app.services.model3d_service import UnknownViewNameError
 from app.services.turnaround import EmptySheetError, UnreadableSheetError
 from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry, ModelStatus
 from app.services.pack_provisioner import (
@@ -3946,6 +3949,48 @@ async def split_sheet_views(
             for vista in vistas
         ],
         warnings=avisos,
+    )
+
+
+@router.post("/model3d/sheet/{token}/names", response_model=SheetViewsResponse)
+async def rename_sheet_views(
+    token: str,
+    payload: RenameViewsRequest,
+    request: Request,
+    settings_dep: Settings = Depends(get_settings),
+    current_user: AuthenticatedUser = Depends(get_current_user),
+) -> SheetViewsResponse:
+    """Corrige qué vista es cada recorte.
+
+    Nombrarlas por posición es una convención: si la hoja viene en otro orden,
+    la escena sale con el dibujo equivocado en cada plano y nada lo delata.
+    """
+    if not re.fullmatch(r"[0-9a-f]{32}", token):
+        raise HTTPException(status_code=404, detail="Vistas no encontradas")
+    _require_print_token_owner(request, token, current_user, "Vistas no encontradas")
+
+    views_dir = _model3d_views_dir(settings_dep, token)
+    if not views_dir.exists():
+        raise HTTPException(status_code=404, detail="Vistas no encontradas")
+    try:
+        await asyncio.to_thread(rename_views, views_dir, payload.names)
+        vistas = await asyncio.to_thread(views_from_dir, views_dir)
+    except UnknownViewNameError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return SheetViewsResponse(
+        token=token,
+        views=[
+            SheetViewResponse(
+                name=vista.name,
+                image=f"/api/v1/model3d/views/{token}/{vista.name}",
+                width_px=vista.ink.width,
+                height_px=vista.ink.height,
+                ink_box=vista.ink.as_tuple(),
+            )
+            for vista in vistas
+        ],
+        warnings=[],
     )
 
 

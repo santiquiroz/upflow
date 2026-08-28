@@ -190,3 +190,40 @@ def measure_proportions(views_dir: Path, *, height_meters: float = 1.70) -> dict
             for z in [i * 0.05 for i in range(int(height_meters / 0.05), -1, -1)]
         ],
     }
+
+
+class UnknownViewNameError(ValueError):
+    """Un nombre de vista que el carril no sabe colocar en la escena."""
+
+
+def rename_views(views_dir: Path, names: list[str]) -> list[str]:
+    """Reasigna que vista es cada recorte, de izquierda a derecha.
+
+    Nombrar por posicion es una CONVENCION, no una deduccion: mirando los
+    pixeles no hay forma de saber si el tercer panel es la espalda o un tres
+    cuartos. Cuando la hoja viene en otro orden, la escena sale con el dibujo
+    equivocado en cada plano y nada lo delata — por eso se puede corregir.
+    """
+    conocidos = set(VIEW_ORDER)
+    desconocidos = [n for n in names if n not in conocidos]
+    if desconocidos:
+        raise UnknownViewNameError(
+            f"nombres que el carril no sabe colocar: {', '.join(desconocidos)}. "
+            f"Validos: {', '.join(VIEW_ORDER)}."
+        )
+    if len(set(names)) != len(names):
+        raise UnknownViewNameError("hay nombres repetidos: cada vista va una sola vez")
+
+    actuales = [nombre for nombre in VIEW_ORDER if (views_dir / f"{nombre}.png").exists()]
+    if len(names) != len(actuales):
+        raise UnknownViewNameError(
+            f"la hoja tiene {len(actuales)} vistas y se pasaron {len(names)} nombres"
+        )
+
+    # Se pasa por nombres temporales: intercambiar frente y espalda directamente
+    # pisaria un archivo con el otro.
+    for indice, viejo in enumerate(actuales):
+        (views_dir / f"{viejo}.png").rename(views_dir / f"_{indice}.tmp")
+    for indice, nuevo in enumerate(names):
+        (views_dir / f"_{indice}.tmp").rename(views_dir / f"{nuevo}.png")
+    return names

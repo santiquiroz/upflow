@@ -853,7 +853,8 @@ async def upflow_sheet_views(file_path: str, expected_views: int = 4) -> str:
 
     Descarta sola la barra de altura y la paleta de color. Nombra las vistas
     por POSICIÓN (front, side, back, side_left): es una convención, no una
-    deducción — mirá el resultado y renombrá si la hoja va en otro orden.
+    deducción — mirá el resultado y corregí con upflow_rename_views si la
+    hoja viene en otro orden.
     Revisá `warnings`: si detectó menos vistas de las esperadas puede haber
     dos dibujadas superpuestas, y esas no se separan solas.
     El token alimenta upflow_reference_scene.
@@ -867,6 +868,30 @@ async def upflow_sheet_views(file_path: str, expected_views: int = 4) -> str:
             timeout=client.UPLOAD_TIMEOUT,
         )
         return _dump(payload)
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
+@mcp.tool(name="upflow_rename_views", annotations={"title": "Corregir qué vista es cada recorte", "readOnlyHint": False, "destructiveHint": False, "openWorldHint": False})
+async def upflow_rename_views(token: str, names: str) -> str:
+    """Reasigna qué vista es cada recorte, de izquierda a derecha.
+
+    names: separados por coma, uno por vista detectada. Válidos: front, side,
+    back, side_left.
+
+    Nombrarlas por posición es una convención, no una deducción: mirando los
+    píxeles no hay forma de saber si el tercer panel es la espalda o un tres
+    cuartos. Si la hoja viene en otro orden, la escena de referencia sale con
+    el dibujo equivocado en cada plano y NADA lo delata — por eso conviene
+    mirar las vistas antes de armarla.
+    """
+    try:
+        pedidos = [n.strip() for n in names.split(",") if n.strip()]
+        return _dump(
+            await client.api_post(
+                f"/api/v1/model3d/sheet/{token}/names", json_body={"names": pedidos}
+            )
+        )
     except Exception as exc:
         return format_tool_error(exc)
 
