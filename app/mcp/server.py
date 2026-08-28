@@ -871,6 +871,28 @@ async def upflow_sheet_views(file_path: str, expected_views: int = 4) -> str:
         return format_tool_error(exc)
 
 
+@mcp.tool(name="upflow_sheet_proportions", annotations={"title": "Proporciones del personaje", **READ_ONLY})
+async def upflow_sheet_proportions(token: str, height_meters: float = 1.70) -> str:
+    """Cuántas cabezas mide el personaje y cuánto de ancho tiene a cada altura.
+
+    token: el que devolvió upflow_sheet_views.
+    Es lo que un modelador mira antes de empezar. Cada altura viaja con lo que
+    opinan las DOS vistas: `agrees` en false significa que cada una la ubica en
+    otro lado y no hay que fiarse — medido sobre una hoja real, un personaje con
+    los brazos colgando no tiene cintura en su silueta, y forzar la medición
+    devuelve un número inventado con cara de dato.
+    """
+    try:
+        return _dump(
+            await client.api_get(
+                f"/api/v1/model3d/proportions/{token}",
+                params={"heightMeters": height_meters},
+            )
+        )
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
 @mcp.tool(name="upflow_reference_scene", annotations={"title": "Escena de referencia en Blender", "readOnlyHint": False, "destructiveHint": False, "openWorldHint": False})
 async def upflow_reference_scene(
     token: str,

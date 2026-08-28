@@ -140,6 +140,7 @@ from app.schemas import (
     ReferenceSceneResponse,
     SheetViewResponse,
     SheetViewsResponse,
+    ProportionsResponse,
 )
 from app.services.asr_installer import AsrModelInstaller
 from app.services.audio_conversion import (
@@ -194,6 +195,7 @@ from app.services.model3d_service import (
     VIEW_ORDER,
     audit_mesh as model3d_audit_mesh,
     build_reference_scene as model3d_build_reference_scene,
+    measure_proportions,
     sheet_warnings,
     split_views,
     views_from_dir,
@@ -3945,6 +3947,32 @@ async def split_sheet_views(
         ],
         warnings=avisos,
     )
+
+
+@router.get("/model3d/proportions/{token}", response_model=ProportionsResponse)
+async def measure_sheet_proportions(
+    token: str,
+    request: Request,
+    height_meters: float = Query(default=1.70, gt=0, alias="heightMeters"),
+    settings_dep: Settings = Depends(get_settings),
+    current_user: AuthenticatedUser = Depends(get_current_user),
+) -> ProportionsResponse:
+    """Cuantas cabezas mide y cuanto de ancho tiene a cada altura."""
+    if not re.fullmatch(r"[0-9a-f]{32}", token):
+        raise HTTPException(status_code=404, detail="Vistas no encontradas")
+    _require_print_token_owner(request, token, current_user, "Vistas no encontradas")
+
+    try:
+        medidas = await asyncio.to_thread(
+            measure_proportions,
+            _model3d_views_dir(settings_dep, token),
+            height_meters=height_meters,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ProportionsResponse(**medidas)
 
 
 @router.post("/model3d/reference-scene", response_model=ReferenceSceneResponse, status_code=201)

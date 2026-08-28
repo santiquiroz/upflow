@@ -167,3 +167,43 @@ def test_mas_vistas_que_nombres_avisa_en_vez_de_descartarlas_callado(tmp_path):
 
     assert len(avisos) == 1
     assert "6" in avisos[0] and "4" in avisos[0]
+
+
+def _figura(tmp_path, nombre, ancho_por_banda):
+    """Un monigote de bandas: cada banda es un rectangulo centrado."""
+    from PIL import Image, ImageDraw
+
+    alto = len(ancho_por_banda) * 10
+    imagen = Image.new("RGB", (200, alto), "white")
+    dibujo = ImageDraw.Draw(imagen)
+    for i, ancho in enumerate(ancho_por_banda):
+        y = i * 10
+        dibujo.rectangle([100 - ancho // 2, y, 100 + ancho // 2, y + 10], fill="black")
+    destino = tmp_path / nombre
+    imagen.save(destino)
+    return destino
+
+
+def test_las_proporciones_marcan_dudosa_la_altura_en_la_que_las_vistas_no_coinciden(tmp_path):
+    # Lo que las dos vistas ubican en el mismo lugar es una articulacion; lo que
+    # cada una ve en otro lado es ruido. Promediarlo en silencio daria un numero
+    # inventado con cara de medicion.
+    cuello_arriba = [60, 60, 20, 60, 60, 60, 90, 60, 60, 60]
+    cuello_igual_cadera_distinta = [60, 60, 20, 60, 60, 90, 60, 60, 60, 60]
+    _figura(tmp_path, "front.png", cuello_arriba)
+    _figura(tmp_path, "side.png", cuello_igual_cadera_distinta)
+
+    medidas = model3d_service.measure_proportions(tmp_path, height_meters=1.70)
+
+    por_nombre = {a["name"]: a for a in medidas["landmarks"]}
+    assert por_nombre["cuello"]["agrees"] is True
+    assert por_nombre["cadera"]["agrees"] is False
+    assert "cadera" in medidas["uncertain"]
+    assert por_nombre["cadera"]["disagreementCm"] > 0
+
+
+def test_las_proporciones_necesitan_las_dos_vistas(tmp_path):
+    _figura(tmp_path, "front.png", [60, 20, 60, 90])
+
+    with pytest.raises(FileNotFoundError):
+        model3d_service.measure_proportions(tmp_path)
