@@ -12,6 +12,7 @@ import { TranscribePage } from "./modules/transcribe/TranscribePage";
 import { EnhanceRoute } from "./pages/EnhanceRoute";
 import { LoginPage } from "./pages/LoginPage";
 import { ModelsPage } from "./pages/ModelsPage";
+import { ModelingPage } from "./modules/model3d/ModelingPage";
 import { PrintPage } from "./modules/print/PrintPage";
 import { VoicePage } from "./modules/voice/VoicePage";
 import { RealtimePage } from "./pages/RealtimePage";
@@ -96,6 +97,7 @@ export function App() {
           <Route path="/models" element={<ModelsPage />} />
           <Route path="/voice" element={<VoicePage />} />
           <Route path="/print" element={<PrintPage />} />
+          <Route path="/modelado" element={<ModelingPage />} />
           <Route path="/realtime" element={<RealtimePage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/users" element={<UsersPage />} />
