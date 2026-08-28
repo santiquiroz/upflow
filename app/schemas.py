@@ -235,6 +235,8 @@ class MeshAuditResponse(BaseModel):
 
 class SheetViewResponse(BaseModel):
     name: str
+    # URL resoluble, no un nombre de archivo suelto: antes era un puntero que
+    # no apuntaba a nada porque ninguna ruta servia los recortes.
     image: str
     width_px: int = Field(serialization_alias="widthPx")
     height_px: int = Field(serialization_alias="heightPx")
@@ -245,6 +247,38 @@ class SheetViewsResponse(BaseModel):
     token: str
     views: list[SheetViewResponse]
     warnings: list[str] = Field(default_factory=list)
+
+
+class LandmarkResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: str
+    z: float
+    front: float
+    side: float
+    # Lo que las dos vistas ubican en el mismo lugar es una articulacion; lo que
+    # cada una ve en otro lado es ruido, y se dice en vez de promediarse.
+    agrees: bool
+    disagreement_cm: float = Field(alias="disagreementCm")
+
+
+class WidthBandResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    z: float
+    front_cm: float = Field(alias="frontCm")
+    side_cm: float = Field(alias="sideCm")
+
+
+class ProportionsResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    height_meters: float = Field(alias="heightMeters")
+    head_meters: float = Field(alias="headMeters")
+    heads_tall: float = Field(alias="headsTall")
+    landmarks: list[LandmarkResponse]
+    uncertain: list[str]
+    widths: list[WidthBandResponse]
 
 
 class ReferenceSceneRequest(BaseModel):

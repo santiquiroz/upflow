@@ -18,7 +18,7 @@ from typing import Any
 from PIL import Image
 
 from app.config import Settings
-from app.services import blender_service
+from app.services import blender_service, silhouette
 from app.services.turnaround import Box, character_view_boxes, ink_bounds, open_sheet
 
 # Como se llama cada vista en la escena. El orden es el de una hoja de
@@ -150,3 +150,43 @@ def build_reference_scene(
             "output": str(output),
         },
     )
+
+
+def measure_proportions(views_dir: Path, *, height_meters: float = 1.70) -> dict[str, Any]:
+    """Las proporciones del personaje, leidas de las vistas ya partidas.
+
+    Es lo que un modelador mira antes de empezar: cuantas cabezas mide y cuanto
+    de ancho tiene a cada altura. Lo que las dos vistas NO ubican en el mismo
+    lugar se marca dudoso en vez de promediarse en silencio.
+    """
+    frente, lado = views_dir / "front.png", views_dir / "side.png"
+    if not frente.exists() or not lado.exists():
+        raise FileNotFoundError("hacen falta las vistas 'front' y 'side' para medir")
+
+    medidas = silhouette.medir(frente, lado, height_meters)
+    return {
+        "heightMeters": medidas.altura_m,
+        "headMeters": medidas.cabeza_m,
+        "headsTall": medidas.cabezas_de_alto,
+        "landmarks": [
+            {
+                "name": altura.nombre,
+                "z": altura.z,
+                "front": altura.frente,
+                "side": altura.lado,
+                "agrees": altura.acuerdo,
+                "disagreementCm": altura.desacuerdo_cm,
+            }
+            for altura in medidas.alturas
+        ],
+        "uncertain": list(medidas.dudosas),
+        "widths": [
+            {
+                "z": round(z, 3),
+                "frontCm": round(silhouette.ancho_en(medidas.bandas_frente, z) * 100, 1),
+                "sideCm": round(silhouette.ancho_en(medidas.bandas_lado, z) * 100, 1),
+            }
+            # Cada 5 cm: mas fino que eso es ruido de trazo y llena la pantalla.
+            for z in [i * 0.05 for i in range(int(height_meters / 0.05), -1, -1)]
+        ],
+    }

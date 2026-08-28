@@ -140,6 +140,7 @@ from app.schemas import (
     ReferenceSceneResponse,
     SheetViewResponse,
     SheetViewsResponse,
+    ProportionsResponse,
 )
 from app.services.asr_installer import AsrModelInstaller
 from app.services.audio_conversion import (
@@ -194,6 +195,7 @@ from app.services.model3d_service import (
     VIEW_ORDER,
     audit_mesh as model3d_audit_mesh,
     build_reference_scene as model3d_build_reference_scene,
+    measure_proportions,
     sheet_warnings,
     split_views,
     views_from_dir,
@@ -3936,7 +3938,7 @@ async def split_sheet_views(
         views=[
             SheetViewResponse(
                 name=vista.name,
-                image=vista.image.name,
+                image=f"/api/v1/model3d/views/{token}/{vista.name}",
                 width_px=vista.ink.width,
                 height_px=vista.ink.height,
                 ink_box=vista.ink.as_tuple(),
@@ -3945,6 +3947,32 @@ async def split_sheet_views(
         ],
         warnings=avisos,
     )
+
+
+@router.get("/model3d/proportions/{token}", response_model=ProportionsResponse)
+async def measure_sheet_proportions(
+    token: str,
+    request: Request,
+    height_meters: float = Query(default=1.70, gt=0, alias="heightMeters"),
+    settings_dep: Settings = Depends(get_settings),
+    current_user: AuthenticatedUser = Depends(get_current_user),
+) -> ProportionsResponse:
+    """Cuantas cabezas mide y cuanto de ancho tiene a cada altura."""
+    if not re.fullmatch(r"[0-9a-f]{32}", token):
+        raise HTTPException(status_code=404, detail="Vistas no encontradas")
+    _require_print_token_owner(request, token, current_user, "Vistas no encontradas")
+
+    try:
+        medidas = await asyncio.to_thread(
+            measure_proportions,
+            _model3d_views_dir(settings_dep, token),
+            height_meters=height_meters,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ProportionsResponse(**medidas)
 
 
 @router.post("/model3d/reference-scene", response_model=ReferenceSceneResponse, status_code=201)
@@ -3995,6 +4023,34 @@ async def build_model3d_reference_scene(
             for colocada in resultado["placed"]
         ],
     )
+
+
+@router.get("/model3d/views/{token}/{name}")
+async def download_sheet_view(
+    token: str,
+    name: str,
+    request: Request,
+    settings_dep: Settings = Depends(get_settings),
+    current_user: AuthenticatedUser = Depends(get_current_user),
+) -> FileResponse:
+    """Un recorte de la hoja partida.
+
+    Sin esto `SheetView.image` era un nombre de archivo que nadie podia
+    resolver: un puntero sin destino. Con esto la pantalla puede mostrar la
+    vista y no solo su nombre y sus pixeles.
+    """
+    if not re.fullmatch(r"[0-9a-f]{32}", token):
+        raise HTTPException(status_code=404, detail="Vista no encontrada")
+    # El nombre sale de VIEW_ORDER y no del cliente: cualquier otra cosa seria
+    # una ruta arbitraria dentro de la carpeta de salidas.
+    if name not in VIEW_ORDER:
+        raise HTTPException(status_code=404, detail="Vista no encontrada")
+    _require_print_token_owner(request, token, current_user, "Vista no encontrada")
+
+    archivo = _model3d_views_dir(settings_dep, token) / f"{name}.png"
+    if not archivo.exists():
+        raise HTTPException(status_code=404, detail="Vista no encontrada")
+    return FileResponse(path=archivo, filename=f"{name}.png", media_type="image/png")
 
 
 @router.get("/model3d/scene/{token}")

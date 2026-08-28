@@ -14,6 +14,7 @@ vi.mock("../../services/model3d", async (importOriginal) => {
     fetchModel3dCapabilities: vi.fn(),
     auditMesh: vi.fn(),
     splitSheetViews: vi.fn(),
+    fetchProportions: vi.fn(),
     buildReferenceScene: vi.fn(),
   };
 });
@@ -90,6 +91,35 @@ const REFERENCE_SCENE: model3dService.ReferenceScene = {
   ],
 };
 
+const PROPORTIONS: model3dService.ProportionsResponse = {
+  heightMeters: 1.7,
+  headMeters: 0.23,
+  headsTall: 7.4,
+  landmarks: [
+    {
+      name: "shoulders",
+      z: 1.38,
+      front: 1.4,
+      side: 1.36,
+      agrees: false,
+      disagreementCm: 4,
+    },
+    {
+      name: "hips",
+      z: 0.92,
+      front: 0.91,
+      side: 0.93,
+      agrees: true,
+      disagreementCm: 2,
+    },
+  ],
+  uncertain: ["shoulders"],
+  widths: [
+    { z: 1.2, frontCm: 42, sideCm: 24 },
+    { z: 1, frontCm: 38, sideCm: 27 },
+  ],
+};
+
 function renderPage() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -118,9 +148,17 @@ function selectMesh(name = "personaje.glb") {
   return file;
 }
 
+async function splitReferenceSheet() {
+  await screen.findByText("Blender 4.3.0 ready");
+  selectSheet();
+  fireEvent.click(screen.getByRole("button", { name: en["modeling.reference.split"] }));
+  await waitFor(() => expect(model3dService.fetchProportions).toHaveBeenCalledWith("sheet-token", 1.7));
+}
+
 beforeEach(() => {
   vi.mocked(model3dService.fetchModel3dCapabilities).mockResolvedValue(CAPABILITIES);
   vi.mocked(model3dService.splitSheetViews).mockResolvedValue(SHEET_VIEWS);
+  vi.mocked(model3dService.fetchProportions).mockResolvedValue(PROPORTIONS);
   vi.mocked(model3dService.buildReferenceScene).mockResolvedValue(REFERENCE_SCENE);
   vi.mocked(model3dService.auditMesh).mockResolvedValue(AUDIT_OK);
 });
@@ -128,6 +166,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.mocked(model3dService.fetchModel3dCapabilities).mockReset();
   vi.mocked(model3dService.splitSheetViews).mockReset();
+  vi.mocked(model3dService.fetchProportions).mockReset();
   vi.mocked(model3dService.buildReferenceScene).mockReset();
   vi.mocked(model3dService.auditMesh).mockReset();
 });
@@ -248,6 +287,43 @@ describe("ModelingPage", () => {
     ).toBeInTheDocument();
     fireEvent.click(buildButton);
     expect(model3dService.buildReferenceScene).not.toHaveBeenCalled();
+  });
+
+  it("marks a disagreeing landmark as unreliable and shows its delta", async () => {
+    renderPage();
+    await splitReferenceSheet();
+
+    const row = (await screen.findByText("shoulders")).closest("li");
+
+    expect(row).not.toBeNull();
+    expect(within(row as HTMLElement).getByText(en["modeling.proportions.unreliable"])).toBeInTheDocument();
+    expect(within(row as HTMLElement).getByText("Views differ by 4 cm")).toBeInTheDocument();
+  });
+
+  it("does not mark an agreeing landmark as unreliable", async () => {
+    renderPage();
+    await splitReferenceSheet();
+
+    const row = (await screen.findByText("hips")).closest("li");
+
+    expect(row).not.toBeNull();
+    expect(within(row as HTMLElement).queryByText(en["modeling.proportions.unreliable"])).not.toBeInTheDocument();
+  });
+
+  it("shows heads tall and refetches proportions at the lane height", async () => {
+    renderPage();
+    await splitReferenceSheet();
+    const heightInput = screen.getByRole("spinbutton", {
+      name: en["modeling.reference.height"],
+    });
+
+    fireEvent.change(heightInput, { target: { value: "1.82" } });
+
+    await waitFor(() =>
+      expect(model3dService.fetchProportions).toHaveBeenLastCalledWith("sheet-token", 1.82),
+    );
+    expect(screen.getByText(en["modeling.proportions.headsTall"])).toBeInTheDocument();
+    expect(screen.getByText("7.4 ×")).toBeInTheDocument();
   });
 
   it("shows blockers, warnings, and the blocked audit verdict", async () => {

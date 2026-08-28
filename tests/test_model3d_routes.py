@@ -9,6 +9,7 @@ from PIL import Image
 from app.api.routes import (
     build_model3d_reference_scene,
     download_reference_scene,
+    download_sheet_view,
     model3d_capabilities,
 )
 from app.config import Settings
@@ -193,6 +194,62 @@ async def test_bajar_una_escena_inexistente_es_404(tmp_path: Path):
             token="d" * 32,
             request=RequestConDuenoLocal(),
             settings_dep=make_settings(tmp_path),
+            current_user=UsuarioLocal(),
+        )
+
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_una_vista_con_nombre_inventado_es_404(tmp_path: Path):
+    # El nombre no puede venir del cliente: cualquier cosa fuera de VIEW_ORDER
+    # seria una ruta arbitraria adentro de la carpeta de salidas.
+    settings = make_settings(tmp_path)
+    token = "e" * 32
+    write_views(settings, token, ("front",))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await download_sheet_view(
+            token=token,
+            name="../../etc/passwd",
+            request=RequestConDuenoLocal(token),
+            settings_dep=settings,
+            current_user=UsuarioLocal(),
+        )
+
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_una_vista_existente_se_sirve_como_png(tmp_path: Path):
+    settings = make_settings(tmp_path)
+    token = "f" * 32
+    write_views(settings, token, ("front",))
+
+    respuesta = await download_sheet_view(
+        token=token,
+        name="front",
+        request=RequestConDuenoLocal(token),
+        settings_dep=settings,
+        current_user=UsuarioLocal(),
+    )
+
+    assert respuesta.media_type == "image/png"
+    assert Path(respuesta.path).exists()
+
+
+@pytest.mark.asyncio
+async def test_una_vista_que_no_se_partio_es_404(tmp_path: Path):
+    settings = make_settings(tmp_path)
+    token = "0" * 32
+    write_views(settings, token, ("front",))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await download_sheet_view(
+            token=token,
+            name="back",
+            request=RequestConDuenoLocal(token),
+            settings_dep=settings,
             current_user=UsuarioLocal(),
         )
 

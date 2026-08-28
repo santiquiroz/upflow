@@ -6,9 +6,11 @@ import {
   auditMesh,
   buildReferenceScene,
   fetchModel3dCapabilities,
+  fetchProportions,
   splitSheetViews,
   type MeshAudit,
   type Model3dCapabilities,
+  type ProportionsResponse,
   type ReferenceScene,
   type SheetViews,
 } from "../../services/model3d";
@@ -118,6 +120,83 @@ function Warnings({ items }: { items: string[] }) {
   );
 }
 
+function ProportionsPanel({ proportions }: { proportions: ProportionsResponse }) {
+  const { t } = useTranslation();
+
+  return (
+    <section
+      aria-label={t("modeling.proportions.title")}
+      className="flex flex-col gap-3 rounded border border-border bg-surface-2 p-3"
+    >
+      <h3 className="font-heading text-sm font-semibold text-text">
+        {t("modeling.proportions.title")}
+      </h3>
+
+      <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+        <dt className="text-text-dim">{t("modeling.proportions.headsTall")}</dt>
+        <dd className="font-mono-tabular text-text">{proportions.headsTall} ×</dd>
+        <dt className="text-text-dim">{t("modeling.proportions.headHeight")}</dt>
+        <dd className="font-mono-tabular text-text">{proportions.headMeters} m</dd>
+      </dl>
+
+      <div className="flex flex-col gap-2">
+        <h4 className="text-xs font-semibold uppercase tracking-wide text-text-dim">
+          {t("modeling.proportions.landmarks")}
+        </h4>
+        <ul className="flex flex-col gap-1">
+          {proportions.landmarks.map((landmark) => (
+            <li
+              key={`${landmark.name}-${landmark.z}`}
+              className={`grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-1 rounded border px-2 py-1.5 text-sm ${
+                landmark.agrees ? "border-border bg-surface" : "border-warn bg-surface"
+              }`}
+            >
+              <span className="min-w-0 text-text">{landmark.name}</span>
+              <span className="font-mono-tabular text-text">{landmark.z} m</span>
+              {!landmark.agrees && (
+                <span className="col-span-2 flex flex-wrap items-center gap-2 text-xs text-warn">
+                  <span className="rounded border border-warn px-1.5 py-0.5 font-semibold">
+                    {t("modeling.proportions.unreliable")}
+                  </span>
+                  {t("modeling.proportions.disagreement", {
+                    cm: landmark.disagreementCm,
+                  })}
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <h4 className="text-xs font-semibold uppercase tracking-wide text-text-dim">
+          {t("modeling.proportions.widths")}
+        </h4>
+        <div className="max-h-48 overflow-y-auto rounded border border-border bg-surface">
+          <table className="w-full border-collapse text-left text-xs">
+            <thead className="sticky top-0 bg-surface-2 text-text-dim">
+              <tr>
+                <th className="px-2 py-1 font-medium">{t("modeling.proportions.z")}</th>
+                <th className="px-2 py-1 font-medium">{t("modeling.proportions.front")}</th>
+                <th className="px-2 py-1 font-medium">{t("modeling.proportions.side")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {proportions.widths.map((width) => (
+                <tr key={width.z} className="border-t border-border">
+                  <td className="px-2 py-1 font-mono-tabular text-text">{width.z}</td>
+                  <td className="px-2 py-1 font-mono-tabular text-text">{width.frontCm}</td>
+                  <td className="px-2 py-1 font-mono-tabular text-text">{width.sideCm}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function ReferenceLane({ enabled }: { enabled: boolean }) {
   const { t } = useTranslation();
   const [file, setFile] = useState<File | null>(null);
@@ -129,6 +208,11 @@ function ReferenceLane({ enabled }: { enabled: boolean }) {
   const [error, setError] = useState<string | null>(null);
   const parsedHeightMeters = Number(heightMeters);
   const heightIsValid = Number.isFinite(parsedHeightMeters) && parsedHeightMeters > 0;
+  const proportionsQuery = useQuery({
+    queryKey: ["model3d-proportions", views?.token, parsedHeightMeters],
+    queryFn: () => fetchProportions(views!.token, parsedHeightMeters),
+    enabled: Boolean(views && heightIsValid),
+  });
 
   async function handleSplit() {
     if (!file) {
@@ -204,16 +288,27 @@ function ReferenceLane({ enabled }: { enabled: boolean }) {
       {views && (
         <div className="flex flex-col gap-3">
           <Warnings items={views.warnings} />
-          <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+          {/* La vista recortada, no solo su nombre: es la unica forma de ver
+              de un vistazo si la hoja se partio donde correspondia. */}
+          <ul className="flex flex-wrap gap-3">
             {views.views.map((vista) => (
-              <div key={vista.name} className="contents">
-                <dt className="text-text-dim">{vista.name}</dt>
-                <dd className="font-mono-tabular text-text">
+              <li
+                key={vista.name}
+                className="flex w-32 flex-col items-center gap-1 rounded border border-border bg-surface p-2"
+              >
+                <img
+                  src={vista.image}
+                  alt={vista.name}
+                  loading="lazy"
+                  className="h-32 w-full bg-white object-contain"
+                />
+                <span className="text-sm text-text">{vista.name}</span>
+                <span className="font-mono-tabular text-xs text-text-faint">
                   {vista.widthPx} × {vista.heightPx} px
-                </dd>
-              </div>
+                </span>
+              </li>
             ))}
-          </dl>
+          </ul>
           <div className="flex flex-wrap items-end gap-4">
             <label className="flex flex-col gap-1 text-sm text-text-dim">
               {t("modeling.reference.height")}
@@ -241,6 +336,14 @@ function ReferenceLane({ enabled }: { enabled: boolean }) {
             </p>
           )}
           <p className="text-xs text-text-faint">{t("modeling.reference.heightHint")}</p>
+          {proportionsQuery.data && <ProportionsPanel proportions={proportionsQuery.data} />}
+          {proportionsQuery.isError && (
+            <p className="text-sm text-danger">
+              {proportionsQuery.error instanceof Error
+                ? proportionsQuery.error.message
+                : String(proportionsQuery.error)}
+            </p>
+          )}
         </div>
       )}
 
