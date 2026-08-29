@@ -114,11 +114,15 @@ async def test_capabilities_lista_los_motores_y_dice_que_le_falta_a_cada_uno(
 
     respuesta = await model3d_capabilities(settings_dep=settings)
 
-    assert [motor.name for motor in respuesta.engines] == ["triposg"]
-    motor = respuesta.engines[0]
-    assert motor.ready is False
-    assert motor.license == "MIT"
-    assert motor.missing and "entorno" in motor.missing
+    # Se afirma sobre el REGISTRO y no sobre una lista escrita a mano: esa
+    # lista caduca en cuanto se agrega un motor, que es lo que pasó.
+    from app.services.mesh_engine_service import ENGINES
+
+    assert {motor.name for motor in respuesta.engines} == set(ENGINES)
+    for motor in respuesta.engines:
+        assert motor.ready is False, motor.name
+        assert motor.license == ENGINES[motor.name]["license"], motor.name
+        assert motor.missing and "entorno" in motor.missing, motor.name
 
 
 @pytest.mark.asyncio
