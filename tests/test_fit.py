@@ -283,3 +283,43 @@ def test_con_escala_real_es_el_comportamiento_por_defecto(tmp_path: Path) -> Non
 
     assert ajuste.escala_medible is True
     assert ajuste.culpa == "escala"
+
+
+def test_la_escala_gana_sobre_las_partes_cuando_las_dos_aplican() -> None:
+    """El ORDEN de precedencia, afirmado sobre el propio veredicto.
+
+    Es el test que faltaba: durante esta tanda alguien invirtió los dos `if`
+    de `culpa` y la suite entera siguió en verde, porque ningún caso tenía las
+    dos condiciones activas a la vez. Un error de escala se disfraza de las
+    otras dos causas, así que revisarlo último manda a modelar de nuevo algo
+    que sólo había que agrandar.
+    """
+    # Las dos condiciones ciertas a la vez: crece parejo (escala) Y gana mucho
+    # al correrse (partes). Construido a mano para no depender de un render.
+    ambas = fit.Ajuste(
+        vista="front",
+        anclado=0.40,
+        mejor=0.90,  # gana 0.50 moviéndose, muy por encima del umbral de partes
+        corrimiento_cm=(1.0, 1.0),
+        ancho=fit.Medida(modelo_cm=60.0, dibujo_cm=50.0),
+        alto=fit.Medida(modelo_cm=120.0, dibujo_cm=100.0),
+    )
+
+    assert ambas.gana_moviendo >= fit.SALTO_QUE_DELATA_PARTES
+    assert min(ambas.ancho.desvio, ambas.alto.desvio) >= fit.DESVIO_QUE_DELATA_ESCALA
+    assert ambas.culpa == "escala"
+
+
+def test_sin_escala_medible_esa_misma_medida_cae_a_partes() -> None:
+    """La precedencia sólo aplica cuando la escala se puede medir."""
+    sin_metros = fit.Ajuste(
+        vista="front",
+        anclado=0.40,
+        mejor=0.90,
+        corrimiento_cm=(1.0, 1.0),
+        ancho=fit.Medida(modelo_cm=60.0, dibujo_cm=50.0),
+        alto=fit.Medida(modelo_cm=120.0, dibujo_cm=100.0),
+        escala_medible=False,
+    )
+
+    assert sin_metros.culpa == "partes"

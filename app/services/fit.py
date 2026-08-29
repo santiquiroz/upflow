@@ -131,10 +131,10 @@ class Ajuste:
         """
         ancho, alto = self.ancho.crecimiento, self.alto.crecimiento
         mismo_lado = ancho * alto > 0
-        if self.gana_moviendo >= SALTO_QUE_DELATA_PARTES:
-            return "partes"
         if self.escala_medible and mismo_lado and min(abs(ancho), abs(alto)) >= DESVIO_QUE_DELATA_ESCALA:
             return "escala"
+        if self.gana_moviendo >= SALTO_QUE_DELATA_PARTES:
+            return "partes"
         return "forma"
 
 
