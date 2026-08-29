@@ -18,7 +18,7 @@ from typing import Any
 from PIL import Image
 
 from app.config import Settings
-from app.services import blender_service, fit, silhouette
+from app.services import blender_service, fit, mesh_engine_service, silhouette
 from app.services.turnaround import Box, character_view_boxes, ink_bounds, open_sheet
 
 # Como se llama cada vista en la escena. El orden es el de una hoja de
@@ -90,6 +90,36 @@ def remesh(
         settings,
         REMESH_SCRIPT,
         {"mesh": str(mesh_path), "output": str(output), "voxelMeters": voxel_meters},
+    )
+
+
+def generate_mesh(
+    settings: Settings,
+    engine: str,
+    image_path: Path,
+    output: Path,
+    *,
+    steps: int = 50,
+    guidance: float = 7.0,
+    face_limit: int = 0,
+) -> dict[str, Any]:
+    """Genera una malla desde una imagen con un motor generativo local.
+
+    Existe para que el banco tenga candidatas que no salgan de primitivas. Lo
+    que devuelve NO esta aprobado por haber salido: `audited` viaja en false a
+    proposito, y el paso siguiente es `score_fit`. Un generador puede devolver
+    una superficie preciosa con doscientas islas sueltas.
+    """
+    return mesh_engine_service.generate(
+        settings,
+        engine,
+        {
+            "image": str(image_path),
+            "output": str(output),
+            "steps": steps,
+            "guidance": guidance,
+            "faceLimit": face_limit,
+        },
     )
 
 

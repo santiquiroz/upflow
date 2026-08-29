@@ -141,6 +141,7 @@ from app.schemas import (
     SheetViewResponse,
     SheetViewsResponse,
     FitScoreResponse,
+    MeshEngineResponse,
     ProportionsResponse,
     RenameViewsRequest,
     RemeshResponse,
@@ -193,6 +194,7 @@ from app.services.blender_service import (
     BlenderError,
     probe as blender_probe,
 )
+from app.services.mesh_engine_service import available as mesh_engines_available
 from app.services.missing_pack import MissingPack, missing_pack_message
 from app.services.model3d_service import (
     VIEW_ORDER,
@@ -3882,8 +3884,12 @@ async def model3d_capabilities(
             version=build.version_string if build is not None else None,
             meets_minimum=usable,
         ),
-        unlocked=["audit", "referenceScene"] if usable else [],
+        unlocked=["audit", "referenceScene", "fit"] if usable else [],
         missing=None if usable else _blender_missing_message(build),
+        engines=[
+            MeshEngineResponse(name=nombre, **estado)
+            for nombre, estado in mesh_engines_available(settings_dep).items()
+        ],
     )
 
 

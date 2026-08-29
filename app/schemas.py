@@ -202,12 +202,28 @@ class BlenderBuildResponse(BaseModel):
     meets_minimum: bool = Field(default=False, serialization_alias="meetsMinimum")
 
 
+class MeshEngineResponse(BaseModel):
+    name: str
+    ready: bool
+    # La licencia viaja con el motor porque no son intercambiables: hay una MIT
+    # limpia y hay una que excluye territorios enteros, y eso cambia si el
+    # resultado se puede usar o no.
+    license: str
+    device: str
+    # Que falta EXACTAMENTE. "No disponible" manda a adivinar entre bajar
+    # varios GB de pesos y crear un entorno.
+    missing: str | None = None
+
+
 class Model3dCapabilitiesResponse(BaseModel):
     blender: BlenderBuildResponse
     # Que se puede hacer HOY en esta maquina. Vacio no es un error: es el carril
     # apagado, y la pantalla lo dice en vez de esconderlo.
     unlocked: list[str] = Field(default_factory=list)
     missing: str | None = None
+    # Ninguno se descarga solo: son varios GB con licencias distintas entre si,
+    # y elegir cual bajar es del usuario.
+    engines: list[MeshEngineResponse] = Field(default_factory=list)
 
 
 class MeshAuditResponse(BaseModel):
