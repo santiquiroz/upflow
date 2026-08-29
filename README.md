@@ -833,9 +833,37 @@ ROCm enumera PRIMERO la iGPU. Acá el dispositivo `0` es una `gfx1036` integrada
 volcado de pila que no menciona la palabra GPU. Se arregla fijando
 `HIP_VISIBLE_DEVICES=1`, y el carril de motores ya lo hace por motor.
 
-Consecuencia práctica: **Hunyuan3D 2.1 pasa a ser alcanzable en AMD/Windows** para
-generación de FORMA (`--no-texture`), que es lo que el banco mide. La textura sí
-necesita `custom_rasterizer` compilado para HIP y queda fuera por ahora.
+**Hunyuan3D 2.1 ya corre en AMD/Windows y está soportado**, para generación de FORMA.
+La textura no: necesita `custom_rasterizer` compilado para HIP y además viene
+reportando salidas corruptas en AMD. No es una pérdida para este carril, porque el
+banco mide SILUETA y una textura preciosa no mueve el número.
+
+Dos trampas más que costaron su rato, ambas ya resueltas por el servicio:
+
+- Sin `TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1`, de los tres backends de
+  `scaled_dot_product_attention` sólo sobrevive el matemático: flash y
+  memory-efficient revientan con `No available kernel. Aborting execution.` — un
+  mensaje que no nombra ni la atención ni la GPU, y que manda a buscar el problema
+  en los pesos. Con la variable puesta, los tres andan.
+- Bajar pesos falla con *"El cliente no dispone de un privilegio requerido"*: Windows
+  pide permiso de administrador para crear enlaces simbólicos y `huggingface_hub` los
+  usa por defecto. Se arregla con `HF_HUB_DISABLE_SYMLINKS=1`.
+
+**Lo que dijo el banco** sobre la misma gorra, con las siluetas igualadas por alto
+porque las mallas generadas no están en metros:
+
+| candidata | calce | caras | islas | sana |
+|---|---|---|---|---|
+| blockout ajustado por el banco | **0.657** | 36.368 | 1 | sí |
+| blockout original | 0.599 | 96.920 | 1 | sí |
+| TripoSG (perfil) | 0.441 | 421.330 | 23 | **no** |
+| Hunyuan3D en GPU | 0.427 | 854.582 | 1 | sí |
+| TripoSG (frente) | 0.368 | 5.876 | 4 | sí |
+
+El número más alto entre los generativos es de TripoSG, pero está sobre una malla con
+23 islas sueltas y aristas no-manifold, así que el banco no la corona: **Hunyuan3D es
+el único generativo que devolvió una malla usable**. Es exactamente para lo que existe
+separar "cuánto calza" de "si sirve".
 
 Para instalarlo: un venv aparte —sus dependencias fijan `numpy==1.22.3` y
 romperían el resto de la app— más el código y los pesos, bajo `~/3d-engines`

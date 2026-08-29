@@ -210,6 +210,9 @@ class MeshEngineResponse(BaseModel):
     # resultado se puede usar o no.
     license: str
     device: str
+    # True = la licencia limita dónde se puede usar el resultado (territorios
+    # excluidos, topes de usuarios). Se dice ANTES de generar, no después.
+    restricted: bool = False
     # Que falta EXACTAMENTE. "No disponible" manda a adivinar entre bajar
     # varios GB de pesos y crear un entorno.
     missing: str | None = None

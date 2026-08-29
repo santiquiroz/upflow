@@ -149,7 +149,7 @@ def test_available_describe_todos_los_motores_aunque_no_haya_nada_instalado(
 
     assert set(estado) == set(ENGINES)
     for nombre, ficha in ENGINES.items():
-        assert set(estado[nombre]) == {"ready", "license", "device", "missing"}
+        assert set(estado[nombre]) == {"ready", "license", "device", "restricted", "missing"}
         assert estado[nombre]["ready"] is False
         assert estado[nombre]["license"] == ficha["license"]
         assert estado[nombre]["device"] == ficha["device"]
@@ -329,10 +329,15 @@ def test_un_motor_desconocido_enumera_los_que_si_existen(tmp_path: Path) -> None
 
     settings = _S(RUNTIME_DIR=str(tmp_path), _env_file=None)
 
+    # Un nombre que NO puede estar en el registro, para que el test no caduque
+    # el dia que se agregue un motor con ese nombre —que es justo lo que paso.
+    inexistente = "motor-que-no-existe"
+    assert inexistente not in ENGINES
+
     with pytest.raises(MeshEngineError) as capturado:
-        build_for(settings, "hunyuan3d")
+        build_for(settings, inexistente)
 
     mensaje = str(capturado.value)
-    assert "hunyuan3d" in mensaje
+    assert inexistente in mensaje
     for conocido in ENGINES:
         assert conocido in mensaje

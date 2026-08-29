@@ -50,6 +50,23 @@ ENGINE_SCRIPTS_DIR = Path(__file__).resolve().parent / "engine_scripts"
 # entre 43,9 TFLOPS y un crash indescifrable.
 VARIABLE_GPU = "HIP_VISIBLE_DEVICES"
 
+# Lo que hay que ponerle al proceso para que ROCm sea usable de verdad. Medido
+# el 2026-08-29 en una Radeon RX 7800 XT (gfx1101) con ROCm 7.14:
+#
+#   - Sin `TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL`, de los tres backends de
+#     `scaled_dot_product_attention` solo sobrevive el matematico: flash y
+#     memory-efficient revientan con "No available kernel. Aborting execution.",
+#     un mensaje que no nombra ni la atencion ni la GPU y manda a buscar el
+#     problema en los pesos. Con la variable puesta, los tres andan.
+#   - `HF_HUB_DISABLE_SYMLINKS` porque bajar pesos sin el falla con
+#     "El cliente no dispone de un privilegio requerido": Windows pide permiso
+#     de administrador para crear enlaces simbolicos y huggingface_hub los usa
+#     por defecto.
+ENTORNO_ROCM = {
+    "TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL": "1",
+    "HF_HUB_DISABLE_SYMLINKS": "1",
+}
+
 # Que le hace falta a cada motor, ademas de su entorno. `source` es el repo del
 # motor, que trae el codigo del modelo y no viaja en este arbol.
 ENGINES = {
@@ -58,11 +75,25 @@ ENGINES = {
         "source": "TripoSG",
         "license": "MIT",
         "device": "cpu",
+        "restricted": False,
+    },
+    "hunyuan3d": {
+        "script": "hunyuan3d_generate.py",
+        "source": "Hunyuan3D",
+        # NO es una licencia libre. Permite uso comercial por debajo de 1 millon
+        # de usuarios activos mensuales pero EXCLUYE la Union Europea, el Reino
+        # Unido y Corea del Sur. Viaja con el motor porque decide si el
+        # resultado se puede usar, y eso no se descubre despues de generar.
+        "license": "tencent-hunyuan-community",
+        "device": "cuda",
+        "restricted": True,
     },
 }
 
 # El indice de GPU que usa cada motor, si usa alguna. Vacio = va por CPU.
-GPU_POR_MOTOR: dict[str, str] = {}
+# El "1" de hunyuan3d NO es un capricho: en un Ryzen con grafica integrada ROCm
+# enumera primero la iGPU, y el paquete de torch instalado es el de la discreta.
+GPU_POR_MOTOR: dict[str, str] = {"hunyuan3d": "1"}
 
 
 class MeshEngineError(RuntimeError):
@@ -147,6 +178,9 @@ def available(settings: Settings) -> dict[str, dict[str, Any]]:
             "ready": build.ready,
             "license": build.license,
             "device": ENGINES[nombre]["device"],
+            # True = la licencia limita donde se puede usar el resultado. Se
+            # dice ANTES de generar, no despues.
+            "restricted": bool(ENGINES[nombre].get("restricted")),
             "missing": build.missing,
         }
     return estado
@@ -194,6 +228,10 @@ def generate(
     gpu = GPU_POR_MOTOR.get(engine)
     if gpu:
         entorno[VARIABLE_GPU] = gpu
+        # Solo se pisa lo que el usuario no fijo: si alguien puso la variable a
+        # mano, sabe algo de su maquina que este codigo no.
+        for clave, valor in ENTORNO_ROCM.items():
+            entorno.setdefault(clave, valor)
 
     try:
         proceso = subprocess.run(
