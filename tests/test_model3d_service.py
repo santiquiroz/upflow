@@ -338,3 +338,58 @@ def test_una_candidata_que_falla_no_tumba_el_banco(
     assert tabla["failed"] == ["explota"]
     assert tabla["winner"] == "anda"
     assert "el motor no arranco" in tabla["ranked"][-1]["error"]
+
+
+def test_el_banco_mide_cada_candidata_en_SU_eje(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """El eje va por candidata porque cada motor entrega en su propio marco.
+
+    Un banco que impone una sola orientación a todas puntúa la ROTACIÓN de las
+    que no coinciden. Medido: la misma malla de TripoSG dio 0.033 con el eje
+    equivocado y 0.266 con el correcto, o sea que el eje decidía el ranking.
+    """
+    ejes: dict[str, str] = {}
+
+    def _espia(_settings, ruta, _views, _render, **kwargs):
+        ejes[ruta.stem] = kwargs["up_axis"]
+        return _medida(0.5)
+
+    monkeypatch.setattr(model3d_service, "score_fit", _espia)
+
+    model3d_service.compare_meshes(
+        None,
+        [
+            model3d_service.Candidata("blockout", tmp_path / "blockout.glb", "z_up"),
+            model3d_service.Candidata("generada", tmp_path / "generada.glb", "y_up"),
+        ],
+        tmp_path,
+        tmp_path,
+        height_meters=1.0,
+    )
+
+    assert ejes == {"blockout": "z_up", "generada": "y_up"}
+
+
+def test_el_banco_sigue_aceptando_un_diccionario_de_rutas(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """La forma vieja no se rompe: todas heredan el eje del banco."""
+    ejes: dict[str, str] = {}
+
+    def _espia(_settings, ruta, _views, _render, **kwargs):
+        ejes[ruta.stem] = kwargs["up_axis"]
+        return _medida(0.5)
+
+    monkeypatch.setattr(model3d_service, "score_fit", _espia)
+
+    model3d_service.compare_meshes(
+        None,
+        {"una": tmp_path / "una.glb", "otra": tmp_path / "otra.glb"},
+        tmp_path,
+        tmp_path,
+        height_meters=1.0,
+        up_axis="y_up",
+    )
+
+    assert ejes == {"una": "y_up", "otra": "y_up"}

@@ -227,9 +227,25 @@ def score_fit(
     }
 
 
+@dataclass(frozen=True, slots=True)
+class Candidata:
+    """Una malla a medir, con lo que hace falta saber para medirla bien.
+
+    El eje viaja POR CANDIDATA y no por banco: cada motor entrega en su propio
+    marco —el blockout de Blender es Z-arriba y TripoSG entrega Y-arriba—, y un
+    banco que impone una sola orientacion a todas puntua la rotacion de las que
+    no coinciden. Medido: la misma malla de TripoSG dio 0.033 con el eje
+    equivocado y 0.266 con el correcto, o sea que el eje decidia el ranking.
+    """
+
+    nombre: str
+    ruta: Path
+    up_axis: str = "z_up"
+
+
 def compare_meshes(
     settings: Settings,
-    meshes: dict[str, Path],
+    meshes: dict[str, Path] | list[Candidata],
     views_dir: Path,
     render_root: Path,
     *,
@@ -249,23 +265,38 @@ def compare_meshes(
     demas siguen. Un motor que no arranca es justamente lo que hay que ver en
     la tabla, no un stack trace que la deja vacia.
     """
+    candidatas = (
+        [Candidata(nombre, ruta, up_axis) for nombre, ruta in meshes.items()]
+        if isinstance(meshes, dict)
+        else list(meshes)
+    )
+
     resultados: list[dict[str, Any]] = []
-    for nombre, ruta in meshes.items():
+    for candidata in candidatas:
         try:
             medida = score_fit(
                 settings,
-                ruta,
+                candidata.ruta,
                 views_dir,
-                render_root / nombre,
+                render_root / candidata.nombre,
                 height_meters=height_meters,
                 scale_view=scale_view,
                 resolution=resolution,
-                up_axis=up_axis,
+                up_axis=candidata.up_axis,
             )
         except Exception as exc:  # noqa: BLE001 - el fallo de una candidata es un dato
-            resultados.append({"name": nombre, "mesh": str(ruta), "error": str(exc)})
+            resultados.append(
+                {"name": candidata.nombre, "mesh": str(candidata.ruta), "error": str(exc)}
+            )
             continue
-        resultados.append({"name": nombre, "mesh": str(ruta), **medida})
+        resultados.append(
+            {
+                "name": candidata.nombre,
+                "mesh": str(candidata.ruta),
+                "upAxis": candidata.up_axis,
+                **medida,
+            }
+        )
 
     medidas = [r for r in resultados if r.get("fit")]
     medidas.sort(key=lambda r: r["fit"]["average"], reverse=True)

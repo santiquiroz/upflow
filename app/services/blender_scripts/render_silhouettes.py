@@ -77,11 +77,19 @@ def enderezar(objeto: bpy.types.Object, orientacion: str) -> None:
     """
     if orientacion == "z_up":
         return
+    # El modo de rotacion se fija ANTES de asignar los angulos. El importador
+    # de glTF deja los objetos en QUATERNION, y con ese modo asignar
+    # `rotation_euler` NO HACE NADA: Blender lee el cuaternion. Medido el
+    # 2026-08-28 — `transform_apply` devolvia {'FINISHED'} sobre una rotacion
+    # de cero y la malla salia intacta, o sea el peor fallo posible: el que
+    # reporta exito.
+    objeto.rotation_mode = "XYZ"
     objeto.rotation_euler = ORIENTACIONES[orientacion]
     bpy.context.view_layer.objects.active = objeto
     bpy.ops.object.select_all(action="DESELECT")
     objeto.select_set(True)
     bpy.ops.object.transform_apply(rotation=True)
+    bpy.context.view_layer.update()
 
 
 def centro_de(objeto: bpy.types.Object) -> tuple[float, float, float]:

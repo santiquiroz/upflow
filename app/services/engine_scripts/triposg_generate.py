@@ -47,6 +47,14 @@ UMBRAL_BLANCO = 244
 # lo decide el servicio, y bajar 8 GB no debe ser efecto de apretar generar.
 REPO_DE_PESOS = "VAST-AI/TripoSG"
 
+# Profundidad del octree con que el decodificador saca la superficie. TripoSG
+# usa 9 por defecto contra GPU; en CPU cada nivel cuesta unas 8 veces mas
+# —es un octree, un nivel son 2^3 celdas mas— y con el decodificador lento
+# (el rapido es CUDA-only) el nivel 9 se va a mas de 20 minutos y 10 GB de RAM
+# en esta maquina. Se baja a 8 por defecto, que es lo que hace la diferencia
+# entre usable y no usable sin GPU. Quien tenga CUDA puede pedir 9.
+OCTREE_POR_DEFECTO = 8
+
 
 def emit(datos: dict) -> None:
     print(RESULT_SENTINEL + json.dumps(datos, ensure_ascii=False))
@@ -151,6 +159,7 @@ def main() -> None:
     pasos = int(datos.get("steps") or PASOS_POR_DEFECTO)
     guia = float(datos.get("guidance") or GUIA_POR_DEFECTO)
     caras_objetivo = int(datos.get("faceLimit") or 0)
+    octree = int(datos.get("octreeDepth") or OCTREE_POR_DEFECTO)
 
     if not imagen or not salida:
         fail("faltan 'image' y 'output'")
@@ -191,6 +200,7 @@ def main() -> None:
             generator=torch.Generator(device=dispositivo).manual_seed(semilla),
             num_inference_steps=pasos,
             guidance_scale=guia,
+            hierarchical_octree_depth=octree,
             # El decodificador rapido pasa por `diso`, que es CUDA-only.
             use_flash_decoder=False,
         )
@@ -220,6 +230,7 @@ def main() -> None:
         "steps": pasos,
         "guidance": guia,
         "seed": semilla,
+        "octreeDepth": octree,
         "device": dispositivo,
         # Lo que sale de aca NO esta aprobado por salir: pasa por el banco como
         # cualquier otra malla.
