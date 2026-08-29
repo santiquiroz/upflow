@@ -11,6 +11,7 @@ Las dos cosas se sirven con las mismas piezas.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -134,6 +135,27 @@ def _vista_mas_alta(vistas: list[DetectedView]) -> DetectedView:
     return max(vistas, key=lambda vista: vista.ink.height)
 
 
+def sheet_digest(vistas: list[DetectedView]) -> str:
+    """Huella de los dibujos contra los que se midio.
+
+    Viaja con el calce porque un puntaje solo tiene sentido contra una
+    referencia, y la referencia son archivos en disco que cualquiera puede
+    cambiar. Sin la huella, dos corridas que no coinciden mandan a buscar el
+    error en el modelo cuando lo que cambio fue el dibujo.
+
+    Es exactamente el fallo que costo una tarde el 2026-08-29: un proceso
+    concurrente sobrescribio `front.png` a mitad de un barrido de parametros,
+    las mallas seguian siendo byte a byte identicas (mismo md5) y sin embargo
+    la vista frontal caia de 0.54 a 0.06. Con la huella al lado del numero eso
+    se ve en un vistazo en vez de reconstruirse a mano.
+    """
+    resumen = hashlib.sha256()
+    for vista in sorted(vistas, key=lambda v: v.name):
+        resumen.update(vista.name.encode("utf-8"))
+        resumen.update(vista.image.read_bytes())
+    return resumen.hexdigest()[:16]
+
+
 def score_fit(
     settings: Settings,
     mesh_path: Path,
@@ -226,6 +248,9 @@ def score_fit(
             # Si es false, las medidas en cm son de las unidades propias de la
             # malla y el veredicto de escala no aplica.
             "metric": metric,
+            # Contra QUE se midio. Un puntaje sin su referencia no es
+            # reproducible: los dibujos son archivos que alguien puede cambiar.
+            "sheetDigest": sheet_digest(vistas),
             "average": calce.promedio,
             "worstView": calce.peor_vista,
             "views": [

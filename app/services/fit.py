@@ -131,10 +131,10 @@ class Ajuste:
         """
         ancho, alto = self.ancho.crecimiento, self.alto.crecimiento
         mismo_lado = ancho * alto > 0
-        if self.escala_medible and mismo_lado and min(abs(ancho), abs(alto)) >= DESVIO_QUE_DELATA_ESCALA:
-            return "escala"
         if self.gana_moviendo >= SALTO_QUE_DELATA_PARTES:
             return "partes"
+        if self.escala_medible and mismo_lado and min(abs(ancho), abs(alto)) >= DESVIO_QUE_DELATA_ESCALA:
+            return "escala"
         return "forma"
 
 
@@ -171,7 +171,7 @@ class Calce:
 
     @property
     def peor_vista(self) -> str:
-        return min(self.ajustes, key=lambda a: a.mejor).vista if self.ajustes else ""
+        return max(self.ajustes, key=lambda a: a.mejor).vista if self.ajustes else ""
 
     @property
     def culpas(self) -> dict[str, str]:

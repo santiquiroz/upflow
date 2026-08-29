@@ -311,6 +311,9 @@ class MeshFitResponse(BaseModel):
     # unidades propias): ahi las medidas en cm son de esas unidades y el
     # veredicto "escala" no aplica.
     metric: bool = True
+    # Huella de los dibujos usados. Dos corridas con el mismo digest son
+    # comparables; con distinto digest cambio la referencia, no el modelo.
+    sheet_digest: str = Field(default="", alias="sheetDigest")
     average: float
     worst_view: str = Field(alias="worstView")
     views: list[ViewFitResponse]

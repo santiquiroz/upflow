@@ -393,3 +393,35 @@ def test_el_banco_sigue_aceptando_un_diccionario_de_rutas(
     )
 
     assert ejes == {"una": "y_up", "otra": "y_up"}
+
+
+def test_la_huella_de_la_hoja_cambia_si_cambia_un_dibujo(tmp_path: Path) -> None:
+    """Un puntaje sin su referencia no es reproducible.
+
+    Costó una tarde el 2026-08-29: un proceso concurrente sobrescribió
+    front.png a mitad de un barrido, las mallas seguían siendo byte a byte
+    idénticas y la vista frontal caía de 0.54 a 0.06. La huella hace visible
+    en un vistazo que cambió el dibujo y no el modelo.
+    """
+    vistas_dir = tmp_path / "vistas"
+    vistas_dir.mkdir()
+    for nombre in ("front", "side"):
+        _write_sheet(vistas_dir / f"{nombre}.png", (Box(5, 5, 40, 60),))
+
+    antes = model3d_service.sheet_digest(model3d_service.views_from_dir(vistas_dir))
+    _write_sheet(vistas_dir / "front.png", (Box(5, 5, 30, 55),))
+    despues = model3d_service.sheet_digest(model3d_service.views_from_dir(vistas_dir))
+
+    assert antes != despues
+
+
+def test_la_huella_no_depende_del_orden_de_lectura(tmp_path: Path) -> None:
+    """Misma hoja, misma huella: si no, deja de servir para comparar corridas."""
+    vistas_dir = tmp_path / "vistas"
+    vistas_dir.mkdir()
+    for nombre in ("front", "side", "back"):
+        _write_sheet(vistas_dir / f"{nombre}.png", (Box(5, 5, 40, 60),))
+
+    vistas = model3d_service.views_from_dir(vistas_dir)
+
+    assert model3d_service.sheet_digest(vistas) == model3d_service.sheet_digest(vistas[::-1])
