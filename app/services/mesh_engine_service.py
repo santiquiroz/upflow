@@ -105,7 +105,11 @@ def _interpreter_name() -> tuple[str, str]:
 def build_for(settings: Settings, name: str) -> EngineBuild:
     """Donde estaria ese motor, exista o no."""
     if name not in ENGINES:
-        raise MeshEngineError(f"motor desconocido: {name}")
+        # Enumerar los conocidos, igual que hace el error de vista desconocida.
+        # "motor desconocido: X" a secas manda a adivinar el nombre, que es lo
+        # unico que el que llama —persona o agente— necesitaba saber.
+        conocidos = ", ".join(sorted(ENGINES))
+        raise MeshEngineError(f"motor desconocido: {name}. Los que hay: {conocidos}")
     ficha = ENGINES[name]
     raiz = settings.mesh_engines_dir
     carpeta, ejecutable = _interpreter_name()

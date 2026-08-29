@@ -317,3 +317,22 @@ def test_todos_los_motores_reportan_sin_rutas(
     for nombre, estado in available(settings).items():
         assert estado["missing"], nombre
         assert str(tmp_path) not in estado["missing"], nombre
+
+
+def test_un_motor_desconocido_enumera_los_que_si_existen(tmp_path: Path) -> None:
+    """"Motor desconocido: X" a secas manda a adivinar el nombre.
+
+    Es lo único que el que llama —persona o agente por MCP— necesitaba saber, y
+    el error análogo de vista desconocida en este mismo carril ya las enumera.
+    """
+    from app.config import Settings as _S
+
+    settings = _S(RUNTIME_DIR=str(tmp_path), _env_file=None)
+
+    with pytest.raises(MeshEngineError) as capturado:
+        build_for(settings, "hunyuan3d")
+
+    mensaje = str(capturado.value)
+    assert "hunyuan3d" in mensaje
+    for conocido in ENGINES:
+        assert conocido in mensaje
