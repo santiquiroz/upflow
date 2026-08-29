@@ -141,6 +141,7 @@ from app.schemas import (
     SheetViewResponse,
     SheetViewsResponse,
     FitScoreResponse,
+    GeneratedMeshResponse,
     MeshEngineResponse,
     ProportionsResponse,
     RenameViewsRequest,
@@ -194,13 +195,14 @@ from app.services.blender_service import (
     BlenderError,
     probe as blender_probe,
 )
-from app.services.mesh_engine_service import available as mesh_engines_available
+from app.services.mesh_engine_service import MeshEngineError, available as mesh_engines_available
 from app.services.missing_pack import MissingPack, missing_pack_message
 from app.services.model3d_service import (
     VIEW_ORDER,
     audit_mesh as model3d_audit_mesh,
     build_reference_scene as model3d_build_reference_scene,
     measure_proportions,
+    generate_mesh as model3d_generate_mesh,
     remesh as model3d_remesh,
     rename_views,
     score_fit as model3d_score_fit,
@@ -4079,6 +4081,69 @@ async def measure_sheet_proportions(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return ProportionsResponse(**medidas)
+
+
+@router.post("/model3d/generate", response_model=GeneratedMeshResponse, status_code=201)
+async def generate_mesh_route(
+    request: Request,
+    file: UploadFile = File(...),
+    engine: str = Form(default="triposg"),
+    steps: int = Form(default=50, ge=1, le=200),
+    guidance: float = Form(default=7.0, gt=0),
+    settings_dep: Settings = Depends(get_settings),
+    storage: StorageService = Depends(get_storage),
+    current_user: AuthenticatedUser = Depends(get_current_user),
+) -> GeneratedMeshResponse:
+    """Genera una malla desde una imagen con un motor generativo local.
+
+    Lo que sale de acá NO está aprobado por haber salido: `audited` viaja en
+    false y el paso siguiente es auditarla o medir su calce.
+    """
+    safe_name = sanitize_filename(Path(file.filename or "imagen.png").name, default="imagen.png")
+    subida = settings_dep.uploads_path / f"{uuid4().hex}-{safe_name}"
+    token = uuid4().hex
+    destino = settings_dep.outputs_path / f"{token}.generada.glb"
+    try:
+        await storage.save_upload(file, subida, max_mb=settings_dep.max_upload_mb)
+        resultado = await asyncio.to_thread(
+            model3d_generate_mesh,
+            settings_dep,
+            engine,
+            subida,
+            destino,
+            steps=steps,
+            guidance=guidance,
+        )
+    except MeshEngineError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        subida.unlink(missing_ok=True)
+
+    _register_print_token(request, token)
+    return GeneratedMeshResponse(
+        engine=resultado["engine"],
+        license=resultado["license"],
+        device=resultado.get("device", "cpu"),
+        download_url=f"/api/v1/model3d/generated/{token}",
+        vertices=resultado["vertices"],
+        faces=resultado["faces"],
+    )
+
+
+@router.get("/model3d/generated/{token}")
+async def download_generated_mesh(
+    token: str,
+    request: Request,
+    settings_dep: Settings = Depends(get_settings),
+    current_user: AuthenticatedUser = Depends(get_current_user),
+) -> FileResponse:
+    if not re.fullmatch(r"[0-9a-f]{32}", token):
+        raise HTTPException(status_code=404, detail="Malla no encontrada")
+    _require_print_token_owner(request, token, current_user, "Malla no encontrada")
+    archivo = settings_dep.outputs_path / f"{token}.generada.glb"
+    if not archivo.exists():
+        raise HTTPException(status_code=404, detail="Malla no encontrada")
+    return FileResponse(archivo, media_type="model/gltf-binary", filename="generada.glb")
 
 
 @router.post("/model3d/fit/{token}", response_model=FitScoreResponse)

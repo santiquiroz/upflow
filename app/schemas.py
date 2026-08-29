@@ -260,6 +260,22 @@ class RemeshResponse(BaseModel):
     after: MeshAuditResponse
 
 
+class GeneratedMeshResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    engine: str
+    # Viaja con el resultado porque los motores no son intercambiables: hay una
+    # MIT limpia y hay una que excluye territorios enteros.
+    license: str
+    device: str = "cpu"
+    download_url: str = Field(serialization_alias="downloadUrl")
+    vertices: int
+    faces: int
+    # Siempre false: lo que sale de un generador NO esta aprobado por haber
+    # salido. El paso siguiente es auditarla o medir su calce.
+    audited: bool = False
+
+
 class ViewFitResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 

@@ -885,6 +885,46 @@ async def upflow_remesh(
         return format_tool_error(exc)
 
 
+@mcp.tool(name="upflow_generate_mesh", annotations={"title": "Generar una malla desde una imagen", "readOnlyHint": False, "destructiveHint": False, "openWorldHint": False})
+async def upflow_generate_mesh(
+    file_path: str,
+    engine: str = "triposg",
+    destination_path: str = "",
+    steps: int = 50,
+    guidance: float = 7.0,
+) -> str:
+    """Genera una malla 3D desde UNA imagen con un motor generativo LOCAL.
+
+    Nada sale de esta máquina. Mirá `upflow_model3d_capabilities` primero: dice
+    qué motores hay, con qué licencia y qué le falta a cada uno; un motor
+    ausente no es un error, es la respuesta.
+
+    Lo que devuelve NO está aprobado por haber salido —`audited` viene en
+    false—. Un generador puede devolver una superficie preciosa con doscientas
+    islas sueltas. El paso siguiente es `upflow_score_fit` (cuánto calza con el
+    dibujo) o `upflow_audit_mesh` (si la malla sirve), y recién ahí se decide.
+
+    Sobre los motores, medido el 2026-08-28: el que es libre no corre en AMD y
+    el que corre en AMD no es libre. `triposg` es MIT y anda en CPU, que es por
+    lo que está primero — no por ser el mejor de la comparativa.
+    """
+    try:
+        name, content = client.read_upload(file_path)
+        payload = await client.api_post(
+            "/api/v1/model3d/generate",
+            data={"engine": engine, "steps": steps, "guidance": guidance},
+            files={"file": (name, content, "application/octet-stream")},
+            timeout=client.UPLOAD_TIMEOUT,
+        )
+        if destination_path and payload.get("downloadUrl"):
+            destino = client.resolve_output_path(destination_path, "generada.glb")
+            await client.api_download(payload["downloadUrl"], destino)
+            payload["outputPath"] = str(destino)
+        return _dump(payload)
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
 @mcp.tool(name="upflow_score_fit", annotations={"title": "Medir cuánto calza una malla con el dibujo", "readOnlyHint": False, "destructiveHint": False, "openWorldHint": False})
 async def upflow_score_fit(
     token: str,
