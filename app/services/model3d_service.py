@@ -141,6 +141,7 @@ def score_fit(
     scale_view: str | None = None,
     resolution: int = 512,
     up_axis: str = "z_up",
+    metric: bool = True,
 ) -> dict[str, Any]:
     """Cuanto se parece una malla al dibujo, y de que tipo es la diferencia.
 
@@ -154,6 +155,12 @@ def score_fit(
     tinta— es el error medido que hizo imposible calzar una gorra: de frente el
     punto mas bajo era la banda y de perfil la punta de la visera, asi que las
     dos vistas quedaban a escalas distintas y ningun modelo podia calzar ambas.
+
+    `metric=False` para mallas que NO estan en metros, que es lo que devuelve
+    cualquier generador: se igualan las siluetas por alto antes de comparar y el
+    veredicto de escala se apaga. Sin esto el banco castiga a un motor por una
+    unidad — medido, una malla generada quedaba cinco veces mas grande que el
+    dibujo y las tres vistas culpaban a la escala, que no existia.
 
     Devuelve la auditoria junto al calce: una malla puede calzar la silueta y
     ser igual inservible por estar rota, y separar las dos preguntas invita a
@@ -200,6 +207,7 @@ def score_fit(
         {vista.name: vista.image for vista in vistas},
         metros_por_pixel_modelo=render["metersPerPixel"],
         metros_por_pixel_dibujo=metros_por_pixel_dibujo,
+        con_escala_real=metric,
     )
     return {
         "audit": auditoria,
@@ -208,6 +216,9 @@ def score_fit(
             "scaleViewHeightMeters": height_meters,
             "metersPerPixelModel": render["metersPerPixel"],
             "metersPerPixelSheet": metros_por_pixel_dibujo,
+            # Si es false, las medidas en cm son de las unidades propias de la
+            # malla y el veredicto de escala no aplica.
+            "metric": metric,
             "average": calce.promedio,
             "worstView": calce.peor_vista,
             "views": [
@@ -241,6 +252,10 @@ class Candidata:
     nombre: str
     ruta: Path
     up_axis: str = "z_up"
+    # Las mallas generadas vienen en unidades propias, no en metros. Marcarlo
+    # por candidata es lo que hace justa la comparacion entre un blockout
+    # construido a escala real y la salida de un modelo generativo.
+    metric: bool = True
 
 
 def compare_meshes(
@@ -283,6 +298,7 @@ def compare_meshes(
                 scale_view=scale_view,
                 resolution=resolution,
                 up_axis=candidata.up_axis,
+                metric=candidata.metric,
             )
         except Exception as exc:  # noqa: BLE001 - el fallo de una candidata es un dato
             resultados.append(

@@ -17,6 +17,7 @@ vi.mock("../../services/model3d", async (importOriginal) => {
     renameViews: vi.fn(),
     fetchProportions: vi.fn(),
     buildReferenceScene: vi.fn(),
+    scoreFit: vi.fn(),
   };
 });
 
@@ -87,6 +88,50 @@ const AUDIT_OK: model3dService.MeshAudit = {
   blockers: [],
   warnings: [],
   ok: true,
+};
+
+const FIT_SCORE: model3dService.FitScore = {
+  audit: AUDIT_OK,
+  fit: {
+    scaleView: "front",
+    scaleViewHeightMeters: 1.7,
+    metersPerPixelModel: 0.002,
+    metersPerPixelSheet: 0.0015,
+    average: 0.81,
+    worstView: "back",
+    views: [
+      {
+        view: "front",
+        anchored: 0.84,
+        best: 0.87,
+        gainFromMoving: 0.03,
+        offsetCm: [1, 2],
+        blame: "escala",
+        widthCm: [48, 45],
+        heightCm: [170, 168],
+      },
+      {
+        view: "side",
+        anchored: 0.82,
+        best: 0.89,
+        gainFromMoving: 0.07,
+        offsetCm: [2, 4],
+        blame: "partes",
+        widthCm: [28, 27],
+        heightCm: [170, 169],
+      },
+      {
+        view: "back",
+        anchored: 0.77,
+        best: 0.78,
+        gainFromMoving: 0.01,
+        offsetCm: [0, 1],
+        blame: "forma",
+        widthCm: [47, 43],
+        heightCm: [170, 166],
+      },
+    ],
+  },
 };
 
 const REFERENCE_SCENE: model3dService.ReferenceScene = {
@@ -170,6 +215,13 @@ function selectMesh(name = "personaje.glb") {
   return file;
 }
 
+function selectFitMesh(name = "personaje.glb") {
+  const file = new File(["binario"], name, { type: "model/gltf-binary" });
+  const input = document.getElementById("modeling-fit-mesh-input") as HTMLInputElement;
+  fireEvent.change(input, { target: { files: [file] } });
+  return file;
+}
+
 async function splitReferenceSheet() {
   await screen.findByText("Blender 4.3.0 ready");
   selectSheet();
@@ -183,6 +235,7 @@ beforeEach(() => {
   vi.mocked(model3dService.renameViews).mockResolvedValue(RENAMED_SHEET_VIEWS);
   vi.mocked(model3dService.fetchProportions).mockResolvedValue(PROPORTIONS);
   vi.mocked(model3dService.buildReferenceScene).mockResolvedValue(REFERENCE_SCENE);
+  vi.mocked(model3dService.scoreFit).mockResolvedValue(FIT_SCORE);
   vi.mocked(model3dService.auditMesh).mockResolvedValue(AUDIT_OK);
 });
 
@@ -192,6 +245,7 @@ afterEach(() => {
   vi.mocked(model3dService.renameViews).mockReset();
   vi.mocked(model3dService.fetchProportions).mockReset();
   vi.mocked(model3dService.buildReferenceScene).mockReset();
+  vi.mocked(model3dService.scoreFit).mockReset();
   vi.mocked(model3dService.auditMesh).mockReset();
 });
 
@@ -413,6 +467,127 @@ describe("ModelingPage", () => {
     );
     expect(screen.getByText(en["modeling.proportions.headsTall"])).toBeInTheDocument();
     expect(screen.getByText("7.4 ×")).toBeInTheDocument();
+  });
+
+  it("no muestra el panel de calce antes de partir la hoja y lo muestra cuando hay vistas", async () => {
+    renderPage();
+    await screen.findByText("Blender 4.3.0 ready");
+
+    expect(
+      screen.queryByRole("region", { name: en["modeling.fit.title"] }),
+    ).not.toBeInTheDocument();
+    selectSheet();
+    fireEvent.click(screen.getByRole("button", { name: en["modeling.reference.split"] }));
+
+    expect(
+      await screen.findByRole("region", { name: en["modeling.fit.title"] }),
+    ).toBeInTheDocument();
+  });
+
+  it("elige por defecto como vista de escala la más alta según su inkBox", async () => {
+    vi.mocked(model3dService.splitSheetViews).mockResolvedValue({
+      ...SHEET_VIEWS,
+      views: [
+        {
+          ...SHEET_VIEWS.views[0],
+          inkBox: [0, 100, 640, 900],
+        },
+        {
+          ...SHEET_VIEWS.views[1],
+          inkBox: [0, 20, 512, 1120],
+        },
+      ],
+    });
+    renderPage();
+    await splitReferenceSheet();
+    const fitPanel = screen.getByRole("region", { name: en["modeling.fit.title"] });
+
+    expect(
+      within(fitPanel).getByRole("combobox", { name: en["modeling.fit.scaleView"] }),
+    ).toHaveValue("side");
+  });
+
+  it("mide el calce con el token, la malla, la altura numérica y la vista elegida", async () => {
+    renderPage();
+    await splitReferenceSheet();
+    const fitPanel = screen.getByRole("region", { name: en["modeling.fit.title"] });
+    const file = selectFitMesh();
+    fireEvent.change(
+      within(fitPanel).getByRole("spinbutton", { name: en["modeling.fit.height"] }),
+      { target: { value: "1.82" } },
+    );
+    fireEvent.change(
+      within(fitPanel).getByRole("combobox", { name: en["modeling.fit.scaleView"] }),
+      { target: { value: "side" } },
+    );
+
+    fireEvent.click(
+      within(fitPanel).getByRole("button", { name: en["modeling.fit.run"] }),
+    );
+
+    await waitFor(() =>
+      expect(model3dService.scoreFit).toHaveBeenCalledWith(
+        "sheet-token",
+        file,
+        1.82,
+        "side",
+      ),
+    );
+  });
+
+  it("traduce el veredicto de cada vista según la causa del descalce", async () => {
+    renderPage();
+    await splitReferenceSheet();
+    const fitPanel = screen.getByRole("region", { name: en["modeling.fit.title"] });
+    selectFitMesh();
+
+    fireEvent.click(
+      within(fitPanel).getByRole("button", { name: en["modeling.fit.run"] }),
+    );
+
+    expect(await screen.findByText(en["modeling.fit.blame.escala"])).toBeInTheDocument();
+    const frontRow = screen.getByRole("cell", { name: "front" }).closest("tr");
+    const sideRow = screen.getByRole("cell", { name: "side" }).closest("tr");
+    const backRow = screen.getByRole("cell", { name: "back" }).closest("tr");
+    expect(frontRow).not.toBeNull();
+    expect(sideRow).not.toBeNull();
+    expect(backRow).not.toBeNull();
+    expect(
+      within(frontRow as HTMLElement).getByText(en["modeling.fit.blame.escala"]),
+    ).toBeInTheDocument();
+    expect(
+      within(sideRow as HTMLElement).getByText(en["modeling.fit.blame.partes"]),
+    ).toBeInTheDocument();
+    expect(
+      within(backRow as HTMLElement).getByText(en["modeling.fit.blame.forma"]),
+    ).toBeInTheDocument();
+  });
+
+  it("muestra el error de medición sin romper el panel de calce", async () => {
+    vi.mocked(model3dService.scoreFit).mockRejectedValue(new Error("No se pudo medir el calce."));
+    renderPage();
+    await splitReferenceSheet();
+    const fitPanel = screen.getByRole("region", { name: en["modeling.fit.title"] });
+    selectFitMesh();
+
+    fireEvent.click(
+      within(fitPanel).getByRole("button", { name: en["modeling.fit.run"] }),
+    );
+
+    expect(await screen.findByText("No se pudo medir el calce.")).toBeInTheDocument();
+    expect(
+      screen.getByRole("region", { name: en["modeling.fit.title"] }),
+    ).toBeInTheDocument();
+  });
+
+  it("deshabilita el botón de medir mientras no haya una malla elegida", async () => {
+    renderPage();
+    await splitReferenceSheet();
+    const fitPanel = screen.getByRole("region", { name: en["modeling.fit.title"] });
+
+    expect(
+      within(fitPanel).getByRole("button", { name: en["modeling.fit.run"] }),
+    ).toBeDisabled();
   });
 
   it("shows blockers, warnings, and the blocked audit verdict", async () => {

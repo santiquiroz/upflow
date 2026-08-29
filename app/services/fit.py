@@ -23,6 +23,14 @@ Por eso cada vista viaja con su culpable:
   - `forma`: proporcion correcta y centrado correcto, y aun asi no calza. Recien
     aca hay que modelar.
 
+Cuando la malla NO esta en metros —lo que devuelve cualquier generador, que
+entrega en unidades propias— el veredicto de escala se APAGA y las siluetas se
+igualan por alto antes de comparar. Medir la escala de algo que no la tiene da
+un numero cierto sobre una pregunta que no aplica: medido el 2026-08-28, una
+malla generada quedaba cinco veces mas grande que el dibujo en la comparacion y
+las tres vistas culpaban a la "escala" cuando la escala no existia. Eso no
+degradaba un numero: castigaba a un motor por una unidad.
+
 Se revisa en ese orden porque un error de escala se disfraza de error de forma,
 y un reparto de partes tambien, pero nunca al reves.
 
@@ -97,6 +105,10 @@ class Ajuste:
     corrimiento_cm: tuple[float, float]
     ancho: Medida
     alto: Medida
+    # False cuando la malla no esta en metros —lo que devuelve cualquier
+    # generador—. Entonces las medidas en cm son de sus unidades propias y no
+    # significan nada contra el dibujo.
+    escala_medible: bool = True
 
     @property
     def gana_moviendo(self) -> float:
@@ -119,7 +131,7 @@ class Ajuste:
         """
         ancho, alto = self.ancho.crecimiento, self.alto.crecimiento
         mismo_lado = ancho * alto > 0
-        if mismo_lado and min(abs(ancho), abs(alto)) >= DESVIO_QUE_DELATA_ESCALA:
+        if self.escala_medible and mismo_lado and min(abs(ancho), abs(alto)) >= DESVIO_QUE_DELATA_ESCALA:
             return "escala"
         if self.gana_moviendo >= SALTO_QUE_DELATA_PARTES:
             return "partes"
@@ -293,20 +305,50 @@ def _preparar(mascara: np.ndarray, vista: str, que: str) -> np.ndarray:
     return recortar(mascara)
 
 
+def igualar_altura(modelo: np.ndarray, referencia: np.ndarray) -> np.ndarray:
+    """Lleva la silueta del modelo al alto de la del dibujo.
+
+    Es para mallas SIN escala real. Un generador entrega en unidades propias
+    —TripoSG devuelve algo del orden de 2 unidades para cualquier objeto—, asi
+    que compararlas contra centimetros mide que la malla no esta en metros y no
+    si la forma se parece. Medido el 2026-08-28: la misma malla generada quedaba
+    cinco veces mas grande que el dibujo en la comparacion, y las tres vistas
+    culpaban a la "escala" cuando la escala no existia.
+
+    Se iguala por ALTO y no por area ni por diagonal: el alto es la medida que
+    la hoja conoce de verdad (es la que fija la escala del dibujo), y usar el
+    area haria que un apendice que sobra encogiera todo lo demas.
+    """
+    alto_modelo = modelo.shape[0]
+    if not alto_modelo:
+        raise SiluetaVaciaError("la silueta del modelo no tiene alto")
+    return recortar(reescalar(modelo, referencia.shape[0] / alto_modelo))
+
+
 def comparar_vista(
     vista: str,
     silueta: Path,
     dibujo: Path,
     metros_por_pixel_modelo: float,
     metros_por_pixel_dibujo: float,
+    *,
+    con_escala_real: bool = True,
 ) -> Ajuste:
-    """Que tan bien calza una vista, con las dos siluetas a la misma escala."""
+    """Que tan bien calza una vista, con las dos siluetas a la misma escala.
+
+    `con_escala_real=False` es para mallas que NO estan en metros —lo que
+    devuelve cualquier generador—: se iguala el alto antes de comparar y el
+    veredicto de escala se apaga, porque medir la escala de algo que no la
+    tiene devuelve un numero cierto sobre una pregunta que no aplica.
+    """
     modelo = _preparar(mascara_de_silueta(silueta), vista, "la silueta")
     referencia = _preparar(mascara_de_dibujo(dibujo), vista, "el dibujo")
 
     # El dibujo se lleva a la escala del render. Las dos escalas son metricas y
     # conocidas, asi que el factor es exacto y no hay que estimar nada.
     referencia = reescalar(referencia, metros_por_pixel_dibujo / metros_por_pixel_modelo)
+    if not con_escala_real:
+        modelo = igualar_altura(modelo, referencia)
 
     diagonal = float(np.hypot(*referencia.shape))
     radio = max(1, round(diagonal * RADIO_BUSQUEDA))
@@ -335,6 +377,7 @@ def comparar_vista(
         corrimiento_cm=(round(dx * a_cm, 2), round(dy * a_cm, 2)),
         ancho=Medida(round(modelo.shape[1] * a_cm, 2), round(referencia.shape[1] * a_cm, 2)),
         alto=Medida(round(modelo.shape[0] * a_cm, 2), round(referencia.shape[0] * a_cm, 2)),
+        escala_medible=con_escala_real,
     )
 
 
@@ -343,6 +386,8 @@ def comparar(
     dibujos: dict[str, Path],
     metros_por_pixel_modelo: float,
     metros_por_pixel_dibujo: float,
+    *,
+    con_escala_real: bool = True,
 ) -> Calce:
     """Compara todas las vistas que tengan silueta Y dibujo.
 
@@ -351,7 +396,12 @@ def comparar(
     """
     ajustes = tuple(
         comparar_vista(
-            vista, siluetas[vista], dibujos[vista], metros_por_pixel_modelo, metros_por_pixel_dibujo
+            vista,
+            siluetas[vista],
+            dibujos[vista],
+            metros_por_pixel_modelo,
+            metros_por_pixel_dibujo,
+            con_escala_real=con_escala_real,
         )
         for vista in sorted(siluetas)
         if vista in dibujos

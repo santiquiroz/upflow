@@ -228,3 +228,58 @@ def test_las_culpas_se_reportan_por_vista(tmp_path: Path) -> None:
     )
 
     assert calce.culpas == {"front": "escala"}
+
+
+def test_una_malla_sin_escala_real_se_iguala_por_alto(tmp_path: Path) -> None:
+    """Un generador entrega en unidades propias, no en metros.
+
+    Compararlas contra centímetros mide que la malla no está en metros y no si
+    la forma se parece. Medido: la misma malla generada quedaba cinco veces más
+    grande que el dibujo y las tres vistas culpaban a la escala, que no existía.
+    """
+    def _ovalo_gigante(draw, color):
+        draw.ellipse((20, 40, 380, 330), fill=color)
+
+    con_escala = fit.comparar_vista(
+        "front",
+        _silueta(tmp_path / "s.png", _ovalo_gigante),
+        _dibujo(tmp_path / "d.png", _ovalo),
+        UN_MILIMETRO,
+        UN_MILIMETRO,
+    )
+    sin_escala = fit.comparar_vista(
+        "front",
+        _silueta(tmp_path / "s2.png", _ovalo_gigante),
+        _dibujo(tmp_path / "d2.png", _ovalo),
+        UN_MILIMETRO,
+        UN_MILIMETRO,
+        con_escala_real=False,
+    )
+
+    assert con_escala.culpa == "escala"
+    assert sin_escala.culpa != "escala"
+    # Igualar el alto tiene que RECUPERAR parecido, no sólo cambiar la etiqueta.
+    assert sin_escala.mejor > con_escala.mejor
+
+
+def test_sin_escala_real_el_veredicto_de_escala_queda_apagado(tmp_path: Path) -> None:
+    """Aunque las medidas sigan difiriendo, la pregunta no aplica."""
+    ajuste = fit.comparar_vista(
+        "front",
+        _silueta(tmp_path / "s.png", _ovalo_grande),
+        _dibujo(tmp_path / "d.png", _ovalo),
+        UN_MILIMETRO,
+        UN_MILIMETRO,
+        con_escala_real=False,
+    )
+
+    assert ajuste.escala_medible is False
+    assert ajuste.culpa in {"partes", "forma"}
+
+
+def test_con_escala_real_es_el_comportamiento_por_defecto(tmp_path: Path) -> None:
+    """Una malla construida a escala real NO debe normalizarse en silencio."""
+    ajuste = _comparar(tmp_path, _ovalo_grande, _ovalo)
+
+    assert ajuste.escala_medible is True
+    assert ajuste.culpa == "escala"

@@ -307,6 +307,10 @@ class MeshFitResponse(BaseModel):
     scale_view_height_meters: float = Field(alias="scaleViewHeightMeters")
     meters_per_pixel_model: float = Field(alias="metersPerPixelModel")
     meters_per_pixel_sheet: float = Field(alias="metersPerPixelSheet")
+    # False cuando la malla no esta en metros (cualquier generador entrega en
+    # unidades propias): ahi las medidas en cm son de esas unidades y el
+    # veredicto "escala" no aplica.
+    metric: bool = True
     average: float
     worst_view: str = Field(alias="worstView")
     views: list[ViewFitResponse]
