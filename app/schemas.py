@@ -255,8 +255,10 @@ class ViewFitResponse(BaseModel):
     best: float
     gain_from_moving: float = Field(alias="gainFromMoving")
     offset_cm: tuple[float, float] = Field(alias="offsetCm")
-    # "escala" | "ubicacion" | "forma": donde esta el problema, para no afinar
-    # lo que no falla.
+    # "escala" | "partes" | "forma": donde esta el problema, para no afinar lo
+    # que no falla. "partes" NO quiere decir mover la malla entera: una
+    # traslacion global no cambia el numero porque la comparacion centra las
+    # dos siluetas.
     blame: str
     # (modelo, dibujo) en cm, para que el numero se pueda discutir.
     width_cm: tuple[float, float] = Field(alias="widthCm")

@@ -81,7 +81,7 @@ def test_un_modelo_uniformemente_mas_grande_culpa_a_la_escala(tmp_path: Path) ->
     assert ajuste.alto.crecimiento > 0
 
 
-def test_una_sola_dimension_pasada_no_es_escala_sino_ubicacion(tmp_path: Path) -> None:
+def test_una_sola_dimension_pasada_no_es_escala_sino_reparto_de_partes(tmp_path: Path) -> None:
     """Un apendice ensancha la caja sin ser un problema de escala.
 
     Es el caso que hizo cambiar la regla: mandar a reescalar por esto achica
@@ -91,8 +91,34 @@ def test_una_sola_dimension_pasada_no_es_escala_sino_ubicacion(tmp_path: Path) -
 
     assert ajuste.ancho.crecimiento >= fit.DESVIO_QUE_DELATA_ESCALA
     assert ajuste.alto.crecimiento == 0.0
-    assert ajuste.culpa == "ubicacion"
+    assert ajuste.culpa == "partes"
     assert ajuste.mejor > ajuste.anclado
+
+
+def test_una_traslacion_global_no_cambia_el_calce(tmp_path: Path) -> None:
+    """Fija el hallazgo que evito shipear un consejo falso.
+
+    La comparacion centra las dos siluetas por su caja de tinta, asi que mover
+    el objeto entero ya esta normalizado antes de calcular nada. Se habia
+    agregado una "correccion vertical" que decia cuanto mover la malla; al
+    probarla contra la gorra el puntaje dio identico hasta el cuarto decimal.
+    Si este test empieza a fallar, alguien rompio el centrado —o volvio a creer
+    que mover sirve.
+    """
+    def _ovalo_corrido(draw, color):
+        draw.ellipse((140, 60, 340, 220), fill=color)
+
+    quieto = _comparar(tmp_path, _ovalo, _ovalo)
+    corrido = fit.comparar_vista(
+        "front",
+        _silueta(tmp_path / "s2.png", _ovalo_corrido),
+        _dibujo(tmp_path / "d2.png", _ovalo),
+        UN_MILIMETRO,
+        UN_MILIMETRO,
+    )
+
+    assert corrido.anclado == quieto.anclado
+    assert corrido.mejor == quieto.mejor
 
 
 def test_el_mejor_calce_nunca_es_peor_que_el_anclado(tmp_path: Path) -> None:

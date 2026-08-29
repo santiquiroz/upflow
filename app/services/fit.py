@@ -14,13 +14,17 @@ Por eso cada vista viaja con su culpable:
   - `escala`: las cajas de tinta no tienen la misma proporcion. Ninguna cantidad
     de modelado arregla esto; hay que reescalar. Se detecta comparando ancho y
     alto reales, no el IoU.
-  - `ubicacion`: la forma calza pero corrida. Se detecta porque dejar correr la
-    silueta sube el IoU de golpe.
+  - `partes`: el contorno general esta bien pero las partes no caen en el mismo
+    lugar adentro de el. Se detecta porque dejar correr la silueta sube el IoU
+    de golpe. NO significa mover la malla en la escena: la comparacion centra
+    las dos siluetas, asi que una traslacion global ya esta normalizada y
+    mover no cambia el numero (probado, ver `Calce`). Significa mover una
+    PARTE —la visera, un brazo— respecto del resto.
   - `forma`: proporcion correcta y centrado correcto, y aun asi no calza. Recien
     aca hay que modelar.
 
 Se revisa en ese orden porque un error de escala se disfraza de error de forma,
-y un error de ubicacion tambien, pero nunca al reves.
+y un reparto de partes tambien, pero nunca al reves.
 
 Las tolerancias son PORCENTAJES del tamano, nunca valores fijos en cm: la misma
 tolerancia absoluta que es razonable en una figura de 1,70 m es media figura en
@@ -45,10 +49,10 @@ RADIO_BUSQUEDA = 0.10
 # borde dentado en vez de la forma.
 MINIMO_PIXELES_TINTA = 64
 
-# Cuanto tiene que subir el IoU al permitir el corrimiento para llamarlo
-# problema de ubicacion y no de forma. Cinco puntos es mucho mas que el ruido de
-# rasterizado medido entre dos renders del mismo objeto.
-SALTO_QUE_DELATA_UBICACION = 0.05
+# Cuanto tiene que subir el IoU al permitir el corrimiento para culpar al
+# reparto de las partes y no a la forma. Cinco puntos es mucho mas que el ruido
+# de rasterizado medido entre dos renders del mismo objeto.
+SALTO_QUE_DELATA_PARTES = 0.05
 
 # Cuanto puede diferir una medida del modelo de la del dibujo antes de que el
 # problema sea la escala. 8% sobre una figura de 1,70 m son 14 cm: visible a
@@ -103,8 +107,8 @@ class Ajuste:
         """Donde esta el problema, para no afinar lo que no falla.
 
         El orden importa: un error de escala se disfraza de error de forma, y
-        uno de ubicacion tambien. Revisarlos al reves manda a modelar de nuevo
-        algo que solo habia que agrandar.
+        un reparto de partes tambien. Revisarlos al reves manda a modelar de
+        nuevo algo que solo habia que agrandar.
 
         Para llamarlo escala tienen que irse las DOS medidas para el MISMO lado.
         Una sola dimension pasada de largo no es escala sino geometria que
@@ -117,14 +121,32 @@ class Ajuste:
         mismo_lado = ancho * alto > 0
         if mismo_lado and min(abs(ancho), abs(alto)) >= DESVIO_QUE_DELATA_ESCALA:
             return "escala"
-        if self.gana_moviendo >= SALTO_QUE_DELATA_UBICACION:
-            return "ubicacion"
+        if self.gana_moviendo >= SALTO_QUE_DELATA_PARTES:
+            return "partes"
         return "forma"
 
 
 @dataclass(frozen=True, slots=True)
 class Calce:
-    """El resultado de comparar una malla contra las vistas de una hoja."""
+    """El resultado de comparar una malla contra las vistas de una hoja.
+
+    NO SE OFRECE UNA "CORRECCION VERTICAL", y conviene dejar escrito por que
+    para que nadie la vuelva a agregar. La idea era tentadora: las tres vistas
+    de la gorra pedian corrimiento vertical para el mismo lado (back 2.34 cm,
+    front 1.60, side 1.23), el eje vertical es el mismo en todas, asi que
+    parecia un solo desalineado con un solo arreglo —promediar y mover 1,72 cm.
+
+    Se probo el 2026-08-28: se movio la malla 1,72 cm en Z, se volvio a medir, y
+    los tres numeros dieron IDENTICOS hasta el cuarto decimal (0.5989 antes y
+    despues). Tiene que ser asi: la comparacion centra las dos siluetas por su
+    caja de tinta, o sea que cualquier traslacion global ya esta normalizada
+    antes de calcular nada. El consejo habria mandado a mover una malla para no
+    cambiar absolutamente nada.
+
+    Lo que ese corrimiento comun SI indica es que la malla reparte su masa a lo
+    alto distinto que el dibujo —aca porque mide 33,0 cm contra 36,5-37,9
+    dibujados—, y eso ya viaja medido en `Ajuste.alto`.
+    """
 
     ajustes: tuple[Ajuste, ...]
     metros_por_pixel: float

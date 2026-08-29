@@ -266,3 +266,75 @@ def test_remesh_manda_el_voxel_y_devuelve_las_dos_auditorias(tmp_path, monkeypat
     assert recibido["script"] == "remesh.py"
     assert recibido["payload"]["voxelMeters"] == 0.03
     assert salida["before"]["faces"] > salida["after"]["faces"]
+
+
+def _medida(promedio: float, *, ok: bool = True) -> dict[str, object]:
+    return {"audit": {"ok": ok}, "fit": {"average": promedio, "views": []}}
+
+
+def test_el_banco_ordena_por_calce(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    puntajes = {"floja": 0.30, "buena": 0.80, "media": 0.55}
+    monkeypatch.setattr(
+        model3d_service,
+        "score_fit",
+        lambda _s, ruta, *a, **k: _medida(puntajes[ruta.stem]),
+    )
+
+    tabla = model3d_service.compare_meshes(
+        None,
+        {nombre: tmp_path / f"{nombre}.glb" for nombre in puntajes},
+        tmp_path,
+        tmp_path,
+        height_meters=1.0,
+    )
+
+    assert [r["name"] for r in tabla["ranked"]] == ["buena", "media", "floja"]
+    assert tabla["winner"] == "buena"
+
+
+def test_el_banco_no_corona_una_malla_rota_aunque_calce_mejor(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Premiar una silueta linda sobre una malla rota es el falso positivo
+    que este banco existe para no cometer."""
+    resultados = {"rota": _medida(0.90, ok=False), "sana": _medida(0.60)}
+    monkeypatch.setattr(
+        model3d_service, "score_fit", lambda _s, ruta, *a, **k: resultados[ruta.stem]
+    )
+
+    tabla = model3d_service.compare_meshes(
+        None,
+        {nombre: tmp_path / f"{nombre}.glb" for nombre in resultados},
+        tmp_path,
+        tmp_path,
+        height_meters=1.0,
+    )
+
+    assert [r["name"] for r in tabla["ranked"]] == ["rota", "sana"]
+    assert tabla["winner"] == "sana"
+
+
+def test_una_candidata_que_falla_no_tumba_el_banco(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Un motor que no arranca es lo que hay que VER en la tabla, no un stack
+    trace que la deja vacia."""
+    def _falla_una(_settings, ruta, *args, **kwargs):
+        if ruta.stem == "explota":
+            raise RuntimeError("el motor no arranco")
+        return _medida(0.42)
+
+    monkeypatch.setattr(model3d_service, "score_fit", _falla_una)
+
+    tabla = model3d_service.compare_meshes(
+        None,
+        {"explota": tmp_path / "explota.glb", "anda": tmp_path / "anda.glb"},
+        tmp_path,
+        tmp_path,
+        height_meters=1.0,
+    )
+
+    assert tabla["measured"] == 1
+    assert tabla["failed"] == ["explota"]
+    assert tabla["winner"] == "anda"
+    assert "el motor no arranco" in tabla["ranked"][-1]["error"]

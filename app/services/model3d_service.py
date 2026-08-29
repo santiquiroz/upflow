@@ -193,6 +193,58 @@ def score_fit(
     }
 
 
+def compare_meshes(
+    settings: Settings,
+    meshes: dict[str, Path],
+    views_dir: Path,
+    render_root: Path,
+    *,
+    height_meters: float,
+    scale_view: str | None = None,
+    resolution: int = 512,
+) -> dict[str, Any]:
+    """Mide varias mallas contra la misma hoja y las ordena.
+
+    Es el banco: dos formas de llegar a la misma pieza —un modelo generativo,
+    un remallado, un blockout a mano— dejan de compararse por impresion y pasan
+    a compararse por el mismo numero. Cada candidata trae su auditoria, asi que
+    una que calce lindo pero este rota no gana por calzar.
+
+    Una candidata que falla NO tumba el banco: se reporta con su error y las
+    demas siguen. Un motor que no arranca es justamente lo que hay que ver en
+    la tabla, no un stack trace que la deja vacia.
+    """
+    resultados: list[dict[str, Any]] = []
+    for nombre, ruta in meshes.items():
+        try:
+            medida = score_fit(
+                settings,
+                ruta,
+                views_dir,
+                render_root / nombre,
+                height_meters=height_meters,
+                scale_view=scale_view,
+                resolution=resolution,
+            )
+        except Exception as exc:  # noqa: BLE001 - el fallo de una candidata es un dato
+            resultados.append({"name": nombre, "mesh": str(ruta), "error": str(exc)})
+            continue
+        resultados.append({"name": nombre, "mesh": str(ruta), **medida})
+
+    medidas = [r for r in resultados if r.get("fit")]
+    medidas.sort(key=lambda r: r["fit"]["average"], reverse=True)
+    fallidas = [r for r in resultados if not r.get("fit")]
+    return {
+        "ranked": medidas + fallidas,
+        # El ganador solo existe si ADEMAS de calzar mejor la malla esta sana:
+        # premiar una silueta linda sobre una malla rota es el falso positivo
+        # que este banco existe para no cometer.
+        "winner": next((r["name"] for r in medidas if r["audit"].get("ok")), None),
+        "measured": len(medidas),
+        "failed": [r["name"] for r in fallidas],
+    }
+
+
 def views_from_dir(views_dir: Path, *, names: tuple[str, ...] = VIEW_ORDER) -> list[DetectedView]:
     """Rearma las vistas leyendo recortes ya escritos, midiendo cada uno.
 

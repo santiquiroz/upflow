@@ -903,7 +903,10 @@ async def upflow_score_fit(
     Por vista devuelve `blame`, que es lo accionable:
       - "escala": las dos medidas se van para el mismo lado. Reescalá; modelar
         no lo arregla.
-      - "ubicacion": la forma calza pero corrida. Mové; `offsetCm` dice cuánto.
+      - "partes": el contorno está bien pero las partes no caen en el mismo
+        lugar adentro. NO significa mover la malla en la escena —la comparación
+        centra las dos siluetas, así que una traslación global no cambia el
+        número, probado— sino mover una PARTE respecto del resto.
       - "forma": proporción y centrado correctos y aun así no calza. Recién acá
         hay que modelar.
 
