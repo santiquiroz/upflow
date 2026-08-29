@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -40,6 +41,15 @@ DEFAULT_TIMEOUT_S = 3600
 
 ENGINE_SCRIPTS_DIR = Path(__file__).resolve().parent / "engine_scripts"
 
+# Cual GPU usar cuando hay mas de una. En un Ryzen con grafica integrada, ROCm
+# enumera PRIMERO la iGPU: medido el 2026-08-29 en esta maquina, el dispositivo
+# 0 es una gfx1036 integrada y la Radeon RX 7800 XT (gfx1101) es el 1. Torch se
+# va a la 0 por defecto, y como el paquete instalado es el de gfx1101, el
+# proceso no falla al arrancar sino que REVIENTA al primer calculo, con un
+# volcado de pila que no menciona la palabra GPU. Fijarla es la diferencia
+# entre 43,9 TFLOPS y un crash indescifrable.
+VARIABLE_GPU = "HIP_VISIBLE_DEVICES"
+
 # Que le hace falta a cada motor, ademas de su entorno. `source` es el repo del
 # motor, que trae el codigo del modelo y no viaja en este arbol.
 ENGINES = {
@@ -50,6 +60,9 @@ ENGINES = {
         "device": "cpu",
     },
 }
+
+# El indice de GPU que usa cada motor, si usa alguna. Vacio = va por CPU.
+GPU_POR_MOTOR: dict[str, str] = {}
 
 
 class MeshEngineError(RuntimeError):
@@ -177,6 +190,11 @@ def generate(
         json.dumps({**payload, "sourceDir": str(build.source)}),
     ]
 
+    entorno = dict(os.environ)
+    gpu = GPU_POR_MOTOR.get(engine)
+    if gpu:
+        entorno[VARIABLE_GPU] = gpu
+
     try:
         proceso = subprocess.run(
             comando,
@@ -184,6 +202,7 @@ def generate(
             text=True,
             timeout=timeout,
             check=False,
+            env=entorno,
         )
     except subprocess.TimeoutExpired as exc:
         raise MeshEngineError(f"{engine} paso los {timeout:.0f} s") from exc

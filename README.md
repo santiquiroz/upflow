@@ -814,6 +814,29 @@ AMD y el que corre en AMD no es libre**:
 
 Por eso el primero soportado es TripoSG, y no por ser el mejor de la comparativa.
 
+**Actualización 2026-08-29 — la GPU de AMD ya no es el problema en Windows.** Medido
+en una Radeon RX 7800 XT (gfx1101): PyTorch con ROCm nativo instala y corre, con
+wheels oficiales de AMD y sin ZLUDA, sin WSL y sin portar nada.
+
+```
+python -m pip install --index-url https://repo.amd.com/rocm/whl-multi-arch/ \
+  "torch[device-gfx1101]==2.12.0+rocm7.14.0"
+```
+
+Pide Python 3.12. Verificado: `torch.cuda.is_available()` en True y **43,9 TFLOPS
+fp16** en un matmul de 4096³.
+
+**LA TRAMPA, que cuesta una hora si no se sabe:** en un Ryzen con gráfica integrada,
+ROCm enumera PRIMERO la iGPU. Acá el dispositivo `0` es una `gfx1036` integrada y la
+7800 XT es el `1`. Torch toma el `0` por defecto y, como el paquete instalado es el de
+`gfx1101`, el proceso **no falla al arrancar**: revienta en el primer cálculo con un
+volcado de pila que no menciona la palabra GPU. Se arregla fijando
+`HIP_VISIBLE_DEVICES=1`, y el carril de motores ya lo hace por motor.
+
+Consecuencia práctica: **Hunyuan3D 2.1 pasa a ser alcanzable en AMD/Windows** para
+generación de FORMA (`--no-texture`), que es lo que el banco mide. La textura sí
+necesita `custom_rasterizer` compilado para HIP y queda fuera por ahora.
+
 Para instalarlo: un venv aparte —sus dependencias fijan `numpy==1.22.3` y
 romperían el resto de la app— más el código y los pesos, bajo `~/3d-engines`
 (configurable con `MESH_ENGINES_ROOT`).
