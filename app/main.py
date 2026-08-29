@@ -32,6 +32,7 @@ from app.services.engines.audio_enhance import AudioEnhancer
 from app.services.engines.generation_onnx import GenerationEngine
 from app.services.engines.gmfss_engine import GmfssEngine
 from app.services.engines.mdx_separator import MdxSeparator
+from app.services.engines.music_transcription import MusicTranscriptionEngine
 from app.services.engines.roformer_separator import RoformerSeparator
 from app.services.engines.umx_separator import UmxSeparator
 from app.services.engines.vr_deecho_separator import VrDeEchoSeparator
@@ -192,12 +193,14 @@ async def lifespan(app: FastAPI):
         "roformer": RoformerSeparator(settings, gpu_coordinator),
         "umx": UmxSeparator(settings, gpu_coordinator),
     }
+    music_transcription_engine = MusicTranscriptionEngine(settings, gpu_coordinator)
     audio_pipeline = AudioPipeline(
         settings,
         audio_enhancers,
         restorers,
         voice_enhancer=voice_enhancer,
         separators=separators,
+        transcription_engine=music_transcription_engine,
     )
     audio_job_manager = AudioJobManager(
         settings,

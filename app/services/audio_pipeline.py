@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import shutil
@@ -32,6 +33,7 @@ from app.services.progress import (
 
 if TYPE_CHECKING:
     from app.services.engines.separator_base import OnnxStemSeparator
+    from app.services.engines.music_transcription import MusicTranscriptionEngine
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +80,7 @@ class AudioPipeline:
         restorers: dict[str, AudioRestorer],
         voice_enhancer: VoiceEnhancer | None = None,
         separators: "dict[str, OnnxStemSeparator] | None" = None,
+        transcription_engine: "MusicTranscriptionEngine | None" = None,
     ) -> None:
         self.settings = settings
         self.audio_enhancers = audio_enhancers
@@ -87,6 +90,10 @@ class AudioPipeline:
         # usuario elige un id de modelo, nunca una arquitectura: el catalogo
         # dice cual es y aca se resuelve el motor.
         self.separators = separators or {}
+        # Transcripcion por stem (F3a). None hasta que se pida un job con
+        # transcribe_stems -- validado antes en el manager, asi que si llega
+        # hasta aca sin motor es un error de wiring, no un pedido invalido.
+        self.transcription_engine = transcription_engine
 
     async def run(self, job: AudioJob) -> Path:
         work_dir = self.settings.temp_path / f"audio-{job.id}"
@@ -309,8 +316,12 @@ class AudioPipeline:
             )
         stem_wavs = [work_dir / f"{stem.id}.wav" for stem in spec.stems]
         await self._separate_with(job, spec, decoded, stem_wavs, work_dir)
+        stem_wavs_by_id = dict(zip([stem.id for stem in spec.stems], stem_wavs))
 
         advance_audio_stage(job, "finalizing")
+        # Transcripcion ANTES de codificar: el motor lee el WAV decodificado de
+        # cada stem, no el mp3/flac final que todavia no existe a esta altura.
+        await self._transcribe_stems(job, stem_wavs_by_id)
         encode_plan = list(zip([stem.id for stem in spec.stems], stem_wavs))
         encode_plan += self._derive_practice_wavs(job, decoded, dict(encode_plan), work_dir)
         output_format = job.output_format
@@ -348,6 +359,48 @@ class AudioPipeline:
             )
             derived.append((f"minus_{stem_id}", destination))
         return derived
+
+    async def _transcribe_stems(self, job: AudioJob, stem_wavs_by_id: dict[str, Path]) -> None:
+        """MIDI + MusicXML (+ tab si guitar/bass) por stem pedido en
+        `job.transcribe_stems`. El manager ya valido separate=True, el pack
+        instalado y que cada stem tenga altura -- aca solo queda correr el
+        motor sobre el WAV decodificado y escribir los archivos."""
+        if not job.transcribe_stems:
+            return
+        device = job.device or self.settings.default_device
+        outputs_dir = self.settings.outputs_path
+        outputs_dir.mkdir(parents=True, exist_ok=True)
+        outputs: dict[str, dict[str, Path]] = {}
+        for stem_id in job.transcribe_stems:
+            outputs[stem_id] = await asyncio.to_thread(
+                self._transcribe_one_stem,
+                job.id,
+                stem_wavs_by_id[stem_id],
+                stem_id,
+                device,
+                outputs_dir,
+            )
+        job.transcription_output_paths = outputs
+
+    def _transcribe_one_stem(
+        self, job_id: str, stem_wav: Path, stem_id: str, device: str, outputs_dir: Path
+    ) -> dict[str, Path]:
+        from app.services.engines.midi_writer import write_midi
+        from app.services.engines.musicxml_writer import write_musicxml
+        from app.services.engines.tab_writer import write_tab
+
+        notes = self.transcription_engine.transcribe_file(stem_wav, device)
+        artifacts: dict[str, Path] = {}
+        midi_path = outputs_dir / f"{job_id}.{stem_id}.mid"
+        write_midi(notes, midi_path)
+        artifacts["midi"] = midi_path
+        musicxml_path = outputs_dir / f"{job_id}.{stem_id}.musicxml"
+        write_musicxml(notes, musicxml_path)
+        artifacts["musicxml"] = musicxml_path
+        tab_path = outputs_dir / f"{job_id}.{stem_id}.tab.txt"
+        if write_tab(notes, tab_path, stem_id):
+            artifacts["tab"] = tab_path
+        return artifacts
 
     async def _separate_with(self, job, spec, decoded: Path, stem_wavs, work_dir: Path) -> None:
         """El modelo pedido, o el promedio de varios cuando se pidio ensemble."""

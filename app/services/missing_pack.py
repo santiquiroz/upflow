@@ -39,6 +39,7 @@ PACK_LABELS: dict[str, str] = {
     "shap-e": "el modelo de generacion 3D",
     "shap-e-img2img": "el modelo de foto a 3D",
     "karaoke": "el modelo de separacion de voz e instrumental",
+    "music-transcription": "el modelo de transcripcion de notas (Basic Pitch)",
     "kokoro": "el modelo de voz",
     "voice-conversion": "el modelo de conversion de voz",
     "translation": "el par de idiomas para traducir",

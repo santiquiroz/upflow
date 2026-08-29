@@ -54,6 +54,9 @@ PACK_SCRIPTS: dict[str, str] = {
     # Separacion voz/instrumental. Pack-familia: un .onnx por modelo del
     # catalogo (separation_models.py) y el script recibe cual por parametro.
     "karaoke": "download-karaoke.ps1",
+    # Transcripcion por stem a MIDI/MusicXML/tab (F3a): Basic Pitch ONNX, un
+    # solo archivo, sin variante.
+    "music-transcription": "download-music-transcription.ps1",
     # El nombre sigue al directorio vendorizado (vendor/kokoro), no al script:
     # es la convencion que ya usan gmfss y audiosr.
     "kokoro": "download-kokoro-tts.ps1",

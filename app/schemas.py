@@ -80,6 +80,17 @@ class AudioStemDownloadResponse(BaseModel):
     url: str
 
 
+class TranscriptionDownloadResponse(BaseModel):
+    """Un archivo de transcripcion (F3a: MIDI/MusicXML/tab) de un stem
+    completado. `format` es el valor que va en download?fmt=midi|musicxml|tab;
+    `stemId` dice a que stem pertenece -- la misma descarga tambien acepta
+    `?stem=<stemId>` junto a `fmt`."""
+
+    stem_id: str = Field(serialization_alias="stemId")
+    format: str
+    url: str
+
+
 class AudioJobResponse(BaseModel):
     id: str
     status: JobStatus
@@ -121,6 +132,13 @@ class AudioJobResponse(BaseModel):
     practice_guide_percent: int = Field(
         default=0, serialization_alias="practiceGuidePercent"
     )
+    # Eco de la seleccion de transcripcion (F3a) + los archivos producidos por
+    # stem. `transcriptions` es None hasta que el job termine (igual que
+    # `stems`); [] una vez completo si no se pidio ninguna transcripcion.
+    transcribe_stems: list[str] = Field(
+        default_factory=list, serialization_alias="transcribeStems"
+    )
+    transcriptions: list[TranscriptionDownloadResponse] | None = None
     created_at: datetime = Field(serialization_alias="createdAt")
     started_at: datetime | None = Field(default=None, serialization_alias="startedAt")
     finished_at: datetime | None = Field(default=None, serialization_alias="finishedAt")

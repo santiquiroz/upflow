@@ -49,6 +49,21 @@ v1 SIN enrollment: clustering no supervisado sobre el stem vocal (el caso banda 
 - UI Studio: badge de cantante por línea (reasignable), rename de cantantes, color pickers pre-render, selector "practicar como <cantante>" (mute), aviso de unísono (decisión #11).
 - KARA_2 (lead/backing, armonías): registro Case A completo — spec mdx con stems `lead_vocals`/`backing_vocals` categoría karaoke, ps1 + sha de model-artifacts.md, créditos, i18n, tests anti-drift. Disponible como modelo más en el picker; la integración "mutear sub-stem en sección armonizada" queda v2.
 
+## Contrato F3a (congelado)
+
+Extiende AudioJob post-separación (decisión #8), sin familia de jobs nueva. Batería EXCLUIDA v1 (decisión #10) — ninguna transcripción de drums ni referencia a ADT en este alcance.
+
+- Form `POST /audio/jobs` (convención CSV de la familia audio, igual que `practice_stems`): `transcribe_stems` = CSV de stem ids con altura (nunca `drums`, `minus_*` ni stems derivados); rechazo explícito si se pide un stem sin altura o inexistente en el modelo.
+- Motor: `app/services/engines/music_transcription.py`, ONNX (Basic Pitch `nmp.onnx`, Apache-2.0, URL/sha en `2026-08-28-model-artifacts.md`) siguiendo el patrón de sesión cacheada de `separator_base.py` (`wrap_onnx_error`, cache key `device::model_id`). Nuevo pack `music-transcription` (Case B completo: ps1 fail-loudly, `pack_provisioner.PACK_SCRIPTS`, `missing_pack.PACK_LABELS`, `config.py` Field+property, `capabilities.py` `Capability("audio.stemTranscription", ...)`).
+- Salida por stem transcripto: `{job.id}.{stem_id}.mid` + `{job.id}.{stem_id}.musicxml`; para `guitar`/`bass` además `{job.id}.{stem_id}.gp5`-equivalente propio o `.tab.txt` (decisión de formato de tab la toma el implementador dentro de "asignación DP cuerda/traste, guitarra 6 cuerdas estándar + bajo 4 cuerdas, sin afinaciones alternativas v1" — serializar en el formato más simple que un músico pueda abrir, documentarlo).
+- Serializers a mano (decisión #9): `midi_writer.py`, `musicxml_writer.py`, `tab_writer.py`, todos sobre `numpy`/stdlib — CERO deps nuevas (nada de `mido`/`music21`/`pretty_midi`).
+- Beat/quantización: si el implementador ve que el MIDI crudo de Basic Pitch (activaciones de nota con onset/offset/pitch/confianza, sin grid de tempo) es inengrañable sin cuantizar, puede agregar un cuantizador simple a grid fijo (subdivisión configurable, sin detección de tempo real) — NO agregar `beat_this`/`madmom` como dependencia; eso es v2.
+- `AudioJobResponse`: `transcriptionOutputPaths` o lista `transcriptions: [{stemId, format, url}]` (el implementador elige la forma más consistente con `stems[]`/`practiceStems` ya existentes — mismo patrón `?stem=&fmt=`).
+- Ruta de descarga: `?stem=<id>&fmt=midi|musicxml|tab` con 400 enumerando los formatos válidos si `fmt` no matchea, siguiendo la convención de error ya usada en `_valid_stems_for`.
+- MCP: `upflow_process_audio` + `transcribe_stems` (enviar solo si truthy).
+- Frontend: dentro de `RehearsalSection` (o acordeón propio adyacente) — checkboxes de stems transcribibles + enlaces de descarga MIDI/MusicXML/tab por stem cuando el job completa; `<PackDownload pack="music-transcription" />` cuando falta el pack. Copy honesto: "borrador editable, abrí en MuseScore/Guitar Pro para pulir" (framing de la investigación).
+- Tests: engine con sesión ONNX fakeada (mismo patrón `_create_session`) asertando eventos MIDI exactos desde una matriz de activación conocida; serializers con asserts de bytes/round-trip determinísticos; pack enforcement (`test_missing_pack.py`, `test_capabilities.py`, `test_download_scripts_fail_loudly.py`); frontend igual que F1a/F2a.
+
 ## Fases
 
 | Fase | Contenido | Estado |

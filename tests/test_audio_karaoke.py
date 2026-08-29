@@ -41,6 +41,10 @@ def make_settings(tmp_path: Path, **overrides: object) -> Settings:
     return Settings(
         RUNTIME_DIR=str(tmp_path / "runtime"),
         KARAOKE_MODEL_DIR=str(tmp_path / "karaoke"),
+        # Aislado igual que KARAOKE_MODEL_DIR: sin esto, el default relativo
+        # resuelve contra la raiz REAL del proyecto (resolve_against_project_root)
+        # y un test que instala un modelo fake contamina el checkout de verdad.
+        MUSIC_TRANSCRIPTION_MODEL=str(tmp_path / "music-transcription" / "nmp.onnx"),
         **overrides,
     )
 

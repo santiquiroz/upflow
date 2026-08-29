@@ -428,6 +428,13 @@ class Settings(BaseSettings):
     # catalogo de modelos vive en app/services/engines/separation_models.py.
     karaoke_model_dir: str = Field(default="vendor/karaoke", alias="KARAOKE_MODEL_DIR")
 
+    # Transcripcion por stem a MIDI/MusicXML/tab (F3a, Basic Pitch ONNX,
+    # Apache-2.0). Sin flag de habilitacion, igual que karaoke: bajar el
+    # modelo alcanza. UN solo archivo (nmp.onnx, ~230 KB).
+    music_transcription_model: str = Field(
+        default="vendor/music-transcription/nmp.onnx", alias="MUSIC_TRANSCRIPTION_MODEL"
+    )
+
     # Limpieza de eco/reverb (modelos VR): el espectrograma combinado 4band_v3
     # cuesta ~6,5 MB por segundo de audio contando intermedios, asi que las
     # pistas largas se procesan por bloques. Medido sobre una pista de 5 min
@@ -1110,6 +1117,13 @@ class Settings(BaseSettings):
             if all((carpeta / archivo).exists() for archivo in spec.files):
                 return str(model_file(carpeta, model_id))
         return ""
+
+    @property
+    def music_transcription_model_path(self) -> Path:
+        return resolve_against_project_root(self.music_transcription_model)
+
+    def music_transcription_available(self) -> bool:
+        return self.music_transcription_model_path.exists()
 
     @property
     def gmfss_model_dir_path(self) -> Path:

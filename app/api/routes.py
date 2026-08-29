@@ -124,6 +124,7 @@ from app.schemas import (
     KaraokeSinger,
     TranscribeJobResponse,
     TranscribeJobsListResponse,
+    TranscriptionDownloadResponse,
     UpdateCheckResponse,
     UpdateSettingRequest,
     UpdateSettingResponse,
@@ -565,6 +566,32 @@ def _audio_stem_downloads(job: AudioJob) -> list[AudioStemDownloadResponse] | No
     return downloads
 
 
+# Formatos validos para `?fmt=` en la descarga de audio (F3a). Mismo orden que
+# se declara el artefacto por stem en el pipeline.
+TRANSCRIPTION_FORMATS = ("midi", "musicxml", "tab")
+
+
+def _audio_transcription_downloads(job: AudioJob) -> list[TranscriptionDownloadResponse] | None:
+    """Una descarga por (stem, formato) transcripto, o None si el job no
+    completo -- igual que `_audio_stem_downloads`. [] una vez completo si no
+    se pidio ninguna transcripcion (distinto de None: dice "no aplica" en vez
+    de "todavia no se sabe")."""
+    if job.status != JobStatus.completed:
+        return None
+    base = f"/api/v1/audio/jobs/{job.id}/download"
+    downloads: list[TranscriptionDownloadResponse] = []
+    for stem_id in job.transcribe_stems:
+        artifacts = job.transcription_output_paths.get(stem_id, {})
+        for fmt in TRANSCRIPTION_FORMATS:
+            if fmt in artifacts:
+                downloads.append(
+                    TranscriptionDownloadResponse(
+                        stem_id=stem_id, format=fmt, url=f"{base}?stem={stem_id}&fmt={fmt}"
+                    )
+                )
+    return downloads
+
+
 def _audio_vocals_download_url(job: AudioJob) -> str | None:
     # Compat v0.59, y SOLO eso: el campo promete que downloadUrl trae la
     # instrumental y esto la voz. Un modelo multi-stem rompe esa promesa —
@@ -601,6 +628,8 @@ def audio_job_to_response(job: AudioJob) -> AudioJobResponse:
         ensemble_models=list(job.ensemble_models),
         practice_stems=list(job.practice_stems),
         practice_guide_percent=job.practice_guide_percent,
+        transcribe_stems=list(job.transcribe_stems),
+        transcriptions=_audio_transcription_downloads(job),
         created_at=job.created_at,
         started_at=job.started_at,
         finished_at=job.finished_at,
@@ -1179,6 +1208,10 @@ async def create_audio_job(
     practice_stems: str | None = Form(default=None),
     # Porcentaje (0-30) del stem removido que queda de guia; 0 = quitarlo.
     practice_guide_percent: int = Form(default=0),
+    # CSV de stems CON altura a los que transcribir (MIDI+MusicXML, +tab si
+    # guitar/bass). Solo con separate; "drums" y los derivados minus_* se
+    # rechazan en el manager.
+    transcribe_stems: str | None = Form(default=None),
     audio_jobs: AudioJobManager = Depends(get_audio_job_manager),
     storage: StorageService = Depends(get_storage),
     settings: Settings = Depends(get_settings),
@@ -1226,6 +1259,7 @@ async def create_audio_job(
             practice_guide_percent=(
                 practice_guide_percent if isinstance(practice_guide_percent, int) else 0
             ),
+            transcribe_stems=_parse_chain_steps(transcribe_stems),
             job_id=token,
             owner=current_user,
         )
@@ -2459,6 +2493,10 @@ async def download_audio_job(
     # separacion es la unica salida). 400 stem invalido listando los validos
     # DEL JOB; 409 al pedir el secundario en un job sin separacion.
     stem: str | None = Query(default=None),
+    # Presente = se pide un artefacto de transcripcion (F3a) en vez de audio:
+    # ?stem=<id>&fmt=midi|musicxml|tab. 400 si fmt no matchea; 404 si ese
+    # stem/formato no se produjo (no se pidio, o el instrumento no da tab).
+    fmt: str | None = Query(default=None),
     audio_jobs: AudioJobManager = Depends(get_audio_job_manager),
     # Bare `Request` (not `Request | None`) so FastAPI's special-case
     # injection still recognizes it -- `lenient_issubclass` rejects unions.
@@ -2468,10 +2506,14 @@ async def download_audio_job(
     if not isinstance(stem, str):
         # Llamada directa (tests): el default es el FieldInfo de Query().
         stem = None
+    if not isinstance(fmt, str):
+        fmt = None
     job = audio_jobs.get_job(job_id)
     current_user = current_user_from_request(request)
     if not job or (current_user is not None and not _can_view_job(job, current_user)):
         raise HTTPException(status_code=404, detail="Audio job not found")
+    if fmt is not None:
+        return _download_transcription(job, stem, fmt)
     valid_stems = _valid_stems_for(job)
     if stem is None:
         stem = valid_stems[0]
@@ -2484,6 +2526,23 @@ async def download_audio_job(
         raise HTTPException(status_code=409, detail="Audio job is not completed yet")
     output_path = _stem_output_path(job, stem, valid_stems)
     return FileResponse(path=output_path, filename=output_path.name, media_type="application/octet-stream")
+
+
+def _download_transcription(job: AudioJob, stem: str | None, fmt: str) -> FileResponse:
+    if fmt not in TRANSCRIPTION_FORMATS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"fmt must be one of {', '.join(TRANSCRIPTION_FORMATS)}",
+        )
+    if job.status != JobStatus.completed:
+        raise HTTPException(status_code=409, detail="Audio job is not completed yet")
+    path = job.transcription_output_paths.get(stem or "", {}).get(fmt)
+    if path is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No {fmt} transcription was produced for stem {stem!r}",
+        )
+    return FileResponse(path=path, filename=path.name, media_type="application/octet-stream")
 
 
 @router.get("/models", response_model=ModelsResponse)

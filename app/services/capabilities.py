@@ -456,6 +456,17 @@ CATALOG: tuple[Capability, ...] = (
             PathRequirement("karaoke_installed_multistem_model", "karaoke"),
         ),
     ),
+    Capability(
+        id="audio.stemTranscription",
+        domain="audio",
+        label_key="capability.audio.stemTranscription",
+        provisioning="vendored_pack",
+        job_kind="audio",
+        strategies=("model",),
+        # Basic Pitch (F3a): un solo archivo (nmp.onnx). Igual que karaoke, sin
+        # SettingRequirement -- bajar el modelo alcanza para usarlo.
+        requirements=(PathRequirement("music_transcription_model_path", "music-transcription"),),
+    ),
     # --- generacion --------------------------------------------------------
     Capability(
         id="generate.textToImage",

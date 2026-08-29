@@ -420,6 +420,7 @@ async def upflow_process_audio(
     separation_model: str = "",
     practice_stems: list[str] | None = None,
     practice_guide_percent: int = 0,
+    transcribe_stems: list[str] | None = None,
 ) -> str:
     """Crea un job de procesamiento de audio: limpieza (quitar ruido/eco/reverb
     de música), denoise, restauración (Apollo/AudioSR), cadena de voz,
@@ -467,6 +468,11 @@ async def upflow_process_audio(
     SIN ese instrumento); cada derivado se baja con stem=minus_<id>.
     practice_guide_percent (0-30): porcentaje del instrumento removido que
     queda sonando de guía; 0 = quitarlo del todo.
+    transcribe_stems (solo con separate=True): lista de stem ids CON altura a
+    transcribir a MIDI+MusicXML (+tab para guitar/bass); nunca "drums" ni un
+    id derivado minus_*. Cada archivo se baja con stem=<id>&fmt=midi|
+    musicxml|tab. Requiere el pack music-transcription (upflow_capabilities
+    (audio) -> "audio.stemTranscription").
     Modos válidos: upflow_capabilities(audio) y upflow_capabilities(voice_catalog).
     voice_steps: CSV de pasos de la cadena de voz en orden.
     output_format: wav | flac | mp3 | m4a. Los dos primeros son sin pérdida
@@ -506,6 +512,8 @@ async def upflow_process_audio(
             data["practice_stems"] = ",".join(practice_stems)
         if practice_guide_percent:
             data["practice_guide_percent"] = str(practice_guide_percent)
+        if transcribe_stems:
+            data["transcribe_stems"] = ",".join(transcribe_stems)
         created = await client.api_post(
             "/api/v1/audio/jobs",
             data=data,

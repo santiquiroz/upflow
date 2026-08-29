@@ -162,6 +162,10 @@ class AudioJob:
     # Guia opcional (0-30): porcentaje del stem removido que queda sonando de
     # fondo como referencia. g = 1 - percent/100; 0 = quitarlo del todo.
     practice_guide_percent: int = 0
+    # Transcripcion por stem (F3a): stems CON altura (nunca "drums" ni un id
+    # derivado minus_*) a los que generar MIDI/MusicXML (+tab si guitar/bass).
+    # Solo con separate y requiere el pack music-transcription instalado.
+    transcribe_stems: list[str] = field(default_factory=list)
     # Standalone-module output format (Fase C Task 9): "wav" (lossless, no
     # re-encode -- current is already PCM from decode/denoise/restore),
     # "flac" (lossless, ~50% smaller, default), "mp3" / "m4a" (con perdida). See
@@ -187,6 +191,10 @@ class AudioJob:
     # cuatro: con un unico `secondary_output_path` los tres ultimos se servian
     # todos desde el mismo archivo.
     stem_output_paths: dict[str, Path] = field(default_factory=dict)
+    # Artefactos de transcripcion (F3a): {stem_id: {formato: Path}}. Los
+    # formatos validos son "midi" | "musicxml" | "tab" (este ultimo solo para
+    # guitar/bass; ausente cuando tab_writer devolvio None).
+    transcription_output_paths: dict[str, dict[str, Path]] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
     owner_id: str | None = None
 

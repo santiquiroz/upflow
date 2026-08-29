@@ -76,6 +76,7 @@ class AudioJobManager(QueuedJobManager[AudioJob]):
         ensemble_models: list[str] | None = None,
         practice_stems: list[str] | None = None,
         practice_guide_percent: int = 0,
+        transcribe_stems: list[str] | None = None,
         job_id: str | None = None,
         owner: AuthenticatedUser | None = None,
     ) -> AudioJob:
@@ -99,6 +100,9 @@ class AudioJobManager(QueuedJobManager[AudioJob]):
             selected_practice = self._validate_practice_selection(
                 separation_model, practice_stems or [], practice_guide_percent
             )
+            selected_transcribe = self._validate_transcribe_selection(
+                separation_model, transcribe_stems or []
+            )
             selected_voice_steps: list[str] = []
             selected_cleanup_steps: list[str] = []
         else:
@@ -114,7 +118,10 @@ class AudioJobManager(QueuedJobManager[AudioJob]):
                 raise ValueError(
                     "practice_guide_percent solo aplica cuando separate=true."
                 )
+            if transcribe_stems:
+                raise ValueError("transcribe_stems solo aplica cuando separate=true.")
             selected_practice = []
+            selected_transcribe = []
             selected_ensemble = []
             selected_cleanup_steps = self._validate_cleanup_selection(cleanup_steps or [])
             selected_voice_steps = self._validate_voice_selection(
@@ -150,6 +157,7 @@ class AudioJobManager(QueuedJobManager[AudioJob]):
             ensemble_models=selected_ensemble,
             practice_stems=selected_practice,
             practice_guide_percent=practice_guide_percent,
+            transcribe_stems=selected_transcribe,
             owner_id=owner.id if owner is not None else None,
         )
         if job_id is not None:
@@ -278,6 +286,32 @@ class AudioJobManager(QueuedJobManager[AudioJob]):
             raise ValueError(
                 f"Stems desconocidos para {model_id!r}: {', '.join(desconocidos)}. "
                 f"Validos: {', '.join(spec.stem_ids())}."
+            )
+        return elegidos
+
+    def _validate_transcribe_selection(self, model_id: str, selected: list[str]) -> list[str]:
+        """Los stems a transcribir a MIDI/MusicXML(+tab), o vacio.
+
+        Rechaza "drums" explicitamente (sin altura, decision #10 del contrato
+        F3a) incluso si un futuro modelo lo declarara, y cualquier stem que no
+        este en el catalogo del modelo -- lo que excluye de paso los ids
+        derivados minus_<id>, que nunca aparecen en `spec.stem_ids()`.
+        """
+        elegidos = list(dict.fromkeys(selected))
+        if not elegidos:
+            return []
+        if not self.settings.music_transcription_available():
+            raise ValueError(missing_pack_message("music-transcription"))
+        from app.services.engines.separation_models import SEPARATION_MODELS
+
+        spec = SEPARATION_MODELS[model_id]
+        transcribibles = tuple(stem_id for stem_id in spec.stem_ids() if stem_id != "drums")
+        desconocidos = [stem for stem in elegidos if stem not in transcribibles]
+        if desconocidos:
+            raise ValueError(
+                f"Stems desconocidos o sin altura para transcribir en {model_id!r}: "
+                f"{', '.join(desconocidos)}. Validos: "
+                f"{', '.join(transcribibles) or '(ninguno)'}."
             )
         return elegidos
 
