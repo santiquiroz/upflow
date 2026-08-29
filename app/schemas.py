@@ -233,6 +233,17 @@ class MeshAuditResponse(BaseModel):
     ok: bool
 
 
+class RemeshResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    voxel_meters: float = Field(alias="voxelMeters")
+    download_url: str = Field(serialization_alias="downloadUrl")
+    # Las dos auditorias viajan juntas: un remesh gana topologia y pierde
+    # detalle, y cuanto perdio solo se ve comparando las dos puntas.
+    before: MeshAuditResponse
+    after: MeshAuditResponse
+
+
 class SheetViewResponse(BaseModel):
     name: str
     # URL resoluble, no un nombre de archivo suelto: antes era un puntero que

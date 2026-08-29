@@ -109,6 +109,10 @@ export function splitSheetViews(
   return apiPostForm<SheetViews>("/model3d/sheet/views", formData, options);
 }
 
+export function renameViews(token: string, names: string[]): Promise<SheetViews> {
+  return apiPostJson<SheetViews>(`/model3d/sheet/${token}/names`, { names });
+}
+
 export function fetchProportions(
   token: string,
   heightMeters: number,

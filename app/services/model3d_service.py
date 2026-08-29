@@ -27,6 +27,7 @@ VIEW_ORDER = ("front", "side", "back", "side_left")
 
 AUDIT_SCRIPT = "audit_mesh.py"
 REFERENCE_SCRIPT = "build_reference_scene.py"
+REMESH_SCRIPT = "remesh.py"
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +66,25 @@ def split_views(
         recorte.save(destino)
         detectadas.append(DetectedView(name=nombre, image=destino, ink=ink_bounds(recorte)))
     return detectadas
+
+
+def remesh(
+    settings: Settings,
+    mesh_path: Path,
+    output: Path,
+    *,
+    voxel_meters: float = 0.01,
+) -> dict[str, Any]:
+    """Rehace la topologia por voxeles y devuelve el antes y el despues.
+
+    Las dos auditorias viajan juntas a proposito: un remesh gana topologia
+    uniforme y pierde detalle, y cuanto perdio solo se ve comparando.
+    """
+    return blender_service.run_script(
+        settings,
+        REMESH_SCRIPT,
+        {"mesh": str(mesh_path), "output": str(output), "voxelMeters": voxel_meters},
+    )
 
 
 def views_from_dir(views_dir: Path, *, names: tuple[str, ...] = VIEW_ORDER) -> list[DetectedView]:

@@ -1357,6 +1357,11 @@ export const en = {
   "modeling.reference.dropzoneHint": "PNG, JPG or WEBP on a white background",
   "modeling.reference.expectedViews": "Views you expect",
   "modeling.reference.split": "Split the sheet",
+  "modeling.reference.namingConvention":
+    "Naming views by position is a convention, not a deduction: pixels alone cannot tell whether the third panel is the back or a three-quarter view. If the sheet arrives in a different order, each scene plane gets the wrong drawing and nothing reveals it. Check the thumbnails and correct their names before building the scene.",
+  "modeling.reference.viewName": "View name",
+  "modeling.reference.applyNames": "Apply names",
+  "modeling.reference.duplicateNames": "Each view must have a different name.",
   "modeling.reference.height": "Real height (m)",
   "modeling.reference.heightHint":
     "Scale is computed from the DRAWING, not the file size: the crop's margin does not shrink the character.",

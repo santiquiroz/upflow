@@ -142,6 +142,7 @@ from app.schemas import (
     SheetViewsResponse,
     ProportionsResponse,
     RenameViewsRequest,
+    RemeshResponse,
 )
 from app.services.asr_installer import AsrModelInstaller
 from app.services.audio_conversion import (
@@ -197,6 +198,7 @@ from app.services.model3d_service import (
     audit_mesh as model3d_audit_mesh,
     build_reference_scene as model3d_build_reference_scene,
     measure_proportions,
+    remesh as model3d_remesh,
     rename_views,
     sheet_warnings,
     split_views,
@@ -3905,6 +3907,57 @@ async def audit_mesh_route(
         destino.unlink(missing_ok=True)
 
     return MeshAuditResponse(**reporte)
+
+
+@router.post("/model3d/remesh", response_model=RemeshResponse)
+async def remesh_mesh_route(
+    request: Request,
+    file: UploadFile = File(...),
+    voxel_meters: float = Form(default=0.01, gt=0, alias="voxelMeters"),
+    settings_dep: Settings = Depends(get_settings),
+    storage: StorageService = Depends(get_storage),
+    current_user: AuthenticatedUser = Depends(get_current_user),
+) -> RemeshResponse:
+    """Rehace la topología por voxeles y devuelve el antes y el después."""
+    safe_name = sanitize_filename(Path(file.filename or "malla.glb").name, default="malla.glb")
+    subida = settings_dep.uploads_path / f"{uuid4().hex}-{safe_name}"
+    token = uuid4().hex
+    destino = settings_dep.outputs_path / f"{token}.remesh.glb"
+    try:
+        await storage.save_upload(file, subida, max_mb=settings_dep.max_upload_mb)
+        resultado = await asyncio.to_thread(
+            model3d_remesh, settings_dep, subida, destino, voxel_meters=voxel_meters
+        )
+    except MissingPack as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BlenderError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        subida.unlink(missing_ok=True)
+
+    _register_print_token(request, token)
+    return RemeshResponse(
+        voxel_meters=resultado["voxelMeters"],
+        download_url=f"/api/v1/model3d/remeshed/{token}",
+        before=MeshAuditResponse(**resultado["before"]),
+        after=MeshAuditResponse(**resultado["after"]),
+    )
+
+
+@router.get("/model3d/remeshed/{token}")
+async def download_remeshed(
+    token: str,
+    request: Request,
+    settings_dep: Settings = Depends(get_settings),
+    current_user: AuthenticatedUser = Depends(get_current_user),
+) -> FileResponse:
+    if not re.fullmatch(r"[0-9a-f]{32}", token):
+        raise HTTPException(status_code=404, detail="Malla no encontrada")
+    _require_print_token_owner(request, token, current_user, "Malla no encontrada")
+    archivo = settings_dep.outputs_path / f"{token}.remesh.glb"
+    if not archivo.exists():
+        raise HTTPException(status_code=404, detail="Malla no encontrada")
+    return FileResponse(path=archivo, filename="remallada.glb", media_type="model/gltf-binary")
 
 
 @router.post("/model3d/sheet/views", response_model=SheetViewsResponse, status_code=201)

@@ -7,6 +7,7 @@ import {
   buildReferenceScene,
   fetchModel3dCapabilities,
   fetchProportions,
+  renameViews,
   splitSheetViews,
   type MeshAudit,
   type Model3dCapabilities,
@@ -18,6 +19,7 @@ import {
 const MESH_FORMATS = ".stl,.obj,.ply,.glb,.gltf,.fbx";
 const SHEET_FORMATS = ".png,.jpg,.jpeg,.webp";
 const DEFAULT_HEIGHT_M = 1.7;
+const VIEW_NAMES = ["front", "side", "back", "side_left"] as const;
 
 function Dropzone({
   id,
@@ -203,11 +205,13 @@ function ReferenceLane({ enabled }: { enabled: boolean }) {
   const [expectedViews, setExpectedViews] = useState("4");
   const [heightMeters, setHeightMeters] = useState(String(DEFAULT_HEIGHT_M));
   const [views, setViews] = useState<SheetViews | null>(null);
+  const [selectedViewNames, setSelectedViewNames] = useState<string[]>([]);
   const [scene, setScene] = useState<ReferenceScene | null>(null);
   const [isBusy, setIsBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const parsedHeightMeters = Number(heightMeters);
   const heightIsValid = Number.isFinite(parsedHeightMeters) && parsedHeightMeters > 0;
+  const hasDuplicateViewNames = new Set(selectedViewNames).size !== selectedViewNames.length;
   const proportionsQuery = useQuery({
     queryKey: ["model3d-proportions", views?.token, parsedHeightMeters],
     queryFn: () => fetchProportions(views!.token, parsedHeightMeters),
@@ -222,8 +226,34 @@ function ReferenceLane({ enabled }: { enabled: boolean }) {
     setError(null);
     setScene(null);
     setViews(null);
+    setSelectedViewNames([]);
     try {
-      setViews(await splitSheetViews(file, Number(expectedViews) || 4));
+      const splitViews = await splitSheetViews(file, Number(expectedViews) || 4);
+      setViews(splitViews);
+      setSelectedViewNames(splitViews.views.map((view) => view.name));
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function handleRenameViews() {
+    if (!views || hasDuplicateViewNames) {
+      return;
+    }
+    const namesChanged = selectedViewNames.some(
+      (name, index) => name !== views.views[index]?.name,
+    );
+    setIsBusy(true);
+    setError(null);
+    try {
+      const renamedViews = await renameViews(views.token, selectedViewNames);
+      setViews(renamedViews);
+      setSelectedViewNames(renamedViews.views.map((view) => view.name));
+      if (namesChanged) {
+        setScene(null);
+      }
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
     } finally {
@@ -259,6 +289,7 @@ function ReferenceLane({ enabled }: { enabled: boolean }) {
         onFileSelected={(elegido) => {
           setFile(elegido);
           setViews(null);
+          setSelectedViewNames([]);
           setScene(null);
         }}
       />
@@ -288,10 +319,13 @@ function ReferenceLane({ enabled }: { enabled: boolean }) {
       {views && (
         <div className="flex flex-col gap-3">
           <Warnings items={views.warnings} />
+          <p className="text-sm text-text-dim">
+            {t("modeling.reference.namingConvention")}
+          </p>
           {/* La vista recortada, no solo su nombre: es la unica forma de ver
               de un vistazo si la hoja se partio donde correspondia. */}
           <ul className="flex flex-wrap gap-3">
-            {views.views.map((vista) => (
+            {views.views.map((vista, index) => (
               <li
                 key={vista.name}
                 className="flex w-32 flex-col items-center gap-1 rounded border border-border bg-surface p-2"
@@ -306,9 +340,43 @@ function ReferenceLane({ enabled }: { enabled: boolean }) {
                 <span className="font-mono-tabular text-xs text-text-faint">
                   {vista.widthPx} × {vista.heightPx} px
                 </span>
+                <label className="flex w-full flex-col gap-1 text-xs text-text-dim">
+                  {t("modeling.reference.viewName")}
+                  <select
+                    aria-label={`${t("modeling.reference.viewName")} ${index + 1}`}
+                    value={selectedViewNames[index] ?? vista.name}
+                    onChange={(event) =>
+                      setSelectedViewNames((current) =>
+                        current.map((name, currentIndex) =>
+                          currentIndex === index ? event.target.value : name,
+                        ),
+                      )
+                    }
+                    className="w-full rounded border border-border bg-surface px-2 py-1 text-sm text-text"
+                  >
+                    {VIEW_NAMES.map((name) => (
+                      <option key={name} value={name}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
               </li>
             ))}
           </ul>
+          <button
+            type="button"
+            disabled={isBusy || hasDuplicateViewNames}
+            onClick={handleRenameViews}
+            className="w-fit rounded bg-accent px-4 py-2 text-sm font-semibold text-on-accent disabled:opacity-50"
+          >
+            {t("modeling.reference.applyNames")}
+          </button>
+          {hasDuplicateViewNames && (
+            <p role="alert" className="text-sm text-danger">
+              {t("modeling.reference.duplicateNames")}
+            </p>
+          )}
           <div className="flex flex-wrap items-end gap-4">
             <label className="flex flex-col gap-1 text-sm text-text-dim">
               {t("modeling.reference.height")}

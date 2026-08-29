@@ -14,6 +14,7 @@ vi.mock("../../services/model3d", async (importOriginal) => {
     fetchModel3dCapabilities: vi.fn(),
     auditMesh: vi.fn(),
     splitSheetViews: vi.fn(),
+    renameViews: vi.fn(),
     fetchProportions: vi.fn(),
     buildReferenceScene: vi.fn(),
   };
@@ -45,6 +46,27 @@ const SHEET_VIEWS: model3dService.SheetViews = {
       widthPx: 512,
       heightPx: 1180,
       inkBox: [0, 0, 512, 1180],
+    },
+  ],
+  warnings: [],
+};
+
+const RENAMED_SHEET_VIEWS: model3dService.SheetViews = {
+  token: "sheet-token",
+  views: [
+    {
+      name: "back",
+      image: "/tmp/renamed-back.png",
+      widthPx: 700,
+      heightPx: 1210,
+      inkBox: [0, 0, 700, 1210],
+    },
+    {
+      name: "side",
+      image: "/tmp/renamed-side.png",
+      widthPx: 530,
+      heightPx: 1190,
+      inkBox: [0, 0, 530, 1190],
     },
   ],
   warnings: [],
@@ -158,6 +180,7 @@ async function splitReferenceSheet() {
 beforeEach(() => {
   vi.mocked(model3dService.fetchModel3dCapabilities).mockResolvedValue(CAPABILITIES);
   vi.mocked(model3dService.splitSheetViews).mockResolvedValue(SHEET_VIEWS);
+  vi.mocked(model3dService.renameViews).mockResolvedValue(RENAMED_SHEET_VIEWS);
   vi.mocked(model3dService.fetchProportions).mockResolvedValue(PROPORTIONS);
   vi.mocked(model3dService.buildReferenceScene).mockResolvedValue(REFERENCE_SCENE);
   vi.mocked(model3dService.auditMesh).mockResolvedValue(AUDIT_OK);
@@ -166,6 +189,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.mocked(model3dService.fetchModel3dCapabilities).mockReset();
   vi.mocked(model3dService.splitSheetViews).mockReset();
+  vi.mocked(model3dService.renameViews).mockReset();
   vi.mocked(model3dService.fetchProportions).mockReset();
   vi.mocked(model3dService.buildReferenceScene).mockReset();
   vi.mocked(model3dService.auditMesh).mockReset();
@@ -237,12 +261,77 @@ describe("ModelingPage", () => {
     fireEvent.click(screen.getByRole("button", { name: en["modeling.reference.split"] }));
 
     await waitFor(() => expect(model3dService.splitSheetViews).toHaveBeenCalledWith(file, 4));
-    expect(await screen.findByText("front")).toBeInTheDocument();
-    expect(screen.getByText("640 × 1200 px")).toBeInTheDocument();
-    expect(screen.getByText("side")).toBeInTheDocument();
-    expect(screen.getByText("512 × 1180 px")).toBeInTheDocument();
+    const frontCard = (await screen.findByRole("img", { name: "front" })).closest("li");
+    const sideCard = screen.getByRole("img", { name: "side" }).closest("li");
+    expect(frontCard).not.toBeNull();
+    expect(sideCard).not.toBeNull();
+    expect(within(frontCard as HTMLElement).getByText("640 × 1200 px")).toBeInTheDocument();
+    expect(within(sideCard as HTMLElement).getByText("512 × 1180 px")).toBeInTheDocument();
     expect(screen.getByText("The side view is narrower than expected.")).toBeInTheDocument();
     expect(screen.getByText("The back view was not detected.")).toBeInTheDocument();
+  });
+
+  it("applies selected view names in thumbnail order", async () => {
+    renderPage();
+    await splitReferenceSheet();
+    const selects = screen.getAllByRole("combobox");
+
+    fireEvent.change(selects[0], { target: { value: "back" } });
+    fireEvent.click(screen.getByRole("button", { name: en["modeling.reference.applyNames"] }));
+
+    await waitFor(() =>
+      expect(model3dService.renameViews).toHaveBeenCalledWith("sheet-token", ["back", "side"]),
+    );
+  });
+
+  it("disables applying duplicate view names", async () => {
+    renderPage();
+    await splitReferenceSheet();
+    const selects = screen.getAllByRole("combobox");
+    const applyButton = screen.getByRole("button", {
+      name: en["modeling.reference.applyNames"],
+    });
+
+    fireEvent.change(selects[1], { target: { value: "front" } });
+
+    expect(applyButton).toBeDisabled();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      en["modeling.reference.duplicateNames"],
+    );
+    fireEvent.click(applyButton);
+    expect(model3dService.renameViews).not.toHaveBeenCalled();
+  });
+
+  it("renders the views returned by a successful rename", async () => {
+    renderPage();
+    await splitReferenceSheet();
+    fireEvent.change(screen.getAllByRole("combobox")[0], { target: { value: "back" } });
+
+    fireEvent.click(screen.getByRole("button", { name: en["modeling.reference.applyNames"] }));
+
+    const renamedImage = await screen.findByRole("img", { name: "back" });
+    expect(renamedImage).toHaveAttribute("src", "/tmp/renamed-back.png");
+    expect(screen.getByText("700 × 1210 px")).toBeInTheDocument();
+    expect(screen.queryByText("640 × 1200 px")).not.toBeInTheDocument();
+  });
+
+  it("clears an already-built scene after view names change successfully", async () => {
+    renderPage();
+    await splitReferenceSheet();
+    fireEvent.click(screen.getByRole("button", { name: en["modeling.reference.build"] }));
+    expect(
+      await screen.findByRole("link", { name: "Download the .blend (1.7 m)" }),
+    ).toBeInTheDocument();
+    fireEvent.change(screen.getAllByRole("combobox")[0], { target: { value: "back" } });
+
+    fireEvent.click(screen.getByRole("button", { name: en["modeling.reference.applyNames"] }));
+
+    await waitFor(() => expect(model3dService.renameViews).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("link", { name: "Download the .blend (1.7 m)" }),
+      ).not.toBeInTheDocument(),
+    );
   });
 
   it("builds the reference scene at the default height and offers its download", async () => {

@@ -847,6 +847,44 @@ async def upflow_audit_mesh(file_path: str) -> str:
         return format_tool_error(exc)
 
 
+@mcp.tool(name="upflow_remesh", annotations={"title": "Rehacer la topología de una malla", "readOnlyHint": False, "destructiveHint": False, "openWorldHint": False})
+async def upflow_remesh(
+    file_path: str,
+    voxel_meters: float = 0.01,
+    destination_path: str = "",
+) -> str:
+    """Rehace la topología de una malla por voxeles y devuelve el ANTES y el DESPUÉS.
+
+    Es lo que convierte primitivas que se solapan —o una malla con agujeros— en
+    una sola superficie cerrada. Uniformiza: no respeta aristas vivas, así que
+    para una pieza con cantos rectos NO es lo que querés.
+
+    voxel_meters: el tamaño del voxel. Más chico = más caras y más detalle;
+    mínimo 0.002 m. Medido sobre un personaje de 1,70 m: 0.05 m deja 8k caras y
+    0.02 m deja 51k, partiendo de 288k.
+
+    Las dos auditorías viajan juntas porque un remesh gana topología y pierde
+    detalle, y cuánto perdió solo se ve comparando. No hay modo de cuádruples:
+    QuadriFlow cancela en este entorno y devolver "listo" con la malla intacta
+    sería mentir.
+    """
+    try:
+        name, content = client.read_upload(file_path)
+        payload = await client.api_post(
+            "/api/v1/model3d/remesh",
+            data={"voxelMeters": voxel_meters},
+            files={"file": (name, content, "application/octet-stream")},
+            timeout=client.UPLOAD_TIMEOUT,
+        )
+        if destination_path and payload.get("downloadUrl"):
+            destino = client.resolve_output_path(destination_path, "remallada.glb")
+            await client.api_download(payload["downloadUrl"], destino)
+            payload["outputPath"] = str(destino)
+        return _dump(payload)
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
 @mcp.tool(name="upflow_sheet_views", annotations={"title": "Partir hoja de turnaround", "readOnlyHint": False, "destructiveHint": False, "openWorldHint": False})
 async def upflow_sheet_views(file_path: str, expected_views: int = 4) -> str:
     """Parte una hoja de turnaround en sus vistas y devuelve un token.

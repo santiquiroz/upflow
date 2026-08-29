@@ -244,3 +244,25 @@ def test_renombrar_exige_un_nombre_por_vista(tmp_path):
 
     with pytest.raises(model3d_service.UnknownViewNameError, match="2 vistas"):
         model3d_service.rename_views(tmp_path, ["front"])
+
+
+def test_remesh_manda_el_voxel_y_devuelve_las_dos_auditorias(tmp_path, monkeypatch):
+    # Las dos auditorías viajan juntas porque un remesh gana topología y pierde
+    # detalle: cuánto perdió solo se ve comparando las dos puntas.
+    recibido = {}
+
+    def fake_run(_settings, script, payload, **_kwargs):
+        recibido["script"] = script
+        recibido["payload"] = payload
+        return {"mesh": payload["output"], "voxelMeters": payload["voxelMeters"],
+                "before": {"faces": 288360}, "after": {"faces": 22568}}
+
+    monkeypatch.setattr(model3d_service.blender_service, "run_script", fake_run)
+
+    salida = model3d_service.remesh(
+        object(), tmp_path / "entra.glb", tmp_path / "sale.glb", voxel_meters=0.03
+    )
+
+    assert recibido["script"] == "remesh.py"
+    assert recibido["payload"]["voxelMeters"] == 0.03
+    assert salida["before"]["faces"] > salida["after"]["faces"]

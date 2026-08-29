@@ -1352,6 +1352,11 @@ export const es = {
   "modeling.reference.dropzoneHint": "PNG, JPG o WEBP con fondo blanco",
   "modeling.reference.expectedViews": "Vistas que esperás",
   "modeling.reference.split": "Partir la hoja",
+  "modeling.reference.namingConvention":
+    "Nombrar las vistas por posición es una convención, no una deducción: mirando solo los píxeles no se puede saber si el tercer panel es la espalda o una vista tres cuartos. Si la hoja llega en otro orden, cada plano de la escena recibe el dibujo equivocado y nada lo delata. Mirá las miniaturas y corregí sus nombres antes de armar la escena.",
+  "modeling.reference.viewName": "Nombre de la vista",
+  "modeling.reference.applyNames": "Aplicar nombres",
+  "modeling.reference.duplicateNames": "Cada vista debe tener un nombre distinto.",
   "modeling.reference.height": "Altura real (m)",
   "modeling.reference.heightHint":
     "La escala se calcula sobre el DIBUJO, no sobre el tamaño del archivo: el margen del recorte no achica al personaje.",

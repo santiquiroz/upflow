@@ -29,6 +29,14 @@ IMPORTERS = {
     ".fbx": lambda ruta: bpy.ops.import_scene.fbx(filepath=ruta),
 }
 
+EXPORTERS = {
+    ".stl": lambda ruta: bpy.ops.wm.stl_export(filepath=ruta),
+    ".obj": lambda ruta: bpy.ops.wm.obj_export(filepath=ruta),
+    ".glb": lambda ruta: bpy.ops.export_scene.gltf(filepath=ruta, export_format="GLB"),
+    ".fbx": lambda ruta: bpy.ops.export_scene.fbx(filepath=ruta),
+}
+
+
 def payload() -> dict[str, Any]:
     """Lo que mando el servicio, del unico argumento posterior a `--`."""
     if "--" not in sys.argv:
@@ -85,6 +93,17 @@ def join_meshes(mallas: list[bpy.types.Object]) -> bpy.types.Object:
     bpy.context.view_layer.objects.active = principal
     bpy.ops.object.join()
     return principal
+
+
+def export_mesh(objeto: bpy.types.Object, ruta: str) -> None:
+    sufijo = "." + ruta.rsplit(".", 1)[-1].lower()
+    exportador = EXPORTERS.get(sufijo)
+    if exportador is None:
+        fail(f"formato de salida no soportado: {sufijo}")
+    bpy.ops.object.select_all(action="DESELECT")
+    objeto.select_set(True)
+    bpy.context.view_layer.objects.active = objeto
+    exportador(ruta)
 
 
 def count_shells(bm: bmesh.types.BMesh) -> int:
