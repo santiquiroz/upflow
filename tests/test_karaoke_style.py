@@ -4,6 +4,7 @@ from app.services.karaoke_subtitles import (
     KaraokeLine,
     KaraokeStyle,
     KaraokeWord,
+    build_singer_style_lines,
     build_style_lines,
     hex_to_ass_color,
     render_karaoke_ass,
@@ -87,3 +88,128 @@ def test_traduccion_vacia_no_emite_evento():
 
     eventos = [l for l in ass.splitlines() if l.startswith("Dialogue:")]
     assert len(eventos) == 1
+
+
+# ---------------------------------------------------------------------------
+# F2a: estilos por cantante
+# ---------------------------------------------------------------------------
+
+
+def test_el_estilo_del_cantante_usa_su_color_como_base():
+    estilos = build_singer_style_lines(KaraokeStyle(), {"s2": "#FF0000"})
+
+    assert len(estilos) == 1
+    # Cambia el color BASE (lo no cantado); el resaltado sigue siendo el global,
+    # asi el relleno se lee igual en todas las lineas.
+    assert estilos[0].startswith("Style: Singer_s2,Arial,48,&H00FFFFFF,&H000000FF,")
+    # Misma alineacion y margen que el estilo principal.
+    assert estilos[0].endswith(",2,40,40,60,1")
+
+
+def test_un_color_de_cantante_invalido_se_rechaza():
+    with pytest.raises(ValueError):
+        build_singer_style_lines(KaraokeStyle(), {"s1": "rojo"})
+
+
+def test_la_linea_de_cada_cantante_usa_su_estilo():
+    ass = render_karaoke_ass(
+        [linea(), linea()],
+        singers=["s1", "s2"],
+        singer_colors={"s2": "#FF0000"},
+    )
+
+    eventos = [l for l in ass.splitlines() if l.startswith("Dialogue:")]
+    # s1 no tiene color propio: cae al estilo principal, no a uno inventado.
+    assert ",Karaoke,,0" in eventos[0]
+    assert ",Singer_s2,,0" in eventos[1]
+    assert "Style: Singer_s2," in ass
+
+
+def test_sin_colores_los_cantantes_no_cambian_el_archivo():
+    con = render_karaoke_ass([linea()], singers=["s1"])
+    sin = render_karaoke_ass([linea()])
+
+    assert con == sin
+
+
+def test_la_traduccion_no_hereda_el_estilo_del_cantante():
+    ass = render_karaoke_ass(
+        [linea()],
+        translations=["hello world"],
+        singers=["s1"],
+        singer_colors={"s1": "#FF0000"},
+    )
+
+    eventos = [l for l in ass.splitlines() if l.startswith("Dialogue:")]
+    assert ",Singer_s1,,0" in eventos[0]
+    # La traduccion acompaña con su propio estilo, como siempre.
+    assert ",Translation,,0" in eventos[1]
+
+
+# ---------------------------------------------------------------------------
+# F2a: estilos por cantante — el color BASE identifica quien canta la linea
+# ---------------------------------------------------------------------------
+
+
+def test_cada_cantante_con_color_recibe_su_estilo_y_sus_lineas_lo_usan():
+    ass = render_karaoke_ass(
+        [linea(), linea("chau amigos")],
+        singers=["s1", "s2"],
+        singer_colors={"s1": "#FF0000", "s2": "#00FF00"},
+    )
+
+    # El color del cantante va en el BASE (SecondaryColour, lo no cantado); el
+    # resaltado sigue siendo el global, asi el relleno se lee igual en todas.
+    assert "Style: Singer_s1,Arial,48,&H00FFFFFF,&H000000FF," in ass
+    assert "Style: Singer_s2,Arial,48,&H00FFFFFF,&H0000FF00," in ass
+    eventos = [l for l in ass.splitlines() if l.startswith("Dialogue:")]
+    assert ",Singer_s1,,0" in eventos[0]
+    assert ",Singer_s2,,0" in eventos[1]
+
+
+def test_el_estilo_del_cantante_hereda_tamano_posicion_y_margen_del_principal():
+    ass = render_karaoke_ass(
+        [linea()],
+        style=KaraokeStyle(size="large", position="top"),
+        singers=["s1"],
+        singer_colors={"s1": "#FF0000"},
+    )
+
+    estilo = next(l for l in ass.splitlines() if l.startswith("Style: Singer_s1,"))
+    assert ",Arial,64," in estilo
+    assert estilo.endswith(",8,40,40,40,1")
+
+
+def test_linea_de_cantante_sin_color_cae_al_estilo_principal():
+    ass = render_karaoke_ass([linea()], singers=["s1"], singer_colors={})
+
+    assert "Style: Singer_" not in ass
+    assert ",Karaoke,,0" in ass
+
+
+def test_sin_lista_de_cantantes_los_colores_no_cambian_nada():
+    con_colores = render_karaoke_ass([linea()], singer_colors={"s1": "#FF0000"})
+
+    eventos = [l for l in con_colores.splitlines() if l.startswith("Dialogue:")]
+    assert ",Karaoke,,0" in eventos[0]
+
+
+def test_la_traduccion_no_cambia_de_estilo_por_cantante():
+    ass = render_karaoke_ass(
+        [linea()],
+        translations=["hello world"],
+        singers=["s1"],
+        singer_colors={"s1": "#FF0000"},
+    )
+
+    eventos = [l for l in ass.splitlines() if l.startswith("Dialogue:")]
+    assert ",Singer_s1,,0" in eventos[0]
+    # La traduccion acompaña, no compite: conserva su estilo chico global.
+    assert ",Translation,,0" in eventos[1]
+
+
+def test_color_de_cantante_invalido_se_rechaza():
+    with pytest.raises(ValueError):
+        render_karaoke_ass(
+            [linea()], singers=["s1"], singer_colors={"s1": "verde"}
+        )

@@ -36,6 +36,11 @@ STEM_VOCALS = "audio.stem.vocals"
 STEM_DRUMS = "audio.stem.drums"
 STEM_BASS = "audio.stem.bass"
 STEM_OTHER = "audio.stem.other"
+# El par de KARA_2 (2026-08-28): "backing_vocals" es la pista instrumental CON
+# los coros adentro (lo que el modelo infiere) y "lead_vocals" la voz lider que
+# quedo afuera. Mismo criterio: existen porque hay un modelo que las emite.
+STEM_LEAD_VOCALS = "audio.stem.lead_vocals"
+STEM_BACKING_VOCALS = "audio.stem.backing_vocals"
 
 # Un stem que NO sale del modelo sino de restarle a la mezcla todo lo que el
 # modelo si infiere. Es el complemento exacto, y solo existe cuando el modelo

@@ -107,6 +107,37 @@ def _background_input(
     )
 
 
+def build_practice_mix_command(
+    *,
+    ffmpeg: str,
+    instrumental: Path,
+    vocals: Path,
+    destination: Path,
+) -> list[str]:
+    """La pista de ensayo: instrumental + voces (ya gateadas) en un FLAC.
+
+    `normalize=0` porque amix por default divide el nivel por la cantidad de
+    entradas: la mezcla de practica tiene que sonar al nivel de la cancion,
+    no a la mitad. `duration=longest` para no cortar la cola del instrumental
+    si las voces gateadas terminan antes.
+    """
+    return [
+        str(ffmpeg),
+        "-y",
+        "-i",
+        str(instrumental),
+        "-i",
+        str(vocals),
+        "-filter_complex",
+        "[0:a][1:a]amix=inputs=2:duration=longest:normalize=0[a]",
+        "-map",
+        "[a]",
+        "-c:a",
+        "flac",
+        str(destination),
+    ]
+
+
 def build_karaoke_command(
     *,
     ffmpeg: str,

@@ -101,15 +101,34 @@ function reviewJob(): karaokeService.KaraokeJob {
     progressPct: 100,
     error: null,
     lines: [
-      { index: 0, start: 0, end: 1.5, text: "teppeki", translation: "muralla" },
+      { index: 0, start: 0, end: 1.5, text: "teppeki", translation: "muralla", singer: null },
     ],
+    singers: [],
     instrumentalUrl: "/api/v1/karaoke/jobs/kj-1/instrumental",
     sourceHasPicture: true,
     downloadUrl: null,
+    practiceMixUrl: null,
+  };
+}
+
+function singersJob(): karaokeService.KaraokeJob {
+  return {
+    ...reviewJob(),
+    singers: [
+      { id: "s1", label: "Singer 1" },
+      { id: "s2", label: "Singer 2" },
+    ],
+    lines: [
+      { index: 0, start: 0, end: 1.5, text: "teppeki", translation: "muralla", singer: "s1" },
+      { index: 1, start: 2, end: 3.5, text: "kokoro", translation: "corazón", singer: "s2" },
+    ],
   };
 }
 
 beforeEach(() => {
+  // El historial de llamadas sobrevive entre tests del mismo archivo: sin
+  // limpiarlo, un assert sobre mock.calls[0] lee la llamada de OTRO test.
+  vi.clearAllMocks();
   vi.mocked(karaokeService.createKaraokeJob).mockResolvedValue({
     jobId: "kj-1",
     status: "queued",
@@ -117,6 +136,7 @@ beforeEach(() => {
     downloadUrl: null,
   });
   vi.mocked(karaokeService.getKaraokeJob).mockResolvedValue(reviewJob());
+  vi.mocked(karaokeService.updateKaraokeLyrics).mockResolvedValue(reviewJob());
   vi.mocked(karaokeService.renderKaraokeJob).mockResolvedValue({
     ...reviewJob(),
     phase: "rendering",
@@ -200,5 +220,150 @@ describe("KaraokeStudioPanel", () => {
         subtitlePosition: "bottom",
       }),
     );
+  });
+});
+
+// --- deteccion de cantantes (F2a) ---------------------------------------
+
+async function submitDefault(): Promise<void> {
+  await pickFile();
+  const submit = screen.getByRole("button", { name: en["karaoke.submit"] });
+  await waitFor(() => expect(submit).toBeEnabled());
+  fireEvent.click(submit);
+}
+
+const badgeName = (index: number) =>
+  en["karaoke.singers.badgeLabel"].replace("{{index}}", String(index));
+const renameName = (label: string) =>
+  en["karaoke.singers.renameLabel"].replace("{{label}}", label);
+const colorName = (name: string) =>
+  en["karaoke.singers.colorLabel"].replace("{{name}}", name);
+
+describe("KaraokeStudioPanel singer detection", () => {
+  it("reveals the singer count only when detection is on and sends both fields", async () => {
+    renderPanel();
+    await pickFile();
+    expect(
+      screen.queryByRole("combobox", { name: en["karaoke.singers.count"] }),
+    ).toBeNull();
+
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: en["karaoke.singers.toggle"] }),
+    );
+    const count = await screen.findByRole("combobox", {
+      name: en["karaoke.singers.count"],
+    });
+    fireEvent.change(count, { target: { value: "3" } });
+
+    const submit = screen.getByRole("button", { name: en["karaoke.submit"] });
+    await waitFor(() => expect(submit).toBeEnabled());
+    fireEvent.click(submit);
+
+    await waitFor(() => expect(karaokeService.createKaraokeJob).toHaveBeenCalled());
+    // lastCall: los mocks del modulo acumulan llamadas de los tests previos.
+    const sent = vi.mocked(karaokeService.createKaraokeJob).mock.lastCall?.[0];
+    expect(sent).toEqual(
+      expect.objectContaining({ detectSingers: true, singerCount: 3 }),
+    );
+  });
+
+  it("cycles the line's singer badge and saves the reassignment", async () => {
+    vi.mocked(karaokeService.getKaraokeJob).mockResolvedValue(singersJob());
+    renderPanel();
+    await submitDefault();
+
+    const badge = await screen.findByRole("button", { name: badgeName(1) });
+    expect(badge).toHaveTextContent("Singer 1");
+    fireEvent.click(badge);
+    expect(badge).toHaveTextContent("Singer 2");
+
+    fireEvent.click(screen.getByRole("button", { name: en["karaoke.review.save"] }));
+    await waitFor(() =>
+      expect(karaokeService.updateKaraokeLyrics).toHaveBeenCalled(),
+    );
+    const [jobId, lines] =
+      vi.mocked(karaokeService.updateKaraokeLyrics).mock.lastCall ?? [];
+    expect(jobId).toBe("kj-1");
+    expect(lines).toEqual([{ index: 0, singer: "s2" }]);
+  });
+
+  it("saves singer renames through the lyrics endpoint", async () => {
+    vi.mocked(karaokeService.getKaraokeJob).mockResolvedValue(singersJob());
+    renderPanel();
+    await submitDefault();
+
+    const rename = await screen.findByLabelText(renameName("Singer 1"));
+    fireEvent.change(rename, { target: { value: "Ana" } });
+    fireEvent.click(screen.getByRole("button", { name: en["karaoke.review.save"] }));
+
+    await waitFor(() =>
+      expect(karaokeService.updateKaraokeLyrics).toHaveBeenCalled(),
+    );
+    const [, lines, singers] =
+      vi.mocked(karaokeService.updateKaraokeLyrics).mock.lastCall ?? [];
+    expect(lines).toEqual([]);
+    expect(singers).toEqual([
+      { id: "s1", label: "Ana" },
+      { id: "s2", label: "Singer 2" },
+    ]);
+  });
+
+  it("sends the singer palette and the practiced singer on render", async () => {
+    vi.mocked(karaokeService.getKaraokeJob).mockResolvedValue(singersJob());
+    renderPanel();
+    await submitDefault();
+
+    const color = await screen.findByLabelText(colorName("Singer 1"));
+    fireEvent.change(color, { target: { value: "#123456" } });
+    const practice = screen.getByRole("combobox", {
+      name: en["karaoke.singers.practiceAs"],
+    });
+    fireEvent.change(practice, { target: { value: "s2" } });
+
+    fireEvent.click(screen.getByRole("button", { name: en["karaoke.render"] }));
+    await waitFor(() => expect(karaokeService.renderKaraokeJob).toHaveBeenCalled());
+    const [, params] =
+      vi.mocked(karaokeService.renderKaraokeJob).mock.lastCall ?? [];
+    expect(params?.muteSinger).toBe("s2");
+    expect(params?.singerColors?.s1).toBe("#123456");
+    expect(Object.keys(params?.singerColors ?? {}).sort()).toEqual(["s1", "s2"]);
+  });
+
+  it("warns that unison singing cannot be split", async () => {
+    vi.mocked(karaokeService.getKaraokeJob).mockResolvedValue(singersJob());
+    renderPanel();
+    await submitDefault();
+
+    await screen.findByRole("button", { name: en["karaoke.render"] });
+    expect(
+      screen.getByText(en["karaoke.singers.unisonWarning"]),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the singer controls out of jobs without detection", async () => {
+    renderPanel();
+    await submitDefault();
+
+    await screen.findByRole("button", { name: en["karaoke.render"] });
+    expect(
+      screen.queryByRole("combobox", { name: en["karaoke.singers.practiceAs"] }),
+    ).toBeNull();
+    expect(screen.queryByText(en["karaoke.singers.unisonWarning"])).toBeNull();
+  });
+
+  it("offers the practice mix download when the render muted a singer", async () => {
+    vi.mocked(karaokeService.getKaraokeJob).mockResolvedValue({
+      ...singersJob(),
+      phase: "completed",
+      downloadUrl: "/api/v1/karaoke/jobs/kj-1/download",
+      practiceMixUrl: "/api/v1/karaoke/jobs/kj-1/practice-mix",
+    });
+    renderPanel();
+    await submitDefault();
+
+    const link = await screen.findByRole("link", {
+      name: en["karaoke.singers.practiceDownload"],
+    });
+    expect(link).toHaveAttribute("href", "/api/v1/karaoke/jobs/kj-1/practice-mix");
   });
 });

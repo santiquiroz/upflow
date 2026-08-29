@@ -19,6 +19,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+import soundfile as sf
+
 from app.config import APOLLO_MODE, AUDIOSR_MODE, Settings
 from app.models import JobStatus, KaraokeJob
 from app.services.audio_excerpt import probe_duration_seconds
@@ -27,11 +29,25 @@ from app.services.auth.quotas import QuotaService
 from app.services.cleanup_chain import cleanup_steps_from_selection
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
+from app.services.engines.singer_clustering import (
+    SINGER_COUNT_DEFAULT,
+    SINGER_COUNT_MAX,
+    SINGER_COUNT_MIN,
+    cluster_singers,
+    mute_time_spans,
+    singer_label,
+)
+from app.services.engines.singer_embedding import (
+    SpeakerEmbedder,
+    line_embeddings,
+    xvector_speaker_embedder,
+)
 from app.services.engines.transcribe_onnx import TranscribeRequest, is_english_only
 from app.services.job_manager_base import QueuedJobManager
 from app.services.karaoke_subtitles import (
     KaraokeStyle,
     build_style_lines,
+    hex_to_ass_color,
     line_from_segment,
     render_karaoke_ass,
 )
@@ -39,8 +55,10 @@ from app.services.karaoke_video import (
     BACKGROUND_KINDS,
     build_karaoke_command,
     build_picture_probe_command,
+    build_practice_mix_command,
     has_real_picture,
 )
+from app.services.missing_pack import missing_pack_message
 from app.services.media_decode import (
     SEPARATION_CHANNELS,
     SEPARATION_SAMPLE_RATE,
@@ -63,6 +81,11 @@ RESTORE_MODES = (APOLLO_MODE, AUDIOSR_MODE)
 PHASES = ("preparing", "review", "rendering", "completed", "failed", "cancelled")
 
 _LANGUAGE_LENGTH = 2
+
+# El stem del que salen los embeddings de cantante. Los modelos de karaoke lo
+# emiten con este id; uno que no lo tenga (reverb_hq, KARA_2) no sirve para
+# detectar cantantes y se rechaza al crear.
+VOCALS_STEM_ID = "vocals"
 
 
 def _discard_dir(work_dir: Path | None) -> None:
@@ -92,6 +115,7 @@ class KaraokeJobManager(QueuedJobManager[KaraokeJob]):
         devices: DevicesService | None = None,
         quota_service: QuotaService | None = None,
         translation: TranslationEngine | None = None,
+        embedder: SpeakerEmbedder | None = None,
     ) -> None:
         super().__init__(settings, quota_service=quota_service, worker_count=1)
         self.transcribe_engine = transcribe_engine
@@ -103,6 +127,11 @@ class KaraokeJobManager(QueuedJobManager[KaraokeJob]):
         self.restorers = restorers
         self.devices = devices
         self.translation = translation or TranslationEngine(translation_dir(settings))
+        # El encoder de voz del pack de conversion, reusado (decision #6 del
+        # spec F2a): un pack nuevo duplicaria 30 MB por la misma huella.
+        self.embedder = embedder or xvector_speaker_embedder(
+            settings.voice_conversion_xvector_path
+        )
 
     # ------------------------------------------------------------ create
 
@@ -118,6 +147,8 @@ class KaraokeJobManager(QueuedJobManager[KaraokeJob]):
         language: str | None = None,
         romanize: bool = False,
         translate_to: str | None = None,
+        detect_singers: bool = False,
+        singer_count: int | None = None,
         device: str | None = None,
         job_id: str | None = None,
         owner: AuthenticatedUser | None = None,
@@ -131,6 +162,7 @@ class KaraokeJobManager(QueuedJobManager[KaraokeJob]):
         cleanup_steps_from_selection(list(cleanup_steps or []))
         self._validate_restore_mode(restore_mode)
         self._validate_translation(language, translate_to)
+        self._validate_singer_detection(detect_singers, singer_count, separation_model_id)
         await self._validate_device(device)
         if owner is not None and self.quota_service is not None:
             self.quota_service.check_admission(owner)
@@ -145,6 +177,10 @@ class KaraokeJobManager(QueuedJobManager[KaraokeJob]):
             language=language,
             romanize=romanize,
             translate_to=translate_to,
+            detect_singers=detect_singers,
+            singer_count=(
+                singer_count if singer_count is not None else SINGER_COUNT_DEFAULT
+            ),
             device=device,
             owner_id=owner.id if owner is not None else None,
         )
@@ -225,6 +261,46 @@ class KaraokeJobManager(QueuedJobManager[KaraokeJob]):
                 "instalado. Instalalo desde Transcribir (doblaje) o elegi otro idioma."
             )
 
+    def _validate_singer_detection(
+        self,
+        detect_singers: bool,
+        singer_count: int | None,
+        separation_model_id: str | None,
+    ) -> None:
+        if not detect_singers:
+            if singer_count is not None:
+                raise ValueError(
+                    "singer_count solo tiene sentido con detect_singers activado."
+                )
+            return
+        count = singer_count if singer_count is not None else SINGER_COUNT_DEFAULT
+        if not SINGER_COUNT_MIN <= count <= SINGER_COUNT_MAX:
+            raise ValueError(
+                f"singer_count tiene que estar entre {SINGER_COUNT_MIN} y "
+                f"{SINGER_COUNT_MAX}; llego {count}."
+            )
+        self._validate_model_emits_vocals(separation_model_id)
+        if not self.embedder.available():
+            raise ValueError(
+                missing_pack_message(
+                    "voice-conversion",
+                    detail="La deteccion de cantantes usa su encoder de voz.",
+                )
+            )
+
+    def _validate_model_emits_vocals(self, separation_model_id: str | None) -> None:
+        from app.services.engines.separation_models import (
+            DEFAULT_SEPARATION_MODEL,
+            SEPARATION_MODELS,
+        )
+
+        spec = SEPARATION_MODELS[separation_model_id or DEFAULT_SEPARATION_MODEL]
+        if VOCALS_STEM_ID not in spec.stem_ids():
+            raise ValueError(
+                f"El modelo {spec.id!r} no emite el stem {VOCALS_STEM_ID!r}, y la "
+                "deteccion de cantantes necesita las voces solas para sacar la huella."
+            )
+
     async def _validate_device(self, device: str | None) -> None:
         if device is None:
             return
@@ -238,17 +314,27 @@ class KaraokeJobManager(QueuedJobManager[KaraokeJob]):
 
     # ------------------------------------------------------------ review
 
-    def update_lyrics(self, job_id: str, lines: list[dict[str, Any]]) -> KaraokeJob:
-        """Reemplaza texto y/o traduccion por indice de segmento, en `review`.
+    def update_lyrics(
+        self,
+        job_id: str,
+        lines: list[dict[str, Any]],
+        singers: list[dict[str, Any]] | None = None,
+    ) -> KaraokeJob:
+        """Reemplaza texto, traduccion y/o cantante por indice, en `review`.
 
         Editar el texto descarta los tiempos POR PALABRA de esa linea: las
         palabras nuevas no son las que el modelo cronometro, y repartir por
         letras (el fallback que ya existe) es honesto; mantener tiempos de
-        palabras que ya no estan no lo seria.
+        palabras que ya no estan no lo seria. Reasignar el cantante NO toca
+        el texto ni sus tiempos.
+
+        `singers` renombra cantantes y es un reemplazo TOTAL de la lista de
+        renombres (contrato F2a): lo que no venga vuelve a su id default.
         """
         job = self._job_in_review(job_id)
         segmentos = list(job.segments)
         traducciones = list(job.translated_lines)
+        cantantes = list(job.line_singers)
         while len(traducciones) < len(segmentos):
             traducciones.append("")
         for cambio in lines:
@@ -261,9 +347,49 @@ class KaraokeJobManager(QueuedJobManager[KaraokeJob]):
             nueva_traduccion = cambio.get("translation")
             if nueva_traduccion is not None:
                 traducciones[index] = nueva_traduccion
+            nuevo_cantante = cambio.get("singer")
+            if nuevo_cantante is not None:
+                self._validate_known_singer(job, str(nuevo_cantante))
+                cantantes[index] = str(nuevo_cantante)
+        renombres = (
+            self._validated_singer_names(job, singers) if singers is not None else None
+        )
         job.segments = segmentos
         job.translated_lines = traducciones
+        job.line_singers = cantantes
+        if renombres is not None:
+            job.singer_names = renombres
         return job
+
+    def _known_singer_ids(self, job: KaraokeJob) -> tuple[str, ...]:
+        if not job.detect_singers:
+            return ()
+        return tuple(singer_label(i) for i in range(job.singer_count))
+
+    def _validate_known_singer(self, job: KaraokeJob, singer_id: str) -> None:
+        conocidos = self._known_singer_ids(job)
+        if not conocidos:
+            raise ValueError(
+                "Este trabajo no detecto cantantes: crealo con detect_singers "
+                "para poder asignarlos."
+            )
+        if singer_id not in conocidos:
+            raise ValueError(
+                f"Cantante desconocido: {singer_id!r}. Validos: {', '.join(conocidos)}."
+            )
+
+    def _validated_singer_names(
+        self, job: KaraokeJob, singers: list[dict[str, Any]]
+    ) -> dict[str, str]:
+        renombres: dict[str, str] = {}
+        for cantante in singers:
+            singer_id = str(cantante.get("id") or "")
+            self._validate_known_singer(job, singer_id)
+            label = str(cantante.get("label") or "").strip()
+            if not label:
+                raise ValueError(f"El cantante {singer_id!r} necesita un nombre no vacio.")
+            renombres[singer_id] = label
+        return renombres
 
     def request_render(
         self,
@@ -275,6 +401,8 @@ class KaraokeJobManager(QueuedJobManager[KaraokeJob]):
         subtitle_position: str = "bottom",
         subtitle_color: str = "#FFFF00",
         subtitle_highlight_color: str = "#FFFFFF",
+        singer_colors: dict[str, str] | None = None,
+        mute_singer: str | None = None,
     ) -> KaraokeJob:
         """Valida los parametros del render y re-encola el trabajo."""
         job = self._job_in_review(job_id)
@@ -295,12 +423,25 @@ class KaraokeJobManager(QueuedJobManager[KaraokeJob]):
                 highlight_color=subtitle_highlight_color,
             )
         )
+        colores = dict(singer_colors or {})
+        for singer_id, color in colores.items():
+            self._validate_known_singer(job, singer_id)
+            hex_to_ass_color(color)  # mismo criterio eager que el estilo
+        if mute_singer is not None:
+            self._validate_known_singer(job, mute_singer)
+            if job.vocals_path is None or not job.vocals_path.exists():
+                raise ValueError(
+                    "El stem de voz de este trabajo ya no esta en disco: "
+                    "no se puede mutear por cantante."
+                )
         job.background_kind = background_kind
         job.background_path = background_path
         job.subtitle_size = subtitle_size
         job.subtitle_position = subtitle_position
         job.subtitle_color = subtitle_color
         job.subtitle_highlight_color = subtitle_highlight_color
+        job.singer_colors = colores
+        job.mute_singer = mute_singer
         job.phase = "rendering"
         job.status = JobStatus.queued
         job.error = None
@@ -379,6 +520,8 @@ class KaraokeJobManager(QueuedJobManager[KaraokeJob]):
             self._translate(job)
             if job.romanize:
                 job.segments = romanize_segments(list(job.segments))
+            if job.detect_singers:
+                await self._assign_singers(job)
             job.instrumental_path = await self._encode_instrumental(work_dir, instrumental)
             job.progress_pct = 100.0
             job.phase = "review"
@@ -420,9 +563,15 @@ class KaraokeJobManager(QueuedJobManager[KaraokeJob]):
             model_id=spec.id,
         )
         principal = work_dir / f"{spec.main_stem.id}.wav"
+        # Con deteccion de cantantes el stem vocal SOBREVIVE al descarte: los
+        # embeddings salen de ahi y el render con mute lo gatea. Muere con la
+        # carpeta de trabajo cuando el trabajo termina de verdad.
+        retenido = work_dir / f"{VOCALS_STEM_ID}.wav" if job.detect_singers else None
         for sobrante in stem_wavs:
-            if sobrante != principal:
+            if sobrante != principal and sobrante != retenido:
                 sobrante.unlink(missing_ok=True)
+        if retenido is not None and retenido != principal:
+            job.vocals_path = retenido
         return principal
 
     async def _cleanup(self, job: KaraokeJob, work_dir: Path, current: Path) -> Path:
@@ -509,12 +658,44 @@ class KaraokeJobManager(QueuedJobManager[KaraokeJob]):
         instrumental.unlink(missing_ok=True)
         return destino
 
+    async def _assign_singers(self, job: KaraokeJob) -> None:
+        """Huella por linea sobre el stem vocal + clustering a s1..sN.
+
+        Las ventanas salen de los tiempos de la transcripcion (hecha sobre la
+        mezcla, decision #7 del spec F2a); el audio, del stem vocal retenido.
+        Corre en un thread: el encoder es ONNX en CPU y bloquearia el loop.
+        """
+        if job.vocals_path is None or not job.vocals_path.exists():
+            raise RuntimeError(
+                "Se pidio detectar cantantes pero el stem vocal no se retuvo."
+            )
+        spans = [(float(s.start), float(s.end)) for s in job.segments]
+        if not spans:
+            job.line_singers = []
+            return
+        vocals_path = job.vocals_path
+        embedder = self.embedder
+        singer_count = job.singer_count
+
+        def calcular() -> list[str]:
+            audio, rate = sf.read(vocals_path, dtype="float32", always_2d=True)
+            huellas = line_embeddings(embedder, audio, rate, spans)
+            return cluster_singers(huellas, spans, singer_count)
+
+        job.line_singers = await asyncio.to_thread(calcular)
+
     # ------------------------------------------------------------ etapa 2
 
     async def _run_render(self, job: KaraokeJob) -> None:
+        # Un intento anterior con mute pudo dejar una mezcla vieja apuntada: el
+        # render vigente decide de nuevo si hay pista de practica o no.
+        job.practice_audio_path = None
         try:
             subtitles = self._write_subtitles(job)
-            duration = await probe_duration_seconds(job.instrumental_path, self.settings) or 0.0
+            pista = job.instrumental_path
+            if job.mute_singer is not None:
+                pista = await self._build_practice_mix(job)
+            duration = await probe_duration_seconds(pista, self.settings) or 0.0
             background = (
                 job.source_path if job.background_kind == "source" else job.background_path
             )
@@ -524,7 +705,7 @@ class KaraokeJobManager(QueuedJobManager[KaraokeJob]):
                 background_kind=job.background_kind,
                 background=background,
                 duration_seconds=duration,
-                instrumental=job.instrumental_path,
+                instrumental=pista,
                 subtitles=subtitles,
                 destination=destination,
             )
@@ -543,6 +724,39 @@ class KaraokeJobManager(QueuedJobManager[KaraokeJob]):
             job.phase = "review"
             raise
 
+    async def _build_practice_mix(self, job: KaraokeJob) -> Path:
+        """Instrumental + voces con las lineas del cantante muteadas.
+
+        Queda como artefacto en outputs y no en work_dir: ES la pista de
+        ensayo, se descarga despues de completar, y work_dir muere antes.
+        """
+        spans = [
+            (float(segmento.start), float(segmento.end))
+            for segmento, cantante in zip(job.segments, job.line_singers)
+            if cantante == job.mute_singer
+        ]
+        gated = job.work_dir / "vocals-gated.wav"
+        vocals_path = job.vocals_path
+
+        def gatear() -> None:
+            audio, rate = sf.read(vocals_path, dtype="float32", always_2d=True)
+            sf.write(gated, mute_time_spans(audio, rate, spans), rate, subtype="FLOAT")
+
+        await asyncio.to_thread(gatear)
+        destino = self.settings.outputs_path / f"{job.id}.practice.flac"
+        command = build_practice_mix_command(
+            ffmpeg=str(self.settings.ffmpeg_binary_path),
+            instrumental=job.instrumental_path,
+            vocals=gated,
+            destination=destino,
+        )
+        await self._run_process(command, "armar la mezcla de practica")
+        if not (destino.exists() and destino.stat().st_size > 0):
+            raise RuntimeError("La mezcla de practica salio vacia.")
+        gated.unlink(missing_ok=True)
+        job.practice_audio_path = destino
+        return destino
+
     def _write_subtitles(self, job: KaraokeJob) -> Path:
         lineas = [
             line_from_segment(segmento)
@@ -551,6 +765,11 @@ class KaraokeJobManager(QueuedJobManager[KaraokeJob]):
         ]
         traducciones = [
             (job.translated_lines[i] if i < len(job.translated_lines) else "")
+            for i, segmento in enumerate(job.segments)
+            if getattr(segmento, "text", "").strip()
+        ]
+        cantantes = [
+            (job.line_singers[i] if i < len(job.line_singers) else "")
             for i, segmento in enumerate(job.segments)
             if getattr(segmento, "text", "").strip()
         ]
@@ -563,7 +782,13 @@ class KaraokeJobManager(QueuedJobManager[KaraokeJob]):
         destino = self.settings.outputs_path / f"{job.id}.ass"
         destino.parent.mkdir(parents=True, exist_ok=True)
         destino.write_text(
-            render_karaoke_ass(lineas, translations=traducciones, style=estilo),
+            render_karaoke_ass(
+                lineas,
+                translations=traducciones,
+                style=estilo,
+                singers=cantantes,
+                singer_colors=dict(job.singer_colors),
+            ),
             encoding="utf-8",
         )
         return destino

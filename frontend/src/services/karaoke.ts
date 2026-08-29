@@ -19,6 +19,13 @@ export interface KaraokeLyricLine {
   end: number;
   text: string;
   translation: string;
+  // null cuando el trabajo no pidio deteccion de cantantes.
+  singer: string | null;
+}
+
+export interface KaraokeSinger {
+  id: string;
+  label: string;
 }
 
 export interface KaraokeJob {
@@ -38,9 +45,14 @@ export interface KaraokeJob {
   progressPct: number | null;
   error: string | null;
   lines: KaraokeLyricLine[];
+  // Vacio cuando el trabajo no pidio deteccion de cantantes.
+  singers: KaraokeSinger[];
   instrumentalUrl: string | null;
   sourceHasPicture: boolean | null;
   downloadUrl: string | null;
+  // Solo en renders completados que mutearon a un cantante: la mezcla de
+  // practica (instrumental + las voces que quedaron) como audio descargable.
+  practiceMixUrl: string | null;
 }
 
 export interface CreateKaraokeJobParams {
@@ -53,6 +65,8 @@ export interface CreateKaraokeJobParams {
   romanize?: boolean;
   translateTo?: string | null;
   device?: string;
+  detectSingers?: boolean;
+  singerCount?: number;
 }
 
 function buildCreateFormData(params: CreateKaraokeJobParams): FormData {
@@ -80,6 +94,14 @@ function buildCreateFormData(params: CreateKaraokeJobParams): FormData {
   if (params.device) {
     formData.append("device", params.device);
   }
+  // singer_count sin detect_singers es invalido para el backend: los dos
+  // campos viajan juntos o no viajan.
+  if (params.detectSingers) {
+    formData.append("detect_singers", "true");
+    if (params.singerCount) {
+      formData.append("singer_count", String(params.singerCount));
+    }
+  }
   return formData;
 }
 
@@ -102,13 +124,21 @@ export interface KaraokeLyricEdit {
   index: number;
   text?: string;
   translation?: string;
+  singer?: string;
 }
 
 export function updateKaraokeLyrics(
   jobId: string,
   lines: KaraokeLyricEdit[],
+  singers?: KaraokeSinger[],
 ): Promise<KaraokeJob> {
-  return apiPutJson<KaraokeJob>(`/karaoke/jobs/${jobId}/lyrics`, { lines });
+  // `singers` ausente = "no los toques"; una lista presente reemplaza los
+  // labels completos. Nunca se manda vacia.
+  const body: { lines: KaraokeLyricEdit[]; singers?: KaraokeSinger[] } = { lines };
+  if (singers && singers.length > 0) {
+    body.singers = singers;
+  }
+  return apiPutJson<KaraokeJob>(`/karaoke/jobs/${jobId}/lyrics`, body);
 }
 
 export interface RenderKaraokeParams {
@@ -118,6 +148,8 @@ export interface RenderKaraokeParams {
   subtitlePosition: string;
   subtitleColor: string;
   subtitleHighlightColor: string;
+  singerColors?: Record<string, string>;
+  muteSinger?: string | null;
 }
 
 export function renderKaraokeJob(
@@ -131,6 +163,14 @@ export function renderKaraokeJob(
   formData.append("subtitle_position", params.subtitlePosition);
   formData.append("subtitle_color", params.subtitleColor);
   formData.append("subtitle_highlight_color", params.subtitleHighlightColor);
+  // Convencion de campo repetido de la familia (como cleanup_steps): una
+  // entrada "id:hex" por cantante.
+  for (const [singerId, color] of Object.entries(params.singerColors ?? {})) {
+    formData.append("singer_colors", `${singerId}:${color}`);
+  }
+  if (params.muteSinger) {
+    formData.append("mute_singer", params.muteSinger);
+  }
   if (params.background) {
     formData.append("background", params.background);
   }

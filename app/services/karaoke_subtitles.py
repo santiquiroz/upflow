@@ -78,28 +78,59 @@ def _style_line(
     )
 
 
-def build_style_lines(style: KaraokeStyle) -> list[str]:
-    """El estilo principal y el de la traduccion, coherentes entre si.
+def _margins(style: KaraokeStyle) -> tuple[int, int]:
+    """(principal, traduccion). Con alineacion abajo, MarginV mas grande = mas
+    arriba: la principal va a 60 y la traduccion debajo a 16. Arriba es al
+    reves, asi que la traduccion baja sumando el alto de la principal."""
+    principal = _font_size(style)
+    if _alignment(style) == ALIGNMENT_BY_POSITION["bottom"]:
+        return 60, 16
+    return 40, 40 + principal + 12
 
-    Con alineacion abajo, MarginV mas grande = mas arriba: la principal va a 60
-    y la traduccion debajo a 16. Arriba es al reves, asi que la traduccion baja
-    sumando el alto de la principal.
-    """
+
+def build_style_lines(style: KaraokeStyle) -> list[str]:
+    """El estilo principal y el de la traduccion, coherentes entre si."""
     principal = _font_size(style)
     traduccion = int(round(principal * TRANSLATION_FONT_RATIO))
     alignment = _alignment(style)
     primary = hex_to_ass_color(style.highlight_color)
     secondary = hex_to_ass_color(style.base_color)
-    if alignment == ALIGNMENT_BY_POSITION["bottom"]:
-        margen_principal, margen_traduccion = 60, 16
-    else:
-        margen_principal = 40
-        margen_traduccion = margen_principal + principal + 12
+    margen_principal, margen_traduccion = _margins(style)
     return [
         _style_line("Karaoke", principal, primary, secondary, alignment, margen_principal),
         _style_line(
             "Translation", traduccion, primary, secondary, alignment, margen_traduccion
         ),
+    ]
+
+
+def singer_style_name(singer_id: str) -> str:
+    return f"Singer_{singer_id}"
+
+
+def build_singer_style_lines(
+    style: KaraokeStyle, singer_colors: dict[str, str]
+) -> list[str]:
+    """Un estilo por cantante CON color elegido, calcado del principal.
+
+    Lo unico que cambia es el color BASE (SecondaryColour, el texto aun no
+    cantado): es lo que identifica al cantante toda la linea. El resaltado
+    sigue siendo el global para que el relleno `\\k` se lea igual en todas.
+    """
+    principal = _font_size(style)
+    alignment = _alignment(style)
+    primary = hex_to_ass_color(style.highlight_color)
+    margen_principal, _ = _margins(style)
+    return [
+        _style_line(
+            singer_style_name(singer_id),
+            principal,
+            primary,
+            hex_to_ass_color(color),
+            alignment,
+            margen_principal,
+        )
+        for singer_id, color in singer_colors.items()
     ]
 
 
@@ -168,6 +199,8 @@ def render_karaoke_ass(
     height: int = 720,
     translations: list[str] | None = None,
     style: KaraokeStyle | None = None,
+    singers: list[str] | None = None,
+    singer_colors: dict[str, str] | None = None,
 ) -> str:
     """El archivo .ass completo.
 
@@ -177,8 +210,14 @@ def render_karaoke_ass(
     `translations` acompaña por INDICE a `lines`: la linea traducida hereda los
     tiempos de la original y se resalta proporcional por letras — los tiempos
     por palabra solo existen de verdad en el idioma que se canta.
+
+    `singers` acompaña por INDICE igual que `translations`: la linea de un
+    cantante que tenga color en `singer_colors` usa su estilo propio; sin
+    color (o sin etiqueta) cae al estilo principal.
     """
     estilo = style or KaraokeStyle()
+    colores = singer_colors or {}
+    etiquetas = list(singers or [])
     cabecera = [
         "[Script Info]",
         "ScriptType: v4.00+",
@@ -191,11 +230,19 @@ def render_karaoke_ass(
         "BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,"
         "BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding",
         *build_style_lines(estilo),
+        *(build_singer_style_lines(estilo, colores) if etiquetas else ()),
         "",
         "[Events]",
         "Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text",
     ]
-    dialogos = [d for d in (line_to_dialogue(linea) for linea in lines) if d]
+    dialogos = [
+        d
+        for d in (
+            line_to_dialogue(linea, style_name=_line_style(etiquetas, indice, colores))
+            for indice, linea in enumerate(lines)
+        )
+        if d
+    ]
     if translations:
         for linea, traduccion in zip(lines, translations):
             if not (traduccion or "").strip():
@@ -205,6 +252,13 @@ def render_karaoke_ass(
             if dialogo:
                 dialogos.append(dialogo)
     return "\n".join(cabecera + dialogos) + "\n"
+
+
+def _line_style(singers: list[str], index: int, singer_colors: dict[str, str]) -> str:
+    cantante = singers[index] if index < len(singers) else ""
+    if cantante and cantante in singer_colors:
+        return singer_style_name(cantante)
+    return "Karaoke"
 
 
 def split_line_proportionally(

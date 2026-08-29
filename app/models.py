@@ -254,11 +254,23 @@ class KaraokeJob:
     romanize: bool = False
     translate_to: str | None = None
     device: str | None = None
+    # Deteccion de cantantes (F2a): clustering sin supervision sobre el stem
+    # vocal. `singer_count` solo tiene sentido con la deteccion prendida.
+    detect_singers: bool = False
+    singer_count: int = 2
     phase: str = "preparing"
     segments: list[Any] = field(default_factory=list)
     # Traducciones por INDICE de segmento; vacias donde no hubo que traducir.
     translated_lines: list[str] = field(default_factory=list)
+    # Cantante por INDICE de segmento ("s1".."sN"), misma convencion que las
+    # traducciones; vacia cuando no se pidio deteccion.
+    line_singers: list[str] = field(default_factory=list)
+    # Nombres visibles renombrados en review, por id de cantante; el id es el
+    # default cuando no hay renombre.
+    singer_names: dict[str, str] = field(default_factory=dict)
     instrumental_path: Path | None = None
+    # El stem vocal retenido cuando hay deteccion: el render con mute lo gatea.
+    vocals_path: Path | None = None
     work_dir: Path | None = None
     # Parametros de la etapa de render; llegan con el endpoint de render.
     background_kind: str = "generated"
@@ -267,6 +279,11 @@ class KaraokeJob:
     subtitle_position: str = "bottom"
     subtitle_color: str = "#FFFF00"
     subtitle_highlight_color: str = "#FFFFFF"
+    # Render per-singer (F2a): color base por cantante y cantante a mutear.
+    singer_colors: dict[str, str] = field(default_factory=dict)
+    mute_singer: str | None = None
+    # La pista de ensayo (instrumental + voces gateadas), solo con mute.
+    practice_audio_path: Path | None = None
     id: str = field(default_factory=lambda: uuid4().hex)
     status: JobStatus = JobStatus.queued
     created_at: datetime = field(default_factory=utc_now)

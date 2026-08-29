@@ -159,7 +159,7 @@ def test_the_roformer_model_joins_the_karaoke_group_without_becoming_the_default
     assert DEFAULT_SEPARATION_MODEL == "inst_hq_3"
     assert SPEC.category == "karaoke"
     karaoke = [spec.id for spec in SEPARATION_MODELS.values() if spec.category == "karaoke"]
-    assert karaoke == ["inst_hq_3", "voc_ft", MODEL_ID, "umx_4stem"]
+    assert karaoke == ["inst_hq_3", "voc_ft", "kara_2", MODEL_ID, "umx_4stem"]
 
 
 def test_the_roformer_entry_declares_its_own_architecture() -> None:
@@ -776,4 +776,4 @@ async def test_capabilities_expose_the_warning_only_for_the_slow_model(
     assert by_id["inst_hq_3"].warning_key is None
     assert [stem.id for stem in by_id[MODEL_ID].stems] == ["instrumental", "vocals"]
     karaoke = [model.id for model in response.separation_models if model.category == "karaoke"]
-    assert karaoke == ["inst_hq_3", "voc_ft", MODEL_ID, "umx_4stem"]
+    assert karaoke == ["inst_hq_3", "voc_ft", "kara_2", MODEL_ID, "umx_4stem"]

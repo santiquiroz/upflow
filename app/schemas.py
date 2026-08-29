@@ -1016,6 +1016,13 @@ class KaraokeLyricLine(BaseModel):
     end: float
     text: str
     translation: str = ""
+    # "s1".."sN", o null cuando el trabajo no detecto cantantes.
+    singer: str | None = None
+
+
+class KaraokeSinger(BaseModel):
+    id: str
+    label: str
 
 
 class KaraokeJobResponse(BaseModel):
@@ -1050,6 +1057,12 @@ class KaraokeJobResponse(BaseModel):
         default=None, serialization_alias="sourceHasPicture"
     )
     download_url: str | None = Field(default=None, serialization_alias="downloadUrl")
+    # SIEMPRE presente ([] sin deteccion): la lista de cantantes con su nombre
+    # visible, para el picker de colores y el selector de mute.
+    singers: list[KaraokeSinger] = Field(default_factory=list)
+    # La mezcla de practica (instrumental + voces gateadas), solo cuando el
+    # render se pidio con mute_singer y ya termino.
+    practice_mix_url: str | None = Field(default=None, serialization_alias="practiceMixUrl")
 
 
 class KaraokeJobsListResponse(BaseModel):
@@ -1060,10 +1073,14 @@ class KaraokeLyricEdit(BaseModel):
     index: int
     text: str | None = None
     translation: str | None = None
+    singer: str | None = None
 
 
 class KaraokeLyricsUpdateRequest(BaseModel):
     lines: list[KaraokeLyricEdit] = Field(default_factory=list)
+    # Reemplazo TOTAL de los renombres cuando viene: lo que no este vuelve a
+    # su id default. Ausente = no tocar los renombres existentes.
+    singers: list[KaraokeSinger] | None = None
 
 
 class ProvisionJobResponse(BaseModel):

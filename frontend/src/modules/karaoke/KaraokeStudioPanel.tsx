@@ -19,11 +19,17 @@ import {
   type KaraokeBackgroundKind,
   type KaraokeJob,
   type KaraokeLyricEdit,
+  type KaraokeLyricLine,
+  type KaraokeSinger,
 } from "../../services/karaoke";
 import { useCleanupSelection } from "../audio/useCleanupSelection";
 
 const POLL_INTERVAL_MS = 1500;
 const LANGUAGE_OPTIONS = ["es", "en", "pt", "fr", "de", "it", "ja"] as const;
+const SINGER_COUNT_OPTIONS = [2, 3, 4] as const;
+// Paleta inicial por cantante (editable en el review): colores saturados y
+// distintos entre si para que chip y subtitulo se reconozcan de una.
+const DEFAULT_SINGER_COLORS = ["#FF5252", "#40C4FF", "#FFD740", "#69F0AE"];
 
 const inputClassName =
   "rounded border border-border bg-surface px-3 py-2 text-sm text-text focus:border-accent focus:outline-none";
@@ -78,39 +84,111 @@ function FileDropzone({
 
 function LyricsEditor({
   job,
+  singerColors,
   onSaved,
 }: {
   job: KaraokeJob;
+  singerColors: Record<string, string>;
   onSaved: () => void;
 }) {
   const { t } = useTranslation();
   const [edits, setEdits] = useState<Record<number, KaraokeLyricEdit>>({});
+  const [names, setNames] = useState<Record<string, string>>({});
   const hasTranslation = job.translateTo !== null;
+  const hasSingers = job.singers.length > 0;
 
   const save = useMutation({
-    mutationFn: () => updateKaraokeLyrics(job.id, Object.values(edits)),
+    mutationFn: () =>
+      updateKaraokeLyrics(job.id, Object.values(edits), renamedSingers()),
     onSuccess: () => {
       setEdits({});
+      setNames({});
       onSaved();
     },
   });
 
-  function edit(index: number, campo: "text" | "translation", value: string): void {
+  function renamedSingers(): KaraokeSinger[] | undefined {
+    if (Object.keys(names).length === 0) {
+      return undefined;
+    }
+    return job.singers.map((cantante) => ({
+      id: cantante.id,
+      label: names[cantante.id] ?? cantante.label,
+    }));
+  }
+
+  function edit(
+    index: number,
+    campo: "text" | "translation" | "singer",
+    value: string,
+  ): void {
     setEdits((current) => ({
       ...current,
       [index]: { ...(current[index] ?? { index }), [campo]: value },
     }));
   }
 
+  function lineSinger(line: KaraokeLyricLine): string | null {
+    return edits[line.index]?.singer ?? line.singer;
+  }
+
+  function cycleSinger(line: KaraokeLyricLine): void {
+    const ids = job.singers.map((cantante) => cantante.id);
+    const next = ids[(ids.indexOf(lineSinger(line) ?? "") + 1) % ids.length];
+    edit(line.index, "singer", next);
+  }
+
+  function singerLabel(singerId: string | null): string {
+    if (singerId === null) {
+      return "—";
+    }
+    return (
+      names[singerId] ??
+      job.singers.find((cantante) => cantante.id === singerId)?.label ??
+      singerId
+    );
+  }
+
+  const hasChanges = Object.keys(edits).length > 0 || Object.keys(names).length > 0;
+
   return (
     <div className="flex flex-col gap-2">
       <span className={labelClassName}>{t("karaoke.review.lyrics")}</span>
+      {hasSingers && (
+        <div className="flex flex-wrap gap-2">
+          {job.singers.map((cantante) => (
+            <input
+              key={cantante.id}
+              value={names[cantante.id] ?? cantante.label}
+              aria-label={t("karaoke.singers.renameLabel", { label: cantante.label })}
+              onChange={(event) =>
+                setNames((current) => ({
+                  ...current,
+                  [cantante.id]: event.target.value,
+                }))
+              }
+              className={`${inputClassName} w-36`}
+            />
+          ))}
+        </div>
+      )}
       <div className="flex max-h-80 flex-col gap-1 overflow-y-auto pr-1">
         {job.lines.map((line) => (
           <div key={line.index} className="flex items-center gap-2">
             <span className="w-14 shrink-0 text-right font-mono-tabular text-xs text-text-faint">
               {line.start.toFixed(1)}s
             </span>
+            {hasSingers && (
+              <button
+                type="button"
+                aria-label={t("karaoke.singers.badgeLabel", { index: line.index + 1 })}
+                onClick={() => cycleSinger(line)}
+                style={{ backgroundColor: singerColors[lineSinger(line) ?? ""] }}
+                className="w-20 shrink-0 truncate rounded-full px-2 py-0.5 text-xs font-semibold text-bg"
+              >
+                {singerLabel(lineSinger(line))}
+              </button>
+            )}
             <input
               value={edits[line.index]?.text ?? line.text}
               aria-label={t("karaoke.review.lineLabel", { index: line.index + 1 })}
@@ -130,7 +208,7 @@ function LyricsEditor({
           </div>
         ))}
       </div>
-      {Object.keys(edits).length > 0 && (
+      {hasChanges && (
         <button
           type="button"
           onClick={() => save.mutate()}
@@ -165,6 +243,16 @@ function ReviewStage({
   const [position, setPosition] = useState("bottom");
   const [baseColor, setBaseColor] = useState("#FFFF00");
   const [highlightColor, setHighlightColor] = useState("#FFFFFF");
+  const [singerColors, setSingerColors] = useState<Record<string, string>>(() =>
+    Object.fromEntries(
+      job.singers.map((cantante, i) => [
+        cantante.id,
+        DEFAULT_SINGER_COLORS[i % DEFAULT_SINGER_COLORS.length],
+      ]),
+    ),
+  );
+  const [muteSinger, setMuteSinger] = useState("");
+  const hasSingers = job.singers.length > 0;
 
   const render = useMutation({
     mutationFn: () =>
@@ -175,6 +263,8 @@ function ReviewStage({
         subtitlePosition: position,
         subtitleColor: baseColor,
         subtitleHighlightColor: highlightColor,
+        singerColors: hasSingers ? singerColors : undefined,
+        muteSinger: muteSinger || null,
       }),
     onSuccess: onRefetch,
   });
@@ -193,7 +283,54 @@ function ReviewStage({
         )}
       </div>
 
-      <LyricsEditor job={job} onSaved={onRefetch} />
+      <LyricsEditor job={job} singerColors={singerColors} onSaved={onRefetch} />
+
+      {hasSingers && (
+        <fieldset className="flex flex-col gap-2">
+          <legend className={labelClassName}>{t("karaoke.singers.legend")}</legend>
+          <div className="flex flex-wrap gap-4">
+            {job.singers.map((cantante) => (
+              <label
+                key={cantante.id}
+                className="flex items-center gap-2 text-sm text-text"
+              >
+                <input
+                  type="color"
+                  value={singerColors[cantante.id] ?? "#FFFFFF"}
+                  aria-label={t("karaoke.singers.colorLabel", { name: cantante.label })}
+                  onChange={(event) =>
+                    setSingerColors((current) => ({
+                      ...current,
+                      [cantante.id]: event.target.value,
+                    }))
+                  }
+                />
+                {cantante.label}
+              </label>
+            ))}
+          </div>
+          <label className="flex flex-col gap-2">
+            <span className={labelClassName}>{t("karaoke.singers.practiceAs")}</span>
+            <select
+              value={muteSinger}
+              aria-label={t("karaoke.singers.practiceAs")}
+              onChange={(event) => setMuteSinger(event.target.value)}
+              className={inputClassName}
+            >
+              <option value="">{t("karaoke.singers.practiceNone")}</option>
+              {job.singers.map((cantante) => (
+                <option key={cantante.id} value={cantante.id}>
+                  {cantante.label}
+                </option>
+              ))}
+            </select>
+            <span className="text-xs text-text-faint">
+              {t("karaoke.singers.practiceHint")}
+            </span>
+          </label>
+          <p className="text-xs text-warn">{t("karaoke.singers.unisonWarning")}</p>
+        </fieldset>
+      )}
 
       <fieldset className="flex flex-col gap-2">
         <legend className={labelClassName}>{t("karaoke.background.label")}</legend>
@@ -298,6 +435,8 @@ export function KaraokeStudioPanel() {
   const [romanize, setRomanize] = useState(false);
   const [translateTo, setTranslateTo] = useState("");
   const [deviceId, setDeviceId] = useState("cpu");
+  const [detectSingers, setDetectSingers] = useState(false);
+  const [singerCount, setSingerCount] = useState(2);
 
   const capacidades = useAudioCapabilities();
   const modelsQuery = useInstalledAsrModels();
@@ -361,6 +500,8 @@ export function KaraokeStudioPanel() {
         romanize: language === "ja" && !soloIngles && romanize,
         translateTo: translateTo || null,
         device: selectedDeviceId || undefined,
+        detectSingers,
+        singerCount: detectSingers ? singerCount : undefined,
       }),
     onSuccess: (response) => setJobId(response.jobId),
   });
@@ -402,6 +543,37 @@ export function KaraokeStudioPanel() {
               ))}
             </select>
           </label>
+
+          <fieldset className="flex flex-col gap-2">
+            <legend className={labelClassName}>{t("karaoke.singers.legend")}</legend>
+            <label className="flex items-center gap-2 text-sm text-text">
+              <input
+                type="checkbox"
+                checked={detectSingers}
+                onChange={(e) => setDetectSingers(e.target.checked)}
+                className="accent-accent"
+              />
+              {t("karaoke.singers.toggle")}
+            </label>
+            <p className="text-xs text-text-faint">{t("karaoke.singers.hint")}</p>
+            {detectSingers && (
+              <label className="ml-6 flex items-center gap-2 text-sm text-text">
+                {t("karaoke.singers.count")}
+                <select
+                  value={String(singerCount)}
+                  aria-label={t("karaoke.singers.count")}
+                  onChange={(e) => setSingerCount(Number(e.target.value))}
+                  className={inputClassName}
+                >
+                  {SINGER_COUNT_OPTIONS.map((n) => (
+                    <option key={n} value={String(n)}>
+                      {n}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+          </fieldset>
 
           <fieldset className="flex flex-col gap-2">
             <legend className={labelClassName}>{t("karaoke.config.cleanup")}</legend>
@@ -605,6 +777,15 @@ export function KaraokeStudioPanel() {
                 >
                   {t("karaoke.done.download")}
                 </a>
+                {job.practiceMixUrl && (
+                  <a
+                    href={job.practiceMixUrl}
+                    download
+                    className="rounded border border-border px-4 py-2 text-sm text-text-dim hover:border-accent"
+                  >
+                    {t("karaoke.singers.practiceDownload")}
+                  </a>
+                )}
                 <button
                   type="button"
                   onClick={reset}

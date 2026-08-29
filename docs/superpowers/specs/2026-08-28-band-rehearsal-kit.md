@@ -37,6 +37,18 @@ Tres features para bandas ensayando con grabaciones reales:
 - MCP: `upflow_process_audio` + `practice_stems`, `practice_guide_percent` (enviar solo si truthy).
 - Progreso: dentro de `finalizing` (no tocar la escalera de progress.py:151-154 en v1).
 
+## Contrato F2a (congelado)
+
+v1 SIN enrollment: clustering no supervisado sobre el stem vocal (el caso banda = cantantes que se turnan líneas). Enrollment con muestras por cantante = v2.
+
+- Form karaoke create (convención repeated-fields de la familia karaoke): `detect_singers: bool` (default false) + `singer_count: int` 2–4 (default 2, solo válido con detect_singers).
+- Prepare: retener el wav de vocals antes del descarte (karaoke_job_manager :422-426); por cada línea de letra ya alineada, embedding sobre esa ventana del stem vocal; clustering jerárquico coseno (scipy, ya dep) a `singer_count` clusters; etiqueta `s1..sN` por línea. Líneas demasiado cortas heredan el vecino más cercano en tiempo.
+- Embeddings: protocolo `SpeakerEmbedder` abstracto. Primera opción: reusar x-vector `tdnn.onnx` del pack voice-conversion. Si el wrapper existente no sirve limpio para esto, pack nuevo `singer-embeddings` (Case B) con WeSpeaker CAM++ (URL/sha en 2026-08-28-model-artifacts.md, Apache-2.0, dim 512, fbank 80 @16kHz — resamplear la ventana).
+- Schemas: `KaraokeLyricLine.singer: str|null`, `KaraokeLyricEdit.singer` (reasignación en review), `KaraokeJobResponse.singers: [{id, label}]` con rename vía el endpoint de edición existente.
+- Render: campos opcionales `singer_colors` (por singer id) y `mute_singer: str|null`. Con `mute_singer`: el audio del render = instrumental + vocals con las líneas de ese cantante muteadas por tiempo (crossfades ~50 ms), y además se expone el audio-only como descarga. Subtítulos coloreados por cantante (estilos ASS por singer).
+- UI Studio: badge de cantante por línea (reasignable), rename de cantantes, color pickers pre-render, selector "practicar como <cantante>" (mute), aviso de unísono (decisión #11).
+- KARA_2 (lead/backing, armonías): registro Case A completo — spec mdx con stems `lead_vocals`/`backing_vocals` categoría karaoke, ps1 + sha de model-artifacts.md, créditos, i18n, tests anti-drift. Disponible como modelo más en el picker; la integración "mutear sub-stem en sección armonizada" queda v2.
+
 ## Fases
 
 | Fase | Contenido | Estado |

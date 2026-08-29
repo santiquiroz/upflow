@@ -164,6 +164,60 @@ def test_no_se_escribe_encima_del_original() -> None:
 
 
 # ---------------------------------------------------------------------------
+# F2a: la mezcla de practica (instrumental + voces gateadas)
+# ---------------------------------------------------------------------------
+
+
+def test_la_mezcla_de_practica_suma_las_dos_pistas_sin_bajar_el_nivel() -> None:
+    from app.services.karaoke_video import build_practice_mix_command
+
+    args = build_practice_mix_command(
+        ffmpeg="ffmpeg",
+        instrumental=Path("instrumental.flac"),
+        vocals=Path("voces-gateadas.wav"),
+        destination=Path("practica.flac"),
+    )
+
+    assert args[0] == "ffmpeg" and "-y" in args
+    assert "instrumental.flac" in args and "voces-gateadas.wav" in args
+    filtro = args[args.index("-filter_complex") + 1]
+    assert "amix=inputs=2" in filtro
+    # amix por default divide el nivel por la cantidad de entradas: la pista de
+    # ensayo tiene que sonar al nivel de la cancion, no a la mitad.
+    assert "normalize=0" in filtro
+    # FLAC y no wav: es un artefacto descargable, igual que el instrumental.
+    assert args[args.index("-c:a") + 1] == "flac"
+    # El destino va ULTIMO: los fakes de proceso escriben en command[-1].
+    assert args[-1] == "practica.flac"
+
+
+# ---------------------------------------------------------------------------
+# F2a: la mezcla de practica (instrumental + voces gateadas)
+# ---------------------------------------------------------------------------
+
+
+def test_la_mezcla_de_practica_suma_sin_bajar_el_nivel() -> None:
+    from app.services.karaoke_video import build_practice_mix_command
+
+    args = build_practice_mix_command(
+        ffmpeg="ffmpeg",
+        instrumental=Path("instrumental.flac"),
+        vocals=Path("vocals-gated.wav"),
+        destination=Path("practica.flac"),
+    )
+
+    filtro = args[args.index("-filter_complex") + 1]
+    # amix por default divide por la cantidad de entradas: la pista de ensayo
+    # tiene que sonar al nivel de la cancion, no a la mitad.
+    assert "amix" in filtro
+    assert "normalize=0" in filtro
+    assert "instrumental.flac" in args and "vocals-gated.wav" in args
+    # FLAC y destino al final: el fake de tests escribe en command[-1].
+    assert args[args.index("-c:a") + 1] == "flac"
+    assert args[-1] == "practica.flac"
+
+
+# ---------------------------------------------------------------------------
 # El paso completo dentro del manager
 # ---------------------------------------------------------------------------
 

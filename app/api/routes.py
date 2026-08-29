@@ -121,6 +121,7 @@ from app.schemas import (
     KaraokeJobsListResponse,
     KaraokeLyricLine,
     KaraokeLyricsUpdateRequest,
+    KaraokeSinger,
     TranscribeJobResponse,
     TranscribeJobsListResponse,
     UpdateCheckResponse,
@@ -262,7 +263,9 @@ from app.services.translate import (
     TranslationUnavailable,
     parse_pair,
 )
+from app.services.engines.singer_clustering import singer_label
 from app.services.karaoke_job_manager import KaraokeJobManager
+from app.services.karaoke_subtitles import hex_to_ass_color
 from app.services.transcribe_job_manager import TranscribeJobManager
 from app.services.stream_analysis import parse_audio_tracks, parse_subtitle_tracks
 from app.services.update_service import UpdateService
@@ -1744,6 +1747,12 @@ def get_karaoke_job_manager(request: Request) -> KaraokeJobManager:
     return request.app.state.karaoke_jobs
 
 
+def _karaoke_singer_id(job: KaraokeJob, index: int) -> str | None:
+    if not job.detect_singers or index >= len(job.line_singers):
+        return None
+    return job.line_singers[index]
+
+
 def karaoke_job_to_response(job: KaraokeJob) -> KaraokeJobResponse:
     lineas: list[KaraokeLyricLine] = []
     if job.phase in ("review", "rendering", "completed"):
@@ -1759,6 +1768,7 @@ def karaoke_job_to_response(job: KaraokeJob) -> KaraokeJobResponse:
                         if index < len(job.translated_lines)
                         else ""
                     ),
+                    singer=_karaoke_singer_id(job, index),
                 )
             )
     instrumental_url = None
@@ -1767,6 +1777,15 @@ def karaoke_job_to_response(job: KaraokeJob) -> KaraokeJobResponse:
     download_url = None
     if job.phase == "completed" and job.output_path is not None:
         download_url = f"/api/v1/karaoke/jobs/{job.id}/download"
+    practice_mix_url = None
+    if job.phase == "completed" and job.practice_audio_path is not None:
+        practice_mix_url = f"/api/v1/karaoke/jobs/{job.id}/practice"
+    singers = [
+        KaraokeSinger(id=singer_id, label=job.singer_names.get(singer_id, singer_id))
+        for singer_id in (
+            singer_label(i) for i in range(job.singer_count if job.detect_singers else 0)
+        )
+    ]
     return KaraokeJobResponse(
         id=job.id,
         status=job.status,
@@ -1790,6 +1809,8 @@ def karaoke_job_to_response(job: KaraokeJob) -> KaraokeJobResponse:
         lines=lineas,
         instrumental_url=instrumental_url,
         download_url=download_url,
+        singers=singers,
+        practice_mix_url=practice_mix_url,
     )
 
 
@@ -1807,6 +1828,10 @@ async def create_karaoke_job(
     language: str | None = Form(default=None),
     romanize: bool = Form(default=False),
     translate_to: str | None = Form(default=None),
+    # Deteccion de cantantes (F2a): booleano estilo `romanize` + un entero que
+    # solo importa cuando el booleano esta prendido (validado en el manager).
+    detect_singers: bool = Form(default=False),
+    singer_count: int | None = Form(default=None),
     device: str | None = Form(default=None),
     karaoke_jobs: KaraokeJobManager = Depends(get_karaoke_job_manager),
     storage: StorageService = Depends(get_storage),
@@ -1840,6 +1865,8 @@ async def create_karaoke_job(
             translate_to=(
                 translate_to if isinstance(translate_to, str) and translate_to else None
             ),
+            detect_singers=detect_singers is True,
+            singer_count=singer_count if isinstance(singer_count, int) else None,
             device=device if isinstance(device, str) and device else None,
             job_id=token,
             owner=current_user,
@@ -1923,11 +1950,46 @@ async def update_karaoke_lyrics(
     _karaoke_job_or_404(karaoke_jobs, job_id, request)
     try:
         job = karaoke_jobs.update_lyrics(
-            job_id, [linea.model_dump() for linea in payload.lines]
+            job_id,
+            [linea.model_dump() for linea in payload.lines],
+            singers=(
+                [cantante.model_dump() for cantante in payload.singers]
+                if payload.singers is not None
+                else None
+            ),
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return karaoke_job_to_response(job)
+
+
+def _parse_singer_colors(entries: list[str]) -> dict[str, str]:
+    """`{singer_id}:{hex}` por entrada, convencion de campo repetido de
+    `cleanup_steps`. Solo valida la FORMA; el color y el id se chequean
+    aparte, contra el job."""
+    colores: dict[str, str] = {}
+    for entrada in entries:
+        singer_id, separador, color = entrada.partition(":")
+        if not separador or not singer_id or not color:
+            raise ValueError(
+                f"singer_colors mal formado: {entrada!r}. Se espera 'id:#RRGGBB'."
+            )
+        colores[singer_id] = color
+    return colores
+
+
+def _validate_singer_render_selection(
+    job: KaraokeJob, colores: dict[str, str], mute_singer: str | None
+) -> None:
+    conocidos = (
+        {singer_label(i) for i in range(job.singer_count)} if job.detect_singers else set()
+    )
+    for singer_id, color in colores.items():
+        if singer_id not in conocidos:
+            raise ValueError(f"Cantante desconocido: {singer_id!r}.")
+        hex_to_ass_color(color)
+    if mute_singer is not None and mute_singer not in conocidos:
+        raise ValueError(f"Cantante desconocido: {mute_singer!r}.")
 
 
 @router.post(
@@ -1943,12 +2005,15 @@ async def render_karaoke_job(
     subtitle_position: str = Form(default="bottom"),
     subtitle_color: str = Form(default="#FFFF00"),
     subtitle_highlight_color: str = Form(default="#FFFFFF"),
+    # `"{singer_id}:{hex}"` repetido, convencion de `cleanup_steps`.
+    singer_colors: list[str] = Form(default=[]),
+    mute_singer: str | None = Form(default=None),
     background: UploadFile | None = File(default=None),
     karaoke_jobs: KaraokeJobManager = Depends(get_karaoke_job_manager),
     storage: StorageService = Depends(get_storage),
     settings: Settings = Depends(get_settings),
 ) -> KaraokeJobResponse:
-    _karaoke_job_or_404(karaoke_jobs, job_id, request)
+    job_obj = _karaoke_job_or_404(karaoke_jobs, job_id, request)
     if background_kind == "source" and not await karaoke_jobs.validate_source_background(
         job_id
     ):
@@ -1957,6 +2022,10 @@ async def render_karaoke_job(
             detail="El archivo original no trae imagen que sirva de fondo: "
             "elegi una imagen, un video o el fondo generado.",
         )
+    mute = mute_singer if isinstance(mute_singer, str) and mute_singer else None
+    entradas_colores = [
+        s for s in (singer_colors or []) if isinstance(s, str) and s
+    ]
     background_path: Path | None = None
     if background is not None and background.filename:
         safe_name = sanitize_filename(Path(background.filename).name, default="fondo")
@@ -1965,6 +2034,8 @@ async def render_karaoke_job(
             background, background_path, max_mb=settings.max_video_upload_mb
         )
     try:
+        colores = _parse_singer_colors(entradas_colores)
+        _validate_singer_render_selection(job_obj, colores, mute)
         job = karaoke_jobs.request_render(
             job_id,
             background_kind=background_kind,
@@ -1973,6 +2044,8 @@ async def render_karaoke_job(
             subtitle_position=subtitle_position,
             subtitle_color=subtitle_color,
             subtitle_highlight_color=subtitle_highlight_color,
+            singer_colors=colores,
+            mute_singer=mute,
         )
     except QueueFullError as exc:
         raise HTTPException(status_code=429, detail=str(exc)) from exc
@@ -1999,6 +2072,32 @@ async def download_karaoke_instrumental(
     return FileResponse(
         path=job.instrumental_path,
         filename=f"{stem}.instrumental.flac",
+        media_type="audio/flac",
+    )
+
+
+@router.get(
+    "/karaoke/jobs/{job_id}/practice",
+    dependencies=[Depends(require(Permission.jobs_read_own))],
+)
+async def download_karaoke_practice_mix(
+    job_id: str,
+    karaoke_jobs: KaraokeJobManager = Depends(get_karaoke_job_manager),
+    request: Request = None,
+) -> FileResponse:
+    job = _karaoke_job_or_404(karaoke_jobs, job_id, request)
+    if (
+        job.phase != "completed"
+        or job.practice_audio_path is None
+        or not job.practice_audio_path.exists()
+    ):
+        raise HTTPException(
+            status_code=409, detail="La mezcla de practica todavia no esta lista"
+        )
+    stem = Path(job.original_filename).stem
+    return FileResponse(
+        path=job.practice_audio_path,
+        filename=f"{stem}.practice.flac",
         media_type="audio/flac",
     )
 

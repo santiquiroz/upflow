@@ -584,6 +584,21 @@ export const en = {
   "karaoke.style.highlight": "Sung color",
   "karaoke.render": "Render the video",
   "karaoke.done.download": "Download the karaoke",
+  "karaoke.singers.legend": "Singers",
+  "karaoke.singers.toggle": "Detect who sings each line",
+  "karaoke.singers.hint":
+    "Groups the lyric lines by voice so each singer gets a color and can be muted to practice. Works when the singers take turns.",
+  "karaoke.singers.count": "How many singers",
+  "karaoke.singers.badgeLabel": "Singer of line {{index}}",
+  "karaoke.singers.renameLabel": "Rename singer {{label}}",
+  "karaoke.singers.colorLabel": "Color for {{name}}",
+  "karaoke.singers.practiceAs": "Practice as",
+  "karaoke.singers.practiceNone": "Nobody: keep every voice",
+  "karaoke.singers.practiceHint":
+    "Mutes that singer's lines in the render so you sing them; the other voices stay. The muted mix also comes as an audio download.",
+  "karaoke.singers.unisonWarning":
+    "Two singers on the same melody at the same time (unison) cannot be told apart: those lines stay with whoever the detector picked.",
+  "karaoke.singers.practiceDownload": "Download the practice mix (audio)",
   "nav.download": "Download",
   "nav.generate": "Generate",
   "nav.editor": "Editor",
@@ -833,7 +848,7 @@ export const en = {
   "audio.karaoke.modelMissing": "The {{name}} model is not downloaded yet.",
   "audio.karaoke.noModels": "Download at least one separation model to enable karaoke.",
   "audio.karaoke.credit":
-    "Models distributed via Ultimate Vocal Remover's official download center: Anjok07 & aufr33 (MIT), and Reverb HQ / De-Echo / De-Reverb / De-Noise by FoxJoy (ONNX port: santiquiroz/port-uvr-deecho-onnx, MIT). Mel-Band RoFormer is by KimberleyJSN (MIT), ONNX port: santiquiroz/port-bs-roformer-onnx.",
+    "Models distributed via Ultimate Vocal Remover's official download center: Anjok07 & aufr33 (MIT) — including MDX-Net KARA 2 (lead/backing vocals; re-hosted by Politrees, original author with no declared license) — and Reverb HQ / De-Echo / De-Reverb / De-Noise by FoxJoy (ONNX port: santiquiroz/port-uvr-deecho-onnx, MIT). Mel-Band RoFormer is by KimberleyJSN (MIT), ONNX port: santiquiroz/port-bs-roformer-onnx.",
   "audio.karaoke.category.karaoke": "Karaoke",
   "audio.karaoke.category.cleanup": "Cleanup (one pass, two stems)",
   "audio.karaoke.cleanupGroupHint":
@@ -852,6 +867,8 @@ export const en = {
     "Extracts the instrumental (karaoke track); the vocals are the remainder.",
   "audio.karaoke.model.voc_ft.description":
     "Extracts the vocals; the instrumental is the remainder.",
+  "audio.karaoke.model.kara_2.description":
+    "Karaoke with harmonies: keeps the backing vocals inside the instrumental and takes out only the lead vocal (the remainder).",
   "audio.karaoke.model.reverb_hq.description":
     "Remove reverb — a second pass to clean up the instrumental of an old track.",
   "audio.karaoke.model.deecho_normal.description":
@@ -875,6 +892,8 @@ export const en = {
   "audio.stem.reverb": "Echo and reverb",
   "audio.stem.no_noise": "No noise",
   "audio.stem.noise": "Noise",
+  "audio.stem.lead_vocals": "Lead vocals",
+  "audio.stem.backing_vocals": "Backing vocals",
   "audio.stem.minus_vocals": "Without vocals",
   "audio.stem.minus_drums": "Without drums",
   "audio.stem.minus_bass": "Without bass",

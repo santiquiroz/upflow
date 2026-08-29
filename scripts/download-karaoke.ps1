@@ -1,7 +1,7 @@
 param(
     # Cual modelo del catalogo bajar. Tiene que coincidir con los ids de
     # app/services/engines/separation_models.py.
-    [ValidateSet('inst_hq_3', 'voc_ft', 'mel_band_roformer_kim', 'umx_4stem', 'reverb_hq', 'deecho_normal', 'deecho_aggressive', 'deecho_dereverb', 'denoise')]
+    [ValidateSet('inst_hq_3', 'voc_ft', 'kara_2', 'mel_band_roformer_kim', 'umx_4stem', 'reverb_hq', 'deecho_normal', 'deecho_aggressive', 'deecho_dereverb', 'denoise')]
     [string]$Model = 'inst_hq_3'
 )
 
@@ -62,6 +62,18 @@ $modelos = @{
         Sha256 = '534b2070fcc7df514b13ef660dc8cbb328679c2374d04354a5c42bb14ecce111'
         Size   = '~67 MB'
         Label  = 'MDX-Net Voc FT (saca la voz)'
+    }
+    # KARA_2 saca la voz LIDER y deja los coros dentro de la instrumental: el
+    # karaoke conserva las armonias. El release original (TRvlvr/model_repo) no
+    # declara licencia; se baja del mirror de Politrees, byte-identico (sha256
+    # verificado 2026-08-28) y publicado como MIT en su model card.
+    'kara_2' = @{
+        File   = 'UVR_MDXNET_KARA_2.onnx'
+        Url    = 'https://huggingface.co/Politrees/UVR_resources/resolve/main/models/MDXNet/UVR_MDXNET_KARA_2.onnx'
+        Hash   = '1d64a6d2c30f709b8c9b4ce1366d96ee'
+        Sha256 = 'bf32e15105a09c0f7dddd2b67346146334d6f3ecb399ed7638eba2ab07cbf5f4'
+        Size   = '~50 MB'
+        Label  = 'MDX-Net Karaoke 2 (saca la voz lider; los coros quedan en la pista)'
     }
     'mel_band_roformer_kim' = @{
         File   = 'mel_band_roformer_kim_T801.onnx'
@@ -186,6 +198,11 @@ function Write-KaraokeCredits([string]$directory) {
         'Ultimate Vocal Remover (Anjok07 & aufr33), MIT'
         'Reverb HQ by FoxJoy - distributed via the official UVR Download Center'
         'github.com/Anjok07/ultimatevocalremovergui'
+        ''
+        'MDX-Net Karaoke 2: UVR_MDXNET_KARA_2 (lead vs backing vocals)'
+        'Ultimate Vocal Remover (Anjok07 & aufr33); mirrored byte-identical by'
+        'huggingface.co/Politrees/UVR_resources (MIT per the mirror card;'
+        'the original release declares no license - commercial use at your discretion)'
         ''
         'VR De-Echo / De-Reverb / De-Noise: UVR-De-Echo-Normal / UVR-De-Echo-Aggressive /'
         'UVR-DeEcho-DeReverb / UVR-DeNoise'

@@ -44,10 +44,10 @@ from tests.test_mdx_separator import (
 # ---------------------------------------------------------------------------
 
 
-def test_catalog_still_has_the_three_mdx_models() -> None:
+def test_catalog_still_has_the_four_mdx_models() -> None:
     from app.services.engines.mdx_models import MDX_MODELS
 
-    assert set(MDX_MODELS) == {"inst_hq_3", "voc_ft", "reverb_hq"}
+    assert set(MDX_MODELS) == {"inst_hq_3", "voc_ft", "reverb_hq", "kara_2"}
 
 
 def test_reverb_hq_spec_matches_the_validated_spike() -> None:

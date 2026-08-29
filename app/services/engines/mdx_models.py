@@ -21,7 +21,9 @@ from typing import ClassVar
 
 from app.services.engines.separation_spec import (
     RESIDUAL,
+    STEM_BACKING_VOCALS,
     STEM_INSTRUMENTAL,
+    STEM_LEAD_VOCALS,
     STEM_VOCALS,
     Architecture,
     SeparationModelSpec,
@@ -100,6 +102,35 @@ MDX_MODELS: dict[str, MdxModelSpec] = {
         stems=(
             SeparationStem("instrumental", STEM_INSTRUMENTAL, RESIDUAL),
             SeparationStem("vocals", STEM_VOCALS, 0),
+        ),
+    ),
+    # Karaoke con armonias (F2a): KARA_2 saca la voz LIDER y deja los coros
+    # DENTRO de la pista instrumental — el karaoke conserva las armonias de la
+    # banda. Mirror Politrees byte-identico (sha256 verificado 2026-08-28
+    # contra el archivo real); el release original TRvlvr no declara licencia,
+    # el re-host lo publica como MIT. Los parametros salen de
+    # model_data_new.json de TRvlvr/application_data, keyed por el hash UVR
+    # (KARA_2 no trae yaml): dim_t 8 ahi significa 2^8 = 256 cuadros.
+    "kara_2": MdxModelSpec(
+        id="kara_2",
+        name="MDX-Net Karaoke 2",
+        filename="UVR_MDXNET_KARA_2.onnx",
+        url=(
+            "https://huggingface.co/Politrees/UVR_resources/resolve/main/"
+            "models/MDXNet/UVR_MDXNET_KARA_2.onnx"
+        ),
+        uvr_hash="1d64a6d2c30f709b8c9b4ce1366d96ee",
+        sha256="bf32e15105a09c0f7dddd2b67346146334d6f3ecb399ed7638eba2ab07cbf5f4",
+        n_fft=5120,
+        dim_f=2048,
+        dim_t=256,
+        compensate=1.065,
+        primary_stem="Instrumental",
+        category="karaoke",
+        description_key="audio.karaoke.model.kara_2.description",
+        stems=(
+            SeparationStem("backing_vocals", STEM_BACKING_VOCALS, 0),
+            SeparationStem("lead_vocals", STEM_LEAD_VOCALS, RESIDUAL),
         ),
     ),
     # Limpieza post-karaoke: el modelo saca la COLA DE REVERB (wet); la pista
