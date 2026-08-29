@@ -266,3 +266,54 @@ def test_generate_convierte_timeout_expired_en_mesh_engine_error(
         generate(settings, "triposg", {}, timeout=12)
 
     assert isinstance(exc_info.value.__cause__, subprocess.TimeoutExpired)
+
+
+def _sin_motores(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
+    from app.config import Settings as _S
+
+    settings = _S(RUNTIME_DIR=str(tmp_path), _env_file=None)
+    monkeypatch.setattr(
+        type(settings), "mesh_engines_dir", property(lambda _s: tmp_path / "sin-motores")
+    )
+    return settings
+
+
+def test_lo_que_falta_no_lleva_rutas_absolutas(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """La ruta de la máquina va al log del servidor, nunca al cliente.
+
+    Es la misma regla que ya rige en blender_service. `/model3d/capabilities` ni
+    siquiera pide autenticación, así que un absoluto ahí filtra el disco a
+    cualquiera. Y nombrar la variable de entorno es MÁS accionable que pegar un
+    absoluto: dice dónde cambiarlo, no sólo dónde miró el proceso.
+    """
+    settings = _sin_motores(tmp_path, monkeypatch)
+
+    faltante = build_for(settings, "triposg").missing
+
+    assert faltante
+    assert str(tmp_path) not in faltante
+    assert "MESH_ENGINES_ROOT" in faltante
+
+
+def test_el_error_de_motor_no_listo_tampoco_lleva_rutas(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _sin_motores(tmp_path, monkeypatch)
+
+    with pytest.raises(MeshEngineError) as capturado:
+        generate(settings, "triposg", {"image": "x", "output": "y"})
+
+    assert str(tmp_path) not in str(capturado.value)
+
+
+def test_todos_los_motores_reportan_sin_rutas(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Vale para cada motor del registro, no sólo para el primero."""
+    settings = _sin_motores(tmp_path, monkeypatch)
+
+    for nombre, estado in available(settings).items():
+        assert estado["missing"], nombre
+        assert str(tmp_path) not in estado["missing"], nombre

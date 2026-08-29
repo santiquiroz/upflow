@@ -73,15 +73,28 @@ class EngineBuild:
 
     @property
     def missing(self) -> str | None:
-        """Que falta exactamente, en terminos accionables.
+        """Que falta exactamente, en terminos accionables y SIN rutas absolutas.
 
-        Decir "no disponible" manda a adivinar entre bajar 8 GB de pesos y
-        crear un entorno; decir cual de los dos falta no.
+        Decir "no disponible" manda a adivinar entre bajar varios GB de pesos y
+        crear un entorno; decir cual de los dos falta, no.
+
+        La ruta absoluta NO viaja en este mensaje aunque seria lo comodo. Es la
+        misma regla que ya rige en `blender_service`: la ruta de la maquina va
+        al log del servidor y no al cliente. Ademas de no filtrar el disco a un
+        endpoint que no pide autenticacion, nombrar la variable de entorno y la
+        carpeta esperada es MAS accionable que pegar un absoluto: dice donde
+        cambiarlo, no solo donde miro.
         """
         if not self.python.exists():
-            return f"falta el entorno del motor en {self.python.parent.parent}"
+            return (
+                f"falta el entorno del motor: crea el venv '{self.name}-env' "
+                "dentro de la carpeta de motores (MESH_ENGINES_ROOT)"
+            )
         if not self.source.exists():
-            return f"falta el codigo del motor en {self.source}"
+            return (
+                f"falta el codigo del motor: pone '{self.source.name}' "
+                "dentro de la carpeta de motores (MESH_ENGINES_ROOT)"
+            )
         return None
 
 
@@ -149,6 +162,8 @@ def generate(
     """
     build = build_for(settings, engine)
     if not build.ready:
+        # La ruta va al LOG, el mensaje al cliente. Ver `EngineBuild.missing`.
+        logger.warning("motor %s no esta listo: python=%s source=%s", engine, build.python, build.source)
         raise MeshEngineError(f"el motor '{engine}' no esta listo: {build.missing}")
 
     ficha = ENGINES[engine]

@@ -11,6 +11,7 @@ Las dos cosas se sirven con las mismas piezas.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,8 @@ from PIL import Image
 from app.config import Settings
 from app.services import blender_service, fit, mesh_engine_service, silhouette
 from app.services.turnaround import Box, character_view_boxes, ink_bounds, open_sheet
+
+logger = logging.getLogger(__name__)
 
 # Como se llama cada vista en la escena. El orden es el de una hoja de
 # turnaround estandar, de izquierda a derecha.
@@ -168,7 +171,11 @@ def score_fit(
     """
     vistas = views_from_dir(views_dir)
     if not vistas:
-        raise UnknownScaleViewError(f"no hay recortes de vista en {views_dir}")
+        # Sin la ruta: va al log. El que llama tiene el token, no el disco.
+        logger.warning("no hay recortes de vista en %s", views_dir)
+        raise UnknownScaleViewError(
+            "no hay recortes de vista para ese token: parti la hoja antes de medir el calce"
+        )
 
     if scale_view is None:
         referencia_escala = _vista_mas_alta(vistas)
