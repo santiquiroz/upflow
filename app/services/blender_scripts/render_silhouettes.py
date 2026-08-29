@@ -17,10 +17,13 @@ la silueta deja de ser la proyeccion del objeto y pasa a ser la proyeccion del
 objeto MAS la distancia a la que se puso la camara. Eso ya no se puede comparar
 contra una hoja de model sheet, que esta dibujada sin fuga.
 
-SUPUESTO, dicho para que se pueda desmentir: la malla llega en Z arriba y
-mirando a +Y, que es como quedan las que salen de `build_reference_scene`. Si
-llega girada, las siluetas salen bien renderizadas y mal rotuladas — por eso el
-resultado devuelve `assumedUpAxis` y `assumedFrontAxis` en vez de callarselo.
+ORIENTACION: se acepta `upAxis` porque cada motor entrega en SU marco canonico.
+Las mallas de `build_reference_scene` vienen Z-arriba; las de un generador
+suelen venir Y-arriba, y renderizar una Y-arriba como si fuera Z-arriba la
+muestra acostada — entonces el banco mide la rotacion en vez del parecido.
+Lo que igual queda como SUPUESTO es hacia donde mira: se toma +Y como frente, y
+si no lo es las siluetas salen bien renderizadas y mal rotuladas. Por eso el
+resultado devuelve `upAxis` y `assumedFrontAxis` en vez de callarselos.
 """
 
 from __future__ import annotations
@@ -52,6 +55,33 @@ RESOLUCION_POR_DEFECTO = 512
 # Debajo de esto un rasgo de 1 cm cae en menos de un pixel y la comparacion
 # mide el antialias en vez de la forma.
 RESOLUCION_MINIMA = 128
+
+# Como llega la malla, para poder enderezarla antes de mirarla. Cada motor
+# entrega en SU marco canonico y el de Blender no es universal: una malla
+# Y-arriba renderizada como si fuera Z-arriba sale acostada, y entonces el
+# banco mide la rotacion en vez del parecido. La conversion es un giro de
+# +90 grados en X, que es la que usan glTF y la mayoria de los generadores.
+CUARTO_EN_X = (CUARTO_DE_VUELTA, 0.0, 0.0)
+ORIENTACIONES = {
+    "z_up": (0.0, 0.0, 0.0),
+    "y_up": CUARTO_EN_X,
+}
+
+
+def enderezar(objeto: bpy.types.Object, orientacion: str) -> None:
+    """Lleva la malla al marco Z-arriba que asume el resto del carril.
+
+    Se aplica la rotacion a la geometria y no se deja en el objeto: los pasos
+    que siguen —medir, comparar— leen coordenadas de mundo, y una rotacion que
+    vive solo en la transformada del objeto se pierde al exportar.
+    """
+    if orientacion == "z_up":
+        return
+    objeto.rotation_euler = ORIENTACIONES[orientacion]
+    bpy.context.view_layer.objects.active = objeto
+    bpy.ops.object.select_all(action="DESELECT")
+    objeto.select_set(True)
+    bpy.ops.object.transform_apply(rotation=True)
 
 
 def centro_de(objeto: bpy.types.Object) -> tuple[float, float, float]:
@@ -113,6 +143,7 @@ def main() -> None:
     vistas = datos.get("views") or ["front", "side"]
     ancho_m = float(datos.get("viewWidthMeters") or 0)
     resolucion = int(datos.get("resolution") or RESOLUCION_POR_DEFECTO)
+    orientacion = datos.get("upAxis") or "z_up"
 
     if not entrada or not carpeta:
         fail("faltan 'mesh' y 'outputDir'")
@@ -122,12 +153,15 @@ def main() -> None:
         fail("'viewWidthMeters' tiene que ser mayor que cero: es lo que le da escala al pixel")
     if resolucion < RESOLUCION_MINIMA:
         fail(f"'resolution' minima {RESOLUCION_MINIMA}: mas chico mide el antialias, no la forma")
+    if orientacion not in ORIENTACIONES:
+        fail(f"'upAxis' desconocido: {orientacion}. Se conocen: {', '.join(ORIENTACIONES)}")
     desconocidas = [vista for vista in vistas if vista not in CAMARAS]
     if desconocidas:
         fail(f"vistas que no se saben renderizar: {', '.join(desconocidas)}")
 
     reset_scene()
     objeto = import_mesh(entrada)
+    enderezar(objeto, orientacion)
     centro = centro_de(objeto)
 
     preparar_render(resolucion)
@@ -146,7 +180,9 @@ def main() -> None:
         "viewWidthMeters": ancho_m,
         "resolution": resolucion,
         "dims": [round(float(valor), 6) for valor in objeto.dimensions],
-        "assumedUpAxis": "Z",
+        # Lo que se ASUMIO, dicho para que se pueda desmentir: una malla mal
+        # rotulada sale bien renderizada y mal medida, sin que nada avise.
+        "upAxis": orientacion,
         "assumedFrontAxis": "+Y",
     })
 

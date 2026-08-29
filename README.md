@@ -795,6 +795,35 @@ Los PRs son bienvenidos. Ver [`CONTRIBUTING.md`](CONTRIBUTING.md) y el [plan de 
 
 [MIT](LICENSE) © 2026 Santiago Quiroz. Hacé lo que quieras con esto.
 
+### Motores generativos de malla (opcionales, no se descargan solos)
+
+El carril de modelado puede generar una malla desde una imagen con un motor
+**local**. Ninguno viaja con la app ni se baja al apretar un botón: son varios GB
+de pesos con licencias distintas entre sí, y elegir cuál instalar es tuyo.
+`/api/v1/model3d/capabilities` dice cuáles hay y **qué le falta a cada uno**.
+
+Revisado el 2026-08-28, el panorama incómodo es que **el motor libre no corre en
+AMD y el que corre en AMD no es libre**:
+
+| motor | licencia | corre en AMD/Windows | fuerte en |
+|---|---|---|---|
+| **TripoSG** | MIT (código y pesos) | sí, en CPU (lento) | es el único limpio *y* ejecutable acá |
+| **TRELLIS.2** | MIT | no: CUDA-only ([issue #74](https://github.com/microsoft/TRELLIS.2/issues/74) sin respuesta) | geometría |
+| **Hunyuan3D 2.1** | `tencent-hunyuan-community`: comercial bajo 1M MAU pero **excluye UE, Reino Unido y Corea del Sur** | sí, con plantilla oficial de AMD para ComfyUI sobre ROCm | textura y PBR |
+| **SAM 3D Objects** | SAM License | no: pide Linux, CUDA y 32 GB de VRAM | clic sobre un objeto dentro de una foto |
+
+Por eso el primero soportado es TripoSG, y no por ser el mejor de la comparativa.
+
+Para instalarlo: un venv aparte —sus dependencias fijan `numpy==1.22.3` y
+romperían el resto de la app— más el código y los pesos, bajo `~/3d-engines`
+(configurable con `MESH_ENGINES_ROOT`).
+
+Lo que sale de un generador **no está aprobado por haber salido**: `audited`
+viaja en `false` y el paso siguiente es auditar la malla o medir su calce contra
+el dibujo.
+
+---
+
 Con una excepción: `app/services/blender_scripts/` es **GPL-2.0-or-later** y
 lleva su propio `LICENSE`. Esos archivos corren DENTRO de Blender y usan `bpy` a
 fondo, y la Fundación Blender considera derivada a una extensión distribuida

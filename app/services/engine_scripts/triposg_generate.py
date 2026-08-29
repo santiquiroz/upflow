@@ -30,6 +30,23 @@ RESULT_SENTINEL = "UPFLOW_RESULT "
 PASOS_POR_DEFECTO = 50
 GUIA_POR_DEFECTO = 7.0
 
+# La semilla va fija por defecto porque esto alimenta un BANCO: dos corridas
+# del mismo motor sobre la misma imagen tienen que dar la misma malla, o la
+# comparacion entre motores mide el azar.
+SEMILLA_POR_DEFECTO = 42
+
+# El margen que deja el preprocesado oficial de TripoSG alrededor del objeto.
+# Sale de `scripts/image_process.py::load_image(padding_ratio=0.1)`.
+MARGEN_ENCUADRE = 0.1
+
+# Un pixel mas claro que esto es fondo. Mismo criterio que usa el resto de
+# Upflow para leer tinta sobre papel blanco.
+UMBRAL_BLANCO = 244
+
+# De donde salen los pesos. No se descargan desde aca: el motor "listo" o no
+# lo decide el servicio, y bajar 8 GB no debe ser efecto de apretar generar.
+REPO_DE_PESOS = "VAST-AI/TripoSG"
+
 
 def emit(datos: dict) -> None:
     print(RESULT_SENTINEL + json.dumps(datos, ensure_ascii=False))
@@ -49,6 +66,81 @@ def fail(mensaje: str) -> None:
 
 def payload() -> dict:
     return json.loads(sys.argv[1]) if len(sys.argv) > 1 else {}
+
+
+def pesos_en_cache() -> str:
+    """La carpeta LOCAL con los pesos ya descargados.
+
+    Hay que darle una carpeta y no el id del repo. Medido: con el id, diffusers
+    resuelve el scheduler propio de TripoSG como si fuera un archivo remoto y
+    falla con "scheduler/triposg.schedulers.scheduling_rectified_flow.py ... does
+    not exist in VAST-AI/TripoSG"; con la carpeta, lo importa de `sys.path` y
+    carga. Es la misma forma que usa el script oficial del repo.
+
+    `local_files_only=True` es deliberado: esta funcion resuelve una ruta, no
+    descarga. Si los pesos no estan, el motor no esta listo y eso se reporta
+    como tal en vez de arrancar una descarga de 8 GB que nadie pidio.
+    """
+    from huggingface_hub import snapshot_download
+
+    return snapshot_download(REPO_DE_PESOS, local_files_only=True)
+
+
+def encuadrar(ruta: str):
+    """Deja la imagen como la espera el modelo: objeto centrado sobre blanco.
+
+    Es una reimplementacion FIEL de `scripts/image_process.py::load_image` del
+    propio TripoSG, y no un encuadre inventado. Se reimplementa porque el
+    original esta cableado a `.cuda()` de punta a punta y esta maquina es AMD;
+    llamarlo tal cual no falla al principio sino en la primera linea que toca
+    la GPU. Los numeros —recortar a la caja del objeto, 10% de margen, cuadrar
+    con relleno blanco— salen de ahi y no de una preferencia: cambiarlos
+    significaria medir MI encuadre en vez del motor.
+
+    El alfa se deriva de la tinta en vez de pedirle a BriaRMBG que quite el
+    fondo. Estas entradas son dibujo de linea sobre papel blanco, donde el
+    fondo ya esta separado; correr un quitafondos entrenado en fotos sobre
+    arte plano agrega su propio criterio al resultado.
+    """
+    import numpy as np
+    from PIL import Image
+
+    with Image.open(ruta) as abierta:
+        if abierta.mode == "RGBA":
+            rgba = np.array(abierta)
+            rgb = rgba[:, :, :3].astype(np.float32) / 255.0
+            alfa = (rgba[:, :, 3] > 127).astype(np.float32)
+        else:
+            rgb = np.array(abierta.convert("RGB")).astype(np.float32) / 255.0
+            alfa = (rgb.max(axis=2) * 255 < UMBRAL_BLANCO).astype(np.float32)
+
+    filas = np.where(alfa.any(axis=1))[0]
+    columnas = np.where(alfa.any(axis=0))[0]
+    if not filas.size or not columnas.size:
+        raise ValueError("la imagen no tiene ningun objeto sobre el fondo")
+
+    # Sobre blanco: lo que no es objeto se borra, para que el modelo no lea
+    # como geometria una firma o un marco del papel.
+    compuesta = rgb * alfa[:, :, None] + (1.0 - alfa[:, :, None])
+    y0, y1 = int(filas[0]), int(filas[-1]) + 1
+    x0, x1 = int(columnas[0]), int(columnas[-1]) + 1
+    recorte = compuesta[y0:y1, x0:x1]
+
+    alto, ancho = recorte.shape[:2]
+    if ancho > alto:
+        izq = int(ancho * MARGEN_ENCUADRE)
+        arriba = int(izq + (ancho - alto) / 2)
+    else:
+        arriba = int(alto * MARGEN_ENCUADRE)
+        izq = int(arriba + (alto - ancho) / 2)
+
+    cuadrada = np.pad(
+        recorte,
+        ((arriba, arriba), (izq, izq), (0, 0)),
+        mode="constant",
+        constant_values=1.0,
+    )
+    return Image.fromarray((cuadrada * 255).astype("uint8"))
 
 
 def main() -> None:
@@ -82,15 +174,21 @@ def main() -> None:
     precision = torch.float32 if dispositivo == "cpu" else torch.float16
 
     try:
-        from PIL import Image
+        pesos = datos.get("weightsDir") or pesos_en_cache()
+    except Exception as exc:  # noqa: BLE001
+        fail(f"no estan los pesos del motor: {type(exc).__name__}: {exc}")
 
-        tuberia = TripoSGPipeline.from_pretrained("VAST-AI/TripoSG", torch_dtype=precision)
+    semilla = int(datos.get("seed") or SEMILLA_POR_DEFECTO)
+    try:
+        entrada = encuadrar(imagen)
+        tuberia = TripoSGPipeline.from_pretrained(pesos, torch_dtype=precision)
         tuberia.to(dispositivo)
-        with Image.open(imagen) as abierta:
-            entrada = abierta.convert("RGB")
 
         resultado = tuberia(
             image=entrada,
+            # Semilla explicita: sin esto dos corridas del mismo motor dan
+            # mallas distintas y el banco compara azar.
+            generator=torch.Generator(device=dispositivo).manual_seed(semilla),
             num_inference_steps=pasos,
             guidance_scale=guia,
             # El decodificador rapido pasa por `diso`, que es CUDA-only.
@@ -121,6 +219,7 @@ def main() -> None:
         "faces": int(len(objeto.faces)),
         "steps": pasos,
         "guidance": guia,
+        "seed": semilla,
         "device": dispositivo,
         # Lo que sale de aca NO esta aprobado por salir: pasa por el banco como
         # cualquier otra malla.

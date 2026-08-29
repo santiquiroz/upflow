@@ -140,6 +140,7 @@ def score_fit(
     height_meters: float,
     scale_view: str | None = None,
     resolution: int = 512,
+    up_axis: str = "z_up",
 ) -> dict[str, Any]:
     """Cuanto se parece una malla al dibujo, y de que tipo es la diferencia.
 
@@ -185,6 +186,9 @@ def score_fit(
             "views": [vista.name for vista in vistas],
             "viewWidthMeters": ancho_encuadre,
             "resolution": resolution,
+            # Cada motor entrega en SU marco. Una malla Y-arriba medida como si
+            # fuera Z-arriba puntua la rotacion y no el parecido.
+            "upAxis": up_axis,
         },
     )
     if render.get("error"):
@@ -232,6 +236,7 @@ def compare_meshes(
     height_meters: float,
     scale_view: str | None = None,
     resolution: int = 512,
+    up_axis: str = "z_up",
 ) -> dict[str, Any]:
     """Mide varias mallas contra la misma hoja y las ordena.
 
@@ -255,6 +260,7 @@ def compare_meshes(
                 height_meters=height_meters,
                 scale_view=scale_view,
                 resolution=resolution,
+                up_axis=up_axis,
             )
         except Exception as exc:  # noqa: BLE001 - el fallo de una candidata es un dato
             resultados.append({"name": nombre, "mesh": str(ruta), "error": str(exc)})
