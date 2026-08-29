@@ -885,6 +885,54 @@ async def upflow_remesh(
         return format_tool_error(exc)
 
 
+@mcp.tool(name="upflow_score_fit", annotations={"title": "Medir cuánto calza una malla con el dibujo", "readOnlyHint": False, "destructiveHint": False, "openWorldHint": False})
+async def upflow_score_fit(
+    token: str,
+    file_path: str,
+    height_meters: float,
+    scale_view: str = "",
+    resolution: int = 512,
+) -> str:
+    """Mide cuánto se parece una malla al dibujo, y de QUÉ TIPO es la diferencia.
+
+    Es la balanza: la misma medida para una malla generada por un modelo,
+    esculpida a mano o armada con primitivas, así que comparar dos formas de
+    llegar deja de ser cuestión de opinión. Usá `upflow_sheet_views` primero
+    para obtener el token.
+
+    Por vista devuelve `blame`, que es lo accionable:
+      - "escala": las dos medidas se van para el mismo lado. Reescalá; modelar
+        no lo arregla.
+      - "ubicacion": la forma calza pero corrida. Mové; `offsetCm` dice cuánto.
+      - "forma": proporción y centrado correctos y aun así no calza. Recién acá
+        hay que modelar.
+
+    height_meters: la altura REAL de la vista que fija la escala (`scale_view`,
+    por defecto la más alta). Es UNA sola escala para toda la hoja a propósito:
+    escalar cada vista por su propia tinta las deja a escalas distintas y
+    entonces ninguna malla puede calzar las dos —medido sobre una gorra, donde
+    de frente el punto más bajo era la banda y de perfil la punta de la visera.
+
+    La auditoría de topología viaja junto al calce: una malla puede calzar la
+    silueta y ser inservible por estar rota.
+    """
+    try:
+        name, content = client.read_upload(file_path)
+        datos: dict[str, object] = {"heightMeters": height_meters, "resolution": resolution}
+        if scale_view:
+            datos["scaleView"] = scale_view
+        return _dump(
+            await client.api_post(
+                f"/api/v1/model3d/fit/{token}",
+                data=datos,
+                files={"file": (name, content, "application/octet-stream")},
+                timeout=client.UPLOAD_TIMEOUT,
+            )
+        )
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
 @mcp.tool(name="upflow_sheet_views", annotations={"title": "Partir hoja de turnaround", "readOnlyHint": False, "destructiveHint": False, "openWorldHint": False})
 async def upflow_sheet_views(file_path: str, expected_views: int = 4) -> str:
     """Parte una hoja de turnaround en sus vistas y devuelve un token.

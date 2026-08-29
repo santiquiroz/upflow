@@ -244,6 +244,49 @@ class RemeshResponse(BaseModel):
     after: MeshAuditResponse
 
 
+class ViewFitResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    view: str
+    # `anchored` alinea por el centro de la caja de tinta; `best` deja correr la
+    # silueta. Que la diferencia sea visible es el punto: dice si hay que mover
+    # o modelar.
+    anchored: float
+    best: float
+    gain_from_moving: float = Field(alias="gainFromMoving")
+    offset_cm: tuple[float, float] = Field(alias="offsetCm")
+    # "escala" | "ubicacion" | "forma": donde esta el problema, para no afinar
+    # lo que no falla.
+    blame: str
+    # (modelo, dibujo) en cm, para que el numero se pueda discutir.
+    width_cm: tuple[float, float] = Field(alias="widthCm")
+    height_cm: tuple[float, float] = Field(alias="heightCm")
+
+
+class MeshFitResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    # La vista cuya altura real fija la escala de TODA la hoja. Explicito y no
+    # inferido: escalar cada vista por su propia tinta deja las vistas a
+    # escalas distintas y ningun modelo puede calzar las dos.
+    scale_view: str = Field(alias="scaleView")
+    scale_view_height_meters: float = Field(alias="scaleViewHeightMeters")
+    meters_per_pixel_model: float = Field(alias="metersPerPixelModel")
+    meters_per_pixel_sheet: float = Field(alias="metersPerPixelSheet")
+    average: float
+    worst_view: str = Field(alias="worstView")
+    views: list[ViewFitResponse]
+
+
+class FitScoreResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    # Las dos preguntas viajan juntas: una malla puede calzar la silueta y ser
+    # inservible por estar rota, y separarlas invita a responder solo la comoda.
+    audit: MeshAuditResponse
+    fit: MeshFitResponse
+
+
 class SheetViewResponse(BaseModel):
     name: str
     # URL resoluble, no un nombre de archivo suelto: antes era un puntero que

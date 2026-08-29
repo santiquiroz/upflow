@@ -18,7 +18,7 @@ from typing import Any
 from PIL import Image
 
 from app.config import Settings
-from app.services import blender_service, silhouette
+from app.services import blender_service, fit, silhouette
 from app.services.turnaround import Box, character_view_boxes, ink_bounds, open_sheet
 
 # Como se llama cada vista en la escena. El orden es el de una hoja de
@@ -28,6 +28,12 @@ VIEW_ORDER = ("front", "side", "back", "side_left")
 AUDIT_SCRIPT = "audit_mesh.py"
 REFERENCE_SCRIPT = "build_reference_scene.py"
 REMESH_SCRIPT = "remesh.py"
+SILHOUETTE_SCRIPT = "render_silhouettes.py"
+
+# Cuanto aire se deja alrededor de la malla al renderizar su silueta. Sin
+# margen, un pixel de antialias en el borde se pierde contra el marco y el
+# ancho medido sale corto.
+MARGEN_ENCUADRE = 1.25
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +91,106 @@ def remesh(
         REMESH_SCRIPT,
         {"mesh": str(mesh_path), "output": str(output), "voxelMeters": voxel_meters},
     )
+
+
+class UnknownScaleViewError(ValueError):
+    """La vista elegida para fijar la escala no existe entre los recortes."""
+
+
+def _vista_mas_alta(vistas: list[DetectedView]) -> DetectedView:
+    return max(vistas, key=lambda vista: vista.ink.height)
+
+
+def score_fit(
+    settings: Settings,
+    mesh_path: Path,
+    views_dir: Path,
+    render_dir: Path,
+    *,
+    height_meters: float,
+    scale_view: str | None = None,
+    resolution: int = 512,
+) -> dict[str, Any]:
+    """Cuanto se parece una malla al dibujo, y de que tipo es la diferencia.
+
+    Es la balanza del banco: la misma medida para una malla generada por un
+    modelo, esculpida a mano o armada con primitivas, asi que comparar motores
+    deja de ser cuestion de opinion.
+
+    `scale_view` es el nombre de la vista cuya altura real se conoce, y esa
+    UNICA escala vale para todos los recortes de la hoja. Es explicito y no
+    inferido porque la alternativa —escalar cada vista por su propia altura de
+    tinta— es el error medido que hizo imposible calzar una gorra: de frente el
+    punto mas bajo era la banda y de perfil la punta de la visera, asi que las
+    dos vistas quedaban a escalas distintas y ningun modelo podia calzar ambas.
+
+    Devuelve la auditoria junto al calce: una malla puede calzar la silueta y
+    ser igual inservible por estar rota, y separar las dos preguntas invita a
+    responder solo la comoda.
+    """
+    vistas = views_from_dir(views_dir)
+    if not vistas:
+        raise UnknownScaleViewError(f"no hay recortes de vista en {views_dir}")
+
+    if scale_view is None:
+        referencia_escala = _vista_mas_alta(vistas)
+    else:
+        elegida = next((vista for vista in vistas if vista.name == scale_view), None)
+        if elegida is None:
+            disponibles = ", ".join(vista.name for vista in vistas)
+            raise UnknownScaleViewError(f"'{scale_view}' no esta entre las vistas: {disponibles}")
+        referencia_escala = elegida
+
+    auditoria = audit_mesh(settings, mesh_path)
+    if auditoria.get("error"):
+        return {"audit": auditoria, "fit": None}
+
+    ancho_encuadre = max(auditoria["dims"]) * MARGEN_ENCUADRE
+    render = blender_service.run_script(
+        settings,
+        SILHOUETTE_SCRIPT,
+        {
+            "mesh": str(mesh_path),
+            "outputDir": str(render_dir),
+            "views": [vista.name for vista in vistas],
+            "viewWidthMeters": ancho_encuadre,
+            "resolution": resolution,
+        },
+    )
+    if render.get("error"):
+        return {"audit": auditoria, "fit": None, "error": render["error"]}
+
+    metros_por_pixel_dibujo = fit.metros_por_pixel_de(referencia_escala.image, height_meters)
+    calce = fit.comparar(
+        {nombre: Path(ruta) for nombre, ruta in render["silhouettes"].items()},
+        {vista.name: vista.image for vista in vistas},
+        metros_por_pixel_modelo=render["metersPerPixel"],
+        metros_por_pixel_dibujo=metros_por_pixel_dibujo,
+    )
+    return {
+        "audit": auditoria,
+        "fit": {
+            "scaleView": referencia_escala.name,
+            "scaleViewHeightMeters": height_meters,
+            "metersPerPixelModel": render["metersPerPixel"],
+            "metersPerPixelSheet": metros_por_pixel_dibujo,
+            "average": calce.promedio,
+            "worstView": calce.peor_vista,
+            "views": [
+                {
+                    "view": ajuste.vista,
+                    "anchored": ajuste.anclado,
+                    "best": ajuste.mejor,
+                    "gainFromMoving": ajuste.gana_moviendo,
+                    "offsetCm": list(ajuste.corrimiento_cm),
+                    "blame": ajuste.culpa,
+                    "widthCm": [ajuste.ancho.modelo_cm, ajuste.ancho.dibujo_cm],
+                    "heightCm": [ajuste.alto.modelo_cm, ajuste.alto.dibujo_cm],
+                }
+                for ajuste in calce.ajustes
+            ],
+        },
+    }
 
 
 def views_from_dir(views_dir: Path, *, names: tuple[str, ...] = VIEW_ORDER) -> list[DetectedView]:

@@ -140,6 +140,7 @@ from app.schemas import (
     ReferenceSceneResponse,
     SheetViewResponse,
     SheetViewsResponse,
+    FitScoreResponse,
     ProportionsResponse,
     RenameViewsRequest,
     RemeshResponse,
@@ -200,11 +201,12 @@ from app.services.model3d_service import (
     measure_proportions,
     remesh as model3d_remesh,
     rename_views,
+    score_fit as model3d_score_fit,
     sheet_warnings,
     split_views,
     views_from_dir,
 )
-from app.services.model3d_service import UnknownViewNameError
+from app.services.model3d_service import UnknownScaleViewError, UnknownViewNameError
 from app.services.turnaround import EmptySheetError, UnreadableSheetError
 from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry, ModelStatus
 from app.services.pack_provisioner import (
@@ -4071,6 +4073,59 @@ async def measure_sheet_proportions(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return ProportionsResponse(**medidas)
+
+
+@router.post("/model3d/fit/{token}", response_model=FitScoreResponse)
+async def score_mesh_fit(
+    token: str,
+    request: Request,
+    file: UploadFile = File(...),
+    height_meters: float = Form(gt=0, alias="heightMeters"),
+    scale_view: str | None = Form(default=None, alias="scaleView"),
+    resolution: int = Form(default=512, ge=128, le=2048),
+    settings_dep: Settings = Depends(get_settings),
+    storage: StorageService = Depends(get_storage),
+    current_user: AuthenticatedUser = Depends(get_current_user),
+) -> FitScoreResponse:
+    """Cuanto se parece una malla al dibujo, y de qué tipo es la diferencia.
+
+    Es la balanza del banco de pruebas: la misma medida para una malla generada
+    por un modelo, esculpida a mano o armada con primitivas.
+    """
+    if not re.fullmatch(r"[0-9a-f]{32}", token):
+        raise HTTPException(status_code=404, detail="Vistas no encontradas")
+    _require_print_token_owner(request, token, current_user, "Vistas no encontradas")
+
+    safe_name = sanitize_filename(Path(file.filename or "malla.glb").name, default="malla.glb")
+    subida = settings_dep.uploads_path / f"{uuid4().hex}-{safe_name}"
+    render_dir = settings_dep.outputs_path / f"{token}.silhouettes"
+    try:
+        await storage.save_upload(file, subida, max_mb=settings_dep.max_upload_mb)
+        resultado = await asyncio.to_thread(
+            model3d_score_fit,
+            settings_dep,
+            subida,
+            _model3d_views_dir(settings_dep, token),
+            render_dir,
+            height_meters=height_meters,
+            scale_view=scale_view,
+            resolution=resolution,
+        )
+    except MissingPack as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (BlenderError, UnknownScaleViewError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        subida.unlink(missing_ok=True)
+
+    if resultado.get("fit") is None:
+        detalle = resultado.get("error") or "la malla no se pudo medir"
+        raise HTTPException(status_code=400, detail=detalle)
+    return FitScoreResponse(**resultado)
 
 
 @router.post("/model3d/reference-scene", response_model=ReferenceSceneResponse, status_code=201)
