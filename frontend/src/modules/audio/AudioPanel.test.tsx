@@ -973,6 +973,90 @@ describe("AudioPanel modo karaoke", () => {
   });
 });
 
+describe("AudioPanel ensayo minus-one", () => {
+  const UMX_STEMS = [
+    { id: "vocals", labelKey: "audio.stem.vocals" },
+    { id: "drums", labelKey: "audio.stem.drums" },
+    { id: "bass", labelKey: "audio.stem.bass" },
+    { id: "other", labelKey: "audio.stem.other" },
+  ];
+
+  // Un solo modelo instalado y de cuatro pistas: queda elegido por defecto y la
+  // seccion de ensayo tiene con que existir.
+  const FOUR_STEM_CAPABILITIES: AudioCapabilities = {
+    denoiseModes: [],
+    restoreAvailable: false,
+    restoreModes: [],
+    separationModels: [
+      {
+        id: "umx_4stem",
+        name: "Open-Unmix UMX-HQ",
+        installed: true,
+        primaryStem: "Vocals",
+        category: "karaoke",
+        architecture: "umx",
+        descriptionKey: "audio.karaoke.model.umx_4stem.description",
+        stems: UMX_STEMS,
+      },
+    ],
+  };
+
+  async function turnKaraokeOn() {
+    fireEvent.click(await screen.findByRole("button", { name: /^Karaoke/ }));
+    fireEvent.click(
+      await screen.findByRole("checkbox", { name: /split the audio into two stems/i }),
+    );
+  }
+
+  it("hides the rehearsal section while the selected model splits fewer than three stems", async () => {
+    renderPanel(FULL_CAPABILITIES);
+    await turnKaraokeOn();
+
+    expect(screen.queryByRole("button", { name: /^rehearsal/i })).not.toBeInTheDocument();
+  });
+
+  it("submits the picked practice stems and guide level with the separation job", async () => {
+    vi.mocked(audioService.createAudioJob).mockResolvedValue({
+      jobId: "reh-1", status: "queued", statusUrl: "/x", downloadUrl: null,
+    });
+    renderPanel(FOUR_STEM_CAPABILITIES);
+    selectFile();
+    await turnKaraokeOn();
+
+    fireEvent.click(await screen.findByRole("button", { name: /^rehearsal/i }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /minus-one/i }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Drums" }));
+    fireEvent.click(screen.getByRole("button", { name: "10%" }));
+
+    const submitButton = screen.getByRole("button", { name: /enhance audio/i });
+    await waitFor(() => expect(submitButton).not.toBeDisabled());
+    fireEvent.click(submitButton);
+
+    await waitFor(() => expect(audioService.createAudioJob).toHaveBeenCalled());
+    const sent = vi.mocked(audioService.createAudioJob).mock.calls[0][0];
+    expect(sent.separate).toBe(true);
+    expect(sent.practiceStems).toEqual(["drums"]);
+    expect(sent.practiceGuidePercent).toBe(10);
+  });
+
+  it("sends no practice fields while the rehearsal section is off", async () => {
+    vi.mocked(audioService.createAudioJob).mockResolvedValue({
+      jobId: "reh-2", status: "queued", statusUrl: "/x", downloadUrl: null,
+    });
+    renderPanel(FOUR_STEM_CAPABILITIES);
+    selectFile();
+    await turnKaraokeOn();
+
+    const submitButton = screen.getByRole("button", { name: /enhance audio/i });
+    await waitFor(() => expect(submitButton).not.toBeDisabled());
+    fireEvent.click(submitButton);
+
+    await waitFor(() => expect(audioService.createAudioJob).toHaveBeenCalled());
+    const sent = vi.mocked(audioService.createAudioJob).mock.calls[0][0];
+    expect(sent.practiceStems).toEqual([]);
+  });
+});
+
 describe("AudioPanel en lote", () => {
   it("creates one job per file with the same settings", async () => {
     vi.mocked(audioService.createAudioJob).mockResolvedValue({

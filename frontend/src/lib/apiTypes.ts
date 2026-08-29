@@ -186,6 +186,13 @@ export interface AudioJob {
    */
   cleanupSteps?: string[];
   /**
+   * Pistas minus-one pedidas (ids del modelo) y el volumen de la guía del
+   * instrumento quitado. Los derivados llegan en `stems[]` con id
+   * `minus_<stem>` y labelKey `audio.stem.minus_<stem>`.
+   */
+  practiceStems?: string[];
+  practiceGuidePercent?: number;
+  /**
    * Solo en jobs de separación completados: las DOS descargas con el label
    * del catálogo, ordenadas (la primera es la que el usuario quiere y
    * coincide con downloadUrl).

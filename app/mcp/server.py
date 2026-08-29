@@ -418,6 +418,8 @@ async def upflow_process_audio(
     cleanup_steps: str = "",
     separate: bool = False,
     separation_model: str = "",
+    practice_stems: list[str] | None = None,
+    practice_guide_percent: int = 0,
 ) -> str:
     """Crea un job de procesamiento de audio: limpieza (quitar ruido/eco/reverb
     de música), denoise, restauración (Apollo/AudioSR), cadena de voz,
@@ -460,6 +462,11 @@ async def upflow_process_audio(
     separationModels); vacío = el default instalado. Los modelos de limpieza
     también están ahí: correrlos por separate=True es la forma de escuchar QUÉ
     sacó una pasada, porque devuelve los dos stems.
+    practice_stems (solo con separate=True y un modelo de 3+ stems): lista de
+    stem ids a los que hornear una pista de práctica "minus-one" (la canción
+    SIN ese instrumento); cada derivado se baja con stem=minus_<id>.
+    practice_guide_percent (0-30): porcentaje del instrumento removido que
+    queda sonando de guía; 0 = quitarlo del todo.
     Modos válidos: upflow_capabilities(audio) y upflow_capabilities(voice_catalog).
     voice_steps: CSV de pasos de la cadena de voz en orden.
     output_format: wav | flac | mp3 | m4a. Los dos primeros son sin pérdida
@@ -493,6 +500,12 @@ async def upflow_process_audio(
         data.update({key: value for key, value in optional.items() if value})
         if voice_presence_db:
             data["voice_presence_db"] = str(voice_presence_db)
+        # Solo si son truthy: la API valida el combo (separate, modelo 3+ stems)
+        # y su 400 explica mejor que un default inventado acá.
+        if practice_stems:
+            data["practice_stems"] = ",".join(practice_stems)
+        if practice_guide_percent:
+            data["practice_guide_percent"] = str(practice_guide_percent)
         created = await client.api_post(
             "/api/v1/audio/jobs",
             data=data,

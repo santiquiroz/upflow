@@ -29,6 +29,10 @@ export interface CreateAudioJobParams {
   separationModel?: string | null;
   /** Modelos EXTRA a combinar con el principal. Vacío = un solo modelo. */
   ensembleModels?: string[];
+  /** Stems a quitar en pistas minus-one. Vacío = no se piden. */
+  practiceStems?: string[];
+  /** Volumen de guía del instrumento quitado (0-30). 0 = sin guía. */
+  practiceGuidePercent?: number;
 }
 
 function buildAudioJobFormData(params: CreateAudioJobParams): FormData {
@@ -60,6 +64,7 @@ function buildAudioJobFormData(params: CreateAudioJobParams): FormData {
     if (params.ensembleModels && params.ensembleModels.length > 0) {
       formData.append("ensemble_models", params.ensembleModels.join(","));
     }
+    appendPracticeFields(formData, params);
   }
   // Misma regla que voice_steps: una selección vacía NO se manda, porque el
   // campo ausente significa "sin cadena de limpieza".
@@ -68,6 +73,20 @@ function buildAudioJobFormData(params: CreateAudioJobParams): FormData {
   }
   appendVoiceFields(formData, params);
   return formData;
+}
+
+function appendPracticeFields(formData: FormData, params: CreateAudioJobParams): void {
+  // Misma regla CSV que las demás listas: la selección vacía NO se manda. Y la
+  // guía solo viaja acompañando stems — sin stems no hay minus-one que hornear,
+  // así que una guía suelta sería un pedido sin sujeto.
+  if (!params.practiceStems || params.practiceStems.length === 0) {
+    return;
+  }
+  formData.append("practice_stems", params.practiceStems.join(","));
+  // 0 es el default del backend: mandarlo solo agrega ruido al form.
+  if (params.practiceGuidePercent) {
+    formData.append("practice_guide_percent", String(params.practiceGuidePercent));
+  }
 }
 
 function appendVoiceFields(formData: FormData, params: CreateAudioJobParams): void {

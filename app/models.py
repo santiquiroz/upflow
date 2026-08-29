@@ -154,6 +154,14 @@ class AudioJob:
     # solo modelo, que es el caso normal. Todos tienen que declarar los mismos
     # stems: promediar un instrumental con un bajo no da nada.
     ensemble_models: list[str] = field(default_factory=list)
+    # Pistas de practica "minus-one": por cada stem elegido se hornea la
+    # cancion SIN ese instrumento (mix decodificado - g*stem). Solo con
+    # separate y un modelo de 3+ stems; los derivados viven en
+    # stem_output_paths con id minus_<stem>.
+    practice_stems: list[str] = field(default_factory=list)
+    # Guia opcional (0-30): porcentaje del stem removido que queda sonando de
+    # fondo como referencia. g = 1 - percent/100; 0 = quitarlo del todo.
+    practice_guide_percent: int = 0
     # Standalone-module output format (Fase C Task 9): "wav" (lossless, no
     # re-encode -- current is already PCM from decode/denoise/restore),
     # "flac" (lossless, ~50% smaller, default), "mp3" / "m4a" (con perdida). See

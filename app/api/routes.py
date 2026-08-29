@@ -545,10 +545,21 @@ def _audio_stem_downloads(job: AudioJob) -> list[AudioStemDownloadResponse] | No
     if spec is None or job.status != JobStatus.completed or not job.stem_output_paths:
         return None
     base = f"/api/v1/audio/jobs/{job.id}/download"
-    return [
+    downloads = [
         AudioStemDownloadResponse(id=stem.id, label_key=stem.label_key, url=f"{base}?stem={stem.id}")
         for stem in spec.stems
     ]
+    # Los derivados minus-one van DESPUES de los stems del catalogo: son pistas
+    # horneadas por este job, no salidas del modelo.
+    downloads.extend(
+        AudioStemDownloadResponse(
+            id=f"minus_{stem_id}",
+            label_key=f"audio.stem.minus_{stem_id}",
+            url=f"{base}?stem=minus_{stem_id}",
+        )
+        for stem_id in job.practice_stems
+    )
+    return downloads
 
 
 def _audio_vocals_download_url(job: AudioJob) -> str | None:
@@ -585,6 +596,8 @@ def audio_job_to_response(job: AudioJob) -> AudioJobResponse:
         separate=job.separate,
         separation_model=job.separation_model,
         ensemble_models=list(job.ensemble_models),
+        practice_stems=list(job.practice_stems),
+        practice_guide_percent=job.practice_guide_percent,
         created_at=job.created_at,
         started_at=job.started_at,
         finished_at=job.finished_at,
@@ -1158,6 +1171,11 @@ async def create_audio_job(
     separation_model: str | None = Form(default=None),
     # CSV de ids extra a combinar con el principal ("maxima calidad").
     ensemble_models: str | None = Form(default=None),
+    # CSV de stems a los que hornear una pista minus-one (solo con separate y
+    # un modelo de 3+ stems). El derivado baja con ?stem=minus_<id>.
+    practice_stems: str | None = Form(default=None),
+    # Porcentaje (0-30) del stem removido que queda de guia; 0 = quitarlo.
+    practice_guide_percent: int = Form(default=0),
     audio_jobs: AudioJobManager = Depends(get_audio_job_manager),
     storage: StorageService = Depends(get_storage),
     settings: Settings = Depends(get_settings),
@@ -1199,6 +1217,12 @@ async def create_audio_job(
                 separation_model if isinstance(separation_model, str) and separation_model else None
             ),
             ensemble_models=_parse_chain_steps(ensemble_models),
+            practice_stems=_parse_chain_steps(practice_stems),
+            # isinstance y no truthiness, como lossy_quality: llamada directa
+            # (tests) => el default es el FieldInfo de Form().
+            practice_guide_percent=(
+                practice_guide_percent if isinstance(practice_guide_percent, int) else 0
+            ),
             job_id=token,
             owner=current_user,
         )
@@ -2306,7 +2330,9 @@ def _valid_stems_for(job: AudioJob) -> tuple[str, ...]:
     spec = _audio_separation_spec(job)
     if spec is None:
         return LEGACY_AUDIO_DOWNLOAD_STEMS
-    return spec.stem_ids()
+    # Los minus_<id> validos son SOLO los pedidos en el job: un derivado que no
+    # se horneo no existe en disco y merece un 400 que lo diga.
+    return spec.stem_ids() + tuple(f"minus_{stem_id}" for stem_id in job.practice_stems)
 
 
 def _stem_output_path(job: AudioJob, stem: str, valid_stems: tuple[str, ...]) -> Path:

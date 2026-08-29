@@ -311,18 +311,43 @@ class AudioPipeline:
         await self._separate_with(job, spec, decoded, stem_wavs, work_dir)
 
         advance_audio_stage(job, "finalizing")
+        encode_plan = list(zip([stem.id for stem in spec.stems], stem_wavs))
+        encode_plan += self._derive_practice_wavs(job, decoded, dict(encode_plan), work_dir)
         output_format = job.output_format
         outputs_dir = self.settings.outputs_path
         outputs_dir.mkdir(parents=True, exist_ok=True)
         outputs: dict[str, Path] = {}
-        for stem, stem_wav in zip(spec.stems, stem_wavs):
-            encoded = outputs_dir / f"{job.id}.{stem.id}.{output_format}"
+        for stem_id, stem_wav in encode_plan:
+            encoded = outputs_dir / f"{job.id}.{stem_id}.{output_format}"
             await self._write_output(stem_wav, encoded, output_format, job.lossy_quality)
             self._validate_output(encoded)
-            outputs[stem.id] = encoded
+            outputs[stem_id] = encoded
         job.stem_output_paths = outputs
         complete_audio_stages(job)
         return outputs[spec.main_stem.id]
+
+    def _derive_practice_wavs(
+        self,
+        job: AudioJob,
+        decoded: Path,
+        stem_wavs_by_id: dict[str, Path],
+        work_dir: Path,
+    ) -> list[tuple[str, Path]]:
+        """Pistas minus-one: la mezcla DECODIFICADA menos g*stem, una por stem
+        pedido. Vive dentro de finalizing a proposito: es una resta y un encode
+        mas, no una etapa nueva en la escalera de progreso."""
+        if not job.practice_stems:
+            return []
+        from app.services.engines.minus_one import derive_minus_one_file
+
+        derived: list[tuple[str, Path]] = []
+        for stem_id in job.practice_stems:
+            destination = work_dir / f"minus_{stem_id}.wav"
+            derive_minus_one_file(
+                decoded, stem_wavs_by_id[stem_id], destination, job.practice_guide_percent
+            )
+            derived.append((f"minus_{stem_id}", destination))
+        return derived
 
     async def _separate_with(self, job, spec, decoded: Path, stem_wavs, work_dir: Path) -> None:
         """El modelo pedido, o el promedio de varios cuando se pidio ensemble."""

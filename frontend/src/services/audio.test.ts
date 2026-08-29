@@ -317,3 +317,73 @@ describe("createAudioJob voice fields", () => {
     expect(sentBody().has("voice_presence_db")).toBe(false);
   });
 });
+
+describe("createAudioJob practice fields", () => {
+  const file = new File(["binary"], "song.wav", { type: "audio/wav" });
+
+  function separateParams() {
+    return {
+      file,
+      denoise: null,
+      restore: null,
+      outputFormat: "flac",
+      device: null,
+      separate: true,
+      separationModel: "umx_4stem",
+    };
+  }
+
+  function sentBody(): FormData {
+    return uploads[0].body;
+  }
+
+  function mockAccepted() {
+    mockUploadOnce({ jobId: "prac-1", status: "queued", statusUrl: "/x", downloadUrl: null }, 202);
+  }
+
+  it("sends the practice stems as a comma separated list with the guide percent", async () => {
+    mockAccepted();
+    await createAudioJob({
+      ...separateParams(),
+      practiceStems: ["drums", "bass"],
+      practiceGuidePercent: 20,
+    });
+    const body = sentBody();
+    expect(body.get("practice_stems")).toBe("drums,bass");
+    expect(body.get("practice_guide_percent")).toBe("20");
+  });
+
+  it("omits practice_guide_percent when it is zero so the backend default wins", async () => {
+    mockAccepted();
+    await createAudioJob({
+      ...separateParams(),
+      practiceStems: ["drums"],
+      practiceGuidePercent: 0,
+    });
+    const body = sentBody();
+    expect(body.get("practice_stems")).toBe("drums");
+    expect(body.has("practice_guide_percent")).toBe(false);
+  });
+
+  it("omits both fields when no practice stem is selected", async () => {
+    // Sin stems no hay minus-one que hornear: una guia suelta seria un pedido
+    // sin sujeto y el campo ausente es lo que el backend espera.
+    mockAccepted();
+    await createAudioJob({
+      ...separateParams(),
+      practiceStems: [],
+      practiceGuidePercent: 20,
+    });
+    const body = sentBody();
+    expect(body.has("practice_stems")).toBe(false);
+    expect(body.has("practice_guide_percent")).toBe(false);
+  });
+
+  it("omits the practice fields when the caller does not pass them", async () => {
+    mockAccepted();
+    await createAudioJob(separateParams());
+    const body = sentBody();
+    expect(body.has("practice_stems")).toBe(false);
+    expect(body.has("practice_guide_percent")).toBe(false);
+  });
+});

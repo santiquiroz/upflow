@@ -10,6 +10,7 @@ import { jobQueueStore } from "../lib/jobQueueStore";
 import { isCancellableJobStatus, isTerminalJobStatus, jobKindLabelKey } from "../lib/jobStatus";
 import { IndeterminateProgressBar } from "./IndeterminateProgressBar";
 import { JobDetailModal } from "./JobDetailModal";
+import { StemDownloadList } from "./StemDownloadList";
 
 function QueuedStatus() {
   const { t } = useTranslation();
@@ -62,34 +63,19 @@ function CompletedDownloadLinks({ entry }: { entry: JobQueueEntry }) {
     return null;
   }
   const stems = readStemDownloads(entry);
-  if (stems) {
-    // El backend ordena el par: primero el stem que el usuario quiere.
-    return (
-      <div className="flex flex-wrap justify-end gap-1.5">
-        {stems.map((stem) => (
-          <a key={stem.id} href={stem.url} download className={QUEUE_DOWNLOAD_LINK_CLASS}>
-            <Download aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.75} />
-            {t(stem.labelKey)}
-          </a>
-        ))}
-      </div>
-    );
-  }
   const vocalsUrl = readVocalsUrl(entry);
-  if (vocalsUrl) {
-    // Dos links etiquetados: el generico bajaba SOLO la instrumental y dejaba
+  if (stems || vocalsUrl) {
+    // Links etiquetados: el generico bajaba SOLO la instrumental y dejaba
     // la voz inalcanzable desde la cola tras un refresh.
     return (
-      <div className="flex flex-wrap justify-end gap-1.5">
-        <a href={entry.downloadUrl} download className={QUEUE_DOWNLOAD_LINK_CLASS}>
-          <Download aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.75} />
-          {t("audio.karaoke.download.instrumental")}
-        </a>
-        <a href={vocalsUrl} download className={QUEUE_DOWNLOAD_LINK_CLASS}>
-          <Download aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.75} />
-          {t("audio.karaoke.download.vocals")}
-        </a>
-      </div>
+      <StemDownloadList
+        stems={stems}
+        downloadUrl={entry.downloadUrl}
+        vocalsUrl={vocalsUrl}
+        linkClassName={QUEUE_DOWNLOAD_LINK_CLASS}
+        iconClassName="h-3.5 w-3.5"
+        containerClassName="flex flex-wrap justify-end gap-1.5"
+      />
     );
   }
   return (

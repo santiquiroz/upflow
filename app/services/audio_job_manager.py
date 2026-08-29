@@ -74,6 +74,8 @@ class AudioJobManager(QueuedJobManager[AudioJob]):
         separate: bool = False,
         separation_model: str | None = None,
         ensemble_models: list[str] | None = None,
+        practice_stems: list[str] | None = None,
+        practice_guide_percent: int = 0,
         job_id: str | None = None,
         owner: AuthenticatedUser | None = None,
     ) -> AudioJob:
@@ -94,6 +96,9 @@ class AudioJobManager(QueuedJobManager[AudioJob]):
                 cleanup_steps=cleanup_steps or [],
             )
             selected_ensemble = self._validate_ensemble(separation_model, ensemble_models or [])
+            selected_practice = self._validate_practice_selection(
+                separation_model, practice_stems or [], practice_guide_percent
+            )
             selected_voice_steps: list[str] = []
             selected_cleanup_steps: list[str] = []
         else:
@@ -103,6 +108,13 @@ class AudioJobManager(QueuedJobManager[AudioJob]):
                 )
             if ensemble_models:
                 raise ValueError("ensemble_models solo aplica cuando separate=true.")
+            if practice_stems:
+                raise ValueError("practice_stems solo aplica cuando separate=true.")
+            if practice_guide_percent:
+                raise ValueError(
+                    "practice_guide_percent solo aplica cuando separate=true."
+                )
+            selected_practice = []
             selected_ensemble = []
             selected_cleanup_steps = self._validate_cleanup_selection(cleanup_steps or [])
             selected_voice_steps = self._validate_voice_selection(
@@ -136,6 +148,8 @@ class AudioJobManager(QueuedJobManager[AudioJob]):
             separate=separate,
             separation_model=separation_model,
             ensemble_models=selected_ensemble,
+            practice_stems=selected_practice,
+            practice_guide_percent=practice_guide_percent,
             owner_id=owner.id if owner is not None else None,
         )
         if job_id is not None:
@@ -227,6 +241,44 @@ class AudioJobManager(QueuedJobManager[AudioJob]):
                     f"{model_id!r} entrega {spec.stem_ids()} y {primary!r} entrega "
                     f"{stems_esperados}: solo se combinan modelos con las mismas pistas."
                 )
+        return elegidos
+
+    def _validate_practice_selection(
+        self, model_id: str, selected: list[str], guide_percent: int
+    ) -> list[str]:
+        """Los stems a los que hornear una pista minus-one, o vacio.
+
+        Piden un modelo de 3+ stems: en uno de dos pistas el "minus-one" de
+        una ES la otra, que ya se descarga por su id.
+        """
+        from app.services.engines.minus_one import GUIDE_PERCENT_MAX
+        from app.services.engines.separation_models import SEPARATION_MODELS
+
+        if not 0 <= guide_percent <= GUIDE_PERCENT_MAX:
+            raise ValueError(
+                f"practice_guide_percent va de 0 a {GUIDE_PERCENT_MAX}; "
+                f"llego {guide_percent}."
+            )
+        elegidos = list(dict.fromkeys(selected))
+        if not elegidos:
+            if guide_percent:
+                raise ValueError(
+                    "practice_guide_percent solo aplica con practice_stems."
+                )
+            return []
+        spec = SEPARATION_MODELS[model_id]
+        if len(spec.stems) < 3:
+            raise ValueError(
+                f"Las pistas minus-one piden un modelo de 3 o mas stems; "
+                f"{model_id!r} entrega {', '.join(spec.stem_ids())}. Con dos "
+                "pistas el minus-one de una ES la otra: descargala directo."
+            )
+        desconocidos = [stem for stem in elegidos if stem not in spec.stem_ids()]
+        if desconocidos:
+            raise ValueError(
+                f"Stems desconocidos para {model_id!r}: {', '.join(desconocidos)}. "
+                f"Validos: {', '.join(spec.stem_ids())}."
+            )
         return elegidos
 
     def _default_installed_model(self) -> str:

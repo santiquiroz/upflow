@@ -8,6 +8,7 @@ import { isProgressDeterminate } from "../lib/jobProgress";
 import { isGenerationJob, type AnyJobResponse } from "../lib/jobTypeGuards";
 import { DeterminateProgressBar } from "./DeterminateProgressBar";
 import { IndeterminateProgressBar } from "./IndeterminateProgressBar";
+import { StemDownloadList } from "./StemDownloadList";
 
 export type JobCardPhase = "idle" | "uploading" | "queued" | "running" | "completed" | "failed" | "cancelled";
 
@@ -323,38 +324,21 @@ function readVocalsDownloadUrl(job: AnyJobResponse): string | null {
 }
 
 function DownloadLinks({ job }: { job: AnyJobResponse }) {
-  const { t } = useTranslation();
   if (!job.downloadUrl) {
     return null;
   }
   const stems = readStemDownloads(job);
-  if (stems) {
-    // El backend ordena el par: primero el stem que el usuario quiere
-    // (instrumental en karaoke, "sin reverb" en la limpieza).
-    return (
-      <div className="flex flex-wrap gap-2">
-        {stems.map((stem) => (
-          <a key={stem.id} href={stem.url} download className={DOWNLOAD_LINK_CLASS}>
-            <Download aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />
-            {t(stem.labelKey)}
-          </a>
-        ))}
-      </div>
-    );
-  }
   const vocalsUrl = readVocalsDownloadUrl(job);
-  if (vocalsUrl) {
+  if (stems || vocalsUrl) {
     return (
-      <div className="flex flex-wrap gap-2">
-        <a href={job.downloadUrl} download className={DOWNLOAD_LINK_CLASS}>
-          <Download aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />
-          {t("audio.karaoke.download.instrumental")}
-        </a>
-        <a href={vocalsUrl} download className={DOWNLOAD_LINK_CLASS}>
-          <Download aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />
-          {t("audio.karaoke.download.vocals")}
-        </a>
-      </div>
+      <StemDownloadList
+        stems={stems}
+        downloadUrl={job.downloadUrl}
+        vocalsUrl={vocalsUrl}
+        linkClassName={DOWNLOAD_LINK_CLASS}
+        iconClassName="h-4 w-4"
+        containerClassName="flex flex-wrap gap-2"
+      />
     );
   }
   return (

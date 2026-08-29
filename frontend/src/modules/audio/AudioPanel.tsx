@@ -16,6 +16,7 @@ import { CleanupChainPanel, cleanupSummaryKey } from "./CleanupChainPanel";
 import { KaraokeSection } from "./KaraokeSection";
 import { EnsembleSection } from "./EnsembleSection";
 import { ModelComparison } from "./ModelComparison";
+import { RehearsalSection } from "./RehearsalSection";
 import { VoiceChainPanel, voiceSummaryKey } from "./VoiceChainPanel";
 import {
   convertibleFileCount,
@@ -25,6 +26,7 @@ import {
   selectableSectionKeys,
 } from "./selectionHint";
 import { useCleanupSelection } from "./useCleanupSelection";
+import { useRehearsalSelection } from "./useRehearsalSelection";
 import { useVoiceSelection } from "./useVoiceSelection";
 
 type AudioOutputFormat = "flac" | "wav" | "mp3" | "m4a";
@@ -266,6 +268,7 @@ export function AudioPanel() {
   const selectedSeparationSpec = separationModels.find(
     (model) => model.id === effectiveSeparationModel,
   );
+  const rehearsal = useRehearsalSelection(selectedSeparationSpec);
   // El resumen nombra los stems del modelo elegido: para karaoke dice
   // voz/instrumental y para la limpieza "sin reverb + reverb".
   const separationSummary = selectedSeparationSpec
@@ -298,6 +301,8 @@ export function AudioPanel() {
           separate: true,
           separationModel: effectiveSeparationModel,
           ensembleModels,
+          practiceStems: rehearsal.enabledStems,
+          practiceGuidePercent: rehearsal.guidePercent,
         }
       : {
           denoise,
@@ -372,6 +377,9 @@ export function AudioPanel() {
           <p role="status" className="text-xs text-text-dim">
             {t("audio.karaoke.exclusiveNote")}
           </p>
+        )}
+        {separate && (
+          <RehearsalSection model={selectedSeparationSpec} selection={rehearsal} />
         )}
         <div
           aria-disabled={separate}
