@@ -1381,6 +1381,8 @@ export const es = {
   "modeling.fit.scaleViewHint":
     "Una sola escala para toda la hoja, tomada de la vista cuya altura real conocés. Escalar cada vista por su propia tinta las deja a escalas distintas y entonces ninguna malla puede calzar las dos.",
   "modeling.fit.height": "Altura real de esa vista (m)",
+  "modeling.fit.view": "Vista",
+  "modeling.fit.blameColumn": "Qué falla",
   "modeling.fit.average": "Promedio",
   "modeling.fit.worst": "Peor vista",
   "modeling.fit.anchored": "Centrado",

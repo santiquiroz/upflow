@@ -1386,6 +1386,8 @@ export const en = {
   "modeling.fit.scaleViewHint":
     "One scale for the whole sheet, taken from the view whose real height you know. Scaling each view by its own ink leaves them at different scales, and then no mesh can match both.",
   "modeling.fit.height": "Real height of that view (m)",
+  "modeling.fit.view": "View",
+  "modeling.fit.blameColumn": "What is wrong",
   "modeling.fit.average": "Average",
   "modeling.fit.worst": "Worst view",
   "modeling.fit.anchored": "Centred",
