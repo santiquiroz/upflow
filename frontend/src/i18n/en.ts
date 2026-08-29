@@ -908,6 +908,15 @@ export const en = {
   "audio.rehearsal.guideNone": "No guide",
   "audio.rehearsal.help":
     "Each pick bakes the full mix without that instrument as its own downloadable track. The removal is only as good as the separation: a weakly separated stem leaves a ghost of the instrument behind.",
+  "audio.transcribe.toggle": "Transcribe to sheet music (MIDI + MusicXML)",
+  "audio.transcribe.stemsLegend": "Instruments to transcribe",
+  "audio.transcribe.help":
+    "Editable draft, not a finished transcription: open it in MuseScore or Guitar Pro to polish it.",
+  "audio.transcribe.missingPack":
+    "The music transcription pack (Basic Pitch) is not installed yet.",
+  "audio.transcribe.format.midi": "MIDI",
+  "audio.transcribe.format.musicxml": "Sheet music (MusicXML)",
+  "audio.transcribe.format.tab": "Tab",
   "audio.karaoke.download.instrumental": "Instrumental",
   "audio.karaoke.download.vocals": "Vocals",
   "audio.mastering.none": "Not levelled",
@@ -1116,6 +1125,7 @@ export const en = {
   "capability.audio.transcribe": "Transcribe to text",
   "capability.audio.karaoke": "Karaoke (separate the vocals)",
   "capability.audio.stems": "Separate stems",
+  "capability.audio.stemTranscription": "Transcribe stems to sheet music",
   "capability.generate.textToImage": "Text to image",
   "capability.generate.imageToImage": "Image to image",
   "capability.generate.textToVideo": "Text to video",

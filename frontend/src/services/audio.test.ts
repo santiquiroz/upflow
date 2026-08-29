@@ -387,3 +387,64 @@ describe("createAudioJob practice fields", () => {
     expect(body.has("practice_guide_percent")).toBe(false);
   });
 });
+
+describe("createAudioJob transcribe fields", () => {
+  const file = new File(["binary"], "song.wav", { type: "audio/wav" });
+
+  function separateParams() {
+    return {
+      file,
+      denoise: null,
+      restore: null,
+      outputFormat: "flac",
+      device: null,
+      separate: true,
+      separationModel: "umx_4stem",
+    };
+  }
+
+  function sentBody(): FormData {
+    return uploads[0].body;
+  }
+
+  function mockAccepted() {
+    mockUploadOnce({ jobId: "trans-1", status: "queued", statusUrl: "/x", downloadUrl: null }, 202);
+  }
+
+  it("sends the transcribe stems as a comma separated list", async () => {
+    mockAccepted();
+    await createAudioJob({
+      ...separateParams(),
+      transcribeStems: ["vocals", "bass"],
+    });
+    expect(sentBody().get("transcribe_stems")).toBe("vocals,bass");
+  });
+
+  it("omits transcribe_stems when no stem is selected", async () => {
+    // El campo ausente significa "sin transcripción pedida": un string vacío
+    // pediría transcribir cero stems, que no es lo mismo para el backend.
+    mockAccepted();
+    await createAudioJob({ ...separateParams(), transcribeStems: [] });
+    expect(sentBody().has("transcribe_stems")).toBe(false);
+  });
+
+  it("omits transcribe_stems when the caller does not pass it", async () => {
+    mockAccepted();
+    await createAudioJob(separateParams());
+    expect(sentBody().has("transcribe_stems")).toBe(false);
+  });
+
+  it("sends transcribe_stems alongside practice_stems in the same job", async () => {
+    // Minus-one y transcripción son opt-ins independientes que pueden viajar
+    // juntos en el mismo pedido de separación.
+    mockAccepted();
+    await createAudioJob({
+      ...separateParams(),
+      practiceStems: ["drums"],
+      transcribeStems: ["vocals", "bass"],
+    });
+    const body = sentBody();
+    expect(body.get("practice_stems")).toBe("drums");
+    expect(body.get("transcribe_stems")).toBe("vocals,bass");
+  });
+});

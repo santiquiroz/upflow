@@ -193,6 +193,14 @@ export interface AudioJob {
   practiceStems?: string[];
   practiceGuidePercent?: number;
   /**
+   * Eco de la selección de transcripción (F3a) y los archivos MIDI/MusicXML
+   * /tab ya producidos por stem. `transcriptions` es null hasta que el job
+   * termine (igual que `stems`); [] una vez completo si no se pidió ninguna
+   * transcripción.
+   */
+  transcribeStems?: string[];
+  transcriptions?: TranscriptionDownload[] | null;
+  /**
    * Solo en jobs de separación completados: las DOS descargas con el label
    * del catálogo, ordenadas (la primera es la que el usuario quiere y
    * coincide con downloadUrl).
@@ -209,6 +217,15 @@ export interface AudioJob {
 export interface AudioStemDownload {
   id: string;
   labelKey: string;
+  url: string;
+}
+
+// Mirrors app/schemas.py::TranscriptionDownloadResponse. Sin labelKey: el
+// stemId es el mismo id que ya trae un labelKey `audio.stem.<id>` en el resto
+// de la app, así que no hace falta que el backend lo repita acá.
+export interface TranscriptionDownload {
+  stemId: string;
+  format: string;
   url: string;
 }
 

@@ -27,6 +27,7 @@ import {
 } from "./selectionHint";
 import { useCleanupSelection } from "./useCleanupSelection";
 import { useRehearsalSelection } from "./useRehearsalSelection";
+import { useTranscribeSelection } from "./useTranscribeSelection";
 import { useVoiceSelection } from "./useVoiceSelection";
 
 type AudioOutputFormat = "flac" | "wav" | "mp3" | "m4a";
@@ -269,6 +270,7 @@ export function AudioPanel() {
     (model) => model.id === effectiveSeparationModel,
   );
   const rehearsal = useRehearsalSelection(selectedSeparationSpec);
+  const transcribe = useTranscribeSelection(selectedSeparationSpec);
   // El resumen nombra los stems del modelo elegido: para karaoke dice
   // voz/instrumental y para la limpieza "sin reverb + reverb".
   const separationSummary = selectedSeparationSpec
@@ -303,6 +305,7 @@ export function AudioPanel() {
           ensembleModels,
           practiceStems: rehearsal.enabledStems,
           practiceGuidePercent: rehearsal.guidePercent,
+          transcribeStems: transcribe.enabledStems,
         }
       : {
           denoise,
@@ -379,7 +382,11 @@ export function AudioPanel() {
           </p>
         )}
         {separate && (
-          <RehearsalSection model={selectedSeparationSpec} selection={rehearsal} />
+          <RehearsalSection
+            model={selectedSeparationSpec}
+            selection={rehearsal}
+            transcribe={transcribe}
+          />
         )}
         <div
           aria-disabled={separate}

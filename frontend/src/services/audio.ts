@@ -33,6 +33,8 @@ export interface CreateAudioJobParams {
   practiceStems?: string[];
   /** Volumen de guía del instrumento quitado (0-30). 0 = sin guía. */
   practiceGuidePercent?: number;
+  /** Stems CON altura a transcribir (MIDI+MusicXML, +tab si guitar/bass). Vacío = no se piden. */
+  transcribeStems?: string[];
 }
 
 function buildAudioJobFormData(params: CreateAudioJobParams): FormData {
@@ -65,6 +67,7 @@ function buildAudioJobFormData(params: CreateAudioJobParams): FormData {
       formData.append("ensemble_models", params.ensembleModels.join(","));
     }
     appendPracticeFields(formData, params);
+    appendTranscribeFields(formData, params);
   }
   // Misma regla que voice_steps: una selección vacía NO se manda, porque el
   // campo ausente significa "sin cadena de limpieza".
@@ -87,6 +90,15 @@ function appendPracticeFields(formData: FormData, params: CreateAudioJobParams):
   if (params.practiceGuidePercent) {
     formData.append("practice_guide_percent", String(params.practiceGuidePercent));
   }
+}
+
+function appendTranscribeFields(formData: FormData, params: CreateAudioJobParams): void {
+  // Misma regla CSV que practice_stems: la selección vacía NO se manda, porque
+  // el campo ausente significa "sin transcripción pedida".
+  if (!params.transcribeStems || params.transcribeStems.length === 0) {
+    return;
+  }
+  formData.append("transcribe_stems", params.transcribeStems.join(","));
 }
 
 function appendVoiceFields(formData: FormData, params: CreateAudioJobParams): void {

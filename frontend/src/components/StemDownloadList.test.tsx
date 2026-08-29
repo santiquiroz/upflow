@@ -1,18 +1,23 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import type { AudioStemDownload } from "../lib/apiTypes";
+import type { AudioStemDownload, TranscriptionDownload } from "../lib/apiTypes";
 import { StemDownloadList } from "./StemDownloadList";
 
 const LINK_CLASS = "link";
 const ICON_CLASS = "h-4 w-4";
 const CONTAINER_CLASS = "flex flex-wrap gap-2";
 
-function renderList(stems: AudioStemDownload[] | null, vocalsUrl: string | null = null) {
+function renderList(
+  stems: AudioStemDownload[] | null,
+  vocalsUrl: string | null = null,
+  transcriptions: TranscriptionDownload[] | null = null,
+) {
   return render(
     <StemDownloadList
       stems={stems}
       downloadUrl="/api/v1/audio/jobs/j1/download"
       vocalsUrl={vocalsUrl}
+      transcriptions={transcriptions}
       linkClassName={LINK_CLASS}
       iconClassName={ICON_CLASS}
       containerClassName={CONTAINER_CLASS}
@@ -66,5 +71,71 @@ describe("StemDownloadList", () => {
     const { container } = renderList(null, null);
 
     expect(container).toBeEmptyDOMElement();
+  });
+
+  describe("transcriptions (F3a)", () => {
+    const STEMS: AudioStemDownload[] = [
+      { id: "vocals", labelKey: "audio.stem.vocals", url: "/d?stem=vocals" },
+    ];
+    const TRANSCRIPTIONS: TranscriptionDownload[] = [
+      { stemId: "vocals", format: "midi", url: "/d?stem=vocals&fmt=midi" },
+      { stemId: "vocals", format: "musicxml", url: "/d?stem=vocals&fmt=musicxml" },
+      { stemId: "bass", format: "midi", url: "/d?stem=bass&fmt=midi" },
+      { stemId: "bass", format: "tab", url: "/d?stem=bass&fmt=tab" },
+    ];
+
+    it("renders one link per produced format, grouped under its stem", () => {
+      renderList(STEMS, null, TRANSCRIPTIONS);
+
+      // "MIDI" sale una vez por stem transcripto: vocals y bass las dos.
+      const midiLinks = screen.getAllByRole("link", { name: "MIDI" });
+      expect(midiLinks).toHaveLength(2);
+      expect(midiLinks[0]).toHaveAttribute("href", "/d?stem=vocals&fmt=midi");
+      expect(midiLinks[1]).toHaveAttribute("href", "/d?stem=bass&fmt=midi");
+      expect(screen.getByRole("link", { name: "Sheet music (MusicXML)" })).toHaveAttribute(
+        "href",
+        "/d?stem=vocals&fmt=musicxml",
+      );
+      expect(screen.getByRole("link", { name: "Tab" })).toHaveAttribute(
+        "href",
+        "/d?stem=bass&fmt=tab",
+      );
+    });
+
+    it("labels each group with the stem it belongs to", () => {
+      renderList(STEMS, null, TRANSCRIPTIONS);
+
+      // "Vocals" sale dos veces: el link de descarga del stem y el
+      // encabezado del grupo de transcripciones -- "Bass" solo tiene el
+      // encabezado, sin ambigüedad.
+      expect(screen.getAllByText("Vocals")).toHaveLength(2);
+      expect(screen.getByText("Bass")).toBeInTheDocument();
+    });
+
+    it("keeps rendering the stem download list unchanged alongside the transcriptions", () => {
+      renderList(STEMS, null, TRANSCRIPTIONS);
+
+      expect(screen.getByRole("link", { name: "Vocals" })).toHaveAttribute(
+        "href",
+        "/d?stem=vocals",
+      );
+    });
+
+    it("adds nothing when transcriptions is empty", () => {
+      renderList(STEMS, null, []);
+
+      expect(screen.queryByRole("link", { name: "MIDI" })).not.toBeInTheDocument();
+    });
+
+    it("renders only the transcriptions when there are no stem downloads", () => {
+      renderList(null, null, [
+        { stemId: "vocals", format: "midi", url: "/d?stem=vocals&fmt=midi" },
+      ]);
+
+      expect(screen.getByRole("link", { name: "MIDI" })).toHaveAttribute(
+        "href",
+        "/d?stem=vocals&fmt=midi",
+      );
+    });
   });
 });

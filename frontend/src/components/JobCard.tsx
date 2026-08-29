@@ -1,6 +1,13 @@
 import { AlertTriangle, Ban, CheckCircle2, Clock, Download, ImageIcon, Loader2, UploadCloud } from "lucide-react";
 import { useTranslation } from "../i18n/LocaleProvider";
-import type { AudioJob, AudioStemDownload, GenerationJob, JobResponse, VideoJobResponse } from "../lib/apiTypes";
+import type {
+  AudioJob,
+  AudioStemDownload,
+  GenerationJob,
+  JobResponse,
+  TranscriptionDownload,
+  VideoJobResponse,
+} from "../lib/apiTypes";
 import { denoiseLabel, restoreLabel } from "../lib/audioLabels";
 import { formatDuration } from "../lib/formatDuration";
 import { formatFps } from "../lib/formatFps";
@@ -323,18 +330,29 @@ function readVocalsDownloadUrl(job: AnyJobResponse): string | null {
   return job.vocalsDownloadUrl ?? null;
 }
 
+function readTranscriptions(job: AnyJobResponse): TranscriptionDownload[] | null {
+  // Solo los jobs de audio con transcripción (F3a) traen esta lista.
+  if (!isAudioJob(job)) {
+    return null;
+  }
+  const transcriptions = job.transcriptions ?? null;
+  return transcriptions !== null && transcriptions.length > 0 ? transcriptions : null;
+}
+
 function DownloadLinks({ job }: { job: AnyJobResponse }) {
   if (!job.downloadUrl) {
     return null;
   }
   const stems = readStemDownloads(job);
   const vocalsUrl = readVocalsDownloadUrl(job);
-  if (stems || vocalsUrl) {
+  const transcriptions = readTranscriptions(job);
+  if (stems || vocalsUrl || transcriptions) {
     return (
       <StemDownloadList
         stems={stems}
         downloadUrl={job.downloadUrl}
         vocalsUrl={vocalsUrl}
+        transcriptions={transcriptions}
         linkClassName={DOWNLOAD_LINK_CLASS}
         iconClassName="h-4 w-4"
         containerClassName="flex flex-wrap gap-2"
