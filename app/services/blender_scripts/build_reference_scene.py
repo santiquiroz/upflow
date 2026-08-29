@@ -13,6 +13,16 @@ Salida: rutas, altura aplicada y las vistas efectivamente colocadas.
 Esto es lo que ninguna IA generativa da y todo modelador necesita: las vistas
 alineadas, a ESCALA REAL, cada una detras de su camara y fuera del camino del
 raton. Es determinista — no hay modelo de por medio, y sale igual las mil veces.
+
+SUPUESTO, y su limite: cada vista se escala por SU altura de tinta y se apoya
+en z=0. Eso vale para un turnaround de cuerpo entero, donde el personaje mide
+lo mismo y apoya los pies en todas las vistas. NO vale para un sub-objeto
+recortado de la hoja. Medido el 2026-08-28 con la gorra del personaje: de
+frente el punto mas bajo es la banda y de perfil es la punta de la visera —dos
+puntos a alturas distintas, forzados los dos a z=0—, asi que los dos planos
+quedan mutuamente inconsistentes y NINGUN modelo puede calzar ambos. Se
+alcanzo 38% de frente y 56% de perfil, y el techo no lo pone el modelo.
+Arreglarlo pide anclar por un punto en comun elegido a mano, no por la tinta.
 """
 
 from __future__ import annotations

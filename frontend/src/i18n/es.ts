@@ -1352,6 +1352,11 @@ export const es = {
   "modeling.reference.dropzoneHint": "PNG, JPG o WEBP con fondo blanco",
   "modeling.reference.expectedViews": "Vistas que esperás",
   "modeling.reference.split": "Partir la hoja",
+  "modeling.reference.namingConvention":
+    "Nombrar las vistas por posición es una convención, no una deducción: mirando solo los píxeles no se puede saber si el tercer panel es la espalda o una vista tres cuartos. Si la hoja llega en otro orden, cada plano de la escena recibe el dibujo equivocado y nada lo delata. Mirá las miniaturas y corregí sus nombres antes de armar la escena.",
+  "modeling.reference.viewName": "Nombre de la vista",
+  "modeling.reference.applyNames": "Aplicar nombres",
+  "modeling.reference.duplicateNames": "Cada vista debe tener un nombre distinto.",
   "modeling.reference.height": "Altura real (m)",
   "modeling.reference.heightHint":
     "La escala se calcula sobre el DIBUJO, no sobre el tamaño del archivo: el margen del recorte no achica al personaje.",
@@ -1367,6 +1372,25 @@ export const es = {
   "modeling.proportions.z": "Altura (m)",
   "modeling.proportions.front": "Frente (cm)",
   "modeling.proportions.side": "Perfil (cm)",
+  "modeling.fit.title": "Cuánto calza con el dibujo",
+  "modeling.fit.subtitle":
+    "Mide la silueta de una malla contra las vistas de la hoja y dice de QUÉ TIPO es la diferencia. Un número solo no sirve: los tres motivos se arreglan en lugares distintos, y afinar la forma cuando lo que falla es la escala son horas perdidas.",
+  "modeling.fit.dropzone": "Soltá la malla a medir o hacé click para buscarla",
+  "modeling.fit.run": "Medir calce",
+  "modeling.fit.scaleView": "Vista que fija la escala",
+  "modeling.fit.scaleViewHint":
+    "Una sola escala para toda la hoja, tomada de la vista cuya altura real conocés. Escalar cada vista por su propia tinta las deja a escalas distintas y entonces ninguna malla puede calzar las dos.",
+  "modeling.fit.height": "Altura real de esa vista (m)",
+  "modeling.fit.view": "Vista",
+  "modeling.fit.blameColumn": "Qué falla",
+  "modeling.fit.average": "Promedio",
+  "modeling.fit.worst": "Peor vista",
+  "modeling.fit.anchored": "Centrado",
+  "modeling.fit.best": "Mejor calce",
+  "modeling.fit.measured": "Modelo / dibujo",
+  "modeling.fit.blame.escala": "Hay que reescalar: modelar no lo arregla",
+  "modeling.fit.blame.partes": "El contorno está bien; las partes no caen en el mismo lugar",
+  "modeling.fit.blame.forma": "Proporción y centrado bien: acá sí hay que modelar",
   "modeling.audit.subtitle":
     "Mide una malla sin tocarla y separa lo que impide seguir de lo que solo saldría mejor de otra forma. Mezclarlos entrena a ignorar los dos.",
   "modeling.audit.dropzone": "Soltá una malla acá o hacé click para buscarla",

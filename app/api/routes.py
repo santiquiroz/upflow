@@ -140,7 +140,12 @@ from app.schemas import (
     ReferenceSceneResponse,
     SheetViewResponse,
     SheetViewsResponse,
+    FitScoreResponse,
+    GeneratedMeshResponse,
+    MeshEngineResponse,
     ProportionsResponse,
+    RenameViewsRequest,
+    RemeshResponse,
 )
 from app.services.asr_installer import AsrModelInstaller
 from app.services.audio_conversion import (
@@ -190,16 +195,22 @@ from app.services.blender_service import (
     BlenderError,
     probe as blender_probe,
 )
+from app.services.mesh_engine_service import MeshEngineError, available as mesh_engines_available
 from app.services.missing_pack import MissingPack, missing_pack_message
 from app.services.model3d_service import (
     VIEW_ORDER,
     audit_mesh as model3d_audit_mesh,
     build_reference_scene as model3d_build_reference_scene,
     measure_proportions,
+    generate_mesh as model3d_generate_mesh,
+    remesh as model3d_remesh,
+    rename_views,
+    score_fit as model3d_score_fit,
     sheet_warnings,
     split_views,
     views_from_dir,
 )
+from app.services.model3d_service import UnknownScaleViewError, UnknownViewNameError
 from app.services.turnaround import EmptySheetError, UnreadableSheetError
 from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry, ModelStatus
 from app.services.pack_provisioner import (
@@ -3875,8 +3886,12 @@ async def model3d_capabilities(
             version=build.version_string if build is not None else None,
             meets_minimum=usable,
         ),
-        unlocked=["audit", "referenceScene"] if usable else [],
+        unlocked=["audit", "referenceScene", "fit"] if usable else [],
         missing=None if usable else _blender_missing_message(build),
+        engines=[
+            MeshEngineResponse(name=nombre, **estado)
+            for nombre, estado in mesh_engines_available(settings_dep).items()
+        ],
     )
 
 
@@ -3902,6 +3917,57 @@ async def audit_mesh_route(
         destino.unlink(missing_ok=True)
 
     return MeshAuditResponse(**reporte)
+
+
+@router.post("/model3d/remesh", response_model=RemeshResponse)
+async def remesh_mesh_route(
+    request: Request,
+    file: UploadFile = File(...),
+    voxel_meters: float = Form(default=0.01, gt=0, alias="voxelMeters"),
+    settings_dep: Settings = Depends(get_settings),
+    storage: StorageService = Depends(get_storage),
+    current_user: AuthenticatedUser = Depends(get_current_user),
+) -> RemeshResponse:
+    """Rehace la topología por voxeles y devuelve el antes y el después."""
+    safe_name = sanitize_filename(Path(file.filename or "malla.glb").name, default="malla.glb")
+    subida = settings_dep.uploads_path / f"{uuid4().hex}-{safe_name}"
+    token = uuid4().hex
+    destino = settings_dep.outputs_path / f"{token}.remesh.glb"
+    try:
+        await storage.save_upload(file, subida, max_mb=settings_dep.max_upload_mb)
+        resultado = await asyncio.to_thread(
+            model3d_remesh, settings_dep, subida, destino, voxel_meters=voxel_meters
+        )
+    except MissingPack as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BlenderError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        subida.unlink(missing_ok=True)
+
+    _register_print_token(request, token)
+    return RemeshResponse(
+        voxel_meters=resultado["voxelMeters"],
+        download_url=f"/api/v1/model3d/remeshed/{token}",
+        before=MeshAuditResponse(**resultado["before"]),
+        after=MeshAuditResponse(**resultado["after"]),
+    )
+
+
+@router.get("/model3d/remeshed/{token}")
+async def download_remeshed(
+    token: str,
+    request: Request,
+    settings_dep: Settings = Depends(get_settings),
+    current_user: AuthenticatedUser = Depends(get_current_user),
+) -> FileResponse:
+    if not re.fullmatch(r"[0-9a-f]{32}", token):
+        raise HTTPException(status_code=404, detail="Malla no encontrada")
+    _require_print_token_owner(request, token, current_user, "Malla no encontrada")
+    archivo = settings_dep.outputs_path / f"{token}.remesh.glb"
+    if not archivo.exists():
+        raise HTTPException(status_code=404, detail="Malla no encontrada")
+    return FileResponse(path=archivo, filename="remallada.glb", media_type="model/gltf-binary")
 
 
 @router.post("/model3d/sheet/views", response_model=SheetViewsResponse, status_code=201)
@@ -3949,6 +4015,48 @@ async def split_sheet_views(
     )
 
 
+@router.post("/model3d/sheet/{token}/names", response_model=SheetViewsResponse)
+async def rename_sheet_views(
+    token: str,
+    payload: RenameViewsRequest,
+    request: Request,
+    settings_dep: Settings = Depends(get_settings),
+    current_user: AuthenticatedUser = Depends(get_current_user),
+) -> SheetViewsResponse:
+    """Corrige qué vista es cada recorte.
+
+    Nombrarlas por posición es una convención: si la hoja viene en otro orden,
+    la escena sale con el dibujo equivocado en cada plano y nada lo delata.
+    """
+    if not re.fullmatch(r"[0-9a-f]{32}", token):
+        raise HTTPException(status_code=404, detail="Vistas no encontradas")
+    _require_print_token_owner(request, token, current_user, "Vistas no encontradas")
+
+    views_dir = _model3d_views_dir(settings_dep, token)
+    if not views_dir.exists():
+        raise HTTPException(status_code=404, detail="Vistas no encontradas")
+    try:
+        await asyncio.to_thread(rename_views, views_dir, payload.names)
+        vistas = await asyncio.to_thread(views_from_dir, views_dir)
+    except UnknownViewNameError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return SheetViewsResponse(
+        token=token,
+        views=[
+            SheetViewResponse(
+                name=vista.name,
+                image=f"/api/v1/model3d/views/{token}/{vista.name}",
+                width_px=vista.ink.width,
+                height_px=vista.ink.height,
+                ink_box=vista.ink.as_tuple(),
+            )
+            for vista in vistas
+        ],
+        warnings=[],
+    )
+
+
 @router.get("/model3d/proportions/{token}", response_model=ProportionsResponse)
 async def measure_sheet_proportions(
     token: str,
@@ -3973,6 +4081,122 @@ async def measure_sheet_proportions(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return ProportionsResponse(**medidas)
+
+
+@router.post("/model3d/generate", response_model=GeneratedMeshResponse, status_code=201)
+async def generate_mesh_route(
+    request: Request,
+    file: UploadFile = File(...),
+    engine: str = Form(default="triposg"),
+    steps: int = Form(default=50, ge=1, le=200),
+    guidance: float = Form(default=7.0, gt=0),
+    settings_dep: Settings = Depends(get_settings),
+    storage: StorageService = Depends(get_storage),
+    current_user: AuthenticatedUser = Depends(get_current_user),
+) -> GeneratedMeshResponse:
+    """Genera una malla desde una imagen con un motor generativo local.
+
+    Lo que sale de acá NO está aprobado por haber salido: `audited` viaja en
+    false y el paso siguiente es auditarla o medir su calce.
+    """
+    safe_name = sanitize_filename(Path(file.filename or "imagen.png").name, default="imagen.png")
+    subida = settings_dep.uploads_path / f"{uuid4().hex}-{safe_name}"
+    token = uuid4().hex
+    destino = settings_dep.outputs_path / f"{token}.generada.glb"
+    try:
+        await storage.save_upload(file, subida, max_mb=settings_dep.max_upload_mb)
+        resultado = await asyncio.to_thread(
+            model3d_generate_mesh,
+            settings_dep,
+            engine,
+            subida,
+            destino,
+            steps=steps,
+            guidance=guidance,
+        )
+    except MeshEngineError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        subida.unlink(missing_ok=True)
+
+    _register_print_token(request, token)
+    return GeneratedMeshResponse(
+        engine=resultado["engine"],
+        license=resultado["license"],
+        device=resultado.get("device", "cpu"),
+        download_url=f"/api/v1/model3d/generated/{token}",
+        vertices=resultado["vertices"],
+        faces=resultado["faces"],
+    )
+
+
+@router.get("/model3d/generated/{token}")
+async def download_generated_mesh(
+    token: str,
+    request: Request,
+    settings_dep: Settings = Depends(get_settings),
+    current_user: AuthenticatedUser = Depends(get_current_user),
+) -> FileResponse:
+    if not re.fullmatch(r"[0-9a-f]{32}", token):
+        raise HTTPException(status_code=404, detail="Malla no encontrada")
+    _require_print_token_owner(request, token, current_user, "Malla no encontrada")
+    archivo = settings_dep.outputs_path / f"{token}.generada.glb"
+    if not archivo.exists():
+        raise HTTPException(status_code=404, detail="Malla no encontrada")
+    return FileResponse(archivo, media_type="model/gltf-binary", filename="generada.glb")
+
+
+@router.post("/model3d/fit/{token}", response_model=FitScoreResponse)
+async def score_mesh_fit(
+    token: str,
+    request: Request,
+    file: UploadFile = File(...),
+    height_meters: float = Form(gt=0, alias="heightMeters"),
+    scale_view: str | None = Form(default=None, alias="scaleView"),
+    resolution: int = Form(default=512, ge=128, le=2048),
+    settings_dep: Settings = Depends(get_settings),
+    storage: StorageService = Depends(get_storage),
+    current_user: AuthenticatedUser = Depends(get_current_user),
+) -> FitScoreResponse:
+    """Cuanto se parece una malla al dibujo, y de qué tipo es la diferencia.
+
+    Es la balanza del banco de pruebas: la misma medida para una malla generada
+    por un modelo, esculpida a mano o armada con primitivas.
+    """
+    if not re.fullmatch(r"[0-9a-f]{32}", token):
+        raise HTTPException(status_code=404, detail="Vistas no encontradas")
+    _require_print_token_owner(request, token, current_user, "Vistas no encontradas")
+
+    safe_name = sanitize_filename(Path(file.filename or "malla.glb").name, default="malla.glb")
+    subida = settings_dep.uploads_path / f"{uuid4().hex}-{safe_name}"
+    render_dir = settings_dep.outputs_path / f"{token}.silhouettes"
+    try:
+        await storage.save_upload(file, subida, max_mb=settings_dep.max_upload_mb)
+        resultado = await asyncio.to_thread(
+            model3d_score_fit,
+            settings_dep,
+            subida,
+            _model3d_views_dir(settings_dep, token),
+            render_dir,
+            height_meters=height_meters,
+            scale_view=scale_view,
+            resolution=resolution,
+        )
+    except MissingPack as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (BlenderError, UnknownScaleViewError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        subida.unlink(missing_ok=True)
+
+    if resultado.get("fit") is None:
+        detalle = resultado.get("error") or "la malla no se pudo medir"
+        raise HTTPException(status_code=400, detail=detalle)
+    return FitScoreResponse(**resultado)
 
 
 @router.post("/model3d/reference-scene", response_model=ReferenceSceneResponse, status_code=201)

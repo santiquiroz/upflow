@@ -33,6 +33,42 @@ export interface MeshAudit {
   ok: boolean;
 }
 
+export interface ViewFit {
+  view: string;
+  /** IoU alineando por el centro de la caja de tinta. */
+  anchored: number;
+  /** El IoU más alto dejando correr la silueta. */
+  best: number;
+  gainFromMoving: number;
+  offsetCm: [number, number];
+  /**
+   * "escala" | "partes" | "forma" — dónde está el problema. "partes" NO
+   * significa mover la malla entera: una traslación global no cambia el
+   * número porque la comparación centra las dos siluetas.
+   */
+  blame: string;
+  /** (modelo, dibujo) en cm, para que el número se pueda discutir. */
+  widthCm: [number, number];
+  heightCm: [number, number];
+}
+
+export interface MeshFit {
+  /** La vista cuya altura real fija la escala de TODA la hoja. */
+  scaleView: string;
+  scaleViewHeightMeters: number;
+  metersPerPixelModel: number;
+  metersPerPixelSheet: number;
+  average: number;
+  worstView: string;
+  views: ViewFit[];
+}
+
+export interface FitScore {
+  /** Viajan juntas: una malla puede calzar la silueta y estar rota. */
+  audit: MeshAudit;
+  fit: MeshFit;
+}
+
 export interface SheetView {
   name: string;
   image: string;
@@ -107,6 +143,26 @@ export function splitSheetViews(
   formData.append("file", file);
   formData.append("expectedViews", String(expectedViews));
   return apiPostForm<SheetViews>("/model3d/sheet/views", formData, options);
+}
+
+export function scoreFit(
+  token: string,
+  file: File,
+  heightMeters: number,
+  scaleView?: string,
+  options: UploadOptions = {},
+): Promise<FitScore> {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("heightMeters", String(heightMeters));
+  if (scaleView) {
+    formData.append("scaleView", scaleView);
+  }
+  return apiPostForm<FitScore>(`/model3d/fit/${token}`, formData, options);
+}
+
+export function renameViews(token: string, names: string[]): Promise<SheetViews> {
+  return apiPostJson<SheetViews>(`/model3d/sheet/${token}/names`, { names });
 }
 
 export function fetchProportions(

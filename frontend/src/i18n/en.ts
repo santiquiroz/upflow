@@ -1357,6 +1357,11 @@ export const en = {
   "modeling.reference.dropzoneHint": "PNG, JPG or WEBP on a white background",
   "modeling.reference.expectedViews": "Views you expect",
   "modeling.reference.split": "Split the sheet",
+  "modeling.reference.namingConvention":
+    "Naming views by position is a convention, not a deduction: pixels alone cannot tell whether the third panel is the back or a three-quarter view. If the sheet arrives in a different order, each scene plane gets the wrong drawing and nothing reveals it. Check the thumbnails and correct their names before building the scene.",
+  "modeling.reference.viewName": "View name",
+  "modeling.reference.applyNames": "Apply names",
+  "modeling.reference.duplicateNames": "Each view must have a different name.",
   "modeling.reference.height": "Real height (m)",
   "modeling.reference.heightHint":
     "Scale is computed from the DRAWING, not the file size: the crop's margin does not shrink the character.",
@@ -1372,6 +1377,25 @@ export const en = {
   "modeling.proportions.z": "Height (m)",
   "modeling.proportions.front": "Front (cm)",
   "modeling.proportions.side": "Side (cm)",
+  "modeling.fit.title": "How well it matches the drawing",
+  "modeling.fit.subtitle":
+    "Measures a mesh silhouette against the sheet views and says WHAT KIND of difference it is. One number alone is useless: the three causes are fixed in different places, and tuning the shape when the scale is what is off wastes hours.",
+  "modeling.fit.dropzone": "Drop the mesh to measure, or click to browse",
+  "modeling.fit.run": "Measure fit",
+  "modeling.fit.scaleView": "View that sets the scale",
+  "modeling.fit.scaleViewHint":
+    "One scale for the whole sheet, taken from the view whose real height you know. Scaling each view by its own ink leaves them at different scales, and then no mesh can match both.",
+  "modeling.fit.height": "Real height of that view (m)",
+  "modeling.fit.view": "View",
+  "modeling.fit.blameColumn": "What is wrong",
+  "modeling.fit.average": "Average",
+  "modeling.fit.worst": "Worst view",
+  "modeling.fit.anchored": "Centred",
+  "modeling.fit.best": "Best match",
+  "modeling.fit.measured": "Model / drawing",
+  "modeling.fit.blame.escala": "Needs rescaling: modelling will not fix it",
+  "modeling.fit.blame.partes": "Outline is right; the parts sit in different places",
+  "modeling.fit.blame.forma": "Proportion and centring are right: modelling is the fix",
   "modeling.audit.subtitle":
     "Measures a mesh without touching it and separates what blocks you from what would merely come out better another way. Mixing them trains you to ignore both.",
   "modeling.audit.dropzone": "Drop a mesh here or click to browse",

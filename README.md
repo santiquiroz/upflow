@@ -682,7 +682,7 @@ API: `POST /api/v1/audio/jobs` (multipart: `file`, `cleanup_steps?` (CSV), `deno
 
 Upflow expone toda su funcionalidad como **tools MCP** (Model Context Protocol) para que agentes de IA (Claude Code, Claude Desktop, o cualquier cliente MCP) puedan reescalar, transcribir, generar y procesar medios directamente.
 
-- **55 tools** que cubren la API entera: upscale de imagen/video, audio (denoise/restore/master), transcripción/doblaje, descargas (yt-dlp), generación de imágenes/video, TTS, 3D imprimible, **modelado 3D con Blender**, edición de imagen (seleccionar por clic, insertar objeto), reparación de mallas, prompts guardados, conversión y optimización de modelos, y ajustes/diagnóstico del sistema.
+- **56 tools** que cubren la API entera: upscale de imagen/video, audio (denoise/restore/master), transcripción/doblaje, descargas (yt-dlp), generación de imágenes/video, TTS, 3D imprimible, **modelado 3D con Blender**, edición de imagen (seleccionar por clic, insertar objeto), reparación de mallas, prompts guardados, conversión y optimización de modelos, y ajustes/diagnóstico del sistema.
 - `upflow_init_image` sube una imagen y devuelve su token: es la puerta de entrada de **todo lo que parte de una imagen** —img2img, inpaint, selección por clic, insertar objeto, foto a malla—, que antes solo existía para quien usaba la pantalla.
 - `upflow_segment_object` no reenvía lo que devuelve la ruta: `/editor/segment` contesta un PNG crudo, inservible para encadenar, así que la tool vuelve a subir la máscara y entrega el token que consume `upflow_insert_object`.
 - Modelo de jobs unificado: `upflow_job_status` / `upflow_wait_job` / `upflow_cancel_job` / `upflow_download_result` funcionan igual para cualquier familia (`image | video | audio | generation | transcribe | download | shape3d`).
@@ -794,6 +794,58 @@ Los PRs son bienvenidos. Ver [`CONTRIBUTING.md`](CONTRIBUTING.md) y el [plan de 
 ## Licencia
 
 [MIT](LICENSE) © 2026 Santiago Quiroz. Hacé lo que quieras con esto.
+
+### Motores generativos de malla (opcionales, no se descargan solos)
+
+El carril de modelado puede generar una malla desde una imagen con un motor
+**local**. Ninguno viaja con la app ni se baja al apretar un botón: son varios GB
+de pesos con licencias distintas entre sí, y elegir cuál instalar es tuyo.
+`/api/v1/model3d/capabilities` dice cuáles hay y **qué le falta a cada uno**.
+
+Revisado el 2026-08-28, el panorama incómodo es que **el motor libre no corre en
+AMD y el que corre en AMD no es libre**:
+
+| motor | licencia | corre en AMD/Windows | fuerte en |
+|---|---|---|---|
+| **TripoSG** | MIT (código y pesos) | sí, en CPU (lento) | es el único limpio *y* ejecutable acá |
+| **TRELLIS.2** | MIT | no: CUDA-only ([issue #74](https://github.com/microsoft/TRELLIS.2/issues/74) sin respuesta) | geometría |
+| **Hunyuan3D 2.1** | `tencent-hunyuan-community`: comercial bajo 1M MAU pero **excluye UE, Reino Unido y Corea del Sur** | sí, con plantilla oficial de AMD para ComfyUI sobre ROCm | textura y PBR |
+| **SAM 3D Objects** | SAM License | no: pide Linux, CUDA y 32 GB de VRAM | clic sobre un objeto dentro de una foto |
+
+Por eso el primero soportado es TripoSG, y no por ser el mejor de la comparativa.
+
+**Actualización 2026-08-29 — la GPU de AMD ya no es el problema en Windows.** Medido
+en una Radeon RX 7800 XT (gfx1101): PyTorch con ROCm nativo instala y corre, con
+wheels oficiales de AMD y sin ZLUDA, sin WSL y sin portar nada.
+
+```
+python -m pip install --index-url https://repo.amd.com/rocm/whl-multi-arch/ \
+  "torch[device-gfx1101]==2.12.0+rocm7.14.0"
+```
+
+Pide Python 3.12. Verificado: `torch.cuda.is_available()` en True y **43,9 TFLOPS
+fp16** en un matmul de 4096³.
+
+**LA TRAMPA, que cuesta una hora si no se sabe:** en un Ryzen con gráfica integrada,
+ROCm enumera PRIMERO la iGPU. Acá el dispositivo `0` es una `gfx1036` integrada y la
+7800 XT es el `1`. Torch toma el `0` por defecto y, como el paquete instalado es el de
+`gfx1101`, el proceso **no falla al arrancar**: revienta en el primer cálculo con un
+volcado de pila que no menciona la palabra GPU. Se arregla fijando
+`HIP_VISIBLE_DEVICES=1`, y el carril de motores ya lo hace por motor.
+
+Consecuencia práctica: **Hunyuan3D 2.1 pasa a ser alcanzable en AMD/Windows** para
+generación de FORMA (`--no-texture`), que es lo que el banco mide. La textura sí
+necesita `custom_rasterizer` compilado para HIP y queda fuera por ahora.
+
+Para instalarlo: un venv aparte —sus dependencias fijan `numpy==1.22.3` y
+romperían el resto de la app— más el código y los pesos, bajo `~/3d-engines`
+(configurable con `MESH_ENGINES_ROOT`).
+
+Lo que sale de un generador **no está aprobado por haber salido**: `audited`
+viaja en `false` y el paso siguiente es auditar la malla o medir su calce contra
+el dibujo.
+
+---
 
 Con una excepción: `app/services/blender_scripts/` es **GPL-2.0-or-later** y
 lleva su propio `LICENSE`. Esos archivos corren DENTRO de Blender y usan `bpy` a

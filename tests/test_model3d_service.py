@@ -207,3 +207,221 @@ def test_las_proporciones_necesitan_las_dos_vistas(tmp_path):
 
     with pytest.raises(FileNotFoundError):
         model3d_service.measure_proportions(tmp_path)
+
+
+def test_renombrar_vistas_intercambia_sin_pisar_archivos(tmp_path):
+    # Intercambiar frente y espalda directamente pisaria un archivo con el otro,
+    # asi que el renombrado pasa por nombres temporales.
+    for nombre, ancho in (("front", 40), ("side", 20), ("back", 60)):
+        _figura(tmp_path, f"{nombre}.png", [ancho] * 6)
+    tamanos = {p.stem: p.stat().st_size for p in tmp_path.glob("*.png")}
+
+    model3d_service.rename_views(tmp_path, ["back", "side", "front"])
+
+    assert (tmp_path / "front.png").stat().st_size == tamanos["back"]
+    assert (tmp_path / "back.png").stat().st_size == tamanos["front"]
+    assert (tmp_path / "side.png").stat().st_size == tamanos["side"]
+
+
+def test_renombrar_rechaza_un_nombre_que_la_escena_no_sabe_colocar(tmp_path):
+    _figura(tmp_path, "front.png", [40] * 6)
+
+    with pytest.raises(model3d_service.UnknownViewNameError, match="front"):
+        model3d_service.rename_views(tmp_path, ["arriba"])
+
+
+def test_renombrar_rechaza_nombres_repetidos(tmp_path):
+    for nombre in ("front", "side"):
+        _figura(tmp_path, f"{nombre}.png", [40] * 6)
+
+    with pytest.raises(model3d_service.UnknownViewNameError, match="repetidos"):
+        model3d_service.rename_views(tmp_path, ["front", "front"])
+
+
+def test_renombrar_exige_un_nombre_por_vista(tmp_path):
+    for nombre in ("front", "side"):
+        _figura(tmp_path, f"{nombre}.png", [40] * 6)
+
+    with pytest.raises(model3d_service.UnknownViewNameError, match="2 vistas"):
+        model3d_service.rename_views(tmp_path, ["front"])
+
+
+def test_remesh_manda_el_voxel_y_devuelve_las_dos_auditorias(tmp_path, monkeypatch):
+    # Las dos auditorías viajan juntas porque un remesh gana topología y pierde
+    # detalle: cuánto perdió solo se ve comparando las dos puntas.
+    recibido = {}
+
+    def fake_run(_settings, script, payload, **_kwargs):
+        recibido["script"] = script
+        recibido["payload"] = payload
+        return {"mesh": payload["output"], "voxelMeters": payload["voxelMeters"],
+                "before": {"faces": 288360}, "after": {"faces": 22568}}
+
+    monkeypatch.setattr(model3d_service.blender_service, "run_script", fake_run)
+
+    salida = model3d_service.remesh(
+        object(), tmp_path / "entra.glb", tmp_path / "sale.glb", voxel_meters=0.03
+    )
+
+    assert recibido["script"] == "remesh.py"
+    assert recibido["payload"]["voxelMeters"] == 0.03
+    assert salida["before"]["faces"] > salida["after"]["faces"]
+
+
+def _medida(promedio: float, *, ok: bool = True) -> dict[str, object]:
+    return {"audit": {"ok": ok}, "fit": {"average": promedio, "views": []}}
+
+
+def test_el_banco_ordena_por_calce(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    puntajes = {"floja": 0.30, "buena": 0.80, "media": 0.55}
+    monkeypatch.setattr(
+        model3d_service,
+        "score_fit",
+        lambda _s, ruta, *a, **k: _medida(puntajes[ruta.stem]),
+    )
+
+    tabla = model3d_service.compare_meshes(
+        None,
+        {nombre: tmp_path / f"{nombre}.glb" for nombre in puntajes},
+        tmp_path,
+        tmp_path,
+        height_meters=1.0,
+    )
+
+    assert [r["name"] for r in tabla["ranked"]] == ["buena", "media", "floja"]
+    assert tabla["winner"] == "buena"
+
+
+def test_el_banco_no_corona_una_malla_rota_aunque_calce_mejor(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Premiar una silueta linda sobre una malla rota es el falso positivo
+    que este banco existe para no cometer."""
+    resultados = {"rota": _medida(0.90, ok=False), "sana": _medida(0.60)}
+    monkeypatch.setattr(
+        model3d_service, "score_fit", lambda _s, ruta, *a, **k: resultados[ruta.stem]
+    )
+
+    tabla = model3d_service.compare_meshes(
+        None,
+        {nombre: tmp_path / f"{nombre}.glb" for nombre in resultados},
+        tmp_path,
+        tmp_path,
+        height_meters=1.0,
+    )
+
+    assert [r["name"] for r in tabla["ranked"]] == ["rota", "sana"]
+    assert tabla["winner"] == "sana"
+
+
+def test_una_candidata_que_falla_no_tumba_el_banco(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Un motor que no arranca es lo que hay que VER en la tabla, no un stack
+    trace que la deja vacia."""
+    def _falla_una(_settings, ruta, *args, **kwargs):
+        if ruta.stem == "explota":
+            raise RuntimeError("el motor no arranco")
+        return _medida(0.42)
+
+    monkeypatch.setattr(model3d_service, "score_fit", _falla_una)
+
+    tabla = model3d_service.compare_meshes(
+        None,
+        {"explota": tmp_path / "explota.glb", "anda": tmp_path / "anda.glb"},
+        tmp_path,
+        tmp_path,
+        height_meters=1.0,
+    )
+
+    assert tabla["measured"] == 1
+    assert tabla["failed"] == ["explota"]
+    assert tabla["winner"] == "anda"
+    assert "el motor no arranco" in tabla["ranked"][-1]["error"]
+
+
+def test_el_banco_mide_cada_candidata_en_SU_eje(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """El eje va por candidata porque cada motor entrega en su propio marco.
+
+    Un banco que impone una sola orientación a todas puntúa la ROTACIÓN de las
+    que no coinciden. Medido: la misma malla de TripoSG dio 0.033 con el eje
+    equivocado y 0.266 con el correcto, o sea que el eje decidía el ranking.
+    """
+    ejes: dict[str, str] = {}
+
+    def _espia(_settings, ruta, _views, _render, **kwargs):
+        ejes[ruta.stem] = kwargs["up_axis"]
+        return _medida(0.5)
+
+    monkeypatch.setattr(model3d_service, "score_fit", _espia)
+
+    model3d_service.compare_meshes(
+        None,
+        [
+            model3d_service.Candidata("blockout", tmp_path / "blockout.glb", "z_up"),
+            model3d_service.Candidata("generada", tmp_path / "generada.glb", "y_up"),
+        ],
+        tmp_path,
+        tmp_path,
+        height_meters=1.0,
+    )
+
+    assert ejes == {"blockout": "z_up", "generada": "y_up"}
+
+
+def test_el_banco_sigue_aceptando_un_diccionario_de_rutas(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """La forma vieja no se rompe: todas heredan el eje del banco."""
+    ejes: dict[str, str] = {}
+
+    def _espia(_settings, ruta, _views, _render, **kwargs):
+        ejes[ruta.stem] = kwargs["up_axis"]
+        return _medida(0.5)
+
+    monkeypatch.setattr(model3d_service, "score_fit", _espia)
+
+    model3d_service.compare_meshes(
+        None,
+        {"una": tmp_path / "una.glb", "otra": tmp_path / "otra.glb"},
+        tmp_path,
+        tmp_path,
+        height_meters=1.0,
+        up_axis="y_up",
+    )
+
+    assert ejes == {"una": "y_up", "otra": "y_up"}
+
+
+def test_la_huella_de_la_hoja_cambia_si_cambia_un_dibujo(tmp_path: Path) -> None:
+    """Un puntaje sin su referencia no es reproducible.
+
+    Costó una tarde el 2026-08-29: un proceso concurrente sobrescribió
+    front.png a mitad de un barrido, las mallas seguían siendo byte a byte
+    idénticas y la vista frontal caía de 0.54 a 0.06. La huella hace visible
+    en un vistazo que cambió el dibujo y no el modelo.
+    """
+    vistas_dir = tmp_path / "vistas"
+    vistas_dir.mkdir()
+    for nombre in ("front", "side"):
+        _write_sheet(vistas_dir / f"{nombre}.png", (Box(5, 5, 40, 60),))
+
+    antes = model3d_service.sheet_digest(model3d_service.views_from_dir(vistas_dir))
+    _write_sheet(vistas_dir / "front.png", (Box(5, 5, 30, 55),))
+    despues = model3d_service.sheet_digest(model3d_service.views_from_dir(vistas_dir))
+
+    assert antes != despues
+
+
+def test_la_huella_no_depende_del_orden_de_lectura(tmp_path: Path) -> None:
+    """Misma hoja, misma huella: si no, deja de servir para comparar corridas."""
+    vistas_dir = tmp_path / "vistas"
+    vistas_dir.mkdir()
+    for nombre in ("front", "side", "back"):
+        _write_sheet(vistas_dir / f"{nombre}.png", (Box(5, 5, 40, 60),))
+
+    vistas = model3d_service.views_from_dir(vistas_dir)
+
+    assert model3d_service.sheet_digest(vistas) == model3d_service.sheet_digest(vistas[::-1])
