@@ -1377,6 +1377,23 @@ export const en = {
   "modeling.proportions.z": "Height (m)",
   "modeling.proportions.front": "Front (cm)",
   "modeling.proportions.side": "Side (cm)",
+  "modeling.fit.title": "How well it matches the drawing",
+  "modeling.fit.subtitle":
+    "Measures a mesh silhouette against the sheet views and says WHAT KIND of difference it is. One number alone is useless: the three causes are fixed in different places, and tuning the shape when the scale is what is off wastes hours.",
+  "modeling.fit.dropzone": "Drop the mesh to measure, or click to browse",
+  "modeling.fit.run": "Measure fit",
+  "modeling.fit.scaleView": "View that sets the scale",
+  "modeling.fit.scaleViewHint":
+    "One scale for the whole sheet, taken from the view whose real height you know. Scaling each view by its own ink leaves them at different scales, and then no mesh can match both.",
+  "modeling.fit.height": "Real height of that view (m)",
+  "modeling.fit.average": "Average",
+  "modeling.fit.worst": "Worst view",
+  "modeling.fit.anchored": "Centred",
+  "modeling.fit.best": "Best match",
+  "modeling.fit.measured": "Model / drawing",
+  "modeling.fit.blame.escala": "Needs rescaling: modelling will not fix it",
+  "modeling.fit.blame.partes": "Outline is right; the parts sit in different places",
+  "modeling.fit.blame.forma": "Proportion and centring are right: modelling is the fix",
   "modeling.audit.subtitle":
     "Measures a mesh without touching it and separates what blocks you from what would merely come out better another way. Mixing them trains you to ignore both.",
   "modeling.audit.dropzone": "Drop a mesh here or click to browse",
