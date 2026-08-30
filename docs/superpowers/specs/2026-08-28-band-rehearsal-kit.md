@@ -71,9 +71,20 @@ Extiende AudioJob post-separación (decisión #8), sin familia de jobs nueva. Ba
 | F1a | Infra minus-one completa (backend+frontend+tests) con umxhq | en curso |
 | F2a | KARA_2 registro + per-singer (embeddings, clustering, ASS colores, UI studio) | pendiente |
 | F3a | Pack basic-pitch + engine AMT + writers MIDI/MusicXML/tab + UI | pendiente |
-| F1b | Export ONNX BS-RoFormer-SW (repo port aparte) + registro + DrumSep | pendiente, GPU coordinada |
+| F1b | Export ONNX BS-RoFormer-SW (repo port aparte) + registro + DrumSep | **cerrado 2026-08-29, no shippeable — ver abajo** |
 
 Anclas de código exactas por fase: ver mapa del workflow (journal `wf_42c6fd4e-27f`) — resumen clave: pipeline :311-322, routes :538/:1137/:2305, job manager :59-145, karaoke manager :363-384/:422-426 (el stem vocal se borra ahí — retenerlo para embeddings), specs Case A/B en el mapa.
+
+## F1b — resultado final (2026-08-29)
+
+Investigado en `c:/personal/port-bs-roformer-onnx` (repo de port ya existente, mismo toolkit que exportó Kim). Hallazgo que cambió el alcance: la licencia de BS-RoFormer-SW (jarredou) es del mismo tipo ambiguo que `bs_roformer_musdb18_4stem` — MIT en la card del re-host (Politrees), sin declaración del autor original (jarredou borró su HF y su GitHub). El propio repo de port ya tenía precedente exacto: le preguntaron directo a ZFTurbo si podía redistribuir pesos de terceros y la respuesta fue que no podía decidir por modelos que no subió él. Con jarredou inalcanzable, no hay a quién preguntarle.
+
+Decisión tomada con el usuario: exportar y validar localmente, NO publicar (mismo trato que el modelo de 4 stems ya en ese repo). Resultado:
+- **CPU**: limpio. Parity de red 1.192e-06, gate completo `[OK]` en los 6 stems, deltas de calidad ≤0.32 dB, drift 31-83 dB SI-SDR.
+- **DirectML**: roto de forma reproducible (dos corridas) — no es el bug de GLU ya parcheado (`onnxruntime#32146`, ya aplicado en el export). Primera corrida: crash mid-graph (`887A0006`, forma de device-removed). Segunda corrida: valores de máscara basura (`max=3.46` vs `1.7e-05` en CPU) antes del mismo crash en un chunk posterior — parecen la misma causa, no dos bugs separados. NO caracterizado a fondo (mereces la misma investigación dedicada con micro-grafos que tuvo el bug de GLU, no una corrida a las apuradas sin vos). Sin evento de TDR, sin impacto observado en tu sesión 3D (quedó idle todo el tiempo).
+- Commiteado localmente en el repo de port (`e8ffd61`), **sin pushear** — decisión tuya cuando lo veas.
+- **Efecto práctico: ninguno hoy.** El modelo no se publica de todos modos por la licencia, así que el bug de DirectML no bloquea nada actual. Importa recién si la pregunta de licencia se resuelve (o si contactás a jarredou en otro lado) y se vuelve publicable.
+- **Upflow**: nada que registrar. Sin redistribución posible, no hay URL que ponerle al pack downloader — mismo patrón que el modelo de 4 stems, que tampoco está integrado en Upflow pese a estar exportado y validado.
 
 ## Reglas de ejecución
 
