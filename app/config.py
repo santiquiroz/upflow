@@ -332,6 +332,10 @@ class Settings(BaseSettings):
     # Vacio = se busca solo (vendor, PATH, instalacion del sistema). Se pone a
     # mano solo cuando hay varias instalaciones y importa cual.
     blender_binary: str = Field(default="", alias="BLENDER_BINARY")
+    # Donde viven los entornos de los motores generativos de malla. Cada motor
+    # trae su propio venv porque sus dependencias chocan con las de la app —
+    # TripoSG fija numpy==1.22.3, que rompe la mitad del resto del arbol.
+    mesh_engines_root: str = Field(default="", alias="MESH_ENGINES_ROOT")
     ffmpeg_binary: str = Field(default="vendor/ffmpeg/bin/ffmpeg.exe", alias="FFMPEG_BINARY")
     ffprobe_binary: str = Field(default="vendor/ffmpeg/bin/ffprobe.exe", alias="FFPROBE_BINARY")
     ffmpeg_decode_threads: int = Field(
@@ -842,6 +846,19 @@ class Settings(BaseSettings):
 
         instalado = _newest_matching(_blender_install_globs())
         return instalado or Path(_blender_executable_name())
+
+    @property
+    def mesh_engines_dir(self) -> Path:
+        """La carpeta con un subdirectorio por motor generativo de malla.
+
+        No se vendoriza y no se descarga sola: son varios GB de pesos con
+        licencias distintas entre si, y decidir cual bajar es del usuario. La
+        ruta devuelta puede NO existir; quien pregunta decide si eso es un
+        error o solo un carril apagado.
+        """
+        if self.mesh_engines_root:
+            return resolve_against_project_root(self.mesh_engines_root)
+        return Path.home() / "3d-engines"
 
     @property
     def blender_scripts_dir(self) -> Path:

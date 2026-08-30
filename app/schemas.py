@@ -228,12 +228,31 @@ class BlenderBuildResponse(BaseModel):
     meets_minimum: bool = Field(default=False, serialization_alias="meetsMinimum")
 
 
+class MeshEngineResponse(BaseModel):
+    name: str
+    ready: bool
+    # La licencia viaja con el motor porque no son intercambiables: hay una MIT
+    # limpia y hay una que excluye territorios enteros, y eso cambia si el
+    # resultado se puede usar o no.
+    license: str
+    device: str
+    # True = la licencia limita dónde se puede usar el resultado (territorios
+    # excluidos, topes de usuarios). Se dice ANTES de generar, no después.
+    restricted: bool = False
+    # Que falta EXACTAMENTE. "No disponible" manda a adivinar entre bajar
+    # varios GB de pesos y crear un entorno.
+    missing: str | None = None
+
+
 class Model3dCapabilitiesResponse(BaseModel):
     blender: BlenderBuildResponse
     # Que se puede hacer HOY en esta maquina. Vacio no es un error: es el carril
     # apagado, y la pantalla lo dice en vez de esconderlo.
     unlocked: list[str] = Field(default_factory=list)
     missing: str | None = None
+    # Ninguno se descarga solo: son varios GB con licencias distintas entre si,
+    # y elegir cual bajar es del usuario.
+    engines: list[MeshEngineResponse] = Field(default_factory=list)
 
 
 class MeshAuditResponse(BaseModel):
@@ -257,6 +276,85 @@ class MeshAuditResponse(BaseModel):
     blockers: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     ok: bool
+
+
+class RemeshResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    voxel_meters: float = Field(alias="voxelMeters")
+    download_url: str = Field(serialization_alias="downloadUrl")
+    # Las dos auditorias viajan juntas: un remesh gana topologia y pierde
+    # detalle, y cuanto perdio solo se ve comparando las dos puntas.
+    before: MeshAuditResponse
+    after: MeshAuditResponse
+
+
+class GeneratedMeshResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    engine: str
+    # Viaja con el resultado porque los motores no son intercambiables: hay una
+    # MIT limpia y hay una que excluye territorios enteros.
+    license: str
+    device: str = "cpu"
+    download_url: str = Field(serialization_alias="downloadUrl")
+    vertices: int
+    faces: int
+    # Siempre false: lo que sale de un generador NO esta aprobado por haber
+    # salido. El paso siguiente es auditarla o medir su calce.
+    audited: bool = False
+
+
+class ViewFitResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    view: str
+    # `anchored` alinea por el centro de la caja de tinta; `best` deja correr la
+    # silueta. Que la diferencia sea visible es el punto: dice si hay que mover
+    # o modelar.
+    anchored: float
+    best: float
+    gain_from_moving: float = Field(alias="gainFromMoving")
+    offset_cm: tuple[float, float] = Field(alias="offsetCm")
+    # "escala" | "partes" | "forma": donde esta el problema, para no afinar lo
+    # que no falla. "partes" NO quiere decir mover la malla entera: una
+    # traslacion global no cambia el numero porque la comparacion centra las
+    # dos siluetas.
+    blame: str
+    # (modelo, dibujo) en cm, para que el numero se pueda discutir.
+    width_cm: tuple[float, float] = Field(alias="widthCm")
+    height_cm: tuple[float, float] = Field(alias="heightCm")
+
+
+class MeshFitResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    # La vista cuya altura real fija la escala de TODA la hoja. Explicito y no
+    # inferido: escalar cada vista por su propia tinta deja las vistas a
+    # escalas distintas y ningun modelo puede calzar las dos.
+    scale_view: str = Field(alias="scaleView")
+    scale_view_height_meters: float = Field(alias="scaleViewHeightMeters")
+    meters_per_pixel_model: float = Field(alias="metersPerPixelModel")
+    meters_per_pixel_sheet: float = Field(alias="metersPerPixelSheet")
+    # False cuando la malla no esta en metros (cualquier generador entrega en
+    # unidades propias): ahi las medidas en cm son de esas unidades y el
+    # veredicto "escala" no aplica.
+    metric: bool = True
+    # Huella de los dibujos usados. Dos corridas con el mismo digest son
+    # comparables; con distinto digest cambio la referencia, no el modelo.
+    sheet_digest: str = Field(default="", alias="sheetDigest")
+    average: float
+    worst_view: str = Field(alias="worstView")
+    views: list[ViewFitResponse]
+
+
+class FitScoreResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    # Las dos preguntas viajan juntas: una malla puede calzar la silueta y ser
+    # inservible por estar rota, y separarlas invita a responder solo la comoda.
+    audit: MeshAuditResponse
+    fit: MeshFitResponse
 
 
 class SheetViewResponse(BaseModel):
@@ -305,6 +403,13 @@ class ProportionsResponse(BaseModel):
     landmarks: list[LandmarkResponse]
     uncertain: list[str]
     widths: list[WidthBandResponse]
+
+
+class RenameViewsRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    # De izquierda a derecha, un nombre por vista detectada.
+    names: list[str]
 
 
 class ReferenceSceneRequest(BaseModel):

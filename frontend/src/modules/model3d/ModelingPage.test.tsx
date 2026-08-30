@@ -14,8 +14,10 @@ vi.mock("../../services/model3d", async (importOriginal) => {
     fetchModel3dCapabilities: vi.fn(),
     auditMesh: vi.fn(),
     splitSheetViews: vi.fn(),
+    renameViews: vi.fn(),
     fetchProportions: vi.fn(),
     buildReferenceScene: vi.fn(),
+    scoreFit: vi.fn(),
   };
 });
 
@@ -50,6 +52,27 @@ const SHEET_VIEWS: model3dService.SheetViews = {
   warnings: [],
 };
 
+const RENAMED_SHEET_VIEWS: model3dService.SheetViews = {
+  token: "sheet-token",
+  views: [
+    {
+      name: "back",
+      image: "/tmp/renamed-back.png",
+      widthPx: 700,
+      heightPx: 1210,
+      inkBox: [0, 0, 700, 1210],
+    },
+    {
+      name: "side",
+      image: "/tmp/renamed-side.png",
+      widthPx: 530,
+      heightPx: 1190,
+      inkBox: [0, 0, 530, 1190],
+    },
+  ],
+  warnings: [],
+};
+
 const AUDIT_OK: model3dService.MeshAudit = {
   vertices: 800,
   faces: 600,
@@ -65,6 +88,50 @@ const AUDIT_OK: model3dService.MeshAudit = {
   blockers: [],
   warnings: [],
   ok: true,
+};
+
+const FIT_SCORE: model3dService.FitScore = {
+  audit: AUDIT_OK,
+  fit: {
+    scaleView: "front",
+    scaleViewHeightMeters: 1.7,
+    metersPerPixelModel: 0.002,
+    metersPerPixelSheet: 0.0015,
+    average: 0.81,
+    worstView: "back",
+    views: [
+      {
+        view: "front",
+        anchored: 0.84,
+        best: 0.87,
+        gainFromMoving: 0.03,
+        offsetCm: [1, 2],
+        blame: "escala",
+        widthCm: [48, 45],
+        heightCm: [170, 168],
+      },
+      {
+        view: "side",
+        anchored: 0.82,
+        best: 0.89,
+        gainFromMoving: 0.07,
+        offsetCm: [2, 4],
+        blame: "partes",
+        widthCm: [28, 27],
+        heightCm: [170, 169],
+      },
+      {
+        view: "back",
+        anchored: 0.77,
+        best: 0.78,
+        gainFromMoving: 0.01,
+        offsetCm: [0, 1],
+        blame: "forma",
+        widthCm: [47, 43],
+        heightCm: [170, 166],
+      },
+    ],
+  },
 };
 
 const REFERENCE_SCENE: model3dService.ReferenceScene = {
@@ -148,6 +215,13 @@ function selectMesh(name = "personaje.glb") {
   return file;
 }
 
+function selectFitMesh(name = "personaje.glb") {
+  const file = new File(["binario"], name, { type: "model/gltf-binary" });
+  const input = document.getElementById("modeling-fit-mesh-input") as HTMLInputElement;
+  fireEvent.change(input, { target: { files: [file] } });
+  return file;
+}
+
 async function splitReferenceSheet() {
   await screen.findByText("Blender 4.3.0 ready");
   selectSheet();
@@ -158,16 +232,20 @@ async function splitReferenceSheet() {
 beforeEach(() => {
   vi.mocked(model3dService.fetchModel3dCapabilities).mockResolvedValue(CAPABILITIES);
   vi.mocked(model3dService.splitSheetViews).mockResolvedValue(SHEET_VIEWS);
+  vi.mocked(model3dService.renameViews).mockResolvedValue(RENAMED_SHEET_VIEWS);
   vi.mocked(model3dService.fetchProportions).mockResolvedValue(PROPORTIONS);
   vi.mocked(model3dService.buildReferenceScene).mockResolvedValue(REFERENCE_SCENE);
+  vi.mocked(model3dService.scoreFit).mockResolvedValue(FIT_SCORE);
   vi.mocked(model3dService.auditMesh).mockResolvedValue(AUDIT_OK);
 });
 
 afterEach(() => {
   vi.mocked(model3dService.fetchModel3dCapabilities).mockReset();
   vi.mocked(model3dService.splitSheetViews).mockReset();
+  vi.mocked(model3dService.renameViews).mockReset();
   vi.mocked(model3dService.fetchProportions).mockReset();
   vi.mocked(model3dService.buildReferenceScene).mockReset();
+  vi.mocked(model3dService.scoreFit).mockReset();
   vi.mocked(model3dService.auditMesh).mockReset();
 });
 
@@ -237,12 +315,77 @@ describe("ModelingPage", () => {
     fireEvent.click(screen.getByRole("button", { name: en["modeling.reference.split"] }));
 
     await waitFor(() => expect(model3dService.splitSheetViews).toHaveBeenCalledWith(file, 4));
-    expect(await screen.findByText("front")).toBeInTheDocument();
-    expect(screen.getByText("640 × 1200 px")).toBeInTheDocument();
-    expect(screen.getByText("side")).toBeInTheDocument();
-    expect(screen.getByText("512 × 1180 px")).toBeInTheDocument();
+    const frontCard = (await screen.findByRole("img", { name: "front" })).closest("li");
+    const sideCard = screen.getByRole("img", { name: "side" }).closest("li");
+    expect(frontCard).not.toBeNull();
+    expect(sideCard).not.toBeNull();
+    expect(within(frontCard as HTMLElement).getByText("640 × 1200 px")).toBeInTheDocument();
+    expect(within(sideCard as HTMLElement).getByText("512 × 1180 px")).toBeInTheDocument();
     expect(screen.getByText("The side view is narrower than expected.")).toBeInTheDocument();
     expect(screen.getByText("The back view was not detected.")).toBeInTheDocument();
+  });
+
+  it("applies selected view names in thumbnail order", async () => {
+    renderPage();
+    await splitReferenceSheet();
+    const selects = screen.getAllByRole("combobox");
+
+    fireEvent.change(selects[0], { target: { value: "back" } });
+    fireEvent.click(screen.getByRole("button", { name: en["modeling.reference.applyNames"] }));
+
+    await waitFor(() =>
+      expect(model3dService.renameViews).toHaveBeenCalledWith("sheet-token", ["back", "side"]),
+    );
+  });
+
+  it("disables applying duplicate view names", async () => {
+    renderPage();
+    await splitReferenceSheet();
+    const selects = screen.getAllByRole("combobox");
+    const applyButton = screen.getByRole("button", {
+      name: en["modeling.reference.applyNames"],
+    });
+
+    fireEvent.change(selects[1], { target: { value: "front" } });
+
+    expect(applyButton).toBeDisabled();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      en["modeling.reference.duplicateNames"],
+    );
+    fireEvent.click(applyButton);
+    expect(model3dService.renameViews).not.toHaveBeenCalled();
+  });
+
+  it("renders the views returned by a successful rename", async () => {
+    renderPage();
+    await splitReferenceSheet();
+    fireEvent.change(screen.getAllByRole("combobox")[0], { target: { value: "back" } });
+
+    fireEvent.click(screen.getByRole("button", { name: en["modeling.reference.applyNames"] }));
+
+    const renamedImage = await screen.findByRole("img", { name: "back" });
+    expect(renamedImage).toHaveAttribute("src", "/tmp/renamed-back.png");
+    expect(screen.getByText("700 × 1210 px")).toBeInTheDocument();
+    expect(screen.queryByText("640 × 1200 px")).not.toBeInTheDocument();
+  });
+
+  it("clears an already-built scene after view names change successfully", async () => {
+    renderPage();
+    await splitReferenceSheet();
+    fireEvent.click(screen.getByRole("button", { name: en["modeling.reference.build"] }));
+    expect(
+      await screen.findByRole("link", { name: "Download the .blend (1.7 m)" }),
+    ).toBeInTheDocument();
+    fireEvent.change(screen.getAllByRole("combobox")[0], { target: { value: "back" } });
+
+    fireEvent.click(screen.getByRole("button", { name: en["modeling.reference.applyNames"] }));
+
+    await waitFor(() => expect(model3dService.renameViews).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("link", { name: "Download the .blend (1.7 m)" }),
+      ).not.toBeInTheDocument(),
+    );
   });
 
   it("builds the reference scene at the default height and offers its download", async () => {
@@ -324,6 +467,127 @@ describe("ModelingPage", () => {
     );
     expect(screen.getByText(en["modeling.proportions.headsTall"])).toBeInTheDocument();
     expect(screen.getByText("7.4 ×")).toBeInTheDocument();
+  });
+
+  it("no muestra el panel de calce antes de partir la hoja y lo muestra cuando hay vistas", async () => {
+    renderPage();
+    await screen.findByText("Blender 4.3.0 ready");
+
+    expect(
+      screen.queryByRole("region", { name: en["modeling.fit.title"] }),
+    ).not.toBeInTheDocument();
+    selectSheet();
+    fireEvent.click(screen.getByRole("button", { name: en["modeling.reference.split"] }));
+
+    expect(
+      await screen.findByRole("region", { name: en["modeling.fit.title"] }),
+    ).toBeInTheDocument();
+  });
+
+  it("elige por defecto como vista de escala la más alta según su inkBox", async () => {
+    vi.mocked(model3dService.splitSheetViews).mockResolvedValue({
+      ...SHEET_VIEWS,
+      views: [
+        {
+          ...SHEET_VIEWS.views[0],
+          inkBox: [0, 100, 640, 900],
+        },
+        {
+          ...SHEET_VIEWS.views[1],
+          inkBox: [0, 20, 512, 1120],
+        },
+      ],
+    });
+    renderPage();
+    await splitReferenceSheet();
+    const fitPanel = screen.getByRole("region", { name: en["modeling.fit.title"] });
+
+    expect(
+      within(fitPanel).getByRole("combobox", { name: en["modeling.fit.scaleView"] }),
+    ).toHaveValue("side");
+  });
+
+  it("mide el calce con el token, la malla, la altura numérica y la vista elegida", async () => {
+    renderPage();
+    await splitReferenceSheet();
+    const fitPanel = screen.getByRole("region", { name: en["modeling.fit.title"] });
+    const file = selectFitMesh();
+    fireEvent.change(
+      within(fitPanel).getByRole("spinbutton", { name: en["modeling.fit.height"] }),
+      { target: { value: "1.82" } },
+    );
+    fireEvent.change(
+      within(fitPanel).getByRole("combobox", { name: en["modeling.fit.scaleView"] }),
+      { target: { value: "side" } },
+    );
+
+    fireEvent.click(
+      within(fitPanel).getByRole("button", { name: en["modeling.fit.run"] }),
+    );
+
+    await waitFor(() =>
+      expect(model3dService.scoreFit).toHaveBeenCalledWith(
+        "sheet-token",
+        file,
+        1.82,
+        "side",
+      ),
+    );
+  });
+
+  it("traduce el veredicto de cada vista según la causa del descalce", async () => {
+    renderPage();
+    await splitReferenceSheet();
+    const fitPanel = screen.getByRole("region", { name: en["modeling.fit.title"] });
+    selectFitMesh();
+
+    fireEvent.click(
+      within(fitPanel).getByRole("button", { name: en["modeling.fit.run"] }),
+    );
+
+    expect(await screen.findByText(en["modeling.fit.blame.escala"])).toBeInTheDocument();
+    const frontRow = screen.getByRole("cell", { name: "front" }).closest("tr");
+    const sideRow = screen.getByRole("cell", { name: "side" }).closest("tr");
+    const backRow = screen.getByRole("cell", { name: "back" }).closest("tr");
+    expect(frontRow).not.toBeNull();
+    expect(sideRow).not.toBeNull();
+    expect(backRow).not.toBeNull();
+    expect(
+      within(frontRow as HTMLElement).getByText(en["modeling.fit.blame.escala"]),
+    ).toBeInTheDocument();
+    expect(
+      within(sideRow as HTMLElement).getByText(en["modeling.fit.blame.partes"]),
+    ).toBeInTheDocument();
+    expect(
+      within(backRow as HTMLElement).getByText(en["modeling.fit.blame.forma"]),
+    ).toBeInTheDocument();
+  });
+
+  it("muestra el error de medición sin romper el panel de calce", async () => {
+    vi.mocked(model3dService.scoreFit).mockRejectedValue(new Error("No se pudo medir el calce."));
+    renderPage();
+    await splitReferenceSheet();
+    const fitPanel = screen.getByRole("region", { name: en["modeling.fit.title"] });
+    selectFitMesh();
+
+    fireEvent.click(
+      within(fitPanel).getByRole("button", { name: en["modeling.fit.run"] }),
+    );
+
+    expect(await screen.findByText("No se pudo medir el calce.")).toBeInTheDocument();
+    expect(
+      screen.getByRole("region", { name: en["modeling.fit.title"] }),
+    ).toBeInTheDocument();
+  });
+
+  it("deshabilita el botón de medir mientras no haya una malla elegida", async () => {
+    renderPage();
+    await splitReferenceSheet();
+    const fitPanel = screen.getByRole("region", { name: en["modeling.fit.title"] });
+
+    expect(
+      within(fitPanel).getByRole("button", { name: en["modeling.fit.run"] }),
+    ).toBeDisabled();
   });
 
   it("shows blockers, warnings, and the blocked audit verdict", async () => {

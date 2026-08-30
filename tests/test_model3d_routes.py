@@ -94,8 +94,35 @@ async def test_capabilities_con_blender_usable_desbloquea_el_carril(tmp_path: Pa
 
     respuesta = await model3d_capabilities(settings_dep=make_settings(tmp_path))
 
-    assert respuesta.unlocked == ["audit", "referenceScene"]
+    assert respuesta.unlocked == ["audit", "referenceScene", "fit"]
     assert respuesta.missing is None
+
+
+@pytest.mark.asyncio
+async def test_capabilities_lista_los_motores_y_dice_que_le_falta_a_cada_uno(
+    tmp_path: Path, monkeypatch
+):
+    """Un motor ausente NO es un error: es la respuesta.
+
+    Y "no disponible" a secas manda a adivinar entre bajar varios GB de pesos
+    y crear un entorno, asi que cada motor dice cual de los dos le falta.
+    """
+    usable = BlenderBuild(path=Path("blender.exe"), version=(5, 2, 1))
+    monkeypatch.setattr(routes, "blender_probe", lambda *_a, **_k: usable)
+    settings = make_settings(tmp_path)
+    monkeypatch.setattr(type(settings), "mesh_engines_dir", property(lambda _s: tmp_path / "nada"))
+
+    respuesta = await model3d_capabilities(settings_dep=settings)
+
+    # Se afirma sobre el REGISTRO y no sobre una lista escrita a mano: esa
+    # lista caduca en cuanto se agrega un motor, que es lo que pasó.
+    from app.services.mesh_engine_service import ENGINES
+
+    assert {motor.name for motor in respuesta.engines} == set(ENGINES)
+    for motor in respuesta.engines:
+        assert motor.ready is False, motor.name
+        assert motor.license == ENGINES[motor.name]["license"], motor.name
+        assert motor.missing and "entorno" in motor.missing, motor.name
 
 
 @pytest.mark.asyncio

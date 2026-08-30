@@ -11,6 +11,8 @@ Las dos cosas se sirven con las mismas piezas.
 
 from __future__ import annotations
 
+import hashlib
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -18,8 +20,10 @@ from typing import Any
 from PIL import Image
 
 from app.config import Settings
-from app.services import blender_service, silhouette
+from app.services import blender_service, fit, mesh_engine_service, silhouette
 from app.services.turnaround import Box, character_view_boxes, ink_bounds, open_sheet
+
+logger = logging.getLogger(__name__)
 
 # Como se llama cada vista en la escena. El orden es el de una hoja de
 # turnaround estandar, de izquierda a derecha.
@@ -27,6 +31,13 @@ VIEW_ORDER = ("front", "side", "back", "side_left")
 
 AUDIT_SCRIPT = "audit_mesh.py"
 REFERENCE_SCRIPT = "build_reference_scene.py"
+REMESH_SCRIPT = "remesh.py"
+SILHOUETTE_SCRIPT = "render_silhouettes.py"
+
+# Cuanto aire se deja alrededor de la malla al renderizar su silueta. Sin
+# margen, un pixel de antialias en el borde se pierde contra el marco y el
+# ancho medido sale corto.
+MARGEN_ENCUADRE = 1.25
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +76,288 @@ def split_views(
         recorte.save(destino)
         detectadas.append(DetectedView(name=nombre, image=destino, ink=ink_bounds(recorte)))
     return detectadas
+
+
+def remesh(
+    settings: Settings,
+    mesh_path: Path,
+    output: Path,
+    *,
+    voxel_meters: float = 0.01,
+) -> dict[str, Any]:
+    """Rehace la topologia por voxeles y devuelve el antes y el despues.
+
+    Las dos auditorias viajan juntas a proposito: un remesh gana topologia
+    uniforme y pierde detalle, y cuanto perdio solo se ve comparando.
+    """
+    return blender_service.run_script(
+        settings,
+        REMESH_SCRIPT,
+        {"mesh": str(mesh_path), "output": str(output), "voxelMeters": voxel_meters},
+    )
+
+
+def generate_mesh(
+    settings: Settings,
+    engine: str,
+    image_path: Path,
+    output: Path,
+    *,
+    steps: int = 50,
+    guidance: float = 7.0,
+    face_limit: int = 0,
+) -> dict[str, Any]:
+    """Genera una malla desde una imagen con un motor generativo local.
+
+    Existe para que el banco tenga candidatas que no salgan de primitivas. Lo
+    que devuelve NO esta aprobado por haber salido: `audited` viaja en false a
+    proposito, y el paso siguiente es `score_fit`. Un generador puede devolver
+    una superficie preciosa con doscientas islas sueltas.
+    """
+    return mesh_engine_service.generate(
+        settings,
+        engine,
+        {
+            "image": str(image_path),
+            "output": str(output),
+            "steps": steps,
+            "guidance": guidance,
+            "faceLimit": face_limit,
+        },
+    )
+
+
+class UnknownScaleViewError(ValueError):
+    """La vista elegida para fijar la escala no existe entre los recortes."""
+
+
+def _vista_mas_alta(vistas: list[DetectedView]) -> DetectedView:
+    return max(vistas, key=lambda vista: vista.ink.height)
+
+
+def sheet_digest(vistas: list[DetectedView]) -> str:
+    """Huella de los dibujos contra los que se midio.
+
+    Viaja con el calce porque un puntaje solo tiene sentido contra una
+    referencia, y la referencia son archivos en disco que cualquiera puede
+    cambiar. Sin la huella, dos corridas que no coinciden mandan a buscar el
+    error en el modelo cuando lo que cambio fue el dibujo.
+
+    Es exactamente el fallo que costo una tarde el 2026-08-29: un proceso
+    concurrente sobrescribio `front.png` a mitad de un barrido de parametros,
+    las mallas seguian siendo byte a byte identicas (mismo md5) y sin embargo
+    la vista frontal caia de 0.54 a 0.06. Con la huella al lado del numero eso
+    se ve en un vistazo en vez de reconstruirse a mano.
+    """
+    resumen = hashlib.sha256()
+    for vista in sorted(vistas, key=lambda v: v.name):
+        resumen.update(vista.name.encode("utf-8"))
+        resumen.update(vista.image.read_bytes())
+    return resumen.hexdigest()[:16]
+
+
+def score_fit(
+    settings: Settings,
+    mesh_path: Path,
+    views_dir: Path,
+    render_dir: Path,
+    *,
+    height_meters: float,
+    scale_view: str | None = None,
+    resolution: int = 512,
+    up_axis: str = "z_up",
+    metric: bool = True,
+) -> dict[str, Any]:
+    """Cuanto se parece una malla al dibujo, y de que tipo es la diferencia.
+
+    Es la balanza del banco: la misma medida para una malla generada por un
+    modelo, esculpida a mano o armada con primitivas, asi que comparar motores
+    deja de ser cuestion de opinion.
+
+    `scale_view` es el nombre de la vista cuya altura real se conoce, y esa
+    UNICA escala vale para todos los recortes de la hoja. Es explicito y no
+    inferido porque la alternativa —escalar cada vista por su propia altura de
+    tinta— es el error medido que hizo imposible calzar una gorra: de frente el
+    punto mas bajo era la banda y de perfil la punta de la visera, asi que las
+    dos vistas quedaban a escalas distintas y ningun modelo podia calzar ambas.
+
+    `metric=False` para mallas que NO estan en metros, que es lo que devuelve
+    cualquier generador: se igualan las siluetas por alto antes de comparar y el
+    veredicto de escala se apaga. Sin esto el banco castiga a un motor por una
+    unidad — medido, una malla generada quedaba cinco veces mas grande que el
+    dibujo y las tres vistas culpaban a la escala, que no existia.
+
+    Devuelve la auditoria junto al calce: una malla puede calzar la silueta y
+    ser igual inservible por estar rota, y separar las dos preguntas invita a
+    responder solo la comoda.
+    """
+    vistas = views_from_dir(views_dir)
+    if not vistas:
+        # Sin la ruta: va al log. El que llama tiene el token, no el disco.
+        logger.warning("no hay recortes de vista en %s", views_dir)
+        raise UnknownScaleViewError(
+            "no hay recortes de vista para ese token: parti la hoja antes de medir el calce"
+        )
+
+    if scale_view is None:
+        referencia_escala = _vista_mas_alta(vistas)
+    else:
+        elegida = next((vista for vista in vistas if vista.name == scale_view), None)
+        if elegida is None:
+            disponibles = ", ".join(vista.name for vista in vistas)
+            raise UnknownScaleViewError(f"'{scale_view}' no esta entre las vistas: {disponibles}")
+        referencia_escala = elegida
+
+    auditoria = audit_mesh(settings, mesh_path)
+    if auditoria.get("error"):
+        return {"audit": auditoria, "fit": None}
+
+    ancho_encuadre = max(auditoria["dims"]) * MARGEN_ENCUADRE
+    render = blender_service.run_script(
+        settings,
+        SILHOUETTE_SCRIPT,
+        {
+            "mesh": str(mesh_path),
+            "outputDir": str(render_dir),
+            "views": [vista.name for vista in vistas],
+            "viewWidthMeters": ancho_encuadre,
+            "resolution": resolution,
+            # Cada motor entrega en SU marco. Una malla Y-arriba medida como si
+            # fuera Z-arriba puntua la rotacion y no el parecido.
+            "upAxis": up_axis,
+        },
+    )
+    if render.get("error"):
+        return {"audit": auditoria, "fit": None, "error": render["error"]}
+
+    metros_por_pixel_dibujo = fit.metros_por_pixel_de(referencia_escala.image, height_meters)
+    calce = fit.comparar(
+        {nombre: Path(ruta) for nombre, ruta in render["silhouettes"].items()},
+        {vista.name: vista.image for vista in vistas},
+        metros_por_pixel_modelo=render["metersPerPixel"],
+        metros_por_pixel_dibujo=metros_por_pixel_dibujo,
+        con_escala_real=metric,
+    )
+    return {
+        "audit": auditoria,
+        "fit": {
+            "scaleView": referencia_escala.name,
+            "scaleViewHeightMeters": height_meters,
+            "metersPerPixelModel": render["metersPerPixel"],
+            "metersPerPixelSheet": metros_por_pixel_dibujo,
+            # Si es false, las medidas en cm son de las unidades propias de la
+            # malla y el veredicto de escala no aplica.
+            "metric": metric,
+            # Contra QUE se midio. Un puntaje sin su referencia no es
+            # reproducible: los dibujos son archivos que alguien puede cambiar.
+            "sheetDigest": sheet_digest(vistas),
+            "average": calce.promedio,
+            "worstView": calce.peor_vista,
+            "views": [
+                {
+                    "view": ajuste.vista,
+                    "anchored": ajuste.anclado,
+                    "best": ajuste.mejor,
+                    "gainFromMoving": ajuste.gana_moviendo,
+                    "offsetCm": list(ajuste.corrimiento_cm),
+                    "blame": ajuste.culpa,
+                    "widthCm": [ajuste.ancho.modelo_cm, ajuste.ancho.dibujo_cm],
+                    "heightCm": [ajuste.alto.modelo_cm, ajuste.alto.dibujo_cm],
+                }
+                for ajuste in calce.ajustes
+            ],
+        },
+    }
+
+
+@dataclass(frozen=True, slots=True)
+class Candidata:
+    """Una malla a medir, con lo que hace falta saber para medirla bien.
+
+    El eje viaja POR CANDIDATA y no por banco: cada motor entrega en su propio
+    marco —el blockout de Blender es Z-arriba y TripoSG entrega Y-arriba—, y un
+    banco que impone una sola orientacion a todas puntua la rotacion de las que
+    no coinciden. Medido: la misma malla de TripoSG dio 0.033 con el eje
+    equivocado y 0.266 con el correcto, o sea que el eje decidia el ranking.
+    """
+
+    nombre: str
+    ruta: Path
+    up_axis: str = "z_up"
+    # Las mallas generadas vienen en unidades propias, no en metros. Marcarlo
+    # por candidata es lo que hace justa la comparacion entre un blockout
+    # construido a escala real y la salida de un modelo generativo.
+    metric: bool = True
+
+
+def compare_meshes(
+    settings: Settings,
+    meshes: dict[str, Path] | list[Candidata],
+    views_dir: Path,
+    render_root: Path,
+    *,
+    height_meters: float,
+    scale_view: str | None = None,
+    resolution: int = 512,
+    up_axis: str = "z_up",
+) -> dict[str, Any]:
+    """Mide varias mallas contra la misma hoja y las ordena.
+
+    Es el banco: dos formas de llegar a la misma pieza —un modelo generativo,
+    un remallado, un blockout a mano— dejan de compararse por impresion y pasan
+    a compararse por el mismo numero. Cada candidata trae su auditoria, asi que
+    una que calce lindo pero este rota no gana por calzar.
+
+    Una candidata que falla NO tumba el banco: se reporta con su error y las
+    demas siguen. Un motor que no arranca es justamente lo que hay que ver en
+    la tabla, no un stack trace que la deja vacia.
+    """
+    candidatas = (
+        [Candidata(nombre, ruta, up_axis) for nombre, ruta in meshes.items()]
+        if isinstance(meshes, dict)
+        else list(meshes)
+    )
+
+    resultados: list[dict[str, Any]] = []
+    for candidata in candidatas:
+        try:
+            medida = score_fit(
+                settings,
+                candidata.ruta,
+                views_dir,
+                render_root / candidata.nombre,
+                height_meters=height_meters,
+                scale_view=scale_view,
+                resolution=resolution,
+                up_axis=candidata.up_axis,
+                metric=candidata.metric,
+            )
+        except Exception as exc:  # noqa: BLE001 - el fallo de una candidata es un dato
+            resultados.append(
+                {"name": candidata.nombre, "mesh": str(candidata.ruta), "error": str(exc)}
+            )
+            continue
+        resultados.append(
+            {
+                "name": candidata.nombre,
+                "mesh": str(candidata.ruta),
+                "upAxis": candidata.up_axis,
+                **medida,
+            }
+        )
+
+    medidas = [r for r in resultados if r.get("fit")]
+    medidas.sort(key=lambda r: r["fit"]["average"], reverse=True)
+    fallidas = [r for r in resultados if not r.get("fit")]
+    return {
+        "ranked": medidas + fallidas,
+        # El ganador solo existe si ADEMAS de calzar mejor la malla esta sana:
+        # premiar una silueta linda sobre una malla rota es el falso positivo
+        # que este banco existe para no cometer.
+        "winner": next((r["name"] for r in medidas if r["audit"].get("ok")), None),
+        "measured": len(medidas),
+        "failed": [r["name"] for r in fallidas],
+    }
 
 
 def views_from_dir(views_dir: Path, *, names: tuple[str, ...] = VIEW_ORDER) -> list[DetectedView]:
@@ -190,3 +483,40 @@ def measure_proportions(views_dir: Path, *, height_meters: float = 1.70) -> dict
             for z in [i * 0.05 for i in range(int(height_meters / 0.05), -1, -1)]
         ],
     }
+
+
+class UnknownViewNameError(ValueError):
+    """Un nombre de vista que el carril no sabe colocar en la escena."""
+
+
+def rename_views(views_dir: Path, names: list[str]) -> list[str]:
+    """Reasigna que vista es cada recorte, de izquierda a derecha.
+
+    Nombrar por posicion es una CONVENCION, no una deduccion: mirando los
+    pixeles no hay forma de saber si el tercer panel es la espalda o un tres
+    cuartos. Cuando la hoja viene en otro orden, la escena sale con el dibujo
+    equivocado en cada plano y nada lo delata — por eso se puede corregir.
+    """
+    conocidos = set(VIEW_ORDER)
+    desconocidos = [n for n in names if n not in conocidos]
+    if desconocidos:
+        raise UnknownViewNameError(
+            f"nombres que el carril no sabe colocar: {', '.join(desconocidos)}. "
+            f"Validos: {', '.join(VIEW_ORDER)}."
+        )
+    if len(set(names)) != len(names):
+        raise UnknownViewNameError("hay nombres repetidos: cada vista va una sola vez")
+
+    actuales = [nombre for nombre in VIEW_ORDER if (views_dir / f"{nombre}.png").exists()]
+    if len(names) != len(actuales):
+        raise UnknownViewNameError(
+            f"la hoja tiene {len(actuales)} vistas y se pasaron {len(names)} nombres"
+        )
+
+    # Se pasa por nombres temporales: intercambiar frente y espalda directamente
+    # pisaria un archivo con el otro.
+    for indice, viejo in enumerate(actuales):
+        (views_dir / f"{viejo}.png").rename(views_dir / f"_{indice}.tmp")
+    for indice, nuevo in enumerate(names):
+        (views_dir / f"_{indice}.tmp").rename(views_dir / f"{nuevo}.png")
+    return names

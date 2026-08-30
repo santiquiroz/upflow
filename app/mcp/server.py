@@ -868,13 +868,143 @@ async def upflow_audit_mesh(file_path: str) -> str:
         return format_tool_error(exc)
 
 
+@mcp.tool(name="upflow_remesh", annotations={"title": "Rehacer la topología de una malla", "readOnlyHint": False, "destructiveHint": False, "openWorldHint": False})
+async def upflow_remesh(
+    file_path: str,
+    voxel_meters: float = 0.01,
+    destination_path: str = "",
+) -> str:
+    """Rehace la topología de una malla por voxeles y devuelve el ANTES y el DESPUÉS.
+
+    Es lo que convierte primitivas que se solapan —o una malla con agujeros— en
+    una sola superficie cerrada. Uniformiza: no respeta aristas vivas, así que
+    para una pieza con cantos rectos NO es lo que querés.
+
+    voxel_meters: el tamaño del voxel. Más chico = más caras y más detalle;
+    mínimo 0.002 m. Medido sobre un personaje de 1,70 m: 0.05 m deja 8k caras y
+    0.02 m deja 51k, partiendo de 288k.
+
+    Las dos auditorías viajan juntas porque un remesh gana topología y pierde
+    detalle, y cuánto perdió solo se ve comparando. No hay modo de cuádruples:
+    QuadriFlow cancela en este entorno y devolver "listo" con la malla intacta
+    sería mentir.
+    """
+    try:
+        name, content = client.read_upload(file_path)
+        payload = await client.api_post(
+            "/api/v1/model3d/remesh",
+            data={"voxelMeters": voxel_meters},
+            files={"file": (name, content, "application/octet-stream")},
+            timeout=client.UPLOAD_TIMEOUT,
+        )
+        if destination_path and payload.get("downloadUrl"):
+            destino = client.resolve_output_path(destination_path, "remallada.glb")
+            await client.api_download(payload["downloadUrl"], destino)
+            payload["outputPath"] = str(destino)
+        return _dump(payload)
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
+@mcp.tool(name="upflow_generate_mesh", annotations={"title": "Generar una malla desde una imagen", "readOnlyHint": False, "destructiveHint": False, "openWorldHint": False})
+async def upflow_generate_mesh(
+    file_path: str,
+    engine: str = "triposg",
+    destination_path: str = "",
+    steps: int = 50,
+    guidance: float = 7.0,
+) -> str:
+    """Genera una malla 3D desde UNA imagen con un motor generativo LOCAL.
+
+    Nada sale de esta máquina. Mirá `upflow_model3d_capabilities` primero: dice
+    qué motores hay, con qué licencia y qué le falta a cada uno; un motor
+    ausente no es un error, es la respuesta.
+
+    Lo que devuelve NO está aprobado por haber salido —`audited` viene en
+    false—. Un generador puede devolver una superficie preciosa con doscientas
+    islas sueltas. El paso siguiente es `upflow_score_fit` (cuánto calza con el
+    dibujo) o `upflow_audit_mesh` (si la malla sirve), y recién ahí se decide.
+
+    Sobre los motores, medido el 2026-08-28: el que es libre no corre en AMD y
+    el que corre en AMD no es libre. `triposg` es MIT y anda en CPU, que es por
+    lo que está primero — no por ser el mejor de la comparativa.
+    """
+    try:
+        name, content = client.read_upload(file_path)
+        payload = await client.api_post(
+            "/api/v1/model3d/generate",
+            data={"engine": engine, "steps": steps, "guidance": guidance},
+            files={"file": (name, content, "application/octet-stream")},
+            timeout=client.UPLOAD_TIMEOUT,
+        )
+        if destination_path and payload.get("downloadUrl"):
+            destino = client.resolve_output_path(destination_path, "generada.glb")
+            await client.api_download(payload["downloadUrl"], destino)
+            payload["outputPath"] = str(destino)
+        return _dump(payload)
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
+@mcp.tool(name="upflow_score_fit", annotations={"title": "Medir cuánto calza una malla con el dibujo", "readOnlyHint": False, "destructiveHint": False, "openWorldHint": False})
+async def upflow_score_fit(
+    token: str,
+    file_path: str,
+    height_meters: float,
+    scale_view: str = "",
+    resolution: int = 512,
+) -> str:
+    """Mide cuánto se parece una malla al dibujo, y de QUÉ TIPO es la diferencia.
+
+    Es la balanza: la misma medida para una malla generada por un modelo,
+    esculpida a mano o armada con primitivas, así que comparar dos formas de
+    llegar deja de ser cuestión de opinión. Usá `upflow_sheet_views` primero
+    para obtener el token.
+
+    Por vista devuelve `blame`, que es lo accionable:
+      - "escala": las dos medidas se van para el mismo lado. Reescalá; modelar
+        no lo arregla.
+      - "partes": el contorno está bien pero las partes no caen en el mismo
+        lugar adentro. NO significa mover la malla en la escena —la comparación
+        centra las dos siluetas, así que una traslación global no cambia el
+        número, probado— sino mover una PARTE respecto del resto.
+      - "forma": proporción y centrado correctos y aun así no calza. Recién acá
+        hay que modelar.
+
+    height_meters: la altura REAL de la vista que fija la escala (`scale_view`,
+    por defecto la más alta). Es UNA sola escala para toda la hoja a propósito:
+    escalar cada vista por su propia tinta las deja a escalas distintas y
+    entonces ninguna malla puede calzar las dos —medido sobre una gorra, donde
+    de frente el punto más bajo era la banda y de perfil la punta de la visera.
+
+    La auditoría de topología viaja junto al calce: una malla puede calzar la
+    silueta y ser inservible por estar rota.
+    """
+    try:
+        name, content = client.read_upload(file_path)
+        datos: dict[str, object] = {"heightMeters": height_meters, "resolution": resolution}
+        if scale_view:
+            datos["scaleView"] = scale_view
+        return _dump(
+            await client.api_post(
+                f"/api/v1/model3d/fit/{token}",
+                data=datos,
+                files={"file": (name, content, "application/octet-stream")},
+                timeout=client.UPLOAD_TIMEOUT,
+            )
+        )
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
 @mcp.tool(name="upflow_sheet_views", annotations={"title": "Partir hoja de turnaround", "readOnlyHint": False, "destructiveHint": False, "openWorldHint": False})
 async def upflow_sheet_views(file_path: str, expected_views: int = 4) -> str:
     """Parte una hoja de turnaround en sus vistas y devuelve un token.
 
     Descarta sola la barra de altura y la paleta de color. Nombra las vistas
     por POSICIÓN (front, side, back, side_left): es una convención, no una
-    deducción — mirá el resultado y renombrá si la hoja va en otro orden.
+    deducción — mirá el resultado y corregí con upflow_rename_views si la
+    hoja viene en otro orden.
     Revisá `warnings`: si detectó menos vistas de las esperadas puede haber
     dos dibujadas superpuestas, y esas no se separan solas.
     El token alimenta upflow_reference_scene.
@@ -888,6 +1018,30 @@ async def upflow_sheet_views(file_path: str, expected_views: int = 4) -> str:
             timeout=client.UPLOAD_TIMEOUT,
         )
         return _dump(payload)
+    except Exception as exc:
+        return format_tool_error(exc)
+
+
+@mcp.tool(name="upflow_rename_views", annotations={"title": "Corregir qué vista es cada recorte", "readOnlyHint": False, "destructiveHint": False, "openWorldHint": False})
+async def upflow_rename_views(token: str, names: str) -> str:
+    """Reasigna qué vista es cada recorte, de izquierda a derecha.
+
+    names: separados por coma, uno por vista detectada. Válidos: front, side,
+    back, side_left.
+
+    Nombrarlas por posición es una convención, no una deducción: mirando los
+    píxeles no hay forma de saber si el tercer panel es la espalda o un tres
+    cuartos. Si la hoja viene en otro orden, la escena de referencia sale con
+    el dibujo equivocado en cada plano y NADA lo delata — por eso conviene
+    mirar las vistas antes de armarla.
+    """
+    try:
+        pedidos = [n.strip() for n in names.split(",") if n.strip()]
+        return _dump(
+            await client.api_post(
+                f"/api/v1/model3d/sheet/{token}/names", json_body={"names": pedidos}
+            )
+        )
     except Exception as exc:
         return format_tool_error(exc)
 
