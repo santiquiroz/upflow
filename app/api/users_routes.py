@@ -117,6 +117,10 @@ async def get_user_jobs(
         ("video", request.app.state.video_job_manager),
         ("audio", request.app.state.audio_job_manager),
         ("generation", request.app.state.generation_job_manager),
+        ("transcribe", request.app.state.transcribe_jobs),
+        ("karaoke", request.app.state.karaoke_jobs),
+        ("shape3d", request.app.state.shape3d_jobs),
+        ("download", request.app.state.download_jobs),
     )
     jobs = [
         OwnedJobSummaryResponse(

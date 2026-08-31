@@ -279,9 +279,11 @@ async def lifespan(app: FastAPI):
         quota_service=quota_service,
     )
 
-    # Los SIETE managers, no solo los cuatro originales: los que faltaban
-    # (transcribe/shape3d/download) dejaban a un usuario no-admin sin limite de
-    # concurrencia ni de cola en esas familias.
+    # Los OCHO managers, no solo los cuatro originales: los que faltaban
+    # (transcribe/shape3d/download, y despues karaoke -- se agrego mas tarde
+    # y quedo afuera de esta lista igual que los tres anteriores) dejaban a
+    # un usuario no-admin sin limite de concurrencia ni de cola en esas
+    # familias.
     quota_service.attach_managers(
         job_manager,
         video_job_manager,
@@ -290,6 +292,7 @@ async def lifespan(app: FastAPI):
         transcribe_jobs,
         shape3d_jobs,
         download_jobs,
+        karaoke_jobs,
     )
     retention_sweeper = RetentionSweeper(
         settings, job_manager, video_job_manager, audio_job_manager,
@@ -297,6 +300,7 @@ async def lifespan(app: FastAPI):
         transcribe_job_manager=transcribe_jobs,
         shape3d_job_manager=shape3d_jobs,
         download_job_manager=download_jobs,
+        karaoke_job_manager=karaoke_jobs,
     )
     await retention_sweeper.start()
     await transcribe_jobs.start()

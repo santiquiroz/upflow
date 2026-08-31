@@ -473,6 +473,18 @@ def test_lifespan_starts_and_stops_retention_sweeper() -> None:
     assert app.state.retention_sweeper.sweep_task is None
 
 
+def test_lifespan_wires_karaoke_into_retention_sweeper_and_quotas() -> None:
+    # Regresion: karaoke_jobs se creo junto con transcribe/shape3d/download
+    # pero quedo afuera de attach_managers() y de RetentionSweeper() -- el
+    # mismo olvido que la auditoria 2026-08-08 encontro para esos tres. Sin
+    # esto un usuario no-admin no tiene limite de concurrencia/cola en
+    # karaoke, y el sweep horario le puede borrar la fuente a un render en
+    # curso.
+    with TestClient(app):
+        assert app.state.retention_sweeper.karaoke_job_manager is app.state.karaoke_jobs
+        assert app.state.karaoke_jobs in app.state.quota_service._managers
+
+
 def make_sweeper(settings: Settings) -> RetentionSweeper:
     job_manager = JobManager(
         settings, FakeImageEngine(settings), DeviceSemaphores(settings)

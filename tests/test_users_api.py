@@ -115,3 +115,41 @@ def test_get_user_jobs_returns_empty_list_for_new_user(admin_client: TestClient)
 
     assert response.status_code == 200
     assert response.json()["jobs"] == []
+
+
+def test_get_user_jobs_includes_karaoke_transcribe_shape3d_and_download(
+    admin_client: TestClient,
+) -> None:
+    # Regresion: get_user_jobs solo agregaba image/video/audio/generation.
+    # karaoke/transcribe/shape3d/download tienen owner_id igual que los
+    # otros cuatro (la cuota y el ownership ya los cubren) pero un admin no
+    # los veia en la vista de "trabajos de este usuario".
+    from app.main import app as fastapi_app
+    from app.models import DownloadJob, KaraokeJob, Shape3dJob, TranscribeJob
+
+    created = admin_client.post("/api/v1/users", json={"username": "bob", "role": "user"}).json()
+    user_id = created["user"]["id"]
+
+    karaoke = KaraokeJob(
+        source_path=Path("song.mp3"), original_filename="song.mp3", asr_model_id="m",
+    )
+    karaoke.owner_id = user_id
+    fastapi_app.state.karaoke_jobs.jobs[karaoke.id] = karaoke
+
+    transcribe = TranscribeJob(source_path=Path("a.mp3"), original_filename="a.mp3", model_id="m")
+    transcribe.owner_id = user_id
+    fastapi_app.state.transcribe_jobs.jobs[transcribe.id] = transcribe
+
+    shape3d = Shape3dJob(prompt="a small ceramic mug")
+    shape3d.owner_id = user_id
+    fastapi_app.state.shape3d_jobs.jobs[shape3d.id] = shape3d
+
+    download = DownloadJob(url="https://example.com/v")
+    download.owner_id = user_id
+    fastapi_app.state.download_jobs.jobs[download.id] = download
+
+    response = admin_client.get(f"/api/v1/users/{user_id}/jobs")
+
+    assert response.status_code == 200
+    kinds = {job["kind"] for job in response.json()["jobs"]}
+    assert kinds == {"karaoke", "transcribe", "shape3d", "download"}

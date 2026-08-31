@@ -15,6 +15,7 @@ from app.services.audio_job_manager import AudioJobManager
 from app.services.download_job_manager import DownloadJobManager
 from app.services.generation_job_manager import GenerationJobManager
 from app.services.job_manager import JobManager
+from app.services.karaoke_job_manager import KaraokeJobManager
 from app.services.shape3d_job_manager import Shape3dJobManager
 from app.services.transcribe_job_manager import TranscribeJobManager
 from app.services.video_job_manager import VideoJobManager
@@ -35,6 +36,7 @@ class RetentionSweeper:
         transcribe_job_manager: TranscribeJobManager | None = None,
         shape3d_job_manager: Shape3dJobManager | None = None,
         download_job_manager: DownloadJobManager | None = None,
+        karaoke_job_manager: KaraokeJobManager | None = None,
     ) -> None:
         self.settings = settings
         self.job_manager = job_manager
@@ -44,6 +46,7 @@ class RetentionSweeper:
         self.transcribe_job_manager = transcribe_job_manager
         self.shape3d_job_manager = shape3d_job_manager
         self.download_job_manager = download_job_manager
+        self.karaoke_job_manager = karaoke_job_manager
         self.sweep_task: asyncio.Task | None = None
         self._stop_event = threading.Event()
 
@@ -111,6 +114,7 @@ class RetentionSweeper:
             self.transcribe_job_manager,
             self.shape3d_job_manager,
             self.download_job_manager,
+            self.karaoke_job_manager,
         ):
             if manager is not None:
                 self._prune_finished_jobs(manager.jobs)
@@ -128,12 +132,21 @@ class RetentionSweeper:
             return []
         return list(self.transcribe_job_manager.jobs.values())
 
+    def _karaoke_jobs(self) -> list:
+        # Mismo caso que _transcribe_jobs: un karaoke en render (fase mas
+        # larga del modulo, mux de video) tambien apunta a uploads_path, y
+        # sin esto el sweep horario le podia borrar el archivo fuente debajo.
+        if self.karaoke_job_manager is None:
+            return []
+        return list(self.karaoke_job_manager.jobs.values())
+
     def _active_source_paths(self) -> set[Path]:
         all_jobs = (
             list(self.job_manager.jobs.values())
             + list(self.video_job_manager.jobs.values())
             + self._audio_jobs()
             + self._transcribe_jobs()
+            + self._karaoke_jobs()
         )
         return {job.source_path for job in all_jobs if not self._is_finished(job)}
 
