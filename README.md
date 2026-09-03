@@ -237,7 +237,7 @@ Todos los endpoints viven bajo `/api/v1`. Los campos de formulario (subida) van 
 
 | Método | Endpoint | Descripción |
 |---|---|---|
-| `GET` | `/api/v1/health` | Healthcheck: motor activo, `gpuConcurrency` y profundidad de ambas colas |
+| `GET` | `/api/v1/health` | Healthcheck: `version`, motor activo, `ncnnAvailable`/`onnxAvailable`, `devices` con `freeVramMb`, `defaultDevice`, `modelsInstalled`, `tile` (defaults de tiling por motor), `gpuConcurrency` y profundidad de ambas colas |
 | `GET` | `/api/v1/engine` | Estado del motor, si FFmpeg está disponible, catálogo de modelos y de perfiles de video |
 | `GET` | `/api/v1/devices` | Dispositivos de cómputo disponibles (`cpu`, `dml:0`, `dml:1`...) y `defaultDeviceId` efectivo |
 | `GET` | `/api/v1/models` | Catálogo completo de modelos instalados (builtin + los instalados desde Hugging Face) |
@@ -279,7 +279,7 @@ Todos los endpoints viven bajo `/api/v1`. Los campos de formulario (subida) van 
 
 Es lo que usa la interfaz para recuperar la cola al recargar el navegador: sin listado, un trabajo en curso seguía corriendo en el servidor pero se perdía de vista para siempre.
 
-**Crear un job de imagen** — campos de formulario: `file` (requerido), `model_name` (default `realesrgan-x4plus`, ignorado si se manda `model_id`), `model_id` (opcional: id de un modelo ONNX instalado desde HF, ver sección Modelos), `device` (opcional: `cpu`/`dml:N`, ver sección Dispositivos; omitido = `DEFAULT_DEVICE`), `scale` (default `4`), `output_format` (`png`/`jpg`/`jpeg`/`webp`, default `png`):
+**Crear un job de imagen** — campos de formulario: `file` (requerido), `model_name` (default `realesrgan-x4plus`, ignorado si se manda `model_id`), `model_id` (opcional: id de un modelo ONNX instalado desde HF, ver sección Modelos), `device` (opcional: `cpu`/`dml:N`, ver sección Dispositivos; omitido = `DEFAULT_DEVICE`), `scale` (default `4`; con un modelo x4 y `scale=2/3` el motor corre a 4× y Upflow reduce con Lanczos — nunca con el `-s` del binario ncnn, que produce un mosaico de tiles), `output_format` (`png`/`jpg`/`jpeg`/`webp`, default `png`), `tile_size` (opcional: omitido = auto por motor, `0` = sin tiling — ncnn elige el mayor tile que entra en la VRAM libre —, `N>=32` = tile fijo), `tile_overlap` (opcional, solo motor ONNX, default 16). El job terminado devuelve en `metadata.effective` el comando/config real que corrió (`engine`, `command`, `nativeScale`, `requestedScale`, `tileSize`, `tileOverlap`, `resized`):
 
 ```bash
 curl -X POST http://127.0.0.1:8090/api/v1/jobs \
@@ -346,12 +346,14 @@ Los jobs largos (videos de muchos frames, modelos ONNX pesados) ya **no se matan
 
 | Modelo | Ideal para | Escalas |
 |---|---|---|
-| `realesrgan-x4plus` | Fotos, imágenes generales | 4× |
-| `realesrgan-x4plus-anime` | Anime fijo, ilustración, line art | 4× |
+| `realesrgan-x4plus` | Fotos, imágenes generales | 2× / 3× / 4× (2× y 3× = 4× nativo + reducción Lanczos) |
+| `realesrgan-x4plus-anime` | Anime fijo, ilustración, line art | 2× / 3× / 4× (ídem) |
 | `realesr-animevideov3-x2` / `-x3` / `-x4` | Fotogramas de video anime | 2× / 3× / 4× |
 | `realesr-animevideov3` | Preset automático (resuelve a x2/x3/x4 según la escala pedida) | 2×–4× |
 
 Estos modelos vienen empaquetados con el motor (`scripts/download-realesrgan.ps1`), corren siempre sobre Vulkan y **no aceptan `device=cpu`** (ver sección Dispositivos).
+
+**Escala nativa y tiling.** El binario `realesrgan-ncnn-vulkan` solo sabe reescalar a la escala del modelo: con `-s 2` sobre un modelo x4 devuelve una imagen del tamaño correcto pero armada con el cuarto superior izquierdo de cada tile ampliado (rejilla de bloques de 400 px, PSNR 13 dB contra el 4× real — medido 2026-09-02, ver `docs/images/ncnn-scale2-seams-before-after.png`). Por eso el motor corre **siempre a la escala nativa** y Upflow reduce a la pedida con Lanczos; `tests/test_seams.py` mide la rejilla y falla si vuelve. Parámetros de tiling del job de imagen (API `tile_size`/`tile_overlap`, CLI `--tile`/`--tile-overlap`): omitido = auto (ncnn deja elegir al binario por heap de VRAM: 200 px en GPUs con más de 1.9 GB; ONNX usa `ONNX_TILE_SIZE`), `0` = sin tiling (ncnn: el mayor tile que entra en la VRAM libre, ≈ 600 MB + 0.0215 MB por píxel de tile medido en una RX 7800 XT; ONNX: un solo pase), `N>=32` = tile fijo. Tiles más grandes no acortan el tiempo ni cambian la calidad a escala nativa (t200 1.5 GB / 7 s, t600 8.1 GB / 6.9 s, t1000 `vkAllocateMemory failed` — que ahora se detecta y falla el job en vez de devolver una imagen plana). `tile_overlap` solo aplica al motor ONNX; ncnn usa un prepadding fijo de 10 px.
 
 ### Instalar modelos desde Hugging Face
 
@@ -678,6 +680,21 @@ API: `POST /api/v1/audio/jobs` (multipart: `file`, `cleanup_steps?` (CSV), `deno
 
 > **Nota experimental:** el restore es un port ONNX del modelo Apollo (ver `docs/` y la guía del port). Funciona y es multi-provider, pero la calidad de reconstrucción y el rendimiento GPU aún se están evaluando — por eso va detrás de un flag y con badge "Experimental" en la UI.
 
+## Para agentes (Claude Code / Codex, sin UI)
+
+Guía completa: [docs/agent-usage.md](docs/agent-usage.md). Lo mínimo:
+
+```powershell
+.venv\Scripts\pip install -e .           # deja `upflow` y `upflow-mcp` en .venv\Scripts
+upflow health --json                      # ¿GPU, pack ncnn, modelos?
+upflow upscale --in foto.png --out foto-2x.webp --model realesrgan-x4plus --scale 2 --json
+upflow models --json                      # ids válidos para --model
+```
+
+- `upflow upscale` corre en proceso, **sin servidor**; `--json` imprime una sola línea JSON al final (`ok`, `output`, `width`, `height`, `model`, `device`, `scale`, `nativeScale`, `tile`, `seconds`). Códigos de salida: `0` ok, `2` argumentos, `3` modelo no instalado, `4` dispositivo, `5` fallo de inferencia. Sin prompts; las descargas exigen `--yes`. Formatos: `png`/`jpg`/`webp` (motor) y `jxl`/`avif` (ffmpeg vendorizado).
+- Mismo input + mismos parámetros ⇒ mismos bytes (id de job = hash del contenido y los parámetros, sin nombres temporales aleatorios).
+- MCP: `claude mcp add upflow -- upflow-mcp --autostart` (Claude Code) o `[mcp_servers.upflow] command = "upflow-mcp" args = ["--autostart"]` en `~/.codex/config.toml` (Codex). Con `--autostart` levanta el servidor si no está; sin servidor las tools de imagen corren in-process.
+
 ## Servidor MCP (tools para agentes de IA)
 
 Upflow expone toda su funcionalidad como **tools MCP** (Model Context Protocol) para que agentes de IA (Claude Code, Claude Desktop, o cualquier cliente MCP) puedan reescalar, transcribir, generar y procesar medios directamente.
@@ -687,7 +704,8 @@ Upflow expone toda su funcionalidad como **tools MCP** (Model Context Protocol) 
 - `upflow_segment_object` no reenvía lo que devuelve la ruta: `/editor/segment` contesta un PNG crudo, inservible para encadenar, así que la tool vuelve a subir la máscara y entrega el token que consume `upflow_insert_object`.
 - Modelo de jobs unificado: `upflow_job_status` / `upflow_wait_job` / `upflow_cancel_job` / `upflow_download_result` funcionan igual para cualquier familia (`image | video | audio | generation | transcribe | download | shape3d`).
 - Las tools de creación aceptan **rutas de archivo locales** y resuelven la subida (multipart o staging por token) por sí solas.
-- Es un cliente HTTP fino: el servidor Upflow tiene que estar corriendo; MCP y la web UI ven exactamente los mismos jobs.
+- Es un cliente HTTP fino: con el servidor corriendo, MCP y la web UI ven exactamente los mismos jobs. Sin servidor, `upflow_upscale_image`, `upflow_list_models` y `upflow_health` caen al modo **in-process** (`UPFLOW_MCP_MODE=auto|server|inprocess`, o `--mode`), y `upflow-mcp --autostart` lo levanta solo.
+- Tools con el mismo contrato que la CLI `upflow`: `upflow_health`, `upflow_upscale_image` (ahora con `tile_size`/`tile_overlap`), `upflow_upscale_image_headless`, `upflow_list_models`, `upflow_preflight_upscaler`, `upflow_install_upscaler(repo_id, confirm=true)` (las in-process; `upflow_model_preflight`/`upflow_install_model` siguen siendo las variantes por servidor, multi-kind).
 
 Config para un cliente MCP (ej. `.mcp.json` de Claude Code):
 
@@ -704,7 +722,7 @@ Config para un cliente MCP (ej. `.mcp.json` de Claude Code):
 }
 ```
 
-Variables: `UPFLOW_URL` (default `http://127.0.0.1:8090`); con `AUTH_MODE=multi`, `UPFLOW_USERNAME`/`UPFLOW_PASSWORD` hacen login automático. En modo single-user (default) no hace falta nada. También queda el script `upflow-mcp` instalado por `pip install -e .`.
+Variables: `UPFLOW_URL` (default `http://127.0.0.1:8090`); con `AUTH_MODE=multi`, `UPFLOW_USERNAME`/`UPFLOW_PASSWORD` hacen login automático. En modo single-user (default) no hace falta nada. También queda el script `upflow-mcp` instalado por `pip install -e .`: `claude mcp add upflow -- upflow-mcp --autostart` lo registra en Claude Code de una.
 
 Flujo típico de un agente: `upflow_status` → `upflow_upscale_image(file_path=..., destination_path=...)` (espera y descarga en un solo paso) o, para videos largos, `upflow_upscale_video(...)` → `upflow_wait_job` → `upflow_download_result`.
 
@@ -738,6 +756,9 @@ Backend (pytest):
 
 # un archivo o test puntual
 .\.venv\Scripts\python -m pytest tests/test_health.py::test_health_endpoint
+
+# regresion de costuras de tiling (usa el binario ncnn real si esta en vendor/, si no lo salta)
+.\.venv\Scripts\python -m pytest tests/test_seams.py
 
 # con cobertura (requiere pytest-cov: pip install pytest-cov)
 .\.venv\Scripts\python -m pytest --cov=app --cov-report=term-missing
