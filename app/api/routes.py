@@ -103,7 +103,9 @@ from app.schemas import (
     StartRealtimeRequest,
     VideoGenerationCapabilitiesResponse,
     VideoModelSummary,
+    HealthDeviceResponse,
     HealthResponse,
+    HealthTileResponse,
     HfModelSearchResultResponse,
     InstallModelRequest,
     InitImageResponse,
@@ -187,6 +189,7 @@ from app.services.hf_client import (
     GENERATION_SEARCH_TASK_TAGS,
     HfClient,
 )
+from app.services.health_report import build_health_report
 from app.services.job_manager import JobManager
 from app.services.media_tools import MediaTools
 from app.services.model_installer import ModelInstaller
@@ -713,6 +716,17 @@ async def health(
     jobs: JobManager = Depends(get_job_manager),
     video_jobs: VideoJobManager = Depends(get_video_job_manager),
 ) -> HealthResponse:
+    state = request.app.state
+    # Enumeracion DXGI + import de onnxruntime: fuera del event loop.
+    report = await asyncio.to_thread(
+        build_health_report,
+        settings,
+        getattr(state, "model_registry", None),
+        getattr(state, "devices_service", None),
+        getattr(state, "engine", None),
+        getattr(state, "onnx_engine", None),
+        (getattr(state, "resource_probes", None) or {}).get("gpu"),
+    )
     return HealthResponse(
         status="ok",
         engine=settings.engine,
@@ -723,6 +737,27 @@ async def health(
         gpu_concurrency=settings.per_device_gpu_concurrency,
         queue_depth=jobs.queue_depth(),
         video_queue_depth=video_jobs.queue_depth(),
+        version=report["version"],
+        ncnn_available=report["ncnnAvailable"],
+        onnx_available=report["onnxAvailable"],
+        devices=[
+            HealthDeviceResponse(
+                id=device["id"],
+                kind=device["kind"],
+                name=device["name"],
+                backend=device["backend"],
+                free_vram_mb=device["freeVramMb"],
+            )
+            for device in report["devices"]
+        ],
+        default_device=report["defaultDevice"],
+        models_installed=report["modelsInstalled"],
+        tile=HealthTileResponse(
+            ncnn_default=report["tile"]["ncnnDefault"],
+            ncnn_default_detail=report["tile"]["ncnnDefaultDetail"],
+            onnx_tile_size=report["tile"]["onnxTileSize"],
+            onnx_tile_overlap=report["tile"]["onnxTileOverlap"],
+        ),
     )
 
 
@@ -793,6 +828,8 @@ async def create_job(
     device: str | None = Form(default=None),
     scale: int = Form(default=4),
     output_format: str = Form(default="png"),
+    tile_size: int | None = Form(default=None),
+    tile_overlap: int | None = Form(default=None),
     jobs: JobManager = Depends(get_job_manager),
     storage: StorageService = Depends(get_storage),
     settings: Settings = Depends(get_settings),
@@ -818,6 +855,8 @@ async def create_job(
             output_format=output_format,
             job_id=token,
             owner=current_user,
+            tile_size=tile_size,
+            tile_overlap=tile_overlap,
         )
     except QueueFullError as exc:
         raise HTTPException(status_code=429, detail=str(exc)) from exc

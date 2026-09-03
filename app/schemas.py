@@ -805,12 +805,36 @@ class EngineInfoResponse(BaseModel):
     max_video_upload_mb: int = Field(serialization_alias="maxVideoUploadMb")
 
 
+class HealthDeviceResponse(BaseModel):
+    id: str
+    kind: str
+    name: str
+    backend: str
+    free_vram_mb: int | None = Field(default=None, serialization_alias="freeVramMb")
+
+
+class HealthTileResponse(BaseModel):
+    ncnn_default: str = Field(serialization_alias="ncnnDefault")
+    ncnn_default_detail: str = Field(serialization_alias="ncnnDefaultDetail")
+    onnx_tile_size: int = Field(serialization_alias="onnxTileSize")
+    onnx_tile_overlap: int = Field(serialization_alias="onnxTileOverlap")
+
+
 class HealthResponse(BaseModel):
     status: Literal["ok"]
     engine: str
     gpu_concurrency: int = Field(serialization_alias="gpuConcurrency")
     queue_depth: int = Field(serialization_alias="queueDepth")
     video_queue_depth: int = Field(serialization_alias="videoQueueDepth")
+    # Lo que un agente necesita para decidir sin abrir la UI: version, GPUs con
+    # VRAM libre, modelos que puede pedir y que tile va a aplicar cada motor.
+    version: str = "0.0.0"
+    ncnn_available: bool = Field(default=False, serialization_alias="ncnnAvailable")
+    onnx_available: bool = Field(default=False, serialization_alias="onnxAvailable")
+    devices: list[HealthDeviceResponse] = Field(default_factory=list)
+    default_device: str | None = Field(default=None, serialization_alias="defaultDevice")
+    models_installed: list[str] = Field(default_factory=list, serialization_alias="modelsInstalled")
+    tile: HealthTileResponse | None = None
 
 
 class DeviceInfoResponse(BaseModel):

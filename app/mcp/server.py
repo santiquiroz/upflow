@@ -15,11 +15,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import sys
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from app.mcp import client
+from app.mcp import client, headless_tools
 from app.mcp.errors import format_tool_error
 from app.mcp.jobs import (
     FAMILIES,
@@ -116,9 +118,13 @@ async def upflow_list_models() -> str:
     """Lista todos los modelos registrados (upscalers, ASR, generación, etc.)
     con id, tipo, escala, tamaño y estado. Los `id` sirven como `model_id` en
     las tools de upscale/transcribe/generación."""
+    if headless_tools.inprocess_only():
+        return await headless_tools.upflow_list_models_headless()
     try:
         return _dump(await client.api_get("/api/v1/models"))
     except Exception as exc:
+        if headless_tools.should_fallback(exc):
+            return await headless_tools.upflow_list_models_headless()
         return format_tool_error(exc)
 
 
@@ -254,6 +260,8 @@ async def upflow_upscale_image(
     model_id: str = "",
     wait: bool = True,
     destination_path: str = "",
+    tile_size: int | None = None,
+    tile_overlap: int | None = None,
 ) -> str:
     """Reescala una imagen local con Real-ESRGAN u otro modelo instalado.
 
@@ -262,7 +270,17 @@ async def upflow_upscale_image(
     model_id: alternativo, un modelo instalado por el usuario (upflow_list_models).
     wait=True espera el resultado (segundos típicamente). Si además pasás
     destination_path, guarda el resultado y devuelve outputPath directo.
+    tile_size: None=auto, 0=sin tiling, N>=32 tile fijo; tile_overlap solo ONNX.
+    Sin servidor corriendo (UPFLOW_MCP_MODE=auto) cae al modo in-process y
+    devuelve el mismo JSON que `upflow upscale --json`.
     """
+    async def headless_fallback() -> str:
+        return await headless_tools.upflow_upscale_image_headless(
+            file_path, destination_path, model_id or model_name, scale, tile_size, tile_overlap, device, output_format
+        )
+
+    if headless_tools.inprocess_only():
+        return await headless_fallback()
     try:
         name, content = client.read_upload(file_path)
         data: dict[str, Any] = {
@@ -274,6 +292,10 @@ async def upflow_upscale_image(
             data["device"] = device
         if model_id:
             data["model_id"] = model_id
+        if tile_size is not None:
+            data["tile_size"] = str(tile_size)
+        if tile_overlap is not None:
+            data["tile_overlap"] = str(tile_overlap)
         created = await client.api_post(
             "/api/v1/jobs",
             data=data,
@@ -296,6 +318,8 @@ async def upflow_upscale_image(
             job["outputPath"] = str(destination)
         return _dump(job)
     except Exception as exc:
+        if headless_tools.should_fallback(exc):
+            return await headless_fallback()
         return format_tool_error(exc)
 
 
@@ -1752,7 +1776,17 @@ async def upflow_realtime_start(
         return format_tool_error(exc)
 
 
+headless_tools.register(mcp)
+
+
 def main() -> None:
+    args = headless_tools.parse_args()
+    if args.mode:
+        os.environ[headless_tools.MODE_ENV] = args.mode
+    if args.autostart:
+        port = args.port or headless_tools.configured_port()
+        if not asyncio.run(headless_tools.autostart_server(port)):
+            print("Warning: Upflow server did not start; using in-process tools.", file=sys.stderr)
     mcp.run()
 
 

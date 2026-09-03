@@ -469,6 +469,8 @@ async def test_create_job_route_routes_explicit_model_id_to_onnx_engine(tmp_path
         device=None,
         scale=2,
         output_format="png",
+        tile_size=None,
+        tile_overlap=None,
         jobs=manager,
         storage=storage,
         settings=settings,
