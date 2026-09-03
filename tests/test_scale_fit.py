@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from PIL import Image
 
 from app.config import Settings
@@ -96,3 +98,29 @@ def test_scaled_size_and_save_image_preserve_expected_output_properties(tmp_path
         assert image.mode == "RGB"
         assert image.size == (8, 6)
 
+
+
+def test_fit_output_removes_the_native_intermediate_even_when_saving_fails(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from PIL import Image as PilImage
+
+    from app.config import Settings as AppSettings
+    from app.services import scale_fit
+
+    settings = AppSettings(_env_file=None, RUNTIME_DIR=str(tmp_path / "runtime"))
+    job = SimpleNamespace(id="fit-fail", scale=2, native_scale=4, output_format="png", metadata={})
+    native = scale_fit.engine_output_path(settings, job)
+    native.parent.mkdir(parents=True, exist_ok=True)
+    PilImage.new("RGB", (8, 4), "red").save(native)
+
+    def failing_save(image, target):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(scale_fit, "save_image", failing_save)
+
+    with pytest.raises(OSError, match="disk full"):
+        scale_fit.fit_output_to_scale(native, job, settings)
+
+    assert not native.exists()
+    assert not scale_fit.final_output_path(settings, job).exists()

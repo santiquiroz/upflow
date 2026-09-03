@@ -68,11 +68,14 @@ def fit_output_to_scale(native_path: Path, job: Any, settings: Settings) -> Path
     if not needs_resize(job):
         return native_path
     target = final_output_path(settings, job)
-    with Image.open(native_path) as image:
-        size = scaled_size(image.size, job.scale, native_scale_of(job) or job.scale)
-        resized = image.resize(size, Image.LANCZOS)
-    save_image(resized, target)
-    native_path.unlink(missing_ok=True)
+    try:
+        with Image.open(native_path) as image:
+            size = scaled_size(image.size, job.scale, native_scale_of(job) or job.scale)
+            resized = image.resize(size, Image.LANCZOS)
+        save_image(resized, target)
+    finally:
+        # Pase lo que pase el intermedio no sobrevive: nadie mas lo limpia en modo headless.
+        native_path.unlink(missing_ok=True)
     job.metadata["effective"] = {**job.metadata.get("effective", {}), "resized": True, "resizeFilter": "lanczos"}
     return target
 

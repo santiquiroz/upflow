@@ -120,3 +120,34 @@ async def test_upscale_image_jxl_and_invalid_inputs(tmp_path, monkeypatch):
         await headless.upscale_image(ctx, tmp_path / "missing.png", tmp_path / "out.png")
     with pytest.raises(headless.UsageError):
         await headless.upscale_image(ctx, source, tmp_path / "bad.png", scale=9, device="dml:0")
+
+
+@pytest.mark.asyncio
+async def test_ffmpeg_failure_leaves_no_engine_output_behind(tmp_path, monkeypatch):
+    settings = Settings(_env_file=None, RUNTIME_DIR=str(tmp_path / "runtime"))
+    ctx = headless.build_context(settings)
+    source = tmp_path / "source.png"
+    Image.new("RGB", (16, 8)).save(source)
+    ctx.devices.validate = lambda device_id: {"id": device_id}
+    ctx.ncnn_engine.available = lambda: True
+
+    async def fake_run(job):
+        produced = final_output_path(ctx.settings, job)
+        produced.parent.mkdir(parents=True, exist_ok=True)
+        produced.write_bytes(source.read_bytes())
+        job.output_path = produced
+        job.metadata["effective"] = {"tileSize": 0, "tileOverlap": 10}
+        return produced
+
+    ctx.job_manager.run_inline = fake_run
+
+    def failing_convert(settings, source_png, target, fmt):
+        raise headless.InferenceError("ffmpeg could not encode jxl: boom")
+
+    monkeypatch.setattr(headless, "convert_with_ffmpeg", failing_convert)
+
+    with pytest.raises(headless.InferenceError, match="boom"):
+        await headless.upscale_image(ctx, source, tmp_path / "result.jxl", scale=4, device="dml:0")
+
+    assert not any(settings.outputs_path.iterdir())
+    assert not (tmp_path / "result.jxl").exists()

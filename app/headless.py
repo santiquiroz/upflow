@@ -278,8 +278,11 @@ def _build_job(
 def deliver_output(settings: Settings, produced: Path, output: Path, fmt: str) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     if fmt in FFMPEG_ENCODERS:
-        convert_with_ffmpeg(settings, produced, output, fmt)
-        produced.unlink(missing_ok=True)
+        try:
+            convert_with_ffmpeg(settings, produced, output, fmt)
+        finally:
+            # Sin sweeper en modo headless: el PNG del motor no puede quedar huerfano.
+            produced.unlink(missing_ok=True)
         return
     shutil.move(str(produced), str(output))
 

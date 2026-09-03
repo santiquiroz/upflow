@@ -181,3 +181,37 @@ async def test_job_manager_run_engine_fits_native_output_to_requested_scale(tmp_
     assert not (manager.settings.outputs_path / "fit-job.native.png").exists()
     with Image.open(job.output_path) as output:
         assert output.size == (40, 24)
+
+
+async def test_ncnn_vulkan_failure_removes_the_flat_output_file(tmp_path: Path, monkeypatch) -> None:
+    from app.services import process_runner
+
+    settings = make_settings(tmp_path)
+    source = make_image(tmp_path / "source.png")
+    job = UpscaleJob(
+        source_path=source,
+        original_filename="source.png",
+        model_name="realesrgan-x4plus",
+        scale=4,
+        native_scale=4,
+        output_format="png",
+        device="dml:0",
+        id="oom-job",
+    )
+    written: list[Path] = []
+
+    async def fake_run(command: list[str], timeout: float) -> tuple[bytes, bytes, int]:
+        output = Path(command[command.index("-o") + 1])
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(b"flat-image")
+        written.append(output)
+        return b"", b"[0 GPU]\nvkAllocateMemory failed -2\n0.00%\n", 0
+
+    monkeypatch.setattr(process_runner, "run_guarded_process", fake_run)
+    engine = RealEsrganNcnnEngine(settings, vram_probe=Probe())
+
+    with pytest.raises(RuntimeError, match="Vulkan failure"):
+        await engine.run(job)
+
+    assert written and not written[0].exists()
+    assert not any(settings.outputs_path.iterdir())

@@ -107,10 +107,14 @@ class RealEsrganNcnnEngine(UpscaleEngine):
 
         # Via el modulo (no import directo): los tests parchean process_runner.run_guarded_process.
         _, stderr, returncode = await process_runner.run_guarded_process(command, self.settings.subprocess_timeout)
-        raise_on_ncnn_failure(returncode, stderr)
-
-        if not is_non_empty_file(output_path):
-            raise RuntimeError("Upscaling process completed but no output file was produced")
+        try:
+            raise_on_ncnn_failure(returncode, stderr)
+            if not is_non_empty_file(output_path):
+                raise RuntimeError("Upscaling process completed but no output file was produced")
+        except RuntimeError:
+            # El binario deja una imagen plana al fallar Vulkan: no puede quedar en outputs/.
+            output_path.unlink(missing_ok=True)
+            raise
 
         return output_path
 
