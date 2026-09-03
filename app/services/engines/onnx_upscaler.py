@@ -28,6 +28,8 @@ from app.services.gpu_session_coordinator import GpuSessionCoordinator
 from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry, ModelStatus
 from app.services.process_runner import is_non_empty_file
 from app.services.progress import apply_image_tile_progress
+from app.services.scale_fit import engine_output_path, native_scale_of
+from app.services.tile_params import onnx_tile_overlap, onnx_tile_size
 
 # ---------------------------------------------------------------------------
 # ONNX Runtime DirectML upscaling engine (in-process, no subprocess).
@@ -166,7 +168,7 @@ class OnnxUpscaler(UpscaleEngine):
             )
 
     def _output_path(self, job: UpscaleJob) -> Path:
-        return self.settings.outputs_path / f"{job.id}.{job.output_format.lower()}"
+        return engine_output_path(self.settings, job)
 
     def _resolve_installed_entry(self, model_id: str) -> ModelEntry:
         entry = self.registry.get(model_id)
@@ -184,8 +186,24 @@ class OnnxUpscaler(UpscaleEngine):
         self.devices.validate(job.device)
         image = _load_rgb_array(job.source_path)
         session = self._get_session(entry.id, job.device, entry)
-        upscaled = self._upscale_array(session, image, self.settings.onnx_tile_size, job=job)
+        tile_size = onnx_tile_size(job, self.settings)
+        overlap = onnx_tile_overlap(job)
+        job.metadata["effective"] = self._describe(job, entry, tile_size, overlap)
+        upscaled = self._upscale_array(session, image, tile_size, job=job, overlap=overlap)
         _save_rgb_array(upscaled, output_path)
+
+    @staticmethod
+    def _describe(job: UpscaleJob, entry: ModelEntry, tile_size: int, overlap: int) -> dict[str, Any]:
+        return {
+            "engine": "onnxruntime",
+            "model": entry.id,
+            "device": job.device,
+            "nativeScale": native_scale_of(job),
+            "requestedScale": getattr(job, "scale", entry.scale),
+            "tileSize": tile_size,
+            "tileSizeMeaning": "single pass" if tile_size <= 0 else "explicit",
+            "tileOverlap": overlap,
+        }
 
     def _get_session(self, model_id: str, device: str, entry: ModelEntry) -> Any:
         self.gpu_coordinator.acquire(device, self)
@@ -208,21 +226,31 @@ class OnnxUpscaler(UpscaleEngine):
         return ep_registry.create_session(str(model_path), device, self.settings)
 
     def _upscale_array(
-        self, session: Any, image: np.ndarray, tile_size: int, job: UpscaleJob | None = None
+        self,
+        session: Any,
+        image: np.ndarray,
+        tile_size: int,
+        job: UpscaleJob | None = None,
+        overlap: int = TILE_OVERLAP_PX,
     ) -> np.ndarray:
         height, width, _ = image.shape
         if tile_size <= 0 or (height <= tile_size and width <= tile_size):
             # Single pass: no honest sub-progress to report (tilesTotal=1 would
             # be a fake ETA), so job is intentionally not threaded through here.
             return finalize_uint8(self._infer_tile(session, image))
-        return self._upscale_tiled(session, image, tile_size, job)
+        return self._upscale_tiled(session, image, tile_size, job, overlap)
 
     def _upscale_tiled(
-        self, session: Any, image: np.ndarray, tile_size: int, job: UpscaleJob | None = None
+        self,
+        session: Any,
+        image: np.ndarray,
+        tile_size: int,
+        job: UpscaleJob | None = None,
+        overlap: int = TILE_OVERLAP_PX,
     ) -> np.ndarray:
         height, width, channels = image.shape
-        starts_y = tile_starts(height, tile_size, TILE_OVERLAP_PX)
-        starts_x = tile_starts(width, tile_size, TILE_OVERLAP_PX)
+        starts_y = tile_starts(height, tile_size, overlap)
+        starts_x = tile_starts(width, tile_size, overlap)
         tiles_total = len(starts_y) * len(starts_x)
 
         tiles: list[tuple[int, int, int, int, np.ndarray]] = []
@@ -237,7 +265,7 @@ class OnnxUpscaler(UpscaleEngine):
 
         _, _, first_h, first_w, first_out = tiles[0]
         scale = detect_scale(first_h, first_w, first_out)
-        return blend_tiles(tiles, height, width, channels, scale)
+        return blend_tiles(tiles, height, width, channels, scale, feather=scale * overlap)
 
     @staticmethod
     def _report_tile_progress(job: UpscaleJob | None, tiles_done: int, tiles_total: int) -> None:

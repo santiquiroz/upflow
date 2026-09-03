@@ -19,6 +19,8 @@ from app.services.classic_upscalers import is_classic_upscaler
 from app.services.job_manager_base import QueuedJobManager
 from app.services.model_registry import ModelKind, ModelRegistry, ModelStatus
 from app.services.progress import advance_image_stage, complete_image_stages
+from app.services.scale_fit import effective_scale, fit_output_to_scale, native_scale_for_engine_model
+from app.services.tile_params import validate_tile_params
 
 ALLOWED_IMAGE_FORMATS = {"PNG", "JPEG", "WEBP", "BMP"}
 
@@ -31,6 +33,7 @@ class ModelResolution:
     engine_model_name: str
     kind: ModelKind
     scale: int
+    native_scale: int
 
 
 def select_upscale_engine(
@@ -90,8 +93,11 @@ class JobManager(QueuedJobManager[UpscaleJob]):
         device: str | None = None,
         job_id: str | None = None,
         owner: AuthenticatedUser | None = None,
+        tile_size: int | None = None,
+        tile_overlap: int | None = None,
     ) -> UpscaleJob:
         await asyncio.to_thread(self._validate_input_image, source_path)
+        validate_tile_params(tile_size, tile_overlap)
         resolved_model_id = model_id if model_id is not None else model_name
         if device is not None and device != AUTO_DEVICE_ID and self.devices is not None:
             await asyncio.to_thread(self.devices.validate, device)
@@ -114,6 +120,9 @@ class JobManager(QueuedJobManager[UpscaleJob]):
             output_format=output_format,
             model_id=resolution.model_id,
             device=device,
+            native_scale=resolution.native_scale,
+            tile_size=tile_size,
+            tile_overlap=tile_overlap,
             owner_id=owner.id if owner is not None else None,
         )
         if job_id is not None:
@@ -142,7 +151,7 @@ class JobManager(QueuedJobManager[UpscaleJob]):
 
         if model_id in self.settings.model_keys:
             return self._resolve_builtin_model(model_id, scale, device)
-        return self._resolve_onnx_model(model_id)
+        return self._resolve_onnx_model(model_id, scale)
 
     def _resolve_builtin_model(self, model_id: str, scale: int, device: str | None) -> ModelResolution:
         option = self.settings.get_model_option(model_id)
@@ -153,11 +162,18 @@ class JobManager(QueuedJobManager[UpscaleJob]):
                 f"Device 'cpu' is not supported for builtin model {model_id!r} (requires a Vulkan GPU device)"
             )
         engine_model_name = self.settings.resolve_engine_model_name(model_id, scale)
+        # El binario ncnn solo sabe la escala del modelo (x4plus = 4): 2x/3x se
+        # resuelven reduciendo su salida nativa, nunca con `-s` (ver scale_fit.py).
+        native_scale = native_scale_for_engine_model(engine_model_name)
         return ModelResolution(
-            model_id=model_id, engine_model_name=engine_model_name, kind=ModelKind.builtin_ncnn, scale=scale
+            model_id=model_id,
+            engine_model_name=engine_model_name,
+            kind=ModelKind.builtin_ncnn,
+            scale=effective_scale(scale, native_scale),
+            native_scale=native_scale,
         )
 
-    def _resolve_onnx_model(self, model_id: str) -> ModelResolution:
+    def _resolve_onnx_model(self, model_id: str, scale: int) -> ModelResolution:
         if self.registry is None:
             raise ValueError(f"Model must be one of {sorted(self.settings.model_keys)}")
         entry = self.registry.get(model_id)
@@ -165,12 +181,18 @@ class JobManager(QueuedJobManager[UpscaleJob]):
             raise ValueError(f"Unknown model id: {model_id!r}")
         if entry.status != ModelStatus.installed:
             raise ValueError(f"Model {model_id!r} is not ready for inference (status={entry.status.value})")
-        # The requested scale is only used to pick a builtin engine variant;
-        # an onnx model's real up-ratio is whatever its weights produce
-        # (entry.scale, detected at install time), so it must win here --
-        # otherwise a scale/model mismatch silently corrupts derived metadata
-        # like video outputWidth/outputHeight (computed from job.scale).
-        return ModelResolution(model_id=model_id, engine_model_name=model_id, kind=ModelKind.onnx, scale=entry.scale)
+        # An onnx model's real up-ratio is whatever its weights produce
+        # (entry.scale, detected at install time). A SMALLER requested scale is
+        # honored by downscaling the native output; a larger one is not
+        # invented -- the job runs at the model's scale, as before.
+        native_scale = entry.scale or scale
+        return ModelResolution(
+            model_id=model_id,
+            engine_model_name=model_id,
+            kind=ModelKind.onnx,
+            scale=effective_scale(scale, native_scale),
+            native_scale=native_scale,
+        )
 
     def _select_engine(self, job: UpscaleJob) -> UpscaleEngine:
         return select_upscale_engine(job, self.registry, self.engine, self.onnx_engine)
@@ -254,7 +276,23 @@ class JobManager(QueuedJobManager[UpscaleJob]):
 
     async def _run_engine(self, job: UpscaleJob) -> None:
         engine = self._select_engine(job)
-        job.output_path = await engine.run(job)
+        native_output = await engine.run(job)
+        job.output_path = await asyncio.to_thread(fit_output_to_scale, native_output, job, self.settings)
+
+    def resolve_model(
+        self, *, model_id: str, scale: int, output_format: str, device: str | None
+    ) -> ModelResolution:
+        return self._resolve_model(model_id=model_id, scale=scale, output_format=output_format, device=device)
+
+    async def run_inline(self, job: UpscaleJob) -> Path:
+        """Corre un job ya resuelto en el hilo que llama, sin cola ni workers.
+
+        Es la puerta del modo headless (CLI / MCP in-process): mismo motor, misma
+        reduccion a la escala pedida y misma metadata `effective` que un job encolado.
+        """
+        await self._run_engine(job)
+        assert job.output_path is not None
+        return job.output_path
 
     @staticmethod
     def _unlink_source_safely(source_path: Path) -> None:

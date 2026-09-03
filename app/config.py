@@ -132,8 +132,9 @@ MODEL_CATALOG: list[ModelOption] = [
             "Best general-purpose photo upscaling. Pick 2x for fast jobs at sane "
             "output sizes; 4x only when you really want the pixels."
         ),
-        # 2x y 3x salen del mismo modelo: el binario ncnn los resuelve con -s (medido:
-        # 64x48 -> 128x96 y 192x144) y hay exports ONNX derivados para el camino CPU.
+        # 2x y 3x salen del mismo modelo x4: el motor corre a 4x y Upflow reduce con
+        # Lanczos (services/scale_fit.py). NUNCA con `-s 2` del binario ncnn: da las
+        # dimensiones correctas pero un mosaico de tiles (medido 2026-09-02, PSNR 13 dB).
         # Antes esta categoria SOLO ofrecia 4x, que sobre una fuente grande es la
         # causa del pedido de 15360x8640 que tardo 2,8 horas.
         "scales": [2, 3, 4],
@@ -147,8 +148,7 @@ MODEL_CATALOG: list[ModelOption] = [
             "Still anime images, illustrations and line art. 2x is the fast pick; "
             "for anime VIDEO prefer the AnimeVideo v3 preset."
         ),
-        # Mismo motivo que el x4plus general: ncnn resuelve 2x/3x con -s (medido) y hay
-        # exports ONNX derivados para el camino CPU.
+        # Mismo mecanismo que el x4plus general: 4x nativo + reduccion Lanczos.
         "scales": [2, 3, 4],
     },
     {

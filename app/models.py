@@ -35,6 +35,12 @@ class UpscaleJob:
     output_format: str
     model_id: str | None = None
     device: str | None = None
+    # Escala real del modelo. `scale` es la PEDIDA: cuando difieren, el motor corre
+    # a la nativa y Upflow reduce con Lanczos (ver services/scale_fit.py).
+    native_scale: int | None = None
+    # None = auto por motor, 0 = sin tiling, N >= 32 = explicito (services/tile_params.py).
+    tile_size: int | None = None
+    tile_overlap: int | None = None
     id: str = field(default_factory=lambda: uuid4().hex)
     status: JobStatus = JobStatus.queued
     created_at: datetime = field(default_factory=utc_now)

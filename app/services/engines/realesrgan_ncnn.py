@@ -1,13 +1,29 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
+from typing import Any
+
+from PIL import Image
 
 from app.config import Settings
 from app.models import UpscaleJob
 from app.services.dml_device import DML_DEVICE_PREFIX
 from app.services.engines.base import UpscaleEngine
 from app.services.missing_pack import missing_pack_message
-from app.services.process_runner import is_non_empty_file, run_checked_process
+from app.services import process_runner
+from app.services.process_runner import is_non_empty_file
+from app.services.resource_probes import DxgiVramProbe, ResourceProbe
+from app.services.scale_fit import engine_output_path, native_scale_of
+from app.services.tile_params import NCNN_AUTO_TILE, NCNN_PREPADDING_PX, choose_ncnn_tile
+
+# El binario acepta jpg/png/webp en `-f`; "jpeg" (valido en la API) lo rechaza.
+_NCNN_FORMAT_ALIASES = {"jpeg": "jpg"}
+# Un fallo de Vulkan (tipicamente VRAM agotada por un tile grande) sale por stderr
+# como "vkAllocateMemory failed -2" y el binario igual termina con exit 0 y una
+# imagen plana. Medido 2026-09-02 con -t 1024 en una RX 7800 XT. Solo llamadas
+# vk*: "decode image X failed" es otra cosa (entrada invalida, sin archivo de salida).
+_VULKAN_FAILURE = re.compile(rb"\bvk\w+ failed\b", re.IGNORECASE)
 
 
 def gpu_index_for_device(device: str | None) -> str:
@@ -42,11 +58,40 @@ def gpu_index_for_device(device: str | None) -> str:
     return "0"
 
 
+def ncnn_output_format(output_path: Path) -> str:
+    suffix = output_path.suffix.lstrip(".").lower()
+    return _NCNN_FORMAT_ALIASES.get(suffix, suffix)
+
+
+def vulkan_failure_line(stderr: bytes) -> str | None:
+    for line in stderr.splitlines():
+        if _VULKAN_FAILURE.search(line):
+            return line.decode("utf-8", errors="ignore").strip()
+    return None
+
+
+def raise_on_ncnn_failure(returncode: int, stderr: bytes) -> None:
+    if returncode != 0:
+        raise RuntimeError(stderr.decode("utf-8", errors="ignore") or "Upscaling process failed")
+    failure = vulkan_failure_line(stderr)
+    if failure is not None:
+        raise RuntimeError(
+            f"Real-ESRGAN NCNN reported a Vulkan failure ({failure}); usually the tile does not fit "
+            "in VRAM. Retry with a smaller tile_size (or leave it unset for auto)."
+        )
+
+
+def image_size(path: Path) -> tuple[int, int]:
+    with Image.open(path) as image:
+        return image.size
+
+
 class RealEsrganNcnnEngine(UpscaleEngine):
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, vram_probe: ResourceProbe | None = None) -> None:
         self.settings = settings
         self.binary_path = settings.engine_binary_path
         self.models_dir = settings.engine_models_path
+        self.vram_probe = vram_probe or DxgiVramProbe()
 
     def available(self) -> bool:
         return self.binary_path.exists() and self.models_dir.exists()
@@ -55,10 +100,22 @@ class RealEsrganNcnnEngine(UpscaleEngine):
         if not self.available():
             raise RuntimeError(missing_pack_message("realesrgan"))
 
-        output_suffix = f".{job.output_format.lower()}"
-        output_path = self.settings.outputs_path / f"{job.id}{output_suffix}"
+        output_path = engine_output_path(self.settings, job)
+        tile = self.tile_for(job)
+        command = self.build_command(job, output_path, tile)
+        job.metadata["effective"] = self.describe(job, command, tile)
 
-        command = [
+        # Via el modulo (no import directo): los tests parchean process_runner.run_guarded_process.
+        _, stderr, returncode = await process_runner.run_guarded_process(command, self.settings.subprocess_timeout)
+        raise_on_ncnn_failure(returncode, stderr)
+
+        if not is_non_empty_file(output_path):
+            raise RuntimeError("Upscaling process completed but no output file was produced")
+
+        return output_path
+
+    def build_command(self, job: UpscaleJob, output_path: Path, tile: int) -> list[str]:
+        return [
             str(self.binary_path),
             "-i",
             str(job.source_path),
@@ -67,18 +124,38 @@ class RealEsrganNcnnEngine(UpscaleEngine):
             "-n",
             job.model_name,
             "-s",
-            str(job.scale),
+            str(native_scale_of(job)),
+            "-t",
+            str(tile),
             "-m",
             str(self.models_dir),
             "-f",
-            job.output_format.lower(),
+            ncnn_output_format(output_path),
             "-g",
             gpu_index_for_device(job.device),
         ]
 
-        await run_checked_process(command, self.settings.subprocess_timeout, "Upscaling process failed")
+    def tile_for(self, job: UpscaleJob) -> int:
+        requested = getattr(job, "tile_size", None)
+        if requested is None:
+            return NCNN_AUTO_TILE
+        if requested > 0:
+            return requested
+        width, height = image_size(job.source_path)
+        free_vram_mb = self.vram_probe.free_capacity_mb(job.device or "")
+        return choose_ncnn_tile(width, height, free_vram_mb)
 
-        if not is_non_empty_file(output_path):
-            raise RuntimeError("Upscaling process completed but no output file was produced")
-
-        return output_path
+    @staticmethod
+    def describe(job: UpscaleJob, command: list[str], tile: int) -> dict[str, Any]:
+        return {
+            "engine": "realesrgan-ncnn-vulkan",
+            "model": job.model_name,
+            "device": job.device,
+            "gpuIndex": gpu_index_for_device(job.device),
+            "nativeScale": native_scale_of(job),
+            "requestedScale": job.scale,
+            "tileSize": tile,
+            "tileSizeMeaning": "binary auto (heap-based)" if tile == NCNN_AUTO_TILE else "explicit",
+            "tileOverlap": NCNN_PREPADDING_PX,
+            "command": command,
+        }
