@@ -91,6 +91,7 @@ dependencies = [
 ]
 
 [project.scripts]
+upflow = "app.cli:main"
 upflow-mcp = "app.mcp.server:main"
 
 [project.optional-dependencies]
