@@ -20,7 +20,13 @@ from app.services.engines.restore_canary import canary_rule_for, canary_score, h
 from app.services.engines.tiled_restore_runner import TileInfer, session_tile_infer
 from app.services.gpu_session_coordinator import GpuSessionCoordinator
 from app.services.missing_pack import missing_pack_message
-from app.services.restore_models import RESTORE_MODELS, RestoreModelSpec, model_path
+from app.services.restore_models import (
+    RESTORE_MODELS,
+    VENDORED_MODELS,
+    RestoreModelSpec,
+    VendoredModel,
+    model_path,
+)
 
 SessionFactory = Callable[..., Any]
 FreeVramProbe = Callable[[str], int | None]
@@ -146,13 +152,15 @@ class PhotoRestoreEngine:
         gpu_coordinator: GpuSessionCoordinator,
         *,
         models: Mapping[str, RestoreModelSpec] = RESTORE_MODELS,
+        vendored: Mapping[str, VendoredModel] = VENDORED_MODELS,
         create_session: SessionFactory = ep_registry.create_session,
         free_vram_mb: FreeVramProbe = dml_free_vram_mb,
         device_health: DeviceHealth | None = None,
     ) -> None:
         self.settings = settings
         self.gpu_coordinator = gpu_coordinator
-        self._models = models
+        self._vendored = vendored
+        self._models = {**{key: model.spec for key, model in vendored.items()}, **models}
         self._create_session = create_session
         self._free_vram_mb = free_vram_mb
         self._device_health = device_health or DevicesService(settings)
@@ -353,11 +361,22 @@ class PhotoRestoreEngine:
         self.gpu_coordinator.invalidate_device(device)
 
     def _model_file(self, spec: RestoreModelSpec, precision: str) -> Path:
+        vendored = self._vendored.get(spec.id)
+        if vendored is not None:
+            return self._vendored_file(vendored, precision)
         path = model_path(self.settings.restore_model_dir_path, spec.id, precision, self._models)
         if path is None:
             raise ValueError(f"Model {spec.id!r} has no {precision} file")
         if not path.is_file():
             raise RuntimeError(missing_pack_message(spec.pack_id, detail=f"No se encontró {path.name}."))
+        return path
+
+    def _vendored_file(self, vendored: VendoredModel, precision: str) -> Path:
+        if precision not in vendored.spec.files_by_precision():
+            raise ValueError(f"Model {vendored.spec.id!r} has no {precision} file")
+        path = Path(vendored.path_of(self.settings))
+        if not path.is_file():
+            raise RuntimeError(missing_pack_message(vendored.pack, detail=f"No se encontró {path.name}."))
         return path
 
     def _evict_to_fit(self, device: str, needed_mb: float) -> None:
