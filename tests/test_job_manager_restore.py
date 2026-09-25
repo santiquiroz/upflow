@@ -147,7 +147,7 @@ class FakeSrEngine(UpscaleEngine):
         return target
 
 
-def make_registry(settings: Settings) -> ModelRegistry:
+def make_registry(settings: Settings, *, generative: bool = True) -> ModelRegistry:
     registry = ModelRegistry(settings)
     entry = ModelEntry(
         id=ONNX_MODEL,
@@ -159,6 +159,7 @@ def make_registry(settings: Settings) -> ModelRegistry:
         arch="fake",
         file_path="onnx/fake.onnx",
         status=ModelStatus.installed,
+        generative=generative,
     )
     registry._entries[ONNX_MODEL] = entry  # noqa: SLF001
     return registry
@@ -646,6 +647,28 @@ def test_ai_upscale_runs_on_a_png_intermediate_moved_to_video_work(tmp_path: Pat
         "precision": None,
     }
     assert "generativeUpscale" in sidecar["compositeReasons"]
+
+
+def test_a_non_generative_upscaler_is_not_declared_as_invented_detail(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    runner = make_runner(settings, step_runners={"tone": brighten})
+    manager = make_manager(
+        settings, runner=runner, onnx_engine=FakeSrEngine(settings), registry=make_registry(settings, generative=False)
+    )
+
+    async def scenario() -> UpscaleJob:
+        job = await create_restore_job(
+            manager, write_image(tmp_path / "in.jpg", fmt="JPEG"), scale=2, output_format="jpg", model_id=ONNX_MODEL
+        )
+        await run_to_end(manager, job)
+        return job
+
+    job = asyncio.run(scenario())
+
+    assert job.status == JobStatus.completed, job.error
+    sidecar = json.loads((settings.outputs_path / f"{job.id}.restore.json").read_text(encoding="utf-8"))
+    assert sidecar["upscale"]["generative"] is False
+    assert "generativeUpscale" not in sidecar["compositeReasons"]
 
 
 def test_failed_post_phase_leaves_no_orphans_in_outputs(tmp_path: Path) -> None:

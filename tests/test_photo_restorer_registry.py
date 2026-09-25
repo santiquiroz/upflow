@@ -96,7 +96,6 @@ def test_unknown_step_is_refused(settings):
         validate_step_ready(settings, "sharpen", resolve=FakeResolver())
 
 
-@pytest.mark.xfail(strict=True, raises=KeyError, reason="P1-14 agrega image.restore* e image.colorize al CATALOG")
 def test_every_step_capability_is_in_the_catalog(settings):
     for capability_id in set(STEP_CAPABILITY.values()):
         capabilities.resolve_one(capability_id, settings, None)

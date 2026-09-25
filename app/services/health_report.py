@@ -6,6 +6,7 @@ from app.config import Settings
 from app.core.version import get_app_version
 from app.services.engines.onnx_common import TILE_OVERLAP_PX
 from app.services.model_registry import ModelKind, ModelRegistry, ModelStatus
+from app.services.restore_models import RESTORE_BUNDLES, bundle_installed
 
 # Mismo reporte para GET /api/v1/health, `upflow health` y la tool MCP: un agente
 # decide con esto si hay GPU, si esta el pack ncnn y que modelos puede pedir.
@@ -46,6 +47,11 @@ def tile_defaults(settings: Settings) -> dict[str, Any]:
     }
 
 
+def installed_restore_packs(settings: Settings) -> list[str]:
+    model_dir = settings.restore_model_dir_path
+    return [bundle.pack_id for bundle in RESTORE_BUNDLES.values() if bundle_installed(model_dir, bundle)]
+
+
 def build_health_report(
     settings: Settings,
     registry: ModelRegistry | None,
@@ -65,4 +71,5 @@ def build_health_report(
         "defaultDevice": devices_service.resolve_default(raw_devices)["id"] if raw_devices else None,
         "modelsInstalled": installed_upscaler_ids(registry) if registry is not None else [],
         "tile": tile_defaults(settings),
+        "restorePacksInstalled": installed_restore_packs(settings),
     }

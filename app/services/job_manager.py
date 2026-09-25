@@ -21,10 +21,9 @@ from app.services.engines.base import UpscaleEngine
 from app.services.engines.photo_restore_engine import run_cancellable
 from app.services.classic_upscalers import is_classic_upscaler
 from app.services.job_manager_base import QueuedJobManager
-from app.services.model_registry import ModelKind, ModelRegistry, ModelStatus
+from app.services.model_registry import ModelKind, ModelRegistry, ModelStatus, is_generative
 from app.services.photo_geometry import Geometry
 from app.services.photo_restore_job import (
-    AI_UPSCALE_GENERATIVE,
     SR_INPUT_NAME,
     SR_OUTPUT_NAME,
     UPSCALE_AI,
@@ -449,9 +448,14 @@ class JobManager(QueuedJobManager[UpscaleJob]):
             mode=mode,
             scale=float(job.scale),
             model=job.model_id,
-            generative=AI_UPSCALE_GENERATIVE,
+            generative=self._is_generative_model(job.model_id),
             backend=self._model_kind_for_job(job).value,
         )
+
+    def _is_generative_model(self, model_id: str | None) -> bool:
+        if self.registry is None or model_id is None:
+            return is_generative(None)
+        return is_generative(self.registry.get(model_id))
 
     def _require_restore_runner(self) -> PhotoRestoreJobRunner:
         if self.restore_runner is None:

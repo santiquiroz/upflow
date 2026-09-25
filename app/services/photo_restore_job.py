@@ -60,9 +60,6 @@ UPSCALE_CLASSIC = "classic"
 UPSCALE_AI = "ai"
 SR_INPUT_NAME = "pre.png"
 SR_OUTPUT_NAME = "sr.png"
-# Conservador: todos los modelos SR del catalogo builtin inventan textura; el campo
-# `generative` del registro (P1-14) lo afina por modelo.
-AI_UPSCALE_GENERATIVE = True
 
 StepReadiness = Callable[..., None]
 SessionCheck = Callable[[str], Mapping[str, Any]]

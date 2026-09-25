@@ -21,6 +21,7 @@ EDITABLE_SETTINGS_WHITELIST = frozenset(
         "hf_token",
         "rebar_confirmed",
         "enable_file_logging",
+        "max_upload_mb",
         "max_video_upload_mb",
         "enable_audiosr",
         "enable_audio_restore",
@@ -30,8 +31,9 @@ EDITABLE_SETTINGS_WHITELIST = frozenset(
 
 # Settings cuyo valor NO es texto. El .env guarda strings, pero la app usa el
 # numero: `"4096" * 1024 * 1024` en Python REPITE el string en vez de
-# multiplicar, y el limite quedaria roto sin que nada falle.
-_POSITIVE_INT_SETTINGS = frozenset({"max_video_upload_mb"})
+# multiplicar, y el limite quedaria roto sin que nada falle. El de imagenes se
+# sube para escaneos TIFF grandes de fotos viejas.
+_POSITIVE_INT_SETTINGS = frozenset({"max_upload_mb", "max_video_upload_mb"})
 
 
 def _is_bool_field(key: str) -> bool:

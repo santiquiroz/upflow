@@ -576,3 +576,75 @@ def test_register_stores_defensive_copy_of_entry(tmp_path: Path) -> None:
     assert stored is not None
     assert stored.status == ModelStatus.installed
     assert stored.error is None
+
+
+# ---------------------------------------------------------------------------
+# `generative`: si el modelo inventa textura. El selector lo muestra como
+# "Generative (invents texture)" / "Non-generative" y la procedencia de una
+# foto restaurada lo usa para declarar el reescalado como composicion.
+# Default conservador: un modelo del que no se sabe nada se trata como generativo.
+# ---------------------------------------------------------------------------
+
+
+def test_every_builtin_super_resolution_model_is_generative(tmp_path: Path) -> None:
+    registry = ModelRegistry(make_settings(tmp_path))
+
+    for option in MODEL_CATALOG:
+        assert option["generative"] is True, option["key"]
+        assert registry.get(option["key"]).generative is True, option["key"]
+
+
+def test_classic_upscalers_do_not_invent_texture(tmp_path: Path) -> None:
+    registry = ModelRegistry(make_settings(tmp_path))
+
+    for classic_id in CLASSIC_IDS:
+        assert registry.get(classic_id).generative is False, classic_id
+
+
+def test_a_custom_model_is_generative_unless_declared_otherwise(tmp_path: Path) -> None:
+    assert make_onnx_entry().generative is True
+
+
+def test_generative_persists_and_reloads(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    ModelRegistry(settings).register(make_onnx_entry(generative=False))
+
+    reloaded = ModelRegistry(settings).get("swinir-real-sr-x4")
+
+    assert reloaded is not None
+    assert reloaded.generative is False
+
+
+def test_registry_json_written_without_generative_loads_as_generative(tmp_path: Path) -> None:
+    # Un registry.json de una version anterior: el campo falta y se asume lo conservador.
+    settings = make_settings(tmp_path)
+    ModelRegistry(settings).register(make_onnx_entry(generative=False))
+    registry_path = settings.models_path / "registry.json"
+    raw = json.loads(registry_path.read_text(encoding="utf-8"))
+    for item in raw:
+        item.pop("generative", None)
+    registry_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    entry = ModelRegistry(settings).get("swinir-real-sr-x4")
+
+    assert entry is not None
+    assert entry.generative is True
+    assert list(settings.models_path.glob("registry.json.corrupt-*")) == []
+
+
+@pytest.mark.parametrize(
+    "entry, expected",
+    [(None, True), (make_onnx_entry(generative=False), False), (make_onnx_entry(), True)],
+)
+def test_is_generative_is_conservative_for_unknown_models(entry, expected: bool) -> None:
+    from app.services.model_registry import is_generative
+
+    assert is_generative(entry) is expected
+
+
+def test_the_model_response_carries_generative() -> None:
+    from app.api.routes import model_entry_to_response
+
+    payload = model_entry_to_response(make_onnx_entry(generative=False)).model_dump(by_alias=True)
+
+    assert payload["generative"] is False

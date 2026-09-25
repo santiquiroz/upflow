@@ -62,6 +62,8 @@ class ModelEntry:
     status: ModelStatus = ModelStatus.installed
     error: str | None = None
     created_at: datetime = field(default_factory=utc_now)
+    # Si inventa textura. True por defecto: de un modelo sin declarar no se sabe.
+    generative: bool = True
 
 
 def _entry_to_json_dict(entry: ModelEntry) -> dict[str, Any]:
@@ -78,6 +80,7 @@ def _entry_to_json_dict(entry: ModelEntry) -> dict[str, Any]:
         "status": entry.status.value,
         "error": entry.error,
         "created_at": entry.created_at.isoformat(),
+        "generative": entry.generative,
     }
 
 
@@ -96,6 +99,8 @@ def _entry_from_json_dict(data: dict[str, Any]) -> ModelEntry:
         status=ModelStatus(data["status"]),
         error=data.get("error"),
         created_at=datetime.fromisoformat(data["created_at"]),
+        # .get: las entradas escritas antes del campo se tratan como generativas.
+        generative=bool(data.get("generative", True)),
     )
 
 
@@ -113,6 +118,7 @@ def _builtin_entry_from_catalog(option: ModelOption) -> ModelEntry:
         size_bytes=0,
         scale=_single_scale(option),
         status=ModelStatus.installed,
+        generative=option["generative"],
     )
 
 
@@ -139,11 +145,16 @@ def _classic_entries() -> list[ModelEntry]:
             size_bytes=0,
             scale=None,
             status=ModelStatus.installed,
+            generative=option["generative"],
         )
         for option in classic_catalog_entries()
     ]
 
 
+
+
+def is_generative(entry: ModelEntry | None) -> bool:
+    return True if entry is None else entry.generative
 
 
 def _write_json_atomically(path: Path, payload: list[dict[str, Any]]) -> None:

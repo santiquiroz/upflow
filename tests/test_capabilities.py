@@ -726,6 +726,10 @@ def test_every_path_requirement_names_a_pack_that_can_produce_it() -> None:
         "voice_conversion_xvector_path": "voice-conversion",
         "kokoro_model_file": "kokoro",
         "rife_default_model_path": "rife",
+        "restore_core_installed": "restore-core",
+        "restore_faces_installed": "restore-faces",
+        "restore_colorize_installed": "restore-colorize",
+        "migan_model_path": "migan",
     }
     # `iter_path_requirements` y no `capability.requirements`: los requisitos que
     # viven dentro de una alternativa (una funcion con dos motores) quedarian
@@ -798,3 +802,114 @@ class TestAudioSrEnElArbol:
         restore_sr = _find(resolve_capabilities(settings, FakeRegistry()), "audio.restoreSr")
 
         assert restore_sr.status == "available"
+
+
+# ---------------------------------------------------------------------------
+# Restaurar fotos: el paso DSP anda sin bajar nada; los pasos con modelo piden
+# su bundle restore-* (y la reparacion, ademas, MI-GAN). La pestana Restore y el
+# validador de pasos leen la MISMA resolucion, asi que si el arbol dice
+# "disponible" el job no puede rechazar el paso por el pack.
+# ---------------------------------------------------------------------------
+
+
+def _published_bundle(name: str):
+    from app.services.restore_models import RestoreArtifact, RestoreBundle
+
+    artifact = RestoreArtifact(
+        model_id=f"{name}-model",
+        precision="fp32",
+        filename=f"{name}-model.onnx",
+        url=f"https://example.com/{name}-model.onnx",
+        sha256="d" * 64,
+        size=4,
+    )
+    return RestoreBundle(name, (artifact,))
+
+
+def _install_bundle(model_dir: Path, bundle) -> None:
+    model_dir.mkdir(parents=True, exist_ok=True)
+    for artifact in bundle.artifacts:
+        (model_dir / artifact.filename).write_bytes(b"x" * artifact.size)
+    (model_dir / bundle.manifest_name).write_text("{}", encoding="utf-8")
+
+
+def _restore_settings(tmp_path: Path) -> Settings:
+    return make_settings(
+        tmp_path,
+        RESTORE_MODEL_DIR=str(tmp_path / "restore"),
+        MIGAN_MODEL=str(tmp_path / "migan" / "migan_pipeline_v2.onnx"),
+    )
+
+
+RESTORE_MODEL_CAPABILITIES = {
+    "image.restoreModels": "core",
+    "image.restoreFaces": "faces",
+    "image.colorize": "colorize",
+}
+
+
+class TestRestauracionDeFotosEnElArbol:
+    def test_the_dsp_restoration_is_available_out_of_the_box(self, tmp_path: Path) -> None:
+        restore = _find(resolve_capabilities(_restore_settings(tmp_path), FakeRegistry()), "image.restore")
+
+        assert restore.status == "available"
+        assert restore.missing_packs == ()
+        assert restore.strategies == ("dsp",)
+        assert restore.job_kind == "image"
+
+    @pytest.mark.parametrize("capability_id, bundle", RESTORE_MODEL_CAPABILITIES.items())
+    def test_each_model_step_asks_for_its_own_bundle(
+        self, tmp_path: Path, capability_id: str, bundle: str
+    ) -> None:
+        resolved = _find(resolve_capabilities(_restore_settings(tmp_path), FakeRegistry()), capability_id)
+
+        assert resolved.status == "needs_setup"
+        assert resolved.missing_packs[0] == f"restore-{bundle}"
+        assert resolved.setup_reason_key == "capability.setup.missingPack"
+        assert resolved.job_kind == "image"
+
+    def test_repair_also_needs_migan_and_offers_both_packs(self, tmp_path: Path) -> None:
+        models = _find(resolve_capabilities(_restore_settings(tmp_path), FakeRegistry()), "image.restoreModels")
+
+        assert models.missing_packs == ("restore-core", "migan")
+
+    @pytest.mark.parametrize("capability_id, bundle", RESTORE_MODEL_CAPABILITIES.items())
+    def test_an_installed_bundle_makes_the_capability_available(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capability_id: str, bundle: str
+    ) -> None:
+        from app.services import restore_models
+
+        settings = _restore_settings(tmp_path)
+        published = _published_bundle(bundle)
+        monkeypatch.setitem(restore_models.RESTORE_BUNDLES, bundle, published)
+        _install_bundle(settings.restore_model_dir_path, published)
+        touch(settings.migan_model_path)
+
+        resolved = _find(resolve_capabilities(settings, FakeRegistry()), capability_id)
+
+        assert resolved.status == "available"
+
+    def test_a_manifest_without_the_models_is_not_installed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.services import restore_models
+
+        settings = _restore_settings(tmp_path)
+        published = _published_bundle("faces")
+        monkeypatch.setitem(restore_models.RESTORE_BUNDLES, "faces", published)
+        _install_bundle(settings.restore_model_dir_path, published)
+        (settings.restore_model_dir_path / "faces-model.onnx").unlink()
+
+        faces = _find(resolve_capabilities(settings, FakeRegistry()), "image.restoreFaces")
+
+        assert faces.status == "needs_setup"
+        assert faces.missing_packs == ("restore-faces",)
+
+    def test_a_model_step_without_its_pack_names_the_pack(self, tmp_path: Path) -> None:
+        from app.services.photo_restorer_registry import validate_step_ready
+
+        settings = _restore_settings(tmp_path)
+
+        validate_step_ready(settings, "descreen")
+        with pytest.raises(ValueError, match="caras"):
+            validate_step_ready(settings, "faces")

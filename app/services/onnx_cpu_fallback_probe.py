@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,13 @@ from app.config import Settings
 from app.services.backend_registry import BUILTIN_ONNX_MODELS
 from app.services.devices_service import DevicesService
 from app.services.gpu_session_coordinator import GpuSessionCoordinator
+from app.services.restore_models import (
+    RESTORE_BUNDLES,
+    VENDORED_MODELS,
+    RestoreArtifact,
+    RestoreBundle,
+    bundle_installed,
+)
 
 # ---------------------------------------------------------------------------
 # Fase 0.1: detects ONNX Runtime ops that silently fall back to the CPU EP on
@@ -32,6 +40,7 @@ _DTYPE_MAP: dict[str, Any] = {
     "tensor(int32)": np.int32,
 }
 _DEFAULT_DYNAMIC_DIM = 64
+BASE_PRECISION = "fp32"
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +77,34 @@ def hot_cpu_ops(profile_events: list[dict], device_provider: str) -> list[str]:
             continue
         hot.append(args.get("op_name", event.get("name", "unknown")))
     return hot
+
+
+def restore_graph_id(artifact: RestoreArtifact) -> str:
+    # Cada precision es un grafo distinto: el fp16 puede caer a CPU donde el fp32 no.
+    if artifact.precision == BASE_PRECISION:
+        return artifact.model_id
+    return f"{artifact.model_id}@{artifact.precision}"
+
+
+def bundle_graphs(model_dir: Path, bundle: RestoreBundle) -> dict[str, Path]:
+    return {restore_graph_id(artifact): model_dir / artifact.filename for artifact in bundle.artifacts}
+
+
+def published_restore_graphs(model_dir: Path, bundles: Mapping[str, RestoreBundle]) -> dict[str, Path]:
+    return {
+        graph_id: path
+        for bundle in bundles.values()
+        for graph_id, path in bundle_graphs(model_dir, bundle).items()
+    }
+
+
+def installed_restore_graphs(model_dir: Path, bundles: Mapping[str, RestoreBundle]) -> dict[str, Path]:
+    installed = {name: bundle for name, bundle in bundles.items() if bundle_installed(model_dir, bundle)}
+    return published_restore_graphs(model_dir, installed)
+
+
+def vendored_restore_graphs(settings: Settings) -> dict[str, Path]:
+    return {model_id: model.path_of(settings) for model_id, model in VENDORED_MODELS.items()}
 
 
 def probe_cpu_fallback(
@@ -109,10 +146,17 @@ class OnnxCpuFallbackProbe:
     Optimization Center diagnostics panel, one (model, device) pair at a
     time."""
 
-    def __init__(self, settings: Settings, devices: DevicesService, gpu_coordinator: GpuSessionCoordinator) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        devices: DevicesService,
+        gpu_coordinator: GpuSessionCoordinator,
+        restore_bundles: Mapping[str, RestoreBundle] = RESTORE_BUNDLES,
+    ) -> None:
         self.settings = settings
         self.devices = devices
         self.gpu_coordinator = gpu_coordinator
+        self.restore_bundles = restore_bundles
         self._cache: dict[tuple[str, str], CpuFallbackReport] = {}
         self._lock = asyncio.Lock()
 
@@ -138,7 +182,24 @@ class OnnxCpuFallbackProbe:
         if self.settings.apollo_restore_model_path.exists():
             for device_id in device_ids:
                 pairs.append(("apollo", device_id))
+        for graph_id in self._installed_restore_graphs():
+            pairs.extend((graph_id, device_id) for device_id in device_ids)
         return pairs
+
+    def _installed_restore_graphs(self) -> list[str]:
+        # Un bundle a medias no se lista; los vendorizados, solo con su archivo.
+        installed = installed_restore_graphs(self.settings.restore_model_dir_path, self.restore_bundles)
+        vendored = [graph_id for graph_id, path in vendored_restore_graphs(self.settings).items() if path.exists()]
+        return [*installed, *vendored]
+
+    def _restore_graph_path(self, model_id: str) -> Path:
+        # Todos los publicados y no solo los instalados: un archivo borrado entre
+        # el listado y el escaneo tiene que dar el error claro de abajo.
+        graphs = {
+            **vendored_restore_graphs(self.settings),
+            **published_restore_graphs(self.settings.restore_model_dir_path, self.restore_bundles),
+        }
+        return graphs[model_id]
 
     def cached(self, model_id: str, device_id: str) -> CpuFallbackReport | None:
         return self._cache.get((model_id, device_id))
@@ -176,9 +237,10 @@ class OnnxCpuFallbackProbe:
     def _model_path_for(self, model_id: str) -> Path:
         if model_id == "apollo":
             model_path = self.settings.apollo_restore_model_path
+        elif model_id in BUILTIN_ONNX_MODELS:
+            model_path = self.settings.builtin_onnx_path / BUILTIN_ONNX_MODELS[model_id].filename
         else:
-            model = BUILTIN_ONNX_MODELS[model_id]
-            model_path = self.settings.builtin_onnx_path / model.filename
+            model_path = self._restore_graph_path(model_id)
         # catalog() only lists a (model_id, device_id) pair when the file
         # existed at catalog-build time (apollo) or unconditionally
         # (builtins) -- either way, the file may be missing or have been

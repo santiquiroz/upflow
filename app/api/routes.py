@@ -696,6 +696,7 @@ def model_entry_to_response(entry: ModelEntry) -> ModelResponse:
         size_bytes=entry.size_bytes,
         status=entry.status.value,
         error=entry.error,
+        generative=entry.generative,
     )
 
 
@@ -760,6 +761,7 @@ async def health(
             onnx_tile_size=report["tile"]["onnxTileSize"],
             onnx_tile_overlap=report["tile"]["onnxTileOverlap"],
         ),
+        restore_packs_installed=report["restorePacksInstalled"],
     )
 
 

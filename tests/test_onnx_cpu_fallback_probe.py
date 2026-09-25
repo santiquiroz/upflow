@@ -232,3 +232,100 @@ def test_onnx_cpu_fallback_probe_scan_raises_when_apollo_file_missing(tmp_path: 
 
     with pytest.raises(RuntimeError, match="ONNX model file not found"):
         asyncio.run(probe.scan("apollo", "cpu"))
+
+
+# ---------------------------------------------------------------------------
+# Restauracion de fotos: los grafos de los bundles restore-* instalados (y
+# MI-GAN, vendorizado aparte) entran al diagnostico igual que los builtin. Un
+# bundle a medias no entra: su manifiesto sin los modelos no es una instalacion.
+# ---------------------------------------------------------------------------
+
+
+def _restore_artifact(model_dir: Path, filename: str, precision: str, model_id: str = "drunet"):
+    from app.services.restore_models import RestoreArtifact
+
+    _write_trivial_relu_model(model_dir / filename)
+    return RestoreArtifact(
+        model_id=model_id,
+        precision=precision,
+        filename=filename,
+        url=f"https://example.com/{filename}",
+        sha256="d" * 64,
+        size=(model_dir / filename).stat().st_size,
+    )
+
+
+def _restore_probe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, manifest: bool = True):
+    from app.services import restore_models
+    from app.services.restore_models import RestoreBundle
+
+    model_dir = tmp_path / "restore"
+    model_dir.mkdir()
+    bundle = RestoreBundle(
+        "core",
+        (
+            _restore_artifact(model_dir, "drunet.onnx", "fp32"),
+            _restore_artifact(model_dir, "drunet.fp16.onnx", "fp16"),
+        ),
+    )
+    monkeypatch.setitem(restore_models.RESTORE_BUNDLES, "core", bundle)
+    if manifest:
+        (model_dir / bundle.manifest_name).write_text("{}", encoding="utf-8")
+    settings = make_settings(
+        tmp_path, RESTORE_MODEL_DIR=str(model_dir), MIGAN_MODEL=str(tmp_path / "migan.onnx")
+    )
+    return OnnxCpuFallbackProbe(settings, DevicesService(settings), GpuSessionCoordinator())
+
+
+def test_catalog_lists_each_precision_of_an_installed_restore_bundle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    catalog = _restore_probe(tmp_path, monkeypatch).catalog()
+
+    assert ("drunet", CPU_DEVICE["id"]) in catalog
+    assert ("drunet@fp16", CPU_DEVICE["id"]) in catalog
+
+
+def test_catalog_skips_a_restore_bundle_that_is_not_installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    catalog = _restore_probe(tmp_path, monkeypatch, manifest=False).catalog()
+
+    assert not any(model_id.startswith("drunet") for model_id, _ in catalog)
+
+
+def test_catalog_lists_migan_only_when_its_file_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    probe = _restore_probe(tmp_path, monkeypatch)
+    assert not any(model_id == "migan" for model_id, _ in probe.catalog())
+
+    _write_trivial_relu_model(tmp_path / "migan.onnx")
+
+    assert ("migan", CPU_DEVICE["id"]) in probe.catalog()
+
+
+def test_scan_runs_a_restore_graph_on_the_cpu(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    probe = _restore_probe(tmp_path, monkeypatch)
+
+    report = asyncio.run(probe.scan("drunet@fp16", "cpu"))
+
+    assert report.model_id == "drunet@fp16"
+    assert report.clean is True
+
+
+def test_scan_of_a_deleted_restore_graph_is_a_clear_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    probe = _restore_probe(tmp_path, monkeypatch)
+    (tmp_path / "restore" / "drunet.onnx").unlink()
+
+    with pytest.raises(RuntimeError, match="ONNX model file not found"):
+        asyncio.run(probe.scan("drunet", "cpu"))
+
+
+def test_scan_of_an_unknown_graph_is_a_key_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    probe = _restore_probe(tmp_path, monkeypatch)
+
+    with pytest.raises(KeyError):
+        asyncio.run(probe.scan("no-such-model", "cpu"))

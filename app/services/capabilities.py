@@ -267,6 +267,51 @@ _PRINT_CAPABILITIES: tuple[Capability, ...] = (
 )
 
 
+_RESTORE_CAPABILITIES: tuple[Capability, ...] = (
+    Capability(
+        id="image.restore",
+        domain="image",
+        label_key="capability.image.restore",
+        # Los pasos clasicos (tramado, tono) son numpy en proceso: nada que bajar.
+        provisioning="builtin",
+        job_kind="image",
+        strategies=("dsp",),
+    ),
+    Capability(
+        id="image.restoreModels",
+        domain="image",
+        label_key="capability.image.restoreModels",
+        provisioning="vendored_pack",
+        job_kind="image",
+        strategies=("model",),
+        # El manifiesto solo cuenta con el bundle completo en disco (propiedad de
+        # Settings), y la reparacion rellena con MI-GAN, que viene en su pack.
+        requirements=(
+            PathRequirement("restore_core_installed", "restore-core"),
+            PathRequirement("migan_model_path", "migan"),
+        ),
+    ),
+    Capability(
+        id="image.restoreFaces",
+        domain="image",
+        label_key="capability.image.restoreFaces",
+        provisioning="vendored_pack",
+        job_kind="image",
+        strategies=("model",),
+        requirements=(PathRequirement("restore_faces_installed", "restore-faces"),),
+    ),
+    Capability(
+        id="image.colorize",
+        domain="image",
+        label_key="capability.image.colorize",
+        provisioning="vendored_pack",
+        job_kind="image",
+        strategies=("model",),
+        requirements=(PathRequirement("restore_colorize_installed", "restore-colorize"),),
+    ),
+)
+
+
 CATALOG: tuple[Capability, ...] = (
     # --- video -------------------------------------------------------------
     Capability(
@@ -317,6 +362,7 @@ CATALOG: tuple[Capability, ...] = (
         strategies=("model",),
         requirements=_UPSCALE_REQUIREMENTS,
     ),
+    *_RESTORE_CAPABILITIES,
     # --- audio -------------------------------------------------------------
     Capability(
         id="audio.denoise",

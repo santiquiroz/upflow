@@ -107,6 +107,9 @@ class ModelOption(TypedDict):
     category: str
     description: str
     scales: list[int]
+    # Si el modelo inventa textura: la etiqueta del selector y la procedencia de
+    # una foto restaurada dependen de esto.
+    generative: bool
 
 
 class VideoProfile(TypedDict):
@@ -139,6 +142,7 @@ MODEL_CATALOG: list[ModelOption] = [
         # Antes esta categoria SOLO ofrecia 4x, que sobre una fuente grande es la
         # causa del pedido de 15360x8640 que tardo 2,8 horas.
         "scales": [2, 3, 4],
+        "generative": True,
     },
     {
         "key": "realesrgan-x4plus-anime",
@@ -151,6 +155,7 @@ MODEL_CATALOG: list[ModelOption] = [
         ),
         # Mismo mecanismo que el x4plus general: 4x nativo + reduccion Lanczos.
         "scales": [2, 3, 4],
+        "generative": True,
     },
     {
         "key": "realesr-animevideov3-x2",
@@ -159,6 +164,7 @@ MODEL_CATALOG: list[ModelOption] = [
         "category": "anime",
         "description": "Anime/video style model optimized for 2x.",
         "scales": [2],
+        "generative": True,
     },
     {
         "key": "realesr-animevideov3-x3",
@@ -167,6 +173,7 @@ MODEL_CATALOG: list[ModelOption] = [
         "category": "anime",
         "description": "Anime/video style model optimized for 3x.",
         "scales": [3],
+        "generative": True,
     },
     {
         "key": "realesr-animevideov3-x4",
@@ -175,6 +182,7 @@ MODEL_CATALOG: list[ModelOption] = [
         "category": "anime",
         "description": "Anime/video style model optimized for 4x.",
         "scales": [4],
+        "generative": True,
     },
     {
         "key": "realesr-animevideov3",
@@ -183,6 +191,7 @@ MODEL_CATALOG: list[ModelOption] = [
         "category": "anime",
         "description": "Convenience preset that maps automatically to x2/x3/x4.",
         "scales": [2, 3, 4],
+        "generative": True,
     },
 ]
 
