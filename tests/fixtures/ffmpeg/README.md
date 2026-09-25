@@ -35,3 +35,16 @@ salidas editadas para simular una build sin GPL: se quitan los flags GPL del con
 ```powershell
 .\.venv\Scripts\python -c "import sys; sys.path.insert(0, 'tests'); from app.config import Settings; import test_ffmpeg_capabilities as t; t.record_fixtures(Settings().ffmpeg_binary_path)"
 ```
+
+## Hashes golden del carril clásico (`cctv_clarify_runner`)
+
+`cctv_determinism_golden.json` guarda el sha256 de `analysis.mkv` que da cada preset sobre
+el clip sintético de `tests/test_cctv_determinism.py`, junto con la primera línea de
+`-version`, el sha256 de `ffmpeg.exe` y las extensiones de CPU con que se grabó.
+`test_analysis_copy_matches_the_golden_hash_of_this_build` se saltea con el motivo si la
+build o las extensiones de CPU no coinciden; el determinismo entre dos corridas se exige
+siempre. Si cambian los presets o el `argv` a propósito, hay que regrabar:
+
+```powershell
+.\.venv\Scripts\python -c "import sys; sys.path.insert(0, 'tests'); from pathlib import Path; import tempfile, test_cctv_determinism as t; t.record_golden(Path(tempfile.mkdtemp()))"
+```
