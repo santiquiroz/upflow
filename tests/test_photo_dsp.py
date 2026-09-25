@@ -1,18 +1,32 @@
 from __future__ import annotations
 
+import tracemalloc
+
 import cv2
 import numpy as np
 import pytest
 
 from app.services.photo_dsp import (
+    BAND_ROWS,
+    PeriodicPeaks,
     ToneSettings,
     apply_gray_point,
     apply_tone,
+    atrous_halo,
+    descreen_halftone,
+    descreen_notch,
+    find_periodic_peaks,
     fit_neutral_axis_curves,
     fix_faded_colors,
+    keep_grain,
     keep_tone_levels,
     local_contrast,
     neutral_gray,
+    notch_gain,
+    process_in_bands,
+    screen_period,
+    wavelet_color_transfer,
+    wavelet_lowpass,
 )
 
 FADE_SEEDS = range(6)
@@ -255,3 +269,301 @@ def test_tone_does_not_mutate_the_input() -> None:
         assert result.shape == faded.shape
 
     np.testing.assert_array_equal(faded, snapshot)
+
+
+def psnr(first: np.ndarray, second: np.ndarray) -> float:
+    mse = float(np.mean((first.astype(np.float64) - second.astype(np.float64)) ** 2))
+    return 10.0 * np.log10(1.0 / mse)
+
+
+def gray_scene(seed: int, size: int = 256) -> np.ndarray:
+    photo = natural_scene(seed, size)
+    return np.repeat(photo.mean(axis=-1, keepdims=True), 3, axis=-1)
+
+
+def periodic_texture(photo: np.ndarray, period: float = 7.0, levels: float = 18.0) -> np.ndarray:
+    # Three cosines 60 degrees apart, like the silk/honeycomb paper finish of research-color-danos §5.3.
+    rows, cols = np.mgrid[: photo.shape[0], : photo.shape[1]].astype(np.float32)
+    texture = sum(
+        np.cos(2.0 * np.pi * (cols * np.cos(angle) + rows * np.sin(angle)) / period)
+        for angle in np.deg2rad([0.0, 60.0, 120.0])
+    )
+    return np.clip(photo + (levels / 255.0 / 3.0) * texture[..., None], 0.0, 1.0).astype(np.float32)
+
+
+def am_halftone(photo: np.ndarray, period: float = 5.0) -> np.ndarray:
+    rows, cols = np.mgrid[: photo.shape[0], : photo.shape[1]].astype(np.float32)
+    u, v = (cols + rows) / np.sqrt(2.0), (cols - rows) / np.sqrt(2.0)
+    screen = 0.5 + 0.25 * (np.cos(2.0 * np.pi * u / period) + np.cos(2.0 * np.pi * v / period))
+    return (photo > screen[..., None]).astype(np.float32)
+
+
+def test_descreen_notch_recovers_the_periodic_paper_texture() -> None:
+    clean = natural_scene(3, 256)
+    textured = periodic_texture(clean)
+
+    restored = descreen_notch(textured)
+
+    assert restored.dtype == np.float32
+    assert restored.shape == textured.shape
+    assert psnr(restored, clean) >= psnr(textured, clean) + 8.0
+
+
+def test_descreen_peaks_find_the_texture_period() -> None:
+    peaks = find_periodic_peaks(periodic_texture(natural_scene(3, 256)))
+
+    assert len(peaks.frequencies) >= 3
+    assert screen_period(peaks) == pytest.approx(7.0, abs=0.4)
+
+
+def test_descreen_notch_gain_touches_a_small_part_of_the_spectrum() -> None:
+    peaks = find_periodic_peaks(periodic_texture(natural_scene(3, 256)))
+
+    gain = notch_gain((308, 308), peaks)
+
+    assert gain.shape == (308, 155)
+    assert gain.min() == 0.0
+    assert np.mean(gain < 0.99) < 0.01
+    assert gain[0, 0] == 1.0
+
+
+@pytest.mark.parametrize("seed", range(4))
+def test_descreen_notch_leaves_a_photo_without_a_pattern_alone(seed: int) -> None:
+    clean = natural_scene(seed, 256)
+
+    assert len(find_periodic_peaks(clean).frequencies) == 0
+    np.testing.assert_array_equal(descreen_notch(clean), clean)
+
+
+def test_descreen_notch_zero_strength_is_the_identity() -> None:
+    textured = periodic_texture(natural_scene(3, 128))
+
+    result = descreen_notch(textured, strength=0.0)
+
+    np.testing.assert_array_equal(result, textured)
+    assert result is not textured
+
+
+def test_descreen_notch_strength_blends_with_the_input() -> None:
+    textured = periodic_texture(natural_scene(3, 128))
+    full = descreen_notch(textured)
+
+    half = descreen_notch(textured, strength=0.5)
+
+    np.testing.assert_allclose(half, (textured + full) / 2.0, atol=1e-5)
+
+
+def test_descreen_notch_without_peaks_returns_a_copy() -> None:
+    clean = natural_scene(4, 64)
+    no_peaks = PeriodicPeaks(np.zeros((0, 2)), np.zeros(0), resolution=1.0 / 64)
+
+    result = descreen_notch(clean, peaks=no_peaks)
+
+    np.testing.assert_array_equal(result, clean)
+    assert result is not clean
+
+
+def test_descreen_halftone_recovers_a_binary_am_screen() -> None:
+    photo = gray_scene(5)
+    reference = cv2.GaussianBlur(photo, (0, 0), 1.0)
+    screened = am_halftone(photo)
+
+    restored = descreen_halftone(screened, period=5.0)
+
+    assert psnr(screened, reference) < 16.0
+    assert psnr(restored, reference) >= 22.0
+
+
+def test_descreen_halftone_estimates_the_screen_period() -> None:
+    screened = am_halftone(gray_scene(5))
+
+    assert screen_period(find_periodic_peaks(screened)) == pytest.approx(5.0, abs=0.4)
+    np.testing.assert_allclose(descreen_halftone(screened), descreen_halftone(screened, period=5.0), atol=0.02)
+
+
+def test_descreen_halftone_beats_the_notch_on_binary_dots() -> None:
+    photo = gray_scene(5)
+    reference = cv2.GaussianBlur(photo, (0, 0), 1.0)
+    screened = am_halftone(photo)
+
+    assert psnr(descreen_halftone(screened, period=5.0), reference) > psnr(descreen_notch(screened), reference)
+
+
+def test_descreen_halftone_zero_strength_is_the_identity() -> None:
+    screened = am_halftone(gray_scene(5, 64))
+
+    np.testing.assert_array_equal(descreen_halftone(screened, period=5.0, strength=0.0), screened)
+
+
+@pytest.mark.parametrize("period", [0.0, -3.0])
+def test_descreen_halftone_rejects_a_non_positive_period(period: float) -> None:
+    with pytest.raises(ValueError):
+        descreen_halftone(gray_scene(5, 32), period=period)
+
+
+@pytest.mark.parametrize("descreen", [descreen_notch, descreen_halftone])
+def test_descreen_rejects_strength_outside_the_unit_interval(descreen) -> None:
+    with pytest.raises(ValueError):
+        descreen(gray_scene(5, 32), strength=1.2)
+
+
+def test_descreen_keeps_sixteen_bit_precision_and_the_input() -> None:
+    fine = periodic_texture(natural_scene(3, 128)) * np.float32(0.999) + np.float32(1.0 / 65535.0)
+    snapshot = fine.copy()
+
+    for result in (descreen_notch(fine), descreen_halftone(fine, period=7.0)):
+        assert result.dtype == np.float32
+        assert len(np.unique(result)) > 256 * 3
+
+    np.testing.assert_array_equal(fine, snapshot)
+
+
+def detail_and_cast(reference: np.ndarray, seed: int) -> np.ndarray:
+    rng = np.random.default_rng(seed)
+    detail = rng.normal(0.0, 0.04, reference.shape[:2]).astype(np.float32)[..., None]
+    cast = np.array([0.08, -0.05, -0.1], np.float32)
+    return np.clip(reference + detail + cast, 0.0, 1.0)
+
+
+def highpass(image: np.ndarray) -> np.ndarray:
+    return image - cv2.GaussianBlur(image, (0, 0), 6.0)
+
+
+def test_wavelet_color_transfer_takes_the_low_frequencies_of_the_reference() -> None:
+    reference = natural_scene(7, 128)
+    restored = detail_and_cast(reference, 1)
+
+    result = wavelet_color_transfer(restored, reference)
+
+    blurred_reference = cv2.GaussianBlur(reference, (0, 0), 8.0)
+    assert median_delta_e(cv2.GaussianBlur(result, (0, 0), 8.0), blurred_reference) < 1.0
+    assert median_delta_e(cv2.GaussianBlur(restored, (0, 0), 8.0), blurred_reference) > 5.0
+
+
+def test_wavelet_color_transfer_keeps_the_detail_of_the_restored_image() -> None:
+    reference = natural_scene(7, 128)
+    restored = detail_and_cast(reference, 1)
+
+    result = wavelet_color_transfer(restored, reference)
+
+    correlation = np.corrcoef(highpass(result).ravel(), highpass(restored).ravel())[0, 1]
+    assert correlation > 0.95
+
+
+def test_wavelet_color_transfer_brings_the_sepia_back() -> None:
+    sepia = sepia_print(128)
+    neutral = neutral_gray(sepia)
+
+    result = wavelet_color_transfer(neutral, sepia)
+
+    assert np.median(chroma(neutral)) < 1.0
+    assert np.median(chroma(result)) == pytest.approx(np.median(chroma(sepia)), abs=1.0)
+
+
+def test_wavelet_color_transfer_of_an_image_onto_itself_is_the_identity() -> None:
+    photo = natural_scene(8, 96)
+
+    np.testing.assert_allclose(wavelet_color_transfer(photo, photo), photo, atol=1e-6)
+
+
+def test_wavelet_lowpass_keeps_a_flat_image_and_the_mean() -> None:
+    flat = np.full((40, 50, 3), 0.3, np.float32)
+    photo = natural_scene(9, 96)
+
+    np.testing.assert_allclose(wavelet_lowpass(flat), flat, atol=1e-6)
+    assert wavelet_lowpass(photo).mean() == pytest.approx(photo.mean(), abs=5e-3)
+    assert highpass(wavelet_lowpass(photo)).std() < highpass(photo).std() / 2.0
+
+
+def test_wavelet_color_transfer_rejects_mismatched_shapes() -> None:
+    with pytest.raises(ValueError):
+        wavelet_color_transfer(natural_scene(1, 64), natural_scene(1, 32))
+
+
+def test_wavelet_lowpass_rejects_zero_levels() -> None:
+    with pytest.raises(ValueError):
+        wavelet_lowpass(natural_scene(1, 32), levels=0)
+
+
+def test_grain_keep_grain_remixes_the_denoise_residual() -> None:
+    original = natural_scene(10, 64)
+    denoised = cv2.GaussianBlur(original, (0, 0), 1.5)
+
+    np.testing.assert_array_equal(keep_grain(original, denoised, 0.0), denoised)
+    np.testing.assert_allclose(keep_grain(original, denoised, 1.0), original, atol=1e-6)
+    np.testing.assert_allclose(
+        keep_grain(original, denoised, 0.25) - denoised, (original - denoised) * 0.25, atol=1e-6
+    )
+
+
+def test_grain_keep_grain_rejects_bad_input() -> None:
+    original = natural_scene(10, 32)
+    with pytest.raises(ValueError):
+        keep_grain(original, original, 1.5)
+    with pytest.raises(ValueError):
+        keep_grain(original, natural_scene(10, 16), 0.25)
+
+
+def square_root_curve(rgb: np.ndarray) -> np.ndarray:
+    return np.sqrt(rgb) * np.float32(0.9)
+
+
+def test_bands_pointwise_processing_matches_the_whole_image() -> None:
+    photo = natural_scene(11, 200)
+
+    banded = process_in_bands(photo, square_root_curve, band_rows=64)
+
+    np.testing.assert_array_equal(banded, square_root_curve(photo))
+
+
+def test_bands_with_a_halo_match_the_whole_wavelet_lowpass() -> None:
+    photo = natural_scene(12, 260)
+
+    banded = process_in_bands(photo, wavelet_lowpass, band_rows=64, halo=atrous_halo(5))
+
+    np.testing.assert_allclose(banded, wavelet_lowpass(photo), atol=1e-6)
+
+
+def test_bands_without_the_halo_differ_from_the_whole_wavelet_lowpass() -> None:
+    photo = natural_scene(12, 260)
+
+    banded = process_in_bands(photo, wavelet_lowpass, band_rows=64)
+
+    assert np.abs(banded - wavelet_lowpass(photo)).max() > 1e-3
+
+
+def test_bands_can_change_the_channel_count() -> None:
+    photo = natural_scene(13, 100)
+
+    banded = process_in_bands(photo, lambda band: band.mean(axis=-1, keepdims=True), band_rows=30)
+
+    np.testing.assert_allclose(banded, photo.mean(axis=-1, keepdims=True), atol=1e-7)
+
+
+def test_bands_bound_the_peak_memory_to_the_output_plus_one_band() -> None:
+    image = np.random.default_rng(0).random((8192, 128, 3), dtype=np.float32)
+
+    def several_copies(band: np.ndarray) -> np.ndarray:
+        return ((band * 2.0 + 1.0) * 0.5 - band) + band * np.float32(0.25)
+
+    tracemalloc.start()
+    try:
+        process_in_bands(image, several_copies)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    band_nbytes = image[:BAND_ROWS].nbytes
+    assert BAND_ROWS == 1024
+    assert peak < image.nbytes + 6 * band_nbytes
+
+
+def test_bands_reject_a_function_that_changes_the_row_count() -> None:
+    with pytest.raises(ValueError):
+        process_in_bands(natural_scene(1, 64), lambda band: band[:-1], band_rows=16)
+
+
+@pytest.mark.parametrize(("band_rows", "halo"), [(0, 0), (16, -1)])
+def test_bands_reject_bad_sizes(band_rows: int, halo: int) -> None:
+    with pytest.raises(ValueError):
+        process_in_bands(natural_scene(1, 32), lambda band: band, band_rows=band_rows, halo=halo)
