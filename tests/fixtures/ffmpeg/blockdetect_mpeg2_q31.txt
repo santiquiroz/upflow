@@ -1,0 +1,39 @@
+Input #0, matroska,webm, from 'clip.mkv':
+  Metadata:
+    ENCODER         : Lavf62.13.101
+  Duration: 00:00:08.00, start: 0.000000, bitrate: 180 kb/s
+  Stream #0:0: Video: mpeg2video (Main), yuv420p(tv, progressive), 320x240 [SAR 1:1 DAR 4:3], 25 fps, 25 tbr, 1k tbn
+    Metadata:
+      ENCODER         : Lavc62.29.101 mpeg2video
+      DURATION        : 00:00:08.000000000
+    Side data:
+      CPB properties: bitrate max/min/avg: 0/0/0 buffer size: 49152 vbv_delay: N/A
+Stream mapping:
+  Stream #0:0 -> #0:0 (mpeg2video (native) -> wrapped_avframe (native))
+[mpeg2video @ 000002097cef5d40] too many threads/slices (16), reducing to 15
+[Parsed_metadata_2 @ 000002097ce94280] frame:0    pts:0       pts_time:0
+[Parsed_metadata_2 @ 000002097ce94280] lavfi.block=141.187393
+Output #0, null, to 'pipe:':
+  Metadata:
+    encoder         : Lavf62.13.101
+  Stream #0:0: Video: wrapped_avframe, yuv420p(tv, progressive), 320x240 [SAR 1:1 DAR 4:3], q=2-31, 200 kb/s, 25 fps, 25 tbn
+    Metadata:
+      encoder         : Lavc62.29.101 wrapped_avframe
+      DURATION        : 00:00:08.000000000
+[Parsed_metadata_2 @ 000002097ce94280] frame:1    pts:1000    pts_time:1
+[Parsed_metadata_2 @ 000002097ce94280] lavfi.block=117.889854
+[Parsed_metadata_2 @ 000002097ce94280] frame:2    pts:2000    pts_time:2
+[Parsed_metadata_2 @ 000002097ce94280] lavfi.block=109.079079
+[Parsed_metadata_2 @ 000002097ce94280] frame:3    pts:3000    pts_time:3
+[Parsed_metadata_2 @ 000002097ce94280] lavfi.block=98.777992
+[Parsed_metadata_2 @ 000002097ce94280] frame:4    pts:4000    pts_time:4
+[Parsed_metadata_2 @ 000002097ce94280] lavfi.block=90.819305
+[Parsed_metadata_2 @ 000002097ce94280] frame:5    pts:5000    pts_time:5
+[Parsed_metadata_2 @ 000002097ce94280] lavfi.block=83.073967
+[Parsed_metadata_2 @ 000002097ce94280] frame:6    pts:6000    pts_time:6
+[Parsed_metadata_2 @ 000002097ce94280] lavfi.block=82.437332
+[Parsed_metadata_2 @ 000002097ce94280] frame:7    pts:7000    pts_time:7
+[Parsed_metadata_2 @ 000002097ce94280] lavfi.block=80.839241
+[Parsed_blockdetect_1 @ 000002097ce94140] block mean: 100.5130205
+[out#0/null @ 000002097ce94c00] video:3KiB audio:0KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: unknown
+frame=    8 fps=0.0 q=-0.0 Lsize=N/A time=00:00:07.04 bitrate=N/A speed= 331x elapsed=0:00:00.02    

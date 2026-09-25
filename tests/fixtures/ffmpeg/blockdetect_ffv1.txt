@@ -1,0 +1,36 @@
+Input #0, matroska,webm, from 'clip.mkv':
+  Metadata:
+    ENCODER         : Lavf62.13.101
+  Duration: 00:00:08.00, start: 0.000000, bitrate: 1581 kb/s
+  Stream #0:0: Video: ffv1, yuv420p(tv, progressive), 320x240, SAR 1:1 DAR 4:3, 25 fps, 25 tbr, 1k tbn
+    Metadata:
+      ENCODER         : Lavc62.29.101 ffv1
+      DURATION        : 00:00:08.000000000
+Stream mapping:
+  Stream #0:0 -> #0:0 (ffv1 (native) -> wrapped_avframe (native))
+[Parsed_metadata_2 @ 000001de154b7200] frame:0    pts:0       pts_time:0
+[Parsed_metadata_2 @ 000001de154b7200] lavfi.block=10.720605
+Output #0, null, to 'pipe:':
+  Metadata:
+    encoder         : Lavf62.13.101
+  Stream #0:0: Video: wrapped_avframe, yuv420p(tv, progressive), 320x240 [SAR 1:1 DAR 4:3], q=2-31, 200 kb/s, 25 fps, 25 tbn
+    Metadata:
+      encoder         : Lavc62.29.101 wrapped_avframe
+      DURATION        : 00:00:08.000000000
+[Parsed_metadata_2 @ 000001de154b7200] frame:1    pts:1000    pts_time:1
+[Parsed_metadata_2 @ 000001de154b7200] lavfi.block=10.696150
+[Parsed_metadata_2 @ 000001de154b7200] frame:2    pts:2000    pts_time:2
+[Parsed_metadata_2 @ 000001de154b7200] lavfi.block=10.847616
+[Parsed_metadata_2 @ 000001de154b7200] frame:3    pts:3000    pts_time:3
+[Parsed_metadata_2 @ 000001de154b7200] lavfi.block=10.747803
+[Parsed_metadata_2 @ 000001de154b7200] frame:4    pts:4000    pts_time:4
+[Parsed_metadata_2 @ 000001de154b7200] lavfi.block=10.666077
+[Parsed_metadata_2 @ 000001de154b7200] frame:5    pts:5000    pts_time:5
+[Parsed_metadata_2 @ 000001de154b7200] lavfi.block=10.591740
+[Parsed_metadata_2 @ 000001de154b7200] frame:6    pts:6000    pts_time:6
+[Parsed_metadata_2 @ 000001de154b7200] lavfi.block=10.522430
+[Parsed_metadata_2 @ 000001de154b7200] frame:7    pts:7000    pts_time:7
+[Parsed_metadata_2 @ 000001de154b7200] lavfi.block=10.451431
+[Parsed_blockdetect_1 @ 000001de154b8200] block mean: 10.6554815
+[out#0/null @ 000001de154b7ec0] video:3KiB audio:0KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: unknown
+frame=    8 fps=0.0 q=-0.0 Lsize=N/A time=00:00:07.04 bitrate=N/A speed= 332x elapsed=0:00:00.02    

@@ -1,0 +1,36 @@
+Input #0, matroska,webm, from 'clip.mkv':
+  Metadata:
+    ENCODER         : Lavf62.13.101
+  Duration: 00:00:08.00, start: 0.000000, bitrate: 2533 kb/s
+  Stream #0:0: Video: ffv1, yuv420p(tv, progressive), 320x240, SAR 1:1 DAR 4:3, 25 fps, 25 tbr, 1k tbn
+    Metadata:
+      ENCODER         : Lavc62.29.101 ffv1
+      DURATION        : 00:00:08.000000000
+Stream mapping:
+  Stream #0:0 -> #0:0 (ffv1 (native) -> wrapped_avframe (native))
+[Parsed_metadata_2 @ 0000025551217b40] frame:0    pts:0       pts_time:0
+[Parsed_metadata_2 @ 0000025551217b40] lavfi.blur=13.293403
+Output #0, null, to 'pipe:':
+  Metadata:
+    encoder         : Lavf62.13.101
+  Stream #0:0: Video: wrapped_avframe, yuv420p(tv, progressive), 320x240 [SAR 1:1 DAR 4:3], q=2-31, 200 kb/s, 25 fps, 25 tbn
+    Metadata:
+      encoder         : Lavc62.29.101 wrapped_avframe
+      DURATION        : 00:00:08.000000000
+[Parsed_metadata_2 @ 0000025551217b40] frame:1    pts:1000    pts_time:1
+[Parsed_metadata_2 @ 0000025551217b40] lavfi.blur=13.464428
+[Parsed_metadata_2 @ 0000025551217b40] frame:2    pts:2000    pts_time:2
+[Parsed_metadata_2 @ 0000025551217b40] lavfi.blur=12.631237
+[Parsed_metadata_2 @ 0000025551217b40] frame:3    pts:3000    pts_time:3
+[Parsed_metadata_2 @ 0000025551217b40] lavfi.blur=12.958650
+[Parsed_metadata_2 @ 0000025551217b40] frame:4    pts:4000    pts_time:4
+[Parsed_metadata_2 @ 0000025551217b40] lavfi.blur=12.812780
+[Parsed_metadata_2 @ 0000025551217b40] frame:5    pts:5000    pts_time:5
+[Parsed_metadata_2 @ 0000025551217b40] lavfi.blur=12.799755
+[Parsed_metadata_2 @ 0000025551217b40] frame:6    pts:6000    pts_time:6
+[Parsed_metadata_2 @ 0000025551217b40] lavfi.blur=12.738542
+[Parsed_metadata_2 @ 0000025551217b40] frame:7    pts:7000    pts_time:7
+[Parsed_metadata_2 @ 0000025551217b40] lavfi.blur=12.730887
+[Parsed_blurdetect_1 @ 0000025551216080] blur mean: 12.9287102
+[out#0/null @ 00000255512174c0] video:3KiB audio:0KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: unknown
+frame=    8 fps=0.0 q=-0.0 Lsize=N/A time=00:00:07.04 bitrate=N/A speed= 233x elapsed=0:00:00.03    
