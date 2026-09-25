@@ -14,9 +14,11 @@ from __future__ import annotations
 import os
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from fractions import Fraction
 from pathlib import Path
 
+from app.models import utc_now
 from app.services.cctv_chain import Limitation, ResolvedStep, in_catalog_order
 from app.services.cctv_frame_index import FrameEntry
 from app.services.ffmpeg_capabilities import FfmpegCapabilities
@@ -445,6 +447,12 @@ def build_reproduce_script(
 
 
 @dataclass(frozen=True, slots=True)
+class PassTiming:
+    started_at: datetime
+    ended_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class ClarifyResult:
     analysis: Path
     viewing: Path
@@ -455,6 +463,8 @@ class ClarifyResult:
     output_geometry: FrameGeometry
     clipping: ClippingReport
     limitations: tuple[Limitation, ...] = ()
+    analysis_timing: PassTiming | None = None
+    viewing_timing: PassTiming | None = None
 
     def reproduce_steps(self) -> tuple[ReproduceStep, ...]:
         return (
@@ -550,12 +560,17 @@ async def run_clarify(
     output_dir: Path,
     threads: ClarifyThreads,
     on_progress: StageProgress = lambda stage, fraction: None,
+    now: Callable[[], datetime] = utc_now,
 ) -> ClarifyResult:
     geometry = plan_output_geometry(plan)
     analysis, viewing = output_dir / ANALYSIS_NAME, output_dir / VIEWING_NAME
+    analysis_started = now()
     analysis_command = await run_analysis_pass(tools, plan, analysis, threads, on_progress)
+    analysis_timing = PassTiming(analysis_started, now())
     counts = await verified_counts(tools, plan, analysis)
+    viewing_started = now()
     viewing_command = await run_viewing_pass(tools, analysis, viewing, geometry, counts[1], threads, on_progress)
+    viewing_timing = PassTiming(viewing_started, now())
     on_progress(STAGE_VERIFYING, 0.0)
     clipping = await clipping_report(tools, plan, analysis, geometry, counts)
     on_progress(STAGE_VERIFYING, 1.0)
@@ -569,4 +584,6 @@ async def run_clarify(
         output_geometry=geometry,
         clipping=clipping,
         limitations=limitations_of(clipping),
+        analysis_timing=analysis_timing,
+        viewing_timing=viewing_timing,
     )

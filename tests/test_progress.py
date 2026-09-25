@@ -8,7 +8,7 @@ import pytest
 
 from app.api.routes import job_to_response, video_job_to_response
 from app.config import Settings
-from app.models import ConversionJob, JobStatus, UpscaleJob, VideoUpscaleJob
+from app.models import CctvOptions, ConversionJob, JobStatus, UpscaleJob, VideoUpscaleJob
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.engines.base import UpscaleEngine
 from app.services.job_manager import JobManager
@@ -21,6 +21,7 @@ from app.services.progress import (
     apply_generation_step_progress,
     apply_image_tile_progress,
     apply_stage_transition,
+    apply_video_stage_fraction,
     build_conversion_stages,
     build_generation_stages,
     build_image_stages,
@@ -1239,3 +1240,74 @@ def test_conversion_job_defaults() -> None:
     job = ConversionJob(repo_id="amd/x")
     assert job.status == JobStatus.queued
     assert job.model_id is None and job.error is None
+
+
+# ---------------------------------------------------------------------------
+# Modo CCTV (spec §4.6 y §5.9): etapas propias por tarea y avance monotono.
+# ---------------------------------------------------------------------------
+
+CLARIFY_STAGES = [
+    "ingesting",
+    "analyzing_video",
+    "clarifying",
+    "verifying",
+    "exporting_frames",
+    "building_comparison",
+    "reporting",
+    "packaging",
+]
+
+
+def make_cctv_job(tmp_path: Path, **options: object) -> VideoUpscaleJob:
+    cctv = CctvOptions(**{"task": "clarify", "session_token": "session0token1", "no_osd": True, **options})
+    return make_video_job(tmp_path / "clip.mkv", cctv=cctv)
+
+
+def test_clarify_stages_replace_the_upscale_stages(tmp_path: Path) -> None:
+    job = make_cctv_job(tmp_path, still_frames=(3,))
+
+    assert [stage.key for stage in build_video_stages(job)] == CLARIFY_STAGES
+
+
+def test_clarify_without_still_frames_has_no_export_stage(tmp_path: Path) -> None:
+    keys = [stage.key for stage in build_video_stages(make_cctv_job(tmp_path))]
+
+    assert "exporting_frames" not in keys and keys[0] == "ingesting"
+
+
+def test_roi_fusion_has_its_own_stages(tmp_path: Path) -> None:
+    job = make_cctv_job(tmp_path, task="roi_fusion")
+
+    assert [stage.key for stage in build_video_stages(job)] == ["ingesting", "roi_registering", "roi_fusing", "reporting"]
+
+
+@pytest.mark.parametrize("task", ["clarify", "enhance", "roi_fusion"])
+def test_cctv_stage_weights_normalize_to_one(tmp_path: Path, task: str) -> None:
+    stages = build_video_stages(make_cctv_job(tmp_path, task=task, still_frames=(1,)))
+
+    assert abs(sum(stage.weight for stage in stages) - 1.0) < 1e-9
+
+
+def test_cctv_progress_is_monotonic_through_every_stage(tmp_path: Path) -> None:
+    job = make_cctv_job(tmp_path, still_frames=(3,))
+    seen: list[float] = []
+
+    for key in CLARIFY_STAGES:
+        for fraction in (0.0, 0.5, 0.25, 1.0):
+            apply_video_stage_fraction(job, key, fraction)
+            seen.append(job.metadata["progress"])
+    complete_video_stages(job)
+    seen.append(job.metadata["progress"])
+
+    assert seen == sorted(seen) and seen[0] == 0.0 and seen[-1] == 1.0
+
+
+def test_a_fraction_within_the_stage_keeps_its_start_time(tmp_path: Path) -> None:
+    job = make_cctv_job(tmp_path)
+    apply_video_stage_fraction(job, "clarifying", 0.1)
+    started = job.metadata["stageStartedAt"]
+
+    apply_video_stage_fraction(job, "clarifying", 0.9)
+
+    assert job.metadata["stageStartedAt"] == started and job.metadata["stage"] == "clarifying"
+    assert job.metadata["stages"][2]["status"] == "active"

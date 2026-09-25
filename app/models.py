@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
 
 if TYPE_CHECKING:
@@ -63,6 +64,47 @@ class UpdateStatus:
     error: str | None
 
 
+CctvTask = Literal["clarify", "enhance", "roi_fusion"]
+RoiKind = Literal["plate", "face_or_object"]
+RoiFusionMethod = Literal["median", "trimmed_mean"]
+
+
+@dataclass(slots=True, frozen=True)
+class CctvStep:
+    id: str
+    params: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True, frozen=True)
+class RoiFusionRequest:
+    first_frame: int
+    last_frame: int
+    reference_frame: int
+    box: tuple[int, int, int, int]
+    kind: RoiKind
+    scale: int = 2
+    method: RoiFusionMethod = "median"
+
+
+@dataclass(slots=True, frozen=True)
+class CctvOptions:
+    task: CctvTask
+    session_token: str
+    preset: str | None = None
+    steps: tuple[CctvStep, ...] = ()
+    osd_boxes: tuple[tuple[int, int, int, int], ...] = ()
+    osd_boxes_confirmed: bool = False
+    # "No on-screen text": excluyente con osd_boxes (spec §4.8).
+    no_osd: bool = False
+    # (primer cuadro, ultimo cuadro), inclusivos.
+    trim: tuple[int, int] | None = None
+    still_frames: tuple[int, ...] = ()
+    roi: RoiFusionRequest | None = None
+    acquisition: Mapping[str, Any] = field(default_factory=dict)
+    case_label: str | None = None
+    operator_name: str | None = None
+
+
 @dataclass(slots=True)
 class VideoUpscaleJob:
     source_path: Path
@@ -115,6 +157,8 @@ class VideoUpscaleJob:
     # same file isn't probed twice. In-memory only: the API response is built field
     # by field, so this never serializes (it holds the absolute source path).
     probe: dict[str, Any] | None = None
+    # Modo CCTV (spec §4.1): con esto el job no pasa por el pipeline de reescalado.
+    cctv: CctvOptions | None = None
     id: str = field(default_factory=lambda: uuid4().hex)
     status: JobStatus = JobStatus.queued
     created_at: datetime = field(default_factory=utc_now)

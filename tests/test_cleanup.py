@@ -14,7 +14,7 @@ from PIL import Image
 
 from app.config import Settings
 from app.main import app
-from app.models import GenerationJob, JobStatus, UpscaleJob, VideoUpscaleJob, utc_now
+from app.models import CctvOptions, GenerationJob, JobStatus, UpscaleJob, VideoUpscaleJob, utc_now
 from app.services import retention_sweeper as retention_sweeper_module
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.engines.base import UpscaleEngine
@@ -706,3 +706,83 @@ def test_retention_sweeper_keeps_stale_work_dir_of_running_video_job(tmp_path: P
     sweeper.sweep_once()
 
     assert active_work_dir.exists(), "work dir of a running video job must survive the sweep"
+
+
+# --- Modo CCTV: outputs/{id}.cctv/ y sesiones video-work/cctv-{token}/ ---
+
+CCTV_TOKEN = "session0token1"
+
+
+def make_stale(path: Path) -> Path:
+    stale = time.time() - 2 * 3600
+    os.utime(path, (stale, stale))
+    return path
+
+
+def make_cctv_job(settings: Settings, status: JobStatus, token: str = CCTV_TOKEN) -> VideoUpscaleJob:
+    upload = settings.video_work_path / f"cctv-{token}" / "upload" / "clip.mp4"
+    job = make_video_job(upload)
+    job.cctv = CctvOptions(task="clarify", session_token=token, no_osd=True)
+    job.status = status
+    return job
+
+
+def make_cctv_dir(root: Path, name: str) -> Path:
+    directory = root / name
+    (directory / "01_original").mkdir(parents=True)
+    (directory / "01_original" / "clip.mp4").write_bytes(b"verified copy")
+    return make_stale(directory)
+
+
+def test_retention_sweeper_deletes_expired_cctv_output_directories(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path, output_ttl_hours=1)
+    StorageService(settings)
+    sweeper = make_sweeper(settings)
+    finished = make_cctv_job(settings, JobStatus.completed)
+    sweeper.video_job_manager.jobs[finished.id] = finished
+    expired = make_cctv_dir(settings.outputs_path, f"{finished.id}.cctv")
+
+    sweeper.sweep_once()
+
+    assert not expired.exists()
+
+
+def test_retention_sweeper_keeps_the_cctv_output_directory_of_a_queued_job(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path, output_ttl_hours=1)
+    StorageService(settings)
+    sweeper = make_sweeper(settings)
+    queued = make_cctv_job(settings, JobStatus.queued)
+    sweeper.video_job_manager.jobs[queued.id] = queued
+    verified_copy = make_cctv_dir(settings.outputs_path, f"{queued.id}.cctv")
+
+    sweeper.sweep_once()
+
+    assert (verified_copy / "01_original" / "clip.mp4").exists(), "a queued CCTV job needs its verified copy"
+
+
+def test_retention_sweeper_removes_an_inactive_cctv_session(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path, output_ttl_hours=1)
+    StorageService(settings)
+    sweeper = make_sweeper(settings)
+    finished = make_cctv_job(settings, JobStatus.completed)
+    sweeper.video_job_manager.jobs[finished.id] = finished
+    session = make_cctv_dir(settings.video_work_path, f"cctv-{CCTV_TOKEN}")
+
+    sweeper.sweep_once()
+
+    assert not session.exists()
+
+
+def test_retention_sweeper_keeps_a_cctv_session_a_live_job_still_reads(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path, output_ttl_hours=1)
+    StorageService(settings)
+    sweeper = make_sweeper(settings)
+    running = make_cctv_job(settings, JobStatus.running)
+    sweeper.video_job_manager.jobs[running.id] = running
+    session = make_cctv_dir(settings.video_work_path, f"cctv-{CCTV_TOKEN}")
+    other = make_cctv_dir(settings.video_work_path, "cctv-othersession")
+
+    sweeper.sweep_once()
+
+    assert session.exists(), "the upload of a running CCTV job lives in its session"
+    assert not other.exists()

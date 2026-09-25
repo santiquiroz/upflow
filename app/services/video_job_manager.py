@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
 
 from app.config import AUDIO_ENHANCE_MODES, AUDIO_RESTORE_MODES, GMFSS_ENGINE, INTERP_ENGINES, RIFE_ENGINE, Settings
-from app.models import TERMINAL_JOB_STATUSES, VideoUpscaleJob
+from app.models import TERMINAL_JOB_STATUSES, CctvOptions, VideoUpscaleJob
 from app.services.auth.identity import AuthenticatedUser
 from app.services.auth.quotas import QuotaService
 from app.services.backend_registry import (
@@ -31,11 +33,29 @@ from app.services.classic_upscalers import (
 from app.services.job_manager_base import QueuedJobManager
 from app.services.model_registry import ModelKind, ModelRegistry, ModelStatus
 from app.services.target_resolution import smallest_scale_reaching
+from app.services.cctv_chain import CctvChainError
+from app.services.cctv_ingest import VerifiedCopyMismatch
+from app.services.cctv_job_runner import frame_geometry
+from app.services.cctv_job_validation import CctvJobFacts, CctvJobPlan, plan_cctv_job
+from app.services.cctv_session import CctvSession, cctv_job_dir, load_session, prepare_job_dir, touch_session
+from app.services.ffmpeg_capabilities import FfmpegCapabilities, cached_capabilities
 from app.services.video_upscaler import VideoUpscaler
+from app.exceptions import QueueFullError
 
 logger = logging.getLogger(__name__)
 
 MAX_TARGET_FPS = 240
+SESSION_CHANGED = "cctv.error.sessionChanged"
+CCTV_VIEWING_CONTAINER = "mp4"
+CCTV_VIEWING_CODEC = "libx264"
+CCTV_VIEWING_PRESET = "medium"
+CCTV_VIEWING_CRF = 16
+
+
+def session_changed_or(exc: Exception) -> Exception:
+    if isinstance(exc, VerifiedCopyMismatch):
+        return CctvChainError(SESSION_CHANGED, "The uploaded file changed after it was analyzed; upload it again.")
+    return exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,6 +81,7 @@ class VideoJobManager(QueuedJobManager[VideoUpscaleJob]):
         devices: DevicesService | None = None,
         device_router: DeviceRouter | None = None,
         quota_service: QuotaService | None = None,
+        cctv_capabilities: Callable[[], FfmpegCapabilities] | None = None,
     ) -> None:
         super().__init__(
             settings,
@@ -73,6 +94,7 @@ class VideoJobManager(QueuedJobManager[VideoUpscaleJob]):
         self.devices = devices
         self.device_semaphores = device_semaphores
         self.device_router = device_router or DeviceRouter(device_semaphores)
+        self.cctv_capabilities = cctv_capabilities or (lambda: cached_capabilities(settings.ffmpeg_binary_path))
 
     async def create_job(
         self,
@@ -170,6 +192,77 @@ class VideoJobManager(QueuedJobManager[VideoUpscaleJob]):
         self._enqueue(job)
         self.jobs[job.id] = job
         return job
+
+    async def create_cctv_job(
+        self,
+        *,
+        cctv: CctvOptions,
+        device: str | None = None,
+        job_id: str | None = None,
+        owner: AuthenticatedUser | None = None,
+    ) -> VideoUpscaleJob:
+        session = await asyncio.to_thread(load_session, self.settings.video_work_path, cctv.session_token)
+        plan = plan_cctv_job(cctv, await self._cctv_facts(session, cctv.task), device)
+        if plan.device is not None and plan.device != AUTO_DEVICE_ID and self.devices is not None:
+            await asyncio.to_thread(self.devices.validate, plan.device)
+        if owner is not None and self.quota_service is not None:
+            self.quota_service.check_admission(owner)
+        job = self._cctv_job(session, cctv, plan, owner)
+        if job_id is not None:
+            job.id = job_id
+        await self._prepare_cctv_outputs(session, job)
+        self._enqueue_cctv(job)
+        return job
+
+    async def _cctv_facts(self, session: CctvSession, task: str) -> CctvJobFacts:
+        probe = await self.media_tools.ffprobe_json(session.work)
+        return CctvJobFacts(
+            geometry=frame_geometry(probe),
+            frame_count=session.frame_count,
+            caps=await asyncio.to_thread(self.cctv_capabilities),
+            restore_core_installed=bool(self.settings.restore_core_installed),
+            task_available=self.upscaler.cctv_task_available(task),
+            max_still_frames=self.settings.cctv_max_still_frames,
+            max_roi_frames=self.settings.cctv_roi_max_frames,
+        )
+
+    @staticmethod
+    def _cctv_job(
+        session: CctvSession, cctv: CctvOptions, plan: CctvJobPlan, owner: AuthenticatedUser | None
+    ) -> VideoUpscaleJob:
+        # Los campos de codec son los de la copia de visualizacion: el job CCTV no los elige ni los valida.
+        return VideoUpscaleJob(
+            source_path=session.upload,
+            original_filename=session.record.original_name,
+            model_name=f"cctv-{cctv.task}",
+            scale=1,
+            output_container=CCTV_VIEWING_CONTAINER,
+            video_codec=CCTV_VIEWING_CODEC,
+            video_preset=CCTV_VIEWING_PRESET,
+            crf=CCTV_VIEWING_CRF,
+            keep_audio=True,
+            device=plan.device,
+            cctv=cctv,
+            owner_id=owner.id if owner is not None else None,
+            metadata={"cctv": {"task": cctv.task, "lane": plan.lane, "sourceSha256": session.record.sha256}},
+        )
+
+    async def _prepare_cctv_outputs(self, session: CctvSession, job: VideoUpscaleJob) -> None:
+        job_dir = cctv_job_dir(self.settings.outputs_path, job.id)
+        try:
+            await asyncio.to_thread(prepare_job_dir, session, job_dir)
+        except Exception as exc:
+            await asyncio.to_thread(shutil.rmtree, job_dir, True)
+            raise session_changed_or(exc) from exc
+        await asyncio.to_thread(touch_session, session.directory)
+
+    def _enqueue_cctv(self, job: VideoUpscaleJob) -> None:
+        try:
+            self._enqueue(job)
+        except QueueFullError:
+            shutil.rmtree(cctv_job_dir(self.settings.outputs_path, job.id), ignore_errors=True)
+            raise
+        self.jobs[job.id] = job
 
     def _resolve_source_path(self, source_path: Path | None, upload_token: str | None) -> Path:
         if upload_token is not None:
@@ -542,6 +635,9 @@ class VideoJobManager(QueuedJobManager[VideoUpscaleJob]):
         job.output_path = await self.upscaler.run(job, fps_multiplier=job.fps_multiplier)
 
     def _cleanup_source(self, job: VideoUpscaleJob) -> None:
+        # El upload CCTV es de la sesion y se reusa en tareas siguientes; lo barre la retencion.
+        if job.cctv is not None:
+            return
         self._unlink_source_if_unused(job)
 
     def _unlink_source_if_unused(self, job: VideoUpscaleJob) -> None:

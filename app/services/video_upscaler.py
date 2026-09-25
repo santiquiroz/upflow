@@ -6,8 +6,9 @@ import logging
 import os
 import shutil
 import threading
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import cv2
 import numpy as np
@@ -53,6 +54,7 @@ from app.services.process_runner import is_non_empty_file, run_guarded_process
 from app.services.progress import (
     advance_video_stage,
     apply_stage_transition,
+    apply_video_stage_fraction,
     build_video_stages,
     complete_video_stages,
     compute_progress,
@@ -69,6 +71,9 @@ from app.services.scene_cuts import (
     source_index_at_time,
 )
 from app.services.stall_watchdog import StallWatchdog
+
+if TYPE_CHECKING:
+    from app.services.cctv_job_runner import CctvTaskRunner
 
 logger = logging.getLogger(__name__)
 
@@ -158,8 +163,11 @@ class VideoUpscaler:
         restorers: dict[str, AudioRestorer] | None = None,
         onnx_video_engine: OnnxVideoUpscaler | None = None,
         devices: DevicesService | None = None,
+        cctv_runners: Mapping[str, CctvTaskRunner] | None = None,
     ) -> None:
         self.settings = settings
+        # Un runner por tarea CCTV (clarify, roi_fusion); una tarea sin runner no esta disponible.
+        self.cctv_runners = dict(cctv_runners or {})
         self.engine = engine
         self.media_tools = media_tools
         self.rife_engine = rife_engine
@@ -181,7 +189,18 @@ class VideoUpscaler:
     def available_for(self, job: VideoUpscaleJob) -> bool:
         if not self.media_tools.available():
             return False
+        if job.cctv is not None:
+            return self.cctv_task_available(job.cctv.task)
         return not self._job_uses_ncnn(job) or self.engine.available()
+
+    def cctv_task_available(self, task: str) -> bool:
+        return task in self.cctv_runners
+
+    @staticmethod
+    def _unavailable_message(job: VideoUpscaleJob) -> str:
+        if job.cctv is not None:
+            return f"CCTV task {job.cctv.task!r} is not available. Ensure FFmpeg is installed."
+        return "Video pipeline is not available. Ensure Real-ESRGAN and FFmpeg are installed."
 
     def _job_uses_ncnn(self, job: VideoUpscaleJob) -> bool:
         if is_classic_upscaler(job.model_id) or self._is_onnx_model(job.model_id):
@@ -191,7 +210,7 @@ class VideoUpscaler:
     async def run(self, job: VideoUpscaleJob, fps_multiplier: int = 1) -> Path:
         # Fuera del loop: resolver el backend puede hacer el import frío de onnxruntime.
         if not await asyncio.to_thread(self.available_for, job):
-            raise RuntimeError("Video pipeline is not available. Ensure Real-ESRGAN and FFmpeg are installed.")
+            raise RuntimeError(self._unavailable_message(job))
 
         work_dir = self.settings.video_work_path / job.id
         frames_in = work_dir / "frames-in"
@@ -214,6 +233,8 @@ class VideoUpscaler:
         audio_path: Path,
         fps_multiplier: int = 1,
     ) -> Path:
+        if job.cctv is not None:
+            return await self._run_cctv(job, frames_in.parent)
         # Reuse the probe captured during job validation; only probe again for jobs
         # built without one (direct VideoUpscaler use / older callers).
         probe = job.probe or await self.media_tools.ffprobe_json(job.source_path)
@@ -297,6 +318,15 @@ class VideoUpscaler:
             )
 
         self._finalize_output(job, output_path)
+        return output_path
+
+    async def _run_cctv(self, job: VideoUpscaleJob, work_dir: Path) -> Path:
+        # CCTV no pasa por el reescalado: ese camino fuerza -fps_mode cfr, incompatible con el carril clasico.
+        runner = self.cctv_runners[job.cctv.task]
+        output_path = await runner.run(
+            job, work_dir, lambda stage, fraction: apply_video_stage_fraction(job, stage, fraction)
+        )
+        complete_video_stages(job)
         return output_path
 
     async def _interpolate_and_upscale(

@@ -23,6 +23,7 @@ from app.services.auth.identity import LocalPasswordProvider
 from app.services.auth.quotas import QuotaService
 from app.services.auth.user_store import UserStore
 from app.services.capability_probe import CapabilityProbe
+from app.services.cctv_job_runner import build_cctv_runners
 from app.services.device_router import DeviceRouter
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.devices_service import DevicesService
@@ -175,6 +176,7 @@ async def lifespan(app: FastAPI):
         restorers=restorers,
         onnx_video_engine=onnx_video_engine,
         devices=devices_service,
+        cctv_runners=build_cctv_runners(settings),
     )
     video_job_manager = VideoJobManager(
         settings,
