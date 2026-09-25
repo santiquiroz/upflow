@@ -37,6 +37,7 @@ from app.services.engines.roformer_separator import RoformerSeparator
 from app.services.engines.umx_separator import UmxSeparator
 from app.services.engines.vr_deecho_separator import VrDeEchoSeparator
 from app.services.engines.onnx_upscaler import OnnxUpscaler
+from app.services.engines.photo_restore_engine import PhotoRestoreEngine
 from app.services.engines.onnx_video_upscaler import OnnxVideoUpscaler
 from app.services.engines.realesrgan_ncnn import RealEsrganNcnnEngine
 from app.services.engines.rife_ncnn import RifeNcnnEngine
@@ -46,6 +47,7 @@ from app.services.generation_installer import GenerationModelInstaller
 from app.services.generation_job_manager import GenerationJobManager
 from app.services.hf_client import HfClient
 from app.services.job_manager import JobManager
+from app.services.photo_restore_job import PhotoRestoreJobRunner
 from app.services.media_tools import MediaTools
 from app.services.model_installer import ModelInstaller
 from app.services.asr_installer import AsrModelInstaller
@@ -129,6 +131,8 @@ async def lifespan(app: FastAPI):
     model_registry = ModelRegistry(settings)
     onnx_engine = OnnxUpscaler(settings, model_registry, devices_service, gpu_coordinator)
     onnx_video_engine = OnnxVideoUpscaler(settings, model_registry, devices_service, gpu_coordinator)
+    # Un solo dueno de las sesiones de restauracion en el coordinator (spec §3.5).
+    photo_restore_engine = PhotoRestoreEngine(settings, gpu_coordinator, device_health=devices_service)
     # Subproyecto B: real VRAM/RAM admission on top of the existing
     # job-count gate. "npu" has no real probe yet (no NPU enumeration story
     # in devices_service.py) -- omitting it from this dict is equivalent to
@@ -162,6 +166,7 @@ async def lifespan(app: FastAPI):
         devices=devices_service,
         device_router=device_router,
         quota_service=quota_service,
+        restore_runner=PhotoRestoreJobRunner(settings, photo_restore_engine),
     )
     video_upscaler = VideoUpscaler(
         settings,

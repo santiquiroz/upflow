@@ -23,6 +23,7 @@ from app.services.engines.tiled_restore_runner import Clock, RestoreCancelled
 from app.services.photo_dsp import PeriodicPeaks
 from app.services.photo_geometry import Crop
 from app.services.photo_restore_chain import RESTORE_CHAIN, RestoreStepSpec, steps_from_selection
+from app.services.photo_restore_chain import STEP_STAGES as CHAIN_STEP_STAGES
 from app.services.photo_restore_presets import ToneKind
 
 PREVIEW_MARGIN_PX = 64
@@ -35,17 +36,7 @@ AB_ARTIFACT = "ab"
 ARTIFACT_OF_STEP: Mapping[str, str] = MappingProxyType({"faces": FACES_ARTIFACT, "colorize": AB_ARTIFACT})
 RGB_CHANNELS = 3
 
-STEP_STAGES: Mapping[str, tuple[str, ...]] = MappingProxyType(
-    {
-        "descreen": ("restore_descreen",),
-        "repair": ("restore_repair_detect", "restore_repair_fill"),
-        "deblock": ("restore_deblock",),
-        "denoise": ("restore_denoise",),
-        "tone": ("restore_tone",),
-        "faces": ("restore_faces",),
-        "colorize": ("restore_colorize",),
-    }
-)
+STEP_STAGES: Mapping[str, tuple[str, ...]] = MappingProxyType(CHAIN_STEP_STAGES)
 STAGE_ORDER: tuple[str, ...] = tuple(stage for step in RESTORE_CHAIN for stage in STEP_STAGES[step.id])
 
 Point = tuple[float, float]

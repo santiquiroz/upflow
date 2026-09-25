@@ -274,7 +274,7 @@ class OnnxUpscaler(UpscaleEngine):
         # progress mixed into a job's metadata.
         if job is None:
             return
-        apply_image_tile_progress(job, tiles_done, tiles_total)
+        apply_image_tile_progress(job, tiles_done, tiles_total, stage_key="upscaling")
 
     def _infer_tile(self, session: Any, tile_rgb: np.ndarray) -> np.ndarray:
         input_info = session.get_inputs()[0]

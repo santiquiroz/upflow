@@ -71,6 +71,17 @@ RESTORE_CHAIN: tuple[RestoreStepSpec, ...] = (
     _step("colorize", "output", "model", pack=COLORIZE_PACK, warning_key="restore.warning.colorize"),
 )
 
+# Etapas de progreso de cada paso, en orden; "repair" detecta y rellena por separado.
+STEP_STAGES: dict[str, tuple[str, ...]] = {
+    "descreen": ("restore_descreen",),
+    "repair": ("restore_repair_detect", "restore_repair_fill"),
+    "deblock": ("restore_deblock",),
+    "denoise": ("restore_denoise",),
+    "tone": ("restore_tone",),
+    "faces": ("restore_faces",),
+    "colorize": ("restore_colorize",),
+}
+
 STEP_PLAIN_NAMES: dict[str, str] = {
     "descreen": "print pattern removal",
     "repair": "damage repair",
