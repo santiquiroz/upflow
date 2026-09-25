@@ -12,6 +12,7 @@ from app.services.photo_dsp import (
     ToneSettings,
     apply_gray_point,
     apply_tone,
+    apply_tone_in_bands,
     atrous_halo,
     descreen_halftone,
     descreen_notch,
@@ -594,3 +595,46 @@ def test_descreen_peaks_group_directions_across_the_half_plane_edge() -> None:
     nearly_horizontal = [(0.0, 0.1), (0.001, -0.117)]
 
     assert len(harmonic_peaks(peaks_at(nearly_horizontal)).frequencies) == 0
+
+
+TONE_BAND_SETTINGS = {
+    "keep_tone": ToneSettings(),
+    "fix_faded": ToneSettings(strength=0.8, fix_faded=True),
+    "fix_faded_gray_point": ToneSettings(strength=0.6, fix_faded=True, gray_point=(40, 70)),
+    "neutral_gray": ToneSettings(neutral_gray=True),
+    "local_contrast": ToneSettings(local_contrast=True),
+    "fix_faded_local_contrast": ToneSettings(fix_faded=True, local_contrast=True),
+    "identity": ToneSettings(keep_tone=False),
+}
+
+
+@pytest.mark.parametrize("settings", TONE_BAND_SETTINGS.values(), ids=TONE_BAND_SETTINGS.keys())
+def test_bands_tone_matches_the_whole_image_tone(settings: ToneSettings) -> None:
+    photo = density_fade(natural_scene(14, 150), np.random.default_rng(3))
+
+    banded = apply_tone_in_bands(photo, settings, band_rows=37)
+
+    np.testing.assert_allclose(banded, apply_tone(photo, settings), atol=2e-6)
+
+
+def test_bands_tone_does_not_mutate_the_input() -> None:
+    photo = natural_scene(15, 90)
+    before = photo.copy()
+
+    apply_tone_in_bands(photo, ToneSettings(fix_faded=True, local_contrast=True), band_rows=20)
+
+    np.testing.assert_array_equal(photo, before)
+
+
+def test_bands_tone_bounds_the_peak_memory() -> None:
+    image = natural_scene(16, 256)
+    tall = np.ascontiguousarray(np.tile(image, (32, 2, 1)))
+
+    tracemalloc.start()
+    try:
+        apply_tone_in_bands(tall, ToneSettings(fix_faded=True))
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert peak < tall.nbytes + 8 * tall[:BAND_ROWS].nbytes

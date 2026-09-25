@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import cv2
 import numpy as np
@@ -85,6 +85,89 @@ def _render_tone(rgb: np.ndarray, settings: ToneSettings) -> np.ndarray:
     return rgb.copy()
 
 
+@dataclass(frozen=True)
+class ToneBandPlan:
+    settings: ToneSettings
+    gains: np.ndarray | None = None
+    curves: tuple[ChannelCurve, ChannelCurve, ChannelCurve] | None = None
+    levels: tuple[float, float] | None = None
+    contrast_lightness: np.ndarray | None = None
+
+
+def apply_tone_in_bands(rgb: np.ndarray, settings: ToneSettings, band_rows: int = BAND_ROWS) -> np.ndarray:
+    # Los parametros globales (curvas, niveles, CLAHE) se miden una vez y se aplican por franjas:
+    # mismo resultado que apply_tone con el pico de RAM acotado a la salida mas una franja.
+    _require_band_sizes(band_rows, 0)
+    plan = _tone_band_plan(rgb, settings, band_rows)
+    output = np.empty(rgb.shape, dtype=np.float32)
+    for start, stop in _band_spans(rgb.shape[0], band_rows):
+        output[start:stop] = _tone_band(rgb[start:stop], plan, start, stop)
+    return output
+
+
+def _tone_band_plan(rgb: np.ndarray, settings: ToneSettings, band_rows: int) -> ToneBandPlan:
+    plan = _balance_plan(rgb, settings, band_rows)
+    if not settings.local_contrast:
+        return plan
+    lightness = _banded_lightness(rgb, band_rows, lambda band: _balance_band(band, plan))
+    return replace(plan, contrast_lightness=_clahe_lightness(lightness))
+
+
+def _balance_plan(rgb: np.ndarray, settings: ToneSettings, band_rows: int) -> ToneBandPlan:
+    if settings.neutral_gray:
+        return ToneBandPlan(settings)
+    if settings.fix_faded:
+        return _faded_plan(rgb, settings)
+    if settings.keep_tone:
+        lightness = _banded_lightness(rgb, band_rows, lambda band: band)
+        return ToneBandPlan(settings, levels=lightness_levels(lightness))
+    return ToneBandPlan(settings)
+
+
+def _faded_plan(rgb: np.ndarray, settings: ToneSettings) -> ToneBandPlan:
+    _require_unit_interval(settings.strength, "Strength")
+    gains = None if settings.gray_point is None else gray_point_gains(rgb, settings.gray_point)
+    if settings.strength == 0:
+        return ToneBandPlan(settings, gains=gains)
+    sample = _fit_sample(rgb)
+    balanced = sample if gains is None else _apply_gains(sample, gains)
+    return ToneBandPlan(settings, gains=gains, curves=fit_neutral_axis_curves(balanced))
+
+
+def _banded_lightness(rgb: np.ndarray, band_rows: int, balance: BandFunction) -> np.ndarray:
+    lightness = np.empty(rgb.shape[:2], dtype=np.float32)
+    for start, stop in _band_spans(rgb.shape[0], band_rows):
+        lightness[start:stop] = _to_lab(balance(rgb[start:stop]))[..., 0]
+    return lightness
+
+
+def _tone_band(band: np.ndarray, plan: ToneBandPlan, start: int, stop: int) -> np.ndarray:
+    balanced = _balance_band(band, plan)
+    if plan.contrast_lightness is None:
+        return balanced
+    lab = _to_lab(balanced)
+    equalized = plan.contrast_lightness[start:stop]
+    return _with_lightness(balanced, lab, _blend(lab[..., 0], equalized, LOCAL_CONTRAST_BLEND))
+
+
+def _balance_band(band: np.ndarray, plan: ToneBandPlan) -> np.ndarray:
+    settings = plan.settings
+    if settings.neutral_gray:
+        return neutral_gray(band)
+    if settings.fix_faded:
+        return _faded_band(band, plan)
+    if plan.levels is not None:
+        return _leveled(band, plan.levels, LEVELS_BLEND)
+    return band.astype(np.float32, copy=True)
+
+
+def _faded_band(band: np.ndarray, plan: ToneBandPlan) -> np.ndarray:
+    balanced = band if plan.gains is None else _apply_gains(band, plan.gains)
+    if plan.curves is None:
+        return balanced.astype(np.float32, copy=True)
+    return apply_channel_curves(balanced, plan.curves, plan.settings.strength)
+
+
 def fix_faded_colors(
     rgb: np.ndarray,
     strength: float = FIX_FADED_DEFAULT_STRENGTH,
@@ -99,9 +182,16 @@ def fix_faded_colors(
 
 
 def apply_gray_point(rgb: np.ndarray, point: GrayPoint) -> np.ndarray:
+    return _apply_gains(rgb, gray_point_gains(rgb, point))
+
+
+def gray_point_gains(rgb: np.ndarray, point: GrayPoint) -> np.ndarray:
     sample = gray_point_sample(rgb, point)
-    gains = sample.mean() / np.maximum(sample, CHANNEL_EPSILON)
-    return np.clip(rgb * gains.astype(np.float32), 0.0, 1.0)
+    return (sample.mean() / np.maximum(sample, CHANNEL_EPSILON)).astype(np.float32)
+
+
+def _apply_gains(rgb: np.ndarray, gains: np.ndarray) -> np.ndarray:
+    return np.clip(rgb * gains, 0.0, 1.0)
 
 
 def gray_point_sample(rgb: np.ndarray, point: GrayPoint) -> np.ndarray:
@@ -173,8 +263,12 @@ def apply_channel_curves(
 
 
 def keep_tone_levels(rgb: np.ndarray, blend: float = LEVELS_BLEND) -> np.ndarray:
+    return _leveled(rgb, lightness_levels(_to_lab(rgb)[..., 0]), blend)
+
+
+def _leveled(rgb: np.ndarray, levels: tuple[float, float], blend: float) -> np.ndarray:
+    low, high = levels
     lab = _to_lab(rgb)
-    low, high = lightness_levels(lab[..., 0])
     stretched = (lab[..., 0] - low) * (LAB_L_MAX / (high - low))
     leveled = np.clip(stretched, 0.0, LAB_L_MAX).astype(np.float32)
     return _with_lightness(rgb, lab, _blend(lab[..., 0], leveled, blend))
@@ -197,17 +291,24 @@ def neutral_gray(rgb: np.ndarray) -> np.ndarray:
 
 def local_contrast(rgb: np.ndarray, blend: float = LOCAL_CONTRAST_BLEND) -> np.ndarray:
     lab = _to_lab(rgb)
-    lightness_u16 = np.round(lab[..., 0] * (UINT16_MAX / LAB_L_MAX)).astype(np.uint16)
+    return _with_lightness(rgb, lab, _blend(lab[..., 0], _clahe_lightness(lab[..., 0]), blend))
+
+
+def _clahe_lightness(lightness: np.ndarray) -> np.ndarray:
+    lightness_u16 = np.round(lightness * (UINT16_MAX / LAB_L_MAX)).astype(np.uint16)
     clahe = cv2.createCLAHE(clipLimit=CLAHE_CLIP_LIMIT, tileGridSize=CLAHE_TILES)
-    equalized = clahe.apply(lightness_u16).astype(np.float32) * (LAB_L_MAX / UINT16_MAX)
-    return _with_lightness(rgb, lab, _blend(lab[..., 0], equalized, blend))
+    return clahe.apply(lightness_u16).astype(np.float32) * (LAB_L_MAX / UINT16_MAX)
 
 
 def _with_lightness(rgb: np.ndarray, lab: np.ndarray, lightness: np.ndarray) -> np.ndarray:
     relit = lab.copy()
     relit[..., 0] = lightness
     # Applied as a delta: the float Lab round trip alone drifts ~1e-3 even where L did not change.
-    return np.clip(rgb + (_lab_to_rgb(relit) - _lab_to_rgb(lab)), 0.0, 1.0)
+    delta = _lab_to_rgb(relit)
+    del relit
+    delta -= _lab_to_rgb(lab)
+    delta += rgb
+    return np.clip(delta, 0.0, 1.0, out=delta)
 
 
 def _blend(original: np.ndarray, processed: np.ndarray, amount: float) -> np.ndarray:

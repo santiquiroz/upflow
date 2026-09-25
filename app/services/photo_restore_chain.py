@@ -71,7 +71,7 @@ RESTORE_CHAIN: tuple[RestoreStepSpec, ...] = (
     _step("colorize", "output", "model", pack=COLORIZE_PACK, warning_key="restore.warning.colorize"),
 )
 
-_FAMILY_IN_MESSAGE: dict[str, str] = {
+STEP_PLAIN_NAMES: dict[str, str] = {
     "descreen": "print pattern removal",
     "repair": "damage repair",
     "deblock": "JPEG artifact removal",
@@ -154,7 +154,7 @@ def _unknown_message(unknown: Sequence[str], chain: Sequence[RestoreStepSpec]) -
 
 def _redundant_message(first: RestoreStepSpec, second: RestoreStepSpec) -> str:
     shared = [family for family in first.covers if family in second.covers]
-    tasks = ", ".join(_FAMILY_IN_MESSAGE.get(family, family) for family in shared)
+    tasks = ", ".join(STEP_PLAIN_NAMES.get(family, family) for family in shared)
     return (
         f"Redundant restore steps: {first.id!r} and {second.id!r} do the same job ({tasks}). "
         "Pick one: running both would process the photo twice for the same fix."

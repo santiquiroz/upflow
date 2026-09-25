@@ -213,23 +213,34 @@ def fit_to_gamut(linear: np.ndarray, luminance: np.ndarray) -> np.ndarray:
     # Recortar canal por canal cambia la Y; se acerca el color al gris de su misma Y hasta que entra.
     gray = luminance[..., np.newaxis]
     offset = linear - gray
-    with np.errstate(divide="ignore", invalid="ignore"):
-        room = np.where(offset > 0.0, (1.0 - gray) / offset, np.where(offset < 0.0, -gray / offset, np.inf))
+    room = np.full_like(offset, np.inf)
+    # En el lugar (out=, where=): son franjas de 1024 filas y cada temporal pesa (§3.1, memoria acotada).
+    np.divide(1.0 - gray, offset, out=room, where=offset > 0.0)
+    np.divide(-gray, offset, out=room, where=offset < 0.0)
     scale = np.minimum(room.min(axis=-1, keepdims=True), 1.0)
-    return np.clip(gray + scale * offset, 0.0, 1.0).astype(np.float32, copy=False)
+    del room
+    offset *= scale
+    offset += gray
+    return np.clip(offset, 0.0, 1.0, out=offset).astype(np.float32, copy=False)
 
 
 def srgb_to_linear(values: np.ndarray) -> np.ndarray:
-    low = values / SRGB_LOW_SLOPE
-    high = np.power((np.maximum(values, SRGB_KNEE) + SRGB_OFFSET) / (1.0 + SRGB_OFFSET), SRGB_GAMMA)
-    return np.where(values <= SRGB_KNEE, low, high).astype(np.float32, copy=False)
+    linear = np.maximum(values, np.float32(SRGB_KNEE))
+    linear += SRGB_OFFSET
+    linear /= 1.0 + SRGB_OFFSET
+    np.power(linear, SRGB_GAMMA, out=linear)
+    np.divide(values, SRGB_LOW_SLOPE, out=linear, where=values <= SRGB_KNEE)
+    return linear.astype(np.float32, copy=False)
 
 
 def linear_to_srgb(values: np.ndarray) -> np.ndarray:
     clipped = np.clip(values, 0.0, 1.0)
-    low = clipped * SRGB_LOW_SLOPE
-    high = (1.0 + SRGB_OFFSET) * np.power(np.maximum(clipped, LINEAR_KNEE), 1.0 / SRGB_GAMMA) - SRGB_OFFSET
-    return np.where(clipped <= LINEAR_KNEE, low, high).astype(np.float32, copy=False)
+    encoded = np.maximum(clipped, np.float32(LINEAR_KNEE))
+    np.power(encoded, 1.0 / SRGB_GAMMA, out=encoded)
+    encoded *= 1.0 + SRGB_OFFSET
+    encoded -= SRGB_OFFSET
+    np.multiply(clipped, SRGB_LOW_SLOPE, out=encoded, where=clipped <= LINEAR_KNEE)
+    return encoded.astype(np.float32, copy=False)
 
 
 def lab_f(t: np.ndarray) -> np.ndarray:
