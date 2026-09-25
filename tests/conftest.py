@@ -31,6 +31,8 @@ def isolated_runtime_dir(tmp_path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("EP_PLUGINS_DIR", str(tmp_path / "ep-plugins-no-instalado"))
     # Mismo motivo con los modelos de separacion karaoke (vendor/karaoke).
     monkeypatch.setenv("KARAOKE_MODEL_DIR", str(tmp_path / "karaoke-no-instalado"))
+    # Y con los bundles de restauracion de fotos (vendor/restore).
+    monkeypatch.setenv("RESTORE_MODEL_DIR", str(tmp_path / "restore-no-instalado"))
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()

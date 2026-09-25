@@ -9,11 +9,12 @@ from functools import lru_cache
 from pathlib import Path
 from typing import TypedDict
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.services.classic_upscalers import catalog_entries as classic_catalog_entries
 from app.services.json_store import write_text_atomically
+from app.services.restore_models import RESTORE_BUNDLES, installed_manifest
 
 
 def _logical_cpus() -> int:
@@ -468,6 +469,28 @@ class Settings(BaseSettings):
         default=8.0, alias="ROFORMER_SEPARATION_MARGIN_SECONDS"
     )
 
+    # Restauracion de fotos y modo CCTV (spec §5.8). Sin flags ENABLE_*: bajar el
+    # pack es poder usarlo, igual que karaoke. El catalogo de modelos vive en
+    # app/services/restore_models.py.
+    restore_model_dir: str = Field(default="vendor/restore", alias="RESTORE_MODEL_DIR")
+    # Presupuesto TDR por llamada; la calibracion de tiles apunta a la mitad.
+    restore_call_budget_ms: int = Field(default=1200, alias="RESTORE_CALL_BUDGET_MS")
+    restore_gpu_throttle_seconds: float = Field(default=0.0, alias="RESTORE_GPU_THROTTLE_SECONDS")
+    restore_session_cache_mb: int = Field(default=3000, alias="RESTORE_SESSION_CACHE_MB")
+    restore_max_live_sessions: int = Field(default=3, alias="RESTORE_MAX_LIVE_SESSIONS")
+    # VRAM libre minima antes de un SR ncnn (Vulkan, otro proceso que el
+    # coordinator no ve); si no alcanza se liberan las sesiones de restauracion.
+    restore_ncnn_headroom_mb: int = Field(default=2048, alias="RESTORE_NCNN_HEADROOM_MB")
+    restore_max_input_pixels: int = Field(default=40_000_000, alias="RESTORE_MAX_INPUT_PIXELS")
+    restore_max_output_pixels: int = Field(default=100_000_000, alias="RESTORE_MAX_OUTPUT_PIXELS")
+    restore_analysis_concurrency: int = Field(default=1, alias="RESTORE_ANALYSIS_CONCURRENCY")
+    # Hilos de x264 y slices de FFV1 FIJOS: son lo unico del carril CCTV cuya
+    # salida cambia con el paralelismo, y el informe promete bits reproducibles.
+    cctv_x264_threads: int = Field(default=4, alias="CCTV_X264_THREADS")
+    cctv_ffv1_slices: int = Field(default=4, alias="CCTV_FFV1_SLICES")
+    cctv_max_still_frames: int = Field(default=20, alias="CCTV_MAX_STILL_FRAMES")
+    cctv_roi_max_frames: int = Field(default=60, alias="CCTV_ROI_MAX_FRAMES")
+
     # GMFSS (second interpolation engine, max-quality anime frame interpolation,
     # own port santiquiroz/port-gmfss-onnx). 10x or more slower than RIFE by
     # design -- a short-clip smoke test measured closer to 20x due to
@@ -713,6 +736,31 @@ class Settings(BaseSettings):
         parts = value.split(":")
         if len(parts) != 3 or not all(part.isdigit() and int(part) >= 1 for part in parts):
             raise ValueError('RIFE_THREADS must be "auto" or "load:proc:save" positive integers')
+        return value
+
+    @field_validator(
+        "restore_call_budget_ms",
+        "restore_session_cache_mb",
+        "restore_max_live_sessions",
+        "restore_max_input_pixels",
+        "restore_max_output_pixels",
+        "restore_analysis_concurrency",
+        "cctv_x264_threads",
+        "cctv_ffv1_slices",
+        "cctv_max_still_frames",
+        "cctv_roi_max_frames",
+    )
+    @classmethod
+    def _validate_restore_positive(cls, value: int, info: ValidationInfo) -> int:
+        if value < 1:
+            raise ValueError(f"{info.field_name.upper()} must be at least 1")
+        return value
+
+    @field_validator("restore_gpu_throttle_seconds", "restore_ncnn_headroom_mb")
+    @classmethod
+    def _validate_restore_non_negative(cls, value: float, info: ValidationInfo) -> float:
+        if value < 0:
+            raise ValueError(f"{info.field_name.upper()} must be >= 0")
         return value
 
     @field_validator("rife_uhd_mode")
@@ -1134,6 +1182,28 @@ class Settings(BaseSettings):
             if all((carpeta / archivo).exists() for archivo in spec.files):
                 return str(model_file(carpeta, model_id))
         return ""
+
+    @property
+    def restore_model_dir_path(self) -> Path:
+        return resolve_against_project_root(self.restore_model_dir)
+
+    def restore_bundle_manifest(self, bundle: str) -> str:
+        # Para el PathRequirement del catalogo de capacidades: la ruta del
+        # manifiesto si el bundle esta completo en disco, o "" (= no cumplido).
+        manifest = installed_manifest(self.restore_model_dir_path, RESTORE_BUNDLES[bundle])
+        return str(manifest) if manifest is not None else ""
+
+    @property
+    def restore_core_installed(self) -> str:
+        return self.restore_bundle_manifest("core")
+
+    @property
+    def restore_faces_installed(self) -> str:
+        return self.restore_bundle_manifest("faces")
+
+    @property
+    def restore_colorize_installed(self) -> str:
+        return self.restore_bundle_manifest("colorize")
 
     @property
     def music_transcription_model_path(self) -> Path:
