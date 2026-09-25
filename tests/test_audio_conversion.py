@@ -22,6 +22,7 @@ from app.services.audio_pipeline import AudioPipeline
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.progress import build_audio_stages
 from app.services.storage import StorageService
+from ffmpeg_support import needs_ffmpeg
 
 # ---------------------------------------------------------------------------
 # Conversion directa: un job SIN ningun paso de procesamiento convierte de
@@ -618,16 +619,12 @@ async def test_a_forced_resample_reaches_the_job_metadata(tmp_path: Path) -> Non
 
 # ---------------------------------------------------------------------------
 # Smoke con ffmpeg REAL: lo unico que prueba que la tasa y la profundidad
-# sobreviven de verdad. Se saltea sin los binarios vendorizados.
+# sobreviven de verdad. Se saltea sin los binarios vendorizados (y falla con
+# UPFLOW_REQUIRE_FFMPEG=1, ver tests/ffmpeg_support.py).
 # ---------------------------------------------------------------------------
 
 _FFMPEG = Settings(RUNTIME_DIR="runtime").ffmpeg_binary_path
 _FFPROBE = Settings(RUNTIME_DIR="runtime").ffprobe_binary_path
-
-needs_ffmpeg = pytest.mark.skipif(
-    not (_FFMPEG.exists() and _FFPROBE.exists()),
-    reason="vendored ffmpeg/ffprobe not present",
-)
 
 
 def write_real_flac(path: Path, sample_rate: int = 44100) -> Path:

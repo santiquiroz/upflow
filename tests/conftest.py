@@ -1,8 +1,17 @@
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from app.config import get_settings
+from ffmpeg_support import check_ffmpeg_for
+from gpu_support import check_gpu_for
+
+
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    check_gpu_for(item, os.environ)
+    check_ffmpeg_for(item, os.environ)
 
 
 @pytest.fixture(autouse=True)

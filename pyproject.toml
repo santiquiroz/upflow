@@ -125,4 +125,10 @@ asyncio_mode = "auto"
 # instala las librerias MCAD, que incluyen test_mcad.py, y pytest lo coleccionaba
 # y moria antes de correr una sola prueba nuestra.
 testpaths = ["tests"]
-norecursedirs = ["vendor", "runtime", "installer", "node_modules", ".venv"]
+# tests/gpu queda fuera de la coleccion por defecto: esos tests ocupan la GPU y
+# se corren de a uno, nombrando el archivo (ver tests/gpu_support.py).
+norecursedirs = ["vendor", "runtime", "installer", "node_modules", ".venv", "tests/gpu"]
+markers = [
+  "gpu: needs a real GPU; lives in tests/gpu and runs only with UPFLOW_GPU_TESTS=1",
+  "ffmpeg: needs the ffmpeg/ffprobe binaries; skipped without them, fails with UPFLOW_REQUIRE_FFMPEG=1",
+]
