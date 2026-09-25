@@ -114,6 +114,35 @@ def _frame_saver(frames_out: Path, png_level: int) -> Callable[[tuple[str, np.nd
     return save_item
 
 
+# Los grafos builtin son uint8-in/out (ver la cabecera del módulo).
+READBACK_DTYPE = np.uint8
+
+
+def ring_output_shape(frame_nhwc: np.ndarray, scale: int) -> tuple[int, int, int, int]:
+    batch, height, width, channels = frame_nhwc.shape
+    return (batch, height * scale, width * scale, channels)
+
+
+def fill_ring_buffer(buffer: np.ndarray, upscaled: np.ndarray) -> np.ndarray:
+    # Se reusa el MISMO slot que falló al bindear: saltearlo haría que el frame
+    # siguiente reciba un buffer que la cola downstream todavía retiene.
+    if upscaled.shape != buffer.shape or upscaled.dtype != buffer.dtype:
+        # La escala declarada no es la del grafo: sin anillo, un array propio nunca aliasa.
+        return upscaled
+    np.copyto(buffer, upscaled)
+    return buffer
+
+
+def bind_input_on_device(io_binding: Any, input_name: str, frame_nhwc: np.ndarray, device: str) -> None:
+    if not device.startswith(DML_DEVICE_PREFIX):
+        io_binding.bind_cpu_input(input_name, frame_nhwc)
+        return
+    import onnxruntime as ort
+
+    input_value = ort.OrtValue.ortvalue_from_numpy(frame_nhwc, "dml", parse_dml_device_id(device))
+    io_binding.bind_ortvalue_input(input_name, input_value)
+
+
 class OnnxVideoUpscaler:
     def __init__(
         self,
@@ -130,6 +159,7 @@ class OnnxVideoUpscaler:
         self._session_lock = threading.Lock()
         self._gpu_ep_cache: bool | None = None
         self._iobinding_warned = False
+        self._ring_bind_warned = False
         # Diagnostico expuesto al caller (llega a job.metadata): por que un job
         # fue lento. fp32 en vez de fp16 son 7.26x; el tiling son 2.3x.
         self.last_precision: str | None = None
@@ -283,7 +313,13 @@ class OnnxVideoUpscaler:
         cancel_event = threading.Event()
         worker = asyncio.ensure_future(
             asyncio.to_thread(
-                self._run_streaming_blocking, frames_in, onnx_path, device, write_frame, cancel_event
+                self._run_streaming_blocking,
+                frames_in,
+                onnx_path,
+                device,
+                write_frame,
+                cancel_event,
+                model.scale,
             )
         )
         try:
@@ -335,7 +371,7 @@ class OnnxVideoUpscaler:
 
         def upscale_frame(frame_nhwc: np.ndarray) -> np.ndarray:
             upscaled, state["force_tiled"] = self._upscale_one(
-                session, frame_nhwc, device, state["force_tiled"], ring
+                session, frame_nhwc, device, state["force_tiled"], ring, model.scale
             )
             return upscaled
 
@@ -348,6 +384,7 @@ class OnnxVideoUpscaler:
         device: str,
         write_frame: "Callable[[np.ndarray], None]",
         cancel_event: threading.Event,
+        scale: int | None = None,
     ) -> int:
         if not self.available():
             raise RuntimeError("ONNX video engine is not available: onnxruntime and opencv are required")
@@ -356,7 +393,7 @@ class OnnxVideoUpscaler:
         self.devices.validate(device)
         session = self._get_session(str(onnx_path), device)
         frame_paths = sorted(frames_in.glob("*.png"))
-        self._run_streaming_pipeline(session, frame_paths, device, write_frame, cancel_event)
+        self._run_streaming_pipeline(session, frame_paths, device, write_frame, cancel_event, scale)
         return len(frame_paths)
 
     def _run_streaming_pipeline(
@@ -366,6 +403,7 @@ class OnnxVideoUpscaler:
         device: str,
         write_frame: "Callable[[np.ndarray], None]",
         cancel_event: threading.Event,
+        scale: int | None = None,
     ) -> None:
         # Exactly one loader so frames load + infer in strict index order and the
         # writer never has to hold more than the in-flight frame (the reorder
@@ -393,7 +431,7 @@ class OnnxVideoUpscaler:
         writer.start()
         try:
             self._infer_loop(
-                session, load_q, save_q, device, len(frame_paths), [loader], errors, cancel_event, ring
+                session, load_q, save_q, device, len(frame_paths), [loader], errors, cancel_event, ring, scale
             )
         finally:
             drain_queue(load_q)
@@ -530,7 +568,7 @@ class OnnxVideoUpscaler:
 
         try:
             self._infer_loop(
-                session, load_q, save_q, device, len(frame_paths), loaders, errors, cancel_event, ring
+                session, load_q, save_q, device, len(frame_paths), loaders, errors, cancel_event, ring, scale
             )
         finally:
             # Drain any frames still queued so a loader blocked on a full load_q
@@ -558,6 +596,7 @@ class OnnxVideoUpscaler:
         errors: list[Exception],
         cancel_event: threading.Event,
         ring: FrameReadbackRing | None = None,
+        scale: int | None = None,
     ) -> None:
         processed = 0
         force_tiled = False  # sticky per-run: once a whole-frame OOM forces tiling, stay tiled
@@ -577,7 +616,7 @@ class OnnxVideoUpscaler:
                     return
                 continue
             try:
-                upscaled, force_tiled = self._upscale_one(session, frame, device, force_tiled, ring)
+                upscaled, force_tiled = self._upscale_one(session, frame, device, force_tiled, ring, scale)
             except Exception as exc:  # noqa: BLE001
                 errors.append(exc)
                 cancel_event.set()
@@ -595,6 +634,7 @@ class OnnxVideoUpscaler:
         device: str,
         force_tiled: bool = False,
         ring: FrameReadbackRing | None = None,
+        scale: int | None = None,
     ) -> tuple[np.ndarray, bool]:
         """Upscale one frame; returns (frame, force_tiled_for_rest_of_job).
 
@@ -608,7 +648,7 @@ class OnnxVideoUpscaler:
             self.last_tiled = True
             return self._infer_tiled(session, frame_nhwc, device), force_tiled
         try:
-            upscaled = self._infer_frame(session, frame_nhwc, device)
+            upscaled = self._infer_whole_frame(session, frame_nhwc, device, ring, scale)
         except Exception as exc:  # noqa: BLE001
             if not _is_oom_error(exc):
                 raise
@@ -620,11 +660,66 @@ class OnnxVideoUpscaler:
             )
             self.last_tiled = True
             return self._infer_tiled(session, frame_nhwc, device), True
+        return upscaled, False
+
+    def _infer_whole_frame(
+        self,
+        session: Any,
+        frame_nhwc: np.ndarray,
+        device: str,
+        ring: FrameReadbackRing | None,
+        scale: int | None,
+    ) -> np.ndarray:
         # El anillo aplica solo al readback whole-frame (el camino rápido cuya
         # allocación por frame se midió); el tiled ya aloca su canvas al blendear.
-        if ring is not None:
-            upscaled = ring.copy_in(upscaled)
-        return upscaled, False
+        if ring is None:
+            return self._infer_frame(session, frame_nhwc, device)
+        if scale is None:
+            return ring.copy_in(self._infer_frame(session, frame_nhwc, device))
+        return self._infer_into_ring(session, frame_nhwc, device, ring, scale)
+
+    def _infer_into_ring(
+        self, session: Any, frame_nhwc: np.ndarray, device: str, ring: FrameReadbackRing, scale: int
+    ) -> np.ndarray:
+        buffer = ring.next_buffer(ring_output_shape(frame_nhwc, scale), READBACK_DTYPE)
+        if self._bind_output_to_buffer(session, frame_nhwc, device, buffer):
+            return buffer
+        return fill_ring_buffer(buffer, self._infer_frame(session, frame_nhwc, device))
+
+    def _bind_output_to_buffer(
+        self, session: Any, frame_nhwc: np.ndarray, device: str, buffer: np.ndarray
+    ) -> bool:
+        # ORT escribe la salida directo en el buffer del anillo: sin el array
+        # nuevo por frame de copy_outputs_to_cpu() ni el np.copyto posterior.
+        try:
+            io_binding = session.io_binding()
+            bind_input_on_device(io_binding, session.get_inputs()[0].name, frame_nhwc, device)
+            io_binding.bind_output(
+                session.get_outputs()[0].name,
+                device_type="cpu",
+                device_id=0,
+                element_type=buffer.dtype.type,
+                shape=buffer.shape,
+                buffer_ptr=buffer.ctypes.data,
+            )
+            session.run_with_iobinding(io_binding)
+        except Exception as exc:  # noqa: BLE001
+            if _is_oom_error(exc):
+                raise
+            self._warn_ring_bind_failed_once(device)
+            return False
+        return True
+
+    def _warn_ring_bind_failed_once(self, device: str) -> None:
+        if self._ring_bind_warned:
+            return
+        self._ring_bind_warned = True
+        logger.warning(
+            "binding the ONNX output to the readback ring failed on %s; falling back to "
+            "device output + copy into the ring",
+            device,
+            exc_info=True,
+        )
 
     def _infer_frame(self, session: Any, frame_nhwc: np.ndarray, device: str) -> np.ndarray:
         input_name = session.get_inputs()[0].name
@@ -645,12 +740,8 @@ class OnnxVideoUpscaler:
         # host<->device copies. Any failure (older ort, EP quirk) returns None
         # so the caller falls back to a plain run rather than failing the job.
         try:
-            import onnxruntime as ort
-
-            device_id = parse_dml_device_id(device)
             io_binding = session.io_binding()
-            input_value = ort.OrtValue.ortvalue_from_numpy(frame_nhwc, "dml", device_id)
-            io_binding.bind_ortvalue_input(input_name, input_value)
+            bind_input_on_device(io_binding, input_name, frame_nhwc, device)
             io_binding.bind_output(output_name, "dml")
             session.run_with_iobinding(io_binding)
             return io_binding.copy_outputs_to_cpu()[0]

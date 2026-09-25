@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import ctypes
+import logging
 import queue
+import sys
 import threading
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -551,10 +555,12 @@ async def test_run_frames_streaming_ring_cycling_keeps_frames_correct(
 def test_build_frame_upscaler_ring_capacity_cycles_buffers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # El modelo x2 coincide con el fake 2x: el anillo dimensiona sus buffers con
+    # la escala declarada del modelo, y una salida de otra escala no entra en él.
     engine = make_engine(tmp_path)
-    touch_builtin_onnx(engine.settings, "realesr-animevideov3-x4-uint8.onnx")
+    touch_builtin_onnx(engine.settings, "realesr-animevideov3-x2-uint8.onnx")
     monkeypatch.setattr(engine, "_create_session", lambda model_path, device: Double2xUint8Session())
-    upscale = engine.build_frame_upscaler("realesr-animevideov3-x4", "cpu", readback_ring_capacity=2)
+    upscale = engine.build_frame_upscaler("realesr-animevideov3-x2", "cpu", readback_ring_capacity=2)
     frame = np.random.default_rng(6).integers(0, 256, (1, 4, 6, 3), dtype=np.uint8)
 
     out1, out2, out3 = upscale(frame), upscale(frame), upscale(frame)
@@ -574,6 +580,261 @@ def test_build_frame_upscaler_defaults_to_no_ring(tmp_path: Path, monkeypatch: p
     frame = np.zeros((1, 4, 6, 3), dtype=np.uint8)
 
     assert upscale(frame) is not upscale(frame)
+
+
+# ---------------------------------------------------------------------------
+# Readback directo al anillo: la salida de ORT se bindea al buffer preasignado
+# (bind_output con buffer_ptr) en vez de copy_outputs_to_cpu() + np.copyto.
+# Sin GPU: la ruta DML se prueba con un io_binding falso y la ruta real con una
+# sesión CPUExecutionProvider sobre un grafo Resize NHWC uint8.
+# ---------------------------------------------------------------------------
+
+
+def _doubled(frame: np.ndarray) -> np.ndarray:
+    return np.repeat(np.repeat(frame, 2, axis=1), 2, axis=2)
+
+
+def _write_to_address(address: int, array: np.ndarray) -> None:
+    target = np.ctypeslib.as_array((ctypes.c_uint8 * array.nbytes).from_address(address))
+    target[:] = np.ascontiguousarray(array).reshape(-1).view(np.uint8)
+
+
+class _FakeOrtValue:
+    def __init__(self, array: np.ndarray) -> None:
+        self.array = array
+
+
+class _FakeOrtModule:
+    class OrtValue:
+        @staticmethod
+        def ortvalue_from_numpy(array: np.ndarray, device: str, device_id: int) -> _FakeOrtValue:
+            return _FakeOrtValue(array)
+
+
+class _RecordingIoBinding:
+    def __init__(self, session: "IoBindingDouble2xSession") -> None:
+        self._session = session
+        self.input: np.ndarray | None = None
+        self.output_buffer_ptr: int | None = None
+
+    def bind_ortvalue_input(self, name: str, value: _FakeOrtValue) -> None:
+        self.input = value.array
+
+    def bind_cpu_input(self, name: str, array: np.ndarray) -> None:
+        self.input = array
+
+    def bind_output(
+        self,
+        name: str,
+        device_type: str = "cpu",
+        device_id: int = 0,
+        element_type: Any = None,
+        shape: Any = None,
+        buffer_ptr: int | None = None,
+    ) -> None:
+        if device_type == "cpu" and self._session.fail_cpu_output_bind:
+            raise RuntimeError("binding the output to CPU memory is not supported")
+        self._session.bound_outputs.append((device_type, buffer_ptr))
+        self.output_buffer_ptr = buffer_ptr
+
+    def copy_outputs_to_cpu(self) -> list[np.ndarray]:
+        self._session.copy_outputs_calls += 1
+        assert self.input is not None
+        return [_doubled(self.input)]
+
+
+class IoBindingDouble2xSession(Double2xUint8Session):
+    """Double2xUint8Session con io_binding(): si la salida está bindeada a un
+    buffer CPU, run_with_iobinding escribe el resultado en esa dirección."""
+
+    def __init__(self, fail_cpu_output_bind: bool = False) -> None:
+        super().__init__()
+        self.fail_cpu_output_bind = fail_cpu_output_bind
+        self.bound_outputs: list[tuple[str, int | None]] = []
+        self.copy_outputs_calls = 0
+        self.plain_run_calls = 0
+
+    def io_binding(self) -> _RecordingIoBinding:
+        return _RecordingIoBinding(self)
+
+    def run_with_iobinding(self, binding: _RecordingIoBinding) -> None:
+        assert binding.input is not None
+        if binding.output_buffer_ptr is not None:
+            _write_to_address(binding.output_buffer_ptr, _doubled(binding.input))
+
+    def run(self, output_names: list[str], input_feed: dict[str, np.ndarray]) -> list[np.ndarray]:
+        self.plain_run_calls += 1
+        return super().run(output_names, input_feed)
+
+
+def make_resize_session(scale: int) -> Any:
+    ort = pytest.importorskip("onnxruntime")
+    onnx_helper = pytest.importorskip("onnx.helper")
+    from onnx import TensorProto
+
+    image = onnx_helper.make_tensor_value_info("image", TensorProto.UINT8, [1, None, None, 3])
+    upscaled = onnx_helper.make_tensor_value_info("upscaled", TensorProto.UINT8, [1, None, None, 3])
+    scales = onnx_helper.make_tensor("scales", TensorProto.FLOAT, [4], [1.0, float(scale), float(scale), 1.0])
+    node = onnx_helper.make_node("Resize", ["image", "", "scales"], ["upscaled"], mode="nearest")
+    graph = onnx_helper.make_graph([node], "resize-nhwc-uint8", [image], [upscaled], initializer=[scales])
+    model = onnx_helper.make_model(graph, opset_imports=[onnx_helper.make_opsetid("", 17)])
+    return ort.InferenceSession(model.SerializeToString(), providers=["CPUExecutionProvider"])
+
+
+def test_readback_ring_next_buffer_rotates_without_copying() -> None:
+    ring = FrameReadbackRing(2)
+    first = ring.next_buffer((1, 2, 2, 3), np.uint8)
+    first[...] = 5
+    second = ring.next_buffer((1, 2, 2, 3), np.uint8)
+    third = ring.next_buffer((1, 2, 2, 3), np.uint8)
+
+    assert second is not first
+    assert third is first
+    assert third[0, 0, 0, 0] == 5  # ni copia ni limpieza: escribe quien lo pide
+    assert first.dtype == np.uint8
+    assert first.flags.c_contiguous
+
+
+def test_upscale_one_binds_the_dml_output_into_the_ring_buffer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(sys.modules, "onnxruntime", _FakeOrtModule)
+    engine = make_engine(tmp_path)
+    session = IoBindingDouble2xSession()
+    ring = FrameReadbackRing(2)
+    frames = [np.random.default_rng(seed).integers(0, 256, (1, 4, 6, 3), dtype=np.uint8) for seed in (1, 2)]
+
+    out1, _ = engine._upscale_one(session, frames[0], "dml:0", False, ring, 2)
+    out2, _ = engine._upscale_one(session, frames[1], "dml:0", False, ring, 2)
+
+    assert session.copy_outputs_calls == 0
+    assert session.plain_run_calls == 0
+    assert session.bound_outputs == [("cpu", out1.ctypes.data), ("cpu", out2.ctypes.data)]
+    assert out1 is not out2
+    assert np.array_equal(out1, _doubled(frames[0]))
+    assert np.array_equal(out2, _doubled(frames[1]))
+
+
+def test_upscale_one_ring_bind_on_a_real_cpu_session_is_bit_exact_and_rotates(tmp_path: Path) -> None:
+    session = make_resize_session(4)
+    engine = make_engine(tmp_path)
+    capacity = 3
+    ring = FrameReadbackRing(capacity)
+    rng = np.random.default_rng(11)
+    outs = []
+    for _ in range(capacity + 2):
+        frame = rng.integers(0, 256, (1, 5, 7, 3), dtype=np.uint8)
+        out, _ = engine._upscale_one(session, frame, "cpu", False, ring, 4)
+        assert np.array_equal(out, session.run(None, {"image": frame})[0])
+        outs.append(out)
+
+    assert engine._ring_bind_warned is False  # salió por el bind, no por el fallback
+    assert len({id(out) for out in outs[:capacity]}) == capacity
+    assert outs[capacity] is outs[0]
+    assert outs[capacity + 1] is outs[1]
+
+
+def test_upscale_one_ring_bind_failure_falls_back_to_the_dml_copy_path_and_logs_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setitem(sys.modules, "onnxruntime", _FakeOrtModule)
+    engine = make_engine(tmp_path)
+    session = IoBindingDouble2xSession(fail_cpu_output_bind=True)
+    ring = FrameReadbackRing(2)
+    frames = [np.random.default_rng(seed).integers(0, 256, (1, 4, 6, 3), dtype=np.uint8) for seed in (3, 4, 5)]
+
+    outs = []
+    with caplog.at_level(logging.WARNING, logger="app.services.engines.onnx_video_upscaler"):
+        for frame in frames:
+            out, _ = engine._upscale_one(session, frame, "dml:0", False, ring, 2)
+            assert np.array_equal(out, _doubled(frame))  # antes de que el anillo lo reuse
+            outs.append(out)
+
+    assert session.copy_outputs_calls == 3  # camino actual: salida en "dml" + copy_outputs_to_cpu
+    assert session.plain_run_calls == 0  # nunca al plain-run
+    assert outs[2] is outs[0]  # el fallback sigue escribiendo en el anillo
+    warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
+    assert len(warnings) == 1
+
+
+def test_upscale_one_ring_with_a_wrong_declared_scale_returns_the_real_output_outside_the_ring(
+    tmp_path: Path,
+) -> None:
+    # ORT rechaza el buffer de shape equivocado ("OrtValue shape verification
+    # failed") en vez de escribir fuera de él; el frame sale por el fallback y,
+    # como no entra en el anillo, se devuelve el array propio del run.
+    session = make_resize_session(4)
+    engine = make_engine(tmp_path)
+    ring = FrameReadbackRing(2)
+    frame = np.random.default_rng(13).integers(0, 256, (1, 5, 7, 3), dtype=np.uint8)
+
+    out, _ = engine._upscale_one(session, frame, "cpu", False, ring, 2)
+
+    assert engine._ring_bind_warned is True
+    assert np.array_equal(out, session.run(None, {"image": frame})[0])
+    assert out.shape == (1, 20, 28, 3)
+
+
+async def test_run_frames_streaming_binds_into_the_ring_with_the_model_scale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = make_engine(tmp_path)
+    touch_builtin_onnx(engine.settings, "realesr-animevideov3-x2-uint8.onnx")
+    session = make_resize_session(2)
+    monkeypatch.setattr(engine, "_create_session", lambda model_path, device: session)
+    frames_in = tmp_path / "frames-in"
+    write_frames(frames_in, count=9, height=4, width=6)
+    received: list[np.ndarray] = []
+
+    await engine.run_frames_streaming(
+        frames_in, "realesr-animevideov3-x2", "cpu", lambda frame: received.append(frame.copy())
+    )
+
+    assert engine._ring_bind_warned is False
+    for index, path in enumerate(sorted(frames_in.glob("*.png"))):
+        with Image.open(path) as image:
+            source = np.asarray(image)
+        assert np.array_equal(received[index], np.repeat(np.repeat(source, 2, axis=0), 2, axis=1)), path.name
+
+
+async def test_run_frames_builtin_binds_into_the_ring_with_the_model_scale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = make_engine(tmp_path, ONNX_VIDEO_LOAD_THREADS=1, ONNX_VIDEO_SAVE_THREADS=1)
+    touch_builtin_onnx(engine.settings, "realesr-animevideov3-x2-uint8.onnx")
+    session = make_resize_session(2)
+    monkeypatch.setattr(engine, "_create_session", lambda model_path, device: session)
+    frames_in = tmp_path / "frames-in"
+    frames_out = tmp_path / "frames-out"
+    write_frames(frames_in, count=9, height=4, width=6)
+
+    await engine.run_frames_builtin(frames_in, frames_out, "realesr-animevideov3-x2", "cpu")
+
+    assert engine._ring_bind_warned is False
+    for path in sorted(frames_in.glob("*.png")):
+        with Image.open(path) as image:
+            source = np.asarray(image)
+        with Image.open(frames_out / path.name) as image:
+            produced = np.asarray(image)
+        assert np.array_equal(produced, np.repeat(np.repeat(source, 2, axis=0), 2, axis=1)), path.name
+
+
+def test_build_frame_upscaler_binds_into_the_ring_with_the_model_scale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = make_engine(tmp_path)
+    touch_builtin_onnx(engine.settings, "realesr-animevideov3-x2-uint8.onnx")
+    session = make_resize_session(2)
+    monkeypatch.setattr(engine, "_create_session", lambda model_path, device: session)
+    upscale = engine.build_frame_upscaler("realesr-animevideov3-x2", "cpu", readback_ring_capacity=2)
+    frame = np.random.default_rng(12).integers(0, 256, (1, 4, 6, 3), dtype=np.uint8)
+
+    out1, out2, out3 = upscale(frame), upscale(frame), upscale(frame)
+
+    assert engine._ring_bind_warned is False
+    assert out1 is not out2
+    assert out3 is out1
+    assert np.array_equal(out2, _doubled(frame))
 
 
 def test_infer_tiled_matches_whole_frame_for_double_session(tmp_path: Path) -> None:
