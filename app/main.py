@@ -11,6 +11,8 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.auth_routes import router as auth_router
 from app.api.capability_routes import router as capability_router
+from app.api.cctv_routes import CctvApiState
+from app.api.cctv_routes import router as cctv_router
 from app.api.editor_routes import router as editor_router
 from app.api.routes import router as api_router
 from app.api.users_routes import router as users_router
@@ -327,6 +329,7 @@ async def lifespan(app: FastAPI):
     app.state.onnx_cpu_fallback_probe = onnx_cpu_fallback_probe
     app.state.job_manager = job_manager
     app.state.video_job_manager = video_job_manager
+    app.state.cctv = CctvApiState()
     app.state.audio_job_manager = audio_job_manager
     app.state.retention_sweeper = retention_sweeper
     app.state.model_registry = model_registry
@@ -359,6 +362,7 @@ async def lifespan(app: FastAPI):
     finally:
         await job_manager.stop()
         await video_job_manager.stop()
+        await app.state.cctv.analyses.close()
         await audio_job_manager.stop()
         await retention_sweeper.stop()
         await model_installer.stop()
@@ -417,6 +421,7 @@ app.add_middleware(OriginGuardMiddleware, allowed_origins=settings.allowed_origi
 app.add_middleware(LoopbackGuardMiddleware, auth_mode=settings.auth_mode)
 app.include_router(api_router)
 app.include_router(capability_router)
+app.include_router(cctv_router)
 app.include_router(editor_router)
 app.include_router(auth_router)
 app.include_router(users_router)

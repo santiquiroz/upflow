@@ -123,6 +123,18 @@ def frame_index_csv(frames: Sequence[FrameEntry]) -> str:
     return "".join(f"{row}\n" for row in (",".join(FRAME_INDEX_COLUMNS), *map(frame_csv_row, frames)))
 
 
+def frame_from_csv_row(row: str) -> FrameEntry:
+    n, stamp, key_frame, pict_type, size = row.split(",")
+    return FrameEntry(int(n), optional_float(stamp or None), key_frame == "1", pict_type, optional_int(size or None))
+
+
+def parse_frame_index_csv(text: str) -> tuple[FrameEntry, ...]:
+    rows = [line for line in text.splitlines() if line.strip()]
+    if not rows or rows[0] != ",".join(FRAME_INDEX_COLUMNS):
+        raise ValueError("frame_index.csv has an unexpected header")
+    return tuple(frame_from_csv_row(row) for row in rows[1:])
+
+
 def timed_frames(frames: Sequence[FrameEntry]) -> list[FrameEntry]:
     return [frame for frame in frames if frame.pts_time is not None]
 

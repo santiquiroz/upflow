@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import pytest
 
-from app.services.cctv_frame_index import FrameEntry, frame_index_csv, parse_frame_index, summarize_frame_index
+from app.services.cctv_frame_index import (
+    FrameEntry,
+    frame_index_csv,
+    parse_frame_index,
+    parse_frame_index_csv,
+    summarize_frame_index,
+)
 
 
 def _frames(pts: list[float | None], types: str = "", sizes: list[int] | None = None) -> str:
@@ -125,3 +131,15 @@ def test_frame_index_summary_json_uses_camel_case() -> None:
 
     assert payload["frameCount"] == 3 and payload["measuredFps"] == pytest.approx(25.0)
     assert set(payload) == {"frameCount", "measuredFps", "medianDelta", "isVfr", "gaps", "probableDuplicates", "gop"}
+
+
+def test_the_stored_frame_index_csv_reads_back_to_the_same_entries() -> None:
+    frames = (FrameEntry(0, 0.0, True, "I", 4918), FrameEntry(1, None, False, "?", None), FrameEntry(2, 0.08, False, "P", 12))
+
+    assert parse_frame_index_csv(frame_index_csv(frames)) == frames
+
+
+def test_a_frame_index_csv_with_another_header_is_rejected() -> None:
+    with pytest.raises(ValueError, match="header"):
+        parse_frame_index_csv("frame,time\n0,0.0\n")
+

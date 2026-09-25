@@ -6,6 +6,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models import JobStatus
+from app.schemas_cctv import CctvSummary
 from app.services.capability_probe import LeverStatus
 from app.services.generation_variants import Precision
 from app.services.object_transfer import DEFAULT_HARMONIZE_BLEND
@@ -61,6 +62,8 @@ class VideoJobResponse(BaseModel):
     device: str | None = None
     backend: str | None = None
     video_encoder: str = Field(default="auto", serialization_alias="videoEncoder")
+    # Resumen del modo CCTV (spec §5.3); None en los jobs de reescalado.
+    cctv: CctvSummary | None = None
     created_at: datetime = Field(serialization_alias="createdAt")
     started_at: datetime | None = Field(default=None, serialization_alias="startedAt")
     finished_at: datetime | None = Field(default=None, serialization_alias="finishedAt")

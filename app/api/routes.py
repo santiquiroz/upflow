@@ -36,6 +36,7 @@ from app.models import (
     VideoUpscaleJob,
     Shape3dJob,
 )
+from app.schemas_cctv import cctv_summary
 from app.schemas import (
     AudioComparisonResponse,
     ComparisonEntryResponse,
@@ -534,6 +535,7 @@ def video_job_to_response(job: VideoUpscaleJob) -> VideoJobResponse:
         device=job.device,
         backend=job.backend,
         video_encoder=job.video_encoder,
+        cctv=cctv_summary(job),
         created_at=job.created_at,
         started_at=job.started_at,
         finished_at=job.finished_at,
