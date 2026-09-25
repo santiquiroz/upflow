@@ -171,6 +171,9 @@ class PhotoRestoreEngine:
         with self._lock:
             self._phase_devices.add(device)
 
+    def model_spec(self, model_id: str) -> RestoreModelSpec:
+        return self._models[model_id]
+
     def session(self, model_id: str, device: str, precision: str) -> Any:
         spec = self._models[model_id]
         key = SessionKey(model_id, device, precision)
