@@ -345,6 +345,13 @@ def test_reproduce_cmd_names_the_build_and_compares_against_sha256sums() -> None
     assert "SHA256SUMS.txt" in text and "certutil -hashfile" in text
 
 
+def test_reproduce_cmd_switches_to_utf8_and_restores_the_code_page_on_both_exits() -> None:
+    lines = reproduce_text(["ffmpeg", "-i", "x"], {}).splitlines()
+
+    assert lines.index("chcp 65001 >nul") < next(i for i, line in enumerate(lines) if line.startswith('"%FFMPEG%"'))
+    assert lines.count(runner.RESTORE_CODEPAGE) == 2
+
+
 def test_reproduce_cmd_escapes_percent_signs() -> None:
     text = reproduce_text(["ffmpeg", "-metadata", "comment=100%"], {})
 

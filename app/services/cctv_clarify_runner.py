@@ -69,6 +69,7 @@ STAGE_VERIFYING = "verifying"
 
 REPRODUCE_DIR = "reproduced"
 SHA256SUMS_NAME = "SHA256SUMS.txt"
+RESTORE_CODEPAGE = "if defined UPFLOW_CODEPAGE chcp %UPFLOW_CODEPAGE% >nul"
 _CMD_FORBIDDEN = ('"', "\n", "\r", "\x00")
 
 StageProgress = Callable[[str, float], None]
@@ -371,6 +372,9 @@ def command_line(step: ReproduceStep, path_map: Mapping[str, str]) -> list[str]:
 def build_header(caps: FfmpegCapabilities) -> list[str]:
     return [
         "@echo off",
+        # UTF-8 para los nombres no ASCII del original; la pagina de codigos se restaura al salir.
+        "for /f \"tokens=2 delims=:.\" %%C in ('chcp') do set \"UPFLOW_CODEPAGE=%%C\"",
+        "chcp 65001 >nul",
         "setlocal EnableExtensions DisableDelayedExpansion",
         "rem Reproduces the Upflow classic-filter outputs of this package and compares them with SHA256SUMS.txt.",
         f"rem Expected ffmpeg build: {cmd_escape(caps.version)}",
@@ -400,12 +404,14 @@ def check_lines(checks: Sequence[ReproduceCheck]) -> list[str]:
 def build_footer() -> list[str]:
     return [
         "popd",
+        RESTORE_CODEPAGE,
         "if defined FAILED (echo Some files are different. & exit /b 1)",
         "echo All reproduced files match SHA256SUMS.txt.",
         "exit /b 0",
         "",
         ":failed",
         "popd",
+        RESTORE_CODEPAGE,
         "exit /b 1",
         "",
         ":sha256",
