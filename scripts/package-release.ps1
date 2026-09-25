@@ -95,7 +95,9 @@ function Copy-AppAllowlist {
     # only end-user-facing files travel in a release artifact. Binaries in
     # vendor/ are downloaded on first launch by upflow-launcher.ps1.
     $includeDirs = @('app', 'scripts')
-    $includeFiles = @('pyproject.toml', 'README.md', 'LICENSE', '.env.example', 'Upflow.bat')
+    # THIRD_PARTY_NOTICES.md viaja siempre: BSD-3 (Real-ESRGAN) y CC BY-SA (Apollo)
+    # exigen el aviso en toda redistribucion binaria.
+    $includeFiles = @('pyproject.toml', 'README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', '.env.example', 'Upflow.bat')
 
     foreach ($dir in $includeDirs) {
         $source = Join-Path $root $dir

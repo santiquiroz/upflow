@@ -101,7 +101,7 @@ Type: files; Name: "{app}\vendor\wheels\*.whl"
 
 [Files]
 ; El arbol de la app (allowlist: app/, scripts/, frontend/dist/, pyproject.toml,
-; .env.example, README.md, LICENSE, Upflow.bat) ya viene armado por
+; .env.example, README.md, LICENSE, THIRD_PARTY_NOTICES.md, Upflow.bat) ya viene armado por
 ; package-release.ps1 -Installer en installer\build\app\.
 Source: "build\app\*"; DestDir: "{app}"; Excludes: "__pycache__,*.pyc"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; Python 3.12 embeddable + pip ya preparado por package-release.ps1 -Installer
