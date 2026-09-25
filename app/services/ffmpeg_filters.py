@@ -62,9 +62,12 @@ def _escape_chars(text: str, specials: str) -> str:
     return "".join(f"\\{char}" if char in specials else char for char in text)
 
 
+def escape_filter_value(text: str) -> str:
+    return _escape_chars(_escape_chars(text, _OPTION_LEVEL_SPECIALS), _GRAPH_LEVEL_SPECIALS)
+
+
 def escape_filter_path(path: PurePath | str) -> str:
-    posix = str(path).replace("\\", "/")
-    return _escape_chars(_escape_chars(posix, _OPTION_LEVEL_SPECIALS), _GRAPH_LEVEL_SPECIALS)
+    return escape_filter_value(str(path).replace("\\", "/"))
 
 
 def scale_flags(algorithm: str = DEFAULT_SCALE_ALGORITHM) -> str:

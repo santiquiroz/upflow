@@ -168,7 +168,17 @@ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 ## Fonts
 
 Fonts bundled under `app/assets/fonts/` get one entry each here, with their
-`OFL.txt` shipped next to the font file. No font is bundled yet.
+`OFL.txt` shipped next to the font file.
+
+### Source Code Pro
+
+- Component: `app/assets/fonts/SourceCodePro-Regular.ttf`
+- License: OFL-1.1
+- License text: `app/assets/fonts/OFL.txt`
+- Copyright: © 2023 Adobe (http://www.adobe.com/), with Reserved Font Name 'Source'. All Rights Reserved. Source is a trademark of Adobe in the United States and/or other countries.
+- Source: https://github.com/adobe-fonts/source-code-pro (release branch at 803b7e23ec97ae58b6232ea76519a76d428ba268, `TTF/SourceCodePro-Regular.ttf`, version 2.042)
+- SHA-256: 74bd80d3e42a08517cd7e1108ba3d86f2da29ac0f3065be95e0357956ab9db37
+- Modifications: none. Used unmodified to draw the frame counters of `comparison.mp4` and the bilingual label of AI-enhanced CCTV outputs.
 
 ## Photo restoration models
 
