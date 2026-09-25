@@ -15,6 +15,7 @@ from app.services.capabilities import CATALOG, PathRequirement
 from app.services.engines.separation_models import SEPARATION_MODELS
 from app.services.install_queue_base import SingleWorkerJobQueue
 from app.services.process_runner import run_guarded_process
+from app.services.restore_models import BUNDLE_NAMES, pack_id
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,15 @@ PACK_SCRIPTS: dict[str, str] = {
     "kokoro": "download-kokoro-tts.ps1",
     "voice-conversion": "download-voice-conversion.ps1",
     "translation": "download-translation.ps1",
+    # Restauracion de fotos: un pack por bundle y un solo script, que recibe
+    # cual bajar por PACK_FIXED_ARGUMENTS.
+    **{pack_id(bundle): "download-restore.ps1" for bundle in BUNDLE_NAMES},
+}
+
+# Argumentos que el pack SIEMPRE pasa a su script. No son variantes: no los
+# elige el usuario ni llegan por HTTP, salen del pack mismo.
+PACK_FIXED_ARGUMENTS: dict[str, tuple[str, ...]] = {
+    pack_id(bundle): ("-Bundle", bundle) for bundle in BUNDLE_NAMES
 }
 
 # Packs que no son UN modelo sino una familia. La traduccion es uno por par de
@@ -196,6 +206,7 @@ def build_command(pack: str, variant: str | None = None) -> list[str]:
         "Bypass",
         "-File",
         str(script_path(pack)),
+        *PACK_FIXED_ARGUMENTS.get(pack, ()),
     ]
     if variant is None:
         return comando

@@ -26,6 +26,8 @@ PACK_PREFIX = "restore-"
 MANIFEST_SUFFIX = ".installed.json"
 DEFAULT_VRAM_FACTOR = 3.0
 DEFAULT_OVERLAP = 32
+LICENSES_DIRNAME = "licenses"
+NOTICE_NAME = "NOTICE.txt"
 
 LICENSE_FIELDS: tuple[str, ...] = (
     "license_spdx",
@@ -43,6 +45,7 @@ LICENSE_FIELDS: tuple[str, ...] = (
 _SAFE_ID = re.compile(r"[a-z0-9][a-z0-9._-]*")
 _SAFE_ONNX_FILE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\.onnx")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
+_LICENSE_NAME = re.compile(r"LICENSE[A-Za-z0-9._-]*")
 
 
 def is_safe_id(value: str) -> bool:
@@ -57,8 +60,21 @@ def is_sha256(value: str) -> bool:
     return bool(_SHA256.fullmatch(value))
 
 
+def is_license_name(name: str) -> bool:
+    return bool(_LICENSE_NAME.fullmatch(name)) and ".." not in name
+
+
+def is_license_file_name(name: str) -> bool:
+    return name == NOTICE_NAME or is_license_name(name)
+
+
 def pack_id(bundle: str) -> str:
     return f"{PACK_PREFIX}{bundle}"
+
+
+def release_license_asset(model_id: str, filename: str) -> str:
+    # Los assets de GitHub no tienen carpetas: port-restore-onnx aplana licenses/<modelo>/<archivo>.
+    return f"{LICENSES_DIRNAME}--{model_id}--{filename}"
 
 
 def _raise_on(owner: str, problems: list[str]) -> None:
@@ -210,9 +226,45 @@ def artifact_problems(artifact: RestoreArtifact) -> list[str]:
 
 
 @dataclass(frozen=True, slots=True)
+class RestoreLicenseFile:
+    model_id: str
+    filename: str
+    url: str
+    sha256: str
+    size: int
+
+    def __post_init__(self) -> None:
+        _raise_on(self.filename, license_file_problems(self))
+
+    @property
+    def relative_path(self) -> Path:
+        return Path(LICENSES_DIRNAME, self.model_id, self.filename)
+
+
+def license_file_problems(license_file: RestoreLicenseFile) -> list[str]:
+    problems = []
+    if not is_safe_id(license_file.model_id):
+        problems.append(f"model_id {license_file.model_id!r} is not a safe identifier")
+    if not is_license_file_name(license_file.filename):
+        problems.append(f"filename {license_file.filename!r} is neither LICENSE* nor {NOTICE_NAME}")
+    if not license_file.url.startswith("https://"):
+        problems.append("url must be https")
+    asset = release_license_asset(license_file.model_id, license_file.filename)
+    if not license_file.url.endswith(f"/{asset}"):
+        problems.append(f"url must point to the release asset {asset!r}")
+    if not is_sha256(license_file.sha256):
+        problems.append("sha256 must be 64 lowercase hex characters")
+    if license_file.size <= 0:
+        problems.append("size must be positive")
+    return problems
+
+
+@dataclass(frozen=True, slots=True)
 class RestoreBundle:
     name: str
     artifacts: tuple[RestoreArtifact, ...]
+    # licenses/<modelo>/{LICENSE*, NOTICE.txt} del Release, copiados junto a los modelos.
+    license_files: tuple[RestoreLicenseFile, ...] = ()
 
     @property
     def pack_id(self) -> str:
@@ -278,13 +330,52 @@ def _non_commercial_problems(bundle: RestoreBundle, spec: RestoreModelSpec) -> l
     return [f"{bundle.name}: non-commercial model {spec.id!r} cannot be in a default bundle"]
 
 
+def _duplicate_license_problems(bundle: RestoreBundle) -> list[str]:
+    paths = [license_file.relative_path.as_posix() for license_file in bundle.license_files]
+    repeated = sorted({path for path in paths if paths.count(path) > 1})
+    return [f"{bundle.name}: license file {path!r} is duplicated" for path in repeated]
+
+
+def _license_catalog_problems(
+    bundle: RestoreBundle, license_file: RestoreLicenseFile, models: Mapping[str, RestoreModelSpec]
+) -> list[str]:
+    owner = f"{bundle.name}: license {license_file.filename!r}"
+    spec = models.get(license_file.model_id)
+    if spec is None:
+        return [f"{owner} belongs to unknown model {license_file.model_id!r}"]
+    if spec.bundle != bundle.name:
+        return [f"{owner} of {spec.id!r}, which is in bundle {spec.bundle!r}"]
+    return []
+
+
+def _missing_license_problems(bundle: RestoreBundle, spec: RestoreModelSpec) -> list[str]:
+    names = [f.filename for f in bundle.license_files if f.model_id == spec.id]
+    problems = []
+    if NOTICE_NAME not in names:
+        problems.append(f"{bundle.name}: {spec.id!r} ships without its {NOTICE_NAME}")
+    if not any(is_license_name(name) for name in names):
+        problems.append(f"{bundle.name}: {spec.id!r} ships without a LICENSE file")
+    return problems
+
+
+def _model_problems(bundle: RestoreBundle, spec: RestoreModelSpec) -> list[str]:
+    return (
+        _missing_file_problems(bundle, spec)
+        + _missing_license_problems(bundle, spec)
+        + _non_commercial_problems(bundle, spec)
+    )
+
+
 def _bundle_problems(key: str, bundle: RestoreBundle, models: Mapping[str, RestoreModelSpec]) -> list[str]:
     problems = _bundle_key_problems(key, bundle) + _duplicate_file_problems(bundle)
+    problems += _duplicate_license_problems(bundle)
     for artifact in bundle.artifacts:
         problems += _artifact_catalog_problems(bundle, artifact, models)
+    for license_file in bundle.license_files:
+        problems += _license_catalog_problems(bundle, license_file, models)
     for spec in models.values():
         if spec.bundle == bundle.name:
-            problems += _missing_file_problems(bundle, spec) + _non_commercial_problems(bundle, spec)
+            problems += _model_problems(bundle, spec)
     return problems
 
 
@@ -299,16 +390,18 @@ def catalog_problems(
     return problems
 
 
-def _artifact_present(model_dir: Path, artifact: RestoreArtifact) -> bool:
-    path = model_dir / artifact.filename
-    return path.is_file() and path.stat().st_size == artifact.size
+def _file_present(path: Path, size: int) -> bool:
+    return path.is_file() and path.stat().st_size == size
 
 
 def bundle_installed(model_dir: Path, bundle: RestoreBundle) -> bool:
     # Un bundle sin artefactos no esta publicado: un manifiesto suelto no lo instala.
     if not bundle.artifacts or not (model_dir / bundle.manifest_name).is_file():
         return False
-    return all(_artifact_present(model_dir, artifact) for artifact in bundle.artifacts)
+    models_present = all(_file_present(model_dir / a.filename, a.size) for a in bundle.artifacts)
+    return models_present and all(
+        _file_present(model_dir / f.relative_path, f.size) for f in bundle.license_files
+    )
 
 
 def installed_manifest(model_dir: Path, bundle: RestoreBundle) -> Path | None:

@@ -43,6 +43,9 @@ PACK_LABELS: dict[str, str] = {
     "kokoro": "el modelo de voz",
     "voice-conversion": "el modelo de conversion de voz",
     "translation": "el par de idiomas para traducir",
+    "restore-core": "los modelos de restauración de fotos (daños, JPEG y ruido)",
+    "restore-faces": "los modelos de caras",
+    "restore-colorize": "el modelo de colorización",
 }
 
 

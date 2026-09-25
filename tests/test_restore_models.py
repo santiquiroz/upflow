@@ -15,6 +15,7 @@ from app.services.restore_models import (
     RESTORE_MODELS,
     RestoreArtifact,
     RestoreBundle,
+    RestoreLicenseFile,
     RestoreModelSpec,
     bundle_installed,
     catalog_problems,
@@ -22,7 +23,19 @@ from app.services.restore_models import (
     installed_manifest,
     model_path,
 )
+from restore_script_catalog import (
+    catalog_block,
+    comparable,
+    declared_sha256,
+    evaluate_catalog,
+    expected_catalog,
+    render_catalog,
+    requires_powershell,
+    script_text,
+    validate_set,
+)
 
+RELEASE = "https://github.com/santiquiroz/port-restore-onnx/releases/download/v1.0.0"
 SHA_A = "a" * 64
 SHA_B = "b" * 64
 SHA_C = "c" * 64
@@ -74,8 +87,31 @@ def fp16_artifact() -> RestoreArtifact:
     )
 
 
-def core_bundle(*artifacts: RestoreArtifact) -> RestoreBundle:
-    return RestoreBundle(name="core", artifacts=artifacts or (make_artifact(), fp16_artifact()))
+def make_license_file(**overrides) -> RestoreLicenseFile:
+    fields = dict(
+        model_id="drunet-color",
+        filename="LICENSE",
+        url=f"{RELEASE}/licenses--drunet-color--LICENSE",
+        sha256=SHA_A,
+        size=7,
+    )
+    return RestoreLicenseFile(**{**fields, **overrides})
+
+
+def notice_file() -> RestoreLicenseFile:
+    return make_license_file(
+        filename="NOTICE.txt", url=f"{RELEASE}/licenses--drunet-color--NOTICE.txt", sha256=SHA_C, size=4
+    )
+
+
+def core_bundle(
+    *artifacts: RestoreArtifact, license_files: tuple[RestoreLicenseFile, ...] | None = None
+) -> RestoreBundle:
+    return RestoreBundle(
+        name="core",
+        artifacts=artifacts or (make_artifact(), fp16_artifact()),
+        license_files=(make_license_file(), notice_file()) if license_files is None else license_files,
+    )
 
 
 def install(model_dir: Path, bundle: RestoreBundle, sizes: dict[str, int] | None = None) -> None:
@@ -83,6 +119,10 @@ def install(model_dir: Path, bundle: RestoreBundle, sizes: dict[str, int] | None
     for artifact in bundle.artifacts:
         size = (sizes or {}).get(artifact.filename, artifact.size)
         (model_dir / artifact.filename).write_bytes(b"x" * size)
+    for license_file in bundle.license_files:
+        path = model_dir / license_file.relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"x" * (sizes or {}).get(license_file.filename, license_file.size))
     manifest = {"bundle": bundle.name, "files": [a.filename for a in bundle.artifacts]}
     (model_dir / f"{bundle.name}.installed.json").write_text(json.dumps(manifest), encoding="utf-8")
 
@@ -208,6 +248,34 @@ def test_artifacts_are_validated(overrides: dict, message: str) -> None:
         make_artifact(**overrides)
 
 
+@pytest.mark.parametrize(
+    "overrides, message",
+    [
+        ({"filename": "README.md"}, "filename"),
+        ({"filename": "../LICENSE"}, "filename"),
+        ({"model_id": "DRUNet color"}, "model_id"),
+        ({"url": "http://example.com/licenses--drunet-color--LICENSE"}, "url"),
+        ({"url": f"{RELEASE}/LICENSE"}, "licenses--drunet-color--LICENSE"),
+        ({"sha256": "123"}, "sha256"),
+        ({"size": 0}, "size"),
+    ],
+)
+def test_license_files_are_validated(overrides: dict, message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        make_license_file(**overrides)
+
+
+@pytest.mark.parametrize("filename", ["LICENSE", "LICENSE.txt", "LICENSE-weights.md", "NOTICE.txt"])
+def test_license_files_are_the_license_and_the_notice(filename: str) -> None:
+    license_file = make_license_file(filename=filename, url=f"{RELEASE}/licenses--drunet-color--{filename}")
+
+    assert license_file.relative_path == Path("licenses", "drunet-color", filename)
+
+
+def test_bundles_ship_no_license_files_unless_declared() -> None:
+    assert RestoreBundle("core", ()).license_files == ()
+
+
 def test_bundle_names_are_the_three_download_bundles() -> None:
     assert BUNDLE_NAMES == ("core", "faces", "colorize")
     assert tuple(RESTORE_BUNDLES) == BUNDLE_NAMES
@@ -300,6 +368,46 @@ def test_non_commercial_models_never_enter_a_default_bundle() -> None:
     assert any("commercial" in p for p in problems)
 
 
+def test_catalog_flags_a_license_file_of_an_unknown_model() -> None:
+    ghost = make_license_file(model_id="ghost", url=f"{RELEASE}/licenses--ghost--LICENSE")
+    bundle = core_bundle(license_files=(make_license_file(), notice_file(), ghost))
+
+    assert any("ghost" in p for p in catalog_problems({"drunet-color": make_spec()}, {"core": bundle}))
+
+
+def test_catalog_flags_a_license_file_of_a_model_in_another_bundle() -> None:
+    gfpgan = make_spec(id="gfpgan", bundle="faces", filename="gfpgan.onnx", fp16_filename=None)
+    stray = make_license_file(model_id="gfpgan", url=f"{RELEASE}/licenses--gfpgan--LICENSE")
+    bundles = {
+        "core": core_bundle(license_files=(make_license_file(), notice_file(), stray)),
+        "faces": RestoreBundle("faces", (make_artifact(model_id="gfpgan", filename="gfpgan.onnx"),)),
+    }
+
+    problems = catalog_problems({"drunet-color": make_spec(), "gfpgan": gfpgan}, bundles)
+
+    assert any("gfpgan" in p and p.startswith("core") for p in problems)
+
+
+@pytest.mark.parametrize(
+    "license_files, missing",
+    [((make_license_file(),), "NOTICE.txt"), ((notice_file(),), "LICENSE")],
+)
+def test_catalog_flags_a_model_without_its_license_or_notice(license_files, missing: str) -> None:
+    bundle = core_bundle(license_files=license_files)
+
+    problems = catalog_problems({"drunet-color": make_spec()}, {"core": bundle})
+
+    assert any(missing in p for p in problems)
+
+
+def test_catalog_flags_duplicated_license_files() -> None:
+    bundle = core_bundle(license_files=(make_license_file(), make_license_file(), notice_file()))
+
+    problems = catalog_problems({"drunet-color": make_spec()}, {"core": bundle})
+
+    assert any("duplicated" in p for p in problems)
+
+
 def test_bundle_installed_needs_the_manifest(tmp_path: Path) -> None:
     bundle = core_bundle()
     install(tmp_path, bundle)
@@ -319,6 +427,18 @@ def test_bundle_installed_needs_every_file(tmp_path: Path) -> None:
 def test_bundle_installed_needs_every_declared_size(tmp_path: Path) -> None:
     bundle = core_bundle()
     install(tmp_path, bundle, sizes={"drunet-color.onnx": 9})
+
+    assert bundle_installed(tmp_path, bundle) is False
+
+
+def test_bundle_installed_needs_every_license_file_at_its_size(tmp_path: Path) -> None:
+    bundle = core_bundle()
+    install(tmp_path, bundle)
+    (tmp_path / "licenses" / "drunet-color" / "NOTICE.txt").unlink()
+
+    assert bundle_installed(tmp_path, bundle) is False
+
+    install(tmp_path, bundle, sizes={"NOTICE.txt": 3})
 
     assert bundle_installed(tmp_path, bundle) is False
 
@@ -369,3 +489,44 @@ def test_model_path_defaults_to_the_shipped_catalog(tmp_path: Path, monkeypatch:
     monkeypatch.setitem(rm.RESTORE_MODELS, "drunet-color", make_spec())
 
     assert model_path(tmp_path, "drunet-color", "fp32") == tmp_path / "drunet-color.onnx"
+
+
+# ---------------------------------------------------------------------------
+# Anti-deriva: scripts/download-restore.ps1 baja exactamente lo que dice el catalogo
+# ---------------------------------------------------------------------------
+
+
+def test_the_script_offers_exactly_the_catalog_bundles() -> None:
+    assert validate_set(script_text()) == BUNDLE_NAMES
+
+
+def test_every_sha256_in_the_script_belongs_to_the_catalog() -> None:
+    catalog = {a.sha256 for b in RESTORE_BUNDLES.values() for a in b.artifacts}
+    catalog |= {f.sha256 for b in RESTORE_BUNDLES.values() for f in b.license_files}
+
+    assert declared_sha256(script_text()) - catalog == set()
+
+
+@requires_powershell
+def test_the_script_table_is_the_catalog() -> None:
+    table = evaluate_catalog(catalog_block(script_text()))
+
+    assert comparable(table) == expected_catalog(RESTORE_BUNDLES, RESTORE_MODELS)
+    assert all(row.get("Label") for tables in table.values() for row in tables["Files"])
+
+
+@requires_powershell
+def test_the_anti_drift_reads_a_published_table_as_powershell_does() -> None:
+    # Un solo archivo por bundle ejercita el caso en que PowerShell desarma un @() de un elemento.
+    models = {"drunet-color": make_spec(fp16_filename=None)}
+    published = {
+        "core": core_bundle(make_artifact()),
+        "faces": RestoreBundle("faces", ()),
+        "colorize": RestoreBundle("colorize", ()),
+    }
+    assert catalog_problems(models, published) == []
+
+    table = evaluate_catalog(render_catalog(published, models))
+
+    assert comparable(table) == expected_catalog(published, models)
+    assert comparable(table) != expected_catalog(RESTORE_BUNDLES, RESTORE_MODELS)

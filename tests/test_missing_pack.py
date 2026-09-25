@@ -51,3 +51,11 @@ def test_la_excepcion_lleva_el_pack_para_que_la_pantalla_sepa_que_boton_dar() ->
 def test_un_paquete_desconocido_falla_fuerte_en_vez_de_inventar_texto() -> None:
     with pytest.raises(UnknownPackLabel):
         label_for("no-existe")
+
+
+@pytest.mark.parametrize(
+    "pack, que",
+    [("restore-core", "restauración de fotos"), ("restore-faces", "caras"), ("restore-colorize", "colorización")],
+)
+def test_cada_pack_de_restauracion_dice_que_trae(pack: str, que: str) -> None:
+    assert que in missing_pack_message(pack)

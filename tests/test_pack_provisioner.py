@@ -7,6 +7,7 @@ import pytest
 import app.services.pack_provisioner as provisioner_module
 from app.config import Settings
 from app.services.pack_provisioner import (
+    PACK_FIXED_ARGUMENTS,
     PACK_SCRIPTS,
     PROVISION_TIMEOUT_SECONDS,
     PackProvisioner,
@@ -17,6 +18,7 @@ from app.services.pack_provisioner import (
     provisioning_supported,
     script_for,
 )
+from app.services.restore_models import BUNDLE_NAMES
 
 
 def make_settings(tmp_path: Path) -> Settings:
@@ -302,3 +304,40 @@ async def test_el_script_corre_sin_psmodulepath_heredado(tmp_path, script, monke
     assert env is not None
     assert "PSModulePath" not in env
     assert provisioner.status(job_id).status is ProvisionStatus.done
+
+
+class TestLosPacksDeRestauracion:
+    """Tres packs, un solo script: el bundle viaja como argumento fijo.
+
+    No es una variante que elige el usuario: cada pack ES un bundle, asi que el
+    argumento sale del pack y nunca de la peticion HTTP.
+    """
+
+    @pytest.mark.parametrize("bundle", BUNDLE_NAMES)
+    def test_cada_bundle_es_un_pack_que_corre_download_restore(self, bundle):
+        assert PACK_SCRIPTS[f"restore-{bundle}"] == "download-restore.ps1"
+
+    @pytest.mark.parametrize("bundle", BUNDLE_NAMES)
+    def test_el_bundle_viaja_como_argumento_fijo(self, bundle, existing_script: Path):
+        comando = build_command(f"restore-{bundle}")
+
+        assert comando[-3:] == [str(existing_script), "-Bundle", bundle]
+
+    def test_los_argumentos_fijos_son_de_packs_conocidos(self):
+        assert set(PACK_FIXED_ARGUMENTS) <= set(PACK_SCRIPTS)
+        assert set(PACK_FIXED_ARGUMENTS) == {f"restore-{b}" for b in BUNDLE_NAMES}
+
+    def test_un_pack_de_restauracion_no_acepta_variantes(self):
+        with pytest.raises(ValueError):
+            build_command("restore-core", variant="faces")
+
+    def test_los_demas_packs_no_reciben_argumentos_fijos(self, existing_script: Path):
+        assert build_command("rife")[-1] == str(existing_script)
+
+    async def test_el_job_corre_el_script_con_su_bundle(self, tmp_path, script):
+        provisioner = PackProvisioner(make_settings(tmp_path))
+        job_id = await provisioner.provision("restore-faces")
+        await provisioner._process_next()
+
+        assert provisioner.status(job_id).status is ProvisionStatus.done
+        assert script.commands[0][-2:] == ["-Bundle", "faces"]
