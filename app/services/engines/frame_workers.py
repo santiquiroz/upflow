@@ -74,8 +74,9 @@ MIN_READBACK_RING_CAPACITY = 2
 class FrameReadbackRing:
     """Anillo de K buffers CPU preasignados para el readback GPU→CPU de frames.
 
-    Alocar un array de salida nuevo por frame costaba ~11% del tiempo de frame
-    (54.3→48.4 ms medido); el anillo preasigna los buffers una vez y rota.
+    Un prototipo que reusaba un buffer CPU preasignado en vez de
+    copy_outputs_to_cpu() midió ~11% del tiempo de frame (54.3→48.4 ms); este
+    anillo aún no se midió en GPU. Preasigna los buffers una vez y rota.
     `next_buffer` entrega el buffer sin copiar, para que ORT escriba ahí su
     salida (bind_output con buffer_ptr); `copy_in` queda para cuando la salida
     ya existe como array aparte. K=1 está prohibido porque reusar el único
