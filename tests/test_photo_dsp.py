@@ -18,6 +18,7 @@ from app.services.photo_dsp import (
     find_periodic_peaks,
     fit_neutral_axis_curves,
     fix_faded_colors,
+    harmonic_peaks,
     keep_grain,
     keep_tone_levels,
     local_contrast,
@@ -567,3 +568,29 @@ def test_bands_reject_a_function_that_changes_the_row_count() -> None:
 def test_bands_reject_bad_sizes(band_rows: int, halo: int) -> None:
     with pytest.raises(ValueError):
         process_in_bands(natural_scene(1, 32), lambda band: band, band_rows=band_rows, halo=halo)
+
+
+def peaks_at(frequencies: list[tuple[float, float]]) -> PeriodicPeaks:
+    points = np.array(frequencies, dtype=np.float64)
+    return PeriodicPeaks(points, np.linspace(3.0, 2.0, len(points)), resolution=1.0 / 1024)
+
+
+def test_descreen_peaks_drop_a_ray_of_non_harmonic_peaks_from_an_edge() -> None:
+    ray = [(radius, 0.0) for radius in (0.042, 0.048, 0.051, 0.088, 0.091, 0.121)]
+
+    assert len(harmonic_peaks(peaks_at(ray)).frequencies) == 0
+
+
+def test_descreen_peaks_keep_harmonics_and_lone_peaks() -> None:
+    diagonal = 0.2 / np.sqrt(2.0)
+    screen = [(diagonal, diagonal), (2 * diagonal, 2 * diagonal), (diagonal, -diagonal), (0.0, 0.3)]
+
+    kept = harmonic_peaks(peaks_at(screen))
+
+    np.testing.assert_allclose(kept.frequencies, peaks_at(screen).frequencies)
+
+
+def test_descreen_peaks_group_directions_across_the_half_plane_edge() -> None:
+    nearly_horizontal = [(0.0, 0.1), (0.001, -0.117)]
+
+    assert len(harmonic_peaks(peaks_at(nearly_horizontal)).frequencies) == 0

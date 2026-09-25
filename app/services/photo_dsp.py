@@ -29,6 +29,8 @@ MIN_PEAK_PROMINENCE = 1.5
 PEAK_BACKGROUND_SIGMA_BINS = 4.0
 MIN_PATTERN_FREQUENCY = 1.0 / 40.0
 MAX_PERIODIC_PEAKS = 32
+RAY_ANGLE_TOLERANCE_DEG = 2.0
+HARMONIC_TOLERANCE = 0.1
 LUMA_WEIGHTS = np.array([0.299, 0.587, 0.114], np.float32)
 NOTCH_PAD_FRACTION = 0.1
 NOTCH_DILATE_BINS = 2.0
@@ -113,11 +115,15 @@ def gray_point_sample(rgb: np.ndarray, point: GrayPoint) -> np.ndarray:
 
 
 def fit_neutral_axis_curves(rgb: np.ndarray) -> tuple[ChannelCurve, ChannelCurve, ChannelCurve]:
-    pixels = _fit_sample(rgb)
-    lab = _to_lab(pixels.reshape(-1, 1, 3)).reshape(-1, 3)
-    band_means = _least_chromatic_band_means(pixels, lab)
+    band_means = neutral_axis_band_means(rgb)
     grays = band_means.mean(axis=1)
     return tuple(_monotone_curve(band_means[:, channel], grays) for channel in range(3))
+
+
+def neutral_axis_band_means(rgb: np.ndarray) -> np.ndarray:
+    pixels = _fit_sample(rgb)
+    lab = _to_lab(pixels.reshape(-1, 1, 3)).reshape(-1, 3)
+    return _least_chromatic_band_means(pixels, lab)
 
 
 def _fit_sample(rgb: np.ndarray) -> np.ndarray:
@@ -235,7 +241,33 @@ def find_periodic_peaks(rgb: np.ndarray) -> PeriodicPeaks:
     is_peak = candidates & (residual > threshold) & _is_local_max(residual) & _upper_half_plane(freq_y, freq_x)
     order = np.argsort(residual[is_peak], kind="stable")[::-1][:MAX_PERIODIC_PEAKS]
     frequencies = np.stack([freq_y[is_peak], freq_x[is_peak]], axis=-1)[order]
-    return PeriodicPeaks(frequencies, residual[is_peak][order], resolution=1.0 / min(luma.shape))
+    found = PeriodicPeaks(frequencies, residual[is_peak][order], resolution=1.0 / min(luma.shape))
+    return harmonic_peaks(found)
+
+
+def harmonic_peaks(peaks: PeriodicPeaks) -> PeriodicPeaks:
+    # A straight edge or a banded gradient leaves a ray of peaks through DC at non-harmonic radii.
+    radii = np.hypot(peaks.frequencies[:, 0], peaks.frequencies[:, 1])
+    keep = np.zeros(len(radii), dtype=bool)
+    for members in _direction_groups(peaks.frequencies):
+        keep[members] = _are_harmonics(radii[members])
+    return PeriodicPeaks(peaks.frequencies[keep], peaks.strengths[keep], peaks.resolution)
+
+
+def _direction_groups(frequencies: np.ndarray) -> list[np.ndarray]:
+    if len(frequencies) == 0:
+        return []
+    angles = np.degrees(np.arctan2(frequencies[:, 0], frequencies[:, 1])) % 180.0
+    # Lines at 179.9 and 0.1 degrees are the same direction.
+    angles = np.where(angles > 180.0 - RAY_ANGLE_TOLERANCE_DEG, angles - 180.0, angles)
+    order = np.argsort(angles, kind="stable")
+    breaks = np.flatnonzero(np.diff(angles[order]) > RAY_ANGLE_TOLERANCE_DEG) + 1
+    return np.split(order, breaks)
+
+
+def _are_harmonics(radii: np.ndarray) -> bool:
+    multiples = radii / radii.min()
+    return bool(np.all(np.abs(multiples - np.round(multiples)) <= HARMONIC_TOLERANCE))
 
 
 def screen_period(peaks: PeriodicPeaks) -> float | None:
