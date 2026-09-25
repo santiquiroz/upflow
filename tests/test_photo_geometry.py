@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 import pytest
 
-from app.services.photo_geometry import apply_geometry
+from app.services.photo_geometry import Geometry, apply_geometry
 
 
 def gradient(height: int = 12, width: int = 20) -> np.ndarray:
@@ -141,3 +141,35 @@ def test_input_array_and_original_file_are_untouched(tmp_path: Path) -> None:
 
     assert hashlib.sha256(rgb.tobytes()).hexdigest() == array_sha
     assert hashlib.sha256(original.read_bytes()).hexdigest() == file_sha
+
+
+def test_geometry_output_size_follows_rotation_and_crop() -> None:
+    assert Geometry().output_size(12, 20) == (12, 20)
+    assert Geometry(rotate90=1).output_size(12, 20) == (20, 12)
+    assert Geometry(rotate90=3, crop=(1, 2, 5, 7)).output_size(12, 20) == (7, 5)
+    assert Geometry(angle=10.0).output_size(12, 20) == (12, 20)
+
+
+def test_geometry_output_size_matches_the_applied_image() -> None:
+    geometry = Geometry(rotate90=1, crop=(2, 3, 8, 9), angle=-4.0)
+
+    assert geometry.apply(gradient()).shape[:2] == geometry.output_size(12, 20)
+
+
+def test_geometry_crop_outside_the_rotated_image_is_refused() -> None:
+    with pytest.raises(ValueError, match="outside"):
+        Geometry(rotate90=1, crop=(0, 0, 13, 5)).output_size(12, 20)
+
+
+def test_geometry_from_mapping_round_trips() -> None:
+    geometry = Geometry.from_mapping({"rotate90": 5, "crop": [1, 2, 3, 4], "angle": 1.5})
+
+    assert geometry == Geometry(rotate90=1, crop=(1, 2, 3, 4), angle=1.5)
+    assert Geometry.from_mapping(geometry.to_dict()) == geometry
+    assert Geometry.from_mapping(None) == Geometry()
+
+
+@pytest.mark.parametrize("angle", [46.0, float("nan")])
+def test_geometry_rejects_an_angle_beyond_the_straighten_limit(angle: float) -> None:
+    with pytest.raises(ValueError, match="Straighten"):
+        Geometry(angle=angle)

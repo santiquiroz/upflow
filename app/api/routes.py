@@ -190,6 +190,7 @@ from app.services.hf_client import (
     HfClient,
 )
 from app.services.health_report import build_health_report
+from app.services.job_artifacts import restored_download_name
 from app.services.job_manager import JobManager
 from app.services.media_tools import MediaTools
 from app.services.model_installer import ModelInstaller
@@ -492,6 +493,7 @@ def job_to_response(job: UpscaleJob) -> JobResponse:
         progress_pct=_progress_pct_from_metadata(job.metadata),
         download_url=download_url,
         owner_id=job.owner_id,
+        restore_steps=list(job.restore_steps),
     )
 
 
@@ -1208,7 +1210,8 @@ async def download_job(
         raise HTTPException(status_code=404, detail="Job not found")
     if job.status != JobStatus.completed or not job.output_path:
         raise HTTPException(status_code=409, detail="Job is not completed yet")
-    return FileResponse(path=job.output_path, filename=job.output_path.name, media_type="application/octet-stream")
+    filename = restored_download_name(job.metadata.get("restore")) or job.output_path.name
+    return FileResponse(path=job.output_path, filename=filename, media_type="application/octet-stream")
 
 
 @router.get("/video/jobs/{job_id}/download", dependencies=[Depends(require(Permission.jobs_read_own))])

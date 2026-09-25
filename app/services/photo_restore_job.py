@@ -6,10 +6,10 @@ import platform
 import shutil
 import threading
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, Protocol, TypeVar
 
 import cv2
 import numpy as np
@@ -23,8 +23,10 @@ from app.services.engines.scratch_fill import CLASSIC_ENGINE, FAST_ENGINE
 from app.services.engines.tiled_restore_runner import CalibrationCache, RestoreCancelled
 from app.services.image_io import LoadedImage, load_image_for_restore
 from app.services.photo_diagnosis import analyze_pattern, classify_tone, estimate_noise_sigma
+from app.services.photo_geometry import Geometry
 from app.services.photo_restore_chain import RestoreStepSpec, steps_from_selection
 from app.services.photo_restore_pipeline import (
+    FaceSelection,
     PhotoRestorePipeline,
     PixelLimits,
     PostResult,
@@ -48,6 +50,7 @@ from app.services.restore_outputs import (
     save_preview_output,
 )
 from app.services.restore_provenance import ModelCatalog, UpscaleInfo, default_model_catalog
+from app.services.restore_session import SessionInputs, SessionNotFound
 from app.services.xmp_packet import normalize_photo_date
 
 T = TypeVar("T")
@@ -62,6 +65,7 @@ SR_OUTPUT_NAME = "sr.png"
 AI_UPSCALE_GENERATIVE = True
 
 StepReadiness = Callable[..., None]
+SessionCheck = Callable[[str], Mapping[str, Any]]
 Analyzer = Callable[[np.ndarray, Sequence[str]], "RestoreAnalysis"]
 ImageLoader = Callable[[Path], LoadedImage]
 
@@ -79,6 +83,13 @@ class RestoreSelection:
 class RestoreAnalysis:
     tone_kind: ToneKind
     hints: RestoreHints
+    faces: tuple[FaceSelection, ...] = ()
+
+
+class SessionSource(Protocol):
+    def geometry_of(self, token: str) -> Mapping[str, Any]: ...
+
+    def job_inputs(self, token: str) -> SessionInputs: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,6 +124,7 @@ def validate_restore_selection(
     *,
     session: str | None = None,
     check_ready: StepReadiness = validate_step_ready,
+    check_session: SessionCheck | None = None,
 ) -> RestoreSelection:
     specs = steps_from_selection(list(steps))
     if not specs:
@@ -122,15 +134,21 @@ def validate_restore_selection(
     _validate_photo_date(options.get("photo_date"))
     mode = restore_upscale_mode(options, scale)
     steps_in_order = tuple(spec.id for spec in specs)
-    return RestoreSelection(steps_in_order, dict(options), mode, scale, _session_token(session))
+    with_geometry = options_with_session_geometry(options, session, check_session)
+    return RestoreSelection(steps_in_order, with_geometry, mode, scale, session)
 
 
-def _session_token(session: str | None) -> str | None:
-    # La sesion de analisis (copia de trabajo, pistas y mascara) todavia no existe: aceptarla
-    # y no usarla correria la foto sin la geometria ni la mascara que el usuario ajusto.
-    if session is not None:
-        raise ValueError("Restore analysis sessions are not available in this build")
-    return None
+def options_with_session_geometry(
+    options: Mapping[str, Any], session: str | None, check_session: SessionCheck | None
+) -> dict[str, Any]:
+    # La mascara y las caras de la sesion se midieron sobre su copia de trabajo: la geometria
+    # del job es la de la sesion, nunca otra que mande el cliente.
+    if session is None:
+        Geometry.from_mapping(options.get("geometry"))
+        return dict(options)
+    if check_session is None:
+        raise ValueError("Restore analysis sessions are not available on this server")
+    return {**options, "geometry": dict(check_session(session))}
 
 
 def _validate_photo_date(value: Any) -> None:
@@ -149,6 +167,23 @@ def analyze_for_restore(rgb: np.ndarray, steps: Sequence[str]) -> RestoreAnalysi
     return RestoreAnalysis(tone_kind=classify_tone(rgb).kind, hints=hints)
 
 
+def with_session_hints(
+    analysis: RestoreAnalysis, inputs: SessionInputs | None, shape: tuple[int, int]
+) -> RestoreAnalysis:
+    if inputs is None:
+        return analysis
+    for layer in (inputs.damage_probability, inputs.user_mask):
+        if layer is not None and layer.shape[:2] != shape:
+            raise ValueError("The analysis session no longer matches the photo; analyze it again")
+    hints = replace(analysis.hints, damage_probability=inputs.damage_probability, user_mask=inputs.user_mask)
+    return replace(analysis, hints=hints, faces=inputs.faces)
+
+
+def with_geometry(loaded: LoadedImage, options: Mapping[str, Any]) -> LoadedImage:
+    geometry = Geometry.from_mapping(options.get("geometry"))
+    return loaded if geometry == Geometry() else replace(loaded, rgb=geometry.apply(loaded.rgb))
+
+
 def request_from_job(job: UpscaleJob, loaded: LoadedImage, analysis: RestoreAnalysis) -> RestoreRequest:
     options = job.restore_options
     crop = options.get("preview_crop")
@@ -161,6 +196,7 @@ def request_from_job(job: UpscaleJob, loaded: LoadedImage, analysis: RestoreAnal
         bit_depth=loaded.bit_depth,
         scale=float(job.scale),
         upscale_mode=restore_upscale_mode(options, job.scale),
+        faces=analysis.faces,
         hints=analysis.hints,
         preview_crop=None if crop is None else tuple(int(value) for value in crop),
     )
@@ -235,10 +271,12 @@ class PhotoRestoreJobRunner:
         catalog: ModelCatalog | None = None,
         app_version: str | None = None,
         check_ready: StepReadiness = validate_step_ready,
+        sessions: SessionSource | None = None,
     ) -> None:
         self.settings = settings
         self.engine = engine
         self.check_ready = check_ready
+        self.sessions = sessions
         self._step_runners = step_runners if step_runners is not None else _default_runners(settings, engine)
         self._analyze = analyze
         self._load_image = load_image
@@ -248,9 +286,18 @@ class PhotoRestoreJobRunner:
     def release_before_ncnn(self, device: str) -> bool:
         return self.engine.release_before_ncnn(device)
 
+    def check_session(self, token: str) -> Mapping[str, Any]:
+        if self.sessions is None:
+            raise ValueError("Restore analysis sessions are not available on this server")
+        try:
+            return self.sessions.geometry_of(token)
+        except SessionNotFound as exc:
+            raise ValueError("Unknown restore session; analyze the photo again") from exc
+
     def run_pre(self, job: UpscaleJob, cancel_event: threading.Event | None = None) -> PreStage:
-        loaded = self._load_image(job.source_path)
-        analysis = self._analyze(loaded.rgb, job.restore_steps)
+        inputs = self._session_inputs(job)
+        loaded = with_geometry(self._load_image(job.source_path), job.restore_options)
+        analysis = with_session_hints(self._analyze(loaded.rgb, job.restore_steps), inputs, loaded.rgb.shape[:2])
         pipeline = self._pipeline(job)
         self.engine.begin_phase(_device_of(job))
         pre = pipeline.run_pre(request_from_job(job, loaded, analysis), cancel_event)
@@ -290,6 +337,13 @@ class PhotoRestoreJobRunner:
             return save_preview_output(post, paths, stage.loaded.icc)
         job.metadata["restore"] = save_full_outputs(stage.loaded, stage.pre, post, paths, self._context(job, upscale))
         return paths.final
+
+    def _session_inputs(self, job: UpscaleJob) -> SessionInputs | None:
+        if job.restore_session is None:
+            return None
+        if self.sessions is None:
+            raise RuntimeError("Restore analysis sessions are not available on this server")
+        return self.sessions.job_inputs(job.restore_session)
 
     def _pipeline(self, job: UpscaleJob) -> PhotoRestorePipeline:
         return PhotoRestorePipeline(

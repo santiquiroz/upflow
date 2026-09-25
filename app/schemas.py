@@ -35,6 +35,7 @@ class JobResponse(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     progress_pct: float | None = Field(default=None, serialization_alias="progressPct")
     download_url: str | None = Field(default=None, serialization_alias="downloadUrl")
+    restore_steps: list[str] = Field(default_factory=list, serialization_alias="restoreSteps")
 
 
 class VideoJobResponse(BaseModel):

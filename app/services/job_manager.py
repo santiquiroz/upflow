@@ -22,6 +22,7 @@ from app.services.engines.photo_restore_engine import run_cancellable
 from app.services.classic_upscalers import is_classic_upscaler
 from app.services.job_manager_base import QueuedJobManager
 from app.services.model_registry import ModelKind, ModelRegistry, ModelStatus
+from app.services.photo_geometry import Geometry
 from app.services.photo_restore_job import (
     AI_UPSCALE_GENERATIVE,
     SR_INPUT_NAME,
@@ -186,7 +187,13 @@ class JobManager(QueuedJobManager[UpscaleJob]):
         if self.restore_runner is None:
             raise ValueError("Photo restoration is not configured on this server")
         return validate_restore_selection(
-            self.settings, steps, options or {}, scale, session=session, check_ready=self.restore_runner.check_ready
+            self.settings,
+            steps,
+            options or {},
+            scale,
+            session=session,
+            check_ready=self.restore_runner.check_ready,
+            check_session=self.restore_runner.check_session,
         )
 
     def _resolution_for(
@@ -333,7 +340,7 @@ class JobManager(QueuedJobManager[UpscaleJob]):
 
     def _validate_restore_image(self, img: Image.Image, restore: RestoreSelection) -> None:
         self._validate_image_format(img, ALLOWED_RESTORE_FORMATS)
-        height, width = oriented_size(img)
+        height, width = Geometry.from_mapping(restore.options.get("geometry")).output_size(*oriented_size(img))
         check_pixel_limits(height, width, float(restore.scale), PixelLimits.from_settings(self.settings))
         crop = restore.options.get("preview_crop")
         if crop is not None:
@@ -385,7 +392,10 @@ class JobManager(QueuedJobManager[UpscaleJob]):
         complete_image_stages(job)
 
     def _cleanup_source(self, job: UpscaleJob) -> None:
-        self._unlink_source_safely(job.source_path)
+        # El original de una sesion de analisis es de la sesion: otro job (la vista previa y
+        # despues la foto entera) lo vuelve a usar, y el barrido la borra por edad.
+        if job.restore_session is None:
+            self._unlink_source_safely(job.source_path)
 
     async def _run_engine(self, job: UpscaleJob) -> None:
         if job.restore_steps:

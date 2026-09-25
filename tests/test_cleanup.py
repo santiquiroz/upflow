@@ -706,3 +706,35 @@ def test_retention_sweeper_keeps_stale_work_dir_of_running_video_job(tmp_path: P
     sweeper.sweep_once()
 
     assert active_work_dir.exists(), "work dir of a running video job must survive the sweep"
+
+
+def test_retention_sweeper_keeps_the_session_and_work_dir_of_a_running_restore_job(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path, output_ttl_hours=1)
+    StorageService(settings)
+    sweeper = make_sweeper(settings)
+    session_dir = settings.video_work_path / ("restore-" + "a" * 32)
+    session_dir.mkdir(parents=True)
+    running_job = UpscaleJob(
+        source_path=session_dir / "original.png",
+        original_filename="photo.png",
+        model_name="realesrgan-x4plus",
+        scale=1,
+        output_format="png",
+        restore_steps=["tone"],
+        restore_session="a" * 32,
+    )
+    running_job.status = JobStatus.running
+    sweeper.job_manager.jobs[running_job.id] = running_job
+    work_dir = settings.video_work_path / running_job.id
+    work_dir.mkdir()
+    orphan_session = settings.video_work_path / ("restore-" + "b" * 32)
+    orphan_session.mkdir()
+    stale_mtime = time.time() - 2 * 3600
+    for directory in (session_dir, work_dir, orphan_session):
+        os.utime(directory, (stale_mtime, stale_mtime))
+
+    sweeper.sweep_once()
+
+    assert session_dir.exists(), "the analysis session of a running restore job must survive the sweep"
+    assert work_dir.exists()
+    assert not orphan_session.exists()

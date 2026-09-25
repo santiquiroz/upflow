@@ -12,6 +12,8 @@ from fastapi.staticfiles import StaticFiles
 from app.api.auth_routes import router as auth_router
 from app.api.capability_routes import router as capability_router
 from app.api.editor_routes import router as editor_router
+from app.api.licenses_routes import router as licenses_router
+from app.api.restore_routes import router as restore_router
 from app.api.routes import router as api_router
 from app.api.users_routes import router as users_router
 from app.core.log_file import configure_file_logging
@@ -67,6 +69,7 @@ from app.services.pack_provisioner import PackProvisioner
 from app.services.model_registry import ModelRegistry
 from app.services.onnx_cpu_fallback_probe import OnnxCpuFallbackProbe
 from app.services.resource_probes import DxgiVramProbe, SystemRamProbe
+from app.services.restore_session import RestoreSessionStore, default_detectors
 from app.services.retention_sweeper import RetentionSweeper
 from app.services.settings_service import register_live_settings
 from app.services.storage import StorageService
@@ -133,6 +136,7 @@ async def lifespan(app: FastAPI):
     onnx_video_engine = OnnxVideoUpscaler(settings, model_registry, devices_service, gpu_coordinator)
     # Un solo dueno de las sesiones de restauracion en el coordinator (spec §3.5).
     photo_restore_engine = PhotoRestoreEngine(settings, gpu_coordinator, device_health=devices_service)
+    restore_sessions = RestoreSessionStore(settings, default_detectors(settings, photo_restore_engine))
     # Subproyecto B: real VRAM/RAM admission on top of the existing
     # job-count gate. "npu" has no real probe yet (no NPU enumeration story
     # in devices_service.py) -- omitting it from this dict is equivalent to
@@ -166,7 +170,7 @@ async def lifespan(app: FastAPI):
         devices=devices_service,
         device_router=device_router,
         quota_service=quota_service,
-        restore_runner=PhotoRestoreJobRunner(settings, photo_restore_engine),
+        restore_runner=PhotoRestoreJobRunner(settings, photo_restore_engine, sessions=restore_sessions),
     )
     video_upscaler = VideoUpscaler(
         settings,
@@ -329,6 +333,7 @@ async def lifespan(app: FastAPI):
     app.state.capability_probe = capability_probe
     app.state.onnx_cpu_fallback_probe = onnx_cpu_fallback_probe
     app.state.job_manager = job_manager
+    app.state.restore_sessions = restore_sessions
     app.state.video_job_manager = video_job_manager
     app.state.audio_job_manager = audio_job_manager
     app.state.retention_sweeper = retention_sweeper
@@ -421,6 +426,8 @@ app.add_middleware(LoopbackGuardMiddleware, auth_mode=settings.auth_mode)
 app.include_router(api_router)
 app.include_router(capability_router)
 app.include_router(editor_router)
+app.include_router(restore_router)
+app.include_router(licenses_router)
 app.include_router(auth_router)
 app.include_router(users_router)
 configure_web_routes(app)

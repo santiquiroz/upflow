@@ -24,6 +24,7 @@ from app.services.photo_restore_pipeline import RestoreTooLarge, StepCall, StepO
 from app.services.photo_restorer_registry import validate_step_ready
 from app.services.restore_outputs import saved_bit_depth
 from app.services.restore_provenance import UpscaleInfo
+from app.services.restore_session import SessionInputs, SessionNotFound
 from app.services.scale_fit import engine_output_path
 
 ONNX_MODEL = "fake-onnx-2x"
@@ -333,12 +334,111 @@ def test_restore_without_a_runner_is_refused(tmp_path: Path) -> None:
         asyncio.run(create_restore_job(manager, write_image(tmp_path / "in.png")))
 
 
-def test_analysis_session_is_refused_until_sessions_exist(tmp_path: Path) -> None:
+def test_analysis_session_is_refused_without_a_session_store(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     manager = make_manager(settings, runner=make_runner(settings))
 
     with pytest.raises(ValueError, match="sessions are not available"):
         asyncio.run(create_restore_job(manager, write_image(tmp_path / "in.png"), restore_session="abc"))
+
+
+class FakeSessions:
+    def __init__(self, geometry: dict | None = None) -> None:
+        self.geometry = geometry or {"rotate90": 1, "crop": None, "angle": 0.0}
+
+    def geometry_of(self, token: str) -> dict:
+        if token != "known":
+            raise SessionNotFound("Unknown restore session")
+        return self.geometry
+
+    def job_inputs(self, token: str) -> SessionInputs:
+        raise AssertionError("create_job must not load the session inputs")
+
+
+def test_unknown_analysis_session_is_refused(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    manager = make_manager(settings, runner=make_runner(settings, sessions=FakeSessions()))
+
+    with pytest.raises(ValueError, match="Unknown restore session"):
+        asyncio.run(create_restore_job(manager, write_image(tmp_path / "in.png"), restore_session="other"))
+
+
+def test_session_geometry_replaces_the_one_the_client_sent(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    manager = make_manager(settings, runner=make_runner(settings, sessions=FakeSessions()))
+    options = {"geometry": {"rotate90": 2}}
+
+    job = asyncio.run(
+        create_restore_job(manager, write_image(tmp_path / "in.png"), restore_session="known", restore_options=options)
+    )
+
+    assert job.restore_session == "known"
+    assert job.restore_options["geometry"] == {"rotate90": 1, "crop": None, "angle": 0.0}
+
+
+def test_preview_crop_is_checked_against_the_working_copy(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    manager = make_manager(settings, runner=make_runner(settings, sessions=FakeSessions()))
+    source = write_image(tmp_path / "in.png", size=(48, 32))
+
+    with pytest.raises(ValueError, match="outside"):
+        asyncio.run(
+            create_restore_job(
+                manager, source, restore_session="known", restore_options={"preview_crop": [0, 0, 40, 16]}
+            )
+        )
+    job = asyncio.run(
+        create_restore_job(manager, source, restore_session="known", restore_options={"preview_crop": [0, 0, 16, 40]})
+    )
+    assert job.restore_options["preview_crop"] == [0, 0, 16, 40]
+
+
+def test_a_crop_outside_the_photo_is_refused_before_queueing(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    manager = make_manager(settings, runner=make_runner(settings))
+
+    with pytest.raises(ValueError, match="outside"):
+        asyncio.run(
+            create_restore_job(
+                manager, write_image(tmp_path / "in.png"), restore_options={"geometry": {"crop": [0, 0, 100, 10]}}
+            )
+        )
+
+
+def test_geometry_without_a_session_is_applied_to_the_photo(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    manager = make_manager(settings, runner=make_runner(settings))
+
+    async def scenario() -> UpscaleJob:
+        job = await create_restore_job(
+            manager, write_image(tmp_path / "uploads" / "in.png"), restore_options={"geometry": {"rotate90": 1}}
+        )
+        await run_to_end(manager, job)
+        return job
+
+    job = asyncio.run(scenario())
+
+    assert job.status == JobStatus.completed, job.error
+    with Image.open(job.output_path) as image:
+        assert image.size == (32, 48)
+
+
+def test_a_session_job_keeps_the_session_original(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    manager = make_manager(settings, runner=make_runner(settings, sessions=FakeSessions()))
+    job = UpscaleJob(
+        source_path=write_image(tmp_path / "session" / "original.png"),
+        original_filename="in.png",
+        model_name=BUILTIN_MODEL,
+        scale=1,
+        output_format="png",
+        restore_steps=["tone"],
+        restore_session="known",
+    )
+
+    manager._cleanup_source(job)  # noqa: SLF001
+
+    assert job.source_path.is_file()
 
 
 def test_restore_options_without_steps_are_refused(tmp_path: Path) -> None:

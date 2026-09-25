@@ -127,7 +127,7 @@ def save_full_outputs(
     if post.uncolored is not None:
         _save_image(post.uncolored, paths.uncolored, loaded, context, xmp)
         outputs.append(OutputFile("uncolored", paths.uncolored))
-    outputs.extend(_save_views(final, paths, loaded.icc))
+    outputs.extend(save_views(final, paths, loaded.icc))
     # El antes/despues se comparte fuera de Upflow: lleva la insignia en todo composite (§3.6).
     before_after = before_after_image(pre.request.image, post.image, badge=is_composite(facts))
     write_jpeg(before_after, paths.before_after, loaded.icc)
@@ -167,7 +167,7 @@ def _save_image(
     return save_restored(rgb, path, context.fmt, depth, loaded.icc, loaded.exif, xmp, keep_gps=keep_gps)
 
 
-def _save_views(final: np.ndarray, paths: RestoreOutputPaths, icc: bytes | None) -> list[OutputFile]:
+def save_views(final: np.ndarray, paths: RestoreOutputPaths, icc: bytes | None) -> list[OutputFile]:
     pixels = to_uint8(final)
     write_jpeg(fit_long_side(pixels, VIEW_MAX_SIDE), paths.view, icc)
     write_jpeg(fit_long_side(pixels, PREVIEW_MAX_SIDE), paths.preview, icc)
