@@ -159,6 +159,19 @@ def blend_tiles(
     onnx_video_upscaler feeds uint8 tiles -- the accumulator is float32 either
     way.
     """
+    return finalize_uint8(blend_tiles_float(tiles, height, width, channels, scale, feather))
+
+
+def blend_tiles_float(
+    tiles: list[tuple[int, int, int, int, np.ndarray]],
+    height: int,
+    width: int,
+    channels: int,
+    scale: int,
+    feather: int | None = None,
+) -> np.ndarray:
+    # Sin clip ni redondeo: la restauracion trabaja en [0,1] (16 bits) y
+    # finalize_uint8 la dejaria negra.
     canvas_h, canvas_w = height * scale, width * scale
     accumulator = np.zeros((canvas_h, canvas_w, channels), dtype=np.float32)
     weight_sum = np.zeros((canvas_h, canvas_w, 1), dtype=np.float32)
@@ -185,5 +198,4 @@ def blend_tiles(
             output_tile.astype(np.float32, copy=False) * weights
         )
         weight_sum[oy : oy + out_h, ox : ox + out_w] += weights
-    blended = accumulator / np.clip(weight_sum, 1e-6, None)
-    return finalize_uint8(blended)
+    return accumulator / np.clip(weight_sum, 1e-6, None)
