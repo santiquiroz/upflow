@@ -357,6 +357,18 @@ def _build_gpu_device(index: int, name: str) -> DeviceInfo:
 class DevicesService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        self._unhealthy: frozenset[str] = frozenset()
+
+    def mark_unhealthy(self, device_id: str) -> None:
+        # Tras una remoción (887A0005/6) el device queda inservible hasta
+        # reiniciar el proceso; la marca no se persiste a propósito.
+        self._unhealthy = self._unhealthy | {device_id}
+
+    def is_healthy(self, device_id: str) -> bool:
+        return device_id not in self._unhealthy
+
+    def unhealthy_devices(self) -> frozenset[str]:
+        return self._unhealthy
 
     def list_devices(self) -> list[DeviceInfo]:
         return [CPU_DEVICE, *self._enumerate_gpu_devices()]

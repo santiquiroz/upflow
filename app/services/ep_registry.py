@@ -407,6 +407,7 @@ def create_session(
     settings: Settings,
     *,
     sess_options_factory: Callable[[], Any] | None = None,
+    prefer_native: bool = True,
 ) -> Any:
     import onnxruntime as ort
 
@@ -417,24 +418,50 @@ def create_session(
     if not device.startswith(DML_DEVICE_PREFIX):
         raise RuntimeError(f"Unsupported device for ONNX inference: {device!r}")
 
+    if prefer_native:
+        native = _try_native_session(model_path, device, settings, sess_options_factory)
+        if native is not None:
+            return native
+    return _create_dml_session(model_path, device, sess_options_factory)
+
+
+def _try_native_session(
+    model_path: str,
+    device: str,
+    settings: Settings,
+    sess_options_factory: Callable[[], Any] | None,
+) -> Any | None:
     _initialize(settings)
     plugin = _native_plugin_for(device)
-    if plugin is not None and device not in _native_failed:
-        try:
-            session = _create_native_session(model_path, device, plugin, sess_options_factory)
-            record_session_providers(device, session)
-            return session
-        except Exception as exc:  # noqa: BLE001 -- fallback garantizado: el job nunca falla por el EP nativo
-            # Una sola vez: reintentarlo en cada trabajo paga el intento y el
-            # fallback, y con TensorRT ese intento es una compilacion cara.
-            _native_failed.add(device)
-            _session_errors[device] = f"{plugin.spec.label}: {exc}"
-            logger.warning(
-                "ep_registry: sesión %s falló en %s, cayendo a DirectML: %s",
-                plugin.spec.label,
-                device,
-                exc,
-            )
+    if plugin is None or device in _native_failed:
+        return None
+    try:
+        session = _create_native_session(model_path, device, plugin, sess_options_factory)
+    except Exception as exc:  # noqa: BLE001 -- fallback garantizado: el job nunca falla por el EP nativo
+        _record_native_failure(device, plugin, exc)
+        return None
+    record_session_providers(device, session)
+    return session
+
+
+def _record_native_failure(device: str, plugin: _PluginState, exc: Exception) -> None:
+    # Una sola vez: reintentarlo en cada trabajo paga el intento y el
+    # fallback, y con TensorRT ese intento es una compilacion cara.
+    _native_failed.add(device)
+    _session_errors[device] = f"{plugin.spec.label}: {exc}"
+    logger.warning(
+        "ep_registry: sesión %s falló en %s, cayendo a DirectML: %s",
+        plugin.spec.label,
+        device,
+        exc,
+    )
+
+
+def _create_dml_session(
+    model_path: str, device: str, sess_options_factory: Callable[[], Any] | None
+) -> Any:
+    import onnxruntime as ort
+
     session = ort.InferenceSession(
         model_path,
         sess_options=_build_options(sess_options_factory),

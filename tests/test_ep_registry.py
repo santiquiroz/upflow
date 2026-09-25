@@ -883,3 +883,75 @@ def test_record_session_providers_warns_on_cpu_fallback(
 
     warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert any("dml:0" in r.getMessage() for r in warnings)
+
+
+# --- P0-13: prefer_native=False ----------------------------------------
+
+
+def test_prefer_native_false_goes_straight_to_directml_even_with_a_plugin(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, clean_registry: list
+) -> None:
+    install_nvidia_plugin(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        ep_registry,
+        "_native_plugin_for",
+        lambda device: pytest.fail("_native_plugin_for must not run with prefer_native=False"),
+    )
+
+    ep_registry.create_session("model.onnx", "dml:0", make_settings(tmp_path), prefer_native=False)
+
+    (_, _, providers), = FakeInferenceSession.calls
+    assert providers == [("DmlExecutionProvider", {"device_id": 0}), "CPUExecutionProvider"]
+    assert clean_registry == []
+
+
+def test_prefer_native_false_keeps_the_session_options(tmp_path: Path) -> None:
+    options = FakeSessionOptions()
+    ep_registry.create_session(
+        "model.onnx",
+        "dml:0",
+        make_settings(tmp_path),
+        sess_options_factory=lambda: options,
+        prefer_native=False,
+    )
+    (_, sess_options, _), = FakeInferenceSession.calls
+    assert sess_options is options
+
+
+def test_prefer_native_false_on_cpu_is_still_cpu_only(tmp_path: Path) -> None:
+    ep_registry.create_session("model.onnx", "cpu", make_settings(tmp_path), prefer_native=False)
+    assert FakeInferenceSession.calls == [("model.onnx", None, ["CPUExecutionProvider"])]
+
+
+def test_prefer_native_false_does_not_mark_the_native_lane_failed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    install_nvidia_plugin(monkeypatch, tmp_path)
+    settings = make_settings(tmp_path)
+
+    ep_registry.create_session("a.onnx", "dml:0", settings, prefer_native=False)
+    ep_registry.create_session("b.onnx", "dml:0", settings)
+
+    _, sess_options, providers = FakeInferenceSession.calls[-1]
+    assert providers is None
+    assert [d.ep_name for d in sess_options.provider_devices] == ["NvTensorRTRTXExecutionProvider"]
+
+
+def test_prefer_native_defaults_to_the_native_lane(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    install_nvidia_plugin(monkeypatch, tmp_path)
+    calls: list[str] = []
+    original = ep_registry._native_plugin_for
+
+    def spy(device: str):
+        calls.append(device)
+        return original(device)
+
+    monkeypatch.setattr(ep_registry, "_native_plugin_for", spy)
+
+    ep_registry.create_session("model.onnx", "dml:0", make_settings(tmp_path))
+
+    assert calls == ["dml:0"]
+    (_, _, providers), = FakeInferenceSession.calls
+    assert providers is None

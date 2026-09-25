@@ -11,6 +11,7 @@ from PIL import Image
 
 from app.config import Settings
 from app.services.devices_service import DevicesService
+from app.services.engines import onnx_video_upscaler as ovu
 from app.services.engines.frame_workers import (
     FrameReadbackRing,
     derive_readback_ring_capacity,
@@ -858,3 +859,54 @@ async def test_run_frames_builtin_cancel_does_not_leave_worker_thread_running(
 
     # The worker must have completed its teardown BEFORE the cancel propagated.
     assert finished.is_set()
+
+
+# --- P0-13: firmas de remoción del device separadas de las de OOM ---------
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "DmlExecutionProvider: 887A0005 The GPU device instance has been suspended.",
+        "Status Message: 887A0006 The GPU will not respond to more commands",
+        "DXGI_ERROR_DEVICE_REMOVED",
+        "DXGI_ERROR_DEVICE_HUNG",
+        "the device removed reason was a driver upgrade",
+        "D3D12 device hung",
+    ],
+)
+def test_device_removal_is_recognized(message: str) -> None:
+    assert ovu.is_device_removed_error(RuntimeError(message))
+    assert not ovu.is_oom_error(RuntimeError(message))
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Failed to allocate memory for requested buffer of size 1073741824",
+        "onnxruntime: out of memory",
+        "E_OUTOFMEMORY (0x8007000E): Not enough memory resources",
+        "insufficient video memory",
+        "D3D12 heap creation failed",
+        "cudaMalloc failed",
+    ],
+)
+def test_oom_is_recognized_without_being_a_device_removal(message: str) -> None:
+    assert ovu.is_oom_error(RuntimeError(message))
+    assert not ovu.is_device_removed_error(RuntimeError(message))
+
+
+def test_unrelated_errors_are_neither_oom_nor_device_removal() -> None:
+    exc = RuntimeError("Invalid input name: image")
+    assert not ovu.is_oom_error(exc)
+    assert not ovu.is_device_removed_error(exc)
+
+
+def test_signature_groups_do_not_overlap() -> None:
+    assert not set(ovu.DEVICE_REMOVED_SIGNATURES) & set(ovu.OOM_SIGNATURES)
+
+
+def test_existing_callers_still_see_the_union_of_both_groups() -> None:
+    assert set(ovu._OOM_SIGNATURES) == set(ovu.DEVICE_REMOVED_SIGNATURES) | set(ovu.OOM_SIGNATURES)
+    assert ovu._is_oom_error(RuntimeError("887A0005 device removed"))
+    assert ovu._is_oom_error(RuntimeError("failed to allocate"))

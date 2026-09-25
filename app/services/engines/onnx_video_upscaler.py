@@ -64,23 +64,45 @@ logger = logging.getLogger(__name__)
 # semaphore of its own.
 # ---------------------------------------------------------------------------
 
-_OOM_SIGNATURES = (
+DEVICE_REMOVED_SIGNATURES = (
+    "887a0005",
+    "887a0006",
+    "887a0007",
+    "dxgi_error_device",
+    "device removed",
+    "device hung",
+    "device instance has been suspended",
+)
+OOM_SIGNATURES = (
     "out of memory",
     "outofmemory",
     "failed to allocate",
     "insufficient",
-    "d3d12",  # DirectML allocation failures surface with D3D12 device-removed/hung text
-    "device removed",
-    "device hung",
+    # Ambiguo a propósito: un texto con solo "D3D12" baja el tile en vez de
+    # marcar el device no sano hasta reiniciar.
+    "d3d12",
     "cudamalloc",
 )
+_OOM_SIGNATURES = DEVICE_REMOVED_SIGNATURES + OOM_SIGNATURES
+
+
+def _matches_any(exc: BaseException, signatures: tuple[str, ...]) -> bool:
+    text = str(exc).lower()
+    return any(sig in text for sig in signatures)
+
+
+def is_device_removed_error(exc: BaseException) -> bool:
+    return _matches_any(exc, DEVICE_REMOVED_SIGNATURES)
+
+
+def is_oom_error(exc: BaseException) -> bool:
+    return _matches_any(exc, OOM_SIGNATURES) and not is_device_removed_error(exc)
 
 
 def _is_oom_error(exc: BaseException) -> bool:
     """True if an inference exception looks like a GPU memory / allocation failure,
     the case where retrying the same frame tiled (smaller allocations) can succeed."""
-    text = str(exc).lower()
-    return any(sig in text for sig in _OOM_SIGNATURES)
+    return _matches_any(exc, _OOM_SIGNATURES)
 
 
 GPU_EXECUTION_PROVIDERS = frozenset(

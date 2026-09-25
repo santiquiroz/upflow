@@ -430,3 +430,48 @@ def test_devices_endpoint_serializes_ep_fields_camel_case(
     assert gpu["activeEp"] == "DmlExecutionProvider"
     assert gpu["epLabel"] == "DirectML"
     assert gpu["epState"] == "baseline"
+
+
+# --- P0-13: marca "no sano" en memoria tras una remoción del device -------
+
+
+def test_every_device_starts_healthy() -> None:
+    service = DevicesService(make_settings())
+    assert service.is_healthy("dml:0")
+    assert service.is_healthy("cpu")
+    assert service.unhealthy_devices() == frozenset()
+
+
+def test_mark_unhealthy_only_affects_that_device() -> None:
+    service = DevicesService(make_settings())
+
+    service.mark_unhealthy("dml:0")
+
+    assert not service.is_healthy("dml:0")
+    assert service.is_healthy("dml:1")
+    assert service.unhealthy_devices() == frozenset({"dml:0"})
+
+
+def test_mark_unhealthy_is_idempotent() -> None:
+    service = DevicesService(make_settings())
+
+    service.mark_unhealthy("dml:0")
+    service.mark_unhealthy("dml:0")
+
+    assert service.unhealthy_devices() == frozenset({"dml:0"})
+
+
+def test_the_unhealthy_mark_lives_in_memory_per_service() -> None:
+    first = DevicesService(make_settings())
+    first.mark_unhealthy("dml:0")
+
+    assert DevicesService(make_settings()).is_healthy("dml:0")
+
+
+def test_unhealthy_devices_is_a_snapshot_not_a_live_view() -> None:
+    service = DevicesService(make_settings())
+    snapshot = service.unhealthy_devices()
+
+    service.mark_unhealthy("dml:0")
+
+    assert snapshot == frozenset()
