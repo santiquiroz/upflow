@@ -178,11 +178,19 @@ class VideoUpscaler:
             else frame_stall_timeout_seconds
         )
 
-    def available(self) -> bool:
-        return self.engine.available() and self.media_tools.available()
+    def available_for(self, job: VideoUpscaleJob) -> bool:
+        if not self.media_tools.available():
+            return False
+        return not self._job_uses_ncnn(job) or self.engine.available()
+
+    def _job_uses_ncnn(self, job: VideoUpscaleJob) -> bool:
+        if is_classic_upscaler(job.model_id) or self._is_onnx_model(job.model_id):
+            return False
+        return self._resolve_builtin_backend(job) == UpscaleBackend.ncnn
 
     async def run(self, job: VideoUpscaleJob, fps_multiplier: int = 1) -> Path:
-        if not self.available():
+        # Fuera del loop: resolver el backend puede hacer el import frío de onnxruntime.
+        if not await asyncio.to_thread(self.available_for, job):
             raise RuntimeError("Video pipeline is not available. Ensure Real-ESRGAN and FFmpeg are installed.")
 
         work_dir = self.settings.video_work_path / job.id

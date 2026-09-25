@@ -1197,3 +1197,92 @@ async def test_interpolating_always_runs_the_cut_repair(tmp_path: Path, monkeypa
     assert len(reparaciones) == 1
     _dir, origen, salida = reparaciones[0]
     assert (origen, salida) == (4, 8)
+
+
+# ---------------------------------------------------------------------------
+# available_for(job): ffmpeg siempre; el binario ncnn solo si el job lo usa.
+# ---------------------------------------------------------------------------
+
+
+class MissingNcnnEngine:
+    def available(self) -> bool:
+        return False
+
+
+class MissingMediaTools(FakeMediaTools):
+    def available(self) -> bool:
+        return False
+
+
+def make_upscaler_without_ncnn(tmp_path: Path, **kwargs: object) -> VideoUpscaler:
+    upscaler = make_stream_upscaler(tmp_path, **kwargs)
+    upscaler.engine = MissingNcnnEngine()  # type: ignore[assignment]
+    return upscaler
+
+
+def test_onnx_job_is_available_without_the_ncnn_binary(tmp_path: Path) -> None:
+    upscaler = make_upscaler_without_ncnn(tmp_path)
+    job = make_stream_job(tmp_path, backend="onnx")
+
+    assert upscaler.available_for(job) is True
+
+
+def test_ncnn_job_is_unavailable_without_the_ncnn_binary(tmp_path: Path) -> None:
+    upscaler = make_upscaler_without_ncnn(tmp_path)
+    job = make_stream_job(tmp_path, backend="ncnn")
+
+    assert upscaler.available_for(job) is False
+
+
+def test_ncnn_job_is_available_with_the_ncnn_binary(tmp_path: Path) -> None:
+    upscaler = make_stream_upscaler(tmp_path)
+    job = make_stream_job(tmp_path, backend="ncnn")
+
+    assert upscaler.available_for(job) is True
+
+
+def test_classic_job_is_available_without_the_ncnn_binary(tmp_path: Path) -> None:
+    upscaler = make_upscaler_without_ncnn(tmp_path)
+    job = make_stream_job(tmp_path, model_id="classic-lanczos", backend="ncnn", scale=2)
+
+    assert upscaler.available_for(job) is True
+
+
+def test_hf_onnx_job_is_available_without_the_ncnn_binary(tmp_path: Path) -> None:
+    registry = ModelRegistry(make_stream_settings(tmp_path))
+    registry.register(make_onnx_entry())
+    upscaler = make_upscaler_without_ncnn(tmp_path, registry=registry)
+    job = make_stream_job(tmp_path, model_name="fake-onnx-2x", model_id="fake-onnx-2x", scale=2, backend="ncnn")
+
+    assert upscaler.available_for(job) is True
+
+
+def test_no_job_is_available_without_ffmpeg(tmp_path: Path) -> None:
+    upscaler = make_stream_upscaler(tmp_path)
+    upscaler.media_tools = MissingMediaTools()  # type: ignore[assignment]
+    job = make_stream_job(tmp_path, backend="onnx")
+
+    assert upscaler.available_for(job) is False
+
+
+@pytest.mark.asyncio
+async def test_run_accepts_an_onnx_job_without_the_ncnn_binary(tmp_path: Path, monkeypatch) -> None:
+    upscaler = make_upscaler_without_ncnn(tmp_path)
+    job = make_stream_job(tmp_path, backend="onnx")
+    expected = tmp_path / "out.mp4"
+
+    async def fake_pipeline(job_, frames_in, frames_out, audio_path, fps_multiplier=1):
+        return expected
+
+    monkeypatch.setattr(upscaler, "_run_pipeline", fake_pipeline)
+
+    assert await upscaler.run(job) == expected
+
+
+@pytest.mark.asyncio
+async def test_run_rejects_an_ncnn_job_without_the_ncnn_binary(tmp_path: Path) -> None:
+    upscaler = make_upscaler_without_ncnn(tmp_path)
+    job = make_stream_job(tmp_path, backend="ncnn")
+
+    with pytest.raises(RuntimeError, match="not available"):
+        await upscaler.run(job)
