@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -10,11 +11,18 @@ from app.config import Settings
 from app.services import ep_registry
 from app.services.engines.onnx_common import blend_tiles, blend_tiles_float
 from app.services.engines.tiled_restore_runner import (
+    TDR_BUDGET_REASON,
+    CalibrationCache,
+    CalibrationKey,
+    CalibrationSpec,
     Padding,
     RestoreCancelled,
+    TileCalibration,
     TilePlan,
+    calibrate_tile,
     crop_padding,
     pad_to_requirements,
+    predict_call_ms,
     run_tiled,
     session_tile_infer,
 )
@@ -395,3 +403,244 @@ def test_real_identity_graph_on_the_cpu_ep_round_trips_16_bit_input(tmp_path: Pa
     output = run_tiled(session_tile_infer(session), image, TilePlan(tile=64, overlap=16, multiple=8))
 
     assert np.array_equal(to_uint16(output), raw)
+
+
+# ---------------------------------------------------------------- calibracion TDR con reloj falso
+
+BUDGET_MS = 1200.0
+COMPILE_MS = 5000.0
+
+
+class FakeClock:
+    def __init__(self) -> None:
+        self.seconds = 0.0
+
+    def __call__(self) -> float:
+        return self.seconds
+
+    def advance_ms(self, ms: float) -> None:
+        self.seconds += ms / 1000.0
+
+
+class TimedFakeModel:
+    """Cada forma nueva paga COMPILE_MS en su primera llamada, como DML con H/W
+    dinamicos; despues cuesta lo que diga ms_for_tile."""
+
+    def __init__(self, clock: FakeClock, ms_for_tile: Callable[[int], float]) -> None:
+        self.clock = clock
+        self.ms_for_tile = ms_for_tile
+        self.calls: list[tuple[int, ...]] = []
+        self.compiled: set[int] = set()
+
+    def __call__(self, tile: np.ndarray) -> np.ndarray:
+        size = tile.shape[0]
+        self.calls.append(tile.shape)
+        compile_ms = 0.0 if size in self.compiled else COMPILE_MS
+        self.compiled.add(size)
+        self.clock.advance_ms(compile_ms + self.ms_for_tile(size))
+        return tile
+
+    def sizes(self) -> list[int]:
+        return [shape[0] for shape in self.calls]
+
+
+def per_mpx(ms_per_mpx: float) -> Callable[[int], float]:
+    return lambda size: ms_per_mpx * size * size / 1_000_000
+
+
+def calibrate_fake(model: TimedFakeModel, spec: CalibrationSpec, precision: str = "fp16") -> TileCalibration:
+    return calibrate_tile(model, spec, precision=precision, budget_ms=BUDGET_MS, clock=model.clock)
+
+
+DYNAMIC_SPEC = CalibrationSpec(tile_min=128, tile_candidates=(256, 384, 512))
+
+
+def test_calibration_excludes_the_compile_warmup_from_the_timing() -> None:
+    model = TimedFakeModel(FakeClock(), per_mpx(1500))
+
+    result = calibrate_fake(model, DYNAMIC_SPEC)
+
+    assert result.tile == 512
+    assert result.ms_per_mpx == pytest.approx(1500)
+    assert model.sizes()[0] == 128
+
+
+def test_calibration_measures_at_least_two_stable_calls_and_keeps_the_slowest() -> None:
+    steady = iter([0.0, 20.0, 40.0])
+    model = TimedFakeModel(FakeClock(), lambda size: next(steady))
+
+    result = calibrate_fake(model, CalibrationSpec(tile_min=128, fixed_shape=True))
+
+    assert model.sizes() == [128, 128, 128]
+    assert result.ms_per_mpx == pytest.approx(40.0 / (128 * 128 / 1_000_000))
+
+
+def test_calibration_extrapolates_by_pixels_to_the_largest_tile_within_half_budget() -> None:
+    model = TimedFakeModel(FakeClock(), per_mpx(3000))
+
+    result = calibrate_fake(model, DYNAMIC_SPEC)
+
+    assert predict_call_ms(3000, 512) > BUDGET_MS / 2 >= predict_call_ms(3000, 384)
+    assert result.tile == 384
+    assert 512 not in model.sizes()
+    assert result.cpu_fallback_reason is None
+
+
+def test_calibration_warms_and_verifies_the_chosen_tile_with_two_calls() -> None:
+    model = TimedFakeModel(FakeClock(), per_mpx(3000))
+
+    calibrate_fake(model, DYNAMIC_SPEC)
+
+    assert model.sizes().count(384) == 3
+
+
+def test_calibration_steps_down_when_a_verification_call_exceeds_three_quarters_of_budget() -> None:
+    linear = per_mpx(1500)
+    model = TimedFakeModel(FakeClock(), lambda size: 0.76 * BUDGET_MS if size == 512 else linear(size))
+
+    result = calibrate_fake(model, DYNAMIC_SPEC)
+
+    assert result.tile == 384
+    assert model.sizes().index(512) < model.sizes().index(384)
+
+
+def test_calibration_that_steps_down_below_the_minimum_tile_falls_back_to_cpu() -> None:
+    model = TimedFakeModel(FakeClock(), lambda size: 0.8 * BUDGET_MS)
+
+    result = calibrate_fake(model, DYNAMIC_SPEC)
+
+    assert result.runs_on_cpu
+    assert result.tile is None
+    assert result.cpu_fallback_reason == TDR_BUDGET_REASON
+
+
+def test_calibration_of_a_minimum_tile_slower_than_the_budget_falls_back_to_cpu() -> None:
+    model = TimedFakeModel(FakeClock(), lambda size: BUDGET_MS + 1)
+
+    result = calibrate_fake(model, DYNAMIC_SPEC)
+
+    assert result.runs_on_cpu
+    assert result.cpu_fallback_reason == TDR_BUDGET_REASON
+    assert set(model.sizes()) == {128}
+
+
+def test_calibration_of_a_fixed_shape_model_over_half_budget_runs_on_cpu() -> None:
+    model = TimedFakeModel(FakeClock(), lambda size: BUDGET_MS / 2 + 1)
+
+    result = calibrate_fake(model, CalibrationSpec(tile_min=512, fixed_shape=True))
+
+    assert result.runs_on_cpu
+    assert result.cpu_fallback_reason == TDR_BUDGET_REASON
+    assert set(model.sizes()) == {512}
+
+
+def test_calibration_of_a_fixed_shape_model_within_half_budget_keeps_its_shape() -> None:
+    model = TimedFakeModel(FakeClock(), lambda size: BUDGET_MS / 2)
+
+    result = calibrate_fake(model, CalibrationSpec(tile_min=512, tile_candidates=(256, 1024), fixed_shape=True))
+
+    assert result.tile == 512
+    assert set(model.sizes()) == {512}
+
+
+def test_calibration_never_goes_above_the_ceiling() -> None:
+    model = TimedFakeModel(FakeClock(), per_mpx(100))
+
+    result = calibrate_fake(model, CalibrationSpec(tile_min=128, tile_candidates=(256, 384, 512), ceiling=384))
+
+    assert result.tile == 384
+    assert 512 not in model.sizes()
+
+
+def test_calibration_ignores_candidates_below_the_minimum_tile() -> None:
+    model = TimedFakeModel(FakeClock(), lambda size: 0.8 * BUDGET_MS)
+
+    result = calibrate_fake(model, CalibrationSpec(tile_min=128, tile_candidates=(64, 256)))
+
+    assert result.runs_on_cpu
+    assert 64 not in model.sizes()
+
+
+def test_calibration_probes_with_the_model_channel_count() -> None:
+    model = TimedFakeModel(FakeClock(), per_mpx(100))
+
+    calibrate_fake(model, CalibrationSpec(tile_min=64, fixed_shape=True, channels=1))
+
+    assert set(model.calls) == {(64, 64, 1)}
+
+
+def test_calibration_of_fp32_gets_its_own_tile_never_the_fp16_one() -> None:
+    cache = CalibrationCache()
+    fp16 = TimedFakeModel(FakeClock(), per_mpx(1500))
+    fp32 = TimedFakeModel(FakeClock(), per_mpx(1500 * 7.26))
+
+    fast = cache.get_or_calibrate(CalibrationKey("drunet", "dml:0", "fp16"), lambda: calibrate_fake(fp16, DYNAMIC_SPEC))
+    slow = cache.get_or_calibrate(
+        CalibrationKey("drunet", "dml:0", "fp32"), lambda: calibrate_fake(fp32, DYNAMIC_SPEC, precision="fp32")
+    )
+
+    assert (fast.precision, fast.tile) == ("fp16", 512)
+    assert (slow.precision, slow.tile) == ("fp32", 128)
+
+
+def test_calibration_runs_once_per_model_device_and_precision() -> None:
+    cache = CalibrationCache()
+    runs: list[str] = []
+
+    def calibrate() -> TileCalibration:
+        runs.append("run")
+        return TileCalibration(precision="fp16", tile=256, ms_per_mpx=1.0)
+
+    key = CalibrationKey("drunet", "dml:0", "fp16")
+    first = cache.get_or_calibrate(key, calibrate)
+    again = cache.get_or_calibrate(key, calibrate)
+    cache.get_or_calibrate(CalibrationKey("drunet", "dml:1", "fp16"), calibrate)
+    cache.get_or_calibrate(CalibrationKey("gfpgan", "dml:0", "fp16"), calibrate)
+
+    assert again is first
+    assert len(runs) == 3
+    assert cache.get(key) is first
+
+
+def test_calibration_cache_rejects_a_result_of_another_precision() -> None:
+    cache = CalibrationCache()
+    fp16_result = TileCalibration(precision="fp16", tile=512, ms_per_mpx=1.0)
+    fp32_key = CalibrationKey("drunet", "dml:0", "fp32")
+
+    with pytest.raises(ValueError, match="precision"):
+        cache.get_or_calibrate(fp32_key, lambda: fp16_result)
+
+    assert cache.get(fp32_key) is None
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"tile_min": 0},
+        {"tile_min": 128, "channels": 0},
+        {"tile_min": 128, "tile_candidates": (0, 256)},
+        {"tile_min": 256, "ceiling": 128},
+    ],
+)
+def test_calibration_spec_rejects_inconsistent_values(kwargs: dict[str, object]) -> None:
+    with pytest.raises(ValueError):
+        CalibrationSpec(**kwargs)
+
+
+@pytest.mark.parametrize("budget_ms", [0.0, -5.0])
+def test_calibration_rejects_a_non_positive_budget(budget_ms: float) -> None:
+    model = TimedFakeModel(FakeClock(), per_mpx(100))
+
+    with pytest.raises(ValueError, match="budget"):
+        calibrate_tile(model, DYNAMIC_SPEC, precision="fp16", budget_ms=budget_ms, clock=model.clock)
+
+    assert model.calls == []
+
+
+def test_calibration_rejects_an_unknown_precision() -> None:
+    model = TimedFakeModel(FakeClock(), per_mpx(100))
+
+    with pytest.raises(ValueError, match="precision"):
+        calibrate_tile(model, DYNAMIC_SPEC, precision="int8", budget_ms=BUDGET_MS, clock=model.clock)
+
+    assert model.calls == []
