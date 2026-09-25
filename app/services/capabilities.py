@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, Protocol
 
 from app.config import Settings, resolve_against_project_root
 from app.services.model_registry import ModelKind
@@ -78,7 +79,76 @@ class AnyOfRequirement:
     options: tuple[tuple["Requirement", ...], ...]
 
 
-Requirement = PathRequirement | RegistryRequirement | SettingRequirement | AnyOfRequirement
+HostCheck = Literal["ffmpeg_cctv_build", "dml_gpu"]
+
+
+@dataclass(frozen=True, slots=True)
+class HostRequirement:
+    """Algo de la maquina que no se baja ni se configura: la build de ffmpeg, una GPU.
+
+    Se evalua DESPUES de los requisitos de disco: sin el binario no hay build que
+    sondear, y lo primero que hay que decir es que falta bajarlo.
+    """
+
+    check: HostCheck
+    reason_key: str
+
+
+Requirement = (
+    PathRequirement | RegistryRequirement | SettingRequirement | AnyOfRequirement | HostRequirement
+)
+
+
+class DeviceLister(Protocol):
+    def list_devices(self) -> list: ...
+
+    def is_healthy(self, device_id: str) -> bool: ...
+
+
+def has_healthy_dml_device(devices: DeviceLister) -> bool:
+    return any(
+        device["backend"] == "directml" and devices.is_healthy(device["id"])
+        for device in devices.list_devices()
+    )
+
+
+def dml_gpu_present(settings: Settings) -> bool:
+    from app.services.devices_service import DevicesService
+
+    return has_healthy_dml_device(DevicesService(settings))
+
+
+def ffmpeg_build_supports_cctv(settings: Settings) -> bool:
+    from app.services.ffmpeg_capabilities import (
+        FfmpegProbeError,
+        cached_capabilities,
+        cctv_mode_available,
+    )
+
+    try:
+        return cctv_mode_available(cached_capabilities(settings.ffmpeg_binary_path))
+    except FfmpegProbeError:
+        return False
+
+
+HostProbe = Callable[[Settings], bool]
+
+
+@dataclass(frozen=True, slots=True)
+class HostProbes:
+    ffmpeg_cctv_build: HostProbe = ffmpeg_build_supports_cctv
+    dml_gpu: HostProbe = dml_gpu_present
+
+    def passes(self, check: HostCheck, settings: Settings) -> bool:
+        return getattr(self, check)(settings)
+
+
+DEFAULT_HOST_PROBES = HostProbes()
+
+
+def host_probes_for(devices: DeviceLister) -> HostProbes:
+    # El DevicesService de la app sabe que GPU se cayo en este proceso; uno nuevo no.
+    return HostProbes(dml_gpu=lambda _settings: has_healthy_dml_device(devices))
 
 
 @dataclass(frozen=True, slots=True)
@@ -306,6 +376,34 @@ CATALOG: tuple[Capability, ...] = (
         # video. Mientras esto dijo "no implementado", la app ya devolvia .srt,
         # .vtt, muxeo suave y quemado en la imagen.
         requirements=(RegistryRequirement((ModelKind.asr_onnx,)),),
+    ),
+    Capability(
+        id="video.cctv",
+        domain="video",
+        label_key="capability.video.cctv",
+        # vendored_pack y no builtin: builtin no evalua requisitos y mostraria el
+        # modo disponible sin ffmpeg.
+        provisioning="vendored_pack",
+        job_kind="video",
+        strategies=("dsp",),
+        requirements=(
+            PathRequirement("ffmpeg_binary", "ffmpeg"),
+            HostRequirement("ffmpeg_cctv_build", "capability.setup.ffmpegBuildLacksCctv"),
+        ),
+    ),
+    Capability(
+        id="video.cctvAi",
+        domain="video",
+        label_key="capability.video.cctvAi",
+        provisioning="vendored_pack",
+        job_kind="video",
+        strategies=("model",),
+        requirements=(
+            PathRequirement("ffmpeg_binary", "ffmpeg"),
+            PathRequirement("restore_core_installed", "restore-core"),
+            HostRequirement("ffmpeg_cctv_build", "capability.setup.ffmpegBuildLacksCctv"),
+            HostRequirement("dml_gpu", "capability.setup.needsGpu"),
+        ),
     ),
     # --- imagen ------------------------------------------------------------
     Capability(
@@ -610,7 +708,19 @@ def _unmet(
     return tuple(
         requirement
         for requirement in capability.requirements
-        if not _is_met(requirement, settings, installed_kinds)
+        if not isinstance(requirement, HostRequirement)
+        and not _is_met(requirement, settings, installed_kinds)
+    )
+
+
+def _unmet_host(
+    capability: Capability, settings: Settings, probes: HostProbes
+) -> tuple[HostRequirement, ...]:
+    return tuple(
+        requirement
+        for requirement in capability.requirements
+        if isinstance(requirement, HostRequirement)
+        and not probes.passes(requirement.check, settings)
     )
 
 
@@ -646,6 +756,7 @@ def _resolve_one(
     capability: Capability,
     settings: Settings,
     installed_kinds: frozenset[ModelKind],
+    probes: HostProbes = DEFAULT_HOST_PROBES,
 ) -> ResolvedCapability:
     if capability.provisioning == "builtin":
         # Anda sin bajar nada: es codigo en proceso, no un pack en disco.
@@ -657,16 +768,25 @@ def _resolve_one(
         return _as_resolved(capability, "not_implemented")
 
     unmet = _unmet(capability, settings, installed_kinds)
-    if not unmet:
-        return _as_resolved(capability, "available")
+    if unmet:
+        return _as_resolved(
+            capability,
+            "needs_setup",
+            missing_packs=_missing_packs(unmet),
+            setup_reason_key=_setup_reason_key(unmet),
+            activatable_settings=_activatable_settings(unmet),
+        )
 
-    return _as_resolved(
-        capability,
-        "needs_setup",
-        missing_packs=_missing_packs(unmet),
-        setup_reason_key=_setup_reason_key(unmet),
-        activatable_settings=_activatable_settings(unmet),
-    )
+    return _resolve_host(capability, settings, probes)
+
+
+def _resolve_host(
+    capability: Capability, settings: Settings, probes: HostProbes
+) -> ResolvedCapability:
+    unmet_host = _unmet_host(capability, settings, probes)
+    if not unmet_host:
+        return _as_resolved(capability, "available")
+    return _as_resolved(capability, "needs_setup", setup_reason_key=unmet_host[0].reason_key)
 
 
 def _preferred_pieces(unmet: tuple[Requirement, ...]) -> tuple[Requirement, ...]:
@@ -751,9 +871,11 @@ def installed_kinds(registry: object) -> frozenset[ModelKind]:
     )
 
 
-def resolve_capabilities(settings: Settings, registry: object) -> list[ResolvedCapability]:
+def resolve_capabilities(
+    settings: Settings, registry: object, probes: HostProbes = DEFAULT_HOST_PROBES
+) -> list[ResolvedCapability]:
     kinds = installed_kinds(registry)
-    return [_resolve_one(capability, settings, kinds) for capability in CATALOG]
+    return [_resolve_one(capability, settings, kinds, probes) for capability in CATALOG]
 
 
 def _capability_by_id(capability_id: str) -> Capability:
@@ -764,7 +886,10 @@ def _capability_by_id(capability_id: str) -> Capability:
 
 
 def resolve_one(
-    capability_id: str, settings: Settings, registry: object | None
+    capability_id: str,
+    settings: Settings,
+    registry: object | None,
+    probes: HostProbes = DEFAULT_HOST_PROBES,
 ) -> ResolvedCapability:
     """La fuente unica de "¿esta listo?" para UNA capacidad del catalogo.
 
@@ -783,8 +908,8 @@ def resolve_one(
                 f"La capacidad {capability_id!r} depende del registro de modelos: "
                 "resolverla sin registro daria una respuesta inventada."
             )
-        return _resolve_one(capability, settings, frozenset())
-    return _resolve_one(capability, settings, installed_kinds(registry))
+        return _resolve_one(capability, settings, frozenset(), probes)
+    return _resolve_one(capability, settings, installed_kinds(registry), probes)
 
 
 @dataclass(frozen=True, slots=True)

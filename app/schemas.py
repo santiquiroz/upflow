@@ -732,6 +732,13 @@ class AudioCapabilitiesResponse(BaseModel):
 
 class VideoCapabilitiesResponse(BaseModel):
     interp_engines: list[str] = Field(default_factory=list, serialization_alias="interpEngines")
+    cctv_available: bool = Field(default=False, serialization_alias="cctvAvailable")
+    cctv_reason_key: str | None = Field(default=None, serialization_alias="cctvReasonKey")
+    cctv_ai_available: bool = Field(default=False, serialization_alias="cctvAiAvailable")
+    cctv_ai_reason_key: str | None = Field(default=None, serialization_alias="cctvAiReasonKey")
+    cctv_unavailable_steps: list[str] = Field(
+        default_factory=list, serialization_alias="cctvUnavailableSteps"
+    )
 
 
 class LeverResponse(BaseModel):

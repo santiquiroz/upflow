@@ -1110,6 +1110,8 @@ export const es = {
   "capability.video.upscale": "Reescalar video",
   "capability.video.interpolate": "Generar fotogramas",
   "capability.video.subtitles": "Generar subtítulos",
+  "capability.video.cctv": "Video de cámaras de seguridad (CCTV)",
+  "capability.video.cctvAi": "Video de cámaras de seguridad con IA",
   "capability.image.upscale": "Reescalar imágenes",
   "capability.audio.denoise": "Quitar ruido",
   "capability.audio.restore": "Restaurar calidad",
@@ -1147,6 +1149,10 @@ export const es = {
   "pack.takesAWhile": "Son varios cientos de MB. Podés seguir usando el resto mientras tanto.",
   "capability.setup.missingPack": "Falta descargar el paquete que necesita.",
   "capability.setup.missingModel": "Todavía no hay ningún modelo compatible instalado.",
+  "capability.setup.ffmpegBuildLacksCctv":
+    "Esta build de ffmpeg no trae el codificador FFV1 o libx264, que el modo CCTV necesita. " +
+    "Usá el ffmpeg que viene con la app en vez del que apunta FFMPEG_BINARY.",
+  "capability.setup.needsGpu": "Necesita una GPU DirectML que funcione: este carril no corre en el procesador.",
   "capability.tree.loading": "Cargando capacidades…",
   "capability.tree.loadFailed": "No se pudieron cargar las capacidades. Probá de nuevo en un momento.",
   "capability.tree.roadmap": "Mapa de ruta",

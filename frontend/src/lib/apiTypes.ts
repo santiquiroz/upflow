@@ -343,6 +343,13 @@ export interface VoiceCatalog {
 // same filtering convention as AudioCapabilities.restoreModes.
 export interface VideoCapabilities {
   interpEngines: string[];
+  // Both CCTV lanes resolve against the backend capability catalog; the reason
+  // keys are `capability.setup.*` translation keys, null when available.
+  cctvAvailable: boolean;
+  cctvReasonKey: string | null;
+  cctvAiAvailable: boolean;
+  cctvAiReasonKey: string | null;
+  cctvUnavailableSteps: string[];
 }
 
 export interface SupportedModelResponse {

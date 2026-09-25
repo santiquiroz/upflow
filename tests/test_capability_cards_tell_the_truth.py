@@ -263,3 +263,43 @@ def test_lo_no_construido_no_se_confunde_con_lo_no_descargado() -> None:
     for capability in sin_implementar:
         assert capability.unavailable_reason_key, capability.id
         assert capability.requirements == (), capability.id
+
+
+# ---------------------------------------------------------------------------
+# Toda clave que el catalogo promete existe en los dos idiomas
+# ---------------------------------------------------------------------------
+
+
+def _claves_de_i18n(idioma: str) -> set[str]:
+    import re
+
+    texto = Path(f"frontend/src/i18n/{idioma}.ts").read_text(encoding="utf-8")
+    return set(re.findall(r'^\s*"([\w.]+)":', texto, flags=re.MULTILINE))
+
+
+def _claves_del_catalogo() -> set[str]:
+    from app.services.capabilities import HostRequirement
+
+    etiquetas = {c.label_key for c in CATALOG}
+    motivos_de_la_maquina = {
+        requisito.reason_key
+        for c in CATALOG
+        for requisito in c.requirements
+        if isinstance(requisito, HostRequirement)
+    }
+    return etiquetas | motivos_de_la_maquina
+
+
+@pytest.mark.parametrize("idioma", ["en", "es"])
+def test_cada_clave_del_catalogo_existe_en_el_idioma(idioma: str) -> None:
+    faltan = _claves_del_catalogo() - _claves_de_i18n(idioma)
+
+    assert faltan == set(), f"{idioma}: faltan {sorted(faltan)}"
+
+
+@pytest.mark.asyncio
+async def test_el_modo_cctv_sin_ffmpeg_no_se_declara_disponible(tmp_path: Path) -> None:
+    resultado = await estados(make_settings(tmp_path, FFMPEG_BINARY=str(tmp_path / "no.exe")))
+
+    assert resultado["video.cctv"] == "needs_setup"
+    assert resultado["video.cctvAi"] == "needs_setup"

@@ -507,7 +507,14 @@ describe("getVideoJob", () => {
 
 describe("getVideoCapabilities", () => {
   it("issues a GET to /api/v1/video/capabilities and returns the typed payload", async () => {
-    const payload: VideoCapabilities = { interpEngines: ["rife", "gmfss"] };
+    const payload: VideoCapabilities = {
+      interpEngines: ["rife", "gmfss"],
+      cctvAvailable: true,
+      cctvReasonKey: null,
+      cctvAiAvailable: false,
+      cctvAiReasonKey: "capability.setup.needsGpu",
+      cctvUnavailableSteps: ["denoise"],
+    };
     mockFetchOnce(payload);
 
     const result = await getVideoCapabilities();

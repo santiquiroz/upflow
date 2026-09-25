@@ -131,7 +131,14 @@ function renderPanel(
   vi.mocked(api.getModels).mockResolvedValue(MODELS);
   vi.mocked(api.getDevices).mockResolvedValue(devices);
   vi.mocked(api.getEngineInfo).mockResolvedValue(ENGINE_INFO);
-  vi.mocked(api.getVideoCapabilities).mockResolvedValue({ interpEngines });
+  vi.mocked(api.getVideoCapabilities).mockResolvedValue({
+    interpEngines,
+    cctvAvailable: false,
+    cctvReasonKey: "capability.setup.missingPack",
+    cctvAiAvailable: false,
+    cctvAiReasonKey: "capability.setup.missingPack",
+    cctvUnavailableSteps: [],
+  });
   vi.mocked(api.analyzeVideo).mockResolvedValue({
     uploadToken: "default-token",
     audioTracks: [],
