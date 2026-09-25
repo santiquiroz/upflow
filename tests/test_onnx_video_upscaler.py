@@ -647,9 +647,10 @@ class IoBindingDouble2xSession(Double2xUint8Session):
     """Double2xUint8Session con io_binding(): si la salida está bindeada a un
     buffer CPU, run_with_iobinding escribe el resultado en esa dirección."""
 
-    def __init__(self, fail_cpu_output_bind: bool = False) -> None:
+    def __init__(self, fail_cpu_output_bind: bool = False, fail_cpu_output_run: bool = False) -> None:
         super().__init__()
         self.fail_cpu_output_bind = fail_cpu_output_bind
+        self.fail_cpu_output_run = fail_cpu_output_run
         self.bound_outputs: list[tuple[str, int | None]] = []
         self.copy_outputs_calls = 0
         self.plain_run_calls = 0
@@ -659,6 +660,10 @@ class IoBindingDouble2xSession(Double2xUint8Session):
 
     def run_with_iobinding(self, binding: _RecordingIoBinding) -> None:
         assert binding.input is not None
+        if binding.output_buffer_ptr is not None and self.fail_cpu_output_run:
+            # Como ORT real: el buffer bindeado se rechaza recién al asignar la
+            # salida del último nodo, después de ejecutar todo el grafo.
+            raise RuntimeError("OrtValue shape verification failed")
         if binding.output_buffer_ptr is not None:
             _write_to_address(binding.output_buffer_ptr, _doubled(binding.input))
 
@@ -667,7 +672,7 @@ class IoBindingDouble2xSession(Double2xUint8Session):
         return super().run(output_names, input_feed)
 
 
-def make_resize_session(scale: int) -> Any:
+def make_resize_session(scale: int, trailing_identity: bool = False) -> Any:
     ort = pytest.importorskip("onnxruntime")
     onnx_helper = pytest.importorskip("onnx.helper")
     from onnx import TensorProto
@@ -675,8 +680,12 @@ def make_resize_session(scale: int) -> Any:
     image = onnx_helper.make_tensor_value_info("image", TensorProto.UINT8, [1, None, None, 3])
     upscaled = onnx_helper.make_tensor_value_info("upscaled", TensorProto.UINT8, [1, None, None, 3])
     scales = onnx_helper.make_tensor("scales", TensorProto.FLOAT, [4], [1.0, float(scale), float(scale), 1.0])
-    node = onnx_helper.make_node("Resize", ["image", "", "scales"], ["upscaled"], mode="nearest")
-    graph = onnx_helper.make_graph([node], "resize-nhwc-uint8", [image], [upscaled], initializer=[scales])
+    resized = "resized" if trailing_identity else "upscaled"
+    nodes = [onnx_helper.make_node("Resize", ["image", "", "scales"], [resized], mode="nearest")]
+    if trailing_identity:
+        # Con más de un nodo, ORT rechaza el buffer bindeado recién después de ejecutar el grafo.
+        nodes.append(onnx_helper.make_node("Identity", [resized], ["upscaled"]))
+    graph = onnx_helper.make_graph(nodes, "resize-nhwc-uint8", [image], [upscaled], initializer=[scales])
     model = onnx_helper.make_model(graph, opset_imports=[onnx_helper.make_opsetid("", 17)])
     return ort.InferenceSession(model.SerializeToString(), providers=["CPUExecutionProvider"])
 
@@ -757,6 +766,44 @@ def test_upscale_one_ring_bind_failure_falls_back_to_the_dml_copy_path_and_logs_
     assert len(warnings) == 1
 
 
+def test_upscale_one_ring_bind_rejected_at_run_time_is_not_retried_on_later_frames(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setitem(sys.modules, "onnxruntime", _FakeOrtModule)
+    engine = make_engine(tmp_path)
+    session = IoBindingDouble2xSession(fail_cpu_output_run=True)
+    ring = FrameReadbackRing(2)
+    frames = [np.random.default_rng(seed).integers(0, 256, (1, 4, 6, 3), dtype=np.uint8) for seed in (6, 7, 8)]
+
+    with caplog.at_level(logging.WARNING, logger="app.services.engines.onnx_video_upscaler"):
+        for frame in frames:
+            out, _ = engine._upscale_one(session, frame, "dml:0", False, ring, 2)
+            assert np.array_equal(out, _doubled(frame))
+
+    cpu_binds = [bound for bound in session.bound_outputs if bound[0] == "cpu"]
+    assert len(cpu_binds) == 1  # un solo intento: cada reintento costaría casi una inferencia entera
+    assert session.copy_outputs_calls == 3
+    assert session.plain_run_calls == 0
+    warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
+    assert len(warnings) == 1
+
+
+def test_ring_bind_disabled_for_one_session_still_binds_for_another(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(sys.modules, "onnxruntime", _FakeOrtModule)
+    engine = make_engine(tmp_path)
+    rejecting = IoBindingDouble2xSession(fail_cpu_output_run=True)
+    accepting = IoBindingDouble2xSession()
+    frame = np.random.default_rng(9).integers(0, 256, (1, 4, 6, 3), dtype=np.uint8)
+
+    engine._upscale_one(rejecting, frame, "dml:0", False, FrameReadbackRing(2), 2)
+    out, _ = engine._upscale_one(accepting, frame, "dml:0", False, FrameReadbackRing(2), 2)
+
+    assert accepting.bound_outputs == [("cpu", out.ctypes.data)]
+    assert accepting.copy_outputs_calls == 0
+
+
 def test_upscale_one_ring_with_a_wrong_declared_scale_returns_the_real_output_outside_the_ring(
     tmp_path: Path,
 ) -> None:
@@ -773,6 +820,46 @@ def test_upscale_one_ring_with_a_wrong_declared_scale_returns_the_real_output_ou
     assert engine._ring_bind_warned is True
     assert np.array_equal(out, session.run(None, {"image": frame})[0])
     assert out.shape == (1, 20, 28, 3)
+
+
+class _CountingSession:
+    def __init__(self, session: Any) -> None:
+        self._session = session
+        self.io_binding_calls = 0
+        self.run_calls = 0
+
+    def get_inputs(self) -> Any:
+        return self._session.get_inputs()
+
+    def get_outputs(self) -> Any:
+        return self._session.get_outputs()
+
+    def io_binding(self) -> Any:
+        self.io_binding_calls += 1
+        return self._session.io_binding()
+
+    def run_with_iobinding(self, binding: Any) -> None:
+        self._session.run_with_iobinding(binding)
+
+    def run(self, output_names: Any, input_feed: dict[str, np.ndarray]) -> list[np.ndarray]:
+        self.run_calls += 1
+        return self._session.run(output_names, input_feed)
+
+
+def test_ring_bind_rejected_by_a_real_multi_node_graph_is_tried_once_per_session(tmp_path: Path) -> None:
+    real = make_resize_session(4, trailing_identity=True)
+    session = _CountingSession(real)
+    engine = make_engine(tmp_path)
+    ring = FrameReadbackRing(2)
+    rng = np.random.default_rng(14)
+
+    for _ in range(3):
+        frame = rng.integers(0, 256, (1, 5, 7, 3), dtype=np.uint8)
+        out, _ = engine._upscale_one(session, frame, "cpu", False, ring, 2)
+        assert np.array_equal(out, real.run(None, {"image": frame})[0])
+
+    assert session.io_binding_calls == 1
+    assert session.run_calls == 3
 
 
 async def test_run_frames_streaming_binds_into_the_ring_with_the_model_scale(

@@ -5,6 +5,7 @@ import contextlib
 import logging
 import queue
 import threading
+import weakref
 from collections import OrderedDict
 from collections.abc import Callable
 from pathlib import Path
@@ -160,6 +161,8 @@ class OnnxVideoUpscaler:
         self._gpu_ep_cache: bool | None = None
         self._iobinding_warned = False
         self._ring_bind_warned = False
+        # Débil para que una sesión desalojada del caché no deje su entrada viva.
+        self._ring_bind_rejected: weakref.WeakSet[Any] = weakref.WeakSet()
         # Diagnostico expuesto al caller (llega a job.metadata): por que un job
         # fue lento. fp32 en vez de fp16 son 7.26x; el tiling son 2.3x.
         self.last_precision: str | None = None
@@ -691,6 +694,8 @@ class OnnxVideoUpscaler:
     ) -> bool:
         # ORT escribe la salida directo en el buffer del anillo: sin el array
         # nuevo por frame de copy_outputs_to_cpu() ni el np.copyto posterior.
+        if not self._ring_bind_enabled(session):
+            return False
         try:
             io_binding = session.io_binding()
             bind_input_on_device(io_binding, session.get_inputs()[0].name, frame_nhwc, device)
@@ -706,9 +711,18 @@ class OnnxVideoUpscaler:
         except Exception as exc:  # noqa: BLE001
             if _is_oom_error(exc):
                 raise
-            self._warn_ring_bind_failed_once(device)
+            self._disable_ring_bind(session, device)
             return False
         return True
+
+    def _ring_bind_enabled(self, session: Any) -> bool:
+        return session not in self._ring_bind_rejected
+
+    def _disable_ring_bind(self, session: Any, device: str) -> None:
+        # ORT puede rechazar el buffer recién al asignar la salida del último
+        # nodo: reintentar en cada frame costaría casi una inferencia extra.
+        self._ring_bind_rejected.add(session)
+        self._warn_ring_bind_failed_once(device)
 
     def _warn_ring_bind_failed_once(self, device: str) -> None:
         if self._ring_bind_warned:
