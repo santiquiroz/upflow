@@ -316,7 +316,9 @@ describe("PhotoRestorePanel: mandatory mask review", () => {
     fireEvent.click(screen.getByRole("button", { name: "The mask looks right" }));
     fireEvent.click(screen.getByRole("button", { name: "Restore" }));
 
-    await waitFor(() => expect(restoreService.createRestoreJob).toHaveBeenCalledTimes(1));
+    // Codificar el PNG pasa por CompressionStream real: con la suite entera en paralelo
+    // tardó hasta 5,5 s, más que el segundo de waitFor y los 5 s del test.
+    await waitFor(() => expect(restoreService.createRestoreJob).toHaveBeenCalledTimes(1), { timeout: 25_000 });
     const [token, mask] = vi.mocked(restoreService.uploadDamageMask).mock.calls[0];
     expect(token).toBe("tok-1");
     expect(mask.type).toBe("image/png");
@@ -326,7 +328,7 @@ describe("PhotoRestorePanel: mandatory mask review", () => {
     expect(vi.mocked(restoreService.createRestoreJob).mock.calls[0][0].options.repair).toMatchObject({
       use_user_mask: true,
     });
-  });
+  }, 30_000);
 
   it("says so and creates no job when the edited mask can't be encoded", async () => {
     vi.stubGlobal(

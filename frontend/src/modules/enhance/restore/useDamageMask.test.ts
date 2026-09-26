@@ -87,5 +87,5 @@ describe("useDamageMask", () => {
     const blob = await result.current.maskBlob();
 
     expect(blob.type).toBe("image/png");
-  });
+  }, 30_000);
 });
