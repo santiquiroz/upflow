@@ -43,19 +43,21 @@ from app.schemas_restore import (
     RestoreMaskResponse,
     RestoreOptions,
     RestorePresetResponse,
+    RestorePresetSelectionResponse,
     RestoreStepCapabilityResponse,
     RestoreStepProposalResponse,
+    StepEtaResponse,
 )
 from app.services.auth.identity import AuthenticatedUser
 from app.services.auth.permissions import Permission
 from app.services.devices_service import DevicesService
 from app.services.job_artifacts import UnknownArtifact, restore_artifact
 from app.services.job_manager import JobManager
-from app.services.photo_diagnosis import Finding
+from app.services.photo_diagnosis import Finding, PhotoDiagnosis
 from app.services.photo_geometry import Geometry
 from app.services.photo_restore_chain import HALFTONE_DENOISE_LIMIT, RESTORE_CHAIN
 from app.services.photo_restore_pipeline import FaceSelection
-from app.services.photo_restore_presets import PHOTO_PRESETS, resolve_preset
+from app.services.photo_restore_presets import PHOTO_PRESETS, PhotoFacts, resolve_preset
 from app.services.restore_models import PACK_PREFIX
 from app.services.restore_recompose import FaceChoice, RecomposeUnavailable
 from app.services.restore_recompose_job import (
@@ -134,11 +136,29 @@ def analysis_response(analysis: SessionAnalysis) -> RestoreAnalysisResponse:
         proposed_preset=diagnosis.proposed_preset,
         proposed_steps=list(diagnosis.proposed_steps),
         proposed_options=resolve_preset(diagnosis.proposed_preset, diagnosis.facts).options,
+        preset_selections=preset_selections(diagnosis.facts),
         faces=[face_response(record.token, face) for face in analysis.faces],
         damage=damage_response(analysis),
         damage_over_faces=analysis.damage_over_faces,
-        eta=RestoreEtaResponse(gpu_seconds=diagnosis.estimate.gpu_seconds, cpu_seconds=diagnosis.estimate.cpu_seconds),
+        eta=eta_response(diagnosis),
     )
+
+
+def preset_selections(facts: PhotoFacts) -> dict[str, RestorePresetSelectionResponse]:
+    resolved = (resolve_preset(preset.id, facts) for preset in PHOTO_PRESETS)
+    return {
+        selection.preset: RestorePresetSelectionResponse(steps=list(selection.steps), options=selection.options)
+        for selection in resolved
+    }
+
+
+def eta_response(diagnosis: PhotoDiagnosis) -> RestoreEtaResponse:
+    per_step = {
+        step: StepEtaResponse(gpu_seconds=estimate.gpu_seconds, cpu_seconds=estimate.cpu_seconds)
+        for step, estimate in diagnosis.step_estimates.items()
+    }
+    total = diagnosis.estimate
+    return RestoreEtaResponse(gpu_seconds=total.gpu_seconds, cpu_seconds=total.cpu_seconds, per_step=per_step)
 
 
 def finding_response(finding: Finding) -> RestoreFindingResponse:

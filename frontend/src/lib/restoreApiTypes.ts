@@ -48,9 +48,20 @@ export interface RestoreDamage {
   largeHoles: number;
 }
 
-export interface RestoreEta {
+export interface StepEta {
   gpuSeconds: number;
   cpuSeconds: number;
+}
+
+export interface RestoreEta extends StepEta {
+  perStep: Record<string, StepEta>;
+}
+
+export type RestoreStepOptions = Record<string, unknown>;
+
+export interface RestorePresetSelection {
+  steps: string[];
+  options: Record<string, RestoreStepOptions>;
 }
 
 export interface RestoreAnalysis {
@@ -66,7 +77,8 @@ export interface RestoreAnalysis {
   diagnosis: RestoreDiagnosis;
   proposedPreset: string;
   proposedSteps: string[];
-  proposedOptions: Record<string, Record<string, unknown>>;
+  proposedOptions: Record<string, RestoreStepOptions>;
+  presetSelections: Record<string, RestorePresetSelection>;
   faces: RestoreFace[];
   damage: RestoreDamage;
   damageOverFaces: boolean;

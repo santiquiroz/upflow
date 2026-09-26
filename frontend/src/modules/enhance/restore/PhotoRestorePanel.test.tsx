@@ -1,21 +1,28 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "../../../lib/api";
-import type { EngineInfoResponse } from "../../../lib/apiTypes";
+import type { EngineInfoResponse, JobResponse } from "../../../lib/apiTypes";
 import * as restoreService from "../../../services/restore";
 import { PhotoRestorePanel, versionedUrl } from "./PhotoRestorePanel";
-import { makeAnalysis } from "./restoreTestFixtures";
+import { makeAnalysis, makeCapabilities } from "./restoreTestFixtures";
 
 vi.mock("../../../lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../lib/api")>();
-  return { ...actual, getEngineInfo: vi.fn() };
+  return { ...actual, getEngineInfo: vi.fn(), getJob: vi.fn() };
 });
 
 vi.mock("../../../services/restore", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../services/restore")>();
-  return { ...actual, analyzePhoto: vi.fn(), setPhotoGeometry: vi.fn(), uploadDamageMask: vi.fn() };
+  return {
+    ...actual,
+    analyzePhoto: vi.fn(),
+    setPhotoGeometry: vi.fn(),
+    uploadDamageMask: vi.fn(),
+    getRestoreCapabilities: vi.fn(),
+    createRestoreJob: vi.fn(),
+  };
 });
 
 const ENGINE_INFO = { maxUploadMb: 1 } as EngineInfoResponse;
@@ -36,10 +43,17 @@ function dropPhoto(file = new File(["x"], "grandma.jpg", { type: "image/jpeg" })
   return file;
 }
 
+beforeEach(() => {
+  vi.mocked(restoreService.getRestoreCapabilities).mockResolvedValue(makeCapabilities());
+});
+
 afterEach(() => {
   vi.mocked(api.getEngineInfo).mockReset();
   vi.mocked(restoreService.analyzePhoto).mockReset();
   vi.mocked(restoreService.setPhotoGeometry).mockReset();
+  vi.mocked(restoreService.getRestoreCapabilities).mockReset();
+  vi.mocked(restoreService.createRestoreJob).mockReset();
+  vi.mocked(api.getJob).mockReset();
 });
 
 describe("PhotoRestorePanel", () => {
@@ -110,6 +124,46 @@ describe("PhotoRestorePanel", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("2 MB");
     expect(restoreService.analyzePhoto).not.toHaveBeenCalled();
+  });
+});
+
+describe("PhotoRestorePanel: summary and Restore", () => {
+  const QUEUED = { jobId: "job-9", status: "queued" } as JobResponse;
+
+  it("shows the summary after the analysis and restores the session's photo with the chosen fixes", async () => {
+    vi.mocked(restoreService.analyzePhoto).mockResolvedValue(makeAnalysis());
+    vi.mocked(restoreService.createRestoreJob).mockResolvedValue(QUEUED);
+    vi.mocked(api.getJob).mockResolvedValue({ ...QUEUED, status: "running" } as JobResponse);
+    renderPanel();
+    dropPhoto();
+
+    const restore = await screen.findByRole("button", { name: "Restore" });
+    expect(screen.getByText("1 fix selected")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Customize" })).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(restore);
+
+    await waitFor(() => expect(restoreService.createRestoreJob).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(restoreService.createRestoreJob).mock.calls[0][0]).toEqual({
+      source: { token: "tok-1" },
+      steps: ["repair"],
+      options: { preset: "gentle", repair: { engine: "fast", sensitivity: 0.5, grow_px: 0 } },
+      scale: 1,
+      modelId: null,
+      device: null,
+      outputFormat: "png",
+    });
+    await waitFor(() => expect(api.getJob).toHaveBeenCalledWith("job-9"));
+    expect(screen.getByRole("button", { name: "Restore" })).toBeDisabled();
+  });
+
+  it("says when the restore options can't be loaded", async () => {
+    vi.mocked(restoreService.getRestoreCapabilities).mockRejectedValue(new Error("boom"));
+    vi.mocked(restoreService.analyzePhoto).mockResolvedValue(makeAnalysis());
+    renderPanel();
+    dropPhoto();
+
+    expect(await screen.findByText("Couldn't load the restore options.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Restore" })).not.toBeInTheDocument();
   });
 });
 

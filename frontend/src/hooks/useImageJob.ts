@@ -32,7 +32,7 @@ export interface UseImageJobResult {
   reset: () => void;
 }
 
-function resolvePhase(
+export function resolvePhase(
   isUploading: boolean,
   initialStatus: JobStatus | undefined,
   job: JobResponse | undefined,
@@ -49,7 +49,7 @@ function resolvePhase(
   return "idle";
 }
 
-function resolveErrorMessage(
+export function resolveErrorMessage(
   uploadError: unknown,
   jobError: unknown,
   job: JobResponse | undefined,

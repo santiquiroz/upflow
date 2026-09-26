@@ -138,9 +138,20 @@ class RestoreDamageResponse(BaseModel):
     large_holes: int = Field(default=0, serialization_alias="largeHoles")
 
 
+class StepEtaResponse(BaseModel):
+    gpu_seconds: float = Field(serialization_alias="gpuSeconds")
+    cpu_seconds: float = Field(serialization_alias="cpuSeconds")
+
+
 class RestoreEtaResponse(BaseModel):
     gpu_seconds: float = Field(serialization_alias="gpuSeconds")
     cpu_seconds: float = Field(serialization_alias="cpuSeconds")
+    per_step: dict[str, StepEtaResponse] = Field(default_factory=dict, serialization_alias="perStep")
+
+
+class RestorePresetSelectionResponse(BaseModel):
+    steps: list[str]
+    options: dict[str, dict[str, Any]]
 
 
 class RestoreAnalysisResponse(BaseModel):
@@ -157,6 +168,7 @@ class RestoreAnalysisResponse(BaseModel):
     proposed_preset: str = Field(serialization_alias="proposedPreset")
     proposed_steps: list[str] = Field(serialization_alias="proposedSteps")
     proposed_options: dict[str, dict[str, Any]] = Field(serialization_alias="proposedOptions")
+    preset_selections: dict[str, RestorePresetSelectionResponse] = Field(serialization_alias="presetSelections")
     faces: list[RestoreFaceResponse]
     damage: RestoreDamageResponse
     damage_over_faces: bool = Field(serialization_alias="damageOverFaces")

@@ -27,8 +27,10 @@ from app.services.engines.face_detect import FaceDetection, priors
 from app.services.engines.face_restore import FaceRestoreResult, RestoredFace, blended_patch, paste_faces
 from app.services.face_geometry import TEMPLATE_FFHQ_512, align_face, align_matrix
 from app.services.job_manager import JobManager
+from app.services.photo_restore_chain import RESTORE_CHAIN, step_ids
 from app.services.photo_restore_job import PhotoRestoreJobRunner
 from app.services.photo_restore_pipeline import StepCall, StepOutcome
+from app.services.photo_restore_presets import PHOTO_PRESETS
 from app.services.restore_session import AnalysisDetectors, RestoreSessionStore, default_detectors
 from app.services.storage import StorageService
 from app.services.xmp_packet import DIGITAL_SOURCE_COMPOSITE, DIGITAL_SOURCE_ENHANCED
@@ -206,6 +208,33 @@ def test_analyze_opens_a_session_with_preview_diagnosis_damage_and_faces(harness
     assert body["eta"]["cpuSeconds"] >= body["eta"]["gpuSeconds"] >= 0
     for url in (body["previewUrl"], body["damage"]["probUrl"], body["faces"][0]["thumbnailUrl"]):
         assert harness.client.get(url).status_code == 200
+
+
+def test_analyze_resolves_every_preset_for_this_photo(harness_factory) -> None:
+    harness = harness_factory(detectors=damage_and_face())
+
+    body = harness.analyze()
+
+    selections = body["presetSelections"]
+    assert list(selections) == [preset.id for preset in PHOTO_PRESETS]
+    for preset in PHOTO_PRESETS:
+        assert set(selections[preset.id]["steps"]) <= set(preset.step_ids())
+        assert set(selections[preset.id]["options"]) == set(selections[preset.id]["steps"])
+    proposed = selections[body["proposedPreset"]]
+    assert (proposed["steps"], proposed["options"]) == (body["proposedSteps"], body["proposedOptions"])
+
+
+def test_analyze_estimates_each_step_so_the_total_follows_the_selection(harness_factory) -> None:
+    harness = harness_factory(detectors=damage_and_face())
+
+    body = harness.analyze()
+
+    per_step = body["eta"]["perStep"]
+    assert set(per_step) == set(step_ids(RESTORE_CHAIN))
+    proposed = [per_step[step] for step in body["proposedSteps"]]
+    assert sum(entry["cpuSeconds"] for entry in proposed) == pytest.approx(body["eta"]["cpuSeconds"])
+    assert sum(entry["gpuSeconds"] for entry in proposed) == pytest.approx(body["eta"]["gpuSeconds"])
+    assert per_step["faces"]["cpuSeconds"] > 0
 
 
 def test_analyze_without_packs_names_the_missing_packs(harness_factory) -> None:

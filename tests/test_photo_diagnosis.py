@@ -24,6 +24,7 @@ from app.services.photo_diagnosis import (
     measure_blocking,
     measure_color_cast,
     measure_sharpness,
+    step_time_estimates,
 )
 from app.services.photo_restore_chain import RESTORE_CHAIN, step_ids
 from app.services.photo_restore_presets import FADED_CAST_MIN_DE, NOISE_MIN_SIGMA, resolve_preset
@@ -486,6 +487,28 @@ def test_time_estimate_follows_the_proposed_steps() -> None:
     assert clean.estimate.cpu_seconds == pytest.approx(0.0)
     assert "denoise" in noisy.proposed_steps
     assert noisy.estimate.cpu_seconds > noisy.estimate.gpu_seconds > 0.0
+
+
+def test_step_estimates_give_each_step_its_own_time_with_its_item_count() -> None:
+    costs = {
+        "denoise": StepCost(gpu_seconds_per_mpx=1.0, cpu_seconds_per_mpx=10.0),
+        "faces": StepCost(0.0, 0.0, gpu_seconds_per_item=0.5, cpu_seconds_per_item=2.0),
+    }
+
+    estimates = step_time_estimates(4.0, costs, items={"faces": 3})
+
+    assert set(estimates) == {"denoise", "faces"}
+    assert (estimates["denoise"].gpu_seconds, estimates["denoise"].cpu_seconds) == pytest.approx((4.0, 40.0))
+    assert (estimates["faces"].gpu_seconds, estimates["faces"].cpu_seconds) == pytest.approx((1.5, 6.0))
+
+
+def test_diagnosis_estimates_every_chain_step_and_they_add_up_to_the_proposal() -> None:
+    noisy = diagnose_photo(with_noise(gray_scene(1, size=512), 12.0 / 255.0))
+
+    assert set(noisy.step_estimates) == set(step_ids(RESTORE_CHAIN))
+    proposed = [noisy.step_estimates[step] for step in noisy.proposed_steps]
+    assert sum(estimate.cpu_seconds for estimate in proposed) == pytest.approx(noisy.estimate.cpu_seconds)
+    assert sum(estimate.gpu_seconds for estimate in proposed) == pytest.approx(noisy.estimate.gpu_seconds)
 
 
 def test_diagnosis_proposes_the_newspaper_preset_for_a_halftone() -> None:

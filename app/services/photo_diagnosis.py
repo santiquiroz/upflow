@@ -184,6 +184,7 @@ class PhotoDiagnosis:
     pattern: PatternAnalysis
     faces: tuple[DetectedFace, ...]
     damage: DamageStats | None
+    step_estimates: Mapping[str, TimeEstimate]
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,16 +233,18 @@ def diagnose_photo(
     preset = proposed_preset(facts)
     steps = resolve_preset(preset, facts).steps
     faces = measures.faces or ()
+    items = {"faces": len(faces)}
     return PhotoDiagnosis(
         findings=_findings(measures),
         facts=facts,
         proposed_preset=preset,
         proposed_steps=steps,
         suggested_presets=suggested_presets(facts),
-        estimate=estimate_restore_time(megapixels(rgb), steps, costs, items={"faces": len(faces)}),
+        estimate=estimate_restore_time(megapixels(rgb), steps, costs, items=items),
         pattern=measures.pattern,
         faces=faces,
         damage=measures.damage,
+        step_estimates=step_time_estimates(megapixels(rgb), costs, items),
     )
 
 
@@ -455,6 +458,14 @@ def estimate_restore_time(
         gpu_seconds=sum(_gpu_seconds(cost, megapixel_count, count) for cost, count in step_costs),
         cpu_seconds=sum(_cpu_seconds(cost, megapixel_count, count) for cost, count in step_costs),
     )
+
+
+def step_time_estimates(
+    megapixel_count: float,
+    costs: Mapping[str, StepCost] = DEFAULT_STEP_COSTS,
+    items: Mapping[str, int] | None = None,
+) -> dict[str, TimeEstimate]:
+    return {step: estimate_restore_time(megapixel_count, (step,), costs, items) for step in costs}
 
 
 def _gpu_seconds(cost: StepCost, megapixel_count: float, count: int) -> float:
