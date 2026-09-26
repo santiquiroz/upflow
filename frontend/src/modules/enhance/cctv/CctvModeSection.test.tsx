@@ -220,6 +220,7 @@ describe("CctvModeSection", () => {
 
     fireEvent.click(screen.getByRole("radio", { name: new RegExp(en["cctv.lane.ai"].replace(/[()]/g, "\\$&")) }));
     expect(screen.getByText(en["cctv.ai.banner"])).toBeInTheDocument();
+    expect(screen.getByText(en["cctv.plates.noAi"])).toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: en["cctv.step.ai_deblock"] })).toBeChecked();
     fireEvent.click(screen.getByRole("checkbox", { name: en["cctv.osd.none"] }));
     fireEvent.click(screen.getByRole("button", { name: en["cctv.start"] }));
@@ -234,14 +235,32 @@ describe("CctvModeSection", () => {
     expect(vi.mocked(cctvService.createCctvJob).mock.calls[0][0].task).toBe("enhance");
   });
 
-  it("keeps the multi-frame still tab closed for now", async () => {
+  it("sends the chosen AI upscale model and scale with the AI job", async () => {
+    await analyzedSection({ ...CAPS, cctvAiAvailable: true, cctvAiReasonKey: null });
+    fireEvent.click(screen.getByRole("radio", { name: new RegExp(en["cctv.lane.ai"].replace(/[()]/g, "\\$&")) }));
+    fireEvent.click(screen.getByRole("checkbox", { name: en["cctv.osd.none"] }));
+
+    fireEvent.change(screen.getByLabelText(en["cctv.ai.upscale.model"]), { target: { value: "realesrgan-x4plus" } });
+    fireEvent.click(screen.getByRole("radio", { name: "4x" }));
+    fireEvent.click(screen.getByRole("button", { name: en["cctv.start"] }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: en["cctv.ai.confirm.continue"] }));
+
+    await waitFor(() => expect(cctvService.createCctvJob).toHaveBeenCalled());
+    const request = vi.mocked(cctvService.createCctvJob).mock.calls[0][0];
+    expect(request).toMatchObject({ task: "enhance", modelId: "realesrgan-x4plus", scale: 4 });
+    expect(request.steps.map((step) => step.id)).toEqual(["ai_deblock", "gray", "ai_upscale"]);
+  });
+
+  it("opens the multi-frame still in either lane", async () => {
     await analyzedSection();
 
     const roiTab = screen.getByRole("tab", { name: en["cctv.task.roi_fusion"] });
     fireEvent.click(roiTab);
 
-    expect(roiTab).toHaveAttribute("aria-disabled", "true");
-    expect(screen.getByRole("tab", { name: en["cctv.task.clarify"] })).toHaveAttribute("aria-selected", "true");
+    expect(roiTab).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("region", { name: en["cctv.roi.legend"] })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: en["cctv.start"] })).toBeDisabled();
+    expect(screen.getAllByText(en["cctv.roi.blocked.box"]).length).toBeGreaterThan(0);
   });
 
   it("switches the steps when another preset is picked", async () => {

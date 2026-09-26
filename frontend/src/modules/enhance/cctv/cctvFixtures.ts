@@ -1,4 +1,6 @@
+import type { CctvRoiSummary } from "../../../lib/apiTypes";
 import type {
+  CctvAiUpscaleModel,
   CctvAnalysis,
   CctvFilterSchema,
   CctvPreset,
@@ -144,6 +146,23 @@ export const NIGHT_PRESET: CctvPreset = {
   },
 };
 
+export const AI_UPSCALE_MODELS: CctvAiUpscaleModel[] = [
+  {
+    id: "realesrgan-x4plus",
+    label: "Real-ESRGAN x4plus",
+    scales: [2, 4],
+    generative: true,
+    generativeLabel: "Generative (invents texture)",
+  },
+  {
+    id: "plain-x2",
+    label: "Plain x2",
+    scales: [2],
+    generative: false,
+    generativeLabel: "Non-generative",
+  },
+];
+
 export const PRESETS_RESPONSE: CctvPresetsResponse = {
   modeAvailable: true,
   modeUnavailableReason: null,
@@ -154,6 +173,7 @@ export const PRESETS_RESPONSE: CctvPresetsResponse = {
   unavailableFilters: [
     { stepId: "deblock", filter: "fspp", missing: ["fspp"], reasonKey: "cctv.filterUnavailable", reason: "missing fspp" },
   ],
+  aiUpscaleModels: AI_UPSCALE_MODELS,
 };
 
 export const ANALYSIS: CctvAnalysis = {
@@ -205,4 +225,24 @@ export const ANALYSIS: CctvAnalysis = {
     { stepId: "deblock", filter: "fspp", missing: ["fspp"], reasonKey: "cctv.filterUnavailable", reason: "missing fspp" },
   ],
   warnings: ["cctv.lite", "cctv.warning.liteAspect", "cctv.warning.monochrome", "cctv.filterUnavailable"],
+};
+
+export const ROI_SUMMARY: CctvRoiSummary = {
+  kind: "plate",
+  scale: 3,
+  method: "median",
+  motion: "homography",
+  referenceFrame: 20,
+  framesTotal: 30,
+  framesUsed: 28,
+  effectiveSamples: 2,
+  rejectedFrames: [3, 17],
+  nearCopies: true,
+  density: { kind: "plate", axis: "height", storedPx: 14, displayPx: 14 },
+  clippedFramesPct: 0,
+  notices: [
+    { key: "cctv.roi.densityPlate", params: { px: 14 } },
+    { key: "cctv.roi.framesUsed", params: { used: 28, total: 30, effective: 2 } },
+    { key: "cctv.roi.nearCopies", params: {} },
+  ],
 };

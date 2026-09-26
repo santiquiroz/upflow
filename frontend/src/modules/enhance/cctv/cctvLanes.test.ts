@@ -6,8 +6,9 @@ import {
   defaultTask,
   estimateAiCpuSeconds,
   formatRoughDuration,
-  isTaskReady,
+  isVideoTask,
   LANE_TASKS,
+  needsAiConfirmation,
   startBlocker,
   type StartInputs,
 } from "./cctvLanes";
@@ -33,6 +34,7 @@ const READY: StartInputs = {
   incompleteStepIds: [],
   trimValid: true,
   caseDetailsValid: true,
+  roiBlockerKey: null,
 };
 
 describe("tasks", () => {
@@ -43,9 +45,16 @@ describe("tasks", () => {
     expect(defaultTask("ai")).toBe("enhance");
   });
 
-  it("keeps the multi-frame still closed until its panel exists", () => {
-    expect(isTaskReady("clarify")).toBe(true);
-    expect(isTaskReady("roi_fusion")).toBe(false);
+  it("treats the multi-frame still as a still, not a video", () => {
+    expect(isVideoTask("clarify")).toBe(true);
+    expect(isVideoTask("enhance")).toBe(true);
+    expect(isVideoTask("roi_fusion")).toBe(false);
+  });
+
+  it("asks for the AI confirmation only before an AI video", () => {
+    expect(needsAiConfirmation("enhance")).toBe(true);
+    expect(needsAiConfirmation("roi_fusion")).toBe(false);
+    expect(needsAiConfirmation("clarify")).toBe(false);
   });
 });
 
@@ -104,9 +113,19 @@ describe("startBlocker", () => {
     expect(startBlocker({ ...READY, modeAvailable: false })).toEqual({ key: "cctv.blocked.modeUnavailable" });
     expect(startBlocker({ ...READY, decodeFailed: true })).toEqual({ key: "cctv.undecodable" });
     expect(startBlocker({ ...READY, lane: "ai", task: "enhance" })).toEqual({ key: "cctv.blocked.aiUnavailable" });
-    expect(startBlocker({ ...READY, task: "roi_fusion" })).toEqual({ key: "cctv.task.unavailable" });
     expect(startBlocker({ ...READY, incompleteStepIds: ["crop"] })).toEqual({ key: "cctv.blocked.incompleteSteps" });
     expect(startBlocker({ ...READY, trimValid: false })).toEqual({ key: "cctv.trim.invalid" });
     expect(startBlocker({ ...READY, caseDetailsValid: false })).toEqual({ key: "cctv.case.offsetInvalid" });
+  });
+
+  it("gates the multi-frame still on its region instead of the on-screen text", () => {
+    const roi = { ...READY, task: "roi_fusion" as const, noOsd: false };
+
+    expect(startBlocker(roi)).toBeNull();
+    expect(startBlocker({ ...roi, roiBlockerKey: "cctv.roi.blocked.box" })).toEqual({ key: "cctv.roi.blocked.box" });
+  });
+
+  it("ignores a stale region outside the multi-frame still", () => {
+    expect(startBlocker({ ...READY, roiBlockerKey: "cctv.roi.blocked.box" })).toBeNull();
   });
 });

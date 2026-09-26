@@ -221,6 +221,25 @@ def test_a_completed_job_lists_its_artifacts_and_the_verify_link(tmp_path: Path)
     assert {"report_html", "sha256sums", "still:5:original", "still:5:processed"} <= set(names)
     assert summary.artifacts[0].url == f"/api/v1/video/jobs/{job.id}/artifacts/analysis"
     assert summary.verify_url == f"/api/v1/video/jobs/{job.id}/verify" and summary.warnings == ["cctv.lite"]
+    assert summary.roi is None
+
+
+ROI_FACTS = {
+    "kind": "plate", "scale": 2, "method": "median", "motion": "homography", "referenceFrame": 12,
+    "framesTotal": 30, "framesUsed": 23, "effectiveSamples": 6, "rejectedFrames": [3], "nearCopies": False,
+    "density": {"kind": "plate", "axis": "height", "storedPx": 14, "displayPx": 14}, "clippedFramesPct": 0.0,
+    "notices": [{"key": "cctv.roi.densityPlate", "params": {"px": 14}}],
+}  # fmt: skip
+
+
+def test_a_multi_frame_still_summary_carries_the_fusion_facts(tmp_path: Path) -> None:
+    job = completed_cctv_job(tmp_path, {"roi": {"fused": "04_stills/roi_fused_x2.png"}})
+    job.metadata["cctv"]["roi"] = ROI_FACTS
+
+    summary = cctv_summary(job)
+
+    assert summary.roi == ROI_FACTS and "roi:fused" in [link.name for link in summary.artifacts]
+    assert summary.model_dump(by_alias=True)["roi"]["effectiveSamples"] == 6
 
 
 # --- Artefactos: lista blanca ---

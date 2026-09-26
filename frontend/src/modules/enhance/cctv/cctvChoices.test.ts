@@ -7,9 +7,13 @@ import {
   withOsdBoxes,
   withOsdConfirmed,
   withPreset,
+  withAiUpscale,
   withCaseDetails,
+  withRoi,
+  withTask,
   withTrim,
 } from "./cctvChoices";
+import { EMPTY_ROI } from "./cctvRoi";
 import { EMPTY_CASE_DETAILS } from "./cctvCase";
 import { ANALYSIS, PRESETS_RESPONSE } from "./cctvFixtures";
 
@@ -148,5 +152,86 @@ describe("buildCctvJobRequest", () => {
     expect(request.osdBoxes).toEqual([[0, 0, 320, 40]]);
     expect(request.osdBoxesConfirmed).toBe(true);
     expect(request.noOsd).toBe(false);
+  });
+});
+
+describe("AI upscale", () => {
+  const aiChoices = () => withLane(initialChoices(ANALYSIS, PRESETS_RESPONSE), "ai", ANALYSIS, PRESETS_RESPONSE);
+
+  it("adds the AI upscale step in catalog order with its model and scale", () => {
+    const choices = withAiUpscale({ ...aiChoices(), noOsd: true }, { modelId: "realesrgan-x4plus", scale: 4 });
+
+    const request = buildCctvJobRequest("tok-1", choices, PRESETS_RESPONSE);
+
+    expect(request.steps.map((step) => step.id)).toEqual(["ai_deblock", "gray", "ai_upscale"]);
+    expect(request.steps[2]).toEqual({ id: "ai_upscale", params: { filter: "onnx_upscale" } });
+    expect(request.modelId).toBe("realesrgan-x4plus");
+    expect(request.scale).toBe(4);
+  });
+
+  it("sends no model or scale with None", () => {
+    const request = buildCctvJobRequest("tok-1", { ...aiChoices(), noOsd: true }, PRESETS_RESPONSE);
+
+    expect(request).not.toHaveProperty("modelId");
+    expect(request).not.toHaveProperty("scale");
+  });
+
+  it("drops the model when going back to the classic lane", () => {
+    const choices = withAiUpscale(aiChoices(), { modelId: "realesrgan-x4plus", scale: 2 });
+
+    expect(withLane(choices, "classic", ANALYSIS, PRESETS_RESPONSE).aiUpscale).toBeNull();
+  });
+});
+
+describe("multi-frame still", () => {
+  const ROI = { ...EMPTY_ROI, first: 10, last: 39, reference: 20, box: [100, 200, 60, 14] as const };
+
+  it("keeps only deinterlace and deblock from the classic preset chain", () => {
+    const choices = withTask(initialChoices(ANALYSIS, PRESETS_RESPONSE), "roi_fusion", ANALYSIS, PRESETS_RESPONSE);
+
+    expect(Object.keys(choices.steps)).toEqual(["deblock"]);
+  });
+
+  it("uses the classic deblock even from the AI lane", () => {
+    const ai = withLane(initialChoices(ANALYSIS, PRESETS_RESPONSE), "ai", ANALYSIS, PRESETS_RESPONSE);
+
+    const choices = withTask(ai, "roi_fusion", ANALYSIS, PRESETS_RESPONSE);
+
+    expect(Object.keys(choices.steps)).toEqual(["deblock"]);
+    expect(choices.lane).toBe("ai");
+  });
+
+  it("sends the region with no trim, no on-screen text and no AI model", () => {
+    const base = withTask(initialChoices(ANALYSIS, PRESETS_RESPONSE), "roi_fusion", ANALYSIS, PRESETS_RESPONSE);
+    const choices = withAiUpscale(withTrim(withRoi({ ...base, noOsd: true }, ROI), [0, 99]), {
+      modelId: "realesrgan-x4plus",
+      scale: 2,
+    });
+
+    expect(buildCctvJobRequest("tok-1", choices, PRESETS_RESPONSE)).toEqual({
+      token: "tok-1",
+      task: "roi_fusion",
+      preset: "night_ir",
+      steps: [{ id: "deblock", params: { filter: "deblock", filter_type: "strong", block: 8 } }],
+      osdBoxes: [],
+      osdBoxesConfirmed: false,
+      noOsd: false,
+      trim: null,
+      roi: {
+        firstFrame: 10,
+        lastFrame: 39,
+        referenceFrame: 20,
+        box: [100, 200, 60, 14],
+        kind: "plate",
+        scale: 2,
+        method: "median",
+      },
+    });
+  });
+
+  it("goes back to the full preset chain when leaving the multi-frame still", () => {
+    const roi = withTask(initialChoices(ANALYSIS, PRESETS_RESPONSE), "roi_fusion", ANALYSIS, PRESETS_RESPONSE);
+
+    expect(Object.keys(withTask(roi, "clarify", ANALYSIS, PRESETS_RESPONSE).steps)).toEqual(["deblock", "gray"]);
   });
 });

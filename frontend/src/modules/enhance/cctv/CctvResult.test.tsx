@@ -6,6 +6,7 @@ import { en } from "../../../i18n/en";
 import { ApiError } from "../../../lib/api";
 import type { CctvJobSummary } from "../../../lib/apiTypes";
 import * as cctvService from "../../../services/cctv";
+import { ROI_SUMMARY } from "./cctvFixtures";
 import { CctvResult } from "./CctvResult";
 
 vi.mock("../../../services/cctv", async (importOriginal) => {
@@ -142,5 +143,29 @@ describe("CctvResult", () => {
     renderResult({ ...SUMMARY, verifyUrl: null });
 
     expect(screen.queryByRole("button", { name: en["cctv.verify.action"] })).not.toBeInTheDocument();
+  });
+});
+
+describe("CctvResult by lane and task", () => {
+  it("repeats the AI warnings on an AI visualization", () => {
+    renderResult({ ...SUMMARY, task: "enhance", lane: "ai", artifacts: ["enhanced", "package"].map(artifact) });
+
+    expect(screen.getByText(en["cctv.ai.banner"])).toBeInTheDocument();
+    expect(screen.getByText(en["cctv.plates.noAi"])).toBeInTheDocument();
+  });
+
+  it("has no AI warning on a classic result", () => {
+    renderResult();
+
+    expect(screen.queryByText(en["cctv.plates.noAi"])).not.toBeInTheDocument();
+  });
+
+  it("shows the multi-frame still with its effective samples", () => {
+    const artifacts = ["roi:fused", "roi:reference", "roi:agreement", "package"].map(artifact);
+
+    renderResult({ ...SUMMARY, task: "roi_fusion", roi: ROI_SUMMARY, artifacts });
+
+    expect(screen.getByText("Frames used: 28 of 30 (only 2 carried new information)")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: en["cctv.roi.result.agreement"] })).toBeInTheDocument();
   });
 });

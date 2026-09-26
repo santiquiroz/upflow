@@ -10,6 +10,8 @@ export type CctvParamValue = number | string;
 export type CctvParams = Readonly<Record<string, CctvParamValue>>;
 export type CctvBox = readonly [number, number, number, number];
 export type CctvStepCondition = "always" | "interlaced" | "anamorphic";
+export type CctvRoiKind = "plate" | "face_or_object";
+export type CctvRoiMethod = "median" | "trimmed_mean";
 
 export interface CctvEnumParamSchema {
   name: string;
@@ -77,6 +79,14 @@ export interface CctvUnavailableFilter {
   reason: string;
 }
 
+export interface CctvAiUpscaleModel {
+  id: string;
+  label: string;
+  scales: number[];
+  generative: boolean;
+  generativeLabel: string;
+}
+
 export interface CctvPresetsResponse {
   modeAvailable: boolean;
   modeUnavailableReason: string | null;
@@ -85,6 +95,8 @@ export interface CctvPresetsResponse {
   steps: Record<CctvLane, CctvStepSchema[]>;
   unavailableSteps: string[];
   unavailableFilters: CctvUnavailableFilter[];
+  // Solo los reescaladores builtin con export ONNX instalado: los unicos que corren dentro del stream IA.
+  aiUpscaleModels: CctvAiUpscaleModel[];
 }
 
 export interface CctvLiteAspect {
@@ -207,6 +219,16 @@ export interface CctvCaseRequest {
   acquisition?: CctvAcquisition;
 }
 
+export interface CctvRoiRequest {
+  firstFrame: number;
+  lastFrame: number;
+  referenceFrame: number;
+  box: [number, number, number, number];
+  kind: CctvRoiKind;
+  scale: number;
+  method: CctvRoiMethod;
+}
+
 export interface CctvJobRequest extends CctvCaseRequest {
   token: string;
   task: CctvTask;
@@ -216,6 +238,9 @@ export interface CctvJobRequest extends CctvCaseRequest {
   osdBoxesConfirmed: boolean;
   noOsd: boolean;
   trim: [number, number] | null;
+  roi?: CctvRoiRequest;
+  modelId?: string;
+  scale?: number;
 }
 
 export interface CctvVerifyResult {

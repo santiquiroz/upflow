@@ -3,8 +3,10 @@ import { Clock, Download, ExternalLink, ListChecks } from "lucide-react";
 import { useTranslation } from "../../../i18n/LocaleProvider";
 import type { CctvJobSummary } from "../../../lib/apiTypes";
 import { verifyCctvFiles, type CctvVerifyResult } from "../../../services/cctv";
+import { AiLaneBanner } from "./AiLaneBanner";
 import { artifactUrl, PACKAGE_ARTIFACT, REPORT_ARTIFACT, resultFiles, verifyOutcome, type ResultFile } from "./cctvResultFiles";
 import { errorInfoOf, errorText, translateOr } from "./cctvText";
+import { RoiFusionResult } from "./RoiFusionResult";
 
 interface CctvResultProps {
   jobId: string;
@@ -183,7 +185,9 @@ export function CctvResult({ jobId, summary, retentionHours }: CctvResultProps) 
       <h3 id="cctv-result-title" className="font-heading text-sm font-semibold text-text">
         {t("cctv.result.title")}
       </h3>
+      {summary.lane === "ai" && <AiLaneBanner />}
       <SourceHash sha256={summary.sourceSha256} />
+      {summary.roi && <RoiFusionResult roi={summary.roi} artifacts={artifacts} />}
       <div className="flex flex-wrap items-start gap-3">
         <PackageLink url={artifactUrl(artifacts, PACKAGE_ARTIFACT)} />
         <ReportLink url={artifactUrl(artifacts, REPORT_ARTIFACT)} />

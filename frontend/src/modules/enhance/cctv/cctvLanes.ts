@@ -27,6 +27,7 @@ export interface StartInputs {
   incompleteStepIds: readonly string[];
   trimValid: boolean;
   caseDetailsValid: boolean;
+  roiBlockerKey: string | null;
 }
 
 export const LANE_TASKS: Readonly<Record<CctvLane, readonly CctvTask[]>> = {
@@ -34,8 +35,8 @@ export const LANE_TASKS: Readonly<Record<CctvLane, readonly CctvTask[]>> = {
   ai: ["enhance", "roi_fusion"],
 };
 
-// La fusion multi-cuadro entra con su panel (P3); hasta entonces la pestana se ve cerrada.
-const READY_TASKS: ReadonlySet<CctvTask> = new Set<CctvTask>(["clarify", "enhance"]);
+// Las tareas que producen video: piden decision sobre el OSD y recorte; la foto multi-cuadro usa su rango.
+const VIDEO_TASKS: ReadonlySet<CctvTask> = new Set<CctvTask>(["clarify", "enhance"]);
 // DRUNet en CPU: unos 15 s por cuadro 1080p (derivado, spec 4.7), escalado por pixeles.
 const AI_CPU_SECONDS_PER_1080P_FRAME = 15;
 const PIXELS_1080P = 1920 * 1080;
@@ -43,8 +44,13 @@ const SECONDS_PER_HOUR = 3600;
 const SECONDS_PER_MINUTE = 60;
 const NEEDS_GPU_REASON = "capability.setup.needsGpu";
 
-export function isTaskReady(task: CctvTask): boolean {
-  return READY_TASKS.has(task);
+export function isVideoTask(task: CctvTask): boolean {
+  return VIDEO_TASKS.has(task);
+}
+
+// Solo un job que genera video con IA pide el modal: la foto multi-cuadro es clasica en los dos carriles.
+export function needsAiConfirmation(task: CctvTask): boolean {
+  return task === "enhance";
 }
 
 export function defaultTask(lane: CctvLane): CctvTask {
@@ -88,7 +94,11 @@ export function aiLaneState(caps: VideoCapabilities | undefined, analysis: CctvA
 }
 
 function hasOsdDecision(inputs: StartInputs): boolean {
-  return inputs.noOsd || (inputs.osdBoxesConfirmed && inputs.osdBoxCount > 0);
+  return !isVideoTask(inputs.task) || inputs.noOsd || (inputs.osdBoxesConfirmed && inputs.osdBoxCount > 0);
+}
+
+function roiBlocker(inputs: StartInputs): StartBlocker | null {
+  return inputs.task === "roi_fusion" && inputs.roiBlockerKey !== null ? { key: inputs.roiBlockerKey } : null;
 }
 
 export function startBlocker(inputs: StartInputs): StartBlocker | null {
@@ -96,12 +106,11 @@ export function startBlocker(inputs: StartInputs): StartBlocker | null {
     [!inputs.modeAvailable, "cctv.blocked.modeUnavailable"],
     [inputs.decodeFailed, "cctv.undecodable"],
     [inputs.lane === "ai" && !inputs.aiAvailable, "cctv.blocked.aiUnavailable"],
-    [!isTaskReady(inputs.task), "cctv.task.unavailable"],
     [inputs.incompleteStepIds.length > 0, "cctv.blocked.incompleteSteps"],
     [!inputs.trimValid, "cctv.trim.invalid"],
     [!inputs.caseDetailsValid, "cctv.case.offsetInvalid"],
     [!hasOsdDecision(inputs), "cctv.osd.confirm"],
   ];
   const failed = checks.find(([blocked]) => blocked);
-  return failed ? { key: failed[1] } : null;
+  return failed ? { key: failed[1] } : roiBlocker(inputs);
 }

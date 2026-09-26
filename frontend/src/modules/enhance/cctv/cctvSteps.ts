@@ -23,8 +23,8 @@ export interface PresetContext {
   sampleAspect: readonly [number, number] | null;
 }
 
-// El recorte, las cajas del OSD y la banda IA los arman sus propios controles y el backend.
-const MANAGED_STEP_IDS: ReadonlySet<string> = new Set(["trim", "osd_protect", "ai_label"]);
+// El recorte, las cajas del OSD, el reescalado IA y la banda IA los arman sus propios controles y el backend.
+const MANAGED_STEP_IDS: ReadonlySet<string> = new Set(["trim", "osd_protect", "ai_upscale", "ai_label"]);
 const FILTER_PARAM = "filter";
 const INTERPOLATED_SCALE_FLAGS: ReadonlySet<CctvParamValue> = new Set(["bicubic", "lanczos"]);
 

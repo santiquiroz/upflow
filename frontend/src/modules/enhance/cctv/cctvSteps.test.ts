@@ -35,10 +35,10 @@ describe("visibleSteps", () => {
     expect(ids).not.toContain("interpolate");
   });
 
-  it("hides the steps other controls own: trim, on-screen text and the AI label", () => {
+  it("hides the steps other controls own: trim, on-screen text, the AI upscale model and the AI label", () => {
     const ids = visibleSteps(AI_STEPS, "ai").map((step) => step.id);
 
-    expect(ids).toEqual(["aspect", "deinterlace", "deblock", "ai_deblock", "denoise", "crop", "gray", "scale", "ai_upscale", "sharpen"]);
+    expect(ids).toEqual(["aspect", "deinterlace", "deblock", "ai_deblock", "denoise", "crop", "gray", "scale", "sharpen"]);
   });
 
   it("keeps the catalog order, which is the fixed processing order", () => {

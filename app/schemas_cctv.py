@@ -164,6 +164,8 @@ class CctvSummary(CamelModel):
     warnings: list[str]
     artifacts: list[CctvArtifactLink]
     verify_url: str | None
+    # Solo en la foto multi-cuadro: muestras efectivas, densidad y avisos (metadata.cctv.roi).
+    roi: dict[str, Any] | None = None
 
 
 # --- Conversion a los modelos del dominio ---
@@ -230,6 +232,11 @@ def cctv_metadata(job: VideoUpscaleJob) -> dict[str, Any]:
     return meta if isinstance(meta, dict) else {}
 
 
+def roi_facts(meta: dict[str, Any]) -> dict[str, Any] | None:
+    roi = meta.get("roi")
+    return roi if isinstance(roi, dict) else None
+
+
 def cctv_summary(job: VideoUpscaleJob) -> CctvSummary | None:
     if job.cctv is None:
         return None
@@ -244,4 +251,5 @@ def cctv_summary(job: VideoUpscaleJob) -> CctvSummary | None:
         warnings=[str(key) for key in meta.get("warnings", [])],
         artifacts=[CctvArtifactLink(name=name, url=artifact_url(job.id, name)) for name in listed_artifacts(job)],
         verify_url=verify_url(job),
+        roi=roi_facts(meta),
     )

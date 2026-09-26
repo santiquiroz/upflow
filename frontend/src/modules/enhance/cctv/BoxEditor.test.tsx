@@ -8,6 +8,7 @@ import * as cctvService from "../../../services/cctv";
 import type { CctvBox } from "../../../services/cctv";
 import { BoxEditor } from "./BoxEditor";
 import { CctvJobSetup } from "./CctvJobSetup";
+import { DISPLAYED_LITE, drag, installPointerEvent } from "./boxEditorTestUtils";
 import { ANALYSIS, PRESETS_RESPONSE } from "./cctvFixtures";
 
 vi.mock("../../../services/cctv", async (importOriginal) => {
@@ -15,23 +16,9 @@ vi.mock("../../../services/cctv", async (importOriginal) => {
   return { ...actual, checkCctvOsd: vi.fn() };
 });
 
-// jsdom no trae PointerEvent: sin esto fireEvent crea un Event plano y se pierden clientX/clientY.
-class TestPointerEvent extends MouseEvent {
-  readonly pointerId: number;
-
-  constructor(type: string, init: PointerEventInit = {}) {
-    super(type, init);
-    this.pointerId = init.pointerId ?? 0;
-  }
-}
-
-if (typeof window.PointerEvent === "undefined") {
-  window.PointerEvent = TestPointerEvent as unknown as typeof PointerEvent;
-}
+installPointerEvent();
 
 const LITE = { width: 960, height: 1080 };
-// Un "1080p Lite" se muestra al doble de ancho: 1920 px en pantalla son 960 px guardados.
-const DISPLAYED_LITE = { left: 0, top: 0, width: 1920, height: 1080, right: 1920, bottom: 1080, x: 0, y: 0 };
 
 const CAPS: VideoCapabilities = {
   interpEngines: [],
@@ -44,14 +31,6 @@ const CAPS: VideoCapabilities = {
 
 function surfaceOf(name: string): HTMLElement {
   return screen.getByRole("group", { name });
-}
-
-function drag(surface: HTMLElement, from: [number, number], to: [number, number], release = true): void {
-  fireEvent.pointerDown(surface, { clientX: from[0], clientY: from[1], pointerId: 1 });
-  fireEvent.pointerMove(surface, { clientX: to[0], clientY: to[1], pointerId: 1 });
-  if (release) {
-    fireEvent.pointerUp(surface, { pointerId: 1 });
-  }
 }
 
 function renderEditor(kind: "osd" | "roi", boxes: CctvBox[] = [], disabled = false) {

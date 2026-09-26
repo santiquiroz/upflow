@@ -8,13 +8,20 @@ export interface CctvErrorInfo {
   message: string;
 }
 
+const OPEN_PARAM = /\{\{\w+\}\}/;
+
+// Una clave del backend sin sus parametros (cctv.ai.cpuBlocked sin {{eta}}) dejaria el hueco a la vista.
+function isUsable(translated: string, key: string): boolean {
+  return translated !== key && !OPEN_PARAM.test(translated);
+}
+
 // Los textos del catalogo del backend (pasos, filtros) traen su version en ingles como respaldo.
 export function translateOr(t: Translate, key: string | null, fallback: string, params?: TranslationParams): string {
   if (key === null) {
     return fallback;
   }
   const translated = t(key, params);
-  return translated === key ? fallback : translated;
+  return isUsable(translated, key) ? translated : fallback;
 }
 
 export function errorInfoOf(error: unknown): CctvErrorInfo | null {

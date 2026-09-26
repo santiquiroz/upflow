@@ -1,4 +1,4 @@
-import { Play, TriangleAlert } from "lucide-react";
+import { Play } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "../../../i18n/LocaleProvider";
 import type { VideoCapabilities } from "../../../lib/apiTypes";
@@ -11,7 +11,9 @@ import type {
   CctvStepSchema,
   CctvTask,
 } from "../../../services/cctv";
+import { AiLaneBanner } from "./AiLaneBanner";
 import { AiLaneConfirmDialog } from "./AiLaneConfirmDialog";
+import { AiUpscalePicker } from "./AiUpscalePicker";
 import { CaseDetailsForm } from "./CaseDetailsForm";
 import { CctvFrameTools } from "./CctvFrameTools";
 import { CctvLaneSelector } from "./CctvLaneSelector";
@@ -20,14 +22,18 @@ import { CctvStepCard } from "./CctvStepCard";
 import { isCaseDetailsValid } from "./cctvCase";
 import {
   buildCctvJobRequest,
+  catalogFor,
   initialChoices,
+  withAiUpscale,
   withCaseDetails,
   withLane,
   withPreset,
+  withTask,
   type CctvChoices,
 } from "./cctvChoices";
 import { isTrimValid } from "./cctvFrames";
-import { aiLaneState, isTaskReady, LANE_TASKS, startBlocker } from "./cctvLanes";
+import { aiLaneState, LANE_TASKS, needsAiConfirmation, startBlocker, type AiLaneState } from "./cctvLanes";
+import { roiBlockerKey } from "./cctvRoi";
 import { incompleteStepIds, visibleSteps, withStepEnabled, withStepFilter, withStepParam } from "./cctvSteps";
 
 interface JobSetupProps {
@@ -40,7 +46,7 @@ interface JobSetupProps {
 
 function taskTabClassName(isActive: boolean): string {
   const base =
-    "rounded-sm border px-3 py-1.5 text-sm transition-[background-color,border-color,color] duration-fast focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent aria-disabled:cursor-not-allowed aria-disabled:opacity-50";
+    "rounded-sm border px-3 py-1.5 text-sm transition-[background-color,border-color,color] duration-fast focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent";
   return isActive ? `${base} border-accent bg-accent text-bg` : `${base} border-border bg-surface text-text-dim hover:text-text`;
 }
 
@@ -54,9 +60,7 @@ function TaskTabs({ lane, value, onChange }: { lane: CctvLane; value: CctvTask; 
           type="button"
           role="tab"
           aria-selected={task === value}
-          aria-disabled={!isTaskReady(task)}
-          title={isTaskReady(task) ? undefined : t("cctv.task.unavailable")}
-          onClick={() => isTaskReady(task) && onChange(task)}
+          onClick={() => onChange(task)}
           className={taskTabClassName(task === value)}
         >
           {t(`cctv.task.${task}`)}
@@ -97,23 +101,19 @@ function StepList({
   );
 }
 
-function AiBanner() {
-  const { t } = useTranslation();
-  return (
-    <p role="note" className="flex items-start gap-2 rounded border border-warn bg-surface-2 p-2 text-xs text-text">
-      <TriangleAlert aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warn" strokeWidth={1.75} />
-      {t("cctv.ai.banner")}
-    </p>
-  );
+function scaleHintOf(presets: CctvPresetsResponse, presetId: string | null): number | null {
+  return presets.presets.find((preset) => preset.id === presetId)?.aiUpscaleHint ?? null;
 }
 
-export function CctvJobSetup({ analysis, presets, capabilities, busy, onSubmit }: JobSetupProps) {
-  const { t } = useTranslation();
-  const [choices, setChoices] = useState<CctvChoices>(() => initialChoices(analysis, presets));
-  const [confirmingAi, setConfirmingAi] = useState(false);
-  const ai = aiLaneState(capabilities, analysis);
-  const catalog = presets.steps[choices.lane];
-  const blocker = startBlocker({
+function setupBlocker(
+  analysis: CctvAnalysis,
+  presets: CctvPresetsResponse,
+  capabilities: VideoCapabilities | undefined,
+  ai: AiLaneState,
+  choices: CctvChoices,
+) {
+  const frameCount = analysis.frameIndex?.frameCount ?? 0;
+  return startBlocker({
     modeAvailable: (capabilities?.cctvAvailable ?? true) && analysis.modeAvailable && presets.modeAvailable,
     decodeFailed: analysis.decodeFailed,
     lane: choices.lane,
@@ -122,10 +122,20 @@ export function CctvJobSetup({ analysis, presets, capabilities, busy, onSubmit }
     noOsd: choices.noOsd,
     osdBoxesConfirmed: choices.osdBoxesConfirmed,
     osdBoxCount: choices.osdBoxes.length,
-    incompleteStepIds: incompleteStepIds(choices.steps, catalog),
-    trimValid: isTrimValid(choices.trim, analysis.frameIndex?.frameCount ?? 0),
+    incompleteStepIds: incompleteStepIds(choices.steps, catalogFor(presets, choices.lane, choices.task)),
+    trimValid: isTrimValid(choices.trim, frameCount),
     caseDetailsValid: isCaseDetailsValid(choices.caseDetails),
+    roiBlockerKey: roiBlockerKey(choices.roi, frameCount),
   });
+}
+
+export function CctvJobSetup({ analysis, presets, capabilities, busy, onSubmit }: JobSetupProps) {
+  const { t } = useTranslation();
+  const [choices, setChoices] = useState<CctvChoices>(() => initialChoices(analysis, presets));
+  const [confirmingAi, setConfirmingAi] = useState(false);
+  const ai = aiLaneState(capabilities, analysis);
+  const catalog = catalogFor(presets, choices.lane, choices.task);
+  const blocker = setupBlocker(analysis, presets, capabilities, ai, choices);
 
   function submit(): void {
     setConfirmingAi(false);
@@ -133,7 +143,7 @@ export function CctvJobSetup({ analysis, presets, capabilities, busy, onSubmit }
   }
 
   function handleStart(): void {
-    if (choices.lane === "ai") {
+    if (needsAiConfirmation(choices.task)) {
       setConfirmingAi(true);
       return;
     }
@@ -143,8 +153,8 @@ export function CctvJobSetup({ analysis, presets, capabilities, busy, onSubmit }
   return (
     <div className="flex flex-col gap-5">
       <CctvLaneSelector value={choices.lane} ai={ai} onChange={(lane) => setChoices(withLane(choices, lane, analysis, presets))} />
-      {choices.lane === "ai" && <AiBanner />}
-      <TaskTabs lane={choices.lane} value={choices.task} onChange={(task) => setChoices({ ...choices, task })} />
+      {choices.lane === "ai" && <AiLaneBanner />}
+      <TaskTabs lane={choices.lane} value={choices.task} onChange={(task) => setChoices(withTask(choices, task, analysis, presets))} />
       <CctvPresetPicker
         presets={presets.presets}
         value={choices.presetId}
@@ -152,6 +162,14 @@ export function CctvJobSetup({ analysis, presets, capabilities, busy, onSubmit }
         onChange={(presetId) => setChoices(withPreset(choices, presetId, analysis, presets))}
       />
       <StepList steps={visibleSteps(catalog, choices.lane)} choices={choices} onChange={(steps) => setChoices({ ...choices, steps })} />
+      {choices.task === "enhance" && (
+        <AiUpscalePicker
+          models={presets.aiUpscaleModels}
+          value={choices.aiUpscale}
+          scaleHint={scaleHintOf(presets, choices.presetId)}
+          onChange={(aiUpscale) => setChoices(withAiUpscale(choices, aiUpscale))}
+        />
+      )}
       <CctvFrameTools analysis={analysis} choices={choices} catalog={catalog} onChange={setChoices} />
       <CaseDetailsForm value={choices.caseDetails} onChange={(caseDetails) => setChoices(withCaseDetails(choices, caseDetails))} />
       <div className="flex flex-col gap-2">

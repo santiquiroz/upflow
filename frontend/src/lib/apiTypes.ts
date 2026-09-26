@@ -135,6 +135,29 @@ export interface CctvJobSummary {
   warnings: string[];
   artifacts: CctvArtifactLink[];
   verifyUrl: string | null;
+  // Solo en la foto multi-cuadro (roi_fusion); ausente en respuestas anteriores.
+  roi?: CctvRoiSummary | null;
+}
+
+export interface CctvRoiNotice {
+  key: string;
+  params: Record<string, string | number>;
+}
+
+export interface CctvRoiSummary {
+  kind: string;
+  scale: number;
+  method: string;
+  motion: string;
+  referenceFrame: number;
+  framesTotal: number;
+  framesUsed: number;
+  effectiveSamples: number;
+  rejectedFrames: number[];
+  nearCopies: boolean;
+  density: { kind: string; axis: "width" | "height"; storedPx: number; displayPx: number };
+  clippedFramesPct: number;
+  notices: CctvRoiNotice[];
 }
 
 // Mirrors app/schemas.py::AudioTrackResponse / SubtitleTrackResponse — one
