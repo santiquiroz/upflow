@@ -13,6 +13,15 @@ function reasonKey(finding: RestoreFinding): string {
   return finding.reasonKey;
 }
 
+// Fichas que ademas traen un consejo de captura: no es un paso, es que hacer con la copia.
+const ADVICE_KEYS: Record<string, string> = {
+  "restore.diag.phoneCapture": "restore.diag.phoneCapture.advice",
+};
+
+export function findingAdviceKey(finding: RestoreFinding): string | null {
+  return ADVICE_KEYS[finding.reasonKey] ?? null;
+}
+
 // El backend nombra la dominante en ingles ("cyan/green"); la clave la traduce.
 export function castKey(cast: string): string {
   return `restore.diag.cast.${cast.replace(/\W+/g, "_")}`;

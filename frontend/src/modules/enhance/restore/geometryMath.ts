@@ -35,8 +35,22 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
+// Sin las esquinas: se midieron sobre otro giro y el backend no admite esquinas con angulo.
+export function framingOnly(geometry: RestoreGeometry): RestoreGeometry {
+  return { rotate90: geometry.rotate90, crop: geometry.crop, angle: geometry.angle };
+}
+
+export function hasPerspective(geometry: RestoreGeometry): boolean {
+  return geometry.corners != null;
+}
+
 export function rotateClockwise(geometry: RestoreGeometry): RestoreGeometry {
-  return { ...geometry, rotate90: (geometry.rotate90 + 1) % 4, crop: null };
+  return { ...framingOnly(geometry), rotate90: (geometry.rotate90 + 1) % 4, crop: null };
+}
+
+// El recorte vive en la imagen rectificada: sin perspectiva deja de tener sentido.
+export function withoutPerspective(geometry: RestoreGeometry): RestoreGeometry {
+  return { ...framingOnly(geometry), crop: null };
 }
 
 export function withAngle(geometry: RestoreGeometry, angle: number): RestoreGeometry {
@@ -49,7 +63,15 @@ export function withoutCrop(geometry: RestoreGeometry): RestoreGeometry {
 }
 
 export function isNeutralGeometry(geometry: RestoreGeometry): boolean {
-  return geometry.rotate90 === 0 && geometry.crop === null && geometry.angle === 0;
+  return geometry.rotate90 === 0 && geometry.crop === null && geometry.angle === 0 && !hasPerspective(geometry);
+}
+
+function sameList(a: readonly unknown[] | null | undefined, b: readonly unknown[] | null | undefined): boolean {
+  return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+}
+
+export function sameGeometry(a: RestoreGeometry, b: RestoreGeometry): boolean {
+  return a.rotate90 === b.rotate90 && a.angle === b.angle && sameList(a.crop, b.crop) && sameList(a.corners, b.corners);
 }
 
 function fraction(value: number, start: number, length: number): number {

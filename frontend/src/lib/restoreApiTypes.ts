@@ -3,10 +3,23 @@
 
 export type CropBox = [x: number, y: number, width: number, height: number];
 
+export type Corner = [x: number, y: number];
+export type Quad = [topLeft: Corner, topRight: Corner, bottomRight: Corner, bottomLeft: Corner];
+
 export interface RestoreGeometry {
   rotate90: number;
   crop: CropBox | null;
   angle: number;
+  // Esquinas de perspectiva sobre la foto girada; excluyentes con angle.
+  corners?: Quad | null;
+}
+
+export interface RestoreCapture {
+  autoCrop: RestoreGeometry | null;
+  photos: RestoreGeometry[];
+  perspective: RestoreGeometry | null;
+  frameWidth: number;
+  frameHeight: number;
 }
 
 export interface RestoreStepProposal {
@@ -83,6 +96,7 @@ export interface RestoreAnalysis {
   damage: RestoreDamage;
   damageOverFaces: boolean;
   eta: RestoreEta;
+  capture?: RestoreCapture;
 }
 
 export interface RestoreMaskResponse {

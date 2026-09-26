@@ -287,6 +287,7 @@ export function PhotoRestorePanel() {
             geometry={analysis.geometry}
             workingSize={{ width: analysis.width, height: analysis.height }}
             busy={session.phase === "updating"}
+            capture={analysis.capture}
             onApply={(geometry) => void session.applyGeometry(geometry)}
           />
           {capabilitiesQuery.data ? (

@@ -6,9 +6,11 @@ import {
   isNeutralGeometry,
   previewRotationDeg,
   rotateClockwise,
+  sameGeometry,
   selectionFromPoints,
   withAngle,
   withoutCrop,
+  withoutPerspective,
 } from "./geometryMath";
 
 const NEUTRAL: RestoreGeometry = { rotate90: 0, crop: null, angle: 0 };
@@ -135,5 +137,36 @@ describe("isNeutralGeometry", () => {
     expect(isNeutralGeometry({ ...NEUTRAL, angle: 0.1 })).toBe(false);
     expect(isNeutralGeometry({ ...NEUTRAL, crop: [0, 0, 1, 1] })).toBe(false);
     expect(isNeutralGeometry({ ...NEUTRAL, rotate90: 2 })).toBe(false);
+  });
+});
+
+const KEYSTONE: RestoreGeometry = {
+  rotate90: 0,
+  crop: [2, 2, 50, 50],
+  angle: 0,
+  corners: [
+    [10, 10],
+    [90, 12],
+    [95, 80],
+    [5, 78],
+  ],
+};
+
+describe("perspective in the geometry", () => {
+  it("counts corners as a framing change", () => {
+    expect(isNeutralGeometry({ ...NEUTRAL, corners: KEYSTONE.corners })).toBe(false);
+    expect(isNeutralGeometry({ ...NEUTRAL, corners: null })).toBe(true);
+  });
+
+  it("drops the corners and their crop when rotating or removing the perspective", () => {
+    expect(rotateClockwise(KEYSTONE)).toEqual({ rotate90: 1, crop: null, angle: 0 });
+    expect(withoutPerspective(KEYSTONE)).toEqual({ rotate90: 0, crop: null, angle: 0 });
+  });
+
+  it("compares geometries by value, treating missing corners as none", () => {
+    expect(sameGeometry(KEYSTONE, structuredClone(KEYSTONE))).toBe(true);
+    expect(sameGeometry(NEUTRAL, { ...NEUTRAL, corners: null })).toBe(true);
+    expect(sameGeometry(KEYSTONE, { ...KEYSTONE, crop: null })).toBe(false);
+    expect(sameGeometry(NEUTRAL, { ...NEUTRAL, angle: 0.1 })).toBe(false);
   });
 });

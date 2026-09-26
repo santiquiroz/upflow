@@ -91,6 +91,28 @@ describe("RestoreSummary", () => {
     expect(within(list).getByText("1 face found")).toBeInTheDocument();
   });
 
+  it("adds the capture advice under a phone photo of a print", () => {
+    const analysis = makeAnalysis({
+      diagnosis: {
+        findings: [finding("capture", "restore.diag.phoneCapture", { glare: 1, perspective: 0 })],
+        suggestedPresets: [],
+        toneKind: "color",
+      },
+    });
+
+    renderSummary({ analysis });
+
+    const list = screen.getByRole("list", { name: "What the analysis found" });
+    expect(within(list).getByText("Looks like a phone photo of a print (glare/perspective)")).toBeInTheDocument();
+    expect(screen.getByText(/rescan the print at 600 dpi or more/)).toBeInTheDocument();
+  });
+
+  it("gives no capture advice for a plain scan", () => {
+    renderSummary();
+
+    expect(screen.queryByText(/rescan the print/)).not.toBeInTheDocument();
+  });
+
   it("estimates the time of the selected fixes on GPU and CPU", () => {
     renderSummary();
 

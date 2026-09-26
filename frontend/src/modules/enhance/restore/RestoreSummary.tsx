@@ -2,7 +2,7 @@ import { Wand2 } from "lucide-react";
 import { useId, useState } from "react";
 import { useTranslation } from "../../../i18n/LocaleProvider";
 import type { RestoreAnalysis, RestoreCapabilities, StepEta } from "../../../lib/restoreApiTypes";
-import { findingText } from "./diagnosisText";
+import { findingAdviceKey, findingText } from "./diagnosisText";
 import { RestoreChainPanel } from "./RestoreChainPanel";
 import { durationText, summaryKey } from "./restoreSteps";
 import type { RestoreSelection } from "./useRestoreSelection";
@@ -21,20 +21,28 @@ function DiagnosisFindings({ analysis }: { analysis: RestoreAnalysis }) {
   if (findings.length === 0) {
     return null;
   }
+  const advice = findings.map(findingAdviceKey).filter((key): key is string => key !== null);
   return (
-    <ul aria-label={t("restore.diag.title")} className="flex flex-wrap gap-1.5">
-      {findings.map((finding, index) => {
-        const text = findingText(finding, t);
-        return (
-          <li
-            key={`${finding.key}-${index}`}
-            className="rounded-sm border border-border bg-surface px-2 py-1 text-xs text-text-dim"
-          >
-            {t(text.key, text.params)}
-          </li>
-        );
-      })}
-    </ul>
+    <div className="flex flex-col gap-1.5">
+      <ul aria-label={t("restore.diag.title")} className="flex flex-wrap gap-1.5">
+        {findings.map((finding, index) => {
+          const text = findingText(finding, t);
+          return (
+            <li
+              key={`${finding.key}-${index}`}
+              className="rounded-sm border border-border bg-surface px-2 py-1 text-xs text-text-dim"
+            >
+              {t(text.key, text.params)}
+            </li>
+          );
+        })}
+      </ul>
+      {advice.map((key) => (
+        <p key={key} className="text-xs text-text-dim">
+          {t(key)}
+        </p>
+      ))}
+    </div>
   );
 }
 
