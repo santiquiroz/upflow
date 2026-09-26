@@ -489,7 +489,7 @@ necesita que el anterior ya haya pasado):
 | Fix colors and tone | Desvaído y dominante de color; conserva sepia, virado e iluminado a mano salvo que pidas "Neutral gray" | Clásico, sin modelo | No |
 | *(agrandar)* | Opcional: ninguno, clásico o un modelo de super-resolución | Motor de reescalado existente | Solo con modelo IA generativo, y el selector lo dice |
 | Restore faces | Caras chicas o borrosas | RetinaFace-R34 + GFPGAN v1.4 (`restore-faces`), mezcla 60% por defecto | **Sí**: cada cara restaurada lleva su aviso |
-| Colorize | Solo fotos en blanco y negro o viradas | DDColor-tiny (`restore-colorize`) | **Sí**: los colores son una estimación |
+| Colorize | Fotos en blanco y negro o viradas; con `colorize.from_luminance` (solo API por ahora) también una copia de color muy desvanecida, que se recolorea desde su luminancia y pierde el color que le quedaba | DDColor-tiny (`restore-colorize`) | **Sí**: los colores son una estimación |
 
 Puntos de partida: **Gentle** (solo lo que el análisis encontró, conserva el tono), **Heavy
 damage**, **Newspaper / magazine clipping**, **Faded color print** y **Portrait** (Gentle más las
