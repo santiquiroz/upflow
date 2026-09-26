@@ -102,15 +102,19 @@ class FakeBackend:
         self.sessions: dict[tuple[str, str], dict] = {}
         self.opened: list[tuple[str, str, bool]] = []
         self.needs_disable_all: set[str] = set()
+        self.cpu_unless_no_fusion: set[str] = set()
 
     def add(self, filename: str, device: str, **session_kwargs) -> None:
         self.sessions[(filename, device)] = session_kwargs
 
-    def open(self, path: Path, device: str, disable_all: bool) -> FakeSession:
-        self.opened.append((path.name, device, disable_all))
-        if path.name in self.needs_disable_all and not disable_all:
+    def open(self, path: Path, device: str, mode: str) -> FakeSession:
+        self.opened.append((path.name, device, mode))
+        if path.name in self.needs_disable_all and mode == spike.MODE_DEFAULT:
             raise RuntimeError("Non-zero status code returned while running Gather node (80070057)")
-        return FakeSession(self.clock, **self.sessions[(path.name, device)])
+        kwargs = dict(self.sessions[(path.name, device)])
+        if path.name in self.cpu_unless_no_fusion and mode != spike.MODE_NO_FUSION:
+            kwargs["providers"] = ("CPUExecutionProvider",)
+        return FakeSession(self.clock, **kwargs)
 
 
 def model_file(tmp_path: Path, name: str, precision: str, size: int = 100 * MIB):
@@ -136,7 +140,7 @@ def make_harness(backend: FakeBackend, *, cpu_nodes=None, vram=None, device: str
         device=device,
         budget_ms=BUDGET_MS,
         open_session=backend.open,
-        cpu_nodes=cpu_nodes or (lambda path, disable_all: ()),
+        cpu_nodes=cpu_nodes or (lambda path, mode: ()),
         vram_usage_mb=lambda: next(readings, None),
         clock=backend.clock,
         catalog={},
@@ -157,14 +161,14 @@ def test_report_table_has_the_agreed_columns(tmp_path: Path) -> None:
     header = "| " + " | ".join(spike.RESULT_COLUMNS) + " |"
     assert spike.RESULT_COLUMNS == (
         "Modelo", "Precisión", "Archivo", "SHA-256", "Providers", "Nodos en CPU", "Tile", "ms/Mpx",
-        "Mediana ms", "vs DML fp32", "vs CPU fp32", "NaN/Inf", "vram_factor", "ORT_DISABLE_ALL", "Veredicto",
+        "Mediana ms", "vs DML fp32", "vs CPU fp32", "NaN/Inf", "vram_factor", "Sesión", "Veredicto",
     )
     assert header in report
     rows = spike.report_rows(report)
     assert set(rows) == {("drunet-color", "fp32"), ("drunet-color", "fp16")}
     assert rows[("drunet-color", "fp16")]["SHA-256"] == "a" * 64
     assert rows[("drunet-color", "fp16")]["Veredicto"] == "ok"
-    assert "| drunet-color | {'fp32': 384, 'fp16': 512} | 'drunet-color-fp16.onnx' | False | n/d |" in report
+    assert "| drunet-color | {'fp32': 384, 'fp16': 512} | 'drunet-color-fp16.onnx' | False | True | n/d |" in report
 
 
 def test_calibration_runs_per_precision_with_its_own_tile(tmp_path: Path) -> None:
@@ -209,7 +213,7 @@ def test_non_finite_output_fails_the_row(tmp_path: Path) -> None:
 def test_nodes_that_run_on_cpu_fail_the_row(tmp_path: Path) -> None:
     backend = FakeBackend(FakeClock())
     add_drunet(backend)
-    harness = make_harness(backend, cpu_nodes=lambda path, disable_all: ("Resize", "Where", "Resize"))
+    harness = make_harness(backend, cpu_nodes=lambda path, mode: ("Resize", "Where", "Resize"))
 
     results, _ = spike.validate_targets(harness, [drunet_target(tmp_path)])
 
@@ -222,7 +226,43 @@ def test_a_session_that_ort_moved_to_cpu_fails_the_row(tmp_path: Path) -> None:
 
     results, _ = spike.validate_targets(make_harness(backend), [drunet_target(tmp_path)])
 
-    assert spike.verdict(by_precision(results)["fp32"]) == "falla: la sesión corre en CPUExecutionProvider"
+    assert spike.verdict(by_precision(results)["fp32"]) == (
+        "falla: error: SilentCpuFallback: ORT abrió la sesión en CPUExecutionProvider"
+    )
+
+
+def test_a_graph_that_only_opens_on_the_device_without_dml_fusion_is_measured_that_way(tmp_path: Path) -> None:
+    backend = FakeBackend(FakeClock())
+    add_drunet(backend)
+    backend.cpu_unless_no_fusion.add("drunet-color-fp16.onnx")
+
+    results, _ = spike.validate_targets(make_harness(backend), [drunet_target(tmp_path)])
+
+    fp16 = by_precision(results)["fp16"]
+    assert fp16.session_mode == spike.MODE_NO_FUSION and spike.verdict(fp16) == "ok"
+    assert [mode for name, device, mode in backend.opened if name == "drunet-color-fp16.onnx"] == list(
+        spike.SESSION_MODES
+    )
+    suggestion = spike.suggest_specs(results)[0]
+    assert suggestion.dml_graph_fusion is False and suggestion.ort_disable_all is False
+
+
+def test_session_flags_of_a_discarded_precision_do_not_reach_the_spec(tmp_path: Path) -> None:
+    backend = FakeBackend(FakeClock())
+    add_drunet(backend, fp16={"transform": brown})
+    backend.cpu_unless_no_fusion.add("drunet-color-fp16.onnx")
+
+    results, _ = spike.validate_targets(make_harness(backend), [drunet_target(tmp_path)])
+
+    assert by_precision(results)["fp16"].session_mode == spike.MODE_NO_FUSION
+    suggestion = spike.suggest_specs(results)[0]
+    assert suggestion.fp16_filename is None and suggestion.dml_graph_fusion is True
+
+
+def test_no_fusion_mode_sets_the_dml_session_config_entry() -> None:
+    options = spike.restore_session_options(DML, spike.MODE_NO_FUSION)
+
+    assert options.get_session_config_entry("ep.dml.disable_graph_fusion") == "1"
 
 
 def test_fixed_shape_model_over_half_budget_is_reported_as_cpu(tmp_path: Path) -> None:
@@ -271,8 +311,8 @@ def test_graph_that_fails_with_optimizations_is_retried_with_ort_disable_all(tmp
     results, _ = spike.validate_targets(make_harness(backend), [drunet_target(tmp_path)])
 
     fp16 = by_precision(results)["fp16"]
-    assert fp16.ort_disable_all and spike.verdict(fp16) == "ok"
-    assert ("drunet-color-fp16.onnx", DML, True) in backend.opened
+    assert fp16.session_mode == spike.MODE_DISABLE_ALL and spike.verdict(fp16) == "ok"
+    assert ("drunet-color-fp16.onnx", DML, spike.MODE_DISABLE_ALL) in backend.opened
     assert spike.suggest_specs(results)[0].ort_disable_all
 
 
@@ -292,29 +332,33 @@ def test_device_removal_aborts_the_run_instead_of_retrying(tmp_path: Path) -> No
 
     with pytest.raises(RuntimeError, match="887A0005"):
         spike.validate_targets(make_harness(backend), [drunet_target(tmp_path)])
-    assert ("drunet-color.onnx", DML, True) not in backend.opened
+    assert ("drunet-color.onnx", DML, spike.MODE_DISABLE_ALL) not in backend.opened
 
 
 def _raise_device_removed(batch: np.ndarray) -> np.ndarray:
     raise RuntimeError("DXGI_ERROR_DEVICE_REMOVED 887A0005")
 
 
-def test_detectors_and_uint8_frame_graphs_are_listed_as_not_validated(tmp_path: Path) -> None:
+def test_detectors_are_listed_as_not_validated(tmp_path: Path) -> None:
     backend = FakeBackend(FakeClock())
-    u8_inputs = [FakeNode("input", [1, "height", "width", 3], "tensor(uint8)"), FakeNode("strength", [])]
-    backend.add("drunet-deblock-color-u8.onnx", "cpu", inputs=u8_inputs)
-    targets = [
-        spike.ModelTarget("bopbtl-scratch-detector", (model_file(tmp_path, "bopbtl.onnx", "fp32"),)),
-        spike.ModelTarget("drunet-deblock-color-u8", (model_file(tmp_path, "drunet-deblock-color-u8.onnx", "fp32"),)),
-    ]
+    targets = [spike.ModelTarget("bopbtl-scratch-detector", (model_file(tmp_path, "bopbtl.onnx", "fp32"),))]
 
     results, skipped = spike.validate_targets(make_harness(backend), targets)
 
     assert results == []
-    reasons = {item.model_id: item.reason for item in skipped}
-    assert "CPU por diseño" in reasons["bopbtl-scratch-detector"]
-    assert reasons["drunet-deblock-color-u8"] == "contrato no soportado: entrada tensor(uint8)"
-    assert ("bopbtl.onnx", "cpu", False) not in backend.opened
+    assert "CPU por diseño" in skipped[0].reason
+    assert ("bopbtl.onnx", "cpu", spike.MODE_DEFAULT) not in backend.opened
+
+
+def test_an_unknown_uint8_contract_is_listed_as_not_validated(tmp_path: Path) -> None:
+    backend = FakeBackend(FakeClock())
+    backend.add("mask.onnx", "cpu", inputs=[FakeNode("image", [1, 3, "height", "width"], "tensor(uint8)")])
+    target = spike.ModelTarget("migan", (model_file(tmp_path, "mask.onnx", "fp32"),))
+
+    results, skipped = spike.validate_targets(make_harness(backend), [target])
+
+    assert results == []
+    assert skipped[0].reason == "contrato no soportado: entrada tensor(uint8)"
 
 
 def test_models_dir_reads_models_lock(tmp_path: Path) -> None:
@@ -373,7 +417,7 @@ def test_the_catalog_sets_tile_min_and_candidates_for_dynamic_graphs(tmp_path: P
         device=DML,
         budget_ms=BUDGET_MS,
         open_session=backend.open,
-        cpu_nodes=lambda path, disable_all: (),
+        cpu_nodes=lambda path, mode: (),
         vram_usage_mb=lambda: None,
         clock=backend.clock,
         catalog={"drunet-color": make_spec(tile_min=64, tile_candidates=(128, 192))},
@@ -404,7 +448,7 @@ def test_a_graph_published_only_with_fp16_weights_uses_itself_on_cpu_as_referenc
 
     assert skipped == []
     assert results[0].vs_cpu == pytest.approx(0.0) and spike.verdict(results[0]) == "ok"
-    assert ("ddcolor-tiny-fp16.onnx", "cpu", False) in backend.opened
+    assert ("ddcolor-tiny-fp16.onnx", "cpu", spike.MODE_DEFAULT) in backend.opened
 
 
 def test_a_non_finite_fp32_does_not_poison_the_fp16_comparison(tmp_path: Path) -> None:
@@ -478,7 +522,7 @@ def test_restore_sessions_skip_native_eps_and_use_restore_options(monkeypatch) -
         lambda path, device, settings, **kwargs: calls.append((path, device, kwargs)) or "session",
     )
 
-    assert spike.open_restore_session(Path("m.onnx"), DML, object(), disable_all=True, profile=True) == "session"
+    assert spike.open_restore_session(Path("m.onnx"), DML, object(), spike.MODE_DISABLE_ALL, profile=True) == "session"
 
     path, device, kwargs = calls[0]
     assert (path, device, kwargs["prefer_native"]) == ("m.onnx", DML, False)
@@ -561,3 +605,264 @@ def test_expect_report_writes_a_rerun_next_to_it_and_never_overwrites_it(tmp_pat
     assert spike.main(["--models-dir", str(models), "--device", "cpu", "--expect-report", str(expected)]) == 1
     rerun_rows = spike.report_rows(rerun.read_text(encoding="utf-8"))
     assert rerun_rows[("tiny-restore", "fp32")]["Veredicto"] == "ok"
+
+
+# --- grafo uint8 de video (drunet-deblock-color-u8) --------------------------------
+
+
+class FakeVideoSession:
+    def __init__(self, clock: FakeClock, *, ms_per_mpx: float = 50.0, providers=None, transform=None, io_binding=None):
+        self.clock = clock
+        self.ms_per_mpx = ms_per_mpx
+        self.providers = providers or ("DmlExecutionProvider", "CPUExecutionProvider")
+        self.transform = transform or (lambda frame: frame)
+        self.shapes: list[tuple[int, ...]] = []
+        if io_binding is not None:
+            self.io_binding = io_binding
+
+    def get_inputs(self) -> list[FakeNode]:
+        return [FakeNode("input", [1, "height", "width", 3], "tensor(uint8)"), FakeNode("strength", [])]
+
+    def get_outputs(self) -> list[FakeNode]:
+        return [FakeNode("output", [1, "height", "width", 3], "tensor(uint8)")]
+
+    def get_providers(self) -> list[str]:
+        return list(self.providers)
+
+    def run(self, names, feeds):
+        frame = feeds["input"]
+        assert frame.dtype == np.uint8 and feeds["strength"].shape == ()
+        self.shapes.append(frame.shape)
+        self.clock.advance_ms(self.ms_per_mpx * frame.shape[1] * frame.shape[2] / 1_000_000)
+        return [self.transform(frame)]
+
+
+class VideoBackend:
+    def __init__(self, clock: FakeClock) -> None:
+        self.clock = clock
+        self.sessions: dict[tuple[str, str], FakeVideoSession] = {}
+
+    def add(self, filename: str, device: str, **kwargs) -> FakeVideoSession:
+        session = FakeVideoSession(self.clock, **kwargs)
+        self.sessions[(filename, device)] = session
+        return session
+
+    def open(self, path: Path, device: str, mode: str) -> FakeVideoSession:
+        return self.sessions[(path.name, device)]
+
+
+def video_target(tmp_path: Path):
+    return spike.ModelTarget(
+        "drunet-deblock-color-u8",
+        (
+            model_file(tmp_path, "drunet-deblock-color-u8.onnx", "fp32"),
+            model_file(tmp_path, "drunet-deblock-color-u8-fp16.onnx", "fp16"),
+        ),
+    )
+
+
+def video_harness(backend: VideoBackend, **kwargs):
+    return spike.Harness(
+        device=kwargs.pop("device", DML),
+        budget_ms=BUDGET_MS,
+        open_session=backend.open,
+        cpu_nodes=lambda path, mode: (),
+        vram_usage_mb=lambda: None,
+        clock=backend.clock,
+        catalog={},
+        ortvalue_factory=lambda array, device_type, device_id: pytest.fail("no IO binding in these fakes"),
+        **kwargs,
+    )
+
+
+def test_the_video_graph_runs_whole_frames_when_the_prediction_fits(tmp_path: Path) -> None:
+    backend = VideoBackend(FakeClock())
+    backend.add("drunet-deblock-color-u8.onnx", "cpu", providers=("CPUExecutionProvider",))
+    fp32 = backend.add("drunet-deblock-color-u8.onnx", DML, ms_per_mpx=2000.0)
+    fp16 = backend.add("drunet-deblock-color-u8-fp16.onnx", DML, ms_per_mpx=100.0)
+
+    results, skipped = spike.validate_targets(video_harness(backend), [video_target(tmp_path)])
+
+    assert skipped == []
+    rows = by_precision(results)
+    assert [(f.shape, f.padded) for f in rows["fp16"].frames] == [((1080, 1920), (1080, 1920)), ((1080, 960), (1080, 960))]
+    assert all(f.start_tile is None and f.median_ms is not None for f in rows["fp16"].frames)
+    assert rows["fp16"].frames[0].median_ms == pytest.approx(100.0 * 1080 * 1920 / 1_000_000)
+    assert (1, 1080, 1920, 3) in fp16.shapes
+    # fp32 predice 4,1 s para 1080p: arranca en tiles y el cuadro entero nunca se llama (riesgo de TDR).
+    assert rows["fp32"].frames[0].start_tile == 512 and rows["fp32"].frames[0].median_ms is None
+    assert (1, 1080, 1920, 3) not in fp32.shapes
+    assert spike.verdict(rows["fp16"]) == "ok" and spike.verdict(rows["fp32"]) == "ok"
+    assert math.isinf(rows["fp16"].vs_fp32) and math.isinf(rows["fp16"].vs_cpu)
+
+
+def test_a_whole_frame_slower_than_half_the_budget_fails_the_row(tmp_path: Path) -> None:
+    backend = VideoBackend(FakeClock())
+    backend.add("drunet-deblock-color-u8.onnx", "cpu", providers=("CPUExecutionProvider",))
+    backend.add("drunet-deblock-color-u8.onnx", DML, ms_per_mpx=100.0)
+    backend.add("drunet-deblock-color-u8-fp16.onnx", DML, ms_per_mpx=100.0)
+    clock = backend.clock
+    session = backend.sessions[("drunet-deblock-color-u8-fp16.onnx", DML)]
+    original = session.run
+
+    def slow_on_whole_frames(names, feeds):
+        if feeds["input"].shape[1] >= 1080:
+            clock.advance_ms(700.0)
+        return original(names, feeds)
+
+    session.run = slow_on_whole_frames
+
+    results, _ = spike.validate_targets(video_harness(backend), [video_target(tmp_path)])
+
+    fp16 = by_precision(results)["fp16"]
+    assert "cuadro 1920x1080: mediana 907 ms > 600 ms" in fp16.issues
+    assert spike.verdict(fp16).startswith("fp16 descartado")
+
+
+def test_a_video_graph_too_slow_even_in_tiles_does_not_start(tmp_path: Path) -> None:
+    backend = VideoBackend(FakeClock())
+    backend.add("drunet-deblock-color-u8.onnx", "cpu", providers=("CPUExecutionProvider",))
+    backend.add("drunet-deblock-color-u8.onnx", DML, ms_per_mpx=100_000.0)
+    target = spike.ModelTarget("drunet-deblock-color-u8", video_target(tmp_path).files[:1])
+
+    results, _ = spike.validate_targets(video_harness(backend), [target])
+
+    assert "cuadro 1920x1080: ni el tile mínimo entra en el presupuesto" in results[0].issues
+    rows = spike.report_rows(
+        spike.render_report(spike.ReportContext("2026-09-26", DML, "dist", "1.24.4", BUDGET_MS), results, [])
+    )
+    assert rows[("drunet-deblock-color-u8", "fp32")]["Tile"] == "CPU"
+
+
+def test_the_video_canary_compares_fp16_with_dml_fp32_in_unit_range(tmp_path: Path) -> None:
+    backend = VideoBackend(FakeClock())
+    backend.add("drunet-deblock-color-u8.onnx", "cpu", providers=("CPUExecutionProvider",))
+    backend.add("drunet-deblock-color-u8.onnx", DML)
+    backend.add("drunet-deblock-color-u8-fp16.onnx", DML, transform=lambda frame: np.full_like(frame, 100))
+
+    results, _ = spike.validate_targets(video_harness(backend), [video_target(tmp_path)])
+
+    fp16 = by_precision(results)["fp16"]
+    assert fp16.vs_fp32 < 50.0 and fp16.vs_cpu < 50.0
+    assert spike.verdict(fp16).startswith("fp16 descartado: canario vs DML fp32")
+    assert spike.suggest_specs(results)[0].fp16_filename is None
+
+
+def test_io_binding_that_falls_back_to_plain_runs_is_an_issue(tmp_path: Path) -> None:
+    backend = VideoBackend(FakeClock())
+    backend.add("drunet-deblock-color-u8.onnx", "cpu", providers=("CPUExecutionProvider",))
+
+    def broken_binding():
+        raise RuntimeError("Unsupported OrtValue device")
+
+    backend.add("drunet-deblock-color-u8.onnx", DML, io_binding=broken_binding)
+    target = spike.ModelTarget("drunet-deblock-color-u8", video_target(tmp_path).files[:1])
+
+    results, _ = spike.validate_targets(video_harness(backend), [target])
+
+    assert results[0].io_binding is False
+    assert "IOBinding cayó a run común" in results[0].issues
+
+
+def test_the_report_lists_whole_frame_timings(tmp_path: Path) -> None:
+    backend = VideoBackend(FakeClock())
+    backend.add("drunet-deblock-color-u8.onnx", "cpu", providers=("CPUExecutionProvider",))
+    backend.add("drunet-deblock-color-u8.onnx", DML, ms_per_mpx=2000.0)
+    backend.add("drunet-deblock-color-u8-fp16.onnx", DML, ms_per_mpx=100.0)
+    results, _ = spike.validate_targets(video_harness(backend), [video_target(tmp_path)])
+
+    report = spike.render_report(spike.ReportContext("2026-09-26", DML, "dist", "1.24.4", BUDGET_MS), results, [])
+
+    assert "## Cuadros enteros del grafo de video (carril IA de CCTV)" in report
+    assert "| drunet-deblock-color-u8 | fp16 | 1920x1080 | 1920x1080 | 207 | 207 | cuadro entero | no |" in report
+    assert "| drunet-deblock-color-u8 | fp32 | 1920x1080 | 1920x1080 | 4147 | n/d | tiles de 512 | no |" in report
+
+
+def test_the_color_canary_is_gray() -> None:
+    gray = spike.canary_for("ddcolor-tiny", 64, 3)
+    photo = spike.canary_for("drunet-color", 64, 4)
+
+    assert np.allclose(gray[:, :, 0], gray[:, :, 1]) and np.allclose(gray[:, :, 1], gray[:, :, 2])
+    assert not np.allclose(photo[:, :, 0], photo[:, :, 1])
+    assert np.allclose(photo[:, :, 3], spike.CONDITION_CHANNEL_VALUE)
+
+
+# --- detectores en CPU por diseño, medidos en el device como dato ------------------
+
+
+class FakeDetectorSession:
+    def __init__(self, clock: FakeClock, offset: float, providers: tuple[str, ...]) -> None:
+        self.clock = clock
+        self.offset = offset
+        self.providers = providers
+        self.feeds: list[np.ndarray] = []
+
+    def get_inputs(self) -> list[FakeNode]:
+        return [FakeNode("input", [1, 3, "height", "width"])]
+
+    def get_outputs(self) -> list[FakeNode]:
+        return [FakeNode("loc", [1, "n", 4]), FakeNode("conf", [1, "n", 2])]
+
+    def get_providers(self) -> list[str]:
+        return list(self.providers)
+
+    def run(self, names, feeds):
+        batch = feeds["input"]
+        self.feeds.append(batch)
+        self.clock.advance_ms(12.0)
+        loc = np.full((1, 8, 4), batch.mean() + self.offset, dtype=np.float32)
+        conf = np.zeros((1, 8, 2), dtype=np.float32)
+        return [loc, conf] if names is None or names == ["loc", "conf"] else [loc]
+
+
+def test_detectors_are_probed_on_the_device_only_when_asked(tmp_path: Path) -> None:
+    clock = FakeClock()
+    cpu = FakeDetectorSession(clock, 0.0, ("CPUExecutionProvider",))
+    dml = FakeDetectorSession(clock, 0.001, ("DmlExecutionProvider", "CPUExecutionProvider"))
+    sessions = {"cpu": cpu, DML: dml}
+    harness = spike.Harness(
+        device=DML,
+        budget_ms=BUDGET_MS,
+        open_session=lambda path, device, mode: sessions[device],
+        cpu_nodes=lambda path, mode: ("Resize",),
+        vram_usage_mb=lambda: None,
+        clock=clock,
+        catalog={},
+    )
+    targets = [
+        spike.ModelTarget("retinaface-r34", (model_file(tmp_path, "retinaface-r34.onnx", "fp32"),)),
+        drunet_target(tmp_path),
+    ]
+
+    probes = spike.probe_detectors(harness, targets)
+
+    assert len(probes) == 1
+    probe = probes[0]
+    assert probe.input_shape == (1, 3, 960, 1280)
+    assert probe.providers[0] == "DmlExecutionProvider" and probe.cpu_nodes == ("Resize",)
+    assert probe.median_ms == pytest.approx(12.0)
+    assert probe.max_abs["loc"] == pytest.approx(0.001, rel=1e-3) and probe.max_abs["conf"] == 0.0
+    assert dml.feeds[0].shape == (1, 3, 960, 1280) and dml.feeds[0].min() < 0  # BGR menos la media
+    report = spike.render_report(spike.ReportContext("2026-09-26", DML, "dist", "1.24.4", BUDGET_MS), [], [], probes)
+    assert "## Detectores en el device (informativo: en la app corren en CPU)" in report
+    assert spike.probe_detectors(dataclasses.replace(harness, device="cpu"), targets) == []
+
+
+def test_a_detector_that_fails_on_the_device_keeps_the_error_in_its_row(tmp_path: Path) -> None:
+    clock = FakeClock()
+
+    def open_session(path, device, mode):
+        if device == DML:
+            raise RuntimeError("DmlExecutionProvider: unsupported op")
+        return FakeDetectorSession(clock, 0.0, ("CPUExecutionProvider",))
+
+    harness = spike.Harness(
+        device=DML, budget_ms=BUDGET_MS, open_session=open_session, cpu_nodes=lambda path, mode: (),
+        vram_usage_mb=lambda: None, clock=clock, catalog={},
+    )
+    target = spike.ModelTarget("bopbtl-scratch-detector", (model_file(tmp_path, "bopbtl.onnx", "fp32"),))
+
+    probe = spike.probe_detectors(harness, [target])[0]
+
+    assert probe.error == "RuntimeError: DmlExecutionProvider: unsupported op"
+    assert probe.input_shape == (1, 1, 256, 336)

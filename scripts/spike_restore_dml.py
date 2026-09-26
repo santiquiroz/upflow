@@ -20,7 +20,6 @@ import argparse
 import datetime as dt
 import hashlib
 import json
-import math
 import os
 import statistics
 import sys
@@ -33,13 +32,38 @@ from typing import Any
 import numpy as np
 
 REPO = Path(__file__).resolve().parents[1]
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
+SCRIPTS = Path(__file__).resolve().parent
+for _path in (REPO, SCRIPTS):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
+
+import restore_dml_probes as probes  # noqa: E402
+# Reexportados: los tests y P1-GPU-1 usan el informe a través de este módulo.
+from restore_dml_report import (  # noqa: E402, F401
+    DML_DISABLE_GRAPH_FUSION,
+    MODE_DEFAULT,
+    MODE_DISABLE_ALL,
+    MODE_NO_FUSION,
+    RESULT_COLUMNS,
+    SESSION_MODES,
+    SPEC_COLUMNS,
+    ReportContext,
+    SpecSuggestion,
+    median_issue,
+    precision_issues,
+    render_report,
+    report_differences,
+    report_rows,
+    suggest_specs,
+    verdict,
+)
 
 from app.services import ep_registry  # noqa: E402
 from app.services.dml_device import try_parse_dml_device_id  # noqa: E402
 from app.services.engines.onnx_video_upscaler import is_device_removed_error  # noqa: E402
+from app.services.engines.frame_model_runner import OrtValueFactory, dml_ortvalue  # noqa: E402
 from app.services.engines.restore_canary import (  # noqa: E402
+    DELTA_E,
     CanaryRule,
     canary_rule_for,
     canary_score,
@@ -74,27 +98,20 @@ FLOAT_INPUT = "tensor(float)"
 NCHW_RANK = 4
 REPORT_DIR = REPO / "docs" / "superpowers" / "specs"
 MIB = 1024 * 1024
-NOT_AVAILABLE = "n/d"
 # El 4.o canal de DRUNet es un mapa de nivel (ruido o calidad JPEG), no imagen.
 CONDITION_CHANNEL_VALUE = 0.1
 CANARY_SEED = 20260925
+# Rec. 709: DDColor recibe el RGB de Lab(L, 0, 0), o sea una imagen gris.
+GRAY_WEIGHTS = np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
 
 CPU_BY_DESIGN = {
     "bopbtl-scratch-detector": "detector de daño: CPU por diseño (§3.4.2)",
     "retinaface-r34": "detector de caras: CPU por diseño (§3.4.7)",
 }
 
-RESULT_COLUMNS = (
-    "Modelo", "Precisión", "Archivo", "SHA-256", "Providers", "Nodos en CPU", "Tile", "ms/Mpx", "Mediana ms",
-    "vs DML fp32", "vs CPU fp32", "NaN/Inf", "vram_factor", "ORT_DISABLE_ALL", "Veredicto",
-)
-SPEC_COLUMNS = ("Modelo", "tile_by_precision", "fp16_filename", "ort_disable_all", "vram_factor")
-SKIPPED_COLUMNS = ("Modelo", "Motivo")
-
 Clock = Callable[[], float]
-OpenSession = Callable[[Path, str, bool], Any]
-CpuNodes = Callable[[Path, bool], tuple[str, ...]]
-RowKey = tuple[str, str]
+OpenSession = Callable[[Path, str, str], Any]
+CpuNodes = Callable[[Path, str], tuple[str, ...]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,19 +156,13 @@ class PrecisionResult:
     vs_cpu: float | None = None
     non_finite: bool = False
     vram_factor: float | None = None
-    ort_disable_all: bool = False
+    session_mode: str = MODE_DEFAULT
     error: str | None = None
     issues: tuple[str, ...] = ()
     output: np.ndarray | None = field(default=None, repr=False, compare=False)
-
-
-@dataclass(frozen=True, slots=True)
-class SpecSuggestion:
-    model_id: str
-    tile_by_precision: Mapping[str, int]
-    fp16_filename: str | None
-    ort_disable_all: bool
-    vram_factor: float | None
+    # Solo el grafo uint8 de video: cuadros enteros medidos y si IOBinding siguió activo.
+    frames: tuple[probes.FrameTiming, ...] = ()
+    io_binding: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,15 +176,14 @@ class Harness:
     tile_min: int = DEFAULT_TILE_MIN
     tile_candidates: tuple[int, ...] = DEFAULT_TILE_CANDIDATES
     catalog: Mapping[str, RestoreModelSpec] = field(default_factory=lambda: RESTORE_MODELS)
+    ortvalue_factory: OrtValueFactory = dml_ortvalue
 
 
 @dataclass(frozen=True, slots=True)
-class ReportContext:
-    date: str
-    device: str
-    source: str
-    ort_version: str
-    budget_ms: float
+class VideoReference:
+    spec: CalibrationSpec
+    canary: np.ndarray
+    output: np.ndarray
 
 
 def canary_tile(side: int, channels: int) -> np.ndarray:
@@ -182,6 +192,14 @@ def canary_tile(side: int, channels: int) -> np.ndarray:
     planes = [_canary_plane(grid, index, rng) for index in range(min(channels, 3))]
     planes += [np.full((side, side), CONDITION_CHANNEL_VALUE, dtype=np.float32)] * max(channels - 3, 0)
     return np.stack(planes, axis=-1)
+
+
+def canary_for(model_id: str, side: int, channels: int) -> np.ndarray:
+    tile = canary_tile(side, channels)
+    if canary_rule_for(model_id).metric != DELTA_E:
+        return tile
+    gray = tile[:, :, :3] @ GRAY_WEIGHTS
+    return np.ascontiguousarray(np.repeat(gray[:, :, np.newaxis], channels, axis=-1), dtype=np.float32)
 
 
 def _canary_plane(grid: np.ndarray, index: int, rng: np.random.Generator) -> np.ndarray:
@@ -269,6 +287,8 @@ def validate_target(harness: Harness, target: ModelTarget) -> list[PrecisionResu
         return Skipped(target.model_id, f"la referencia en CPU falla: {_one_line(exc)}")
     if isinstance(prepared, str):
         return Skipped(target.model_id, prepared)
+    if isinstance(prepared, VideoReference):
+        return _measure_video(harness, target, prepared)
     return _measure_precisions(harness, target, *prepared)
 
 
@@ -277,14 +297,25 @@ def reference_file(target: ModelTarget) -> ModelFile:
     return target.file("fp32") or target.file("fp16")
 
 
-def _prepare_reference(harness: Harness, target: ModelTarget) -> tuple[CalibrationSpec, np.ndarray, np.ndarray] | str:
-    session = harness.open_session(reference_file(target).path, CPU_DEVICE, False)
+def _prepare_reference(
+    harness: Harness, target: ModelTarget
+) -> tuple[CalibrationSpec, np.ndarray, np.ndarray] | VideoReference | str:
+    session = harness.open_session(reference_file(target).path, CPU_DEVICE, MODE_DEFAULT)
+    if probes.is_video_contract(session.get_inputs()):
+        return _video_reference(harness, target.model_id, session)
     contract = graph_contract(session.get_inputs())
     if isinstance(contract, str):
         return contract
     spec = calibration_spec_for(harness, target.model_id, contract)
-    canary = canary_tile(spec.tile_min, contract.channels)
+    canary = canary_for(target.model_id, spec.tile_min, contract.channels)
     return spec, canary, session_tile_infer(session)(canary)
+
+
+def _video_reference(harness: Harness, model_id: str, session: Any) -> VideoReference:
+    spec = calibration_spec_for(harness, model_id, GraphContract(channels=3, fixed_side=None))
+    canary = probes.u8_canary(canary_tile(spec.tile_min, 3))
+    inference = probes.frame_inference(session, CPU_DEVICE, harness.ortvalue_factory)
+    return VideoReference(spec, canary, probes.canary_output(inference, canary))
 
 
 def _measure_precisions(
@@ -303,19 +334,57 @@ def _measure_precisions(
     return results
 
 
+def _measure_video(harness: Harness, target: ModelTarget, reference: VideoReference) -> list[PrecisionResult]:
+    rule = canary_rule_for(target.model_id)
+    results: list[PrecisionResult] = []
+    dml_fp32: np.ndarray | None = None
+    for model_file in _files_to_measure(harness, target):
+        measured = measure_with_fallback(
+            harness, target.model_id, model_file, reference.spec, reference.canary, measure=measure_video_precision
+        )
+        scored = score_result(measured, rule, reference.output, dml_fp32)
+        if model_file.precision == "fp32" and not scored.non_finite:
+            dml_fp32 = scored.output
+        issues = precision_issues(scored, rule, harness.device, harness.budget_ms)
+        results.append(replace(scored, issues=issues, output=None))
+    return results
+
+
 def _files_to_measure(harness: Harness, target: ModelTarget) -> list[ModelFile]:
     files = [model_file for p in PRECISION_ORDER if (model_file := target.file(p)) is not None]
     # En CPU siempre corre un solo grafo: el fp32, o el unico que haya.
     return files[:1] if harness.device == CPU_DEVICE else files
 
 
+MeasurePrecision = Callable[["Harness", str, ModelFile, CalibrationSpec, np.ndarray, str], PrecisionResult]
+
+
+class SilentCpuFallback(RuntimeError):
+    pass
+
+
+def open_on_device(harness: Harness, path: Path, mode: str) -> Any:
+    session = harness.open_session(path, harness.device, mode)
+    providers = tuple(session.get_providers())
+    # ORT cae a CPU sin lanzar si el EP no inicializa el grafo (p. ej. la fusion de DML): eso no es validar en DML.
+    if harness.device != CPU_DEVICE and providers[:1] != (DML_PROVIDER,):
+        raise SilentCpuFallback(f"ORT abrió la sesión en {providers[0] if providers else 'ningún provider'}")
+    return session
+
+
 def measure_with_fallback(
-    harness: Harness, model_id: str, model_file: ModelFile, spec: CalibrationSpec, canary: np.ndarray
+    harness: Harness,
+    model_id: str,
+    model_file: ModelFile,
+    spec: CalibrationSpec,
+    canary: np.ndarray,
+    measure: MeasurePrecision | None = None,
 ) -> PrecisionResult:
+    measure = measure or measure_precision
     errors: list[Exception] = []
-    for disable_all in (False, True):
+    for mode in SESSION_MODES:
         try:
-            return measure_precision(harness, model_id, model_file, spec, canary, disable_all)
+            return measure(harness, model_id, model_file, spec, canary, mode)
         except Exception as exc:  # noqa: BLE001 -- el arnes anota el error del grafo y sigue con el resto
             if is_device_removed_error(exc):
                 raise
@@ -324,10 +393,10 @@ def measure_with_fallback(
 
 
 def measure_precision(
-    harness: Harness, model_id: str, model_file: ModelFile, spec: CalibrationSpec, canary: np.ndarray, disable_all: bool
+    harness: Harness, model_id: str, model_file: ModelFile, spec: CalibrationSpec, canary: np.ndarray, mode: str
 ) -> PrecisionResult:
     before = harness.vram_usage_mb()
-    session = harness.open_session(model_file.path, harness.device, disable_all)
+    session = open_on_device(harness, model_file.path, mode)
     providers = tuple(session.get_providers())
     infer = session_tile_infer(session)
     calibration = calibrate_tile(
@@ -342,13 +411,49 @@ def measure_precision(
         model_file.precision,
         model_file,
         providers=providers,
-        cpu_nodes=harness.cpu_nodes(model_file.path, disable_all),
+        cpu_nodes=harness.cpu_nodes(model_file.path, mode),
         calibration=calibration,
         median_ms=median,
         non_finite=has_non_finite(output),
         vram_factor=vram_factor(before, after, model_file.size),
-        ort_disable_all=disable_all,
+        session_mode=mode,
         output=output,
+    )
+
+
+def measure_video_precision(
+    harness: Harness, model_id: str, model_file: ModelFile, spec: CalibrationSpec, canary: np.ndarray, mode: str
+) -> PrecisionResult:
+    before = harness.vram_usage_mb()
+    session = open_on_device(harness, model_file.path, mode)
+    providers = tuple(session.get_providers())
+    inference = probes.frame_inference(session, harness.device, harness.ortvalue_factory)
+    planned_binding = inference.uses_iobinding
+    calibration = probes.calibrate_video(inference, spec, model_file.precision, harness.budget_ms, harness.clock)
+    median = probes.median_tile_ms(inference, calibration.tile, harness.clock)
+    frames = tuple(
+        probes.frame_timing(inference, calibration, shape, harness.budget_ms, harness.clock)
+        for shape in probes.VIDEO_FRAME_SHAPES
+    )
+    output = probes.canary_output(inference, canary)
+    after = harness.vram_usage_mb()
+    # None = no aplica (CPU o una sesión sin io_binding); False = se intentó y cayó a run común.
+    io_binding = inference.uses_iobinding if planned_binding else None
+    del inference, session
+    return PrecisionResult(
+        model_id,
+        model_file.precision,
+        model_file,
+        providers=providers,
+        cpu_nodes=harness.cpu_nodes(model_file.path, mode),
+        calibration=calibration,
+        median_ms=median,
+        non_finite=has_non_finite(output),
+        vram_factor=vram_factor(before, after, model_file.size),
+        session_mode=mode,
+        output=output,
+        frames=frames,
+        io_binding=io_binding,
     )
 
 
@@ -365,219 +470,6 @@ def score_result(
 
 def _one_line(exc: Exception) -> str:
     return f"{type(exc).__name__}: {' '.join(str(exc).split())}"
-
-
-# --- veredicto -----------------------------------------------------------------
-
-
-def precision_issues(result: PrecisionResult, rule: CanaryRule, device: str, budget_ms: float) -> tuple[str, ...]:
-    if result.error is not None:
-        return (f"error: {result.error}",)
-    checks = (
-        provider_issue(result.providers, device),
-        cpu_node_issue(result.cpu_nodes),
-        tile_issue(result.calibration),
-        median_issue(result.median_ms, budget_ms),
-        "NaN/Inf en la salida" if result.non_finite else None,
-        canary_issue("DML fp32", result.vs_fp32, rule),
-        canary_issue("CPU fp32", result.vs_cpu, rule),
-    )
-    return tuple(issue for issue in checks if issue is not None)
-
-
-def provider_issue(providers: tuple[str, ...], device: str) -> str | None:
-    if device == CPU_DEVICE or providers[:1] == (DML_PROVIDER,):
-        return None
-    return f"la sesión corre en {providers[0] if providers else 'un provider desconocido'}"
-
-
-def cpu_node_issue(cpu_nodes: tuple[str, ...]) -> str | None:
-    if not cpu_nodes:
-        return None
-    return f"{len(cpu_nodes)} nodos en CPU ({', '.join(sorted(set(cpu_nodes)))})"
-
-
-def tile_issue(calibration: TileCalibration | None) -> str | None:
-    if calibration is None or not calibration.runs_on_cpu:
-        return None
-    return f"corre en CPU ({calibration.cpu_fallback_reason})"
-
-
-def median_issue(median_ms: float | None, budget_ms: float) -> str | None:
-    target_ms = budget_ms / 2
-    if median_ms is None or median_ms < target_ms:
-        return None
-    return f"mediana {median_ms:.0f} ms > {target_ms:.0f} ms"
-
-
-def canary_issue(label: str, score: float | None, rule: CanaryRule) -> str | None:
-    if score is None or rule.passes(score):
-        return None
-    return f"canario vs {label} {rule.describe(score)} (umbral {rule.describe(rule.threshold)})"
-
-
-def verdict(result: PrecisionResult) -> str:
-    if not result.issues:
-        return "ok"
-    prefix = "fp16 descartado" if result.precision == "fp16" else "falla"
-    return f"{prefix}: {'; '.join(result.issues)}"
-
-
-def suggest_specs(results: Sequence[PrecisionResult]) -> list[SpecSuggestion]:
-    return [_suggest_spec(model_id, rows) for model_id, rows in _group_by_model(results).items()]
-
-
-def _suggest_spec(model_id: str, rows: list[PrecisionResult]) -> SpecSuggestion:
-    passed = [row for row in rows if not row.issues]
-    factors = [row.vram_factor for row in rows if row.vram_factor is not None]
-    return SpecSuggestion(
-        model_id=model_id,
-        tile_by_precision={row.precision: row.calibration.tile for row in passed},
-        fp16_filename=next((row.file.path.name for row in passed if row.precision == "fp16"), None),
-        ort_disable_all=any(row.ort_disable_all for row in rows),
-        vram_factor=max(factors) if factors else None,
-    )
-
-
-def _group_by_model(results: Sequence[PrecisionResult]) -> dict[str, list[PrecisionResult]]:
-    groups: dict[str, list[PrecisionResult]] = {}
-    for result in results:
-        groups.setdefault(result.model_id, []).append(result)
-    return groups
-
-
-# --- informe -------------------------------------------------------------------
-
-
-def _number(value: float | None, digits: int = 1) -> str:
-    if value is None:
-        return NOT_AVAILABLE
-    if math.isinf(value):
-        return "∞"
-    return f"{value:.{digits}f}"
-
-
-def _score_cell(score: float | None, rule: CanaryRule) -> str:
-    return NOT_AVAILABLE if score is None else rule.describe(score)
-
-
-def _cpu_nodes_cell(cpu_nodes: tuple[str, ...]) -> str:
-    return str(len(cpu_nodes)) if not cpu_nodes else f"{len(cpu_nodes)}: {', '.join(sorted(set(cpu_nodes)))}"
-
-
-def result_row(result: PrecisionResult) -> tuple[str, ...]:
-    rule = canary_rule_for(result.model_id)
-    calibration = result.calibration
-    return (
-        result.model_id,
-        result.precision,
-        result.file.path.name,
-        result.file.sha256,
-        ", ".join(result.providers) or NOT_AVAILABLE,
-        _cpu_nodes_cell(result.cpu_nodes),
-        _tile_cell(calibration),
-        _number(calibration.ms_per_mpx if calibration else None, 0),
-        _number(result.median_ms, 0),
-        _score_cell(result.vs_fp32, rule),
-        _score_cell(result.vs_cpu, rule),
-        "sí" if result.non_finite else "no",
-        _number(result.vram_factor, 2),
-        "sí" if result.ort_disable_all else "no",
-        verdict(result),
-    )
-
-
-def _tile_cell(calibration: TileCalibration | None) -> str:
-    if calibration is None:
-        return NOT_AVAILABLE
-    return "CPU" if calibration.tile is None else str(calibration.tile)
-
-
-def spec_row(suggestion: SpecSuggestion) -> tuple[str, ...]:
-    return (
-        suggestion.model_id,
-        repr(dict(suggestion.tile_by_precision)),
-        repr(suggestion.fp16_filename),
-        repr(suggestion.ort_disable_all),
-        _number(suggestion.vram_factor, 2),
-    )
-
-
-def markdown_table(columns: Sequence[str], rows: Iterable[Sequence[str]]) -> str:
-    lines = [_markdown_row(columns), "|" + "|".join("---" for _ in columns) + "|"]
-    lines += [_markdown_row(row) for row in rows]
-    return "\n".join(lines)
-
-
-def _markdown_row(cells: Sequence[str]) -> str:
-    return "| " + " | ".join(str(cell).replace("|", "\\|") for cell in cells) + " |"
-
-
-def render_report(context: ReportContext, results: Sequence[PrecisionResult], skipped: Sequence[Skipped]) -> str:
-    sections = [
-        f"# Validación DML de los modelos de restauración — {context.date}",
-        _report_preamble(context),
-        "## Resultados",
-        markdown_table(RESULT_COLUMNS, (result_row(result) for result in results)),
-        "## Valores para RestoreModelSpec",
-        markdown_table(SPEC_COLUMNS, (spec_row(item) for item in suggest_specs(results))),
-    ]
-    if skipped:
-        sections += ["## Sin validar", markdown_table(SKIPPED_COLUMNS, ((s.model_id, s.reason) for s in skipped))]
-    return "\n\n".join(sections) + "\n"
-
-
-def _report_preamble(context: ReportContext) -> str:
-    return (
-        f"- Device: `{context.device}` · onnxruntime {context.ort_version} · presupuesto por llamada "
-        f"{context.budget_ms:.0f} ms (la mediana tiene que quedar < {context.budget_ms / 2:.0f} ms)\n"
-        f"- Modelos: `{context.source}`\n"
-        "- Sesiones con `create_session(..., prefer_native=False)`; nodos en CPU por perfilado de ORT; calibración "
-        "TDR por precisión y canario contra DML fp32 y CPU fp32 (spec §3.5 y §6.1).\n"
-        "- Generado por `scripts/spike_restore_dml.py`."
-    )
-
-
-def report_rows(text: str) -> dict[RowKey, dict[str, str]]:
-    lines = text.splitlines()
-    header = _markdown_row(RESULT_COLUMNS)
-    start = lines.index(header) + 2
-    rows: dict[RowKey, dict[str, str]] = {}
-    for line in lines[start:]:
-        if not line.startswith("|"):
-            break
-        cells = dict(zip(RESULT_COLUMNS, _split_row(line), strict=True))
-        rows[(cells["Modelo"], cells["Precisión"])] = cells
-    return rows
-
-
-def _split_row(line: str) -> list[str]:
-    placeholder = "\x00"
-    cells = line.replace("\\|", placeholder).strip().strip("|").split("|")
-    return [cell.strip().replace(placeholder, "|") for cell in cells]
-
-
-def report_differences(expected_text: str, actual_text: str) -> list[str]:
-    expected = report_rows(expected_text)
-    actual = report_rows(actual_text)
-    problems: list[str] = []
-    for key, row in expected.items():
-        problems += _row_differences(key, row, actual.get(key))
-    extra = sorted(actual.keys() - expected.keys())
-    problems += [f"{model} {precision}: no estaba en el informe esperado" for model, precision in extra]
-    return problems
-
-
-def _row_differences(key: RowKey, expected: dict[str, str], actual: dict[str, str] | None) -> list[str]:
-    label = f"{key[0]} {key[1]}"
-    if actual is None:
-        return [f"{label}: falta en la corrida nueva"]
-    problems = []
-    if actual["SHA-256"] != expected["SHA-256"]:
-        problems.append(f"{label}: SHA-256 {expected['SHA-256']} -> {actual['SHA-256']}")
-    if (actual["Veredicto"] == "ok") != (expected["Veredicto"] == "ok"):
-        problems.append(f"{label}: veredicto {expected['Veredicto']} -> {actual['Veredicto']}")
-    return problems
 
 
 # --- descubrimiento de modelos ------------------------------------------------------
@@ -641,10 +533,34 @@ def select_targets(targets: list[ModelTarget], only: Sequence[str]) -> list[Mode
     return [target for target in targets if not only or target.model_id in only]
 
 
+def probe_detectors(harness: Harness, targets: Iterable[ModelTarget]) -> list[probes.DetectorProbe]:
+    if harness.device == CPU_DEVICE:
+        return []
+    return [probe_detector_target(harness, t) for t in targets if t.model_id in probes.DETECTOR_SHAPES]
+
+
+def probe_detector_target(harness: Harness, target: ModelTarget) -> probes.DetectorProbe:
+    model_file = reference_file(target)
+    base = probes.DetectorProbe(
+        target.model_id, model_file.path.name, model_file.sha256, probes.DETECTOR_SHAPES[target.model_id]
+    )
+    try:
+        # El perfilado va antes de abrir la sesion medida: con RetinaFace op11, destruir una segunda
+        # sesion DML del mismo grafo tira abajo la que sigue viva (access violation, medido en P0-GPU).
+        cpu_nodes = harness.cpu_nodes(model_file.path, MODE_DEFAULT)
+        reference = harness.open_session(model_file.path, CPU_DEVICE, MODE_DEFAULT)
+        session = harness.open_session(model_file.path, harness.device, MODE_DEFAULT)
+        return replace(base, **probes.probe_detector(target.model_id, reference, session, cpu_nodes, harness.clock))
+    except Exception as exc:  # noqa: BLE001 -- dato informativo: el error queda en la fila
+        if is_device_removed_error(exc):
+            raise
+        return replace(base, error=_one_line(exc))
+
+
 # --- ORT real y CLI -----------------------------------------------------------
 
 
-def restore_session_options(device: str, disable_all: bool, profile: bool = False) -> Any:
+def restore_session_options(device: str, mode: str, profile: bool = False) -> Any:
     import onnxruntime as ort
 
     options = ort.SessionOptions()
@@ -652,17 +568,19 @@ def restore_session_options(device: str, disable_all: bool, profile: bool = Fals
     options.enable_profiling = profile
     if device != CPU_DEVICE:
         options.intra_op_num_threads = 1
-    if disable_all:
+    if mode == MODE_DISABLE_ALL:
         options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
+    if mode == MODE_NO_FUSION:
+        options.add_session_config_entry(DML_DISABLE_GRAPH_FUSION, "1")
     return options
 
 
-def open_restore_session(path: Path, device: str, settings: Any, disable_all: bool, profile: bool = False) -> Any:
+def open_restore_session(path: Path, device: str, settings: Any, mode: str, profile: bool = False) -> Any:
     return ep_registry.create_session(
         str(path),
         device,
         settings,
-        sess_options_factory=lambda: restore_session_options(device, disable_all, profile),
+        sess_options_factory=lambda: restore_session_options(device, mode, profile),
         prefer_native=False,
     )
 
@@ -692,9 +610,9 @@ def build_harness(args: argparse.Namespace, settings: Any, budget_ms: float) -> 
     return Harness(
         device=device,
         budget_ms=budget_ms,
-        open_session=lambda path, on_device, disable_all: open_restore_session(path, on_device, settings, disable_all),
-        cpu_nodes=lambda path, disable_all: profile_cpu_nodes(
-            lambda: open_restore_session(path, device, settings, disable_all, profile=True), device
+        open_session=lambda path, on_device, mode: open_restore_session(path, on_device, settings, mode),
+        cpu_nodes=lambda path, mode: profile_cpu_nodes(
+            lambda: open_restore_session(path, device, settings, mode, profile=True), device
         ),
         vram_usage_mb=lambda: process_vram_mb(device),
         tile_min=args.tile_min,
@@ -722,6 +640,9 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument("--budget-ms", type=float, default=None)
     parser.add_argument("--tile-min", type=int, default=DEFAULT_TILE_MIN)
     parser.add_argument("--tile-candidates", type=_tile_list, default=DEFAULT_TILE_CANDIDATES)
+    parser.add_argument(
+        "--probe-cpu-models", action="store_true", help="mide también en el device los detectores que corren en CPU"
+    )
     return parser.parse_args(argv)
 
 
@@ -767,9 +688,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     budget_ms = args.budget_ms or float(settings.restore_call_budget_ms)
     expected = args.expect_report.read_text(encoding="utf-8") if args.expect_report else None
     source, targets = _source_targets(args, settings)
-    results, skipped = validate_targets(build_harness(args, settings, budget_ms), select_targets(targets, args.models))
+    harness = build_harness(args, settings, budget_ms)
+    selected = select_targets(targets, args.models)
+    results, skipped = validate_targets(harness, selected)
+    detectors = probe_detectors(harness, selected) if args.probe_cpu_models else []
     today = dt.date.today().isoformat()
-    report = render_report(ReportContext(today, args.device, source, _ort_version(), budget_ms), results, skipped)
+    context = ReportContext(today, args.device, source, _ort_version(), budget_ms)
+    report = render_report(context, results, skipped, detectors)
     report_path = report_path_for(args, today)
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(report, encoding="utf-8")
