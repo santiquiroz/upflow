@@ -35,6 +35,7 @@ from app.services.engines.onnx_common import (
     blend_tiles,
     detect_scale,
     get_cached_session,
+    readable_error_text,
     tile_starts,
     wrap_onnx_error,
 )
@@ -88,7 +89,7 @@ _OOM_SIGNATURES = DEVICE_REMOVED_SIGNATURES + OOM_SIGNATURES
 
 
 def _matches_any(exc: BaseException, signatures: tuple[str, ...]) -> bool:
-    text = str(exc).lower()
+    text = readable_error_text(exc).lower()
     return any(sig in text for sig in signatures)
 
 

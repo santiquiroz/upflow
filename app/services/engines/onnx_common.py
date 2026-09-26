@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import locale
 import threading
 from collections import OrderedDict
 from collections.abc import Callable
@@ -37,8 +38,17 @@ def build_providers(device: str) -> list[str | tuple[str, dict[str, int]]]:
     raise RuntimeError(f"Unsupported device for ONNX inference: {device!r}")
 
 
+def readable_error_text(exc: BaseException) -> str:
+    # pybind11 decodifica como UTF-8 el mensaje de ORT, que en Windows llega en la
+    # página de códigos ANSI: con Windows en español el 887A0005 quedaba escondido
+    # detrás de un UnicodeDecodeError ("cuál", "acción").
+    if isinstance(exc, UnicodeDecodeError) and isinstance(exc.object, (bytes, bytearray)):
+        return bytes(exc.object).decode(locale.getpreferredencoding(False), errors="replace")
+    return str(exc)
+
+
 def wrap_onnx_error(context: str, exc: Exception) -> RuntimeError:
-    message = str(exc)
+    message = readable_error_text(exc)
     lowered = message.lower()
     if any(token in lowered for token in ("memory", "alloc", "oom")):
         return RuntimeError(f"{context}: insufficient GPU/VRAM memory ({message})")
