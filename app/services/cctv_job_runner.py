@@ -64,7 +64,7 @@ from app.services.cctv_report_html import render_report_html
 from app.services.cctv_session import cctv_job_dir
 from app.services.ffmpeg_capabilities import FfmpegCapabilities, cached_capabilities
 from app.services.ffmpeg_filters import Box, FrameGeometry
-from app.services.frame_export import StillPair, StillRequest, StillSource, export_still_pairs
+from app.services.frame_export import StillPair, StillRequest, StillSource, export_still_pairs, seek_keyframes
 from app.services.handover_package import (
     COMPARISONS_DIRNAME,
     STILLS_DIRNAME,
@@ -164,6 +164,10 @@ class IngestedSource:
     @property
     def frame_times(self) -> tuple[float, ...]:
         return tuple(frame.pts_time or 0.0 for frame in self.frames)
+
+    @property
+    def keyframes(self) -> tuple[int, ...]:
+        return seek_keyframes(self.frames)
 
 
 @dataclass(frozen=True, slots=True)
@@ -265,7 +269,7 @@ def still_request(clarify: ClarifyJob, source: IngestedSource, analysis: Path) -
     frames = tuple(sorted(set(clarify.options.still_frames)))
     # Carril clasico: sin re-temporizar, el cuadro procesado es el original menos el comienzo del recorte.
     return StillRequest(
-        StillSource(source.work, times),
+        StillSource(source.work, times, source.keyframes),
         StillSource(analysis, times),
         frames,
         clarify.job_dir / STILLS_DIRNAME,

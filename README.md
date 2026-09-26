@@ -761,7 +761,7 @@ Ningún preset aplica nitidez ni Lanczos: generan halos y píxeles que no estaba
 
 **Texto en pantalla (fecha, hora, cámara):** el job no arranca hasta que confirmás las cajas del texto sobre un cuadro donde se lea la hora, o elegís **"No on-screen text"**. Para Hikvision se proponen las dos cajas típicas (hora arriba a la izquierda, cámara abajo a la derecha), sin confirmar. Los píxeles de esas cajas salen del original, así que un filtro temporal no puede emborronar la hora ni mezclar dos segundos distintos. Un chequeo de contraste y de píxeles quietos avisa si una caja no parece texto, sin bloquear.
 
-**Recorte y cuadros:** el recorte es por número de cuadro (con su timecode). Los cuadros que elijas salen como PNG del original y del procesado, extraídos por número exacto (`select=eq(n,N)`) y con el SHA-256 del cuadro decodificado. Antes de lanzar el job podés ver los filtros aplicados alrededor del cuadro actual, encima del original.
+**Recorte y cuadros:** el recorte es por número de cuadro (con su timecode). Los cuadros que elijas salen como PNG del original y del procesado, extraídos por número exacto (`select=eq(n,N)`, o saltando al keyframe anterior y verificando el PTS contra el índice) y con el SHA-256 del cuadro decodificado. Antes de lanzar el job podés ver los filtros aplicados alrededor del cuadro actual, encima del original.
 
 **Qué te llevás** (`outputs/<jobId>.cctv/`, y lo mismo dentro del `.zip` de entrega, sin compresión, bajo `<caso>_<fecha>_upflow/`):
 

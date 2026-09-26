@@ -131,7 +131,7 @@ def enhance_still_request(
 ) -> StillRequest:
     # El stream normaliza a CFR con los fps medidos: el cuadro procesado se busca por tiempo, no por indice.
     return StillRequest(
-        StillSource(source.work, source.frame_times),
+        StillSource(source.work, source.frame_times, source.keyframes),
         enhanced,
         tuple(sorted(set(options.still_frames))),
         job_dir / STILLS_DIRNAME,

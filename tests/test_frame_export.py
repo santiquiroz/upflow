@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from fractions import Fraction
 from pathlib import Path
 
 import numpy as np
@@ -11,7 +12,8 @@ from app.config import Settings
 from app.services import cctv_clarify_runner as runner
 from app.services import frame_export as fe
 from app.services.cctv_chain import steps_from_request
-from app.services.cctv_ingest import MediaTools, ingest_working_copy
+from app.services.cctv_frame_index import FrameEntry, parse_frame_index
+from app.services.cctv_ingest import MediaTools, build_frame_index_command, ingest_working_copy
 from app.services.ffmpeg_filters import FrameGeometry
 from app.services.label_band import LabelAssets
 from app.services.media_signature import sniff_file
@@ -182,6 +184,127 @@ def test_an_approximate_pair_says_so_in_the_report(tmp_path: Path) -> None:
     }
 
 
+# --- Seek al keyframe previo (P4-SEEK) ---
+
+SEEK_POINT = fe.SeekPoint(start=0.96, threshold=1.18, target=1.2, tolerance=0.02)
+
+
+def entry(n: int, key: bool, pict_type: str) -> FrameEntry:
+    return FrameEntry(n, n * 0.04, key, pict_type, 100)
+
+
+def seekable(
+    times: tuple[float, ...] = tuple(n * 0.04 for n in range(40)), keyframes: tuple[int, ...] = (0, 12, 24)
+) -> fe.StillSource:
+    return fe.StillSource(WORK, times, keyframes)
+
+
+def framehash_at(pts: int) -> bytes:
+    return FRAMEHASH_OUTPUT.replace(b"0,          7,          7,", f"0, {pts}, {pts},".encode())
+
+
+def test_seek_keyframes_are_the_i_frames_the_decoder_marks_as_key() -> None:
+    frames = (entry(0, True, "I"), entry(1, False, "B"), entry(2, True, "P"), entry(3, False, "I"), entry(4, True, "I"))
+
+    assert fe.seek_keyframes(frames) == (0, 4)
+
+
+@pytest.mark.parametrize(("frame", "expected"), [(0, 0), (11, 0), (12, 12), (23, 12), (39, 24)])
+def test_seek_previous_keyframe_is_the_last_one_at_or_before_the_frame(frame: int, expected: int) -> None:
+    assert fe.previous_keyframe((0, 12, 24), frame) == expected
+
+
+def test_seek_without_a_keyframe_before_the_frame_has_none() -> None:
+    assert fe.previous_keyframe((12, 24), 5) is None
+
+
+def test_seek_point_starts_at_the_keyframe_and_selects_between_the_neighbours() -> None:
+    point = fe.seek_point(seekable(), 30)
+
+    assert point is not None
+    assert point.start == pytest.approx(24 * 0.04) and point.target == pytest.approx(30 * 0.04)
+    assert point.threshold == pytest.approx(29.5 * 0.04) and point.tolerance == pytest.approx(0.02)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        seekable(keyframes=()),
+        seekable(times=()),
+        seekable(times=(0.0, 0.04, 0.04, *(n * 0.04 for n in range(3, 40)))),
+        seekable(times=tuple(n * 0.04 - 2.0 for n in range(40))),
+    ],
+    ids=["no-index", "no-times", "repeated-pts", "negative-pts"],
+)
+def test_seek_is_skipped_when_the_index_cannot_place_the_frame(source: fe.StillSource) -> None:
+    assert fe.seek_point(source, 30) is None
+
+
+def test_seek_is_skipped_inside_the_first_gop() -> None:
+    assert fe.seek_point(seekable(), 11) is None
+
+
+def test_the_seek_command_seeks_the_input_by_timestamp_and_selects_by_time() -> None:
+    argv = fe.build_still_command(FFMPEG, WORK, 30, Path("C:/out/original_f30.png"), seek=SEEK_POINT)
+
+    before_input = argv[: argv.index("-i")]
+    assert value_after(before_input, "-ss") == "0.960000"
+    assert value_after(before_input, "-seek_timestamp") == "1"
+    assert "-noaccurate_seek" in before_input and "-copyts" in before_input
+    assert value_after(argv, "-vf") == "select=gte(t\\,1.180000000)"
+    assert value_after(argv, "-frames:v") == "1"
+
+
+def test_the_seek_framehash_uses_the_same_selection() -> None:
+    argv = fe.build_framehash_command(FFMPEG, WORK, 30, seek=SEEK_POINT)
+
+    assert value_after(argv, "-ss") == "0.960000" and value_after(argv, "-vf") == "select=gte(t\\,1.180000000)"
+    assert value_after(argv, "-f") == "framehash"
+
+
+def test_the_seek_framehash_timebase_is_parsed() -> None:
+    assert fe.parse_framehash_timebase(FRAMEHASH_OUTPUT) == Fraction(1, 25)
+    assert fe.parse_framehash_timebase(b"0, 1, 2, 3, 4, abc\n") is None
+
+
+@pytest.mark.parametrize(("pts", "landed"), [(30, True), (31, False), (29, False)])
+def test_seek_lands_only_on_the_target_timestamp(pts: int, landed: bool) -> None:
+    hashes = (fe.FrameHash(pts, "a" * 64),)
+
+    assert fe.seek_landed(SEEK_POINT, hashes, Fraction(1, 25)) is landed
+    assert fe.seek_landed(SEEK_POINT, (), Fraction(1, 25)) is False
+    assert fe.seek_landed(SEEK_POINT, hashes, None) is False
+
+
+def fake_tools(outputs: list[bytes]) -> tuple[runner.ClarifyTools, list[list[str]]]:
+    calls: list[list[str]] = []
+
+    async def fake_run(command: list[str], timeout: float) -> tuple[bytes, bytes, int]:
+        calls.append(command)
+        return (outputs.pop(0) if "framehash" in command else b""), b"", 0
+
+    return runner.ClarifyTools(FFMPEG, FFMPEG, run=fake_run), calls
+
+
+async def test_a_seek_that_misses_the_frame_falls_back_to_the_full_decode(tmp_path: Path) -> None:
+    tools_, calls = fake_tools([framehash_at(31), framehash_at(30)])
+
+    _, digest = await fe.export_still(tools_, seekable(), 30, tmp_path / "s.png")
+
+    assert digest == "aab0e340f1dea8df615c8f345030862552970274e294bf78f92a916a4d860c86"
+    assert ["-ss" in call for call in calls] == [True, False, False]
+    assert value_after(calls[1], "-vf") == value_after(calls[2], "-vf") == "select=eq(n\\,30)"
+
+
+async def test_a_seek_that_lands_exports_the_still_with_the_same_selection(tmp_path: Path) -> None:
+    tools_, calls = fake_tools([framehash_at(30)])
+
+    await fe.export_still(tools_, seekable(), 30, tmp_path / "s.png")
+
+    assert len(calls) == 2 and all("-ss" in call for call in calls)
+    assert value_after(calls[1], "-vf") == "select=gte(t\\,1.180000000)"
+
+
 # --- Con ffmpeg real ---
 
 
@@ -281,3 +404,87 @@ async def test_real_pairs_hash_the_original_and_the_processed_frame_through_the_
         assert Image.open(pair.original.path).size == Image.open(pair.processed.path).size == (352, 288)
         assert not pair.approximate
     assert pairs[1].original.framehash != pairs[1].processed.framehash
+
+
+def make_gop_clip(path: Path, x264_params: str, offset: float = 0.0) -> Path:
+    command = [
+        str(ffmpeg_path()), "-hide_banner", "-v", "error", "-y",
+        "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=25,noise=alls=12:allf=t", "-t", "3",
+        "-c:v", "libx264", "-threads", "1", "-x264-params", f"threads=1:{x264_params}", "-bf", "3",
+        "-b:v", "300k", "-output_ts_offset", str(offset), str(path),
+    ]  # fmt: skip
+    subprocess.run(command, check=True, capture_output=True)
+    return path
+
+
+async def ingested_source(clip: Path, session: Path) -> fe.StillSource:
+    session.mkdir()
+    settings = Settings()
+    media = MediaTools(ffmpeg=settings.ffmpeg_binary_path, ffprobe=settings.ffprobe_binary_path)
+    ingested = await ingest_working_copy(media, clip, session, sniff_file(clip))
+    frames = ingested.index.frames
+    times = tuple(frame.pts_time or 0.0 for frame in frames)
+    return fe.StillSource(ingested.working_copy.path, times, fe.seek_keyframes(frames))
+
+
+def indexed_source(video: Path) -> fe.StillSource:
+    frames = parse_frame_index(run(build_frame_index_command(Settings().ffprobe_binary_path, video)).decode())
+    times = tuple(frame.pts_time or 0.0 for frame in frames)
+    return fe.StillSource(video, times, fe.seek_keyframes(frames))
+
+
+async def seek_landings(source: fe.StillSource, frames: range) -> dict[int, str | None]:
+    points = {frame: fe.seek_point(source, frame) for frame in frames}
+    return {
+        frame: await fe.seek_sha256(tools(), source.path, frame, point)
+        for frame, point in points.items()
+        if point is not None
+    }
+
+
+async def assert_seek_matches_the_full_decode(
+    source: fe.StillSource, frames: range, tmp_path: Path, index_is_right: bool = True
+) -> None:
+    everything = extract_all(source.path, tmp_path / "all")
+    hashes = full_framehashes(source.path)
+    landings = await seek_landings(source, frames)
+    assert landings, "no frame was eligible for the seek"
+    for frame, digest in landings.items():
+        assert digest == (hashes[frame].sha256 if index_is_right else None), frame
+    for frame in frames:
+        path, digest = await fe.export_still(tools(), source, frame, tmp_path / f"seek_{frame}.png")
+
+        assert np.array_equal(pixels(path), pixels(everything[frame])), frame
+        assert digest == hashes[frame].sha256, frame
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize(
+    "x264_params",
+    ["keyint=12:min-keyint=12:scenecut=0", "keyint=12:min-keyint=12:scenecut=0:open-gop=1"],
+    ids=["closed-gop", "open-gop"],
+)
+async def test_real_seek_export_matches_the_full_decode_on_every_frame(tmp_path: Path, x264_params: str) -> None:
+    source = await ingested_source(make_gop_clip(tmp_path / "camera.mkv", x264_params), tmp_path / "session")
+    assert len(source.keyframes) >= 5
+    assert sum(fe.seek_point(source, frame) is not None for frame in range(75)) >= 60
+
+    await assert_seek_matches_the_full_decode(source, range(75), tmp_path)
+
+
+@needs_ffmpeg
+async def test_real_seek_uses_absolute_timestamps_when_the_file_does_not_start_at_zero(tmp_path: Path) -> None:
+    # La copia de trabajo arranca en 0 tras el remux; aca se usa el clip directo para cubrir start_time > 0.
+    source = indexed_source(make_gop_clip(tmp_path / "camera.mkv", "keyint=12:min-keyint=12:scenecut=0", offset=7.0))
+    assert source.times[0] >= 7.0 and len(source.keyframes) >= 5
+
+    await assert_seek_matches_the_full_decode(source, range(10, 75, 7), tmp_path)
+
+
+@needs_ffmpeg
+async def test_real_seek_with_a_stale_index_falls_back_to_the_exact_frame(tmp_path: Path) -> None:
+    clip = make_gop_clip(tmp_path / "camera.mkv", "keyint=12:min-keyint=12:scenecut=0")
+    source = await ingested_source(clip, tmp_path / "session")
+    stale = fe.StillSource(source.path, tuple(time + 0.3 for time in source.times), source.keyframes)
+
+    await assert_seek_matches_the_full_decode(stale, range(30, 75, 11), tmp_path, index_is_right=False)

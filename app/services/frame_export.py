@@ -4,17 +4,25 @@ El cuadro N es el orden de salida del decodificador sobre `work.mkv`, el mismo
 que usan `trim`, `select` y el indice de cuadros. Cada cuadro se saca con
 `select=eq(n\\,N)` decodificando desde el inicio (exacto) y se hashea con
 `-f framehash -hash sha256` sobre el cuadro decodificado, no sobre el PNG.
+
+P4-SEEK: si el indice ubica un I-frame clave antes de N, la entrada salta a ese
+keyframe con `-ss` por timestamp absoluto y el cuadro se elige por su PTS. El
+framehash del salto se corre primero y su PTS se contrasta con el indice; si no
+coincide, el cuadro se saca decodificando desde el inicio como antes.
 """
 
 from __future__ import annotations
 
 import bisect
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
+from fractions import Fraction
 from pathlib import Path
 from typing import Any, Literal
 
 from app.services.cctv_clarify_runner import ClarifyStepError, ClarifyTools, run_step
+from app.services.cctv_frame_index import FrameEntry
 from app.services.label_band import LabelAssets, label_band_graph, tag_png_with_xmp
 
 MAX_STILL_FRAMES = 20
@@ -23,6 +31,10 @@ STILL_FRAME_OUT_OF_RANGE = "cctv.error.stillFrameOutOfRange"
 APPROXIMATE_NOTE = "approximate (re-timed frames)"
 HASH_ALGORITHM = "sha256"
 FRAMEHASH_FIELDS = 6
+FRAMEHASH_TIMEBASE_PREFIX = "#tb 0:"
+SEEK_PICT_TYPE = "I"
+
+logger = logging.getLogger(__name__)
 
 Role = Literal["original", "processed"]
 
@@ -54,6 +66,53 @@ def checked_still_frames(requested: Sequence[int], first: int, last: int) -> tup
     return frames
 
 
+# --- Seek al keyframe previo ---
+
+
+@dataclass(frozen=True, slots=True)
+class SeekPoint:
+    start: float
+    threshold: float
+    target: float
+    tolerance: float
+
+
+def seek_keyframes(frames: Sequence[FrameEntry]) -> tuple[int, ...]:
+    # Solo I-frames: un P con punto de recuperacion tambien sale como key_frame y no decodifica solo.
+    return tuple(n for n, frame in enumerate(frames) if frame.key_frame and frame.pict_type == SEEK_PICT_TYPE)
+
+
+def previous_keyframe(keyframes: Sequence[int], frame: int) -> int | None:
+    position = bisect.bisect_right(keyframes, frame)
+    return keyframes[position - 1] if position else None
+
+
+def is_strictly_increasing(times: Sequence[float]) -> bool:
+    return all(earlier < later for earlier, later in zip(times, times[1:]))
+
+
+def can_seek_to(times: Sequence[float], keyframe: int, frame: int) -> bool:
+    if keyframe == 0 or frame >= len(times):
+        return False
+    return times[keyframe] >= 0 and is_strictly_increasing(times[: frame + 1])
+
+
+def seek_point(source: StillSource, frame: int) -> SeekPoint | None:
+    keyframe = previous_keyframe(source.keyframes, frame)
+    if keyframe is None or not can_seek_to(source.times, keyframe, frame):
+        return None
+    times = source.times
+    half_gap = (times[frame] - times[frame - 1]) / 2
+    return SeekPoint(times[keyframe], times[frame] - half_gap, times[frame], half_gap)
+
+
+def seek_input_args(seek: SeekPoint | None) -> list[str]:
+    if seek is None:
+        return []
+    # Timestamps absolutos de punta a punta: -ss sin sumar start_time y el filtro ve el PTS del indice.
+    return ["-seek_timestamp", "1", "-noaccurate_seek", "-copyts", "-ss", f"{seek.start:.6f}"]
+
+
 # --- Comandos ---
 
 
@@ -63,8 +122,15 @@ def select_frame_filter(frame: int) -> str:
     return f"select=eq(n\\,{frame})"
 
 
-def still_vf(frame: int, label: LabelAssets | None = None) -> str:
-    select = select_frame_filter(frame)
+def select_time_filter(seek: SeekPoint) -> str:
+    return f"select=gte(t\\,{seek.threshold:.9f})"
+
+
+def frame_selector(frame: int, seek: SeekPoint | None) -> str:
+    return select_frame_filter(frame) if seek is None else select_time_filter(seek)
+
+
+def still_vf(select: str, label: LabelAssets | None = None) -> str:
     return select if label is None else label_band_graph(label, prefix=(select,))
 
 
@@ -77,22 +143,36 @@ def ffmpeg_quiet(ffmpeg: Path) -> list[str]:
 
 
 def build_still_command(
-    ffmpeg: Path, source: Path, frame: int, output: Path, label: LabelAssets | None = None
+    ffmpeg: Path,
+    source: Path,
+    frame: int,
+    output: Path,
+    label: LabelAssets | None = None,
+    seek: SeekPoint | None = None,
 ) -> list[str]:
     return [
         *ffmpeg_quiet(ffmpeg),
+        *seek_input_args(seek),
         *("-i", str(source)),
-        *single_frame_args(still_vf(frame, label)),
+        *single_frame_args(still_vf(frame_selector(frame, seek), label)),
         *("-flags", "+bitexact", "-fflags", "+bitexact"),
         str(output),
     ]
 
 
-def build_framehash_command(ffmpeg: Path, source: Path, frame: int | None = None) -> list[str]:
+def build_framehash_command(
+    ffmpeg: Path, source: Path, frame: int | None = None, seek: SeekPoint | None = None
+) -> list[str]:
     selection = ["-map", "0:v:0", "-fps_mode", "passthrough"]
     if frame is not None:
-        selection = single_frame_args(select_frame_filter(frame))
-    return [*ffmpeg_quiet(ffmpeg), "-i", str(source), *selection, "-f", "framehash", "-hash", HASH_ALGORITHM, "-"]
+        selection = single_frame_args(frame_selector(frame, seek))
+    return [
+        *ffmpeg_quiet(ffmpeg),
+        *seek_input_args(seek),
+        *("-i", str(source)),
+        *selection,
+        *("-f", "framehash", "-hash", HASH_ALGORITHM, "-"),
+    ]
 
 
 # --- framehash y tiempos ---
@@ -114,6 +194,25 @@ def parse_framehash_line(line: str) -> FrameHash:
 def parse_framehashes(stdout: bytes) -> tuple[FrameHash, ...]:
     lines = stdout.decode("utf-8", errors="replace").splitlines()
     return tuple(parse_framehash_line(line) for line in lines if line.strip() and not line.startswith("#"))
+
+
+def parse_timebase_line(line: str) -> Fraction | None:
+    try:
+        return Fraction(line.removeprefix(FRAMEHASH_TIMEBASE_PREFIX).strip())
+    except (ValueError, ZeroDivisionError):
+        return None
+
+
+def parse_framehash_timebase(stdout: bytes) -> Fraction | None:
+    lines = stdout.decode("utf-8", errors="replace").splitlines()
+    header = next((line for line in lines if line.startswith(FRAMEHASH_TIMEBASE_PREFIX)), None)
+    return None if header is None else parse_timebase_line(header)
+
+
+def seek_landed(seek: SeekPoint, hashes: Sequence[FrameHash], timebase: Fraction | None) -> bool:
+    if len(hashes) != 1 or timebase is None:
+        return False
+    return abs(float(hashes[0].pts * timebase) - seek.target) < seek.tolerance
 
 
 def single_hash(hashes: Sequence[FrameHash], frame: int) -> str:
@@ -186,6 +285,7 @@ class StillPair:
 class StillSource:
     path: Path
     times: tuple[float, ...]
+    keyframes: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -223,11 +323,40 @@ async def frame_sha256(tools: ClarifyTools, source: Path, frame: int) -> str:
     return single_hash(parse_framehashes(stdout), frame)
 
 
+async def seek_sha256(tools: ClarifyTools, source: Path, frame: int, seek: SeekPoint) -> str | None:
+    stdout = await run_step("framehash", build_framehash_command(tools.ffmpeg, source, frame, seek), tools)
+    hashes = parse_framehashes(stdout)
+    if seek_landed(seek, hashes, parse_framehash_timebase(stdout)):
+        return hashes[0].sha256
+    logger.info("Seek for frame %d of %s missed its PTS; decoding from the start", frame, source.name)
+    return None
+
+
+async def export_still_by_seek(
+    tools: ClarifyTools, source: Path, frame: int, output: Path, label: LabelAssets | None, seek: SeekPoint
+) -> tuple[Path, str] | None:
+    digest = await seek_sha256(tools, source, frame, seek)
+    if digest is None:
+        return None
+    await run_step("still", build_still_command(tools.ffmpeg, source, frame, output, label, seek), tools)
+    return output, digest
+
+
+async def export_still_decoded(
+    tools: ClarifyTools, source: Path, frame: int, output: Path, label: LabelAssets | None
+) -> tuple[Path, str]:
+    await run_step("still", build_still_command(tools.ffmpeg, source, frame, output, label), tools)
+    return output, await frame_sha256(tools, source, frame)
+
+
 async def export_still(
     tools: ClarifyTools, source: StillSource, frame: int, output: Path, label: LabelAssets | None = None
 ) -> tuple[Path, str]:
-    await run_step("still", build_still_command(tools.ffmpeg, source.path, frame, output, label), tools)
-    return output, await frame_sha256(tools, source.path, frame)
+    seek = seek_point(source, frame)
+    exported = None
+    if seek is not None:
+        exported = await export_still_by_seek(tools, source.path, frame, output, label, seek)
+    return exported or await export_still_decoded(tools, source.path, frame, output, label)
 
 
 async def export_original(tools: ClarifyTools, request: StillRequest, frame: int) -> StillFrame:
