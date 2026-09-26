@@ -267,7 +267,7 @@ describe("PhotoRestorePanel: summary and Restore", () => {
     expect(vi.mocked(restoreService.createRestoreJob).mock.calls[1][0]).toEqual({
       source: { file: more },
       steps: ["repair"],
-      options: { preset: "gentle", repair: { engine: "fast", sensitivity: 0.5, grow_px: 0 } },
+      options: { preset: "gentle", repair: { engine: "fast", sensitivity: 0.5, grow_px: 0 }, batch: true },
       scale: 1,
       modelId: null,
       device: null,

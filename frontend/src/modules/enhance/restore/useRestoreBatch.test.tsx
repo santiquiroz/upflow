@@ -42,6 +42,22 @@ describe("useRestoreBatch", () => {
     ]);
     expect(result.current.pending).toBe(0);
     expect(result.current.failed).toBe(0);
+    expect(result.current.entries).toEqual([
+      { jobId: "job-a", fileName: "a.jpg" },
+      { jobId: "job-b", fileName: "b.jpg" },
+    ]);
+  });
+
+  it("keeps the photos of earlier rounds so each result can still be reviewed", async () => {
+    const createJob = vi.fn().mockResolvedValueOnce(created("job-a")).mockResolvedValueOnce(created("job-b"));
+    const { result } = renderBatch(createJob);
+
+    act(() => result.current.submitMany([params("a.jpg")]));
+    await waitFor(() => expect(result.current.sent).toBe(1));
+    act(() => result.current.submitMany([params("b.jpg")]));
+
+    await waitFor(() => expect(result.current.entries).toHaveLength(2));
+    expect(result.current.sent).toBe(1);
   });
 
   it("keeps going when a photo is refused and counts it", async () => {
@@ -52,6 +68,7 @@ describe("useRestoreBatch", () => {
 
     await waitFor(() => expect(result.current.sent).toBe(1));
     expect(result.current.failed).toBe(1);
+    expect(result.current.entries.map((entry) => entry.fileName)).toEqual(["b.jpg"]);
   });
 
   it("reports what is still waiting to be sent", async () => {

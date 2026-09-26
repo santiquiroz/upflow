@@ -9,11 +9,17 @@ export interface RestoreBatchDeps {
   queue: JobQueueStore;
 }
 
+export interface BatchEntry {
+  jobId: string;
+  fileName: string;
+}
+
 export interface UseRestoreBatchResult {
   submitMany: (paramsList: CreateRestoreJobParams[]) => void;
   pending: number;
   sent: number;
   failed: number;
+  entries: BatchEntry[];
 }
 
 const DEFAULT_DEPS: RestoreBatchDeps = {
@@ -31,10 +37,13 @@ export function useRestoreBatch(deps: RestoreBatchDeps = DEFAULT_DEPS): UseResto
   const [pending, setPending] = useState(0);
   const [sent, setSent] = useState(0);
   const [failed, setFailed] = useState(0);
+  const [entries, setEntries] = useState<BatchEntry[]>([]);
 
   async function sendOne(params: CreateRestoreJobParams): Promise<void> {
     const job = await deps.createJob(params);
-    deps.queue.addTrackedJob({ id: job.jobId, kind: "image", fileName: fileNameOf(params), createdAt: Date.now() });
+    const fileName = fileNameOf(params);
+    deps.queue.addTrackedJob({ id: job.jobId, kind: "image", fileName, createdAt: Date.now() });
+    setEntries((current) => [...current, { jobId: job.jobId, fileName }]);
     setSent((count) => count + 1);
   }
 
@@ -51,5 +60,6 @@ export function useRestoreBatch(deps: RestoreBatchDeps = DEFAULT_DEPS): UseResto
     pending,
     sent,
     failed,
+    entries,
   };
 }

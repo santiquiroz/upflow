@@ -157,9 +157,14 @@ describe("RestoreResult", () => {
     expect(screen.queryByLabelText("Apply these settings to more photos")).not.toBeInTheDocument();
   });
 
-  it("has no batch when the photo only restored faces", () => {
+  it("offers a faces-only batch only once faces are turned on", () => {
     renderResult({}, vi.fn(), { ...BATCH_BASE, steps: ["faces"] });
-    expect(screen.queryByLabelText("Apply these settings to more photos")).not.toBeInTheDocument();
+    const input = screen.getByLabelText("Apply these settings to more photos");
+    expect(input).toBeDisabled();
+
+    fireEvent.click(screen.getByLabelText("Also restore faces in these photos"));
+
+    expect(input).toBeEnabled();
   });
 
   it("has no face controls when no face was restored", () => {

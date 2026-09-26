@@ -135,6 +135,8 @@ export interface RestoreOptions {
   badge?: boolean;
   keep_gps?: boolean;
   photo_date?: string;
+  // Foto de un lote: el backend rechaza lo elegido sobre otra foto (indices de caras, geometria...).
+  batch?: boolean;
 }
 
 export interface RecomposeFaceChoice {
