@@ -197,7 +197,7 @@ def box_of(values: list[int] | None) -> tuple[int, int, int, int]:
 
 def cctv_roi_choices(
     frames: list[int] | None,
-    reference: int,
+    reference: int | None,
     box: list[int] | None,
     kind: str,
     scale: int = 2,
@@ -207,13 +207,16 @@ def cctv_roi_choices(
     acquisition: dict[str, Any] | None = None,
 ) -> headless.CctvRoiChoices:
     first, last = required_pair(frames, "frames")
-    roi = RoiFusionRequest(first, last, int(reference), box_of(box), kind, int(scale), method)
+    # Sin reference se pide "Suggest reference frame": el primer cuadro es solo un marcador.
+    chosen = first if reference is None else int(reference)
+    roi = RoiFusionRequest(first, last, chosen, box_of(box), kind, int(scale), method)
     headless.check_roi_request(roi)
     choices = headless.CctvRoiChoices(
         roi=roi,
         preset=preset or None,
         steps=None if steps is None else tuple(headless.normalized_step(step) for step in steps),
         acquisition=dict(acquisition or {}),
+        suggest_reference=reference is None,
     )
     headless.require_steps_for_preset(choices)
     return choices

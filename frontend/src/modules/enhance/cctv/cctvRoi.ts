@@ -1,5 +1,13 @@
 import type { CctvRoiSummary } from "../../../lib/apiTypes";
-import type { CctvBox, CctvRoiKind, CctvRoiMethod, CctvRoiRequest, CctvStepSchema } from "../../../services/cctv";
+import type {
+  CctvBox,
+  CctvRoiKind,
+  CctvRoiMethod,
+  CctvRoiReferenceRequest,
+  CctvRoiRequest,
+  CctvStepRequest,
+  CctvStepSchema,
+} from "../../../services/cctv";
 import { trimFrameCount, type TrimRange } from "./cctvFrames";
 import type { TranslatedReason } from "./cctvLanes";
 
@@ -72,6 +80,19 @@ export function roiBlockerKey(roi: RoiChoice, frameCount: number): string | null
     [!isReferenceInRange(range, roi.reference), "cctv.roi.blocked.reference"],
   ];
   return checks.find(([blocked]) => blocked)?.[1] ?? null;
+}
+
+// "Suggest reference frame" mide la caja en cada cuadro del rango: hace falta la caja y un rango valido.
+export function roiReferenceRequest(
+  roi: RoiChoice,
+  frameCount: number,
+  steps: readonly CctvStepRequest[],
+): CctvRoiReferenceRequest | null {
+  const range = roiRange(roi);
+  if (roi.box === null || range === null || !isRangeValid(range, frameCount)) {
+    return null;
+  }
+  return { firstFrame: range[0], lastFrame: range[1], box: [...roi.box], steps: [...steps] };
 }
 
 export function roiRequest(roi: RoiChoice): CctvRoiRequest | null {

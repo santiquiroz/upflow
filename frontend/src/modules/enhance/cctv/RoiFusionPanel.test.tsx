@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { en } from "../../../i18n/en";
@@ -9,6 +9,12 @@ import { CctvJobSetup } from "./CctvJobSetup";
 import { ANALYSIS, PRESETS_RESPONSE } from "./cctvFixtures";
 import { EMPTY_ROI, type RoiChoice } from "./cctvRoi";
 import { RoiFusionPanel } from "./RoiFusionPanel";
+import * as cctvService from "../../../services/cctv";
+
+vi.mock("../../../services/cctv", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../services/cctv")>();
+  return { ...actual, suggestCctvRoiReference: vi.fn() };
+});
 
 installPointerEvent();
 
@@ -158,6 +164,38 @@ describe("multi-frame still in the job setup", () => {
     });
     expect(request.steps.map((step: { id: string }) => step.id)).toEqual(["deblock"]);
     expect(request).not.toHaveProperty("modelId");
+  });
+
+  it("suggests a reference frame for the drawn box and range, then shows it", async () => {
+    vi.mocked(cctvService.suggestCctvRoiReference).mockResolvedValue({ referenceFrame: 17 });
+    renderSetup();
+    openMultiFrameStill();
+    const suggest = screen.getByRole("button", { name: en["cctv.roi.reference.suggest"] });
+
+    expect(suggest).toBeDisabled();
+    drag(screen.getByRole("group", { name: en["cctv.box.surfaceRoi"] }), [100, 100], [300, 200]);
+    fireEvent.change(screen.getByLabelText(en["cctv.trim.start"]), { target: { value: "10" } });
+    fireEvent.change(screen.getByLabelText(en["cctv.trim.end"]), { target: { value: "29" } });
+    fireEvent.click(suggest);
+
+    expect(await screen.findByText("Reference frame: 17")).toBeInTheDocument();
+    const [token, request] = vi.mocked(cctvService.suggestCctvRoiReference).mock.calls[0];
+    expect(token).toBe(ANALYSIS.token);
+    expect(request).toMatchObject({ firstFrame: 10, lastFrame: 29, box: [50, 100, 100, 100] });
+    expect(request.steps.map((step) => step.id)).toEqual(["deblock"]);
+  });
+
+  it("shows why a reference frame could not be suggested", async () => {
+    vi.mocked(cctvService.suggestCctvRoiReference).mockRejectedValue(new Error("decode failed"));
+    renderSetup();
+    openMultiFrameStill();
+    drag(screen.getByRole("group", { name: en["cctv.box.surfaceRoi"] }), [100, 100], [300, 200]);
+    fireEvent.change(screen.getByLabelText(en["cctv.trim.start"]), { target: { value: "0" } });
+    fireEvent.change(screen.getByLabelText(en["cctv.trim.end"]), { target: { value: "5" } });
+
+    fireEvent.click(screen.getByRole("button", { name: en["cctv.roi.reference.suggest"] }));
+
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("decode failed"));
   });
 
   it("refuses more frames than the limit", () => {

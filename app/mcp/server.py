@@ -17,7 +17,9 @@ import asyncio
 import json
 import os
 import sys
+from dataclasses import replace
 from typing import Any
+from urllib.parse import quote
 
 from mcp.server.fastmcp import FastMCP
 
@@ -708,13 +710,32 @@ def cctv_roi_body(token: str, choices: headless.CctvRoiChoices) -> dict[str, Any
     }
 
 
+def roi_reference_body(choices: headless.CctvRoiChoices) -> dict[str, Any]:
+    roi = choices.roi
+    return {
+        "firstFrame": roi.first_frame,
+        "lastFrame": roi.last_frame,
+        "box": list(roi.box),
+        "steps": [headless.normalized_step(step) for step in choices.steps or ()],
+    }
+
+
+async def with_server_reference(token: str, choices: headless.CctvRoiChoices) -> headless.CctvRoiChoices:
+    if not choices.suggest_reference:
+        return choices
+    path = f"/api/v1/video/cctv/{quote(token, safe='')}/roi/reference"
+    suggested = await client.api_post(path, json_body=roi_reference_body(choices))
+    roi = replace(choices.roi, reference_frame=int(suggested["referenceFrame"]))
+    return replace(choices, roi=roi, suggest_reference=False)
+
+
 @mcp.tool(name="upflow_cctv_roi_fuse", annotations={"title": "Foto multi-cuadro de placa o cara (CCTV)", **CREATES_JOB})
 async def upflow_cctv_roi_fuse(
     token: str,
     frames: list[int],
-    reference: int,
     box: list[int],
     kind: str,
+    reference: int | None = None,
     scale: int = 2,
     method: str = "median",
     preset: str = "",
@@ -729,7 +750,8 @@ async def upflow_cctv_roi_fuse(
     detalle, pero no crea detalle más fino que el grabado.
 
     frames: [primer, último] cuadro (tope 60). reference: el cuadro donde se midió
-    box, dentro de frames. box: [x, y, w, h] en píxeles del cuadro guardado, lados
+    box, dentro de frames; omitido = el que sugiere Upflow ("Suggest reference
+    frame": más nitidez dentro de box sin saturar), que vuelve en roi.referenceFrame. box: [x, y, w, h] en píxeles del cuadro guardado, lados
     pares. kind: "plate" (plana, homografía) o "face_or_object" (afín). scale: 2, 3
     o 4. method: "median" o "trimmed_mean".
     steps: solo "deinterlace" y "deblock", tomados de presetSteps[preset] del
@@ -750,7 +772,8 @@ async def upflow_cctv_roi_fuse(
     if headless_tools.inprocess_only():
         return await headless_tools.upflow_cctv_roi_fuse_headless(token, choices, destination_dir)
     try:
-        created = await client.api_post("/api/v1/video/cctv/jobs", json_body=cctv_roi_body(token, choices))
+        chosen = await with_server_reference(token, choices)
+        created = await client.api_post("/api/v1/video/cctv/jobs", json_body=cctv_roi_body(token, chosen))
         return _dump(normalize_job(FAMILIES["video"], created))
     except Exception as exc:
         if headless_tools.should_fallback(exc):

@@ -5,7 +5,7 @@
     upflow models --json | upflow health --json | upflow preflight --repo X | upflow install --repo X --yes
     upflow cctv probe --in clip.mp4 --json
     upflow cctv clarify --in clip.mp4 --out-dir caso --preset day --no-osd --json
-    upflow cctv roi --in clip.mp4 --out-dir caso --frames 120:150 --ref 131 --box 410,300,64,24 --kind plate --json
+    upflow cctv roi --in clip.mp4 --out-dir caso --frames 120:150 [--ref 131] --box 410,300,64,24 --kind plate --json
     upflow cctv verify --dir caso/<jobId>.cctv --json
 
 `--json` imprime UNA sola linea JSON en stdout (contrato en app/headless.py). Codigos
@@ -126,7 +126,8 @@ def add_cctv_roi_parser(commands: argparse._SubParsersAction) -> None:
     roi.add_argument("--in", dest="input_path", required=True)
     roi.add_argument("--out-dir", dest="out_dir", required=True)
     roi.add_argument("--frames", type=parse_trim, required=True, metavar="A:B", help="primer y ultimo cuadro, tope 60")
-    roi.add_argument("--ref", dest="reference", type=int, required=True, help="cuadro de --box, dentro de --frames")
+    ref_help = "cuadro de --box, dentro de --frames; omitido = el sugerido (Suggest reference frame)"
+    roi.add_argument("--ref", dest="reference", type=int, default=None, help=ref_help)
     roi.add_argument("--box", type=parse_box, required=True, metavar="X,Y,W,H", help="pixeles guardados, lados pares")
     roi.add_argument("--kind", choices=sorted(ROI_KINDS), required=True, help="plate: homografia; face_or_object: afin")
     roi.add_argument("--scale", type=int, choices=sorted(ROI_SCALES), default=DEFAULT_ROI_SCALE)
@@ -291,8 +292,10 @@ async def run_cctv_clarify(args: argparse.Namespace) -> dict[str, Any]:
 
 def roi_choices(args: argparse.Namespace) -> headless.CctvRoiChoices:
     first, last = args.frames
-    roi = RoiFusionRequest(first, last, args.reference, args.box, args.kind, args.scale, args.method)
-    return headless.CctvRoiChoices(roi=roi, preset=args.preset)
+    suggest = args.reference is None
+    reference = first if suggest else args.reference
+    roi = RoiFusionRequest(first, last, reference, args.box, args.kind, args.scale, args.method)
+    return headless.CctvRoiChoices(roi=roi, preset=args.preset, suggest_reference=suggest)
 
 
 async def run_cctv_roi(args: argparse.Namespace) -> dict[str, Any]:

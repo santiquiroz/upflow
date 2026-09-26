@@ -202,7 +202,7 @@ upflow cctv roi --in clip.mp4 --out-dir caso --frames 120:150 --ref 131 `
 |---|---|---|
 | `--in PATH`, `--out-dir DIR` | — | igual que en `clarify` |
 | `--frames A:B` | — | primer y último cuadro, inclusive; tope de 60 cuadros (`CCTV_ROI_MAX_FRAMES`) |
-| `--ref R` | — | el cuadro donde se midió `--box`; tiene que estar dentro de `--frames` |
+| `--ref R` | el sugerido | el cuadro donde se midió `--box`, dentro de `--frames`. Omitido, Upflow lo elige como "Suggest reference frame": el cuadro del rango con más nitidez (varianza del Laplaciano) dentro de `--box` entre los que tienen menos del 5% de píxeles saturados, con los mismos prefiltros; sirve cuando el objeto casi no se mueve, porque la caja se mide en el mismo lugar de cada cuadro. El elegido vuelve en `roi.referenceFrame` |
 | `--box X,Y,W,H` | — | la región, ajustada al objeto, en píxeles del cuadro guardado; ancho y alto pares |
 | `--kind` | — | `plate` (placa o cartel plano, homografía) o `face_or_object` (afín) |
 | `--scale` | `2` | `2`, `3` o `4` |
@@ -241,7 +241,7 @@ suma `key` (`cctv.error.*`), la misma clave que usa la API.
 | `upflow_restore_recompose(job_id, faces)` | rehace la mezcla de las caras de un job terminado sin volver a correr modelos (`faces`: `{"0": {"enabled": true, "blend": 0.4}}`). Solo con servidor |
 | `upflow_cctv_probe(file_path)` | `upflow cctv probe`. Con servidor sube el clip y espera el análisis aunque la API responda 202; en proceso la sesión queda viva para `upflow_cctv_clarify` (la barre el sweeper del servidor cuando arranca) |
 | `upflow_cctv_clarify(token, preset, steps, osd_boxes, osd_confirmed, no_osd, trim, still_frames, acquisition, destination_dir)` | `upflow cctv clarify`. `steps` = `presetSteps[preset]` del probe (`[]` = sin filtros; preset sin `steps` es un error). Con servidor crea un job de la familia `video` (seguilo con `upflow_wait_job`; `cctv.artifacts` lista los archivos); en proceso espera y, con `destination_dir`, mueve ahí `<jobId>.cctv` |
-| `upflow_cctv_roi_fuse(token, frames, reference, box, kind, scale=2, method="median", preset, steps, acquisition, destination_dir)` | `upflow cctv roi`. `frames` = `[primer, último]`, `box` = `[x, y, w, h]` medido en `reference`. `steps` admite solo `deinterlace` y `deblock` (sacalos de `presetSteps[preset]` del probe; preset sin `steps` es un error; `[]` = sin prefiltros). Con servidor crea un job de la familia `video` (`cctv.roi` trae las muestras efectivas y los avisos); en proceso espera y, con `destination_dir`, mueve ahí `<jobId>.cctv` |
+| `upflow_cctv_roi_fuse(token, frames, box, kind, reference=None, scale=2, method="median", preset, steps, acquisition, destination_dir)` | `upflow cctv roi`. `frames` = `[primer, último]`, `box` = `[x, y, w, h]` medido en `reference`; sin `reference` se usa el sugerido (`POST /api/v1/video/cctv/{token}/roi/reference` con `firstFrame`, `lastFrame`, `box` y `steps`, que devuelve `referenceFrame`; en proceso, la misma función). `steps` admite solo `deinterlace` y `deblock` (sacalos de `presetSteps[preset]` del probe; preset sin `steps` es un error; `[]` = sin prefiltros). Con servidor crea un job de la familia `video` (`cctv.roi` trae las muestras efectivas y los avisos); en proceso espera y, con `destination_dir`, mueve ahí `<jobId>.cctv` |
 | `upflow_cctv_check_unchanged(job_id, output_dir)` | `upflow cctv verify`; `output_dir` para una carpeta ya movida |
 
 Un `token` de `upflow_restore_analyze` en proceso sirve para `upflow_restore_photo`

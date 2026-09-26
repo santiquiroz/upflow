@@ -55,7 +55,9 @@ from app.services.cctv_analysis import (
 )
 from app.services.cctv_chain import CctvChainError
 from app.services.cctv_job_validation import ROI_FRAMES, ROI_PREFILTER_STEPS, check_roi_choices
+from app.services.cctv_ingest import MediaTools
 from app.services.cctv_presets import CCTV_PRESETS, PresetContext, preset_steps
+from app.services.cctv_preview import load_preview_source
 from app.services.cctv_report import REPORT_HTML_NAME, REPORT_JSON_NAME
 from app.services.cctv_session import cctv_job_dir
 from app.services.cctv_session import session_dir as cctv_session_dir
@@ -96,6 +98,12 @@ from app.services.restore_session import (
     SessionNotFound,
     default_detectors,
     session_dir,
+)
+from app.services.roi_reference import (
+    ReferenceRequest,
+    check_reference_request,
+    resolved_roi_steps,
+    suggest_session_reference,
 )
 from app.services.tile_params import validate_tile_params
 
@@ -802,6 +810,8 @@ class CctvRoiChoices:
     preset: str | None = None
     steps: tuple[Mapping[str, Any], ...] | None = None
     acquisition: Mapping[str, Any] = field(default_factory=lambda: MappingProxyType({}))
+    # Sin --ref: roi.reference_frame es un marcador y se pide "Suggest reference frame" con la sesion.
+    suggest_reference: bool = False
 
 
 AnyCctvChoices = CctvClarifyChoices | CctvRoiChoices
@@ -1064,7 +1074,27 @@ async def cctv_roi(
     check_roi_request(choices.roi)
     require_steps_for_preset(choices)
     check_out_dir(out_dir)
-    return await run_cctv_job(ctx, cctv_roi_options_of(token, choices), out_dir, describe_roi_result)
+    chosen = await with_suggested_reference(ctx, token, choices)
+    return await run_cctv_job(ctx, cctv_roi_options_of(token, chosen), out_dir, describe_roi_result)
+
+
+async def with_suggested_reference(ctx: HeadlessContext, token: str, choices: CctvRoiChoices) -> CctvRoiChoices:
+    if not choices.suggest_reference:
+        return choices
+    try:
+        frame = await suggested_reference(ctx.settings, token, choices)
+    except Exception as exc:  # noqa: BLE001 - la CLI traduce cualquier fallo a un codigo estable
+        raise cctv_error(exc) from exc
+    return replace(choices, roi=replace(choices.roi, reference_frame=frame), suggest_reference=False)
+
+
+async def suggested_reference(settings: Settings, token: str, choices: CctvRoiChoices) -> int:
+    roi, ffmpeg = choices.roi, settings.ffmpeg_binary_path
+    request = ReferenceRequest(roi.first_frame, roi.last_frame, tuple(roi.box), tuple(choices.steps or ()))
+    source = await load_preview_source(settings.video_work_path, token, MediaTools(ffmpeg, settings.ffprobe_binary_path))
+    check_reference_request(request, source, settings.cctv_roi_max_frames)
+    steps = resolved_roi_steps(request.steps, await asyncio.to_thread(cached_capabilities, ffmpeg))
+    return await suggest_session_reference(ffmpeg, source, request, steps)
 
 
 async def run_cctv_job(

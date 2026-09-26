@@ -221,9 +221,12 @@ def check_roi_box(box: Sequence[int], geometry: FrameGeometry) -> None:
 
 
 def check_roi_frames(roi: RoiFusionRequest, frame_count: int, max_frames: int) -> None:
-    in_index = 0 <= roi.first_frame <= roi.reference_frame <= roi.last_frame < frame_count
-    count = roi.last_frame - roi.first_frame + 1
-    if not in_index or count > max_frames:
+    check_roi_range(roi.first_frame, roi.last_frame, roi.reference_frame, frame_count, max_frames)
+
+
+def check_roi_range(first: int, last: int, reference: int, frame_count: int, max_frames: int) -> None:
+    in_index = 0 <= first <= reference <= last < frame_count
+    if not in_index or last - first + 1 > max_frames:
         raise CctvChainError(
             ROI_FRAMES,
             f"Pick at most {max_frames} frames inside the video (0-{frame_count - 1}) with the reference inside the range.",

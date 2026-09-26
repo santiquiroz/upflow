@@ -316,3 +316,21 @@ def test_cctv_cli_roi_and_verify_on_a_real_clip(monkeypatch, capsys, tmp_path: P
 
     code, verified = run_cli(capsys, ["cctv", "verify", "--dir", str(result_dir)])
     assert code == 0 and verified["ok"] and verified["checked"] > 0
+
+
+@needs_ffmpeg
+def test_cctv_cli_roi_without_ref_uses_the_suggested_reference(monkeypatch, capsys, tmp_path: Path) -> None:
+    settings = Settings(_env_file=None, RUNTIME_DIR=str(tmp_path / "runtime"))
+    build = headless.build_context
+    monkeypatch.setattr(headless, "build_context", lambda: build(settings))
+    clip = make_clip(tmp_path / "clip.mkv", settings)
+    argv = [
+        "cctv", "roi", "--in", str(clip), "--out-dir", str(tmp_path / "caso"), "--frames", "5:20",
+        "--box", "120,80,64,48", "--kind", "face_or_object",
+    ]  # fmt: skip
+
+    code, result = run_cli(capsys, argv)
+
+    assert code == 0, result
+    assert 5 <= result["roi"]["referenceFrame"] <= 20
+    assert leftovers(settings) == []

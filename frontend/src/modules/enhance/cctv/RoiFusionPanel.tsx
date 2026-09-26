@@ -3,6 +3,7 @@ import { useTranslation } from "../../../i18n/LocaleProvider";
 import type { CctvFrameIndex } from "../../../services/cctv";
 import { clampFrame, frameTimecode } from "./cctvFrames";
 import { CctvOptionGroup } from "./CctvOptionGroup";
+import type { RoiReferenceSuggestion } from "./useRoiReferenceSuggestion";
 import { MAX_ROI_FRAMES, ROI_KINDS, ROI_METHODS, ROI_SCALES, roiDensityNotice, roiFrameCount, type RoiChoice } from "./cctvRoi";
 
 type RangeEnd = "first" | "last";
@@ -17,6 +18,7 @@ interface RoiFusionPanelProps {
   index: CctvFrameIndex | null;
   onChange: (roi: RoiChoice) => void;
   onShowFrame: (frame: number) => void;
+  suggestion?: RoiReferenceSuggestion;
 }
 
 const FIELD_CLASS =
@@ -96,6 +98,30 @@ function ReferenceLine({ reference, onShowFrame }: { reference: number | null; o
   );
 }
 
+function SuggestReference({ suggestion }: { suggestion: RoiReferenceSuggestion }) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex flex-col gap-1">
+      <p className="flex flex-wrap items-center gap-2 text-xs text-text-dim">
+        <button
+          type="button"
+          onClick={suggestion.suggest}
+          disabled={!suggestion.canSuggest}
+          className={`${LINK_BUTTON_CLASS} disabled:cursor-not-allowed disabled:text-text-dim disabled:no-underline`}
+        >
+          {suggestion.suggesting ? t("cctv.roi.reference.suggesting") : t("cctv.roi.reference.suggest")}
+        </button>
+        <span>{t("cctv.roi.reference.suggestHelp")}</span>
+      </p>
+      {suggestion.error && (
+        <p role="alert" className="text-xs text-danger">
+          {suggestion.error}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function DensityNotice({ roi }: { roi: RoiChoice }) {
   const { t } = useTranslation();
   const notice = roiDensityNotice(roi.kind, roi.box);
@@ -136,7 +162,7 @@ function RoiSettings({ roi, onChange }: { roi: RoiChoice; onChange: (roi: RoiCho
   );
 }
 
-export function RoiFusionPanel({ roi, frame, frameCount, index, onChange, onShowFrame }: RoiFusionPanelProps) {
+export function RoiFusionPanel({ roi, frame, frameCount, index, onChange, onShowFrame, suggestion }: RoiFusionPanelProps) {
   const { t } = useTranslation();
   return (
     <section aria-label={t("cctv.roi.legend")} className="flex flex-col gap-3 rounded border border-border bg-surface p-3">
@@ -146,6 +172,7 @@ export function RoiFusionPanel({ roi, frame, frameCount, index, onChange, onShow
       <RangeField end="last" roi={roi} frame={frame} frameCount={frameCount} index={index} onChange={onChange} />
       <RangeSummary roi={roi} />
       <ReferenceLine reference={roi.reference} onShowFrame={onShowFrame} />
+      {suggestion && <SuggestReference suggestion={suggestion} />}
       <RoiSettings roi={roi} onChange={onChange} />
       <DensityNotice roi={roi} />
     </section>

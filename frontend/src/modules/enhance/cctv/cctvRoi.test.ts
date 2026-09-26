@@ -7,6 +7,7 @@ import {
   roiCatalog,
   roiDensityNotice,
   roiFrameCount,
+  roiReferenceRequest,
   roiRequest,
   roiResultNotices,
   withRoiBox,
@@ -116,5 +117,20 @@ describe("roiResultNotices", () => {
 
   it("adds nothing when every frame aligned", () => {
     expect(roiResultNotices({ ...ROI_SUMMARY, notices: [], rejectedFrames: [] })).toEqual([]);
+  });
+});
+
+describe("roiReferenceRequest", () => {
+  const steps = [{ id: "deblock", params: { filter: "deblock" } }];
+
+  it("sends the range, the box and the pre-alignment steps without a reference", () => {
+    expect(roiReferenceRequest(READY, 750, steps)).toEqual({ firstFrame: 10, lastFrame: 39, box: [100, 200, 60, 14], steps });
+  });
+
+  it("needs the box and a valid range", () => {
+    expect(roiReferenceRequest({ ...READY, box: null }, 750, steps)).toBeNull();
+    expect(roiReferenceRequest({ ...READY, last: null }, 750, steps)).toBeNull();
+    expect(roiReferenceRequest({ ...READY, last: 10 + MAX_ROI_FRAMES }, 750, steps)).toBeNull();
+    expect(roiReferenceRequest({ ...READY, last: 800 }, 750, steps)).toBeNull();
   });
 });

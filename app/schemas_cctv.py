@@ -74,6 +74,17 @@ class CctvJobRequest(CamelRequest):
     device: str | None = Field(default=None, max_length=64)
 
 
+class RoiReferenceRequest(CamelRequest):
+    first_frame: StrictInt
+    last_frame: StrictInt
+    box: BoxIn
+    steps: list[CctvStepIn] = Field(default_factory=list, max_length=MAX_STEPS)
+
+
+class RoiReferenceResponse(CamelModel):
+    reference_frame: int
+
+
 class OsdCheckRequest(CamelRequest):
     boxes: list[BoxIn] = Field(min_length=1, max_length=MAX_BOXES)
     frame: StrictInt | None = None

@@ -297,6 +297,24 @@ def test_cctv_roi_defaults_to_2x_median_and_the_suggested_preset(monkeypatch):
     assert calls == [headless.CctvRoiChoices(roi=RoiFusionRequest(10, 40, 22, (0, 0, 40, 40), "face_or_object"))]
 
 
+def test_cctv_roi_without_ref_asks_for_the_suggested_reference(monkeypatch):
+    calls = []
+    monkeypatch.setattr(headless, "build_context", lambda: "ctx")
+
+    async def fake(ctx, source, out_dir, choices):
+        calls.append(choices)
+        return {"ok": True}
+
+    monkeypatch.setattr(headless, "cctv_roi_file", fake)
+    argv = ["cctv", "roi", "--in", "c.mp4", "--out-dir", "o", "--frames", "10:40", "--box", "0,0,40,40", "--kind", "plate"]
+
+    assert cli.main([*argv, "--json"]) == 0
+
+    (choices,) = calls
+    assert choices.suggest_reference is True
+    assert choices.roi.reference_frame == 10
+
+
 @pytest.mark.parametrize(
     "flags",
     [

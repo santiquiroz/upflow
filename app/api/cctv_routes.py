@@ -38,6 +38,8 @@ from app.schemas_cctv import (
     OsdBoxCheckResponse,
     OsdCheckRequest,
     OsdCheckResponse,
+    RoiReferenceRequest,
+    RoiReferenceResponse,
     VerifyFilesResponse,
     ai_upscale_choice,
     cctv_options,
@@ -81,6 +83,14 @@ from app.services.ffmpeg_capabilities import FfmpegCapabilities, FfmpegProbeErro
 from app.services.frame_export import StillFrameError
 from app.services.handover_package import check_files_unchanged
 from app.services.osd_check import OSD_NOT_TEXT, OsdBoxCheck, osd_warnings
+from app.services.roi_frames import ROI_DECODE_FAILED, RoiDecodeError
+from app.services.roi_reference import (
+    ReferenceRequest,
+    check_reference_request,
+    resolved_roi_steps,
+    suggest_session_reference,
+)
+from app.services.roi_registration import RoiRegistrationError
 from app.services.storage import StorageService
 from app.services.video_analysis import VideoAnalysisError
 from app.services.video_job_manager import VideoJobManager
@@ -371,6 +381,38 @@ async def check_cctv_osd(
     except VideoAnalysisError as exc:
         raise keyed_error(500, OSD_CHECK_FAILED, "The on-screen text check could not decode the video.") from exc
     return osd_check_response(checks)
+
+
+def reference_request_of(body: RoiReferenceRequest) -> ReferenceRequest:
+    steps = tuple(step.model_dump() for step in body.steps)
+    return ReferenceRequest(body.first_frame, body.last_frame, tuple(body.box), steps)
+
+
+@router.post(
+    "/cctv/{token}/roi/reference",
+    response_model=RoiReferenceResponse,
+    dependencies=[Depends(require(Permission.jobs_create))],
+)
+async def suggest_roi_reference(
+    token: str,
+    body: RoiReferenceRequest = Body(...),
+    settings: Settings = Depends(get_settings),
+    state: CctvApiState = Depends(get_cctv_state),
+) -> RoiReferenceResponse:
+    request = reference_request_of(body)
+    try:
+        source = await preview_source(settings, token)
+        check_reference_request(request, source, settings.cctv_roi_max_frames)
+        steps = resolved_roi_steps(request.steps, await current_capabilities(settings))
+        async with state.preview_slots:
+            frame = await suggest_session_reference(settings.ffmpeg_binary_path, source, request, steps)
+    except CctvChainError as exc:
+        raise chain_error(exc) from exc
+    except RoiRegistrationError as exc:
+        raise keyed_error(400, exc.key, str(exc)) from exc
+    except (RoiDecodeError, VideoAnalysisError) as exc:
+        raise keyed_error(500, ROI_DECODE_FAILED, "The frames of the range could not be decoded.") from exc
+    return RoiReferenceResponse(reference_frame=frame)
 
 
 # --- Jobs ---

@@ -599,6 +599,40 @@ async def test_an_osd_box_outside_the_frame_is_400(analyzed) -> None:
     assert error.status_code == 400 and error.detail["key"] == "cctv.error.osdBoxOutsideFrame"
 
 
+def reference_body(**overrides) -> cctv_routes.RoiReferenceRequest:
+    raw = {"firstFrame": 10, "lastFrame": 20, "box": [100, 80, 64, 32], "steps": [], **overrides}
+    return cctv_routes.RoiReferenceRequest.model_validate(raw)
+
+
+@needs_ffmpeg
+async def test_the_suggested_reference_frame_is_inside_the_range(analyzed) -> None:
+    settings, _, result = analyzed
+    state = cctv_routes.CctvApiState()
+    deblock = [{"id": "deblock", "params": {"filter": "deblock"}}]
+
+    response = await cctv_routes.suggest_roi_reference(result.token, reference_body(steps=deblock), settings, state)
+
+    assert 10 <= response.reference_frame <= 20
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize(
+    ("overrides", "key"),
+    [
+        ({"lastFrame": 90}, "cctv.error.roiFrames"),
+        ({"box": [300, 0, 64, 32]}, "cctv.error.roiOutsideFrame"),
+        ({"steps": [{"id": "denoise", "params": {"filter": "hqdn3d"}}]}, "cctv.error.roiSteps"),
+    ],
+)
+async def test_a_bad_reference_request_is_400_with_its_key(analyzed, overrides, key) -> None:
+    settings, _, result = analyzed
+    body = reference_body(**overrides)
+
+    error = await rejected(cctv_routes.suggest_roi_reference(result.token, body, settings, cctv_routes.CctvApiState()))
+
+    assert error.status_code == 400 and error.detail["key"] == key
+
+
 def real_manager(settings: Settings) -> VideoJobManager:
     media_tools = MediaTools(settings)
     upscaler = VideoUpscaler(settings, NoNcnnEngine(), media_tools, cctv_runners=build_cctv_runners(settings))

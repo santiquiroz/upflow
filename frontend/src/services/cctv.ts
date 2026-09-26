@@ -312,6 +312,21 @@ export function checkCctvOsd(token: string, boxes: readonly CctvBox[], frame: nu
   });
 }
 
+export interface CctvRoiReferenceRequest {
+  firstFrame: number;
+  lastFrame: number;
+  box: number[];
+  steps: CctvStepRequest[];
+}
+
+export interface CctvRoiReferenceResponse {
+  referenceFrame: number;
+}
+
+export function suggestCctvRoiReference(token: string, request: CctvRoiReferenceRequest): Promise<CctvRoiReferenceResponse> {
+  return apiPostJson<CctvRoiReferenceResponse>(`/video/cctv/${encodeURIComponent(token)}/roi/reference`, request);
+}
+
 export function verifyCctvFiles(jobId: string): Promise<CctvVerifyResult> {
   return apiPostJson<CctvVerifyResult>(`/video/jobs/${encodeURIComponent(jobId)}/verify`, {});
 }

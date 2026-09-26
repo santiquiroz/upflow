@@ -7,12 +7,13 @@ import type { FrameSize } from "./cctvBoxes";
 import { withRoi, withTrim, type CctvChoices } from "./cctvChoices";
 import { displaySizeOf, storedSizeOf } from "./cctvFrames";
 import { isVideoTask } from "./cctvLanes";
-import { withRoiBox } from "./cctvRoi";
+import { roiReferenceRequest, withRoiBox } from "./cctvRoi";
 import { hasChosenAiSteps, previewStepRequests } from "./cctvSteps";
 import { FrameScrubber } from "./FrameScrubber";
 import { RoiFusionPanel } from "./RoiFusionPanel";
 import { TrimControls } from "./TrimControls";
 import { useOsdTools } from "./useOsdTools";
+import { useRoiReferenceSuggestion } from "./useRoiReferenceSuggestion";
 
 interface FrameToolsProps {
   analysis: CctvAnalysis;
@@ -53,6 +54,14 @@ export function CctvFrameTools({ analysis, choices, catalog, onChange }: FrameTo
   const isVideo = isVideoTask(choices.task);
   const osd = useOsdTools({ token: analysis.token, choices, frame, frameSize, onChange });
   const roiEditor = <RoiBoxEditor choices={choices} frame={frame} frameSize={frameSize} onChange={onChange} />;
+  const stepRequests = previewStepRequests(choices.steps, catalog);
+  const suggestion = useRoiReferenceSuggestion({
+    token: analysis.token,
+    roi: choices.roi,
+    request: roiReferenceRequest(choices.roi, frameCount, stepRequests),
+    onChange: (roi) => onChange(withRoi(choices, roi)),
+    onShowFrame: setFrame,
+  });
 
   return (
     <section aria-label={t("cctv.frames.legend")} className="flex flex-col gap-4">
@@ -86,13 +95,14 @@ export function CctvFrameTools({ analysis, choices, catalog, onChange }: FrameTo
           index={analysis.frameIndex}
           onChange={(roi) => onChange(withRoi(choices, roi))}
           onShowFrame={setFrame}
+          suggestion={suggestion}
         />
       )}
       {hasFrames && (
         <CctvFilterPreview
           token={analysis.token}
           frame={frame}
-          steps={previewStepRequests(choices.steps, catalog)}
+          steps={stepRequests}
           skipsAiSteps={hasChosenAiSteps(choices.steps, catalog)}
           displaySize={displaySize}
         />

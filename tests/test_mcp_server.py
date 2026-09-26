@@ -776,6 +776,30 @@ async def test_cctv_roi_fuse_posts_the_json_contract(monkeypatch: pytest.MonkeyP
     ]
 
 
+async def test_cctv_roi_fuse_without_reference_asks_the_server_for_one(
+    monkeypatch: pytest.MonkeyPatch, server_mode: None
+) -> None:
+    sent: list[tuple[str, dict]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append((request.url.path, json.loads(request.read())))
+        if request.url.path.endswith("/roi/reference"):
+            return httpx.Response(200, json={"referenceFrame": 7})
+        return httpx.Response(202, json={"jobId": "v7", "status": "queued"})
+
+    install_mock(monkeypatch, handler)
+    await upflow_cctv_roi_fuse(
+        "tok123", frames=[4, 9], box=[0, 0, 40, 40], kind="plate", steps=[{"id": "deblock", "params": {}}]
+    )
+
+    (reference_path, reference_body), (job_path, job_body) = sent
+    assert reference_path == "/api/v1/video/cctv/tok123/roi/reference"
+    assert reference_body == {
+        "firstFrame": 4, "lastFrame": 9, "box": [0, 0, 40, 40], "steps": [{"id": "deblock", "params": {}}],
+    }  # fmt: skip
+    assert job_path == "/api/v1/video/cctv/jobs" and job_body["roi"]["referenceFrame"] == 7
+
+
 async def test_cctv_roi_fuse_defaults_to_2x_median_without_prefilters(
     monkeypatch: pytest.MonkeyPatch, server_mode: None
 ) -> None:
