@@ -9,30 +9,41 @@ import threading
 import time
 from fractions import Fraction
 from pathlib import Path
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
 import pytest
+from PIL import Image
 
 from app.config import Settings
 from app.models import CctvOptions, CctvStep, VideoUpscaleJob
 from app.services.cctv_enhance_plan import EnhancePlan
 from app.services.cctv_ingest import ingest_source, make_verified_copy, write_source_record
+from app.services.cctv_report import load_report
 from app.services.cctv_session import cctv_job_dir
 from app.services.devices_service import DevicesService
 from app.services.engines.ffmpeg_frame_source import FfmpegFrameSource
 from app.services.engines.ffmpeg_frame_sink import RawPipeEncoder
+from app.services.engines.frame_model_runner import FrameModelReport
 from app.services.engines.frame_restorer import build_composed_stage
 from app.services.engines.gmfss.assets import GRAPH_NAMES
 from app.services.engines.gmfss_engine import GmfssEngine
 from app.services.engines.onnx_video_upscaler import OnnxVideoUpscaler
 from app.services.ffmpeg_filters import FrameGeometry
 from app.services.gpu_session_coordinator import GpuSessionCoordinator
+from app.services.handover_package import check_files_unchanged
 from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry, ModelStatus
 from app.services.video_upscaler import (
     STREAM_MODE_FULL,
     STREAM_MODE_HYBRID,
     VideoUpscaler,
+)
+from app.services.xmp_packet import (
+    DIGITAL_SOURCE_COMPOSITE,
+    DIGITAL_SOURCE_ENHANCED,
+    extract_xmp,
+    read_xmp_properties,
 )
 from ffmpeg_support import needs_ffmpeg
 
@@ -1465,6 +1476,9 @@ def probe_streams(path: Path) -> list[dict]:
     return json.loads(subprocess.run(command, check=True, capture_output=True).stdout)["streams"]
 
 
+LABEL_PNGS = {"ai_label_band.png", "ai_label_mark.png"}
+
+
 def pngs_under(*roots: Path) -> list[Path]:
     return [path for root in roots if root.exists() for path in root.rglob("*.png")]
 
@@ -1558,7 +1572,8 @@ async def test_cctv_enhance_streams_at_scale_1_with_a_classic_upscaler_and_write
         settings = upscaler_box[0].settings
         work_dir = settings.video_work_path / job.id
         work_dir_seen.append(work_dir.is_dir() and not (work_dir / "frames-in").exists())
-        assert not pngs_under(work_dir, settings.outputs_path)
+        # Los unicos PNG son los dos del rotulo, nunca cuadros intermedios.
+        assert {path.name for path in pngs_under(work_dir, settings.outputs_path)} <= LABEL_PNGS
 
     restorer = IdentityFrameRestorer(on_build=inside_the_stream)
     upscaler = make_enhance_upscaler(tmp_path, restorer)
@@ -1582,11 +1597,13 @@ async def test_cctv_enhance_streams_at_scale_1_with_a_classic_upscaler_and_write
     encode = RecordingRawPipeEncoder.commands[0]
     assert encode[encode.index("-framerate") + 1] == "25/1"
     assert encode[encode.index("-s") + 1] == "320x240"
-    assert "-vf" not in encode
+    assert encode.count("-vf") == 1 and "pad=w=iw:h=ih+" in encode[encode.index("-vf") + 1]
+    assert encode[encode.index("-metadata") + 1].startswith("comment=AI-enhanced visualization by Upflow ")
+    band = job.metadata["cctv"]["label"]["bandHeight"]
     expected_call = {"device": "dml:0", "shape": (1, 240, 320, 3), "strength": 40, "boxes": ((16, 16, 64, 24),)}
     assert restorer.calls == [expected_call]
     video, audio = sorted(probe_streams(output), key=lambda stream: stream["codec_type"] != "video")
-    assert (video["width"], video["height"], video["r_frame_rate"], video["nb_frames"]) == (320, 240, "25/1", "35")
+    assert (video["width"], video["height"], video["r_frame_rate"], video["nb_frames"]) == (320, 240 + band, "25/1", "35")
     assert audio["codec_name"] == "aac" and float(audio["duration"]) == pytest.approx(1.4, abs=0.1)
     metadata = job.metadata["cctv"]
     assert metadata["lane"] == "ai" and metadata["cfrNormalized"] is True and metadata["measuredFps"] == "25/1"
@@ -1594,7 +1611,7 @@ async def test_cctv_enhance_streams_at_scale_1_with_a_classic_upscaler_and_write
     assert metadata["outputs"]["enhanced"] == "02_processed/enhanced.mp4"
     assert metadata["sourceSha256"] == hashlib.sha256(clip.read_bytes()).hexdigest()
     assert job.metadata["stage"] == "completed" and job.metadata["streamPipeline"] is True
-    assert (job.metadata["outputWidth"], job.metadata["outputHeight"]) == (320, 240)
+    assert (job.metadata["outputWidth"], job.metadata["outputHeight"]) == (320, 240 + band)
 
 
 @needs_ffmpeg
@@ -1614,3 +1631,219 @@ async def test_cctv_enhance_reuses_the_previous_output_for_identical_frames(tmp_
     metadata = job.metadata["cctv"]
     assert metadata["framesOut"] == 20 and metadata["duplicatesReused"] == 19
     assert restorer.restored == 1
+
+
+# ---------------------------------------------------------------------------
+# Carril IA de CCTV: encode con pasos post-IA, rotulo, cuadros e informe (spec §4.7 puntos 8-12).
+# ---------------------------------------------------------------------------
+
+
+def test_rawpipe_command_without_video_filter_args_is_unchanged_and_ai_label_args_replace_the_resize(
+    tmp_path: Path,
+) -> None:
+    upscaler = VideoUpscaler(
+        make_stream_settings(tmp_path),
+        FakeNcnnEngine(),  # type: ignore[arg-type]
+        ProbeForbiddenMediaTools(),  # type: ignore[arg-type]
+    )
+    job = make_stream_job(tmp_path, scale=2, target_height=1080)
+    args = (tmp_path / "out.mp4", job, "libx264")
+
+    plain = upscaler._build_rawpipe_command(2560, 1440, "24/1", None, [], *args)
+    explicit_none = upscaler._build_rawpipe_command(2560, 1440, "24/1", None, [], *args, video_filter_args=None)
+    labeled = upscaler._build_rawpipe_command(
+        2560, 1440, "24/1", None, [], *args, video_filter_args=("-vf", "LABEL", "-metadata", "comment=AI")
+    )
+
+    assert plain == explicit_none
+    assert plain.count("-vf") == 1 and "LABEL" not in plain
+    assert labeled.count("-vf") == 1 and labeled[labeled.index("-vf") + 1] == "LABEL"
+    assert labeled[labeled.index("-metadata") + 1] == "comment=AI"
+
+
+class FakeStreamUpscalerEngine:
+    """OnnxVideoUpscaler falso: vecino mas cercano, un builtin con export 'instalado'."""
+
+    last_precision = "fp32"
+
+    def __init__(self) -> None:
+        self.built: list[tuple[str, str, int]] = []
+
+    def builtin_onnx_available(self, model_id: str, scale: int | None = None) -> bool:
+        return True
+
+    def build_frame_upscaler(self, model_id: str, device: str, scale: int, *, readback_ring_capacity: int):
+        self.built.append((model_id, device, scale))
+        return lambda frame: frame.repeat(scale, axis=1).repeat(scale, axis=2)
+
+
+class RestorerWithModelFile(IdentityFrameRestorer):
+    """Como IdentityFrameRestorer, pero la etapa informa el modelo de restauracion y su archivo."""
+
+    def __init__(self, model_path: Path) -> None:
+        super().__init__()
+        self.model_path = model_path
+
+    def build_stage(
+        self, device, sample_frame, strength_percent, *, upscaler_factory=None, osd_boxes=(), cancel_event=None
+    ):
+        upscale = None if upscaler_factory is None else upscaler_factory()
+        report = FrameModelReport("drunet-deblock-color-u8", device, "fp32", None, False)
+        return build_composed_stage(self._restore, upscale, osd_boxes=osd_boxes, describe_restore=lambda: report)
+
+    def model_file(self, model_id: str, precision: str):
+        return SimpleNamespace(name="DRUNet deblock (video)", license_spdx="MIT"), self.model_path
+
+
+def post_ai_steps_cctv(still_frames: tuple[int, ...] = (10,)) -> CctvOptions:
+    return CctvOptions(
+        task="enhance",
+        session_token="session0token1",
+        steps=(
+            CctvStep("ai_deblock", {"strength": 40}),
+            CctvStep("levels", {"filter": "eq", "gamma": 1.2}),
+            CctvStep("scale", {"filter": "scale", "factor": 2}),
+            CctvStep("sharpen", {"filter": "cas", "strength": 0.4}),
+        ),
+        no_osd=True,
+        still_frames=still_frames,
+    )
+
+
+def ffprobe_comment(path: Path) -> str:
+    command = [
+        str(Settings().ffprobe_binary_path), "-v", "error", "-show_entries", "format_tags=comment",
+        "-of", "default=nw=1:nk=1", str(path),
+    ]  # fmt: skip
+    return subprocess.run(command, check=True, capture_output=True, text=True).stdout.strip()
+
+
+def processed_still(job_dir: Path, metadata: dict) -> Image.Image:
+    return Image.open(job_dir / metadata["outputs"]["stills"][0]["processed"]["file"])
+
+
+def original_still(job_dir: Path, metadata: dict) -> Image.Image:
+    return Image.open(job_dir / metadata["outputs"]["stills"][0]["original"]["file"])
+
+
+def encode_vf(command: list[str]) -> str:
+    return command[command.index("-vf") + 1]
+
+
+@needs_ffmpeg
+async def test_cctv_ai_label_band_goes_after_the_post_ai_steps_with_the_comment_and_a_labeled_still(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clip = make_cctv_camera_clip(tmp_path, "testsrc2=size=352x288:rate=25", "1", with_audio=False)
+    job = make_enhance_job(clip, post_ai_steps_cctv())
+    upscaler = make_enhance_upscaler(tmp_path, IdentityFrameRestorer())
+    RecordingRawPipeEncoder.commands = []
+    monkeypatch.setattr("app.services.video_upscaler.RawPipeEncoder", RecordingRawPipeEncoder)
+    job_dir = admit_cctv_source(upscaler.settings, job, clip)
+
+    output = await upscaler.run(job)
+
+    encode = RecordingRawPipeEncoder.commands[0]
+    assert encode[encode.index("-s") + 1] == "352x288"
+    assert encode_vf(encode).startswith(
+        "eq=brightness=0.0:contrast=1.0:gamma=1.2:saturation=1.0,"
+        "scale=w=iw*2:h=ih*2:flags=neighbor+accurate_rnd+full_chroma_int+bitexact,"
+        "cas=strength=0.4,null[lb_image];"
+    )
+    metadata = job.metadata["cctv"]
+    band = metadata["label"]["bandHeight"]
+    (video,) = probe_streams(output)
+    assert (video["width"], video["height"]) == (704, 576 + band)
+    assert ffprobe_comment(output).startswith("AI-enhanced visualization by Upflow ")
+    assert "not original footage" in ffprobe_comment(output)
+    assert metadata["label"]["text"].startswith("AI-ENHANCED VISUALIZATION — NOT ORIGINAL FOOTAGE / ")
+    still = processed_still(job_dir, metadata)
+    assert still.size == (704, 576 + band)
+    assert read_xmp_properties(extract_xmp(still))["Iptc4xmpExt:DigitalSourceType"] == DIGITAL_SOURCE_ENHANCED
+    assert extract_xmp(original_still(job_dir, metadata)) is None
+    assert metadata["generative"] is False and metadata["aiUpscale"] is None
+
+
+@needs_ffmpeg
+async def test_cctv_ai_report_ties_each_step_to_its_process_and_the_files_check_out(tmp_path: Path) -> None:
+    clip = make_cctv_camera_clip(tmp_path, "testsrc2=size=176x144:rate=25", "0.6", with_audio=True)
+    model = tmp_path / "drunet-deblock-color-u8.onnx"
+    model.write_bytes(b"not a real graph")
+    job = make_enhance_job(clip, post_ai_steps_cctv(still_frames=(3,)))
+    upscaler = make_enhance_upscaler(tmp_path, RestorerWithModelFile(model))
+    job_dir = admit_cctv_source(upscaler.settings, job, clip)
+
+    await upscaler.run(job)
+
+    metadata = job.metadata["cctv"]
+    assert metadata["outputs"]["report"] == "report.json" and metadata["outputs"]["checksums"] == "SHA256SUMS.txt"
+    report = load_report((job_dir / "report.json").read_text(encoding="utf-8"))
+    assert report.mode == "ai-visual" and report.ai_used is True
+    steps = {step.id: step for step in report.steps}
+    assert [step.id for step in report.steps] == ["ai_deblock", "levels", "scale", "sharpen", "ai_label"]
+    deblock = steps["ai_deblock"]
+    assert (deblock.category, deblock.engine.name, deblock.engine.model_license) == ("ai", "onnxruntime", "MIT")
+    assert deblock.engine.model_sha256 == hashlib.sha256(b"not a real graph").hexdigest()
+    assert deblock.argv == []
+    assert steps["levels"].engine.name == "ffmpeg" and steps["levels"].argv == steps["ai_label"].argv
+    assert steps["ai_label"].category == "label" and "-vf" in steps["ai_label"].argv
+    labels = [process.label for process in report.processes]
+    assert labels == ["AI lane audio (ffmpeg)", "AI lane decode (ffmpeg)", "AI lane frames (ONNX Runtime, one thread)", "AI lane encode (ffmpeg)"]
+    enhanced = next(output for output in report.outputs if output.role == "ai-visualization")
+    assert enhanced.path == "02_processed/enhanced.mp4" and enhanced.ai_applied is True
+    assert enhanced.visible_label == metadata["label"]["text"]
+    processed = [output for output in report.outputs if output.role == "still" and output.ai_applied]
+    assert len(processed) == 1 and processed[0].visible_label == metadata["label"]["text"]
+    keys = {limitation.key for limitation in report.limitations}
+    assert "cctv.limitation.aiDetail" in keys and "cctv.limitation.generativeUpscale" not in keys
+    assert (job_dir / "report.html").is_file()
+    check = check_files_unchanged(job_dir)
+    assert check.ok and check.checked >= 5
+
+
+@needs_ffmpeg
+async def test_cctv_ai_upscale_with_a_generative_model_is_labeled_generative_everywhere(tmp_path: Path) -> None:
+    clip = make_cctv_camera_clip(tmp_path, "testsrc2=size=160x120:rate=25", "0.4", with_audio=False)
+    onnx_dir = tmp_path / "onnx"
+    onnx_dir.mkdir()
+    (onnx_dir / "realesr-animevideov3-x2-uint8.onnx").write_bytes(b"fake x2 export")
+    cctv = CctvOptions(
+        task="enhance",
+        session_token="session0token1",
+        steps=(CctvStep("ai_upscale", {}),),
+        no_osd=True,
+        still_frames=(2,),
+    )
+    job = make_enhance_job(clip, cctv, model_id="realesr-animevideov3", scale=2)
+    engine = FakeStreamUpscalerEngine()
+    upscaler = VideoUpscaler(
+        make_stream_settings(tmp_path, BUILTIN_ONNX_DIR=str(onnx_dir)),
+        FakeNcnnEngine(),  # type: ignore[arg-type]
+        ProbeForbiddenMediaTools(),  # type: ignore[arg-type]
+        onnx_video_engine=engine,  # type: ignore[arg-type]
+        frame_restorer=IdentityFrameRestorer(),  # type: ignore[arg-type]
+    )
+    job_dir = admit_cctv_source(upscaler.settings, job, clip)
+
+    output = await upscaler.run(job)
+
+    assert engine.built == [("realesr-animevideov3", "dml:0", 2)]
+    metadata = job.metadata["cctv"]
+    band = metadata["label"]["bandHeight"]
+    (video,) = probe_streams(output)
+    assert (video["width"], video["height"]) == (320, 240 + band)
+    assert metadata["generative"] is True
+    assert metadata["aiUpscale"] == {
+        "model": "realesr-animevideov3",
+        "scale": 2,
+        "generative": True,
+        "generativeLabel": "Generative (invents texture)",
+    }
+    still = processed_still(job_dir, metadata)
+    assert read_xmp_properties(extract_xmp(still))["Iptc4xmpExt:DigitalSourceType"] == DIGITAL_SOURCE_COMPOSITE
+    report = load_report((job_dir / "report.json").read_text(encoding="utf-8"))
+    upscale = next(step for step in report.steps if step.id == "ai_upscale")
+    assert upscale.engine.model_license == "BSD-3-Clause"
+    assert upscale.engine.model_sha256 == hashlib.sha256(b"fake x2 export").hexdigest()
+    assert "realesr-animevideov3-x2-uint8.onnx" in upscale.engine.model_name
+    assert "cctv.limitation.generativeUpscale" in {limitation.key for limitation in report.limitations}

@@ -13,7 +13,7 @@ from fractions import Fraction
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from app.services.cctv_chain import AiLanePlan, ResolvedStep, in_catalog_order
+from app.services.cctv_chain import AI_LABEL_STEP, AiLanePlan, ResolvedStep, in_catalog_order
 from app.services.cctv_clarify_runner import atrim_filter, trim_step, trimmed_count
 from app.services.cctv_frame_index import FrameEntry, FrameIndexSummary
 from app.services.cctv_ingest import SourceRecord
@@ -48,6 +48,8 @@ class EnhancePlan:
     strength: int | None
     upscale: int
     osd_boxes: tuple[Box, ...]
+    encode_filters: tuple[str, ...] = ()
+    encoded: FrameGeometry | None = None
 
     @property
     def rate_text(self) -> str:
@@ -56,6 +58,12 @@ class EnhancePlan:
     @property
     def output_size(self) -> tuple[int, int]:
         return self.decoded.width * self.upscale, self.decoded.height * self.upscale
+
+    @property
+    def encoded_size(self) -> tuple[int, int]:
+        if self.encoded is None:
+            return self.output_size
+        return self.encoded.width, self.encoded.height
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,18 +151,35 @@ def decoded_frames(lane: AiLanePlan, frame_count: int) -> int:
     return trimmed_count(frame_count, trim_step(lane.decode)) * fields_per_frame(lane.decode)
 
 
+def post_ai_steps(lane: AiLanePlan) -> tuple[ResolvedStep, ...]:
+    # La banda no es un filtro de la cadena: la arma label_band al final del -vf del encode.
+    return tuple(step for step in in_catalog_order(lane.encode) if step.id != AI_LABEL_STEP)
+
+
+def encode_filters(lane: AiLanePlan) -> tuple[str, ...]:
+    return tuple(build_filter(step) for step in post_ai_steps(lane))
+
+
+def encoded_geometry(lane: AiLanePlan, decoded: FrameGeometry, upscale: int) -> FrameGeometry:
+    return output_dims_after(post_ai_steps(lane), decoded.width * upscale, decoded.height * upscale, decoded.sar)
+
+
 def build_enhance_plan(
     lane: AiLanePlan, source: EnhanceSource, osd_boxes: Sequence[Sequence[int]], scale: int
 ) -> EnhancePlan:
     geometry = source.geometry
+    decoded = output_dims_after(lane.decode, geometry.width, geometry.height, geometry.sar)
+    upscale = upscale_factor(lane.composite, scale)
     return EnhancePlan(
         prefilter_args=prefilter_args(lane.decode),
-        decoded=output_dims_after(lane.decode, geometry.width, geometry.height, geometry.sar),
+        decoded=decoded,
         rate=source_rate(source.index, source.header_rate) * fields_per_frame(lane.decode),
         frames_in=decoded_frames(lane, source.index.frame_count),
         strength=deblock_strength(lane.composite),
-        upscale=upscale_factor(lane.composite, scale),
+        upscale=upscale,
         osd_boxes=decoded_osd_boxes(lane, osd_boxes, geometry),
+        encode_filters=encode_filters(lane),
+        encoded=encoded_geometry(lane, decoded, upscale),
     )
 
 

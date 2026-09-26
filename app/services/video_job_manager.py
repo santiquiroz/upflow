@@ -36,7 +36,14 @@ from app.services.target_resolution import smallest_scale_reaching
 from app.services.cctv_chain import CctvChainError
 from app.services.cctv_ingest import VerifiedCopyMismatch
 from app.services.cctv_job_runner import frame_geometry
-from app.services.cctv_job_validation import CctvJobFacts, CctvJobPlan, plan_cctv_job
+from app.services.cctv_job_validation import (
+    NO_UPSCALE,
+    AiUpscaleChoice,
+    CctvJobFacts,
+    CctvJobPlan,
+    lane_for_task,
+    plan_cctv_job,
+)
 from app.services.cctv_session import CctvSession, cctv_job_dir, load_session, prepare_job_dir, touch_session
 from app.services.ffmpeg_capabilities import FfmpegCapabilities, cached_capabilities
 from app.services.video_upscaler import VideoUpscaler
@@ -200,8 +207,9 @@ class VideoJobManager(QueuedJobManager[VideoUpscaleJob]):
         device: str | None = None,
         job_id: str | None = None,
         owner: AuthenticatedUser | None = None,
+        upscale: AiUpscaleChoice = NO_UPSCALE,
     ) -> VideoUpscaleJob:
-        job = await self._admit_cctv_job(cctv, device, job_id, owner)
+        job = await self._admit_cctv_job(cctv, device, job_id, owner, upscale)
         self._enqueue_cctv(job)
         return job
 
@@ -219,10 +227,15 @@ class VideoJobManager(QueuedJobManager[VideoUpscaleJob]):
         return job
 
     async def _admit_cctv_job(
-        self, cctv: CctvOptions, device: str | None, job_id: str | None, owner: AuthenticatedUser | None
+        self,
+        cctv: CctvOptions,
+        device: str | None,
+        job_id: str | None,
+        owner: AuthenticatedUser | None,
+        upscale: AiUpscaleChoice = NO_UPSCALE,
     ) -> VideoUpscaleJob:
         session = await asyncio.to_thread(load_session, self.settings.video_work_path, cctv.session_token)
-        plan = plan_cctv_job(cctv, await self._cctv_facts(session, cctv.task), device)
+        plan = plan_cctv_job(cctv, await self._cctv_facts(session, cctv.task), device, upscale)
         if plan.device is not None and plan.device != AUTO_DEVICE_ID and self.devices is not None:
             await asyncio.to_thread(self.devices.validate, plan.device)
         if owner is not None and self.quota_service is not None:
@@ -243,7 +256,16 @@ class VideoJobManager(QueuedJobManager[VideoUpscaleJob]):
             task_available=self.upscaler.cctv_task_available(task),
             max_still_frames=self.settings.cctv_max_still_frames,
             max_roi_frames=self.settings.cctv_roi_max_frames,
+            gpu_devices=await self._healthy_gpus(task),
+            stream_upscaler_ready=lambda model_id, scale: self.upscaler.cctv_upscale_ready(model_id, scale),
         )
+
+    async def _healthy_gpus(self, task: str) -> tuple[str, ...] | None:
+        # Solo el carril IA necesita GPU; enumerar el hardware en los demas seria costo sin uso.
+        if self.devices is None or lane_for_task(task) != "ai":
+            return None
+        devices = await asyncio.to_thread(self.devices.list_devices)
+        return tuple(d["id"] for d in devices if d["kind"] == "gpu" and self.devices.is_healthy(d["id"]))
 
     @staticmethod
     def _cctv_job(
@@ -254,7 +276,8 @@ class VideoJobManager(QueuedJobManager[VideoUpscaleJob]):
             source_path=session.upload,
             original_filename=session.record.original_name,
             model_name=f"cctv-{cctv.task}",
-            scale=1,
+            model_id=plan.upscale.model_id,
+            scale=plan.upscale.scale or 1,
             output_container=CCTV_VIEWING_CONTAINER,
             video_codec=CCTV_VIEWING_CODEC,
             video_preset=CCTV_VIEWING_PRESET,

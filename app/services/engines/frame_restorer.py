@@ -4,6 +4,7 @@ import hashlib
 import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -16,6 +17,7 @@ from app.services.engines.frame_model_runner import (
 )
 from app.services.engines.photo_restore_engine import PhotoRestoreEngine
 from app.services.inpaint_mask import soft_composite
+from app.services.restore_models import RestoreModelSpec
 
 Box = tuple[int, int, int, int]
 FrameFn = Callable[[np.ndarray], np.ndarray]
@@ -183,3 +185,6 @@ class FrameRestorer:
         # El escalador toma el device despues: el runner ya corrio su canario y retiene su sesion.
         upscale = None if upscaler_factory is None else upscaler_factory()
         return build_composed_stage(runner, upscale, osd_boxes=boxes, describe_restore=runner.report)
+
+    def model_file(self, model_id: str, precision: str) -> tuple[RestoreModelSpec, Path]:
+        return self._engine.model_spec(model_id), self._engine.model_file(model_id, precision)

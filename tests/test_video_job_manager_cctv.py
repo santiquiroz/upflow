@@ -28,9 +28,11 @@ from app.services.cctv_ingest import (
 from app.services.cctv_clarify_runner import ClarifyThreads, ClarifyTools
 from app.services.cctv_ingest import VerifiedCopyMismatch
 from app.services.cctv_job_runner import CctvClarifyRunner, CctvRunnerConfig, build_cctv_runners
+from app.services.cctv_job_validation import AiUpscaleChoice, cpu_eta_seconds, duration_text
 from app.services.cctv_report import load_report
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.ffmpeg_capabilities import FfmpegCapabilities
+from app.services.ffmpeg_filters import FrameGeometry
 from app.services.frame_export import StillFrameError
 from app.services.handover_package import check_files_unchanged
 from app.services.media_signature import MATROSKA
@@ -635,3 +637,149 @@ async def test_real_roi_fusion_jobs_write_the_still_the_agreement_map_and_the_re
     assert roi_file(face_dir, face_job, "fused").name == "roi_fused_x3.png"
     assert {"key": "cctv.roi.densityFace", "params": {"px": 32}} in face_job.metadata["cctv"]["roi"]["notices"]
     assert face_report.case.case_label == "Caso 9"
+
+
+# --- Carril IA: GPU obligatoria y reescaladores del stream (spec §4.7 puntos 5 y 7) ---
+
+AI_UPSCALE = CctvStep("ai_upscale", {})
+
+
+class FakeDevices:
+    def __init__(self, gpus: tuple[str, ...] = ("dml:0",), unhealthy: frozenset[str] = frozenset()) -> None:
+        self.gpus = gpus
+        self.unhealthy = unhealthy
+
+    def list_devices(self) -> list[dict]:
+        gpus = [{"id": gpu, "kind": "gpu", "name": f"GPU {gpu}", "backend": "directml"} for gpu in self.gpus]
+        return [{"id": "cpu", "kind": "cpu", "name": "CPU", "backend": "cpu"}, *gpus]
+
+    def is_healthy(self, device_id: str) -> bool:
+        return device_id not in self.unhealthy
+
+    def validate(self, device_id: str) -> dict:
+        match = next((device for device in self.list_devices() if device["id"] == device_id), None)
+        if match is None:
+            raise ValueError(f"Unknown device id: {device_id!r}")
+        return match
+
+
+class EnhanceUpscaler(FakeUpscaler):
+    def __init__(self, installed: frozenset[tuple[str, int]] = frozenset()) -> None:
+        super().__init__(("enhance",))
+        self.installed = installed
+
+    def cctv_upscale_ready(self, model_id: str, scale: int) -> bool:
+        return (model_id, scale) in self.installed
+
+
+def make_ai_manager(
+    tmp_path: Path, devices: FakeDevices | None = None, installed: frozenset[tuple[str, int]] = frozenset()
+) -> VideoJobManager:
+    settings = make_settings(tmp_path)
+    manager = VideoJobManager(
+        settings,
+        EnhanceUpscaler(installed),
+        FakeMediaTools(),
+        DeviceSemaphores(settings),
+        devices=devices,
+        cctv_capabilities=lambda: CAPS,
+    )
+    write_fake_session(settings)
+    return manager
+
+
+def enhance(*steps: CctvStep) -> CctvOptions:
+    return clarify(task="enhance", steps=steps)
+
+
+async def rejected_upscale(manager: VideoJobManager, choice: AiUpscaleChoice, *steps: CctvStep) -> CctvChainError:
+    with pytest.raises(CctvChainError) as caught:
+        await manager.create_cctv_job(cctv=enhance(*steps), device="dml:0", upscale=choice)
+    return caught.value
+
+
+async def test_the_ai_lane_on_the_cpu_is_rejected_with_the_cpu_eta(manager: VideoJobManager) -> None:
+    error = await rejected(manager, clarify(task="enhance", steps=()), device="cpu")
+
+    assert error.code == "cctv.ai.cpuBlocked"
+    assert "about 1 min" in str(error) and "15 s per 1080p frame" in str(error)
+
+
+def test_the_cpu_eta_of_a_minute_of_1080p_is_hours() -> None:
+    assert duration_text(cpu_eta_seconds(FrameGeometry(1920, 1080), 25 * 60)) == "about 6.2 h"
+
+
+async def test_auto_in_the_ai_lane_resolves_to_the_first_healthy_gpu(tmp_path: Path) -> None:
+    manager = make_ai_manager(tmp_path, FakeDevices(("dml:0", "dml:1"), unhealthy=frozenset({"dml:0"})))
+
+    job = await manager.create_cctv_job(cctv=enhance(), device="auto")
+
+    assert job.device == "dml:1"
+
+
+async def test_auto_in_the_ai_lane_without_a_gpu_is_cpu_blocked(tmp_path: Path) -> None:
+    manager = make_ai_manager(tmp_path, FakeDevices(gpus=()))
+
+    error = await rejected(manager, enhance(), device="auto")
+
+    assert error.code == "cctv.ai.cpuBlocked"
+
+
+async def test_an_unhealthy_gpu_is_refused_by_the_ai_lane(tmp_path: Path) -> None:
+    manager = make_ai_manager(tmp_path, FakeDevices(unhealthy=frozenset({"dml:0"})))
+
+    error = await rejected(manager, enhance(), device="dml:0")
+
+    assert error.code == "cctv.ai.cpuBlocked" and "dml:0" in str(error)
+
+
+@pytest.mark.parametrize(
+    ("choice", "fragment"),
+    [
+        (AiUpscaleChoice(), "needs a model"),
+        (AiUpscaleChoice("realesr-animevideov3", None), "scale of 2, 3 or 4"),
+        (AiUpscaleChoice("realesr-animevideov3", 1), "scale of 2, 3 or 4"),
+    ],
+)
+async def test_ai_upscale_needs_a_model_and_a_scale(tmp_path: Path, choice: AiUpscaleChoice, fragment: str) -> None:
+    error = await rejected_upscale(make_ai_manager(tmp_path), choice, AI_UPSCALE)
+
+    assert error.code == "cctv.error.aiUpscaleModel" and fragment in str(error)
+
+
+@pytest.mark.parametrize(
+    "choice",
+    [AiUpscaleChoice("someone/hf-upscaler", 2), AiUpscaleChoice("realesr-animevideov3-x2", 4)],
+)
+async def test_ai_upscale_refuses_models_the_stream_cannot_run(tmp_path: Path, choice: AiUpscaleChoice) -> None:
+    installed = frozenset({(choice.model_id, choice.scale)})
+
+    error = await rejected_upscale(make_ai_manager(tmp_path, installed=installed), choice, AI_UPSCALE)
+
+    assert error.code == "cctv.error.aiUpscaleModel" and "ncnn and Hugging Face" in str(error)
+
+
+async def test_ai_upscale_without_its_onnx_export_installed_is_rejected(tmp_path: Path) -> None:
+    choice = AiUpscaleChoice("realesr-animevideov3", 2)
+
+    error = await rejected_upscale(make_ai_manager(tmp_path), choice, AI_UPSCALE)
+
+    assert error.code == "cctv.error.aiUpscaleModel" and "not installed" in str(error)
+
+
+async def test_a_model_without_the_ai_upscale_step_is_rejected(tmp_path: Path) -> None:
+    manager = make_ai_manager(tmp_path, installed=frozenset({("realesr-animevideov3", 2)}))
+
+    error = await rejected_upscale(manager, AiUpscaleChoice("realesr-animevideov3", 2))
+
+    assert error.code == "cctv.error.aiUpscaleModel"
+
+
+async def test_ai_upscale_with_a_stream_model_carries_the_model_and_scale_into_the_job(tmp_path: Path) -> None:
+    manager = make_ai_manager(tmp_path, installed=frozenset({("realesrgan-x4plus", 3)}))
+
+    job = await manager.create_cctv_job(
+        cctv=enhance(AI_UPSCALE), device="dml:0", upscale=AiUpscaleChoice("realesrgan-x4plus", 3)
+    )
+
+    assert (job.model_id, job.scale, job.model_name) == ("realesrgan-x4plus", 3, "cctv-enhance")

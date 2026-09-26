@@ -158,3 +158,33 @@ def test_cctv_enhance_metadata_records_the_stream_and_keeps_the_admission_fields
     assert metadata["restore"]["model"] == "drunet-deblock-color-u8" and metadata["restore"]["ioBinding"] is True
     assert metadata["outputs"] == {"enhanced": "02_processed/enhanced.mp4"}
     assert metadata["warnings"] == ["cctv.lite"]
+
+
+LEVELS = {"id": "levels", "params": {"filter": "eq", "gamma": 1.2}}
+SCALE = {"id": "scale", "params": {"filter": "scale", "factor": 2}}
+SHARPEN = {"id": "sharpen", "params": {"filter": "cas", "strength": 0.4}}
+
+
+def test_cctv_ai_lane_puts_levels_scale_and_sharpen_after_the_ai_in_catalog_order() -> None:
+    plan = build(SHARPEN, SCALE, DEBLOCK, LEVELS, scale=2)
+
+    assert plan.encode_filters == (
+        "eq=brightness=0.0:contrast=1.0:gamma=1.2:saturation=1.0",
+        "scale=w=iw*2:h=ih*2:flags=neighbor+accurate_rnd+full_chroma_int+bitexact",
+        "cas=strength=0.4",
+    )
+    assert plan.prefilter_args == ()
+
+
+def test_cctv_ai_lane_encoded_size_follows_the_classic_scale_after_the_ai_upscale() -> None:
+    plan = build(CROP, DEBLOCK, UPSCALE, SCALE, scale=2)
+
+    assert plan.output_size == (640, 480)
+    assert plan.encoded_size == (1280, 960)
+
+
+def test_cctv_ai_label_never_becomes_an_ffmpeg_filter_of_the_chain() -> None:
+    plan = build(DEBLOCK)
+
+    assert plan.encode_filters == ()
+    assert plan.encoded_size == plan.output_size == (704, 576)

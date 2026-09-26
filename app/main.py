@@ -42,6 +42,7 @@ from app.services.engines.roformer_separator import RoformerSeparator
 from app.services.engines.umx_separator import UmxSeparator
 from app.services.engines.vr_deecho_separator import VrDeEchoSeparator
 from app.services.engines.onnx_upscaler import OnnxUpscaler
+from app.services.engines.frame_restorer import FrameRestorer
 from app.services.engines.photo_restore_engine import PhotoRestoreEngine
 from app.services.engines.onnx_video_upscaler import OnnxVideoUpscaler
 from app.services.engines.realesrgan_ncnn import RealEsrganNcnnEngine
@@ -188,6 +189,8 @@ async def lifespan(app: FastAPI):
         onnx_video_engine=onnx_video_engine,
         devices=devices_service,
         cctv_runners=build_cctv_runners(settings),
+        # Carril IA de CCTV: la etapa compuesta comparte el unico dueno de las sesiones de restauracion.
+        frame_restorer=FrameRestorer(photo_restore_engine),
     )
     video_job_manager = VideoJobManager(
         settings,

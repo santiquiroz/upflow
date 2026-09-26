@@ -7,19 +7,44 @@ import logging
 import os
 import shutil
 import threading
-from collections.abc import AsyncIterator, Callable, Iterator, Mapping
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import cv2
 import numpy as np
 
-from app.config import GMFSS_ENGINE, Settings
-from app.models import VideoUpscaleJob
+from app.config import GMFSS_ENGINE, MODEL_CATALOG, Settings
+from app.core.version import get_app_version
+from app.models import VideoUpscaleJob, utc_now
 from app.services.classic_upscalers import is_classic_upscaler, swscale_flag_for
 from app.services.target_resolution import plan_for_scale, plan_for_target
 from app.services import video_encoders
-from app.services.cctv_chain import ResolvedStep, ai_lane_plan
+from app.services.cctv_ai_models import catalog_generative
+from app.services.cctv_chain import AiLanePlan, ResolvedStep, ai_lane_plan
+from app.services.cctv_clarify_runner import ClarifyTools
+from app.services.cctv_enhance_finish import (
+    EnhanceContext,
+    EnhanceFinishTools,
+    EnhanceOutputs,
+    finish_enhance,
+    finished_json,
+    with_finished,
+)
+from app.services.cctv_enhance_outputs import (
+    AUDIO_LABEL,
+    EnhanceLabel,
+    EnhanceRuns,
+    ModelFile,
+    labeled_size,
+    onnx_runtime_info,
+    process_run,
+    restore_model_file,
+    stream_runs,
+    upscale_json,
+    upscaler_model_file,
+    write_enhance_label,
+)
 from app.services.cctv_enhance_plan import (
     AI_LANE,
     EnhancePlan,
@@ -35,7 +60,10 @@ from app.services.cctv_enhance_plan import (
 from app.services.cctv_ingest import MediaTools as CctvMediaTools
 from app.services.cctv_job_runner import IngestedSource, ingest_job_source
 from app.services.cctv_job_validation import resolve_steps
+from app.services.cctv_report import HostFacts, ProcessRun, host_facts
+from app.services.cctv_report_model import GpuInfo
 from app.services.cctv_session import cctv_job_dir
+from app.services.ffmpeg_capabilities import cached_capabilities
 from app.services.backend_registry import (
     UpscaleBackend,
     ncnn_produces_correct_output,
@@ -162,6 +190,7 @@ UPSCALE_STAGE = "upscaling_frames"
 CCTV_ENHANCE_TASK = "enhance"
 CCTV_ENHANCE_STAGE = "restoring_frames"
 CCTV_AUDIO_NAME = "audio.m4a"
+CCTV_LABEL_DIRNAME = "label"
 
 
 # Not a SubprocessTimeoutError: a stall is "hung, no new output", not
@@ -273,6 +302,10 @@ class VideoUpscaler:
         if task == CCTV_ENHANCE_TASK:
             return self.frame_restorer is not None
         return task in self.cctv_runners
+
+    def cctv_upscale_ready(self, model_id: str, scale: int) -> bool:
+        engine = self.onnx_video_engine
+        return engine is not None and engine.builtin_onnx_available(model_id, scale)
 
     @staticmethod
     def _unavailable_message(job: VideoUpscaleJob) -> str:
@@ -417,49 +450,62 @@ class VideoUpscaler:
         on_stage = functools.partial(apply_video_stage_fraction, job)
         source = await ingest_job_source(self._cctv_media_tools(), job_dir, work_dir, on_stage)
         plan = build_enhance_plan(lane, enhance_source(source), job.cctv.osd_boxes, job.scale)
+        label_dir = work_dir / CCTV_LABEL_DIRNAME
+        label = await asyncio.to_thread(write_enhance_label, label_dir, plan, self._app_version(), job.id)
         # Se encodea en video-work y se mueve al final: un job que falla no deja un video a medias en outputs.
         encoded = enhanced_output_path(work_dir, job.output_container)
-        audio_mux_path, audio_codec_args = await self._cctv_audio(job, source, lane.decode, work_dir)
-        command = await self._cctv_encode_command(job, plan, encoded, audio_mux_path, audio_codec_args)
-        report = await self._run_cctv_stream(job, plan, source.work, command, encoded)
+        audio_mux_path, audio_codec_args, audio_run = await self._cctv_audio(job, source, lane.decode, work_dir)
+        command = await self._cctv_encode_command(job, plan, label, encoded, audio_mux_path, audio_codec_args)
+        frame_source = self._cctv_frame_source(plan, source.work)
+        started = utc_now()
+        report = await self._run_cctv_stream(job, plan, frame_source, command, encoded)
+        frames = (plan.frames_in, job.metadata["framesTotal"])
+        runs = stream_runs(frame_source.build_command(), command, (started, utc_now()), frames, audio_run)
         output_path = place_file(encoded, enhanced_output_path(job_dir / PROCESSED_DIRNAME, job.output_container))
-        self._stamp_cctv_enhance(job, plan, source, report, output_path.relative_to(job_dir).as_posix())
+        context = self._enhance_context(job, lane, plan, source, output_path, label, runs, report)
+        outputs = await finish_enhance(self._enhance_finish_tools(job.device), context, on_stage)
+        self._stamp_cctv_enhance(job, context, report, outputs)
         return output_path
+
+    def _app_version(self) -> str:
+        return get_app_version(self.settings.update_package_name)
 
     def _cctv_media_tools(self) -> CctvMediaTools:
         return CctvMediaTools(self.settings.ffmpeg_binary_path, self.settings.ffprobe_binary_path)
 
     async def _cctv_audio(
         self, job: VideoUpscaleJob, source: IngestedSource, decode: tuple[ResolvedStep, ...], work_dir: Path
-    ) -> tuple[Path | None, list[str]]:
+    ) -> tuple[Path | None, list[str], ProcessRun | None]:
         if not job.keep_audio or not source.ingest.audio:
-            return None, []
+            return None, [], None
         audio_path = work_dir / CCTV_AUDIO_NAME
         atrim = audio_trim(decode, source.frames)
-        await self._run_process(build_audio_command(self.settings.ffmpeg_binary_path, source.work, atrim, audio_path))
-        return self._usable_audio_or_none(audio_path), ["-c:a", "copy"]
+        command = build_audio_command(self.settings.ffmpeg_binary_path, source.work, atrim, audio_path)
+        started = utc_now()
+        await self._run_process(command)
+        run = process_run(AUDIO_LABEL, command, (started, utc_now()), (None, None))
+        return self._usable_audio_or_none(audio_path), ["-c:a", "copy"], run
 
     async def _cctv_encode_command(
         self,
         job: VideoUpscaleJob,
         plan: EnhancePlan,
+        label: EnhanceLabel,
         output_path: Path,
         audio_mux_path: Path | None,
         audio_codec_args: list[str],
     ) -> list[str]:
-        width, height = plan.output_size
-        encoder = await asyncio.to_thread(self._resolve_video_encoder, job, width, height)
+        # El encoder se elige para el cuadro final: los pasos post-IA y la banda cambian el tamaño.
+        encoder = await asyncio.to_thread(self._resolve_video_encoder, job, *labeled_size(plan, label))
         job.metadata["videoEncoder"] = encoder
+        width, height = plan.output_size
         return self._build_rawpipe_command(
-            width, height, plan.rate_text, audio_mux_path, audio_codec_args, output_path, job, encoder
-        )
+            width, height, plan.rate_text, audio_mux_path, audio_codec_args, output_path, job, encoder,
+            video_filter_args=label.args,
+        )  # fmt: skip
 
-    async def _run_cctv_stream(
-        self, job: VideoUpscaleJob, plan: EnhancePlan, work: Path, command: list[str], output_path: Path
-    ) -> ComposedStageReport:
-        advance_video_stage(job, CCTV_ENHANCE_STAGE)
-        job.metadata["framesTotal"] = plan.frames_in
-        source = FfmpegFrameSource(
+    def _cctv_frame_source(self, plan: EnhancePlan, work: Path) -> FfmpegFrameSource:
+        return FfmpegFrameSource(
             self.settings.ffmpeg_binary_path,
             work,
             plan.decoded.width,
@@ -468,6 +514,17 @@ class VideoUpscaler:
             plan.rate_text,
             prefilter_args=plan.prefilter_args,
         )
+
+    async def _run_cctv_stream(
+        self,
+        job: VideoUpscaleJob,
+        plan: EnhancePlan,
+        source: FfmpegFrameSource,
+        command: list[str],
+        output_path: Path,
+    ) -> ComposedStageReport:
+        advance_video_stage(job, CCTV_ENHANCE_STAGE)
+        job.metadata["framesTotal"] = plan.frames_in
         counter = {"n": 0}
         cancel_event = threading.Event()
         blocking = functools.partial(self._run_cctv_stream_blocking, job, plan, source, command, counter, cancel_event)
@@ -573,22 +630,79 @@ class VideoUpscaler:
             raise RuntimeError("AI upscale needs the ONNX video engine.")
         ring = derive_readback_ring_capacity(maxsizes[-1], 1)
         engine = self.onnx_video_engine
-        return lambda: engine.build_frame_upscaler(job.model_name, device, plan.upscale, readback_ring_capacity=ring)
+        return lambda: engine.build_frame_upscaler(job.model_id, device, plan.upscale, readback_ring_capacity=ring)
 
-    def _stamp_cctv_enhance(
+    def _enhance_context(
         self,
         job: VideoUpscaleJob,
+        lane: AiLanePlan,
         plan: EnhancePlan,
         source: IngestedSource,
+        enhanced: Path,
+        label: EnhanceLabel,
+        runs: EnhanceRuns,
         report: ComposedStageReport,
-        enhanced: str,
+    ) -> EnhanceContext:
+        return EnhanceContext(
+            job_id=job.id,
+            options=job.cctv,
+            lane=lane,
+            plan=plan,
+            source=source,
+            job_dir=cctv_job_dir(self.settings.outputs_path, job.id),
+            enhanced=enhanced,
+            frames_out=job.metadata["framesTotal"],
+            label=label,
+            runs=runs,
+            models={**self._restore_model(report), **self._upscaler_model(job, plan)},
+            generative=plan.upscale > 1 and catalog_generative(MODEL_CATALOG, job.model_id),
+            app_version=self._app_version(),
+        )
+
+    def _restore_model(self, report: ComposedStageReport) -> dict[str, ModelFile]:
+        restore = report.restore
+        if restore is None or self.frame_restorer is None:
+            return {}
+        spec, path = self.frame_restorer.model_file(restore.model_id, restore.precision)
+        return {"ai_deblock": restore_model_file(spec, path)}
+
+    def _upscaler_model(self, job: VideoUpscaleJob, plan: EnhancePlan) -> dict[str, ModelFile]:
+        if plan.upscale == 1:
+            return {}
+        precision = getattr(self.onnx_video_engine, "last_precision", None)
+        onnx_dir = self.settings.builtin_onnx_path
+        return {"ai_upscale": upscaler_model_file(job.model_id, plan.upscale, precision, onnx_dir, MODEL_CATALOG)}
+
+    def _enhance_finish_tools(self, device: str | None) -> EnhanceFinishTools:
+        ffmpeg, ffprobe = self.settings.ffmpeg_binary_path, self.settings.ffprobe_binary_path
+        return EnhanceFinishTools(
+            media=self._cctv_media_tools(),
+            stills=ClarifyTools(ffmpeg, ffprobe),
+            capabilities=functools.partial(cached_capabilities, ffmpeg),
+            host=functools.partial(self._enhance_host, device),
+        )
+
+    def _enhance_host(self, device: str | None) -> HostFacts:
+        return host_facts(self._gpu_info(device), onnx_runtime_info())
+
+    def _gpu_info(self, device: str | None) -> tuple[GpuInfo, ...]:
+        if self.devices is None:
+            return ()
+        return tuple(GpuInfo(name=info["name"]) for info in self.devices.list_devices() if info["id"] == device)
+
+    def _stamp_cctv_enhance(
+        self, job: VideoUpscaleJob, context: EnhanceContext, report: ComposedStageReport, outputs: EnhanceOutputs
     ) -> None:
+        plan, source = context.plan, context.source
         base = {**job.metadata.get("cctv", {}), "task": job.cctv.task, **source_json(source.record)}
         stream = stream_json(plan, report, job.metadata["framesTotal"])
-        job.metadata["cctv"] = enhance_metadata(base, stream, enhanced, source.ingest.warnings)
+        enhanced = context.enhanced.relative_to(context.job_dir).as_posix()
+        metadata = enhance_metadata(base, stream, enhanced, source.ingest.warnings)
+        upscale = upscale_json(job.model_id, plan.upscale, context.generative)
+        job.metadata["cctv"] = with_finished(metadata, finished_json(context, outputs), upscale)
         job.metadata["streamPipeline"] = True
         job.metadata["outputFps"] = plan.rate_text
-        job.metadata["outputWidth"], job.metadata["outputHeight"] = plan.output_size
+        job.metadata["outputWidth"], job.metadata["outputHeight"] = labeled_size(plan, context.label)
         complete_video_stages(job)
 
     async def _interpolate_and_upscale(
@@ -1958,6 +2072,7 @@ class VideoUpscaler:
         output_path: Path,
         job: VideoUpscaleJob,
         encoder: str,
+        video_filter_args: Sequence[str] | None = None,
     ) -> list[str]:
         # Upscaled frames are RGB HWC uint8 (see OnnxVideoUpscaler / frame_workers.load_frame),
         # so the raw input is rgb24 at the upscaled size.
@@ -1998,7 +2113,8 @@ class VideoUpscaler:
         # metadata, la API y la vista previa del frontend mentian sobre el resultado.
         # Los frames que entran por el pipe ya vienen en fuente*escala, que es
         # exactamente lo que _resize_filter_args toma como punto de partida.
-        cmd += self._resize_filter_args(job)
+        # El carril IA de CCTV trae su propio -vf (pasos post-IA y banda) y su -metadata.
+        cmd += self._resize_filter_args(job) if video_filter_args is None else list(video_filter_args)
 
         cmd += self._build_video_encode_options(job, encoder)
         if audio_mux_path is not None:

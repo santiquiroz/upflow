@@ -12,7 +12,7 @@ import json
 import platform
 import sys
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, tzinfo
 from pathlib import Path
 from typing import Any
@@ -109,6 +109,11 @@ SAME_BUILD = Limitation(
     "Identical results need the same ffmpeg build (sha256 above) and the same CPU features.",
 )
 AI_DETAIL = Limitation("cctv.limitation.aiDetail", "AI model may add detail not present in the source.")
+GENERATIVE_UPSCALE = Limitation(
+    "cctv.limitation.generativeUpscale",
+    "The AI upscaler is generative: it invents texture and can invent facial features or plate characters "
+    "that were never recorded.",
+)
 CLOCK_OFFSET = Limitation("cctv.limitation.clockOffsetUserReported", "Recorder clock offset is user-reported.")
 
 
@@ -124,6 +129,12 @@ class ProcessRun:
     exit_code: int
     frames_in: int | None = None
     frames_out: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class StepRun:
+    run: ProcessRun
+    engine: EngineInfo
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,6 +180,8 @@ class ReportParts:
     extra_limitations: tuple[Limitation, ...] = ()
     warnings: tuple[str, ...] = ()
     roi: Mapping[str, Any] | None = None
+    # Carril IA: cada paso con el proceso y el motor que lo corrieron; sin entrada, el del carril clasico.
+    step_runs: Mapping[str, StepRun] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -297,10 +310,14 @@ def report_step(
 
 
 def chain_steps(
-    chain: Sequence[ResolvedStep], run: ProcessRun, engine: EngineInfo, local_tz: tzinfo | None
+    chain: Sequence[ResolvedStep], runs: Mapping[str, StepRun], default: StepRun, local_tz: tzinfo | None
 ) -> list[ReportStep]:
     # En el carril clasico toda la cadena corre en un solo ffmpeg: cada paso lleva ese argv.
-    return [report_step(index, step, run, engine, local_tz) for index, step in enumerate(chain)]
+    executions = [runs.get(step.id, default) for step in chain]
+    return [
+        report_step(index, step, execution.run, execution.engine, local_tz)
+        for index, (step, execution) in enumerate(zip(chain, executions))
+    ]
 
 
 def process_info(run: ProcessRun, local_tz: tzinfo | None) -> ProcessInfo:
@@ -423,7 +440,7 @@ def build_report(parts: ReportParts, tools: ReportTools = ReportTools()) -> Cctv
         acquisition=parts.acquisition,
         osd=OsdInfo.model_validate(parts.osd),
         trim=trim_info(parts.chain, frames),
-        steps=chain_steps(parts.chain, parts.chain_run, ffmpeg_engine(parts.caps), tz),
+        steps=chain_steps(parts.chain, parts.step_runs, StepRun(parts.chain_run, ffmpeg_engine(parts.caps)), tz),
         processes=[process_info(run, tz) for run in parts.processes],
         outputs=[output_file(output, base, tools.hash_file) for output in parts.outputs],
         stills=[still_pair_info(pair, base) for pair in parts.stills],

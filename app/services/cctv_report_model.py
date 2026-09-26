@@ -32,6 +32,7 @@ OutputRole = Literal[
     "roi-reference",
     "roi-agreement",
     "roi-stack",
+    "ai-visualization",
 ]
 
 SHA256_PATTERN = r"^[0-9a-f]{64}$"

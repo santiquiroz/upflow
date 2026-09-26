@@ -8,17 +8,18 @@ convierte en 400. El manager solo junta los hechos y llama a `plan_cctv_job`.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from typing import Any
 
 from pydantic import ValidationError
 
 from app.models import CctvOptions, RoiFusionRequest
+from app.services.cctv_ai_models import AI_UPSCALE_SCALES, runs_in_stream
 from app.services.cctv_chain import CctvChainError, Lane, ResolvedStep, steps_from_request
 from app.services.cctv_presets import preset_spec
 from app.services.cctv_report_model import Acquisition, CaseInfo
-from app.services.devices_service import CPU_DEVICE_ID
+from app.services.devices_service import AUTO_DEVICE_ID, CPU_DEVICE_ID
 from app.services.ffmpeg_capabilities import (
     FILTER_UNAVAILABLE,
     FfmpegCapabilities,
@@ -35,6 +36,7 @@ TASK_UNAVAILABLE = "cctv.error.taskUnavailable"
 MODE_UNAVAILABLE = "cctv.error.modeUnavailable"
 AI_CPU_BLOCKED = "cctv.ai.cpuBlocked"
 AI_PACK_MISSING = "cctv.error.aiPackMissing"
+AI_UPSCALE_MODEL = "cctv.error.aiUpscaleModel"
 TRIM_OUT_OF_RANGE = "cctv.error.trimOutOfRange"
 INVALID_ACQUISITION = "cctv.error.invalidCaseDetails"
 ROI_REQUIRED = "cctv.error.roiRequired"
@@ -52,11 +54,29 @@ OSD_STEP = "osd_protect"
 TRIM_STEP = "trim"
 AI_DEBLOCK_STEP = "ai_deblock"
 AI_DEBLOCK_PACK = "restore-core"
+AI_UPSCALE_STEP = "ai_upscale"
+# Derivado en spec §4.7 punto 7, sin medir: DRUNet en CPU tarda unos 15 s por cuadro 1080p.
+CPU_SECONDS_PER_1080P_FRAME = 15.0
+PIXELS_1080P = 1920 * 1080
+SECONDS_PER_HOUR = 3600
 ROI_SCALES = frozenset({2, 3, 4})
 ROI_KINDS = frozenset({"plate", "face_or_object"})
 ROI_METHODS = frozenset({"median", "trimmed_mean"})
 # Antes del denoise temporal, que correlaciona los cuadros (spec §4.9 paso 2).
 ROI_PREFILTER_STEPS = frozenset({"deinterlace", "deblock"})
+
+
+def no_stream_upscaler(model_id: str, scale: int) -> bool:
+    return False
+
+
+@dataclass(frozen=True, slots=True)
+class AiUpscaleChoice:
+    model_id: str | None = None
+    scale: int | None = None
+
+
+NO_UPSCALE = AiUpscaleChoice()
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +88,9 @@ class CctvJobFacts:
     task_available: bool
     max_still_frames: int
     max_roi_frames: int
+    # GPU sanas que ve DevicesService; None = no hay servicio de devices para enumerarlas.
+    gpu_devices: tuple[str, ...] | None = None
+    stream_upscaler_ready: Callable[[str, int], bool] = field(default=no_stream_upscaler)
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +103,7 @@ class CctvJobPlan:
     acquisition: Acquisition
     case: CaseInfo
     device: str | None
+    upscale: AiUpscaleChoice = NO_UPSCALE
 
 
 # --- Tarea, carril y device ---
@@ -149,7 +173,9 @@ def check_filters_available(steps: Sequence[ResolvedStep], caps: FfmpegCapabilit
 
 
 def check_geometry(steps: Sequence[ResolvedStep], geometry: FrameGeometry) -> None:
-    output_dims_after(steps, geometry.width, geometry.height, geometry.sar)
+    # El factor de ai_upscale sale de la escala del job y no puede invalidar la geometria: el recorte va antes.
+    sized = [step for step in steps if step.id != AI_UPSCALE_STEP]
+    output_dims_after(sized, geometry.width, geometry.height, geometry.sar)
 
 
 # --- Recorte y cuadros ---
@@ -233,9 +259,51 @@ def check_roi_steps(task: str, steps: Sequence[ResolvedStep]) -> None:
 # --- Carril IA ---
 
 
-def check_ai_device(device: str | None) -> None:
+def planned_frames(steps: Sequence[ResolvedStep], frame_count: int) -> int:
+    trim = next((step for step in steps if step.id == TRIM_STEP), None)
+    if trim is None:
+        return frame_count
+    last = min(int(trim.params["end_frame"]), frame_count - 1)
+    return max(0, last - int(trim.params["start_frame"]) + 1)
+
+
+def cpu_eta_seconds(geometry: FrameGeometry, frames: int) -> float:
+    return frames * CPU_SECONDS_PER_1080P_FRAME * geometry.width * geometry.height / PIXELS_1080P
+
+
+def duration_text(seconds: float) -> str:
+    if seconds >= SECONDS_PER_HOUR:
+        return f"about {seconds / SECONDS_PER_HOUR:.1f} h"
+    return f"about {max(1, round(seconds / 60))} min"
+
+
+def cpu_blocked(eta_seconds: float) -> CctvChainError:
+    return CctvChainError(
+        AI_CPU_BLOCKED,
+        "AI enhancement needs a GPU; it is not available on the CPU. On the CPU this clip would take "
+        f"{duration_text(eta_seconds)} (about {CPU_SECONDS_PER_1080P_FRAME:g} s per 1080p frame).",
+    )
+
+
+def unhealthy_gpu(device: str) -> CctvChainError:
+    return CctvChainError(AI_CPU_BLOCKED, f"AI enhancement needs a working GPU; {device!r} is not available.")
+
+
+def first_gpu(gpus: tuple[str, ...] | None, eta_seconds: float) -> str:
+    if not gpus:
+        raise cpu_blocked(eta_seconds)
+    return gpus[0]
+
+
+def ai_device(device: str | None, gpus: tuple[str, ...] | None, eta_seconds: float) -> str:
     if device is None or device == CPU_DEVICE_ID:
-        raise CctvChainError(AI_CPU_BLOCKED, "AI enhancement needs a GPU; it is not available on the CPU.")
+        raise cpu_blocked(eta_seconds)
+    # "auto" se resuelve aca: el ruteo automatico del manager podria elegir la CPU.
+    if device == AUTO_DEVICE_ID:
+        return first_gpu(gpus, eta_seconds)
+    if gpus is not None and device not in gpus:
+        raise unhealthy_gpu(device)
+    return device
 
 
 def check_ai_packs(steps: Sequence[ResolvedStep], restore_core_installed: bool) -> None:
@@ -244,10 +312,59 @@ def check_ai_packs(steps: Sequence[ResolvedStep], restore_core_installed: bool) 
         raise CctvChainError(AI_PACK_MISSING, missing_pack_message(AI_DEBLOCK_PACK, detail=detail))
 
 
-def check_ai_lane(lane: Lane, steps: Sequence[ResolvedStep], device: str | None, packs_ready: bool) -> None:
-    if lane == "ai":
-        check_ai_device(device)
-        check_ai_packs(steps, packs_ready)
+def ai_lane_device(lane: Lane, steps: Sequence[ResolvedStep], device: str | None, facts: CctvJobFacts) -> str | None:
+    if lane != "ai":
+        return device
+    eta = cpu_eta_seconds(facts.geometry, planned_frames(steps, facts.frame_count))
+    resolved = ai_device(device, facts.gpu_devices, eta)
+    check_ai_packs(steps, facts.restore_core_installed)
+    return resolved
+
+
+def upscale_error(message: str) -> CctvChainError:
+    return CctvChainError(AI_UPSCALE_MODEL, message)
+
+
+def check_no_upscale_choice(choice: AiUpscaleChoice) -> AiUpscaleChoice:
+    if choice.model_id is not None or choice.scale not in (None, 1):
+        raise upscale_error("A model and a scale only apply when the AI upscale step is on.")
+    return NO_UPSCALE
+
+
+def check_upscale_request(choice: AiUpscaleChoice) -> tuple[str, int]:
+    if choice.model_id is None:
+        raise upscale_error("AI upscale needs a model.")
+    if choice.scale not in AI_UPSCALE_SCALES:
+        raise upscale_error("AI upscale needs a scale of 2, 3 or 4.")
+    return choice.model_id, choice.scale
+
+
+def check_upscale_model(model_id: str, scale: int, ready: Callable[[str, int], bool]) -> None:
+    if not runs_in_stream(model_id, scale):
+        raise upscale_error(
+            f"{model_id!r} at {scale}x can't run in the AI lane: only built-in models with an ONNX export for "
+            "that scale run inside its stream (ncnn and Hugging Face models are not supported here)."
+        )
+    if not ready(model_id, scale):
+        raise upscale_error(f"The ONNX export of {model_id!r} at {scale}x is not installed.")
+
+
+def check_ai_upscale(
+    steps: Sequence[ResolvedStep], choice: AiUpscaleChoice, ready: Callable[[str, int], bool]
+) -> AiUpscaleChoice:
+    if not any(step.id == AI_UPSCALE_STEP for step in steps):
+        return check_no_upscale_choice(choice)
+    model_id, scale = check_upscale_request(choice)
+    check_upscale_model(model_id, scale, ready)
+    return AiUpscaleChoice(model_id, scale)
+
+
+def ai_lane_upscale(
+    lane: Lane, steps: Sequence[ResolvedStep], choice: AiUpscaleChoice, facts: CctvJobFacts
+) -> AiUpscaleChoice:
+    if lane != "ai":
+        return NO_UPSCALE
+    return check_ai_upscale(steps, choice, facts.stream_upscaler_ready)
 
 
 # --- Datos del caso ---
@@ -265,12 +382,14 @@ def parse_case_details(options: CctvOptions) -> tuple[Acquisition, CaseInfo]:
 # --- Plan completo ---
 
 
-def plan_cctv_job(options: CctvOptions, facts: CctvJobFacts, device: str | None) -> CctvJobPlan:
+def plan_cctv_job(
+    options: CctvOptions, facts: CctvJobFacts, device: str | None, upscale: AiUpscaleChoice = NO_UPSCALE
+) -> CctvJobPlan:
     lane = lane_for_task(options.task)
     check_preset(options.preset)
     steps = resolve_steps(options, lane)
-    resolved_device = device_for_task(options.task, device)
-    check_ai_lane(lane, steps, resolved_device, facts.restore_core_installed)
+    resolved_device = ai_lane_device(lane, steps, device_for_task(options.task, device), facts)
+    chosen_upscale = ai_lane_upscale(lane, steps, upscale, facts)
     check_mode_available(facts.caps)
     check_filters_available(steps, facts.caps)
     check_osd(options, facts.geometry)
@@ -281,4 +400,4 @@ def plan_cctv_job(options: CctvOptions, facts: CctvJobFacts, device: str | None)
     stills = still_frames_in(options.still_frames, first, last, facts.max_still_frames)
     acquisition, case = parse_case_details(options)
     check_task_available(options.task, facts.task_available)
-    return CctvJobPlan(lane, steps, first, last, stills, acquisition, case, resolved_device)
+    return CctvJobPlan(lane, steps, first, last, stills, acquisition, case, resolved_device, chosen_upscale)

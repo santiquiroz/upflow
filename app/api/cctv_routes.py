@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -23,12 +24,13 @@ from app.api.routes import (
     resolve_request_device,
     video_job_to_response,
 )
-from app.config import Settings, get_settings
+from app.config import MODEL_CATALOG, Settings, get_settings
 from app.exceptions import QueueFullError, QuotaExceededError
 from app.models import JobStatus, VideoUpscaleJob
 from app.schemas import VideoJobResponse
 from app.schemas_cctv import (
     ENHANCE_ONLY,
+    TARGET_HEIGHT_UNSUPPORTED,
     CctvAnalysisJobResponse,
     CctvAnalysisResponse,
     CctvJobRequest,
@@ -37,6 +39,7 @@ from app.schemas_cctv import (
     OsdCheckRequest,
     OsdCheckResponse,
     VerifyFilesResponse,
+    ai_upscale_choice,
     cctv_options,
     enhance_only_fields,
 )
@@ -56,6 +59,7 @@ from app.services.cctv_analysis import (
     staged_upload,
     upload_destination,
 )
+from app.services.cctv_ai_models import export_on_disk, stream_upscale_models
 from app.services.cctv_analysis_jobs import AnalysisSnapshot, CctvAnalysisJobs
 from app.services.cctv_artifacts import ArtifactNotFound, cctv_outputs, is_inline, media_type_for, resolve_artifact
 from app.services.cctv_chain import CctvChainError
@@ -282,7 +286,13 @@ async def get_cctv_analysis(
 @router.get("/cctv/presets", response_model=CctvPresetsResponse)
 async def cctv_presets(settings: Settings = Depends(get_settings)) -> CctvPresetsResponse:
     caps = await current_capabilities(settings)
-    return CctvPresetsResponse.model_validate(presets_payload(caps))
+    models = await asyncio.to_thread(ai_upscale_models_payload, settings)
+    return CctvPresetsResponse.model_validate({**presets_payload(caps), "aiUpscaleModels": models})
+
+
+def ai_upscale_models_payload(settings: Settings) -> list[dict]:
+    installed = functools.partial(export_on_disk, settings.builtin_onnx_path)
+    return [model.to_json() for model in stream_upscale_models(MODEL_CATALOG, installed)]
 
 
 # --- Vista previa y chequeo del OSD ---
@@ -370,6 +380,11 @@ def reject_enhance_only(body: CctvJobRequest) -> None:
     fields = enhance_only_fields(body)
     if fields and body.task != "enhance":
         raise keyed_error(400, ENHANCE_ONLY, f"{', '.join(fields)} only apply to the 'enhance' task.")
+    # La banda del rotulo va despues de todo redimensionado: el ajuste a un alto va en el paso "Resize".
+    if body.target_height is not None:
+        raise keyed_error(
+            400, TARGET_HEIGHT_UNSUPPORTED, "targetHeight is not supported in CCTV; use the Resize step instead."
+        )
 
 
 def job_creation_error(exc: Exception) -> HTTPException:
@@ -402,11 +417,13 @@ async def create_cctv_job(
     device = await resolve_request_device(body.device, devices, settings)
     try:
         job = await video_jobs.create_cctv_job(
-            cctv=cctv_options(body), device=device, owner=current_user_from_request(request)
+            cctv=cctv_options(body),
+            device=device,
+            owner=current_user_from_request(request),
+            upscale=ai_upscale_choice(body),
         )
     except Exception as exc:
         raise job_creation_error(exc) from exc
-    # TODO(P3): modelId, targetHeight y scale del carril IA viajan en CctvOptions cuando entre `enhance`.
     return video_job_to_response(job)
 
 

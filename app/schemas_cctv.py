@@ -15,12 +15,14 @@ from pydantic.alias_generators import to_camel
 
 from app.models import CctvOptions, CctvStep, JobStatus, RoiFusionRequest, VideoUpscaleJob
 from app.services.cctv_artifacts import listed_artifacts
+from app.services.cctv_job_validation import AiUpscaleChoice
 
 MAX_TEXT = 2000
 MAX_STEPS = 32
 MAX_BOXES = 32
 MAX_STILLS = 256
 ENHANCE_ONLY = "cctv.error.enhanceOnly"
+TARGET_HEIGHT_UNSUPPORTED = "cctv.error.targetHeightUnsupported"
 
 BoxIn = tuple[StrictInt, StrictInt, StrictInt, StrictInt]
 AcquisitionValue = str | StrictInt | float
@@ -137,6 +139,7 @@ class CctvPresetsResponse(CamelModel):
     steps: dict[str, list[dict[str, Any]]]
     unavailable_steps: list[str]
     unavailable_filters: list[dict[str, Any]]
+    ai_upscale_models: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class VerifyFilesResponse(CamelModel):
@@ -169,6 +172,10 @@ class CctvSummary(CamelModel):
 def enhance_only_fields(request: CctvJobRequest) -> list[str]:
     fields = {"modelId": request.model_id, "targetHeight": request.target_height, "scale": request.scale}
     return [name for name, value in fields.items() if value is not None]
+
+
+def ai_upscale_choice(request: CctvJobRequest) -> AiUpscaleChoice:
+    return AiUpscaleChoice(request.model_id, request.scale)
 
 
 def cctv_step(step: CctvStepIn) -> CctvStep:

@@ -732,7 +732,8 @@
             "roi-fused",
             "roi-reference",
             "roi-agreement",
-            "roi-stack"
+            "roi-stack",
+            "ai-visualization"
           ],
           "title": "Role",
           "type": "string"

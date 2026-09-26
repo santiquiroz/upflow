@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import subprocess
+from fractions import Fraction
 from pathlib import Path
 
 import numpy as np
@@ -10,6 +11,9 @@ from PIL import Image
 
 from app.config import Settings
 from app.services import label_band as lb
+from app.services.cctv_enhance_outputs import labeled_size, write_enhance_label
+from app.services.cctv_enhance_plan import EnhancePlan
+from app.services.ffmpeg_filters import FrameGeometry
 from app.services.frame_export import StillRequest, StillSource, export_still_pairs
 from app.services.cctv_clarify_runner import ClarifyTools
 from app.services.xmp_packet import (
@@ -285,3 +289,45 @@ async def test_real_ai_still_png_carries_the_band_and_the_xmp(tmp_path: Path) ->
     assert properties["Iptc4xmpExt:DigitalSourceType"] == DIGITAL_SOURCE_COMPOSITE
     original = Image.open(pair.original.path)
     assert original.size == (352, 288) and extract_xmp(original) is None
+
+
+# --- Rotulo del carril IA (encode de _run_cctv_enhance) ---
+
+
+def post_ai_plan() -> EnhancePlan:
+    return EnhancePlan(
+        (),
+        FrameGeometry(160, 120),
+        Fraction(25),
+        10,
+        40,
+        2,
+        (),
+        encode_filters=("eq=gamma=1.2", "scale=w=iw*2:h=ih*2:flags=neighbor"),
+        encoded=FrameGeometry(640, 480),
+    )
+
+
+def test_the_ai_label_is_sized_for_the_post_ai_frame_behind_the_post_ai_filters(tmp_path: Path) -> None:
+    plan = post_ai_plan()
+
+    label = write_enhance_label(tmp_path / "label", plan, VERSION, JOB_ID)
+
+    assert Image.open(label.assets.band).size[0] == 640
+    assert label.args[0] == "-vf"
+    assert label.args[1].startswith("eq=gamma=1.2,scale=w=iw*2:h=ih*2:flags=neighbor,null[lb_image];")
+    assert label.args[2:] == ("-metadata", f"comment={lb.metadata_comment(VERSION, JOB_ID)}")
+    assert labeled_size(plan, label) == (640, 480 + label.assets.band_height)
+    assert label.text == lb.band_text(VERSION, JOB_ID)
+
+
+def test_an_ai_still_with_the_label_burned_in_still_needs_its_xmp(tmp_path: Path) -> None:
+    source = StillSource(tmp_path / "clip.mkv", (0.0,))
+
+    with pytest.raises(ValueError, match="XMP"):
+        StillRequest(source, source, (0,), tmp_path, label_burned_in=True)
+
+    tagged = StillRequest(
+        source, source, (0,), tmp_path, xmp_packet=lb.still_xmp_packet(VERSION, JOB_ID, False), label_burned_in=True
+    )
+    assert tagged.label is None

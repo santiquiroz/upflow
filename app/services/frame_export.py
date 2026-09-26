@@ -198,9 +198,12 @@ class StillRequest:
     retimed: bool = False
     label: LabelAssets | None = None
     xmp_packet: str | None = None
+    # El video del carril IA ya trae la banda quemada: se exporta tal cual, sin una segunda banda.
+    label_burned_in: bool = False
 
     def __post_init__(self) -> None:
-        if (self.label is None) != (self.xmp_packet is None):
+        has_band = self.label is not None or self.label_burned_in
+        if has_band != (self.xmp_packet is not None):
             raise ValueError("AI-lane stills need both the visible band and the XMP packet")
 
 

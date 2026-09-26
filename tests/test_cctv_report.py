@@ -28,6 +28,7 @@ from app.services.cctv_report import (
     AI_DETAIL,
     CLOCK_OFFSET,
     DISCLAIMER_TEXT,
+    GENERATIVE_UPSCALE,
     GUIDELINES_TEXT,
     HASH_SCOPE,
     LOSSY_COPIES,
@@ -39,6 +40,7 @@ from app.services.cctv_report import (
     ProcessRun,
     ReportParts,
     ReportTools,
+    StepRun,
     build_report,
     host_facts,
     load_report,
@@ -53,6 +55,7 @@ from app.services.cctv_report_model import (
     Acquisition,
     CaseInfo,
     CctvReportV1,
+    EngineInfo,
     report_schema,
     report_schema_text,
 )
@@ -512,3 +515,54 @@ def test_parse_sha256sums_rejects_malformed_lines() -> None:
         parse_sha256sums("not a checksum line\n")
     with pytest.raises(ValueError):
         parse_sha256sums(f"{'a' * 63} *file.bin\n")
+
+
+# --- Carril IA: cada paso con su proceso y su motor ---
+
+AI_REQUEST = [
+    {"id": "ai_deblock", "params": {"strength": 40}},
+    {"id": "levels", "params": {"filter": "eq", "gamma": 1.2}},
+]
+DRUNET = EngineInfo(name="onnxruntime", version="1.24.4", model_name="DRUNet", model_sha256="e" * 64, model_license="MIT")
+
+
+def ai_parts(base: Path, **overrides) -> ReportParts:
+    frames_run = ProcessRun("AI lane frames", (), START, START + timedelta(seconds=9), 0, 4, 4)
+    encode_run = ProcessRun("AI lane encode", ("ffmpeg", "-vf", "LABEL", "enhanced.mp4"), START,
+                            START + timedelta(seconds=9), 0, 4, 4)
+    viewing = base / "viewing.mp4"
+    return make_parts(
+        base,
+        mode="ai-visual",
+        chain=steps_from_request(AI_REQUEST, "ai"),
+        chain_run=encode_run,
+        processes=(frames_run, encode_run),
+        outputs=(OutputArtifact(viewing, "ai-visualization", ai_applied=True, visible_label="AI-ENHANCED"),),
+        stills=(),
+        clipping=None,
+        step_runs={"ai_deblock": StepRun(frames_run, DRUNET)},
+        **overrides,
+    )
+
+
+def test_ai_steps_carry_the_model_engine_and_the_process_that_ran_them(tmp_path: Path) -> None:
+    report = build_report(ai_parts(tmp_path), ReportTools(now=lambda: START, local_tz=LOCAL_TZ))
+
+    deblock, levels, label = report.steps
+    assert (deblock.id, deblock.category, deblock.argv) == ("ai_deblock", "ai", [])
+    assert (deblock.engine.model_sha256, deblock.engine.model_license) == ("e" * 64, "MIT")
+    assert (levels.engine.name, levels.argv) == ("ffmpeg", ["ffmpeg", "-vf", "LABEL", "enhanced.mp4"])
+    assert (label.id, label.category, label.argv) == ("ai_label", "label", levels.argv)
+
+
+def test_ai_report_marks_the_visualization_and_a_generative_upscaler(tmp_path: Path) -> None:
+    parts = ai_parts(tmp_path, extra_limitations=(GENERATIVE_UPSCALE,))
+
+    report = build_report(parts, ReportTools(now=lambda: START, local_tz=LOCAL_TZ))
+
+    (output,) = report.outputs
+    assert (output.role, output.ai_applied, output.visible_label) == ("ai-visualization", True, "AI-ENHANCED")
+    keys = limitation_keys(report)
+    assert AI_DETAIL.key in keys and GENERATIVE_UPSCALE.key in keys
+    assert LOSSY_COPIES.key not in keys and SAME_BUILD.key not in keys
+    jsonschema.validate(json.loads(report_json_text(report)), report_schema())

@@ -360,6 +360,9 @@ class PhotoRestoreEngine:
         self._device_health.mark_unhealthy(device)
         self.gpu_coordinator.invalidate_device(device)
 
+    def model_file(self, model_id: str, precision: str) -> Path:
+        return self._model_file(self._models[model_id], precision)
+
     def _model_file(self, spec: RestoreModelSpec, precision: str) -> Path:
         vendored = self._vendored.get(spec.id)
         if vendored is not None:

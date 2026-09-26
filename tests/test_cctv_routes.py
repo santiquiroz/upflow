@@ -662,3 +662,36 @@ def test_the_app_analyzes_a_clip_and_queues_a_job_with_camel_case_json(tmp_path:
     assert job.status_code == 202 and job.json()["cctv"]["task"] == "clarify" and job.json()["cctv"]["noOsd"] is True
     assert status.json()["cctv"]["sourceSha256"] == analysis.json()["sourceSha256"]
     assert loose.status_code == 422
+
+
+# --- Carril IA: modelo, escala y alto de salida ---
+
+
+async def test_a_target_height_in_the_ai_lane_is_rejected_in_favor_of_the_resize_step(tmp_path: Path) -> None:
+    body = job_body(task="enhance", targetHeight=720, device="dml:0")
+
+    error = await rejected(post_job(fake_manager(tmp_path), body))
+
+    assert error.status_code == 400 and error.detail["key"] == "cctv.error.targetHeightUnsupported"
+
+
+async def test_the_ai_upscale_model_and_scale_reach_the_job_validation(tmp_path: Path) -> None:
+    steps = [{"id": "ai_upscale", "params": {}}]
+    body = job_body(task="enhance", steps=steps, modelId="someone/hf-upscaler", scale=2, device="dml:0")
+
+    error = await rejected(post_job(fake_manager(tmp_path), body))
+
+    assert error.status_code == 400 and error.detail["key"] == "cctv.error.aiUpscaleModel"
+
+
+def test_the_presets_list_only_installed_stream_upscalers_with_their_generative_label(tmp_path: Path) -> None:
+    onnx_dir = tmp_path / "onnx"
+    onnx_dir.mkdir()
+    (onnx_dir / "realesrgan-x4plus-x2-uint8.onnx").write_bytes(b"x")
+    settings = Settings(_env_file=None, RUNTIME_DIR=str(tmp_path / "runtime"), BUILTIN_ONNX_DIR=str(onnx_dir))
+
+    models = cctv_routes.ai_upscale_models_payload(settings)
+
+    assert [(model["id"], model["scales"], model["generativeLabel"]) for model in models] == [
+        ("realesrgan-x4plus", [2], "Generative (invents texture)")
+    ]
