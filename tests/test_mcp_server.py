@@ -7,6 +7,7 @@ normalizada de la salida y manejo de errores — no la lógica del servidor.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from urllib.parse import parse_qs
@@ -15,7 +16,11 @@ import httpx
 import pytest
 
 from app.mcp import client as mcp_client
+from app.mcp import headless_tools
 from app.mcp.server import (
+    upflow_cctv_check_unchanged,
+    upflow_cctv_clarify,
+    upflow_cctv_probe,
     upflow_download_result,
     upflow_job_status,
     upflow_list_jobs,
@@ -507,3 +512,215 @@ async def test_restore_photo_runs_in_process_when_the_server_is_down(
     assert seen["file_path"] == str(source)
     assert seen["steps"] == ["tone"]
     assert seen["scale"] == 2
+
+
+# ---------------------------------------------------------------- CCTV
+
+
+CCTV_ANALYSIS = {
+    "token": "tok123",
+    "sourceSha256": "ab" * 32,
+    "video": {"lite": None},
+    "quality": {"interlace": {"interlaced": True}},
+    "suggestedPreset": "day",
+    "modeAvailable": True,
+    "warnings": [],
+}
+
+
+@pytest.fixture
+def server_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(headless_tools.MODE_ENV, raising=False)
+
+
+def step_ids(steps: list[dict]) -> list[str]:
+    return [step["id"] for step in steps]
+
+
+async def test_cctv_probe_waits_for_a_long_analysis_and_adds_the_preset_steps(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, server_mode: None
+) -> None:
+    clip = tmp_path / "camara.mp4"
+    clip.write_bytes(b"clip-bytes")
+    polls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v1/video/cctv/analyze":
+            assert b"clip-bytes" in request.read()
+            return httpx.Response(
+                202,
+                json={"analysisJobId": "an1", "status": "running", "statusUrl": "/api/v1/video/cctv/analysis/an1"},
+            )
+        assert request.url.path == "/api/v1/video/cctv/analysis/an1"
+        polls["n"] += 1
+        status = "completed" if polls["n"] >= 2 else "running"
+        result = CCTV_ANALYSIS if status == "completed" else None
+        return httpx.Response(200, json={"analysisJobId": "an1", "status": status, "statusUrl": "/api/v1/video/cctv/analysis/an1", "result": result})
+
+    install_mock(monkeypatch, handler)
+    monkeypatch.setattr("app.mcp.server.WAIT_POLL_SECONDS", 0.01)
+    result = json.loads(await upflow_cctv_probe(str(clip)))
+
+    assert result["token"] == "tok123" and polls["n"] == 2
+    assert set(result["presetSteps"]) == {"day", "night_ir", "analog", "low_res"}
+    assert "deinterlace" in step_ids(result["presetSteps"]["day"])
+
+
+async def test_cctv_probe_returns_a_short_analysis_directly(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, server_mode: None
+) -> None:
+    clip = tmp_path / "camara.mp4"
+    clip.write_bytes(b"clip")
+    install_mock(monkeypatch, lambda request: httpx.Response(200, json={**CCTV_ANALYSIS, "quality": None}))
+
+    result = json.loads(await upflow_cctv_probe(str(clip)))
+
+    assert result["sourceSha256"] == "ab" * 32
+    assert "deinterlace" not in step_ids(result["presetSteps"]["day"])
+
+
+async def test_cctv_probe_reports_a_failed_analysis_with_its_key(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, server_mode: None
+) -> None:
+    clip = tmp_path / "camara.mp4"
+    clip.write_bytes(b"clip")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v1/video/cctv/analyze":
+            return httpx.Response(202, json={"analysisJobId": "an1", "status": "running", "statusUrl": "/s/an1"})
+        return httpx.Response(
+            200,
+            json={"status": "failed", "statusUrl": "/s/an1", "error": "The file has no video stream.", "errorKey": "cctv.error.noVideoStream"},
+        )
+
+    install_mock(monkeypatch, handler)
+    monkeypatch.setattr("app.mcp.server.WAIT_POLL_SECONDS", 0.01)
+    result = await upflow_cctv_probe(str(clip))
+
+    assert result.startswith("Error") and "cctv.error.noVideoStream" in result
+
+
+async def test_cctv_clarify_posts_the_json_contract_and_keeps_the_cctv_summary(
+    monkeypatch: pytest.MonkeyPatch, server_mode: None
+) -> None:
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/video/cctv/jobs" and request.method == "POST"
+        sent.append(json.loads(request.read()))
+        summary = {"task": "clarify", "sourceSha256": "ab" * 32, "artifacts": [], "verifyUrl": None}
+        return httpx.Response(202, json={"jobId": "v9", "status": "queued", "cctv": summary})
+
+    install_mock(monkeypatch, handler)
+    result = json.loads(
+        await upflow_cctv_clarify(
+            "tok123",
+            preset="day",
+            steps=[{"id": "denoise", "params": {"filter": "hqdn3d"}}, {"id": "deblock"}],
+            osd_boxes=[[0, 0, 96, 24]],
+            osd_confirmed=True,
+            trim=[3, 40],
+            still_frames=[5, 30],
+            acquisition={"recorderMake": "HiLook"},
+        )
+    )
+
+    assert result["jobId"] == "v9" and result["family"] == "video"
+    assert result["cctv"]["sourceSha256"] == "ab" * 32
+    assert sent == [
+        {
+            "token": "tok123",
+            "task": "clarify",
+            "preset": "day",
+            "steps": [{"id": "denoise", "params": {"filter": "hqdn3d"}}, {"id": "deblock", "params": {}}],
+            "osdBoxes": [[0, 0, 96, 24]],
+            "osdBoxesConfirmed": True,
+            "noOsd": False,
+            "trim": [3, 40],
+            "stillFrames": [5, 30],
+            "acquisition": {"recorderMake": "HiLook"},
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "fragment"),
+    [
+        ({"preset": "day"}, "presetSteps"),
+        ({"steps": [], "trim": [1, 2, 3]}, "trim"),
+        ({"steps": ["denoise"]}, "'id'"),
+    ],
+)
+async def test_cctv_clarify_rejects_bad_choices_before_calling_the_api(
+    monkeypatch: pytest.MonkeyPatch, server_mode: None, kwargs: dict, fragment: str
+) -> None:
+    install_mock(monkeypatch, lambda request: pytest.fail("the API must not be called"))
+
+    result = json.loads(await upflow_cctv_clarify("tok123", no_osd=True, **kwargs))
+
+    assert result["ok"] is False and result["code"] == 2 and fragment in result["error"]
+
+
+async def test_cctv_clarify_propagates_the_keyed_api_400(
+    monkeypatch: pytest.MonkeyPatch, server_mode: None
+) -> None:
+    detail = {"key": "cctv.error.osdUnconfirmed", "reason": "Confirm the on-screen text boxes"}
+    install_mock(monkeypatch, lambda request: httpx.Response(400, json={"detail": detail}))
+
+    result = await upflow_cctv_clarify("tok123", steps=[])
+
+    assert result.startswith("Error") and "cctv.error.osdUnconfirmed" in result
+
+
+async def test_cctv_clarify_falls_back_in_process_when_the_server_is_down(
+    monkeypatch: pytest.MonkeyPatch, server_mode: None
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("rechazado")
+
+    seen: list[tuple] = []
+
+    async def inprocess(token, choices, destination_dir=""):
+        seen.append((token, choices.no_osd, destination_dir))
+        return json.dumps({"ok": True, "jobId": "inline"})
+
+    install_mock(monkeypatch, handler)
+    monkeypatch.setattr(headless_tools, "upflow_cctv_clarify_headless", inprocess)
+    result = json.loads(await upflow_cctv_clarify("tok123", steps=[], no_osd=True, destination_dir="C:/caso"))
+
+    assert result["jobId"] == "inline" and seen == [("tok123", True, "C:/caso")]
+
+
+async def test_cctv_check_unchanged_posts_verify(monkeypatch: pytest.MonkeyPatch, server_mode: None) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/video/jobs/v9/verify" and request.method == "POST"
+        return httpx.Response(200, json={"ok": False, "checked": 3, "mismatches": ["02_processed/a.mkv"], "missing": []})
+
+    install_mock(monkeypatch, handler)
+    result = json.loads(await upflow_cctv_check_unchanged("v9"))
+
+    assert result["ok"] is False and result["mismatches"] == ["02_processed/a.mkv"]
+
+
+async def test_cctv_check_unchanged_rejects_a_path_as_job_id(monkeypatch: pytest.MonkeyPatch, server_mode: None) -> None:
+    install_mock(monkeypatch, lambda request: pytest.fail("the API must not be called"))
+
+    result = json.loads(await upflow_cctv_check_unchanged("../v9"))
+
+    assert result["ok"] is False and result["code"] == 2
+
+
+async def test_cctv_check_unchanged_reads_a_moved_folder_in_process(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, server_mode: None
+) -> None:
+    install_mock(monkeypatch, lambda request: pytest.fail("a moved folder is checked without the server"))
+    folder = tmp_path / "v9.cctv"
+    folder.mkdir()
+    (folder / "report.json").write_text("{}", encoding="utf-8")
+    digest = hashlib.sha256(b"{}").hexdigest()
+    (folder / "SHA256SUMS.txt").write_text(f"{digest} *report.json\n", encoding="utf-8")
+    monkeypatch.setattr(headless_tools, "get_context", lambda: pytest.fail("no context needed"))
+
+    result = json.loads(await upflow_cctv_check_unchanged("v9", output_dir=str(folder)))
+
+    assert result["ok"] is True and result["checked"] == 1

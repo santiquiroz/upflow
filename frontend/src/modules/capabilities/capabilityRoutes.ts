@@ -6,6 +6,9 @@ import type { CapabilityResponse } from "../../lib/apiTypes";
 const SURFACE_BY_CAPABILITY: Record<string, string> = {
   "video.upscale": "/enhance/video",
   "video.interpolate": "/enhance/video",
+  // El modo CCTV es un interruptor dentro del panel de video, no otra pantalla.
+  "video.cctv": "/enhance/video?cctv=1",
+  "video.cctvAi": "/enhance/video?cctv=1",
   "image.upscale": "/enhance/image",
   "image.restore": "/enhance/restore",
   "image.restoreModels": "/enhance/restore",

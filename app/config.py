@@ -499,6 +499,8 @@ class Settings(BaseSettings):
     cctv_ffv1_slices: int = Field(default=4, alias="CCTV_FFV1_SLICES")
     cctv_max_still_frames: int = Field(default=20, alias="CCTV_MAX_STILL_FRAMES")
     cctv_roi_max_frames: int = Field(default=60, alias="CCTV_ROI_MAX_FRAMES")
+    # Correlacion ECC minima para aceptar un cuadro en la fusion de ROI (spec §4.9 paso 4).
+    cctv_roi_ecc_min: float = Field(default=0.8, alias="CCTV_ROI_ECC_MIN")
 
     # GMFSS (second interpolation engine, max-quality anime frame interpolation,
     # own port santiquiroz/port-gmfss-onnx). 10x or more slower than RIFE by
@@ -763,6 +765,13 @@ class Settings(BaseSettings):
     def _validate_restore_positive(cls, value: int, info: ValidationInfo) -> int:
         if value < 1:
             raise ValueError(f"{info.field_name.upper()} must be at least 1")
+        return value
+
+    @field_validator("cctv_roi_ecc_min")
+    @classmethod
+    def _validate_roi_ecc_min(cls, value: float, info: ValidationInfo) -> float:
+        if not 0.0 < value < 1.0:
+            raise ValueError(f"{info.field_name.upper()} must be between 0 and 1")
         return value
 
     @field_validator("restore_gpu_throttle_seconds", "restore_ncnn_headroom_mb")

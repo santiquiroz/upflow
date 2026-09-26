@@ -27,6 +27,12 @@ describe("surfaceFor", () => {
     }
   });
 
+  it("opens the video surface with CCTV mode on for both CCTV lanes", () => {
+    for (const id of ["video.cctv", "video.cctvAi"]) {
+      expect(surfaceFor(capability({ id, domain: "video" }))).toBe("/enhance/video?cctv=1");
+    }
+  });
+
   it("sends image upscaling to the image surface", () => {
     expect(surfaceFor(capability({ id: "image.upscale", domain: "image" }))).toBe(
       "/enhance/image",
@@ -109,10 +115,13 @@ describe("surfaceFor", () => {
       "audio.voiceConvert",
       "generate.textToImage",
       "generate.textToVideo",
+      "video.cctv",
+      "video.cctvAi",
     ];
     for (const id of IDS) {
       const destino = surfaceFor(capability({ id }));
-      expect(RUTAS_REALES, `${id} -> ${destino}`).toContain(destino);
+      const ruta = destino?.split("?")[0];
+      expect(RUTAS_REALES, `${id} -> ${destino}`).toContain(ruta);
     }
   });
 

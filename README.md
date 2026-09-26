@@ -29,6 +29,7 @@ la app y no 40 GB de modelos.
 | **Más fluido** | Duplicá, triplicá o cuadruplicá los cuadros por segundo. Detecta los cortes de escena para no inventar cuadros fantasma entre dos planos distintos. |
 | **Subtítulos** | Sacá la transcripción con tiempos, o devolvé el video con los subtítulos adentro o quemados en la imagen. En otro idioma si querés. |
 | **Doblaje** | El video hablado en otro idioma, con el audio original conservado como segunda pista. |
+| **Cámaras de seguridad** | Aclará lo que exportó tu DVR (Hikvision/HiLook, Dahua, MP4) con filtros clásicos, sin IA y reproducibles, y llevate un paquete de entrega con el original intacto, un informe y los hashes. No es una herramienta forense certificada. |
 
 ### 🖼️ Imagen
 
@@ -226,6 +227,7 @@ lleva a la pantalla que corresponde, con el estado preseleccionado.
 - **Enhance** (`/enhance`, `/enhance/image`, `/enhance/video`) — imagen y video, con tabs:
   - *Imagen*: subís el archivo, elegís modelo, dispositivo de cómputo (`cpu`/`dml:N`) y escala (la lista se filtra automáticamente según lo que soporta cada modelo), formato de salida. Job en vivo con progreso y descarga directa al terminar.
   - *Video*: subís el archivo (se analiza automáticamente con `/video/analyze`) y elegís un perfil, que **rellena una pila de pasos** con lo que el job va a hacer de verdad (reescalar, interpolar, audio, subtítulos). Podés quitar y agregar pasos; el orden se muestra pero no se reordena, porque el backend lo tiene fijo y ofrecer reordenar sería un control que miente. Hay opciones avanzadas para sobreescribir modelo, escala, contenedor, códec, preset, CRF, audio, el dropdown **FPS boost** (Off, o 2×/3×/4×; solo produce resultado si tenés `ENABLE_INTERPOLATION=true` y RIFE instalado — ver más abajo), **mejora de audio** (Off/RNNoise/DeepFilterNet) y **formato de audio de salida** (Auto/FLAC/AAC). Si el video trae más de una pista de audio o subtítulos embebidos, aparece un **selector de pistas**: tildá cuáles pistas de audio conservar (la primera tildada es la primaria, la única que pasa por enhance/restore) y si querés preservar los subtítulos (sube el contenedor a `.mkv` automáticamente si hacía falta).
+  - *Video → modo CCTV*: el interruptor **"Security camera footage (CCTV)"** (o `/enhance/video?cctv=1`) cambia perfil y pasos por el flujo de cámaras de seguridad: diagnóstico, preset, cajas del texto en pantalla, recorte por cuadro, datos del caso y paquete de entrega. Ver [Video de cámaras de seguridad](#video-de-cámaras-de-seguridad-modo-cctv).
 - **Models** (`/models`) — buscador de modelos de super-resolución en Hugging Face con **compatibilidad detectada** en cada resultado (si trae `.onnx` se instala directo; si trae pesos de PyTorch se convierten con Spandrel; si está restringido o no tiene pesos, lo dice antes de que aprietes instalar), instalación con un click con polling de progreso, lista de modelos instalados con borrado, y selección de dispositivo por default.
 - **Settings** (`/settings`) — estado del motor (disponibilidad, ffmpeg), concurrencia de GPU y profundidad de las colas de jobs, en vivo, y **selector de idioma** (español / inglés, se recuerda en el equipo).
 - **Realtime** (`/realtime`) — página de roadmap: explica el plan de interpolación en tiempo real (Fase 7) y por qué el frame generation en vivo no es viable todavía en Windows sin driver hooks propietarios.
@@ -598,6 +600,11 @@ Todas las variables leen de `.env` (ver [`.env.example`](.env.example) con los d
 | `ENABLE_STREAM_PIPELINE` | `True` | Pipeline de frames en streaming (decode→interp→upscale→encode por colas en memoria, sin PNGs intermedios). Cae al camino clásico ante cualquier fallo. `False` fuerza siempre el camino clásico. Ver [Pipeline de frames en streaming](#pipeline-de-frames-en-streaming-enable_stream_pipeline) |
 | `ONNX_VIDEO_MAX_PIPELINE_MB` | `1024` | Presupuesto de RAM para las colas de frames en vuelo. Es **global**: se reparte entre todas las colas del pipeline, no es por cola |
 | `ENABLE_FILE_LOGGING` | `False` | Escribe los logs a `runtime/logs/upflow.log` (rotado). Apagado por defecto: en uso normal es ruido y disco. Se enciende desde **Settings** sin reiniciar, para que quien reporta un problema pueda reproducirlo y mandar el archivo |
+| `CCTV_X264_THREADS` | `4` | Hilos **fijos** de x264 en el modo CCTV (copia de visualización y comparativo): es lo único del carril clásico cuya salida cambia con la cantidad de hilos, y el informe promete bytes reproducibles. Cambiarlo cambia los hashes de esas copias. Ver [Video de cámaras de seguridad](#video-de-cámaras-de-seguridad-modo-cctv) |
+| `CCTV_FFV1_SLICES` | `4` | Slices **fijos** de FFV1 de la copia sin pérdida (`analysis.mkv`); mismo motivo que el anterior |
+| `CCTV_MAX_STILL_FRAMES` | `20` | Tope de cuadros exactos exportados por job CCTV |
+| `CCTV_ROI_MAX_FRAMES` | `60` | Tope de cuadros para la fusión multi-cuadro de una región (placa o cara); la tarea corre por la API pero todavía no tiene pantalla |
+| `CCTV_ROI_ECC_MIN` | `0.8` | Correlación ECC mínima (entre 0 y 1, sin incluirlos) para que un cuadro entre en la fusión de una región; los que quedan debajo se descartan y el informe los lista |
 | `LOG_FILE_MAX_MB` / `LOG_FILE_BACKUPS` | `10` / `3` | Techo por archivo antes de rotar y cuántos rotados se conservan |
 | `RESTORE_MODEL_DIR` | `vendor/restore` | Carpeta de los packs `restore-*` de [Restaurar fotos](#restaurar-fotos-mejorar--restore-photo). No hay flags `ENABLE_*`: bajar el pack es poder usarlo |
 | `RESTORE_CALL_BUDGET_MS` | `1200` | Presupuesto por llamada a la GPU (límite TDR de Windows); la calibración de tiles apunta a la mitad |
@@ -719,6 +726,89 @@ ENABLE_AUDIO_ENHANCE=true
 
 Con eso activado, un job de video con `keep_audio=true` puede pedir `audio_enhance=deepfilter` (red neuronal DeepFilterNet3, mejor calidad, más lento) o `audio_enhance=rnnoise` (filtro `arnndn` de FFmpeg, más liviano). Pedir `audio_enhance` sin `keep_audio=true`, sin `ENABLE_AUDIO_ENHANCE=true` o sin los binarios instalados devuelve `400`. Omitir `audio_enhance` deja el audio original intacto (remux con `-c:a copy`).
 
+## Video de cámaras de seguridad (modo CCTV)
+
+Para lo que exporta un DVR o NVR: la cámara de la casa, del local o del edificio. La idea es **ver mejor** lo que ya está grabado, sin tocar el original y dejando constancia de todo lo que se hizo. Está en **Mejorar → Video**, con el interruptor **"Security camera footage (CCTV)"** arriba del panel (o directo en `/enhance/video?cctv=1`). Si soltás un archivo que parece de una cámara de seguridad —cabecera `IMKH` de Hikvision/HiLook, `DHAV` de Dahua, H.264/H.265 crudo, o la resolución "lite" 960×1080 o 640×720— la pantalla ofrece pasar a este modo.
+
+> **Upflow no es una herramienta forense certificada** y ningún laboratorio forense la validó. El informe documenta lo que hizo Upflow; no certifica autenticidad ni admisibilidad. Lo que se entrega a una autoridad es siempre el original. Nada de esto es asesoría legal.
+
+**Requisitos:** solo el FFmpeg vendorizado (`scripts/download-ffmpeg.ps1`), con `ffv1` y `libx264`. No baja modelos ni usa la GPU: el carril clásico corre en CPU. Si la build de ffmpeg no trae esos dos codecs, el modo queda en "needs setup" con el motivo escrito; si le falta algún filtro, ese paso aparece deshabilitado en vez de romper el job.
+
+**Qué pasa con el archivo, en orden:**
+
+1. Se calcula el **SHA-256 del archivo tal como llegó, antes de cualquier otra operación**, y se anota la hora de recepción (UTC y local). Esa copia verificada va a `01_original` con su nombre y no se modifica nunca.
+2. Se re-empaqueta **sin re-encodear** a una copia de trabajo MKV, probando el demuxer automático, el Program Stream de Hikvision, `dhav` y el stream crudo; los intentos quedan en el informe. Se decodifican 100 cuadros de prueba: si el video no se puede decodificar (por ejemplo, un export cifrado) se dice y se explica cómo reexportarlo. Upflow no descifra nada.
+3. Índice de cuadros hasheado (número, tiempo, keyframe y tipo de cuadro) con los fps medidos, CFR o VFR, huecos, duplicados probables y GOP.
+4. Diagnóstico con los filtros de análisis de ffmpeg (`idet`, `blockdetect`, `blurdetect`, `freezedetect`) más estadísticas de luma, croma y clipping: entrelazado, bloqueo, desenfoque, noche/IR, y un preset sugerido.
+
+**Presets del carril clásico** — la pantalla muestra cada paso con su descripción en lenguaje llano y un enlace a la documentación del filtro; los parámetros se tocan en "Advanced":
+
+| Preset | Para qué | Pasos |
+|---|---|---|
+| Day | Color con bloqueo de compresión moderado | aspecto (si el cuadro es anamórfico), desentrelazado `bwdif` (si está entrelazado), deblock suave, denoise `hqdn3d` |
+| Night / IR | Oscuro o infrarrojo, sin color real | igual, con deblock fuerte, denoise temporal `atadenoise`, escala de grises y gamma 1,2 |
+| Analog (interlaced) | Cámaras analógicas entrelazadas | desentrelazado siempre, deblock suave, `hqdn3d` |
+| Low-res sub-stream | Sub-stream de 704×576 o menos | Day más ampliación ×2 por vecino más cercano, que no inventa píxeles |
+
+Ningún preset aplica nitidez ni Lanczos: generan halos y píxeles que no estaban. El carril clásico **rechaza en el backend** cualquier paso de IA, la interpolación y todo filtro fuera de su lista blanca, aunque llegue por la API.
+
+**Texto en pantalla (fecha, hora, cámara):** el job no arranca hasta que confirmás las cajas del texto sobre un cuadro donde se lea la hora, o elegís **"No on-screen text"**. Para Hikvision se proponen las dos cajas típicas (hora arriba a la izquierda, cámara abajo a la derecha), sin confirmar. Los píxeles de esas cajas salen del original, así que un filtro temporal no puede emborronar la hora ni mezclar dos segundos distintos. Un chequeo de contraste y de píxeles quietos avisa si una caja no parece texto, sin bloquear.
+
+**Recorte y cuadros:** el recorte es por número de cuadro (con su timecode). Los cuadros que elijas salen como PNG del original y del procesado, extraídos por número exacto (`select=eq(n,N)`) y con el SHA-256 del cuadro decodificado. Antes de lanzar el job podés ver los filtros aplicados alrededor del cuadro actual, encima del original.
+
+**Qué te llevás** (`outputs/<jobId>.cctv/`, y lo mismo dentro del `.zip` de entrega, sin compresión, bajo `<caso>_<fecha>_upflow/`):
+
+```
+01_original/      copia verificada, idéntica byte a byte a la recibida, con su nombre
+02_processed/     <nombre>__upflow-clarify__<jobId>.mkv   sin pérdida (FFV1), para examinar
+                  <nombre>__upflow-clarify__<jobId>.mp4   copia de visualización (H.264)
+03_comparisons/   comparison.mp4: original | procesado, con contador de cuadros
+04_stills/        cuadros exactos, original y procesado
+frame_index.csv   índice de cuadros del original
+report.html       informe legible (se imprime a PDF desde el navegador), con "AI used: NO/YES"
+report.json       el mismo informe, validable contra docs/schemas/cctv-report-v1.schema.json
+SHA256SUMS.txt    hashes de todo, en el formato de sha256sum -c
+reproduce.cmd     rehace 02_processed desde 01_original y compara contra SHA256SUMS.txt
+README.txt        español e inglés: qué es cada carpeta, cómo verificar, cómo entregar
+```
+
+Los nombres procesados nunca repiten el del original. El informe lleva cada paso en orden con su descripción, sus parámetros y el `argv` exacto de ffmpeg, la versión y el SHA-256 del binario de ffmpeg, las extensiones de la CPU, el recorte, las cajas del texto en pantalla, el clipping antes y después, las limitaciones que corresponden a los pasos usados y los datos del caso si los cargaste (etiqueta, operador, marca y modelo del grabador, cámara, desfase del reloj). **"Check files are unchanged"** vuelve a hashear la carpeta y dice qué cambió o falta; detecta cambios accidentales desde que Upflow recibió el archivo, no prueba que la grabación sea auténtica, y quien altere los archivos también puede regenerar `SHA256SUMS.txt`.
+
+**Reproducible bit a bit** con la misma build de ffmpeg y las mismas extensiones de CPU: los hilos de x264 y los slices de FFV1 son fijos (`CCTV_X264_THREADS`, `CCTV_FFV1_SLICES`), los codificadores y el muxer van con `+bitexact` y el reescalado con `accurate_rnd+full_chroma_int+bitexact`. Otra build u otra CPU pueden dar bytes distintos, y `reproduce.cmd` lo dice.
+
+**Carril "AI enhancement (visual only)":** aparece en la pantalla, pero en esta versión todavía no procesa; la tarea "Plate or face still (multi-frame)" tampoco. Cuando lleguen, el carril IA necesita GPU y el pack `restore-core`, y todo lo que produzca lleva una banda bilingüe visible y una marca dentro de la imagen: sirve para mirar, no como prueba.
+
+**Lo que ningún filtro recupera:** detalle que el sensor nunca registró (una cara de 15 px, letras de 3 px de alto, el fondo que H.265+ descartó a propósito), píxeles saturados (la placa quemada por el IR, faros), cuadros que no se grabaron (12–15 fps) y la información que el encoder copió de un cuadro al siguiente. Upflow no identifica a nadie: no hay OCR de placas ni reconocimiento de caras.
+
+**Retención:** como todo job, los resultados se borran a las `OUTPUT_TTL_HOURS` (24 por defecto). Bajá el paquete de entrega para conservarlos.
+
+### Guía: entregar el video de tu DVR a la Policía o la Fiscalía
+
+Lista armada a partir de SWGDE 17-V-002 y 20-V-002, la sentencia SP248-2025 de la Corte Suprema, la Ley 906 de 2004 y la Ley 1581 de 2012. No es asesoría legal. El `README.txt` del paquete trae la versión corta.
+
+1. **Actuá rápido.** El DVR sobrescribe lo viejo según su disco. Mirá en su menú cuál es la grabación más antigua y, si lo permite, bloqueá o protegé el tramo (los equipos Hikvision tienen "lock" de archivos; no está verificado para todos los modelos).
+2. **Medí el desfase del reloj.** Sacale una foto con el celular a la pantalla del DVR mostrando su hora junto a la hora legal ([horalegal.inm.gov.co](https://horalegal.inm.gov.co)) y anotá la diferencia en segundos. Va en los datos del caso.
+3. **Exportá en el formato nativo** desde el propio DVR a una USB nueva: el MP4 o el PS/`.dav` del fabricante, con margen antes y después del hecho, de todas las cámaras que sirvan. Si se puede, exportá también el reproductor del fabricante.
+4. **Hasheá enseguida.** Cargar el archivo en Upflow calcula su SHA-256 antes que nada (equivale a `Get-FileHash -Algorithm SHA256`) y anota la hora.
+5. **Guardá una copia maestra** de solo lectura y entregá una **copia verificada** (mismo hash) en un medio nuevo, sin recortarla, recomprimirla ni mejorarla: es `01_original`.
+6. **Acta de entrega:** quién extrajo, cuándo, de qué equipo (marca, modelo, número de serie, canales), el desfase del reloj, la lista de archivos con tamaño y SHA-256, y firma. La autoridad que recibe hace su propio registro de cadena de custodia.
+7. **Lo procesado va aparte.** Si querés aportar la versión aclarada, entregala como **anexo separado**, rotulado "Versión procesada — no es la grabación original", con `report.html` y `SHA256SUMS.txt`, que la vinculan con el original. Nunca en lugar del original.
+8. **No lo difundas antes.** Publicarlo puede afectar la investigación y los datos de terceros (Ley 1581). Para compartir con vecinos o en redes hace falta anonimizar a terceros, y eso nunca va en la copia para la autoridad.
+9. **Denuncia:** la Policía tiene el portal [¡A Denunciar!](https://adenunciar.policia.gov.co). No está verificado que acepte video adjunto; lo prudente es ofrecerle la entrega física al investigador asignado.
+
+### API del modo CCTV
+
+Todo bajo `/api/v1/video`, con errores `{"detail": {"key": "cctv.error.*", "reason": "..."}}`:
+
+- `POST /cctv/analyze` — `file` o `upload_token`; hashea, ingesta y diagnostica. `200` con el análisis (`token`, `sourceSha256`, `receivedAt`, contenedor, índice, GOP, calidad, `suggestedPreset`, `proposedSteps` por carril, pasos no disponibles, avisos) o `202` con `analysisJobId` si no termina en la ventana sincrónica → `GET /cctv/analysis/{analysisJobId}`.
+- `GET /cctv/presets` — presets y pasos, con la disponibilidad de cada filtro en esta build.
+- `GET /cctv/{token}/preview?frame=N` — el cuadro N decodificado (PNG); con `steps` aplica solo pasos clásicos alrededor de ese cuadro.
+- `POST /cctv/{token}/osd-check` — `{"boxes": [[x, y, w, h]], "frame": N}` → si cada caja parece texto.
+- `POST /cctv/jobs` — cuerpo JSON camelCase estricto (`token`, `task: "clarify"`, `preset`, `steps`, `osdBoxes` + `osdBoxesConfirmed` o `noOsd`, `trim: [primero, último]` inclusivo, `stillFrames`, `caseLabel`, `operatorName`, `acquisition`) → `202` con un job de la familia `video`; se sigue con `GET /jobs/{id}` como cualquier video, y `cctv.artifacts` lista los archivos.
+- `GET /jobs/{id}/artifacts/{name}` — un archivo del resultado (el informe se abre en el navegador, el resto se descarga); `POST /jobs/{id}/verify` → `{ok, checked, mismatches, missing}`.
+
+Para agentes: `upflow cctv probe|clarify|verify` y las tools MCP `upflow_cctv_*`, en [docs/agent-usage.md](docs/agent-usage.md).
+
 ## Apartado de Audio (mejora standalone + restauración de compresión)
 
 Además de imagen y video, Upflow tiene un **apartado de Audio** propio (ruta `/audio`): subís un archivo de audio (wav/mp3/flac/m4a/ogg/opus), elegís la mejora y descargás el resultado. La cadena es `entrada → [limpieza] → [denoise] → [restore] → [voz] → [acabado] → salida`, cada paso opcional y todos combinables en el mismo trabajo (la única excepción es la separación de stems, que corre sola porque entrega dos archivos).
@@ -788,6 +878,7 @@ upflow restore --in escaneo.tif --out foto.png --steps repair,denoise,tone --jso
 ```
 
 - `upflow upscale` corre en proceso, **sin servidor**; `--json` imprime una sola línea JSON al final (`ok`, `output`, `width`, `height`, `model`, `device`, `scale`, `nativeScale`, `tile`, `seconds`). Códigos de salida: `0` ok, `2` argumentos, `3` modelo no instalado, `4` dispositivo, `5` fallo de inferencia. Sin prompts; las descargas exigen `--yes`. Formatos: `png`/`jpg`/`webp` (motor) y `jxl`/`avif` (ffmpeg vendorizado).
+- `upflow cctv probe|clarify|verify` hace lo mismo con video de cámaras de seguridad (carril clásico, CPU); ver [docs/agent-usage.md](docs/agent-usage.md).
 - Mismo input + mismos parámetros ⇒ mismos bytes (id de job = hash del contenido y los parámetros, sin nombres temporales aleatorios).
 - MCP: `claude mcp add upflow -- upflow-mcp --autostart` (Claude Code) o `[mcp_servers.upflow] command = "upflow-mcp" args = ["--autostart"]` en `~/.codex/config.toml` (Codex). Con `--autostart` levanta el servidor si no está; sin servidor las tools de imagen corren in-process.
 
@@ -795,7 +886,7 @@ upflow restore --in escaneo.tif --out foto.png --steps repair,denoise,tone --jso
 
 Upflow expone toda su funcionalidad como **tools MCP** (Model Context Protocol) para que agentes de IA (Claude Code, Claude Desktop, o cualquier cliente MCP) puedan reescalar, transcribir, generar y procesar medios directamente.
 
-- **62 tools** que cubren la API entera: upscale de imagen/video, restauración de fotos, audio (denoise/restore/master), transcripción/doblaje, descargas (yt-dlp), generación de imágenes/video, TTS, 3D imprimible, **modelado 3D con Blender**, edición de imagen (seleccionar por clic, insertar objeto), reparación de mallas, prompts guardados, conversión y optimización de modelos, y ajustes/diagnóstico del sistema.
+- **69 tools** que cubren la API entera: upscale de imagen/video, restauración de fotos, video de cámaras de seguridad (CCTV, carril clásico), audio (denoise/restore/master), transcripción/doblaje, descargas (yt-dlp), generación de imágenes/video, TTS, 3D imprimible, **modelado 3D con Blender**, edición de imagen (seleccionar por clic, insertar objeto), reparación de mallas, prompts guardados, conversión y optimización de modelos, y ajustes/diagnóstico del sistema.
 - `upflow_init_image` sube una imagen y devuelve su token: es la puerta de entrada de **todo lo que parte de una imagen** —img2img, inpaint, selección por clic, insertar objeto, foto a malla—, que antes solo existía para quien usaba la pantalla.
 - `upflow_segment_object` no reenvía lo que devuelve la ruta: `/editor/segment` contesta un PNG crudo, inservible para encadenar, así que la tool vuelve a subir la máscara y entrega el token que consume `upflow_insert_object`.
 - Restauración de fotos: `upflow_restore_analyze` (diagnóstico y punto de partida propuesto), `upflow_restore_photo` (con los pasos de `proposedSteps`) y `upflow_restore_recompose` (re-mezcla las caras de un job terminado sin volver a correr modelos). Detalle en [docs/agent-usage.md](docs/agent-usage.md).

@@ -61,6 +61,11 @@ def inprocess_only() -> bool:
     return mode() == "inprocess"
 
 
+def error_payload(exc: headless.HeadlessError) -> dict[str, Any]:
+    keyed = {"key": exc.key} if exc.key else {}
+    return {"ok": False, "error": str(exc), "code": exc.exit_code, **keyed}
+
+
 def should_fallback(exc: Exception) -> bool:
     # Solo cuando el servidor NO esta (conexion rechazada): un 4xx/5xx real se
     # reporta como error del servidor, no se disimula corriendo in-process.
@@ -138,13 +143,85 @@ async def upflow_upscale_image_headless(
         )
         return _dump(result)
     except headless.HeadlessError as exc:
-        return headless_error(exc)
+        return _dump(error_payload(exc))
+    except Exception as exc:
+        return f"Error: {exc}"
+
+
+def pair_of(values: list[int] | None, name: str) -> tuple[int, int] | None:
+    if not values:
+        return None
+    if len(values) != 2:
+        raise headless.UsageError(f"{name} needs exactly two frame numbers [first, last]")
+    return int(values[0]), int(values[1])
+
+
+def cctv_choices(
+    preset: str = "",
+    steps: list[dict[str, Any]] | None = None,
+    osd_boxes: list[list[int]] | None = None,
+    osd_confirmed: bool = False,
+    no_osd: bool = False,
+    trim: list[int] | None = None,
+    still_frames: list[int] | None = None,
+    acquisition: dict[str, Any] | None = None,
+) -> headless.CctvClarifyChoices:
+    choices = headless.CctvClarifyChoices(
+        preset=preset or None,
+        steps=None if steps is None else tuple(headless.normalized_step(step) for step in steps),
+        osd_boxes=tuple(tuple(box) for box in osd_boxes or ()),
+        osd_confirmed=osd_confirmed,
+        no_osd=no_osd,
+        trim=pair_of(trim, "trim"),
+        still_frames=tuple(still_frames or ()),
+        acquisition=dict(acquisition or {}),
+    )
+    headless.require_steps_for_preset(choices)
+    return choices
+
+
+async def upflow_cctv_probe_headless(file_path: str) -> str:
+    """Analisis CCTV en proceso; la sesion queda para upflow_cctv_clarify (la barre el sweeper del servidor)."""
+    try:
+        return _dump(await headless.cctv_probe(get_context(), Path(file_path), keep_session=True))
+    except headless.HeadlessError as exc:
+        return _dump(error_payload(exc))
+    except Exception as exc:
+        return f"Error: {exc}"
+
+
+async def upflow_cctv_clarify_headless(
+    token: str, choices: headless.CctvClarifyChoices, destination_dir: str = ""
+) -> str:
+    """Clarify video en proceso: espera el job y deja la carpeta del resultado en destination_dir."""
+    try:
+        out_dir = Path(destination_dir) if destination_dir else None
+        return _dump(await headless.cctv_clarify(get_context(), token, choices, out_dir))
+    except headless.HeadlessError as exc:
+        return _dump(error_payload(exc))
+    except Exception as exc:
+        return f"Error: {exc}"
+
+
+def cctv_result_folder(job_id: str, output_dir: str) -> Path:
+    if output_dir:
+        return Path(output_dir)
+    return headless.cctv_result_dir(get_context(), job_id)
+
+
+async def upflow_cctv_check_unchanged_headless(job_id: str, output_dir: str = "") -> str:
+    """Relee los SHA-256 de SHA256SUMS.txt del resultado de un job CCTV, sin servidor."""
+    try:
+        directory = cctv_result_folder(job_id, output_dir)
+        return _dump(await asyncio.to_thread(headless.cctv_check_unchanged, directory))
+    except headless.HeadlessError as exc:
+        return _dump(error_payload(exc))
     except Exception as exc:
         return f"Error: {exc}"
 
 
 def headless_error(exc: headless.HeadlessError) -> str:
-    return _dump({"ok": False, "error": str(exc), "code": exc.exit_code})
+    return _dump(error_payload(exc))
 
 
 async def upflow_restore_analyze_headless(file_path: str) -> str:

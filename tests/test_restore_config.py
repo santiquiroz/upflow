@@ -24,6 +24,7 @@ RESTORE_DEFAULTS = {
     "CCTV_FFV1_SLICES": ("cctv_ffv1_slices", 4),
     "CCTV_MAX_STILL_FRAMES": ("cctv_max_still_frames", 20),
     "CCTV_ROI_MAX_FRAMES": ("cctv_roi_max_frames", 60),
+    "CCTV_ROI_ECC_MIN": ("cctv_roi_ecc_min", 0.8),
 }
 
 INSTALLED_PROPERTIES = {
@@ -130,6 +131,8 @@ def test_installed_property_is_empty_when_a_file_is_missing(
         ("CCTV_FFV1_SLICES", 0),
         ("CCTV_MAX_STILL_FRAMES", 0),
         ("CCTV_ROI_MAX_FRAMES", 0),
+        ("CCTV_ROI_ECC_MIN", 0.0),
+        ("CCTV_ROI_ECC_MIN", 1.0),
         ("RESTORE_GPU_THROTTLE_SECONDS", -0.1),
         ("RESTORE_NCNN_HEADROOM_MB", -1),
     ],

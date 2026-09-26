@@ -13,6 +13,8 @@ import type {
   VideoProfileResponse,
 } from "../../lib/apiTypes";
 import * as audioService from "../../services/audio";
+import * as cctvService from "../../services/cctv";
+import { ANALYSIS, PRESETS_RESPONSE } from "./cctv/cctvFixtures";
 import { VideoPanel } from "./VideoPanel";
 import * as videoOutputResolution from "./videoOutputResolution";
 
@@ -33,6 +35,11 @@ vi.mock("../../lib/api", async (importOriginal) => {
 vi.mock("../../services/audio", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../services/audio")>();
   return { ...actual, fetchAudioCapabilities: vi.fn() };
+});
+
+vi.mock("../../services/cctv", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../services/cctv")>();
+  return { ...actual, analyzeCctv: vi.fn(), getCctvPresets: vi.fn() };
 });
 
 vi.mock("./videoOutputResolution", async (importOriginal) => {
@@ -119,6 +126,7 @@ const ENGINE_INFO: EngineInfoResponse = {
   supportedModels: [],
   maxUploadMb: 50,
   maxVideoUploadMb: 2048,
+  outputTtlHours: 24,
   videoProfiles: [GENERAL_PROFILE, ANIME_PROFILE],
   ffmpegAvailable: true,
 };
@@ -131,7 +139,14 @@ function renderPanel(
   vi.mocked(api.getModels).mockResolvedValue(MODELS);
   vi.mocked(api.getDevices).mockResolvedValue(devices);
   vi.mocked(api.getEngineInfo).mockResolvedValue(ENGINE_INFO);
-  vi.mocked(api.getVideoCapabilities).mockResolvedValue({ interpEngines });
+  vi.mocked(api.getVideoCapabilities).mockResolvedValue({
+    interpEngines,
+    cctvAvailable: false,
+    cctvReasonKey: "capability.setup.missingPack",
+    cctvAiAvailable: false,
+    cctvAiReasonKey: "capability.setup.missingPack",
+    cctvUnavailableSteps: [],
+  });
   vi.mocked(api.analyzeVideo).mockResolvedValue({
     uploadToken: "default-token",
     audioTracks: [],
@@ -1246,5 +1261,99 @@ describe("VideoPanel", () => {
         }),
       ),
     ).toBeVisible();
+  });
+});
+
+describe("VideoPanel CCTV mode", () => {
+  function recorderExport(): File {
+    return new File(["IMKH0100 recorder bytes"], "ch01.mp4", { type: "video/mp4" });
+  }
+
+  function dropInVideoPanel(file: File) {
+    const fileInput = document.getElementById("video-file-input") as HTMLInputElement;
+    fireEvent.change(fileInput, { target: { files: [file] } });
+  }
+
+  function mockCctv() {
+    vi.mocked(cctvService.getCctvPresets).mockResolvedValue(PRESETS_RESPONSE);
+    vi.mocked(cctvService.analyzeCctv).mockResolvedValue({ kind: "done", analysis: ANALYSIS });
+  }
+
+  afterEach(() => {
+    window.history.replaceState(null, "", "/");
+    vi.mocked(cctvService.getCctvPresets).mockReset();
+    vi.mocked(cctvService.analyzeCctv).mockReset();
+  });
+
+  it("offers the CCTV switch off by default above the regular controls", async () => {
+    renderPanel();
+
+    const toggle = screen.getByRole("switch", { name: en["cctv.toggle"] });
+    expect(toggle).not.toBeChecked();
+    expect(await screen.findByRole("button", { name: /^Profile/ })).toBeInTheDocument();
+  });
+
+  it("replaces profile, steps and model with the CCTV section when switched on", async () => {
+    mockCctv();
+    renderPanel();
+
+    fireEvent.click(screen.getByRole("switch", { name: en["cctv.toggle"] }));
+
+    expect(screen.getByRole("switch", { name: en["cctv.toggle"] })).toBeChecked();
+    expect(screen.getByText(en["cctv.dropzone"])).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Profile/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Model/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: en["video.steps.listLabel"] })).not.toBeInTheDocument();
+  });
+
+  it("opens straight in CCTV mode from ?cctv=1", () => {
+    mockCctv();
+    window.history.replaceState(null, "", "/enhance/video?cctv=1");
+
+    renderPanel();
+
+    expect(screen.getByRole("switch", { name: en["cctv.toggle"] })).toBeChecked();
+    expect(screen.getByText(en["cctv.dropzone"])).toBeInTheDocument();
+  });
+
+  it("goes back to the regular panel when the switch is turned off", () => {
+    mockCctv();
+    window.history.replaceState(null, "", "/enhance/video?cctv=1");
+    renderPanel();
+
+    fireEvent.click(screen.getByRole("switch", { name: en["cctv.toggle"] }));
+
+    expect(screen.queryByText(en["cctv.dropzone"])).not.toBeInTheDocument();
+    expect(screen.getByText(en["enhance.video.dropzone"])).toBeInTheDocument();
+  });
+
+  it("suggests CCTV mode for a recorder export and analyzes that file once accepted", async () => {
+    mockCctv();
+    renderPanel();
+    const file = recorderExport();
+
+    dropInVideoPanel(file);
+    fireEvent.click(await screen.findByRole("button", { name: en["cctv.suggest.accept"] }));
+
+    expect(screen.getByRole("switch", { name: en["cctv.toggle"] })).toBeChecked();
+    await screen.findByText(en["cctv.diag.title"]);
+    expect(cctvService.analyzeCctv).toHaveBeenCalledWith(file, expect.anything());
+  });
+
+  it("suggests CCTV mode for a lite resolution", async () => {
+    renderPanel();
+    vi.mocked(videoOutputResolution.readVideoDimensions).mockResolvedValue({ width: 960, height: 1080 });
+
+    dropInVideoPanel(makeFile());
+
+    expect(await screen.findByText(en["cctv.suggestMode"])).toBeInTheDocument();
+  });
+
+  it("stays quiet for an ordinary video", async () => {
+    renderPanel();
+
+    await selectFile();
+
+    expect(screen.queryByText(en["cctv.suggestMode"])).not.toBeInTheDocument();
   });
 });

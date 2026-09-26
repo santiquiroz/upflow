@@ -11,6 +11,8 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.auth_routes import router as auth_router
 from app.api.capability_routes import router as capability_router
+from app.api.cctv_routes import CctvApiState
+from app.api.cctv_routes import router as cctv_router
 from app.api.editor_routes import router as editor_router
 from app.api.licenses_routes import router as licenses_router
 from app.api.restore_routes import router as restore_router
@@ -25,6 +27,7 @@ from app.services.auth.identity import LocalPasswordProvider
 from app.services.auth.quotas import QuotaService
 from app.services.auth.user_store import UserStore
 from app.services.capability_probe import CapabilityProbe
+from app.services.cctv_job_runner import build_cctv_runners
 from app.services.device_router import DeviceRouter
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.devices_service import DevicesService
@@ -184,6 +187,7 @@ async def lifespan(app: FastAPI):
         restorers=restorers,
         onnx_video_engine=onnx_video_engine,
         devices=devices_service,
+        cctv_runners=build_cctv_runners(settings),
     )
     video_job_manager = VideoJobManager(
         settings,
@@ -335,6 +339,7 @@ async def lifespan(app: FastAPI):
     app.state.job_manager = job_manager
     app.state.restore_sessions = restore_sessions
     app.state.video_job_manager = video_job_manager
+    app.state.cctv = CctvApiState()
     app.state.audio_job_manager = audio_job_manager
     app.state.retention_sweeper = retention_sweeper
     app.state.model_registry = model_registry
@@ -367,6 +372,7 @@ async def lifespan(app: FastAPI):
     finally:
         await job_manager.stop()
         await video_job_manager.stop()
+        await app.state.cctv.analyses.close()
         await audio_job_manager.stop()
         await retention_sweeper.stop()
         await model_installer.stop()
@@ -425,6 +431,7 @@ app.add_middleware(OriginGuardMiddleware, allowed_origins=settings.allowed_origi
 app.add_middleware(LoopbackGuardMiddleware, auth_mode=settings.auth_mode)
 app.include_router(api_router)
 app.include_router(capability_router)
+app.include_router(cctv_router)
 app.include_router(editor_router)
 app.include_router(restore_router)
 app.include_router(licenses_router)

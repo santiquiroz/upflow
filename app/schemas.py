@@ -6,6 +6,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models import JobStatus
+from app.schemas_cctv import CctvSummary
 from app.services.capability_probe import LeverStatus
 from app.services.generation_variants import Precision
 from app.services.object_transfer import DEFAULT_HARMONIZE_BLEND
@@ -62,6 +63,8 @@ class VideoJobResponse(BaseModel):
     device: str | None = None
     backend: str | None = None
     video_encoder: str = Field(default="auto", serialization_alias="videoEncoder")
+    # Resumen del modo CCTV (spec §5.3); None en los jobs de reescalado.
+    cctv: CctvSummary | None = None
     created_at: datetime = Field(serialization_alias="createdAt")
     started_at: datetime | None = Field(default=None, serialization_alias="startedAt")
     finished_at: datetime | None = Field(default=None, serialization_alias="finishedAt")
@@ -730,6 +733,13 @@ class AudioCapabilitiesResponse(BaseModel):
 
 class VideoCapabilitiesResponse(BaseModel):
     interp_engines: list[str] = Field(default_factory=list, serialization_alias="interpEngines")
+    cctv_available: bool = Field(default=False, serialization_alias="cctvAvailable")
+    cctv_reason_key: str | None = Field(default=None, serialization_alias="cctvReasonKey")
+    cctv_ai_available: bool = Field(default=False, serialization_alias="cctvAiAvailable")
+    cctv_ai_reason_key: str | None = Field(default=None, serialization_alias="cctvAiReasonKey")
+    cctv_unavailable_steps: list[str] = Field(
+        default_factory=list, serialization_alias="cctvUnavailableSteps"
+    )
 
 
 class LeverResponse(BaseModel):
@@ -804,6 +814,8 @@ class EngineInfoResponse(BaseModel):
     # cuanto alguien toca el .env.
     max_upload_mb: int = Field(serialization_alias="maxUploadMb")
     max_video_upload_mb: int = Field(serialization_alias="maxVideoUploadMb")
+    # Horas que las salidas quedan en disco: el modo CCTV avisa cuando se borran.
+    output_ttl_hours: int = Field(serialization_alias="outputTtlHours")
 
 
 class HealthDeviceResponse(BaseModel):

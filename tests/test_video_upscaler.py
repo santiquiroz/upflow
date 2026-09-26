@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 
 from app.config import Settings
-from app.models import VideoUpscaleJob
+from app.models import CctvOptions, VideoUpscaleJob
 from app.services.devices_service import DevicesService
 from app.services.engines.ffmpeg_frame_source import FfmpegFrameSource
 from app.services.engines.ffmpeg_frame_sink import RawPipeEncoder
@@ -1286,3 +1286,81 @@ async def test_run_rejects_an_ncnn_job_without_the_ncnn_binary(tmp_path: Path) -
 
     with pytest.raises(RuntimeError, match="not available"):
         await upscaler.run(job)
+
+
+# ---------------------------------------------------------------------------
+# Modo CCTV (spec §4.1): _run_pipeline bifurca al principio hacia el runner de
+# la tarea y no toca el pipeline de reescalado.
+# ---------------------------------------------------------------------------
+
+
+class RecordingCctvRunner:
+    def __init__(self, output: Path) -> None:
+        self.output = output
+        self.calls: list[tuple[str, Path]] = []
+
+    async def run(self, job: VideoUpscaleJob, work_dir: Path, on_stage) -> Path:
+        self.calls.append((job.id, work_dir))
+        assert work_dir.is_dir()
+        on_stage("ingesting", 1.0)
+        on_stage("roi_registering", 0.5)
+        return self.output
+
+
+class ProbeForbiddenMediaTools(FakeMediaTools):
+    async def ffprobe_json(self, source_path: Path) -> dict:
+        raise AssertionError("CCTV jobs must not probe the upload through the upscale pipeline")
+
+
+def make_cctv_upscaler(tmp_path: Path, runners: dict) -> VideoUpscaler:
+    settings = make_stream_settings(tmp_path)
+    return VideoUpscaler(
+        settings,
+        FakeNcnnEngine(),  # type: ignore[arg-type]
+        ProbeForbiddenMediaTools(),  # type: ignore[arg-type]
+        cctv_runners=runners,
+    )
+
+
+def make_cctv_job(tmp_path: Path, task: str) -> VideoUpscaleJob:
+    cctv = CctvOptions(task=task, session_token="session0token1", no_osd=True)  # type: ignore[arg-type]
+    return make_stream_job(tmp_path, model_name="cctv-" + task, scale=1, backend=None, cctv=cctv)
+
+
+async def test_a_cctv_job_goes_to_the_runner_of_its_task(tmp_path: Path) -> None:
+    roi_runner = RecordingCctvRunner(tmp_path / "roi.png")
+    clarify_runner = RecordingCctvRunner(tmp_path / "viewing.mp4")
+    upscaler = make_cctv_upscaler(tmp_path, {"clarify": clarify_runner, "roi_fusion": roi_runner})
+    job = make_cctv_job(tmp_path, "roi_fusion")
+
+    output = await upscaler.run(job)
+
+    assert output == tmp_path / "roi.png"
+    assert [call[0] for call in roi_runner.calls] == [job.id] and not clarify_runner.calls
+    assert roi_runner.calls[0][1] == upscaler.settings.video_work_path / job.id
+    assert not (upscaler.settings.video_work_path / job.id).exists()
+
+
+async def test_a_cctv_job_ends_with_every_stage_done(tmp_path: Path) -> None:
+    upscaler = make_cctv_upscaler(tmp_path, {"roi_fusion": RecordingCctvRunner(tmp_path / "roi.png")})
+    job = make_cctv_job(tmp_path, "roi_fusion")
+
+    await upscaler.run(job)
+
+    assert job.metadata["stage"] == "completed" and job.metadata["progress"] == 1.0
+    assert [stage["key"] for stage in job.metadata["stages"]] == ["ingesting", "roi_registering", "roi_fusing", "reporting"]
+
+
+def test_a_cctv_task_without_a_runner_is_not_available(tmp_path: Path) -> None:
+    upscaler = make_cctv_upscaler(tmp_path, {"clarify": RecordingCctvRunner(tmp_path / "v.mp4")})
+
+    assert upscaler.available_for(make_cctv_job(tmp_path, "clarify"))
+    assert not upscaler.available_for(make_cctv_job(tmp_path, "roi_fusion"))
+    assert not upscaler.cctv_task_available("enhance")
+
+
+async def test_a_cctv_job_without_a_runner_fails_before_touching_the_pipeline(tmp_path: Path) -> None:
+    upscaler = make_cctv_upscaler(tmp_path, {})
+
+    with pytest.raises(RuntimeError, match="not available"):
+        await upscaler.run(make_cctv_job(tmp_path, "clarify"))

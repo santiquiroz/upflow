@@ -1,0 +1,20 @@
+{
+  "ffmpegVersion": "ffmpeg version N-123588-g9c63742425-20260323 Copyright (c) 2000-2026 the FFmpeg developers",
+  "ffmpegSha256": "aa52648996e3bcbc016112c37568004d15a2fdae58b9a90126a4fbd59d9344b5",
+  "cpuExtensions": [
+    "sse2",
+    "sse3",
+    "ssse3",
+    "sse4_1",
+    "sse4_2",
+    "avx",
+    "avx2",
+    "avx512f"
+  ],
+  "analysisSha256": {
+    "day": "5cd852346b58efd9fbd592d4bbe55ccd4660e9d81a21b4ceb112b53c419ecd32",
+    "night_ir": "a6df308b673d8c8275c06de95404e9c8c125790b2962b4cd26bff9a46db0491d",
+    "analog": "5cd852346b58efd9fbd592d4bbe55ccd4660e9d81a21b4ceb112b53c419ecd32",
+    "low_res": "95737d34823701585fb4676fc736901b0960e50e8eb897ab86b199f201333b6e"
+  }
+}

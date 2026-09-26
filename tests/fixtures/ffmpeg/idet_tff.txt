@@ -1,0 +1,25 @@
+Input #0, matroska,webm, from 'clip.mkv':
+  Metadata:
+    ENCODER         : Lavf62.13.101
+  Duration: 00:00:02.00, start: 0.000000, bitrate: 2824 kb/s
+  Stream #0:0: Video: ffv1, yuv444p(tv, top coded first (swapped)), 320x240, SAR 1:1 DAR 4:3, 25 fps, 25 tbr, 1k tbn
+    Metadata:
+      ENCODER         : Lavc62.29.101 ffv1
+      DURATION        : 00:00:02.000000000
+[Parsed_idet_0 @ 0000021e23fa7280] Repeated Fields: Neither:     0 Top:     0 Bottom:     0
+[Parsed_idet_0 @ 0000021e23fa7280] Single frame detection: TFF:     0 BFF:     0 Progressive:     0 Undetermined:     0
+[Parsed_idet_0 @ 0000021e23fa7280] Multi frame detection: TFF:     0 BFF:     0 Progressive:     0 Undetermined:     0
+Stream mapping:
+  Stream #0:0 -> #0:0 (ffv1 (native) -> wrapped_avframe (native))
+Output #0, null, to 'pipe:':
+  Metadata:
+    encoder         : Lavf62.13.101
+  Stream #0:0: Video: wrapped_avframe, yuv444p(tv, top coded first (swapped)), 320x240 [SAR 1:1 DAR 4:3], q=2-31, 200 kb/s, 25 fps, 25 tbn
+    Metadata:
+      encoder         : Lavc62.29.101 wrapped_avframe
+      DURATION        : 00:00:02.000000000
+[Parsed_idet_0 @ 0000021e23fa6180] Repeated Fields: Neither:    50 Top:     0 Bottom:     0
+[Parsed_idet_0 @ 0000021e23fa6180] Single frame detection: TFF:    50 BFF:     0 Progressive:     0 Undetermined:     0
+[Parsed_idet_0 @ 0000021e23fa6180] Multi frame detection: TFF:    50 BFF:     0 Progressive:     0 Undetermined:     0
+[out#0/null @ 0000021e23fa6d40] video:21KiB audio:0KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: unknown
+frame=   50 fps=0.0 q=-0.0 Lsize=N/A time=00:00:02.00 bitrate=N/A speed= 121x elapsed=0:00:00.01    

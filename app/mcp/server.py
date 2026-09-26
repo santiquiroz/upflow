@@ -21,6 +21,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
+from app import headless
 from app.mcp import client, headless_tools
 from app.mcp.errors import format_tool_error
 from app.mcp.jobs import (
@@ -36,6 +37,7 @@ from app.mcp.jobs import (
 mcp = FastMCP("upflow_mcp")
 
 WAIT_POLL_SECONDS = 2.0
+CCTV_ANALYSIS_TIMEOUT_SECONDS = 1800.0
 READ_ONLY = {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False}
 CREATES_JOB = {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": False}
 
@@ -573,6 +575,138 @@ async def upflow_upscale_video(
         )
         return _dump(normalize_job(FAMILIES["video"], created))
     except Exception as exc:
+        return format_tool_error(exc)
+
+
+# ---------------------------------------------------------------- CCTV (carril clásico)
+
+
+async def finished_cctv_analysis(created: dict[str, Any]) -> dict[str, Any]:
+    if "analysisJobId" not in created:
+        return {"status": "completed", "result": created}
+    status = created
+    async with asyncio.timeout(CCTV_ANALYSIS_TIMEOUT_SECONDS):
+        while status.get("status") == "running":
+            await asyncio.sleep(WAIT_POLL_SECONDS)
+            status = await client.api_get(status["statusUrl"])
+    return status
+
+
+def cctv_analysis_reply(status: dict[str, Any]) -> str:
+    if status.get("status") == "completed":
+        return _dump(headless.with_preset_steps(status["result"]))
+    return f"Error: el análisis CCTV falló ({status.get('errorKey')}): {status.get('error')}"
+
+
+@mcp.tool(name="upflow_cctv_probe", annotations={"title": "Analizar video de cámara de seguridad", **CREATES_JOB})
+async def upflow_cctv_probe(file_path: str) -> str:
+    """Primer paso del modo CCTV: sube el clip, calcula su SHA-256 antes de
+    tocarlo, lo remuxa sin re-encodear (IMKH/DHAV/H.264 crudo incluidos), arma el
+    índice de cuadros y el diagnóstico (entrelazado, bloqueo, desenfoque, noche/IR).
+
+    Devuelve token (para upflow_cctv_clarify), sourceSha256, video, frameIndex,
+    quality, suggestedPreset y presetSteps: los pasos clásicos de cada preset
+    para ESTE clip (con desentrelazado/aspecto según el diagnóstico). Todo corre
+    en CPU. Equivale a `upflow cctv probe --json`.
+    """
+    if headless_tools.inprocess_only():
+        return await headless_tools.upflow_cctv_probe_headless(file_path)
+    try:
+        name, content = client.read_upload(file_path)
+        created = await client.api_post(
+            "/api/v1/video/cctv/analyze",
+            files={"file": (name, content, "application/octet-stream")},
+            timeout=client.UPLOAD_TIMEOUT,
+        )
+        return cctv_analysis_reply(await finished_cctv_analysis(created))
+    except TimeoutError:
+        return "Error: el análisis CCTV sigue corriendo; reintentá upflow_cctv_probe más tarde."
+    except Exception as exc:
+        if headless_tools.should_fallback(exc):
+            return await headless_tools.upflow_cctv_probe_headless(file_path)
+        return format_tool_error(exc)
+
+
+def cctv_job_body(token: str, choices: headless.CctvClarifyChoices) -> dict[str, Any]:
+    return {
+        "token": token,
+        "task": headless.CCTV_CLARIFY_TASK,
+        "preset": choices.preset,
+        "steps": [headless.normalized_step(step) for step in choices.steps or ()],
+        "osdBoxes": [list(box) for box in choices.osd_boxes],
+        "osdBoxesConfirmed": choices.osd_confirmed,
+        "noOsd": choices.no_osd,
+        "trim": None if choices.trim is None else list(choices.trim),
+        "stillFrames": list(choices.still_frames),
+        "acquisition": dict(choices.acquisition),
+    }
+
+
+@mcp.tool(name="upflow_cctv_clarify", annotations={"title": "Clarify video (CCTV, filtros clásicos)", **CREATES_JOB})
+async def upflow_cctv_clarify(
+    token: str,
+    preset: str = "",
+    steps: list[dict[str, Any]] | None = None,
+    osd_boxes: list[list[int]] | None = None,
+    osd_confirmed: bool = False,
+    no_osd: bool = False,
+    trim: list[int] | None = None,
+    still_frames: list[int] | None = None,
+    acquisition: dict[str, Any] | None = None,
+    destination_dir: str = "",
+) -> str:
+    """Crea el job "Clarify video" del carril clásico (CPU, determinista, sin IA)
+    sobre el token de upflow_cctv_probe: copia sin pérdida (FFV1), copia de
+    visualización, comparativo, cuadros exportados, informe y paquete con SHA256SUMS.
+
+    steps: los pasos a aplicar, [{"id": "denoise", "params": {...}}, ...]; copiá
+    presetSteps[preset] de upflow_cctv_probe. Con preset y sin steps, error.
+    [] = sin filtros. Nunca se mandan strings de filtro: el servidor valida cada
+    parámetro contra su esquema.
+    OSD (hora y cámara en pantalla), obligatorio decidir: osd_boxes [[x,y,w,h], ...]
+    en píxeles del cuadro guardado (lado par) + osd_confirmed=true, o no_osd=true.
+    trim: [primer, último] cuadro, inclusive. still_frames: cuadros a exportar.
+    acquisition: datos del grabador ({"recorderMake": ..., "clockOffsetSeconds": ...}).
+    Con servidor devuelve el job de la familia video (seguilo con upflow_wait_job
+    y leé cctv.artifacts). En proceso espera el resultado y, con destination_dir,
+    mueve ahí la carpeta <jobId>.cctv. Equivale a `upflow cctv clarify --json`.
+    """
+    try:
+        choices = headless_tools.cctv_choices(
+            preset, steps, osd_boxes, osd_confirmed, no_osd, trim, still_frames, acquisition
+        )
+    except headless.HeadlessError as exc:
+        return _dump(headless_tools.error_payload(exc))
+    if headless_tools.inprocess_only():
+        return await headless_tools.upflow_cctv_clarify_headless(token, choices, destination_dir)
+    try:
+        created = await client.api_post("/api/v1/video/cctv/jobs", json_body=cctv_job_body(token, choices))
+        return _dump(normalize_job(FAMILIES["video"], created))
+    except Exception as exc:
+        if headless_tools.should_fallback(exc):
+            return await headless_tools.upflow_cctv_clarify_headless(token, choices, destination_dir)
+        return format_tool_error(exc)
+
+
+@mcp.tool(name="upflow_cctv_check_unchanged", annotations={"title": "Verificar que los archivos CCTV no cambiaron", **READ_ONLY})
+async def upflow_cctv_check_unchanged(job_id: str, output_dir: str = "") -> str:
+    """Equivale a "Check files are unchanged": vuelve a calcular el SHA-256 de
+    cada archivo listado en SHA256SUMS.txt del resultado de un job CCTV terminado.
+
+    Devuelve {ok, checked, mismatches, missing}. Detecta cambios accidentales
+    después de que Upflow recibió el archivo; no prueba que la grabación sea
+    auténtica. output_dir: la carpeta <jobId>.cctv si se movió (in-process).
+    """
+    if output_dir or headless_tools.inprocess_only():
+        return await headless_tools.upflow_cctv_check_unchanged_headless(job_id, output_dir)
+    try:
+        checked = headless.checked_job_id(job_id)
+        return _dump(await client.api_post(f"/api/v1/video/jobs/{checked}/verify"))
+    except headless.HeadlessError as exc:
+        return _dump(headless_tools.error_payload(exc))
+    except Exception as exc:
+        if headless_tools.should_fallback(exc):
+            return await headless_tools.upflow_cctv_check_unchanged_headless(job_id)
         return format_tool_error(exc)
 
 

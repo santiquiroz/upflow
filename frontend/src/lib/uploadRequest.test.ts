@@ -100,6 +100,15 @@ describe("postFormWithProgress", () => {
     await expect(pending).rejects.toThrow(/2048 MB/);
   });
 
+  it("keeps the key of a keyed detail so the screen can translate it", async () => {
+    const xhr = new FakeXhr();
+    const pending = upload(xhr);
+
+    xhr.finish(400, JSON.stringify({ detail: { key: "cctv.error.invalidUpload", reason: "Not a video." } }));
+
+    await expect(pending).rejects.toMatchObject({ status: 400, message: "Not a video.", key: "cctv.error.invalidUpload" });
+  });
+
   it("still fails with the status when the body is not JSON", async () => {
     const xhr = new FakeXhr();
     const pending = upload(xhr);

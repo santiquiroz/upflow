@@ -36,6 +36,7 @@ from app.models import (
     VideoUpscaleJob,
     Shape3dJob,
 )
+from app.schemas_cctv import cctv_summary
 from app.schemas import (
     AudioComparisonResponse,
     ComparisonEntryResponse,
@@ -163,9 +164,11 @@ from app.services.auth.permissions import Permission
 from app.services.capabilities import (
     ResolvedCapability,
     group_by_domain,
+    host_probes_for,
     resolve_capabilities,
     resolve_one,
 )
+from app.services.cctv_capability_view import cctv_capability_view
 from app.services.compat_strategy import CompatStrategy, InstallOptions, strategy_for
 from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
 from app.services.engines.generation_onnx import generation_dependencies_available
@@ -536,6 +539,7 @@ def video_job_to_response(job: VideoUpscaleJob) -> VideoJobResponse:
         device=job.device,
         backend=job.backend,
         video_encoder=job.video_encoder,
+        cctv=cctv_summary(job),
         created_at=job.created_at,
         started_at=job.started_at,
         finished_at=job.finished_at,
@@ -779,6 +783,7 @@ async def engine_info(request: Request, settings: Settings = Depends(get_setting
         supported_models=[SupportedModelResponse(**item) for item in settings.model_catalog],
         max_upload_mb=settings.max_upload_mb,
         max_video_upload_mb=settings.max_video_upload_mb,
+        output_ttl_hours=settings.output_ttl_hours,
         video_profiles=[VideoProfileResponse(**item) for item in settings.video_profile_catalog],
         ffmpeg_available=media_tools.available(),
     )
@@ -2352,11 +2357,23 @@ async def get_asr_install_status(
 
 
 @router.get("/video/capabilities", response_model=VideoCapabilitiesResponse)
-async def video_capabilities(settings: Settings = Depends(get_settings)) -> VideoCapabilitiesResponse:
+async def video_capabilities(
+    settings: Settings = Depends(get_settings),
+    devices: DevicesService = Depends(get_devices_service),
+) -> VideoCapabilitiesResponse:
     interp_engines = [
         engine for engine in sorted(INTERP_ENGINES) if settings.interp_engine_available(engine)
     ]
-    return VideoCapabilitiesResponse(interp_engines=interp_engines)
+    # El primer sondeo de ffmpeg hashea el binario y lo ejecuta: fuera del event loop.
+    cctv = await asyncio.to_thread(cctv_capability_view, settings, host_probes_for(devices))
+    return VideoCapabilitiesResponse(
+        interp_engines=interp_engines,
+        cctv_available=cctv.available,
+        cctv_reason_key=cctv.reason_key,
+        cctv_ai_available=cctv.ai_available,
+        cctv_ai_reason_key=cctv.ai_reason_key,
+        cctv_unavailable_steps=list(cctv.unavailable_steps),
+    )
 
 
 @router.get("/audio/capabilities", response_model=AudioCapabilitiesResponse)
@@ -3511,7 +3528,8 @@ async def capability_tree(
     El frontend no puede mentir sobre lo que hay porque no decide: el status sale
     de mirar el disco y el registro, no de un flag persistido.
     """
-    grouped = group_by_domain(resolve_capabilities(settings, registry))
+    # El modo CCTV sondea la build de ffmpeg y la GPU: fuera del event loop.
+    grouped = group_by_domain(await asyncio.to_thread(resolve_capabilities, settings, registry))
     return CapabilityTreeResponse(
         domains=[
             CapabilityDomainResponse(

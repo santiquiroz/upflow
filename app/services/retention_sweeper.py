@@ -12,6 +12,7 @@ from pathlib import Path
 from app.config import Settings
 from app.models import AudioJob, GenerationJob, JobStatus, TERMINAL_JOB_STATUSES, UpscaleJob, VideoUpscaleJob, utc_now
 from app.services.audio_job_manager import AudioJobManager
+from app.services.cctv_session import SESSION_PREFIX as CCTV_SESSION_PREFIX
 from app.services.download_job_manager import DownloadJobManager
 from app.services.generation_job_manager import GenerationJobManager
 from app.services.job_manager import JobManager
@@ -98,13 +99,13 @@ class RetentionSweeper:
         active_video_work_ids = self._active_video_work_ids()
         # Bail between phases if stop() was requested, so a big sweep doesn't keep
         # the worker thread alive (and stop()'s await) longer than one phase.
-        self._delete_expired_outputs()
+        self._delete_expired_outputs(active_video_work_ids)
         if self._stop_event.is_set():
             return
         self._delete_expired_uploads(active_source_paths)
         if self._stop_event.is_set():
             return
-        self._delete_expired_work_dirs(active_video_work_ids)
+        self._delete_expired_work_dirs(active_video_work_ids | self._active_cctv_sessions())
         if self._stop_event.is_set():
             return
         self._prune_finished_jobs(self.job_manager.jobs)
@@ -168,16 +169,29 @@ class RetentionSweeper:
                     names.add(f"{SESSION_PREFIX}{job.restore_session}")
         return names
 
+    def _active_cctv_sessions(self) -> set[str]:
+        # Un job CCTV encolado lee el upload de su sesion: no se barre mientras el job viva.
+        return {
+            f"{CCTV_SESSION_PREFIX}{job.cctv.session_token}"
+            for job in self.video_job_manager.jobs.values()
+            if job.cctv is not None and not self._is_finished(job)
+        }
+
+    @staticmethod
+    def _output_job_id(entry: Path) -> str:
+        return entry.name.split(".", 1)[0]
+
     @staticmethod
     def _is_finished(job: UpscaleJob | VideoUpscaleJob | AudioJob | GenerationJob) -> bool:
         return job.status in TERMINAL_JOB_STATUSES
 
-    def _delete_expired_outputs(self) -> None:
+    def _delete_expired_outputs(self, active_job_ids: set[str]) -> None:
         if not self.settings.outputs_path.exists():
             return
         cutoff = time.time() - self.settings.output_ttl_hours * 3600
         for entrada in self.settings.outputs_path.iterdir():
-            if entrada.stat().st_mtime >= cutoff:
+            # outputs/{id}.cctv/ se crea al encolar (copia verificada): un job largo o en cola no la pierde.
+            if entrada.stat().st_mtime >= cutoff or self._output_job_id(entrada) in active_job_ids:
                 continue
             if entrada.is_file():
                 entrada.unlink(missing_ok=True)

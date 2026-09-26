@@ -116,6 +116,25 @@ export interface VideoJobResponse {
   metadata: JobMetadata;
   progressPct: number | null;
   downloadUrl: string | null;
+  // Solo en jobs del modo CCTV (`POST /video/cctv/jobs`); null en el resto.
+  cctv?: CctvJobSummary | null;
+}
+
+export interface CctvArtifactLink {
+  name: string;
+  url: string;
+}
+
+export interface CctvJobSummary {
+  task: string;
+  lane: string | null;
+  preset: string | null;
+  sourceSha256: string | null;
+  noOsd: boolean;
+  osdBoxesConfirmed: boolean;
+  warnings: string[];
+  artifacts: CctvArtifactLink[];
+  verifyUrl: string | null;
 }
 
 // Mirrors app/schemas.py::AudioTrackResponse / SubtitleTrackResponse — one
@@ -345,6 +364,13 @@ export interface VoiceCatalog {
 // same filtering convention as AudioCapabilities.restoreModes.
 export interface VideoCapabilities {
   interpEngines: string[];
+  // Both CCTV lanes resolve against the backend capability catalog; the reason
+  // keys are `capability.setup.*` translation keys, null when available.
+  cctvAvailable: boolean;
+  cctvReasonKey: string | null;
+  cctvAiAvailable: boolean;
+  cctvAiReasonKey: string | null;
+  cctvUnavailableSteps: string[];
 }
 
 export interface SupportedModelResponse {
@@ -380,6 +406,8 @@ export interface EngineInfoResponse {
   // escrita a mano en el frontend se desincroniza con el .env del servidor.
   maxUploadMb: number;
   maxVideoUploadMb: number;
+  // Horas que las salidas quedan en disco (OUTPUT_TTL_HOURS); el modo CCTV avisa antes del borrado.
+  outputTtlHours: number;
   videoProfiles: VideoProfileResponse[];
   ffmpegAvailable: boolean;
 }

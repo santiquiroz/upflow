@@ -33,6 +33,35 @@ VIDEO_STAGE_ORDER: tuple[str, ...] = (
     "encoding_video",
 )
 
+CCTV_STAGE_WEIGHTS: dict[str, tuple[str, float]] = {
+    "ingesting": ("Preparing working copy", 8),
+    "analyzing_video": ("Analyzing video", 6),
+    "clarifying": ("Applying classic filters", 45),
+    "restoring_frames": ("Enhancing frames", 60),
+    "verifying": ("Verifying frame counts", 8),
+    "exporting_frames": ("Exporting frames", 5),
+    "building_comparison": ("Building side-by-side comparison", 14),
+    "roi_registering": ("Aligning frames", 40),
+    "roi_fusing": ("Combining frames", 30),
+    "reporting": ("Writing report", 2),
+    "packaging": ("Building handover package", 10),
+}
+
+CCTV_STAGE_ORDER: dict[str, tuple[str, ...]] = {
+    "clarify": (
+        "ingesting",
+        "analyzing_video",
+        "clarifying",
+        "verifying",
+        "exporting_frames",
+        "building_comparison",
+        "reporting",
+        "packaging",
+    ),
+    "enhance": ("ingesting", "restoring_frames", "exporting_frames", "building_comparison", "reporting", "packaging"),
+    "roi_fusion": ("ingesting", "roi_registering", "roi_fusing", "reporting"),
+}
+
 IMAGE_STAGE_WEIGHTS: dict[str, tuple[str, float]] = {
     "validating": ("Validating image", 10),
     "upscaling": ("Upscaling", 90),
@@ -139,7 +168,18 @@ def _normalize_weights(raw_stages: list[tuple[str, str, float]]) -> list[Stage]:
     ]
 
 
+def _cctv_stage_active(job: VideoUpscaleJob, key: str) -> bool:
+    return key != "exporting_frames" or bool(job.cctv.still_frames)
+
+
+def build_cctv_stages(job: VideoUpscaleJob) -> list[Stage]:
+    keys = CCTV_STAGE_ORDER[job.cctv.task]
+    return _normalize_weights([(key, *CCTV_STAGE_WEIGHTS[key]) for key in keys if _cctv_stage_active(job, key)])
+
+
 def build_video_stages(job: VideoUpscaleJob) -> list[Stage]:
+    if job.cctv is not None:
+        return build_cctv_stages(job)
     # hasAudio is stamped at probe; default True keeps audio stages when the
     # source has not been probed yet (stages get filtered once it is known).
     has_audio = bool(job.metadata.get("hasAudio", True))
@@ -351,6 +391,15 @@ def _write_stage_metadata(
 def advance_video_stage(job: VideoUpscaleJob, stage_key: str) -> None:
     stages = apply_stage_transition(build_video_stages(job), stage_key)
     _write_stage_metadata(job, stages, stage_key)
+
+
+def apply_video_stage_fraction(job: VideoUpscaleJob, stage_key: str, fraction: float) -> None:
+    # Una sola escritura por avance: re-sellar stageStartedAt en cada fraccion romperia la ETA de la etapa.
+    if job.metadata.get("stage") != stage_key:
+        advance_video_stage(job, stage_key)
+    stages = apply_stage_transition(build_video_stages(job), stage_key)
+    progress = compute_progress(stages, current_fraction=fraction)
+    job.metadata["progress"] = max(float(job.metadata.get("progress") or 0.0), progress)
 
 
 def complete_video_stages(job: VideoUpscaleJob) -> None:

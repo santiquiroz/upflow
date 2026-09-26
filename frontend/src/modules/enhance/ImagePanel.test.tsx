@@ -89,6 +89,7 @@ const ENGINE_INFO: EngineInfoResponse = {
   ],
   maxUploadMb: 50,
   maxVideoUploadMb: 2048,
+  outputTtlHours: 24,
   videoProfiles: [],
   ffmpegAvailable: true,
 };

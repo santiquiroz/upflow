@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { en } from "../i18n/en";
 import type {
   AudioJob,
+  CctvJobSummary,
   DownloadJob,
   GenerationJob,
   JobResponse,
@@ -470,6 +471,68 @@ describe("buildJobDetailSections", () => {
       const sections = buildJobDetailSections({ ...VIDEO_JOB, audioTrackIndices: [1, 3] }, context());
 
       expect(valueOf(sections.parameters, "job.detail.field.audioTracks")).toBe("1, 3");
+    });
+  });
+
+  describe("CCTV", () => {
+    const CCTV_SUMMARY: CctvJobSummary = {
+      task: "clarify",
+      lane: "classic",
+      preset: "night_ir",
+      sourceSha256: "c".repeat(64),
+      noOsd: true,
+      osdBoxesConfirmed: false,
+      warnings: ["cctv.package.noDiskRoom", "cctv.somethingNew"],
+      artifacts: [],
+      verifyUrl: "/api/v1/video/jobs/vid-1/verify",
+    };
+    const CCTV_JOB: VideoJobResponse = {
+      ...VIDEO_JOB,
+      status: "completed",
+      originalFilename: "ch01.dav",
+      modelName: "cctv-clarify",
+      scale: 1,
+      cctv: CCTV_SUMMARY,
+    };
+
+    it("shows the task, the lane, the preset and the on-screen text decision", () => {
+      const sections = buildJobDetailSections(CCTV_JOB, context());
+
+      expect(valueOf(sections.parameters, "job.detail.field.cctvTask")).toBe("Clarify video");
+      expect(valueOf(sections.parameters, "job.detail.field.cctvLane")).toBe("Classic filters (no AI)");
+      expect(valueOf(sections.parameters, "job.detail.field.videoPreset")).toBe("Night / IR");
+      expect(valueOf(sections.parameters, "job.detail.field.onScreenText")).toBe("No on-screen text");
+    });
+
+    it("says the boxes were confirmed when there is on-screen text", () => {
+      const cctv = { ...CCTV_SUMMARY, noOsd: false, osdBoxesConfirmed: true };
+      const sections = buildJobDetailSections({ ...CCTV_JOB, cctv }, context());
+
+      expect(valueOf(sections.parameters, "job.detail.field.onScreenText")).toBe("Boxes confirmed");
+    });
+
+    it("leaves out the upscale model, scale and encoding, which a CCTV job doesn't use", () => {
+      const sections = buildJobDetailSections(CCTV_JOB, context());
+
+      expect(labels(sections.parameters)).not.toContain("job.detail.field.model");
+      expect(labels(sections.parameters)).not.toContain("job.detail.field.scale");
+      expect(labels(sections.parameters)).not.toContain("job.detail.field.crf");
+    });
+
+    it("shows the original's hash and the translated warnings in the result", () => {
+      const sections = buildJobDetailSections(CCTV_JOB, context());
+
+      expect(valueOf(sections.result, "job.detail.field.sourceSha256")).toBe("c".repeat(64));
+      expect(valueOf(sections.result, "job.detail.field.cctvWarnings")).toBe(
+        `${en["cctv.package.noDiskRoom"]} cctv.somethingNew`,
+      );
+    });
+
+    it("shows an unknown preset by its id", () => {
+      const cctv = { ...CCTV_SUMMARY, preset: "harbor" };
+      const sections = buildJobDetailSections({ ...CCTV_JOB, cctv }, context());
+
+      expect(valueOf(sections.parameters, "job.detail.field.videoPreset")).toBe("harbor");
     });
   });
 

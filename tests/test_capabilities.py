@@ -913,3 +913,180 @@ class TestRestauracionDeFotosEnElArbol:
         validate_step_ready(settings, "descreen")
         with pytest.raises(ValueError, match="caras"):
             validate_step_ready(settings, "faces")
+
+
+# Modo CCTV: ffmpeg en disco no alcanza, la build tiene que traer FFV1 y
+# libx264; el carril IA ademas pide restore-core y una GPU DirectML sana.
+# ---------------------------------------------------------------------------
+
+
+def _probes(*, build: bool = True, gpu: bool = True):
+    from app.services.capabilities import HostProbes
+
+    return HostProbes(ffmpeg_cctv_build=lambda _s: build, dml_gpu=lambda _s: gpu)
+
+
+def _exploding_probes():
+    from app.services.capabilities import HostProbes
+
+    def boom(_settings):
+        raise AssertionError("no se sondea la maquina si falta bajar algo")
+
+    return HostProbes(ffmpeg_cctv_build=boom, dml_gpu=boom)
+
+
+def _disk_complete(monkeypatch) -> None:
+    import app.services.capabilities as cap_mod
+
+    monkeypatch.setattr(cap_mod, "_path_exists", lambda _settings, _requirement: True)
+
+
+def _cctv(settings, capability_id: str, probes):
+    return _find(resolve_capabilities(settings, FakeRegistry(), probes), capability_id)
+
+
+class TestModoCctv:
+    def test_el_modo_no_es_builtin_para_que_evalue_ffmpeg(self) -> None:
+        cctv = next(c for c in CATALOG if c.id == "video.cctv")
+
+        assert cctv.provisioning == "vendored_pack"
+        assert cctv.job_kind == "video"
+        assert cctv.strategies == ("dsp",)
+        assert PathRequirement("ffmpeg_binary", "ffmpeg") in cctv.requirements
+
+    def test_el_carril_ia_pide_ffmpeg_y_restore_core(self) -> None:
+        ai = next(c for c in CATALOG if c.id == "video.cctvAi")
+
+        assert ai.strategies == ("model",)
+        assert PathRequirement("ffmpeg_binary", "ffmpeg") in ai.requirements
+        assert PathRequirement("restore_core_installed", "restore-core") in ai.requirements
+
+    def test_sin_ffmpeg_pide_bajarlo_sin_sondear_la_build(self, tmp_path: Path) -> None:
+        settings = make_settings(tmp_path, FFMPEG_BINARY=str(tmp_path / "no-ffmpeg.exe"))
+
+        cctv = _cctv(settings, "video.cctv", _exploding_probes())
+
+        assert cctv.status == "needs_setup"
+        assert cctv.missing_packs == ("ffmpeg",)
+        assert cctv.setup_reason_key == "capability.setup.missingPack"
+
+    def test_con_una_build_sin_ffv1_o_libx264_no_esta_disponible(
+        self, tmp_path: Path
+    ) -> None:
+        settings = make_settings(tmp_path, FFMPEG_BINARY=str(touch(tmp_path / "ffmpeg.exe")))
+
+        cctv = _cctv(settings, "video.cctv", _probes(build=False))
+
+        assert cctv.status == "needs_setup"
+        # Bajar el pack no arregla un FFMPEG_BINARY que apunta a otra build.
+        assert cctv.missing_packs == ()
+        assert cctv.setup_reason_key == "capability.setup.ffmpegBuildLacksCctv"
+
+    def test_con_ffmpeg_y_una_build_completa_esta_disponible(self, tmp_path: Path) -> None:
+        settings = make_settings(tmp_path, FFMPEG_BINARY=str(touch(tmp_path / "ffmpeg.exe")))
+
+        assert _cctv(settings, "video.cctv", _probes()).status == "available"
+
+    def test_el_modo_clasico_no_pide_gpu(self, tmp_path: Path) -> None:
+        settings = make_settings(tmp_path, FFMPEG_BINARY=str(touch(tmp_path / "ffmpeg.exe")))
+
+        assert _cctv(settings, "video.cctv", _probes(gpu=False)).status == "available"
+
+    def test_el_carril_ia_sin_restore_core_ofrece_el_pack(self, tmp_path: Path) -> None:
+        from app.services.capabilities import resolve_one
+
+        settings = make_settings(tmp_path, FFMPEG_BINARY=str(touch(tmp_path / "ffmpeg.exe")))
+
+        ai = resolve_one("video.cctvAi", settings, None, _exploding_probes())
+
+        assert ai.status == "needs_setup"
+        assert ai.missing_packs == ("restore-core",)
+        assert ai.setup_reason_key == "capability.setup.missingPack"
+
+    def test_el_carril_ia_sin_gpu_dice_que_la_necesita(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        _disk_complete(monkeypatch)
+
+        ai = _cctv(make_settings(tmp_path), "video.cctvAi", _probes(gpu=False))
+
+        assert ai.status == "needs_setup"
+        assert ai.missing_packs == ()
+        assert ai.setup_reason_key == "capability.setup.needsGpu"
+
+    def test_la_build_de_ffmpeg_se_dice_antes_que_la_gpu(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        _disk_complete(monkeypatch)
+
+        ai = _cctv(make_settings(tmp_path), "video.cctvAi", _probes(build=False, gpu=False))
+
+        assert ai.setup_reason_key == "capability.setup.ffmpegBuildLacksCctv"
+
+    def test_el_carril_ia_con_todo_esta_disponible(self, tmp_path: Path, monkeypatch) -> None:
+        _disk_complete(monkeypatch)
+
+        assert _cctv(make_settings(tmp_path), "video.cctvAi", _probes()).status == "available"
+
+    def test_resolve_one_usa_las_mismas_sondas(self, tmp_path: Path, monkeypatch) -> None:
+        from app.services.capabilities import resolve_one
+
+        _disk_complete(monkeypatch)
+
+        ai = resolve_one("video.cctvAi", make_settings(tmp_path), None, _probes(gpu=False))
+
+        assert ai.setup_reason_key == "capability.setup.needsGpu"
+
+
+class TestSondasDeLaMaquina:
+    def test_la_build_sin_binario_no_soporta_cctv(self, tmp_path: Path) -> None:
+        from app.services.capabilities import ffmpeg_build_supports_cctv
+
+        settings = make_settings(tmp_path, FFMPEG_BINARY=str(tmp_path / "no-ffmpeg.exe"))
+
+        assert ffmpeg_build_supports_cctv(settings) is False
+
+    def test_la_build_que_no_arranca_no_soporta_cctv(self, tmp_path: Path) -> None:
+        from app.services.capabilities import ffmpeg_build_supports_cctv
+
+        roto = tmp_path / "ffmpeg.exe"
+        roto.write_bytes(b"no es un ejecutable")
+        settings = make_settings(tmp_path, FFMPEG_BINARY=str(roto))
+
+        assert ffmpeg_build_supports_cctv(settings) is False
+
+    @pytest.mark.parametrize(
+        "devices, unhealthy, expected",
+        [
+            ([{"id": "cpu", "backend": "cpu"}], set(), False),
+            ([{"id": "cpu", "backend": "cpu"}, {"id": "dml:0", "backend": "directml"}], set(), True),
+            (
+                [{"id": "cpu", "backend": "cpu"}, {"id": "dml:0", "backend": "directml"}],
+                {"dml:0"},
+                False,
+            ),
+        ],
+    )
+    def test_solo_cuenta_una_gpu_directml_sana(self, devices, unhealthy, expected) -> None:
+        from app.services.capabilities import has_healthy_dml_device
+
+        class Devices:
+            def list_devices(self):
+                return devices
+
+            def is_healthy(self, device_id: str) -> bool:
+                return device_id not in unhealthy
+
+        assert has_healthy_dml_device(Devices()) is expected
+
+    def test_las_sondas_de_la_app_usan_su_servicio_de_devices(self, tmp_path: Path) -> None:
+        from app.services.capabilities import host_probes_for
+
+        class Removida:
+            def list_devices(self):
+                return [{"id": "dml:0", "backend": "directml"}]
+
+            def is_healthy(self, device_id: str) -> bool:
+                return False
+
+        assert host_probes_for(Removida()).dml_gpu(make_settings(tmp_path)) is False
