@@ -1376,6 +1376,18 @@ def test_roi_fusion_has_its_own_stages(tmp_path: Path) -> None:
     assert [stage.key for stage in build_video_stages(job)] == ["ingesting", "roi_registering", "roi_fusing", "reporting"]
 
 
+def test_enhance_stages_list_only_what_the_ai_lane_runs(tmp_path: Path) -> None:
+    # El carril IA todavia no arma comparativo ni paquete ZIP: esas etapas no pueden aparecer como hechas.
+    job = make_cctv_job(tmp_path, task="enhance", still_frames=(3,))
+
+    assert [stage.key for stage in build_video_stages(job)] == [
+        "ingesting",
+        "restoring_frames",
+        "exporting_frames",
+        "reporting",
+    ]
+
+
 @pytest.mark.parametrize("task", ["clarify", "enhance", "roi_fusion"])
 def test_cctv_stage_weights_normalize_to_one(tmp_path: Path, task: str) -> None:
     stages = build_video_stages(make_cctv_job(tmp_path, task=task, still_frames=(1,)))

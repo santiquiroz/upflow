@@ -58,7 +58,7 @@ CCTV_STAGE_ORDER: dict[str, tuple[str, ...]] = {
         "reporting",
         "packaging",
     ),
-    "enhance": ("ingesting", "restoring_frames", "exporting_frames", "building_comparison", "reporting", "packaging"),
+    "enhance": ("ingesting", "restoring_frames", "exporting_frames", "reporting"),
     "roi_fusion": ("ingesting", "roi_registering", "roi_fusing", "reporting"),
 }
 
