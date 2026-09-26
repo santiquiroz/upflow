@@ -33,6 +33,7 @@ NETWORK_MODULES = frozenset(
 RESTORE_MODULES = (
     "api/licenses_routes.py",
     "api/restore_routes.py",
+    "headless_restore.py",
     "schemas_restore.py",
     "services/engines/colorize.py",
     "services/engines/drunet_restore.py",
@@ -63,6 +64,7 @@ RESTORE_GLOBS = (
 # CCTV lands on another branch: these globs match nothing until it is merged.
 CCTV_GLOBS = (
     "api/cctv_routes.py",
+    "headless_cctv.py",
     "schemas_cctv.py",
     "services/cctv_*.py",
     "services/ffmpeg_*.py",

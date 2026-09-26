@@ -1,5 +1,8 @@
 """Modo headless de Upflow: reescalado, restauracion de fotos y carril clasico de CCTV en proceso, sin servidor.
 
+Es la fachada: la restauracion vive en headless_restore.py, el modo CCTV en headless_cctv.py y los
+errores, el contexto y las ayudas de job compartidas en headless_base.py; todo se usa como app.headless.<nombre>.
+
 Lo consumen la CLI (`upflow`) y el servidor MCP en modo in-process. Arma los
 mismos servicios que el lifespan de app.main pero sin colas, workers ni sweeper:
 un job se resuelve y corre en el hilo que llama (JobManager.run_inline), con el
@@ -22,99 +25,80 @@ se borran (sin sweeper), asi que "recomponer caras" necesita el servidor.
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
-import re
 import shutil
 import subprocess
 import time
-from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict
 from pathlib import Path
-from types import MappingProxyType
-from typing import TYPE_CHECKING, Any
-from uuid import uuid4
+from typing import Any
 
-from PIL import Image
-from pydantic import ValidationError
-
-from app.api.restore_routes import analysis_response
-from app.config import Settings, get_settings
-from app.models import CctvOptions, CctvStep, RoiFusionRequest, UpscaleJob, VideoUpscaleJob
-from app.schemas_restore import RestoreOptions
-from app.services.cctv_analysis import (
-    FFMPEG_UNAVAILABLE,
-    AnalysisRequest,
-    AnalysisTools,
-    CctvAnalysisError,
-    analysis_tools,
-    discard_session,
-    new_session,
-    run_session_analysis,
-    upload_destination,
+from app.config import Settings
+from app.headless_base import (  # noqa: F401 - fachada: la CLI, MCP y los tests usan app.headless.<nombre>
+    DEFAULT_SR_MODEL,
+    DeviceError,
+    EXIT_DEVICE,
+    EXIT_FAILED,
+    EXIT_MODEL_NOT_INSTALLED,
+    EXIT_OK,
+    EXIT_USAGE,
+    HeadlessContext,
+    HeadlessError,
+    InferenceError,
+    ModelNotInstalledError,
+    UsageError,
+    build_context,
+    deterministic_job_id,
+    ensure_model_installed,
+    image_size,
+    resolve_device,
+    run_job_inline,
 )
-from app.services.cctv_chain import CctvChainError
-from app.services.cctv_job_validation import ROI_FRAMES, ROI_PREFILTER_STEPS, check_roi_choices
-from app.services.cctv_ingest import MediaTools
-from app.services.cctv_presets import CCTV_PRESETS, PresetContext, preset_steps
-from app.services.cctv_preview import load_preview_source
-from app.services.cctv_report import REPORT_HTML_NAME, REPORT_JSON_NAME
-from app.services.cctv_session import cctv_job_dir
-from app.services.cctv_session import session_dir as cctv_session_dir
+from app.headless_cctv import (  # noqa: F401 - fachada: la CLI, MCP y los tests usan app.headless.<nombre>
+    CCTV_CLARIFY_TASK,
+    CCTV_ROI_TASK,
+    CctvClarifyChoices,
+    CctvRoiChoices,
+    cctv_check_unchanged,
+    cctv_clarify,
+    cctv_clarify_file,
+    cctv_error,
+    cctv_options_of,
+    cctv_probe,
+    cctv_result_dir,
+    cctv_roi,
+    cctv_roi_file,
+    cctv_roi_options_of,
+    check_osd_decision,
+    check_roi_request,
+    checked_job_id,
+    choices_with_preset_steps,
+    classic_preset_steps,
+    normalized_step,
+    parse_sample_aspect,
+    require_cctv_mode,
+    require_steps_for_preset,
+    roi_choices_with_steps,
+    with_preset_steps,
+)
+from app.headless_restore import (  # noqa: F401 - fachada: la CLI, MCP y los tests usan app.headless.<nombre>
+    RestoreSpec,
+    analyze_photo,
+    merge_restore_options,
+    plan_from_analysis,
+    plan_from_steps,
+    preset_step_options,
+    relocated_sidecar,
+    restore_format_for,
+    restore_image,
+    validated_restore_options,
+)
+from app.models import UpscaleJob
 from app.services.compat_strategy import strategy_for
-from app.services.device_semaphores import DeviceSemaphores
-from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
-from app.services.engines.onnx_upscaler import OnnxUpscaler
-from app.services.engines.photo_restore_engine import PhotoRestoreEngine
-from app.services.engines.realesrgan_ncnn import RealEsrganNcnnEngine
-from app.services.ffmpeg_capabilities import cached_capabilities
-from app.services.ffmpeg_filters import Box
-from app.services.frame_export import StillFrameError
-from app.services.gpu_session_coordinator import GpuSessionCoordinator
-from app.services.handover_package import check_files_unchanged
 from app.services.health_report import build_health_report
-from app.services.hf_client import HfClient
-from app.services.job_manager import JobManager
 from app.services.model_installer import InstallStatus, ModelInstaller
 from app.services.model_preflight import preflight_upscaler
-from app.services.model_registry import ModelKind, ModelRegistry, ModelStatus
-from app.services.photo_geometry import Geometry
-from app.services.photo_restore_chain import steps_from_selection
-from app.services.photo_restore_job import (
-    UPSCALE_AI,
-    PhotoRestoreJobRunner,
-    restore_upscale_mode,
-    step_uses_model,
-)
-from app.services.photo_restore_presets import photo_preset, resolve_preset
-from app.services.osd_check import OsdSelection, validate_osd_decision
-from app.services.resource_probes import DxgiVramProbe, SystemRamProbe
-from app.services.restore_outputs import discard_restore_outputs, restore_output_paths
-from app.services.restore_provenance import EXTENSIONS, write_sidecar
-from app.services.restore_session import (
-    PREVIEW_NAME,
-    RestoreSessionStore,
-    SessionAnalysis,
-    SessionNotFound,
-    default_detectors,
-    session_dir,
-)
-from app.services.roi_reference import (
-    ReferenceRequest,
-    check_reference_request,
-    resolved_roi_steps,
-    suggest_session_reference,
-)
+from app.services.model_registry import ModelKind
 from app.services.tile_params import validate_tile_params
-
-if TYPE_CHECKING:
-    from app.services.video_job_manager import VideoJobManager
-
-EXIT_OK = 0
-EXIT_USAGE = 2
-EXIT_MODEL_NOT_INSTALLED = 3
-EXIT_DEVICE = 4
-EXIT_FAILED = 5
 
 ENGINE_FORMATS = ("png", "jpg", "jpeg", "webp")
 # Formatos que el motor no escribe: salida PNG del motor + ffmpeg vendorizado.
@@ -124,83 +108,6 @@ FFMPEG_ENCODERS: dict[str, list[str]] = {
 }
 INSTALL_TERMINAL = (InstallStatus.installed, InstallStatus.error)
 INSTALL_POLL_SECONDS = 1.0
-DEFAULT_SR_MODEL = "realesrgan-x4plus"
-CCTV_CLARIFY_TASK = "clarify"
-CCTV_ROI_TASK = "roi_fusion"
-CCTV_CLASSIC_LANE = "classic"
-CCTV_JOB_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
-
-
-class HeadlessError(RuntimeError):
-    exit_code = EXIT_FAILED
-
-    def __init__(self, message: str, key: str | None = None) -> None:
-        super().__init__(message)
-        self.key = key
-
-
-class UsageError(HeadlessError):
-    exit_code = EXIT_USAGE
-
-
-class ModelNotInstalledError(HeadlessError):
-    exit_code = EXIT_MODEL_NOT_INSTALLED
-
-
-class DeviceError(HeadlessError):
-    exit_code = EXIT_DEVICE
-
-
-class InferenceError(HeadlessError):
-    exit_code = EXIT_FAILED
-
-
-@dataclass(slots=True)
-class HeadlessContext:
-    settings: Settings
-    registry: ModelRegistry
-    devices: DevicesService
-    probes: dict[str, Any]
-    ncnn_engine: RealEsrganNcnnEngine
-    onnx_engine: OnnxUpscaler
-    job_manager: JobManager
-    hf_client: HfClient
-    restore_sessions: RestoreSessionStore
-    restore_runner: PhotoRestoreJobRunner
-
-
-def build_context(settings: Settings | None = None) -> HeadlessContext:
-    settings = settings or get_settings()
-    registry = ModelRegistry(settings)
-    devices = DevicesService(settings)
-    probes: dict[str, Any] = {"gpu": DxgiVramProbe(), "cpu": SystemRamProbe()}
-    ncnn_engine = RealEsrganNcnnEngine(settings, vram_probe=probes["gpu"])
-    coordinator = GpuSessionCoordinator()
-    onnx_engine = OnnxUpscaler(settings, registry, devices, coordinator)
-    restore_engine = PhotoRestoreEngine(settings, coordinator, device_health=devices)
-    restore_sessions = RestoreSessionStore(settings, default_detectors(settings, restore_engine))
-    restore_runner = PhotoRestoreJobRunner(settings, restore_engine, sessions=restore_sessions)
-    job_manager = JobManager(
-        settings,
-        ncnn_engine,
-        DeviceSemaphores(settings, resource_probes=probes),
-        onnx_engine=onnx_engine,
-        registry=registry,
-        devices=devices,
-        restore_runner=restore_runner,
-    )
-    return HeadlessContext(
-        settings=settings,
-        registry=registry,
-        devices=devices,
-        probes=probes,
-        ncnn_engine=ncnn_engine,
-        onnx_engine=onnx_engine,
-        job_manager=job_manager,
-        hf_client=HfClient(settings),
-        restore_sessions=restore_sessions,
-        restore_runner=restore_runner,
-    )
 
 
 # ---------------------------------------------------------------- consultas
@@ -253,38 +160,6 @@ def engine_format_for(fmt: str) -> str:
     return "png" if fmt in FFMPEG_ENCODERS else fmt
 
 
-def deterministic_job_id(source: Path, **params: Any) -> str:
-    digest = hashlib.sha1(source.read_bytes())
-    digest.update(repr(sorted(params.items())).encode("utf-8"))
-    return f"cli-{digest.hexdigest()[:16]}"
-
-
-async def resolve_device(ctx: HeadlessContext, device: str | None) -> str:
-    if device == AUTO_DEVICE_ID:
-        raise DeviceError("device 'auto' needs the server's router; pass an explicit device (cpu, dml:0...)")
-    if device is None:
-        return (await asyncio.to_thread(ctx.devices.resolve_default))["id"]
-    try:
-        await asyncio.to_thread(ctx.devices.validate, device)
-    except ValueError as exc:
-        raise DeviceError(str(exc)) from exc
-    return device
-
-
-def ensure_model_installed(ctx: HeadlessContext, model: str) -> None:
-    if model in ctx.settings.model_keys:
-        if not ctx.ncnn_engine.available():
-            raise ModelNotInstalledError(
-                f"builtin model {model!r} needs the realesrgan-ncnn pack at {ctx.settings.engine_binary_path}"
-            )
-        return
-    entry = ctx.registry.get(model)
-    if entry is None or entry.kind != ModelKind.onnx:
-        raise ModelNotInstalledError(f"model {model!r} is not installed (see `upflow models`)")
-    if entry.status != ModelStatus.installed:
-        raise ModelNotInstalledError(f"model {model!r} is not ready (status={entry.status.value})")
-
-
 async def upscale_image(
     ctx: HeadlessContext,
     source: Path,
@@ -311,20 +186,6 @@ async def upscale_image(
     size = image_size(produced)
     deliver_output(ctx.settings, produced, output, fmt)
     return describe_result(job, output, fmt, device_id, size, time.perf_counter() - started)
-
-
-async def run_job_inline(ctx: HeadlessContext, job: UpscaleJob) -> Path:
-    try:
-        return await ctx.job_manager.run_inline(job)
-    except HeadlessError:
-        raise
-    except Exception as exc:  # noqa: BLE001 - cualquier fallo del motor es codigo 5
-        raise InferenceError(str(exc)) from exc
-
-
-def image_size(path: Path) -> tuple[int, int]:
-    with Image.open(path) as image:
-        return image.size
 
 
 def _build_job(
@@ -412,332 +273,6 @@ def describe_result(
     }
 
 
-# ---------------------------------------------------------------- restauracion
-
-
-@dataclass(frozen=True, slots=True)
-class RestoreSpec:
-    steps: tuple[str, ...] = ()
-    options: Mapping[str, Any] = field(default_factory=dict)
-    preset: str | None = None
-    scale: int = 1
-    model: str = DEFAULT_SR_MODEL
-    device: str | None = None
-    output_format: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class RestorePlan:
-    steps: tuple[str, ...]
-    options: dict[str, Any]
-    preset: str | None
-
-
-@dataclass(frozen=True, slots=True)
-class RestoreSource:
-    path: Path
-    name: str
-    token: str | None = None
-    analysis: SessionAnalysis | None = None
-    owned: bool = False
-
-
-@dataclass(frozen=True, slots=True)
-class RestoreDelivery:
-    output: Path
-    uncolored: Path | None
-    details: Path
-
-
-def restore_format_for(output: Path, explicit: str | None) -> str:
-    fmt = (explicit or output.suffix.lstrip(".")).lower()
-    if fmt in EXTENSIONS:
-        return fmt
-    raise UsageError(f"unsupported restore format {fmt!r}; use one of {tuple(EXTENSIONS)}")
-
-
-def validated_restore_options(raw: Mapping[str, Any]) -> dict[str, Any]:
-    try:
-        options = RestoreOptions.model_validate(dict(raw)).model_dump(exclude_none=True)
-    except ValidationError as exc:
-        raise UsageError(f"invalid restore options: {validation_message(exc)}") from exc
-    if "preview_crop" in options:
-        raise UsageError("preview_crop (Preview this area) needs the Upflow server; restore the whole photo here")
-    return options
-
-
-def validation_message(exc: ValidationError) -> str:
-    return "; ".join(f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}" for error in exc.errors())
-
-
-def preset_step_options(preset_id: str, steps: Sequence[str]) -> dict[str, dict[str, Any]]:
-    try:
-        preset = photo_preset(preset_id)
-    except ValueError as exc:
-        raise UsageError(str(exc)) from exc
-    return {step.step_id: dict(step.options) for step in preset.steps if step.step_id in steps}
-
-
-def merge_restore_options(base: Mapping[str, Any], overrides: Mapping[str, Any]) -> dict[str, Any]:
-    merged = dict(base)
-    for key, value in overrides.items():
-        current = merged.get(key)
-        both_mappings = isinstance(current, Mapping) and isinstance(value, Mapping)
-        merged[key] = {**current, **value} if both_mappings else value
-    return merged
-
-
-def with_preset(options: dict[str, Any], preset: str | None) -> dict[str, Any]:
-    return options if preset is None else {**options, "preset": preset}
-
-
-def plan_from_steps(spec: RestoreSpec) -> RestorePlan:
-    base = {} if spec.preset is None else preset_step_options(spec.preset, spec.steps)
-    options = merge_restore_options(base, spec.options)
-    return RestorePlan(tuple(spec.steps), with_preset(options, spec.preset), spec.preset)
-
-
-def plan_from_analysis(spec: RestoreSpec, analysis: Any) -> RestorePlan:
-    preset = spec.preset or analysis.diagnosis.proposed_preset
-    try:
-        selection = resolve_preset(preset, analysis.diagnosis.facts)
-    except ValueError as exc:
-        raise UsageError(str(exc)) from exc
-    if not selection.steps:
-        raise UsageError(f"the analysis found nothing for preset {preset!r} to fix; choose steps with --steps")
-    options = merge_restore_options(selection.options, spec.options)
-    return RestorePlan(selection.steps, with_preset(options, preset), preset)
-
-
-def plan_for(spec: RestoreSpec, origin: RestoreSource) -> RestorePlan:
-    return plan_from_steps(spec) if spec.steps else plan_from_analysis(spec, origin.analysis)
-
-
-async def analyze_photo(ctx: HeadlessContext, source: Path) -> dict[str, Any]:
-    analysis = await open_restore_session(ctx, existing_file(source))
-    return analysis_payload(ctx, analysis)
-
-
-def analysis_payload(ctx: HeadlessContext, analysis: SessionAnalysis) -> dict[str, Any]:
-    payload = analysis_response(analysis).model_dump(by_alias=True, mode="json")
-    preview = ctx.restore_sessions.file(analysis.record.token, PREVIEW_NAME)
-    return {"ok": True, **payload, "previewPath": str(preview)}
-
-
-def existing_file(source: Path) -> Path:
-    path = Path(source).expanduser().resolve()
-    if not path.is_file():
-        raise UsageError(f"input file not found: {path}")
-    return path
-
-
-async def open_restore_session(ctx: HeadlessContext, source: Path) -> SessionAnalysis:
-    # La sesion se queda con una copia: la foto del usuario nunca se mueve.
-    upload = ctx.settings.uploads_path / f"{uuid4().hex}-{source.name}"
-    try:
-        await asyncio.to_thread(copy_file, source, upload)
-        return await ctx.restore_sessions.open(upload, source.name)
-    except ValueError as exc:
-        raise UsageError(str(exc)) from exc
-    finally:
-        upload.unlink(missing_ok=True)
-
-
-def copy_file(source: Path, target: Path) -> None:
-    target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(source, target)
-
-
-async def restore_source(
-    ctx: HeadlessContext, spec: RestoreSpec, source: Path | None, token: str | None
-) -> RestoreSource:
-    if (source is None) == (token is None):
-        raise UsageError("pass either an input photo or an analysis token")
-    if token is not None:
-        return session_source(ctx, spec, token)
-    path = existing_file(source)
-    if spec.steps:
-        return RestoreSource(path, path.name)
-    return await analyzed_source(ctx, path, spec.options.get("geometry"))
-
-
-def session_source(ctx: HeadlessContext, spec: RestoreSpec, token: str) -> RestoreSource:
-    if not spec.steps:
-        raise UsageError("a restore from an analysis token needs its steps (see proposedSteps)")
-    try:
-        record = ctx.restore_sessions.record(token)
-        return RestoreSource(ctx.restore_sessions.original_path(token), record.original_name, token)
-    except SessionNotFound as exc:
-        raise UsageError("unknown restore session; analyze the photo again") from exc
-
-
-async def analyzed_source(ctx: HeadlessContext, source: Path, geometry: Mapping[str, Any] | None) -> RestoreSource:
-    analysis = await open_restore_session(ctx, source)
-    token = analysis.record.token
-    origin = RestoreSource(
-        ctx.restore_sessions.original_path(token), analysis.record.original_name, token, analysis, owned=True
-    )
-    if not geometry:
-        return origin
-    try:
-        return replace(origin, analysis=await session_geometry(ctx, token, geometry))
-    except BaseException:
-        discard_owned_session(ctx.settings, origin)
-        raise
-
-
-async def session_geometry(ctx: HeadlessContext, token: str, geometry: Mapping[str, Any]) -> SessionAnalysis:
-    # La mascara y las caras se miden sobre la copia de trabajo: la geometria va a la sesion.
-    try:
-        return await ctx.restore_sessions.set_geometry(token, Geometry.from_mapping(geometry))
-    except ValueError as exc:
-        raise UsageError(str(exc)) from exc
-
-
-def discard_owned_session(settings: Settings, origin: RestoreSource) -> None:
-    if origin.owned and origin.token is not None:
-        shutil.rmtree(session_dir(settings.video_work_path, origin.token), ignore_errors=True)
-
-
-def ensure_steps_ready(ctx: HeadlessContext, plan: RestorePlan) -> None:
-    try:
-        specs = steps_from_selection(list(plan.steps))
-    except ValueError as exc:
-        raise UsageError(str(exc)) from exc
-    for step in specs:
-        check_step_ready(ctx, step.id, step_uses_model(step, plan.options))
-
-
-def check_step_ready(ctx: HeadlessContext, step_id: str, uses_model: bool) -> None:
-    try:
-        ctx.restore_runner.check_ready(ctx.settings, step_id, uses_model=uses_model)
-    except ValueError as exc:
-        raise ModelNotInstalledError(str(exc)) from exc
-
-
-async def prepare_restore_job(
-    ctx: HeadlessContext, plan: RestorePlan, spec: RestoreSpec, origin: RestoreSource
-) -> UpscaleJob:
-    ensure_steps_ready(ctx, plan)
-    try:
-        job = await ctx.job_manager.build_job(
-            source_path=origin.path,
-            original_filename=origin.name,
-            model_name=spec.model,
-            scale=spec.scale,
-            output_format=str(spec.output_format),
-            device=spec.device,
-            restore_steps=plan.steps,
-            restore_options=plan.options,
-            restore_session=origin.token,
-        )
-    except ValueError as exc:
-        raise UsageError(str(exc)) from exc
-    if restore_upscale_mode(job.restore_options, job.scale) == UPSCALE_AI:
-        ensure_model_installed(ctx, spec.model)
-    job.id = deterministic_job_id(
-        origin.path,
-        steps=job.restore_steps,
-        options=json.dumps(job.restore_options, sort_keys=True),
-        scale=spec.scale,
-        model=spec.model,
-        device=spec.device,
-        fmt=spec.output_format,
-    )
-    return job
-
-
-async def restore_image(
-    ctx: HeadlessContext,
-    output: Path,
-    spec: RestoreSpec,
-    *,
-    source: Path | None = None,
-    token: str | None = None,
-) -> dict[str, Any]:
-    output = Path(output).expanduser().resolve()
-    fmt = restore_format_for(output, spec.output_format)
-    options = validated_restore_options(spec.options)
-    started = time.perf_counter()
-    device_id = await resolve_device(ctx, spec.device)
-    spec = replace(spec, options=options, device=device_id, output_format=fmt)
-    origin = await restore_source(ctx, spec, source, token)
-    try:
-        plan = plan_for(spec, origin)
-        job = await prepare_restore_job(ctx, plan, spec, origin)
-        await run_job_inline(ctx, job)
-        delivery = deliver_restore_outputs(ctx.settings, job, output)
-    finally:
-        discard_owned_session(ctx.settings, origin)
-    return describe_restore(job, plan, delivery, origin, time.perf_counter() - started)
-
-
-def delivery_targets(output: Path, has_uncolored: bool) -> RestoreDelivery:
-    uncolored = output.with_name(f"{output.stem}.uncolored{output.suffix}") if has_uncolored else None
-    return RestoreDelivery(output, uncolored, output.with_name(f"{output.stem}.restore.json"))
-
-
-def delivered_names(delivery: RestoreDelivery) -> dict[str, str]:
-    names = {"restored": delivery.output.name}
-    if delivery.uncolored is not None:
-        names["uncolored"] = delivery.uncolored.name
-    return names
-
-
-def relocated_sidecar(sidecar: Mapping[str, Any], names: Mapping[str, str]) -> dict[str, Any]:
-    outputs = [
-        {**entry, "file": names[entry["role"]]} for entry in sidecar.get("outputs", []) if entry.get("role") in names
-    ]
-    return {**sidecar, "outputs": outputs}
-
-
-def deliver_restore_outputs(settings: Settings, job: UpscaleJob, output: Path) -> RestoreDelivery:
-    paths = restore_output_paths(settings.outputs_path, job.id, job.output_format)
-    targets = delivery_targets(output, paths.uncolored.is_file())
-    try:
-        output.parent.mkdir(parents=True, exist_ok=True)
-        sidecar = json.loads(paths.sidecar.read_text(encoding="utf-8"))
-        shutil.move(str(paths.final), str(targets.output))
-        if targets.uncolored is not None:
-            shutil.move(str(paths.uncolored), str(targets.uncolored))
-        write_sidecar(targets.details, relocated_sidecar(sidecar, delivered_names(targets)))
-    finally:
-        # Sin sweeper en modo headless: vista, antes/despues y artefactos de caras no quedan huerfanos.
-        discard_restore_outputs(paths)
-    return targets
-
-
-def describe_restore(
-    job: UpscaleJob, plan: RestorePlan, delivery: RestoreDelivery, origin: RestoreSource, seconds: float
-) -> dict[str, Any]:
-    summary = job.metadata.get("restore") or {}
-    width, height = image_size(delivery.output)
-    return {
-        "ok": True,
-        "output": str(delivery.output),
-        "uncolored": None if delivery.uncolored is None else str(delivery.uncolored),
-        "details": str(delivery.details),
-        "width": width,
-        "height": height,
-        "steps": list(job.restore_steps),
-        "preset": plan.preset,
-        "options": dict(job.restore_options),
-        "scale": job.scale,
-        "upscale": summary.get("upscale"),
-        "device": job.device,
-        "format": job.output_format,
-        "faces": summary.get("faces", []),
-        "compositeReasons": summary.get("compositeReasons", []),
-        "badge": summary.get("badge", False),
-        "digitalSourceType": summary.get("digitalSourceType"),
-        "warnings": summary.get("warnings", []),
-        "cpuFallback": summary.get("cpuFallback", []),
-        "recomposeAvailable": False,
-        "token": None if origin.owned else origin.token,
-        "seconds": round(seconds, 2),
-    }
-
-
 # ---------------------------------------------------------------- modelos HF
 
 
@@ -787,370 +322,3 @@ async def _wait_install(installer: ModelInstaller, install_id: str, poll_seconds
         if job.status in INSTALL_TERMINAL:
             return job
         await asyncio.sleep(poll_seconds)
-
-
-# ---------------------------------------------------------------- CCTV (carril clasico)
-
-
-@dataclass(frozen=True, slots=True)
-class CctvClarifyChoices:
-    preset: str | None = None
-    steps: tuple[Mapping[str, Any], ...] | None = None
-    osd_boxes: tuple[Box, ...] = ()
-    osd_confirmed: bool = False
-    no_osd: bool = False
-    trim: tuple[int, int] | None = None
-    still_frames: tuple[int, ...] = ()
-    acquisition: Mapping[str, Any] = field(default_factory=lambda: MappingProxyType({}))
-
-
-@dataclass(frozen=True, slots=True)
-class CctvRoiChoices:
-    roi: RoiFusionRequest
-    preset: str | None = None
-    steps: tuple[Mapping[str, Any], ...] | None = None
-    acquisition: Mapping[str, Any] = field(default_factory=lambda: MappingProxyType({}))
-    # Sin --ref: roi.reference_frame es un marcador y se pide "Suggest reference frame" con la sesion.
-    suggest_reference: bool = False
-
-
-AnyCctvChoices = CctvClarifyChoices | CctvRoiChoices
-StepPicker = Callable[[Sequence[Mapping[str, Any]]], tuple[Mapping[str, Any], ...]]
-CctvResultDescriber = Callable[[VideoUpscaleJob, Path, float], dict[str, Any]]
-
-
-def checked_job_id(job_id: str) -> str:
-    if not CCTV_JOB_ID.fullmatch(job_id):
-        raise UsageError(f"invalid job id {job_id!r}")
-    return job_id
-
-
-def cctv_error(exc: BaseException) -> HeadlessError:
-    if isinstance(exc, HeadlessError):
-        return exc
-    if isinstance(exc, CctvAnalysisError):
-        return analysis_headless_error(exc)
-    if isinstance(exc, CctvChainError):
-        return UsageError(str(exc), key=exc.code)
-    if isinstance(exc, StillFrameError):
-        return UsageError(str(exc), key=exc.key)
-    return InferenceError(str(exc), key=getattr(exc, "key", None))
-
-
-def analysis_headless_error(exc: CctvAnalysisError) -> HeadlessError:
-    if exc.key == FFMPEG_UNAVAILABLE:
-        return ModelNotInstalledError(str(exc), key=exc.key)
-    if exc.status >= 500:
-        return InferenceError(str(exc), key=exc.key)
-    return UsageError(str(exc), key=exc.key)
-
-
-def check_osd_decision(choices: CctvClarifyChoices) -> None:
-    try:
-        validate_osd_decision(OsdSelection(choices.osd_boxes, choices.osd_confirmed, choices.no_osd))
-    except CctvChainError as exc:
-        raise UsageError(str(exc), key=exc.code) from exc
-
-
-def check_roi_request(roi: RoiFusionRequest) -> None:
-    try:
-        check_roi_choices(roi)
-    except CctvChainError as exc:
-        raise UsageError(str(exc), key=exc.code) from exc
-    if not 0 <= roi.first_frame <= roi.reference_frame <= roi.last_frame:
-        raise UsageError(
-            f"the reference frame {roi.reference_frame} must be inside the range {roi.first_frame}:{roi.last_frame}",
-            key=ROI_FRAMES,
-        )
-
-
-def check_out_dir(out_dir: Path | None) -> None:
-    if out_dir is not None and Path(out_dir).exists() and not Path(out_dir).is_dir():
-        raise UsageError(f"the output folder is a file: {out_dir}")
-
-
-# --- Pasos del preset, con el mismo contexto que arma la UI (cctvSteps.presetContextOf)
-
-
-def parse_sample_aspect(sar: object) -> tuple[int, int] | None:
-    parts = str(sar or "").split(":")
-    if len(parts) != 2 or not all(part.isdigit() and int(part) > 0 for part in parts):
-        return None
-    return int(parts[0]), int(parts[1])
-
-
-def preset_context_of(analysis: Mapping[str, Any]) -> PresetContext:
-    interlace = (analysis.get("quality") or {}).get("interlace") or {}
-    lite = (analysis.get("video") or {}).get("lite") or {}
-    return PresetContext(interlaced=bool(interlace.get("interlaced")), sample_aspect=parse_sample_aspect(lite.get("sar")))
-
-
-def classic_preset_steps(analysis: Mapping[str, Any]) -> dict[str, list[dict[str, Any]]]:
-    context = preset_context_of(analysis)
-    return {preset.id: preset_steps(preset.id, CCTV_CLASSIC_LANE, context) for preset in CCTV_PRESETS}
-
-
-def steps_for_preset(analysis: Mapping[str, Any], preset: str) -> tuple[dict[str, Any], ...]:
-    try:
-        return tuple(preset_steps(preset, CCTV_CLASSIC_LANE, preset_context_of(analysis)))
-    except CctvChainError as exc:
-        raise UsageError(str(exc), key=exc.code) from exc
-
-
-def with_preset_steps(analysis: Mapping[str, Any]) -> dict[str, Any]:
-    return {**analysis, "presetSteps": classic_preset_steps(analysis)}
-
-
-def require_cctv_mode(analysis: Mapping[str, Any]) -> None:
-    if analysis.get("modeAvailable") is False:
-        reason = analysis.get("modeUnavailableReason")
-        raise ModelNotInstalledError(f"this ffmpeg build cannot run CCTV mode ({reason})", key=reason)
-
-
-def with_steps_of_preset(analysis: Mapping[str, Any], choices: AnyCctvChoices, pick: StepPicker) -> AnyCctvChoices:
-    if choices.steps is not None:
-        return choices
-    preset = choices.preset or analysis.get("suggestedPreset")
-    if preset is None:
-        return replace(choices, steps=())
-    return replace(choices, preset=preset, steps=pick(steps_for_preset(analysis, preset)))
-
-
-def choices_with_preset_steps(analysis: Mapping[str, Any], choices: CctvClarifyChoices) -> CctvClarifyChoices:
-    return with_steps_of_preset(analysis, choices, tuple)
-
-
-def roi_prefilter_steps(steps: Sequence[Mapping[str, Any]]) -> tuple[Mapping[str, Any], ...]:
-    return tuple(step for step in steps if step["id"] in ROI_PREFILTER_STEPS)
-
-
-def roi_choices_with_steps(analysis: Mapping[str, Any], choices: CctvRoiChoices) -> CctvRoiChoices:
-    return with_steps_of_preset(analysis, choices, roi_prefilter_steps)
-
-
-def require_steps_for_preset(choices: AnyCctvChoices) -> None:
-    if choices.steps is None and choices.preset:
-        raise UsageError(
-            f"pass the steps of preset {choices.preset!r}: copy presetSteps[{choices.preset!r}] from the CCTV probe"
-        )
-
-
-# --- Opciones del job
-
-
-def normalized_step(raw: object) -> dict[str, Any]:
-    step_id = raw.get("id") if isinstance(raw, Mapping) else None
-    params = (raw.get("params") or {}) if isinstance(raw, Mapping) else None
-    if not isinstance(step_id, str) or not isinstance(params, Mapping):
-        raise UsageError(f"each CCTV step needs an 'id' and an optional 'params' object, got {raw!r}")
-    return {"id": step_id, "params": dict(params)}
-
-
-def cctv_step_of(raw: object) -> CctvStep:
-    step = normalized_step(raw)
-    return CctvStep(step["id"], MappingProxyType(step["params"]))
-
-
-def cctv_options_of(token: str, choices: CctvClarifyChoices) -> CctvOptions:
-    return CctvOptions(
-        task=CCTV_CLARIFY_TASK,
-        session_token=token,
-        preset=choices.preset,
-        steps=tuple(cctv_step_of(step) for step in choices.steps or ()),
-        osd_boxes=tuple(tuple(box) for box in choices.osd_boxes),
-        osd_boxes_confirmed=choices.osd_confirmed,
-        no_osd=choices.no_osd,
-        trim=choices.trim,
-        still_frames=choices.still_frames,
-        acquisition=MappingProxyType(dict(choices.acquisition)),
-    )
-
-
-def cctv_roi_options_of(token: str, choices: CctvRoiChoices) -> CctvOptions:
-    return CctvOptions(
-        task=CCTV_ROI_TASK,
-        session_token=token,
-        preset=choices.preset,
-        steps=tuple(cctv_step_of(step) for step in choices.steps or ()),
-        roi=choices.roi,
-        acquisition=MappingProxyType(dict(choices.acquisition)),
-    )
-
-
-# --- Sesion, job y entrega
-
-
-def cctv_analysis_tools(settings: Settings) -> AnalysisTools:
-    ffmpeg = settings.ffmpeg_binary_path
-    return analysis_tools(ffmpeg, settings.ffprobe_binary_path, lambda: cached_capabilities(ffmpeg))
-
-
-def open_cctv_session(work_root: Path, source: Path) -> AnalysisRequest:
-    token, directory = new_session(work_root)
-    try:
-        upload = upload_destination(directory, source.name)
-        shutil.copy2(source, upload)
-    except BaseException:
-        discard_session(directory)
-        raise
-    return AnalysisRequest(token, directory, upload)
-
-
-def cctv_job_manager(ctx: HeadlessContext) -> VideoJobManager:
-    # Import diferido: el pipeline de video suma ~1,7 s al arranque de cada comando de la CLI.
-    from app.services.cctv_job_runner import build_cctv_runners
-    from app.services.media_tools import MediaTools as VideoMediaTools
-    from app.services.video_job_manager import VideoJobManager
-    from app.services.video_upscaler import VideoUpscaler
-
-    settings = ctx.settings
-    media = VideoMediaTools(settings)
-    upscaler = VideoUpscaler(
-        settings, ctx.ncnn_engine, media, devices=ctx.devices, cctv_runners=build_cctv_runners(settings)
-    )
-    semaphores = DeviceSemaphores(settings, resource_probes=ctx.probes)
-    return VideoJobManager(settings, upscaler, media, semaphores, registry=ctx.registry, devices=ctx.devices)
-
-
-def deliver_cctv_outputs(job_dir: Path, out_dir: Path | None) -> Path:
-    if out_dir is None:
-        return job_dir
-    destination = Path(out_dir).expanduser().resolve() / job_dir.name
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(job_dir), str(destination))
-    return destination
-
-
-def describe_cctv_result(job: VideoUpscaleJob, result_dir: Path, seconds: float) -> dict[str, Any]:
-    meta = job.metadata.get("cctv") or {}
-    return {
-        "ok": True,
-        "jobId": job.id,
-        "task": job.cctv.task,
-        "lane": meta.get("lane"),
-        "preset": job.cctv.preset,
-        "outputDir": str(result_dir),
-        "sourceSha256": meta.get("sourceSha256"),
-        "receivedAt": meta.get("receivedAt"),
-        "framesIn": meta.get("framesIn"),
-        "framesOut": meta.get("framesOut"),
-        "outputs": meta.get("outputs", {}),
-        "report": str(result_dir / REPORT_HTML_NAME),
-        "reportJson": str(result_dir / REPORT_JSON_NAME),
-        "warnings": list(meta.get("warnings", [])),
-        "seconds": round(seconds, 2),
-    }
-
-
-def describe_roi_result(job: VideoUpscaleJob, result_dir: Path, seconds: float) -> dict[str, Any]:
-    return {**describe_cctv_result(job, result_dir, seconds), "roi": (job.metadata.get("cctv") or {}).get("roi")}
-
-
-async def cctv_probe(ctx: HeadlessContext, source: Path, *, keep_session: bool = False) -> dict[str, Any]:
-    source = existing_file(source)
-    request = await asyncio.to_thread(open_cctv_session, ctx.settings.video_work_path, source)
-    try:
-        analysis = await run_session_analysis(request, cctv_analysis_tools(ctx.settings))
-    except Exception as exc:  # noqa: BLE001 - run_session_analysis ya borro la sesion
-        raise cctv_error(exc) from exc
-    if not keep_session:
-        await asyncio.to_thread(discard_session, request.directory)
-        analysis = {**analysis, "token": None}
-    return {"ok": True, **with_preset_steps(analysis)}
-
-
-async def cctv_clarify(
-    ctx: HeadlessContext, token: str, choices: CctvClarifyChoices, out_dir: Path | None = None
-) -> dict[str, Any]:
-    check_osd_decision(choices)
-    require_steps_for_preset(choices)
-    check_out_dir(out_dir)
-    return await run_cctv_job(ctx, cctv_options_of(token, choices), out_dir, describe_cctv_result)
-
-
-async def cctv_roi(
-    ctx: HeadlessContext, token: str, choices: CctvRoiChoices, out_dir: Path | None = None
-) -> dict[str, Any]:
-    check_roi_request(choices.roi)
-    require_steps_for_preset(choices)
-    check_out_dir(out_dir)
-    chosen = await with_suggested_reference(ctx, token, choices)
-    return await run_cctv_job(ctx, cctv_roi_options_of(token, chosen), out_dir, describe_roi_result)
-
-
-async def with_suggested_reference(ctx: HeadlessContext, token: str, choices: CctvRoiChoices) -> CctvRoiChoices:
-    if not choices.suggest_reference:
-        return choices
-    try:
-        frame = await suggested_reference(ctx.settings, token, choices)
-    except Exception as exc:  # noqa: BLE001 - la CLI traduce cualquier fallo a un codigo estable
-        raise cctv_error(exc) from exc
-    return replace(choices, roi=replace(choices.roi, reference_frame=frame), suggest_reference=False)
-
-
-async def suggested_reference(settings: Settings, token: str, choices: CctvRoiChoices) -> int:
-    roi, ffmpeg = choices.roi, settings.ffmpeg_binary_path
-    request = ReferenceRequest(roi.first_frame, roi.last_frame, tuple(roi.box), tuple(choices.steps or ()))
-    source = await load_preview_source(settings.video_work_path, token, MediaTools(ffmpeg, settings.ffprobe_binary_path))
-    check_reference_request(request, source, settings.cctv_roi_max_frames)
-    steps = resolved_roi_steps(request.steps, await asyncio.to_thread(cached_capabilities, ffmpeg))
-    return await suggest_session_reference(ffmpeg, source, request, steps)
-
-
-async def run_cctv_job(
-    ctx: HeadlessContext, options: CctvOptions, out_dir: Path | None, describe: CctvResultDescriber
-) -> dict[str, Any]:
-    started = time.perf_counter()
-    try:
-        job = await cctv_job_manager(ctx).run_cctv_inline(cctv=options)
-    except Exception as exc:  # noqa: BLE001 - la CLI traduce cualquier fallo a un codigo estable
-        raise cctv_error(exc) from exc
-    job_dir = cctv_job_dir(ctx.settings.outputs_path, job.id)
-    result_dir = await asyncio.to_thread(deliver_cctv_outputs, job_dir, out_dir)
-    return describe(job, result_dir, time.perf_counter() - started)
-
-
-async def on_probed_clip(
-    ctx: HeadlessContext, source: Path, run: Callable[[Mapping[str, Any], str], Awaitable[dict[str, Any]]]
-) -> dict[str, Any]:
-    analysis = await cctv_probe(ctx, source, keep_session=True)
-    token = analysis["token"]
-    try:
-        require_cctv_mode(analysis)
-        return await run(analysis, token)
-    finally:
-        # Sin sweeper en modo headless: la sesion solo servia para este job.
-        await asyncio.to_thread(discard_session, cctv_session_dir(ctx.settings.video_work_path, token))
-
-
-async def cctv_clarify_file(
-    ctx: HeadlessContext, source: Path, out_dir: Path, choices: CctvClarifyChoices
-) -> dict[str, Any]:
-    check_osd_decision(choices)
-    check_out_dir(out_dir)
-
-    async def clarify(analysis: Mapping[str, Any], token: str) -> dict[str, Any]:
-        return await cctv_clarify(ctx, token, choices_with_preset_steps(analysis, choices), out_dir)
-
-    return await on_probed_clip(ctx, source, clarify)
-
-
-async def cctv_roi_file(ctx: HeadlessContext, source: Path, out_dir: Path, choices: CctvRoiChoices) -> dict[str, Any]:
-    check_roi_request(choices.roi)
-    check_out_dir(out_dir)
-
-    async def fuse(analysis: Mapping[str, Any], token: str) -> dict[str, Any]:
-        return await cctv_roi(ctx, token, roi_choices_with_steps(analysis, choices), out_dir)
-
-    return await on_probed_clip(ctx, source, fuse)
-
-
-def cctv_result_dir(ctx: HeadlessContext, job_id: str) -> Path:
-    return cctv_job_dir(ctx.settings.outputs_path, checked_job_id(job_id))
-
-
-def cctv_check_unchanged(directory: Path) -> dict[str, Any]:
-    directory = Path(directory).expanduser().resolve()
-    if not directory.is_dir():
-        raise UsageError(f"CCTV result folder not found: {directory}")
-    return {"directory": str(directory), **check_files_unchanged(directory).to_json()}
