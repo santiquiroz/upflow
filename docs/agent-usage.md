@@ -186,8 +186,41 @@ Salida de `clarify --json` (las rutas de `outputs` son relativas a `outputDir`):
 accidentales después de que Upflow recibió el archivo; no prueba que la
 grabación sea auténtica ni dice qué pasó antes.
 
+### Foto multi-cuadro de una placa o cara (`upflow cctv roi`)
+
+"Plate or face still (multi-frame)": alinea la misma región en varios cuadros y
+los combina. Es clásico, en CPU y determinista, sin IA. Reduce ruido y a veces
+recupera algo de detalle, pero no crea detalle más fino que el grabado. Cuánto
+mejora frente al mejor cuadro solo todavía no está medido con clips reales.
+
+```powershell
+upflow cctv roi --in clip.mp4 --out-dir caso --frames 120:150 --ref 131 `
+  --box 410,300,64,24 --kind plate --scale 3 --json
+```
+
+| Flag de `roi` | Default | Qué hace |
+|---|---|---|
+| `--in PATH`, `--out-dir DIR` | — | igual que en `clarify` |
+| `--frames A:B` | — | primer y último cuadro, inclusive; tope de 60 cuadros (`CCTV_ROI_MAX_FRAMES`) |
+| `--ref R` | — | el cuadro donde se midió `--box`; tiene que estar dentro de `--frames` |
+| `--box X,Y,W,H` | — | la región, ajustada al objeto, en píxeles del cuadro guardado; ancho y alto pares |
+| `--kind` | — | `plate` (placa o cartel plano, homografía) o `face_or_object` (afín) |
+| `--scale` | `2` | `2`, `3` o `4` |
+| `--method` | `median` | `median` o `trimmed_mean` (descarta el 20% de los extremos) |
+| `--preset` | el sugerido por `probe` | de su cadena solo se usan `deinterlace` y `deblock`, antes de alinear |
+
+No hace falta decidir el OSD: la fusión no pega cajas de texto. Salida de
+`roi --json`: los campos de `clarify` más `roi`, con `framesTotal`, `framesUsed`,
+`effectiveSamples` (los cuadros que aportaron información nueva; las copias del
+GOP cuentan como una), `rejectedFrames`, `nearCopies` ("little to gain"),
+`density`, `clippedFramesPct` y `notices` (`cctv.roi.*`). `outputs.roi` lista
+`roi_fused_x{k}.png` (16 bits), la referencia ampliada con vecino más cercano,
+el mapa de acuerdo, la pila alineada y `roi_samples.csv`. La carpeta también
+lleva informe y `SHA256SUMS.txt`, así que `upflow cctv verify` funciona igual.
+
 Códigos propios del modo: `2` para la decisión del OSD, un preset, recorte,
-cuadro o caja inválidos; `3` si no hay ffmpeg o la build no trae FFV1/libx264;
+cuadro o caja inválidos (en `roi`, también rango, referencia, tipo o factor:
+`cctv.error.roi*`); `3` si no hay ffmpeg o la build no trae FFV1/libx264;
 `5` si el video no se puede decodificar o ffmpeg falla. Con `--json` el error
 suma `key` (`cctv.error.*`), la misma clave que usa la API.
 
@@ -208,6 +241,7 @@ suma `key` (`cctv.error.*`), la misma clave que usa la API.
 | `upflow_restore_recompose(job_id, faces)` | rehace la mezcla de las caras de un job terminado sin volver a correr modelos (`faces`: `{"0": {"enabled": true, "blend": 0.4}}`). Solo con servidor |
 | `upflow_cctv_probe(file_path)` | `upflow cctv probe`. Con servidor sube el clip y espera el análisis aunque la API responda 202; en proceso la sesión queda viva para `upflow_cctv_clarify` (la barre el sweeper del servidor cuando arranca) |
 | `upflow_cctv_clarify(token, preset, steps, osd_boxes, osd_confirmed, no_osd, trim, still_frames, acquisition, destination_dir)` | `upflow cctv clarify`. `steps` = `presetSteps[preset]` del probe (`[]` = sin filtros; preset sin `steps` es un error). Con servidor crea un job de la familia `video` (seguilo con `upflow_wait_job`; `cctv.artifacts` lista los archivos); en proceso espera y, con `destination_dir`, mueve ahí `<jobId>.cctv` |
+| `upflow_cctv_roi_fuse(token, frames, reference, box, kind, scale=2, method="median", preset, steps, acquisition, destination_dir)` | `upflow cctv roi`. `frames` = `[primer, último]`, `box` = `[x, y, w, h]` medido en `reference`. `steps` admite solo `deinterlace` y `deblock` (sacalos de `presetSteps[preset]` del probe; preset sin `steps` es un error; `[]` = sin prefiltros). Con servidor crea un job de la familia `video` (`cctv.roi` trae las muestras efectivas y los avisos); en proceso espera y, con `destination_dir`, mueve ahí `<jobId>.cctv` |
 | `upflow_cctv_check_unchanged(job_id, output_dir)` | `upflow cctv verify`; `output_dir` para una carpeta ya movida |
 
 Un `token` de `upflow_restore_analyze` en proceso sirve para `upflow_restore_photo`

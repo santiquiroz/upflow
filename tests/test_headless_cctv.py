@@ -9,6 +9,7 @@ import pytest
 
 from app import cli, headless
 from app.config import Settings
+from app.models import RoiFusionRequest
 from app.services.cctv_analysis import FFMPEG_UNAVAILABLE, CctvAnalysisError
 from app.services.cctv_chain import CctvChainError
 from app.services.cctv_session import JOB_DIR_SUFFIX
@@ -224,3 +225,94 @@ def test_cctv_cli_probe_clarify_and_verify_on_a_real_clip(monkeypatch, capsys, t
     (result_dir / "report.json").write_text("{}", encoding="utf-8")
     code, tampered = run_cli(capsys, ["cctv", "verify", "--dir", str(result_dir)])
     assert code == 5 and tampered["mismatches"] == ["report.json"]
+
+
+# --- Foto multi-cuadro de una ROI
+
+
+def roi_request(**overrides) -> RoiFusionRequest:
+    fields = {"first_frame": 10, "last_frame": 40, "reference_frame": 22, "box": (0, 0, 40, 40), "kind": "plate"}
+    return RoiFusionRequest(**{**fields, **overrides})
+
+
+def test_cctv_roi_takes_only_deinterlace_and_deblock_from_the_preset() -> None:
+    chosen = headless.roi_choices_with_steps(INTERLACED_LITE, headless.CctvRoiChoices(roi=roi_request()))
+    explicit = headless.CctvRoiChoices(roi=roi_request(), steps=())
+
+    assert chosen.preset == "night_ir" and step_ids(chosen.steps) == ["deinterlace", "deblock"]
+    assert headless.roi_choices_with_steps(INTERLACED_LITE, explicit) is explicit
+    assert headless.roi_choices_with_steps({}, headless.CctvRoiChoices(roi=roi_request())).steps == ()
+
+
+def test_cctv_roi_options_carry_the_region() -> None:
+    choices = headless.CctvRoiChoices(
+        roi=roi_request(), preset="day", steps=({"id": "deblock"},), acquisition={"recorderMake": "HiLook"}
+    )
+
+    options = headless.cctv_roi_options_of("tok", choices)
+
+    assert (options.task, options.session_token, options.preset) == ("roi_fusion", "tok", "day")
+    assert options.roi == roi_request() and [step.id for step in options.steps] == ["deblock"]
+    assert options.osd_boxes == () and options.trim is None and options.still_frames == ()
+    assert dict(options.acquisition) == {"recorderMake": "HiLook"}
+
+
+@pytest.mark.parametrize(
+    ("overrides", "key"),
+    [
+        ({"reference_frame": 9}, "cctv.error.roiFrames"),
+        ({"reference_frame": 41}, "cctv.error.roiFrames"),
+        ({"first_frame": -1, "reference_frame": 0}, "cctv.error.roiFrames"),
+        ({"kind": "car"}, "cctv.error.roiInvalid"),
+        ({"scale": 5}, "cctv.error.roiInvalid"),
+        ({"method": "mean"}, "cctv.error.roiInvalid"),
+    ],
+)
+def test_cctv_roi_bad_choices_are_usage_errors(overrides, key) -> None:
+    with pytest.raises(headless.UsageError) as error:
+        headless.check_roi_request(roi_request(**overrides))
+
+    assert error.value.key == key and error.value.exit_code == 2
+
+
+async def test_cctv_roi_file_checks_the_region_before_probing(monkeypatch, tmp_path: Path) -> None:
+    async def probe(*args, **kwargs):
+        pytest.fail("the probe must not run with an invalid region")
+
+    monkeypatch.setattr(headless, "cctv_probe", probe)
+    choices = headless.CctvRoiChoices(roi=roi_request(reference_frame=50))
+
+    with pytest.raises(headless.UsageError) as error:
+        await headless.cctv_roi_file(object(), tmp_path / "clip.mp4", tmp_path / "out", choices)
+
+    assert error.value.key == "cctv.error.roiFrames"
+
+
+@needs_ffmpeg
+def test_cctv_cli_roi_and_verify_on_a_real_clip(monkeypatch, capsys, tmp_path: Path) -> None:
+    settings = Settings(_env_file=None, RUNTIME_DIR=str(tmp_path / "runtime"))
+    build = headless.build_context
+    monkeypatch.setattr(headless, "build_context", lambda: build(settings))
+    clip = make_clip(tmp_path / "cámara 1.mkv", settings)
+    clip_sha = hashlib.sha256(clip.read_bytes()).hexdigest()
+    out_dir = tmp_path / "caso"
+    argv = [
+        "cctv", "roi", "--in", str(clip), "--out-dir", str(out_dir), "--frames", "5:20", "--ref", "10",
+        "--box", "120,80,64,48", "--kind", "face_or_object",
+    ]  # fmt: skip
+
+    code, result = run_cli(capsys, argv)
+
+    assert code == 0, result
+    result_dir = Path(result["outputDir"])
+    assert result_dir.parent == out_dir.resolve() and result_dir.name == f"{result['jobId']}{JOB_DIR_SUFFIX}"
+    assert (result["task"], result["lane"], result["sourceSha256"]) == ("roi_fusion", "classic", clip_sha)
+    roi = result["roi"]
+    assert (roi["kind"], roi["scale"], roi["method"], roi["referenceFrame"]) == ("face_or_object", 2, "median", 10)
+    assert roi["framesTotal"] == 16 and 1 <= roi["effectiveSamples"] <= 16
+    assert all((result_dir / path).is_file() for path in result["outputs"]["roi"].values())
+    assert Path(result["reportJson"]).is_file()
+    assert leftovers(settings) == [] and hashlib.sha256(clip.read_bytes()).hexdigest() == clip_sha
+
+    code, verified = run_cli(capsys, ["cctv", "verify", "--dir", str(result_dir)])
+    assert code == 0 and verified["ok"] and verified["checked"] > 0

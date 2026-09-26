@@ -604,7 +604,7 @@ async def upflow_cctv_probe(file_path: str) -> str:
     tocarlo, lo remuxa sin re-encodear (IMKH/DHAV/H.264 crudo incluidos), arma el
     índice de cuadros y el diagnóstico (entrelazado, bloqueo, desenfoque, noche/IR).
 
-    Devuelve token (para upflow_cctv_clarify), sourceSha256, video, frameIndex,
+    Devuelve token (para upflow_cctv_clarify o upflow_cctv_roi_fuse), sourceSha256, video, frameIndex,
     quality, suggestedPreset y presetSteps: los pasos clásicos de cada preset
     para ESTE clip (con desentrelazado/aspecto según el diagnóstico). Todo corre
     en CPU. Equivale a `upflow cctv probe --json`.
@@ -685,6 +685,76 @@ async def upflow_cctv_clarify(
     except Exception as exc:
         if headless_tools.should_fallback(exc):
             return await headless_tools.upflow_cctv_clarify_headless(token, choices, destination_dir)
+        return format_tool_error(exc)
+
+
+def cctv_roi_body(token: str, choices: headless.CctvRoiChoices) -> dict[str, Any]:
+    roi = choices.roi
+    return {
+        "token": token,
+        "task": headless.CCTV_ROI_TASK,
+        "preset": choices.preset,
+        "steps": [headless.normalized_step(step) for step in choices.steps or ()],
+        "roi": {
+            "firstFrame": roi.first_frame,
+            "lastFrame": roi.last_frame,
+            "referenceFrame": roi.reference_frame,
+            "box": list(roi.box),
+            "kind": roi.kind,
+            "scale": roi.scale,
+            "method": roi.method,
+        },
+        "acquisition": dict(choices.acquisition),
+    }
+
+
+@mcp.tool(name="upflow_cctv_roi_fuse", annotations={"title": "Foto multi-cuadro de placa o cara (CCTV)", **CREATES_JOB})
+async def upflow_cctv_roi_fuse(
+    token: str,
+    frames: list[int],
+    reference: int,
+    box: list[int],
+    kind: str,
+    scale: int = 2,
+    method: str = "median",
+    preset: str = "",
+    steps: list[dict[str, Any]] | None = None,
+    acquisition: dict[str, Any] | None = None,
+    destination_dir: str = "",
+) -> str:
+    """Crea el job "Plate or face still (multi-frame)" sobre el token de
+    upflow_cctv_probe: alinea la región en varios cuadros y los combina (mediana o
+    media recortada).
+    Clásico, CPU y determinista, sin IA: reduce ruido y a veces recupera algo de
+    detalle, pero no crea detalle más fino que el grabado.
+
+    frames: [primer, último] cuadro (tope 60). reference: el cuadro donde se midió
+    box, dentro de frames. box: [x, y, w, h] en píxeles del cuadro guardado, lados
+    pares. kind: "plate" (plana, homografía) o "face_or_object" (afín). scale: 2, 3
+    o 4. method: "median" o "trimmed_mean".
+    steps: solo "deinterlace" y "deblock", tomados de presetSteps[preset] del
+    probe (con preset y sin steps, error; [] = sin prefiltros).
+    Resultado: roi_fused_x{k}.png (16 bits), la referencia ampliada con vecino más
+    cercano, el mapa de acuerdo, roi_samples.csv, informe y SHA256SUMS.txt; roi
+    trae framesUsed, effectiveSamples, nearCopies, densidad y avisos (cctv.roi.*).
+    Con servidor devuelve el job de la familia video (seguilo con upflow_wait_job);
+    en proceso espera el resultado y, con destination_dir, mueve ahí la carpeta
+    <jobId>.cctv. Equivale a `upflow cctv roi --json`.
+    """
+    try:
+        choices = headless_tools.cctv_roi_choices(
+            frames, reference, box, kind, scale, method, preset, steps, acquisition
+        )
+    except headless.HeadlessError as exc:
+        return _dump(headless_tools.error_payload(exc))
+    if headless_tools.inprocess_only():
+        return await headless_tools.upflow_cctv_roi_fuse_headless(token, choices, destination_dir)
+    try:
+        created = await client.api_post("/api/v1/video/cctv/jobs", json_body=cctv_roi_body(token, choices))
+        return _dump(normalize_job(FAMILIES["video"], created))
+    except Exception as exc:
+        if headless_tools.should_fallback(exc):
+            return await headless_tools.upflow_cctv_roi_fuse_headless(token, choices, destination_dir)
         return format_tool_error(exc)
 
 

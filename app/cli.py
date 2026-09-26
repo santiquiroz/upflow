@@ -5,6 +5,7 @@
     upflow models --json | upflow health --json | upflow preflight --repo X | upflow install --repo X --yes
     upflow cctv probe --in clip.mp4 --json
     upflow cctv clarify --in clip.mp4 --out-dir caso --preset day --no-osd --json
+    upflow cctv roi --in clip.mp4 --out-dir caso --frames 120:150 --ref 131 --box 410,300,64,24 --kind plate --json
     upflow cctv verify --dir caso/<jobId>.cctv --json
 
 `--json` imprime UNA sola linea JSON en stdout (contrato en app/headless.py). Codigos
@@ -23,6 +24,8 @@ from pathlib import Path
 from typing import Any
 
 from app import headless
+from app.models import RoiFusionRequest
+from app.services.cctv_job_validation import ROI_KINDS, ROI_METHODS, ROI_SCALES
 from app.services.cctv_presets import CCTV_PRESETS
 from app.services.photo_restore_chain import RESTORE_CHAIN, step_ids
 from app.services.photo_restore_presets import PHOTO_PRESETS
@@ -35,6 +38,8 @@ ROTATIONS = (0, 90, 180, 270)
 QUARTER_TURN = 90
 CCTV_PRESET_IDS = tuple(preset.id for preset in CCTV_PRESETS)
 OSD_FLAGS_HINT = "Pass --osd x,y,w,h (one per box) with --osd-confirmed, or --no-osd."
+DEFAULT_ROI_SCALE = 2
+DEFAULT_ROI_METHOD = "median"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -109,9 +114,26 @@ def add_cctv_commands(subparsers: argparse._SubParsersAction) -> None:
     clarify.add_argument("--frames", type=parse_frames, default=(), metavar="N,M", help="cuadros a exportar")
     _add_json_flag(clarify).set_defaults(handler=run_cctv_clarify)
 
+    add_cctv_roi_parser(commands)
+
     verify = commands.add_parser("verify", help="Check files are unchanged (SHA256SUMS.txt)")
     verify.add_argument("--dir", dest="result_dir", required=True)
     _add_json_flag(verify).set_defaults(handler=run_cctv_verify)
+
+
+def add_cctv_roi_parser(commands: argparse._SubParsersAction) -> None:
+    roi = commands.add_parser("roi", help="Plate or face still: fusion multi-cuadro de una region, en CPU")
+    roi.add_argument("--in", dest="input_path", required=True)
+    roi.add_argument("--out-dir", dest="out_dir", required=True)
+    roi.add_argument("--frames", type=parse_trim, required=True, metavar="A:B", help="primer y ultimo cuadro, tope 60")
+    roi.add_argument("--ref", dest="reference", type=int, required=True, help="cuadro de --box, dentro de --frames")
+    roi.add_argument("--box", type=parse_box, required=True, metavar="X,Y,W,H", help="pixeles guardados, lados pares")
+    roi.add_argument("--kind", choices=sorted(ROI_KINDS), required=True, help="plate: homografia; face_or_object: afin")
+    roi.add_argument("--scale", type=int, choices=sorted(ROI_SCALES), default=DEFAULT_ROI_SCALE)
+    roi.add_argument("--method", choices=sorted(ROI_METHODS), default=DEFAULT_ROI_METHOD)
+    preset_help = "de su cadena solo se usan deinterlace y deblock; omitido = el sugerido"
+    roi.add_argument("--preset", choices=CCTV_PRESET_IDS, default=None, help=preset_help)
+    _add_json_flag(roi).set_defaults(handler=run_cctv_roi)
 
 
 def parse_ints(raw: str, separator: str, count: int | None = None) -> tuple[int, ...]:
@@ -267,6 +289,18 @@ async def run_cctv_clarify(args: argparse.Namespace) -> dict[str, Any]:
     )
 
 
+def roi_choices(args: argparse.Namespace) -> headless.CctvRoiChoices:
+    first, last = args.frames
+    roi = RoiFusionRequest(first, last, args.reference, args.box, args.kind, args.scale, args.method)
+    return headless.CctvRoiChoices(roi=roi, preset=args.preset)
+
+
+async def run_cctv_roi(args: argparse.Namespace) -> dict[str, Any]:
+    choices = roi_choices(args)
+    headless.check_roi_request(choices.roi)
+    return await headless.cctv_roi_file(headless.build_context(), Path(args.input_path), Path(args.out_dir), choices)
+
+
 async def run_cctv_verify(args: argparse.Namespace) -> dict[str, Any]:
     return headless.cctv_check_unchanged(Path(args.result_dir))
 
@@ -322,6 +356,16 @@ def print_cctv_clarify(payload: dict[str, Any]) -> None:
     )
 
 
+def print_cctv_roi(payload: dict[str, Any]) -> None:
+    roi = payload.get("roi") or {}
+    notices = [notice.get("key", "") for notice in roi.get("notices", [])]
+    print(
+        f"wrote {payload.get('outputDir')} job={payload.get('jobId')} kind={roi.get('kind')} scale={roi.get('scale')}x "
+        f"framesUsed={roi.get('framesUsed')}/{roi.get('framesTotal')} effective={roi.get('effectiveSamples')} "
+        f"nearCopies={roi.get('nearCopies')} notices={listed(notices)} {payload.get('seconds')}s"
+    )
+
+
 def print_cctv_verify(payload: dict[str, Any]) -> None:
     if payload.get("ok"):
         print(f"unchanged: {payload.get('checked')} files in {payload.get('directory')}")
@@ -336,6 +380,7 @@ HUMAN_PRINTERS: dict[str, Callable[[dict[str, Any]], None]] = {
     "health": print_health,
     "cctv probe": print_cctv_probe,
     "cctv clarify": print_cctv_clarify,
+    "cctv roi": print_cctv_roi,
     "cctv verify": print_cctv_verify,
 }
 

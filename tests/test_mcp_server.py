@@ -21,6 +21,7 @@ from app.mcp.server import (
     upflow_cctv_check_unchanged,
     upflow_cctv_clarify,
     upflow_cctv_probe,
+    upflow_cctv_roi_fuse,
     upflow_download_result,
     upflow_job_status,
     upflow_list_jobs,
@@ -724,3 +725,144 @@ async def test_cctv_check_unchanged_reads_a_moved_folder_in_process(
     result = json.loads(await upflow_cctv_check_unchanged("v9", output_dir=str(folder)))
 
     assert result["ok"] is True and result["checked"] == 1
+
+
+# ---------------------------------------------------------------- CCTV: foto multi-cuadro de una ROI
+
+
+async def test_cctv_roi_fuse_posts_the_json_contract(monkeypatch: pytest.MonkeyPatch, server_mode: None) -> None:
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/video/cctv/jobs" and request.method == "POST"
+        sent.append(json.loads(request.read()))
+        summary = {"task": "roi_fusion", "sourceSha256": "ab" * 32, "artifacts": [], "roi": None}
+        return httpx.Response(202, json={"jobId": "v7", "status": "queued", "cctv": summary})
+
+    install_mock(monkeypatch, handler)
+    result = json.loads(
+        await upflow_cctv_roi_fuse(
+            "tok123",
+            frames=[10, 40],
+            reference=22,
+            box=[100, 80, 64, 24],
+            kind="plate",
+            scale=3,
+            method="trimmed_mean",
+            preset="night_ir",
+            steps=[{"id": "deinterlace", "params": {"mode": "send_frame"}}],
+            acquisition={"recorderMake": "HiLook"},
+        )
+    )
+
+    assert result["jobId"] == "v7" and result["family"] == "video" and result["cctv"]["task"] == "roi_fusion"
+    assert sent == [
+        {
+            "token": "tok123",
+            "task": "roi_fusion",
+            "preset": "night_ir",
+            "steps": [{"id": "deinterlace", "params": {"mode": "send_frame"}}],
+            "roi": {
+                "firstFrame": 10,
+                "lastFrame": 40,
+                "referenceFrame": 22,
+                "box": [100, 80, 64, 24],
+                "kind": "plate",
+                "scale": 3,
+                "method": "trimmed_mean",
+            },
+            "acquisition": {"recorderMake": "HiLook"},
+        }
+    ]
+
+
+async def test_cctv_roi_fuse_defaults_to_2x_median_without_prefilters(
+    monkeypatch: pytest.MonkeyPatch, server_mode: None
+) -> None:
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.read()))
+        return httpx.Response(202, json={"jobId": "v7", "status": "queued"})
+
+    install_mock(monkeypatch, handler)
+    await upflow_cctv_roi_fuse("tok123", frames=[0, 5], reference=0, box=[0, 0, 40, 40], kind="face_or_object")
+
+    body = sent[0]
+    assert body["steps"] == [] and body["preset"] is None
+    assert (body["roi"]["scale"], body["roi"]["method"]) == (2, "median")
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "fragment"),
+    [
+        ({"frames": [10]}, "frames"),
+        ({"box": [0, 0, 40]}, "box"),
+        ({"kind": "car"}, "Region type"),
+        ({"scale": 5}, "Region type"),
+        ({"reference": 41}, "reference"),
+        ({"preset": "day"}, "presetSteps"),
+        ({"steps": ["deblock"]}, "'id'"),
+    ],
+)
+async def test_cctv_roi_fuse_rejects_bad_choices_before_calling_the_api(
+    monkeypatch: pytest.MonkeyPatch, server_mode: None, kwargs: dict, fragment: str
+) -> None:
+    install_mock(monkeypatch, lambda request: pytest.fail("the API must not be called"))
+    choices = {"frames": [10, 40], "reference": 22, "box": [0, 0, 40, 40], "kind": "plate", **kwargs}
+
+    result = json.loads(await upflow_cctv_roi_fuse("tok123", **choices))
+
+    assert result["ok"] is False and result["code"] == 2 and fragment in result["error"]
+
+
+async def test_cctv_roi_fuse_propagates_the_keyed_api_400(monkeypatch: pytest.MonkeyPatch, server_mode: None) -> None:
+    detail = {"key": "cctv.error.roiOdd", "reason": "The region must have an even width and height."}
+    install_mock(monkeypatch, lambda request: httpx.Response(400, json={"detail": detail}))
+
+    result = await upflow_cctv_roi_fuse("tok123", frames=[0, 5], reference=2, box=[0, 0, 41, 40], kind="plate")
+
+    assert result.startswith("Error") and "cctv.error.roiOdd" in result
+
+
+async def test_cctv_roi_fuse_falls_back_in_process_when_the_server_is_down(
+    monkeypatch: pytest.MonkeyPatch, server_mode: None
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("rechazado")
+
+    seen: list[tuple] = []
+
+    async def inprocess(token, choices, destination_dir=""):
+        seen.append((token, choices.roi.kind, choices.roi.reference_frame, destination_dir))
+        return json.dumps({"ok": True, "jobId": "inline"})
+
+    install_mock(monkeypatch, handler)
+    monkeypatch.setattr(headless_tools, "upflow_cctv_roi_fuse_headless", inprocess)
+    result = json.loads(
+        await upflow_cctv_roi_fuse(
+            "tok123", frames=[0, 5], reference=3, box=[0, 0, 40, 40], kind="plate", destination_dir="C:/caso"
+        )
+    )
+
+    assert result["jobId"] == "inline" and seen == [("tok123", "plate", 3, "C:/caso")]
+
+
+async def test_cctv_roi_fuse_runs_in_process_without_calling_the_api(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(headless_tools.MODE_ENV, "inprocess")
+    install_mock(monkeypatch, lambda request: pytest.fail("in-process mode never calls the API"))
+    seen: list[tuple] = []
+
+    async def fake_roi(ctx, token, choices, out_dir=None):
+        seen.append((ctx, token, choices.roi.first_frame, out_dir))
+        return {"ok": True, "jobId": "inline", "roi": {"framesUsed": 5}}
+
+    monkeypatch.setattr(headless_tools, "get_context", lambda: "ctx")
+    monkeypatch.setattr(headless_tools.headless, "cctv_roi", fake_roi)
+    result = json.loads(
+        await upflow_cctv_roi_fuse(
+            "tok123", frames=[4, 9], reference=5, box=[0, 0, 40, 40], kind="plate", destination_dir="C:/caso"
+        )
+    )
+
+    assert result["roi"] == {"framesUsed": 5} and seen == [("ctx", "tok123", 4, Path("C:/caso"))]

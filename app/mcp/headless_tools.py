@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 
 from app import headless
 from app.mcp import client
+from app.models import RoiFusionRequest
 
 MODE_ENV = "UPFLOW_MCP_MODE"
 AUTOSTART_TIMEOUT_SECONDS = 60
@@ -180,8 +181,46 @@ def cctv_choices(
     return choices
 
 
+def required_pair(values: list[int] | None, name: str) -> tuple[int, int]:
+    pair = pair_of(values, name)
+    if pair is None:
+        raise headless.UsageError(f"{name} needs exactly two frame numbers [first, last]")
+    return pair
+
+
+def box_of(values: list[int] | None) -> tuple[int, int, int, int]:
+    if values is None or len(values) != 4:
+        raise headless.UsageError(f"box needs four integers [x, y, w, h], got {values!r}")
+    x, y, width, height = (int(value) for value in values)
+    return x, y, width, height
+
+
+def cctv_roi_choices(
+    frames: list[int] | None,
+    reference: int,
+    box: list[int] | None,
+    kind: str,
+    scale: int = 2,
+    method: str = "median",
+    preset: str = "",
+    steps: list[dict[str, Any]] | None = None,
+    acquisition: dict[str, Any] | None = None,
+) -> headless.CctvRoiChoices:
+    first, last = required_pair(frames, "frames")
+    roi = RoiFusionRequest(first, last, int(reference), box_of(box), kind, int(scale), method)
+    headless.check_roi_request(roi)
+    choices = headless.CctvRoiChoices(
+        roi=roi,
+        preset=preset or None,
+        steps=None if steps is None else tuple(headless.normalized_step(step) for step in steps),
+        acquisition=dict(acquisition or {}),
+    )
+    headless.require_steps_for_preset(choices)
+    return choices
+
+
 async def upflow_cctv_probe_headless(file_path: str) -> str:
-    """Analisis CCTV en proceso; la sesion queda para upflow_cctv_clarify (la barre el sweeper del servidor)."""
+    """Analisis CCTV en proceso; la sesion queda para clarify o roi_fuse (la barre el sweeper del servidor)."""
     try:
         return _dump(await headless.cctv_probe(get_context(), Path(file_path), keep_session=True))
     except headless.HeadlessError as exc:
@@ -197,6 +236,19 @@ async def upflow_cctv_clarify_headless(
     try:
         out_dir = Path(destination_dir) if destination_dir else None
         return _dump(await headless.cctv_clarify(get_context(), token, choices, out_dir))
+    except headless.HeadlessError as exc:
+        return _dump(error_payload(exc))
+    except Exception as exc:
+        return f"Error: {exc}"
+
+
+async def upflow_cctv_roi_fuse_headless(
+    token: str, choices: headless.CctvRoiChoices, destination_dir: str = ""
+) -> str:
+    """Foto multi-cuadro de una ROI en proceso: espera el job y deja la carpeta del resultado en destination_dir."""
+    try:
+        out_dir = Path(destination_dir) if destination_dir else None
+        return _dump(await headless.cctv_roi(get_context(), token, choices, out_dir))
     except headless.HeadlessError as exc:
         return _dump(error_payload(exc))
     except Exception as exc:

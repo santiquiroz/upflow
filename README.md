@@ -807,7 +807,7 @@ Todo bajo `/api/v1/video`, con errores `{"detail": {"key": "cctv.error.*", "reas
 - `POST /cctv/jobs` — cuerpo JSON camelCase estricto (`token`, `task: "clarify"`, `preset`, `steps`, `osdBoxes` + `osdBoxesConfirmed` o `noOsd`, `trim: [primero, último]` inclusivo, `stillFrames`, `caseLabel`, `operatorName`, `acquisition`) → `202` con un job de la familia `video`; se sigue con `GET /jobs/{id}` como cualquier video, y `cctv.artifacts` lista los archivos.
 - `GET /jobs/{id}/artifacts/{name}` — un archivo del resultado (el informe se abre en el navegador, el resto se descarga); `POST /jobs/{id}/verify` → `{ok, checked, mismatches, missing}`.
 
-Para agentes: `upflow cctv probe|clarify|verify` y las tools MCP `upflow_cctv_*`, en [docs/agent-usage.md](docs/agent-usage.md).
+Para agentes: `upflow cctv probe|clarify|roi|verify` y las tools MCP `upflow_cctv_*`, en [docs/agent-usage.md](docs/agent-usage.md).
 
 ## Apartado de Audio (mejora standalone + restauración de compresión)
 
@@ -878,7 +878,7 @@ upflow restore --in escaneo.tif --out foto.png --steps repair,denoise,tone --jso
 ```
 
 - `upflow upscale` corre en proceso, **sin servidor**; `--json` imprime una sola línea JSON al final (`ok`, `output`, `width`, `height`, `model`, `device`, `scale`, `nativeScale`, `tile`, `seconds`). Códigos de salida: `0` ok, `2` argumentos, `3` modelo no instalado, `4` dispositivo, `5` fallo de inferencia. Sin prompts; las descargas exigen `--yes`. Formatos: `png`/`jpg`/`webp` (motor) y `jxl`/`avif` (ffmpeg vendorizado).
-- `upflow cctv probe|clarify|verify` hace lo mismo con video de cámaras de seguridad (carril clásico, CPU); ver [docs/agent-usage.md](docs/agent-usage.md).
+- `upflow cctv probe|clarify|roi|verify` hace lo mismo con video de cámaras de seguridad (carril clásico, CPU); ver [docs/agent-usage.md](docs/agent-usage.md).
 - Mismo input + mismos parámetros ⇒ mismos bytes (id de job = hash del contenido y los parámetros, sin nombres temporales aleatorios).
 - MCP: `claude mcp add upflow -- upflow-mcp --autostart` (Claude Code) o `[mcp_servers.upflow] command = "upflow-mcp" args = ["--autostart"]` en `~/.codex/config.toml` (Codex). Con `--autostart` levanta el servidor si no está; sin servidor las tools de imagen corren in-process.
 
@@ -886,7 +886,7 @@ upflow restore --in escaneo.tif --out foto.png --steps repair,denoise,tone --jso
 
 Upflow expone toda su funcionalidad como **tools MCP** (Model Context Protocol) para que agentes de IA (Claude Code, Claude Desktop, o cualquier cliente MCP) puedan reescalar, transcribir, generar y procesar medios directamente.
 
-- **69 tools** que cubren la API entera: upscale de imagen/video, restauración de fotos, video de cámaras de seguridad (CCTV, carril clásico), audio (denoise/restore/master), transcripción/doblaje, descargas (yt-dlp), generación de imágenes/video, TTS, 3D imprimible, **modelado 3D con Blender**, edición de imagen (seleccionar por clic, insertar objeto), reparación de mallas, prompts guardados, conversión y optimización de modelos, y ajustes/diagnóstico del sistema.
+- **70 tools** que cubren la API entera: upscale de imagen/video, restauración de fotos, video de cámaras de seguridad (CCTV, carril clásico), audio (denoise/restore/master), transcripción/doblaje, descargas (yt-dlp), generación de imágenes/video, TTS, 3D imprimible, **modelado 3D con Blender**, edición de imagen (seleccionar por clic, insertar objeto), reparación de mallas, prompts guardados, conversión y optimización de modelos, y ajustes/diagnóstico del sistema.
 - `upflow_init_image` sube una imagen y devuelve su token: es la puerta de entrada de **todo lo que parte de una imagen** —img2img, inpaint, selección por clic, insertar objeto, foto a malla—, que antes solo existía para quien usaba la pantalla.
 - `upflow_segment_object` no reenvía lo que devuelve la ruta: `/editor/segment` contesta un PNG crudo, inservible para encadenar, así que la tool vuelve a subir la máscara y entrega el token que consume `upflow_insert_object`.
 - Restauración de fotos: `upflow_restore_analyze` (diagnóstico y punto de partida propuesto), `upflow_restore_photo` (con los pasos de `proposedSteps`) y `upflow_restore_recompose` (re-mezcla las caras de un job terminado sin volver a correr modelos). Detalle en [docs/agent-usage.md](docs/agent-usage.md).

@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from app import cli, headless
+from app.models import RoiFusionRequest
 
 
 def test_upscale_json_passes_tile_zero(monkeypatch, capsys, tmp_path):
@@ -248,3 +249,99 @@ def test_cctv_verify_exits_5_when_a_file_changed(monkeypatch, capsys):
     monkeypatch.setattr(headless, "cctv_check_unchanged", lambda directory: {**result, "ok": True, "mismatches": []})
     assert cli.main(["cctv", "verify", "--dir", "caso/j1.cctv"]) == 0
     assert capsys.readouterr().out.strip() == "unchanged: 4 files in caso/j1.cctv"
+
+
+# ---------------------------------------------------------------- cctv roi
+
+
+ROI_ARGV = ["cctv", "roi", "--in", "clip.mp4", "--out-dir", "caso", "--frames", "10:40", "--ref", "22"]
+
+
+def test_cctv_roi_passes_every_choice_to_headless(monkeypatch, capsys):
+    calls = []
+    payload = {"ok": True, "jobId": "j2", "outputDir": "caso/j2.cctv", "roi": {"framesUsed": 23}}
+    monkeypatch.setattr(headless, "build_context", lambda: "ctx")
+
+    async def fake(ctx, source, out_dir, choices):
+        calls.append((ctx, source, out_dir, choices))
+        return payload
+
+    monkeypatch.setattr(headless, "cctv_roi_file", fake)
+    argv = [
+        *ROI_ARGV, "--box", "100,80,64,24", "--kind", "plate", "--scale", "3",
+        "--method", "trimmed_mean", "--preset", "night_ir", "--json",
+    ]  # fmt: skip
+
+    assert cli.main(argv) == 0
+
+    assert json.loads(capsys.readouterr().out) == payload
+    ctx, source, out_dir, choices = calls[0]
+    assert (ctx, source, out_dir) == ("ctx", Path("clip.mp4"), Path("caso"))
+    assert choices == headless.CctvRoiChoices(
+        roi=RoiFusionRequest(10, 40, 22, (100, 80, 64, 24), "plate", 3, "trimmed_mean"), preset="night_ir"
+    )
+
+
+def test_cctv_roi_defaults_to_2x_median_and_the_suggested_preset(monkeypatch):
+    calls = []
+    monkeypatch.setattr(headless, "build_context", lambda: "ctx")
+
+    async def fake(ctx, source, out_dir, choices):
+        calls.append(choices)
+        return {"ok": True}
+
+    monkeypatch.setattr(headless, "cctv_roi_file", fake)
+
+    assert cli.main([*ROI_ARGV, "--box", "0,0,40,40", "--kind", "face_or_object", "--json"]) == 0
+
+    assert calls == [headless.CctvRoiChoices(roi=RoiFusionRequest(10, 40, 22, (0, 0, 40, 40), "face_or_object"))]
+
+
+@pytest.mark.parametrize(
+    "flags",
+    [
+        ["--box", "0,0,40,40", "--kind", "car"],
+        ["--box", "0,0,40,40", "--kind", "plate", "--scale", "5"],
+        ["--box", "0,0,40", "--kind", "plate"],
+        ["--box", "0,0,40,40", "--kind", "plate", "--method", "mean"],
+        ["--box", "0,0,40,40"],
+        ["--kind", "plate"],
+    ],
+)
+def test_cctv_roi_malformed_flags_exit_2(monkeypatch, flags):
+    forbid_cctv_work(monkeypatch)
+
+    with pytest.raises(SystemExit) as error:
+        cli.main([*ROI_ARGV, *flags])
+
+    assert error.value.code == 2
+
+
+def test_cctv_roi_a_reference_outside_the_range_exits_2_before_touching_the_clip(monkeypatch, capsys):
+    forbid_cctv_work(monkeypatch)
+    argv = ["cctv", "roi", "--in", "c.mp4", "--out-dir", "o", "--frames", "10:40", "--ref", "41"]
+
+    code = cli.main([*argv, "--box", "0,0,40,40", "--kind", "plate", "--json"])
+
+    error = json.loads(capsys.readouterr().out)
+    assert code == 2 and error["key"] == "cctv.error.roiFrames"
+
+
+def test_cctv_roi_prints_a_readable_line(monkeypatch, capsys):
+    monkeypatch.setattr(headless, "build_context", lambda: "ctx")
+    roi = {
+        "kind": "plate", "scale": 3, "framesTotal": 30, "framesUsed": 23, "effectiveSamples": 6,
+        "nearCopies": False, "notices": [{"key": "cctv.roi.densityPlate", "params": {"px": 14}}],
+    }  # fmt: skip
+
+    async def fake(ctx, source, out_dir, choices):
+        return {"ok": True, "jobId": "j2", "outputDir": "caso/j2.cctv", "roi": roi, "seconds": 3.5}
+
+    monkeypatch.setattr(headless, "cctv_roi_file", fake)
+
+    assert cli.main([*ROI_ARGV, "--box", "0,0,40,40", "--kind", "plate"]) == 0
+
+    assert capsys.readouterr().out.strip() == (
+        "wrote caso/j2.cctv job=j2 kind=plate scale=3x framesUsed=23/30 effective=6 nearCopies=False "
+        "notices=cctv.roi.densityPlate 3.5s"
+    )

@@ -28,7 +28,7 @@ import re
 import shutil
 import subprocess
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
@@ -40,7 +40,7 @@ from pydantic import ValidationError
 
 from app.api.restore_routes import analysis_response
 from app.config import Settings, get_settings
-from app.models import CctvOptions, CctvStep, UpscaleJob, VideoUpscaleJob
+from app.models import CctvOptions, CctvStep, RoiFusionRequest, UpscaleJob, VideoUpscaleJob
 from app.schemas_restore import RestoreOptions
 from app.services.cctv_analysis import (
     FFMPEG_UNAVAILABLE,
@@ -54,6 +54,7 @@ from app.services.cctv_analysis import (
     upload_destination,
 )
 from app.services.cctv_chain import CctvChainError
+from app.services.cctv_job_validation import ROI_FRAMES, ROI_PREFILTER_STEPS, check_roi_choices
 from app.services.cctv_presets import CCTV_PRESETS, PresetContext, preset_steps
 from app.services.cctv_report import REPORT_HTML_NAME, REPORT_JSON_NAME
 from app.services.cctv_session import cctv_job_dir
@@ -117,6 +118,7 @@ INSTALL_TERMINAL = (InstallStatus.installed, InstallStatus.error)
 INSTALL_POLL_SECONDS = 1.0
 DEFAULT_SR_MODEL = "realesrgan-x4plus"
 CCTV_CLARIFY_TASK = "clarify"
+CCTV_ROI_TASK = "roi_fusion"
 CCTV_CLASSIC_LANE = "classic"
 CCTV_JOB_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
@@ -794,6 +796,19 @@ class CctvClarifyChoices:
     acquisition: Mapping[str, Any] = field(default_factory=lambda: MappingProxyType({}))
 
 
+@dataclass(frozen=True, slots=True)
+class CctvRoiChoices:
+    roi: RoiFusionRequest
+    preset: str | None = None
+    steps: tuple[Mapping[str, Any], ...] | None = None
+    acquisition: Mapping[str, Any] = field(default_factory=lambda: MappingProxyType({}))
+
+
+AnyCctvChoices = CctvClarifyChoices | CctvRoiChoices
+StepPicker = Callable[[Sequence[Mapping[str, Any]]], tuple[Mapping[str, Any], ...]]
+CctvResultDescriber = Callable[[VideoUpscaleJob, Path, float], dict[str, Any]]
+
+
 def checked_job_id(job_id: str) -> str:
     if not CCTV_JOB_ID.fullmatch(job_id):
         raise UsageError(f"invalid job id {job_id!r}")
@@ -825,6 +840,18 @@ def check_osd_decision(choices: CctvClarifyChoices) -> None:
         validate_osd_decision(OsdSelection(choices.osd_boxes, choices.osd_confirmed, choices.no_osd))
     except CctvChainError as exc:
         raise UsageError(str(exc), key=exc.code) from exc
+
+
+def check_roi_request(roi: RoiFusionRequest) -> None:
+    try:
+        check_roi_choices(roi)
+    except CctvChainError as exc:
+        raise UsageError(str(exc), key=exc.code) from exc
+    if not 0 <= roi.first_frame <= roi.reference_frame <= roi.last_frame:
+        raise UsageError(
+            f"the reference frame {roi.reference_frame} must be inside the range {roi.first_frame}:{roi.last_frame}",
+            key=ROI_FRAMES,
+        )
 
 
 def check_out_dir(out_dir: Path | None) -> None:
@@ -870,16 +897,28 @@ def require_cctv_mode(analysis: Mapping[str, Any]) -> None:
         raise ModelNotInstalledError(f"this ffmpeg build cannot run CCTV mode ({reason})", key=reason)
 
 
-def choices_with_preset_steps(analysis: Mapping[str, Any], choices: CctvClarifyChoices) -> CctvClarifyChoices:
+def with_steps_of_preset(analysis: Mapping[str, Any], choices: AnyCctvChoices, pick: StepPicker) -> AnyCctvChoices:
     if choices.steps is not None:
         return choices
     preset = choices.preset or analysis.get("suggestedPreset")
     if preset is None:
         return replace(choices, steps=())
-    return replace(choices, preset=preset, steps=steps_for_preset(analysis, preset))
+    return replace(choices, preset=preset, steps=pick(steps_for_preset(analysis, preset)))
 
 
-def require_steps_for_preset(choices: CctvClarifyChoices) -> None:
+def choices_with_preset_steps(analysis: Mapping[str, Any], choices: CctvClarifyChoices) -> CctvClarifyChoices:
+    return with_steps_of_preset(analysis, choices, tuple)
+
+
+def roi_prefilter_steps(steps: Sequence[Mapping[str, Any]]) -> tuple[Mapping[str, Any], ...]:
+    return tuple(step for step in steps if step["id"] in ROI_PREFILTER_STEPS)
+
+
+def roi_choices_with_steps(analysis: Mapping[str, Any], choices: CctvRoiChoices) -> CctvRoiChoices:
+    return with_steps_of_preset(analysis, choices, roi_prefilter_steps)
+
+
+def require_steps_for_preset(choices: AnyCctvChoices) -> None:
     if choices.steps is None and choices.preset:
         raise UsageError(
             f"pass the steps of preset {choices.preset!r}: copy presetSteps[{choices.preset!r}] from the CCTV probe"
@@ -913,6 +952,17 @@ def cctv_options_of(token: str, choices: CctvClarifyChoices) -> CctvOptions:
         no_osd=choices.no_osd,
         trim=choices.trim,
         still_frames=choices.still_frames,
+        acquisition=MappingProxyType(dict(choices.acquisition)),
+    )
+
+
+def cctv_roi_options_of(token: str, choices: CctvRoiChoices) -> CctvOptions:
+    return CctvOptions(
+        task=CCTV_ROI_TASK,
+        session_token=token,
+        preset=choices.preset,
+        steps=tuple(cctv_step_of(step) for step in choices.steps or ()),
+        roi=choices.roi,
         acquisition=MappingProxyType(dict(choices.acquisition)),
     )
 
@@ -982,6 +1032,10 @@ def describe_cctv_result(job: VideoUpscaleJob, result_dir: Path, seconds: float)
     }
 
 
+def describe_roi_result(job: VideoUpscaleJob, result_dir: Path, seconds: float) -> dict[str, Any]:
+    return {**describe_cctv_result(job, result_dir, seconds), "roi": (job.metadata.get("cctv") or {}).get("roi")}
+
+
 async def cctv_probe(ctx: HeadlessContext, source: Path, *, keep_session: bool = False) -> dict[str, Any]:
     source = existing_file(source)
     request = await asyncio.to_thread(open_cctv_session, ctx.settings.video_work_path, source)
@@ -1001,14 +1055,42 @@ async def cctv_clarify(
     check_osd_decision(choices)
     require_steps_for_preset(choices)
     check_out_dir(out_dir)
+    return await run_cctv_job(ctx, cctv_options_of(token, choices), out_dir, describe_cctv_result)
+
+
+async def cctv_roi(
+    ctx: HeadlessContext, token: str, choices: CctvRoiChoices, out_dir: Path | None = None
+) -> dict[str, Any]:
+    check_roi_request(choices.roi)
+    require_steps_for_preset(choices)
+    check_out_dir(out_dir)
+    return await run_cctv_job(ctx, cctv_roi_options_of(token, choices), out_dir, describe_roi_result)
+
+
+async def run_cctv_job(
+    ctx: HeadlessContext, options: CctvOptions, out_dir: Path | None, describe: CctvResultDescriber
+) -> dict[str, Any]:
     started = time.perf_counter()
     try:
-        job = await cctv_job_manager(ctx).run_cctv_inline(cctv=cctv_options_of(token, choices))
+        job = await cctv_job_manager(ctx).run_cctv_inline(cctv=options)
     except Exception as exc:  # noqa: BLE001 - la CLI traduce cualquier fallo a un codigo estable
         raise cctv_error(exc) from exc
     job_dir = cctv_job_dir(ctx.settings.outputs_path, job.id)
     result_dir = await asyncio.to_thread(deliver_cctv_outputs, job_dir, out_dir)
-    return describe_cctv_result(job, result_dir, time.perf_counter() - started)
+    return describe(job, result_dir, time.perf_counter() - started)
+
+
+async def on_probed_clip(
+    ctx: HeadlessContext, source: Path, run: Callable[[Mapping[str, Any], str], Awaitable[dict[str, Any]]]
+) -> dict[str, Any]:
+    analysis = await cctv_probe(ctx, source, keep_session=True)
+    token = analysis["token"]
+    try:
+        require_cctv_mode(analysis)
+        return await run(analysis, token)
+    finally:
+        # Sin sweeper en modo headless: la sesion solo servia para este job.
+        await asyncio.to_thread(discard_session, cctv_session_dir(ctx.settings.video_work_path, token))
 
 
 async def cctv_clarify_file(
@@ -1016,14 +1098,21 @@ async def cctv_clarify_file(
 ) -> dict[str, Any]:
     check_osd_decision(choices)
     check_out_dir(out_dir)
-    analysis = await cctv_probe(ctx, source, keep_session=True)
-    token = analysis["token"]
-    try:
-        require_cctv_mode(analysis)
+
+    async def clarify(analysis: Mapping[str, Any], token: str) -> dict[str, Any]:
         return await cctv_clarify(ctx, token, choices_with_preset_steps(analysis, choices), out_dir)
-    finally:
-        # Sin sweeper en modo headless: la sesion solo servia para este job.
-        await asyncio.to_thread(discard_session, cctv_session_dir(ctx.settings.video_work_path, token))
+
+    return await on_probed_clip(ctx, source, clarify)
+
+
+async def cctv_roi_file(ctx: HeadlessContext, source: Path, out_dir: Path, choices: CctvRoiChoices) -> dict[str, Any]:
+    check_roi_request(choices.roi)
+    check_out_dir(out_dir)
+
+    async def fuse(analysis: Mapping[str, Any], token: str) -> dict[str, Any]:
+        return await cctv_roi(ctx, token, roi_choices_with_steps(analysis, choices), out_dir)
+
+    return await on_probed_clip(ctx, source, fuse)
 
 
 def cctv_result_dir(ctx: HeadlessContext, job_id: str) -> Path:
