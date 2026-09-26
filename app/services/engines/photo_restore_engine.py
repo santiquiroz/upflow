@@ -332,7 +332,7 @@ class PhotoRestoreEngine:
 
     def _raw_infer(self, model_id: str, device: str, precision: str, infer_for: InferFactory) -> TileInfer:
         def infer(tile: np.ndarray) -> np.ndarray:
-            with self._removal_classified(device):
+            with self.removal_classified(device):
                 return infer_for(self.session(model_id, device, precision))(tile)
 
         return infer
@@ -346,7 +346,7 @@ class PhotoRestoreEngine:
             raise
 
     @contextlib.contextmanager
-    def _removal_classified(self, device: str) -> Iterator[None]:
+    def removal_classified(self, device: str) -> Iterator[None]:
         try:
             yield
         except Exception as exc:
