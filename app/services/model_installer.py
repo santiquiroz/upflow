@@ -145,8 +145,29 @@ def _progress_percent(downloaded: int, total: int | None) -> float | None:
     return round(min(downloaded, total) / total * 100, 1)
 
 
-def _make_validation_tile() -> np.ndarray:
-    return np.zeros((VALIDATION_TILE_SIZE, VALIDATION_TILE_SIZE, 3), dtype=np.uint8)
+def _make_validation_tile(height: int, width: int) -> np.ndarray:
+    return np.zeros((height, width, 3), dtype=np.uint8)
+
+
+def _static_dim(dim: Any) -> int | None:
+    return dim if isinstance(dim, int) and dim > 0 else None
+
+
+def _validation_tile_size(input_info: Any, probe_size: tuple[int, int] | None) -> tuple[int, int]:
+    # A converted model's graph never pads, so it is probed at the size its
+    # SizeRequirements allow; a published .onnx with fixed H/W at that size.
+    if probe_size is not None:
+        return probe_size
+    height = _static_dim(input_info.shape[2]) or VALIDATION_TILE_SIZE
+    width = _static_dim(input_info.shape[3]) or VALIDATION_TILE_SIZE
+    return height, width
+
+
+def _require_rgb_conversion(result: ConversionResult) -> None:
+    if (result.channels_in, result.channels_out) != (3, 3):
+        raise ValueError(
+            f"{result.arch} works on {result.channels_in}-channel images; only RGB models can be installed"
+        )
 
 
 def _require_single_input(inputs: list[Any]) -> Any:
@@ -255,8 +276,9 @@ class ModelInstaller(SingleWorkerJobQueue[InstallJob]):
             )
 
         job.status = InstallStatus.validating
+        probe_size = conversion_result.probe_size if conversion_result is not None else None
         try:
-            detected_scale = await asyncio.to_thread(self._validate_onnx_file, staging_dest)
+            detected_scale = await asyncio.to_thread(self._validate_onnx_file, staging_dest, probe_size)
         except Exception:
             staging_dest.unlink(missing_ok=True)
             raise
@@ -317,12 +339,14 @@ class ModelInstaller(SingleWorkerJobQueue[InstallJob]):
 
         job.status = InstallStatus.converting
         try:
-            return await asyncio.to_thread(
+            result = await asyncio.to_thread(
                 convert_to_onnx,
                 source_weight_path,
                 staging_dest,
                 self._conversion_progress_logger(job),
             )
+            _require_rgb_conversion(result)
+            return result
         except Exception:
             staging_dest.unlink(missing_ok=True)
             raise
@@ -378,16 +402,17 @@ class ModelInstaller(SingleWorkerJobQueue[InstallJob]):
                 )
                 await asyncio.sleep(PROMOTE_RETRY_DELAYS_SECONDS[attempt])
 
-    def _validate_onnx_file(self, path: Path) -> int:
+    def _validate_onnx_file(self, path: Path, probe_size: tuple[int, int] | None = None) -> int:
         session = self._create_validation_session(path)
         try:
             input_info = _require_single_input(session.get_inputs())
             _require_4d_float_input(input_info)
             output_info = session.get_outputs()[0]
-            batch = to_nchw_float(_make_validation_tile())
+            height, width = _validation_tile_size(input_info, probe_size)
+            batch = to_nchw_float(_make_validation_tile(height, width))
             result = session.run([output_info.name], {input_info.name: batch})[0]
             output_hwc = from_nchw_float(result)
-            return detect_scale(VALIDATION_TILE_SIZE, VALIDATION_TILE_SIZE, output_hwc)
+            return detect_scale(height, width, output_hwc)
         finally:
             # Drop the session eagerly instead of relying on refcounting at
             # function exit: an ORT session can be entangled in an internal

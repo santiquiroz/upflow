@@ -113,6 +113,18 @@ class ThreeDInputSession(FakeValidSession):
         self._input = _FakeIoInfo("input", [1, 3, "width"], "tensor(float)")
 
 
+class RecordingSession(FakeValidSession):
+    def __init__(self, scale: int = 2, input_shape: list | None = None) -> None:
+        super().__init__(scale=scale)
+        self.input_shapes: list[tuple[int, ...]] = []
+        if input_shape is not None:
+            self._input = _FakeIoInfo("input", input_shape, "tensor(float)")
+
+    def run(self, output_names, input_feed):
+        self.input_shapes.append(input_feed[self._input.name].shape)
+        return super().run(output_names, input_feed)
+
+
 class IntInputSession(FakeValidSession):
     def __init__(self) -> None:
         super().__init__()
@@ -279,6 +291,7 @@ def _install_fake_convert_to_onnx(
     scale: int = 4,
     onnx_bytes: bytes = b"converted-onnx-bytes",
     error: Exception | None = None,
+    result: ConversionResult | None = None,
 ) -> list[tuple[Path, Path]]:
     calls: list[tuple[Path, Path]] = []
 
@@ -288,7 +301,7 @@ def _install_fake_convert_to_onnx(
             raise error
         out_onnx.parent.mkdir(parents=True, exist_ok=True)
         out_onnx.write_bytes(onnx_bytes)
-        return ConversionResult(arch=arch, scale=scale)
+        return result or ConversionResult(arch=arch, scale=scale)
 
     monkeypatch.setattr(model_installer, "convert_to_onnx", fake_convert)
     return calls
@@ -403,6 +416,67 @@ async def test_install_marks_error_when_conversion_fails(
     assert registry.get("org--broken-weights") is None
     assert list((settings.models_path / "onnx").glob("*")) == []
     assert not (settings.temp_path / "org--broken-weights.safetensors").exists()
+
+
+async def test_install_validates_converted_model_at_its_probe_size(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installer, registry, _, _ = make_installer(tmp_path, NON_ONNX_FILES)
+    session = RecordingSession(scale=1)
+    monkeypatch.setattr(installer, "_create_validation_session", lambda path: session)
+    result = ConversionResult(arch="SCUNet", scale=1, purpose="Restoration", size_minimum=40, probe_size=(64, 64))
+    _install_fake_convert_to_onnx(monkeypatch, result=result)
+
+    install_id = await installer.install_from_hf("org/scunet")
+    await installer._process_next()
+
+    job = installer.status(install_id)
+    assert job.status == InstallStatus.installed
+    assert session.input_shapes == [(1, 3, 64, 64)]
+    assert registry.get(job.model_id).scale == 1
+
+
+async def test_install_rejects_converted_grayscale_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    installer, registry, _, settings = make_installer(tmp_path, NON_ONNX_FILES)
+    monkeypatch.setattr(installer, "_create_validation_session", lambda path: FakeValidSession(scale=1))
+    result = ConversionResult(arch="FBCNN", scale=1, purpose="Restoration", channels_in=1, channels_out=1)
+    _install_fake_convert_to_onnx(monkeypatch, result=result)
+
+    install_id = await installer.install_from_hf("org/fbcnn-gray")
+    await installer._process_next()
+
+    job = installer.status(install_id)
+    assert job.status == InstallStatus.error
+    assert "RGB" in job.error
+    assert registry.get("org--fbcnn-gray") is None
+    assert list((settings.models_path / "onnx").glob("*")) == []
+
+
+async def test_install_validates_published_onnx_with_fixed_size_at_that_size(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installer, _, _, _ = make_installer(tmp_path, ONNX_FILES)
+    session = RecordingSession(scale=2, input_shape=[1, 3, 48, 48])
+    monkeypatch.setattr(installer, "_create_validation_session", lambda path: session)
+
+    install_id = await installer.install_from_hf("org/fixed")
+    await installer._process_next()
+
+    assert installer.status(install_id).status == InstallStatus.installed
+    assert session.input_shapes == [(1, 3, 48, 48)]
+
+
+async def test_install_validates_dynamic_published_onnx_with_default_tile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installer, _, _, _ = make_installer(tmp_path, ONNX_FILES)
+    session = RecordingSession(scale=2)
+    monkeypatch.setattr(installer, "_create_validation_session", lambda path: session)
+
+    await installer.install_from_hf("org/dynamic")
+    await installer._process_next()
+
+    assert session.input_shapes == [(1, 3, 32, 32)]
 
 
 async def test_install_error_when_no_weight_file_present(tmp_path: Path) -> None:
