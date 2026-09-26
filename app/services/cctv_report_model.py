@@ -93,10 +93,22 @@ class Timestamp(ReportModel):
     local: str
 
 
+class ReproductionOf(ReportModel):
+    generated_at: Timestamp
+    report_sha256: Sha256
+    upflow_version: ShortText
+
+
+def _is_none(value: Any) -> bool:
+    return value is None
+
+
 class CaseInfo(ReportModel):
     case_label: ShortText | None = None
     operator_name: ShortText | None = None
     notes: UserText | None = None
+    # Fuera del JSON cuando falta: un informe que no es reproduccion se re-serializa con los mismos bytes.
+    reproduction_of: ReproductionOf | None = Field(default=None, exclude_if=_is_none)
 
 
 class UpflowInfo(ReportModel):

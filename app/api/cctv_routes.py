@@ -569,7 +569,7 @@ async def reproduce_cctv_job(
 ) -> CctvReproduceStartResponse:
     try:
         wanted = await asyncio.to_thread(reproduce_request, body, settings.video_work_path)
-        job = await video_jobs.create_cctv_job(cctv=cctv_options(wanted.job), owner=current_user_from_request(request))
+        job = await video_jobs.create_cctv_job(cctv=wanted.options(), owner=current_user_from_request(request))
     except Exception as exc:
         raise job_creation_error(exc) from exc
     expected = expected_facts(wanted.report)

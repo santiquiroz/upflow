@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import hashlib
+import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
-from app.schemas_cctv import CctvJobRequest
+from app.schemas_cctv import CctvJobRequest, cctv_options
 from app.services.cctv_chain import CctvChainError
+from app.services.cctv_job_validation import parse_case_details
+from app.services.cctv_report import report_json_text
 from app.services.cctv_report_model import CctvReportV1
 from app.services.cctv_reproduce import (
     NOT_CLASSIC,
@@ -24,6 +29,7 @@ from app.services.cctv_reproduce import (
     job_body_from_report,
     parse_untrusted_report,
     preflight_warnings,
+    reproduction_source,
 )
 from app.services.ffmpeg_capabilities import FfmpegCapabilities
 from test_cctv_report import CAPS, FFMPEG_SHA, FRAME_SHA, SOURCE_SHA, report_for
@@ -113,6 +119,46 @@ def test_reproduce_turns_the_report_into_an_ordinary_clarify_request(tmp_path: P
     }}  # fmt: skip
     assert request.still_frames == [3] and request.no_osd and request.osd_boxes == []
     assert request.acquisition == {"recorderMake": "HiLook"} and request.case_label == "Case 7"
+
+
+def test_reproduce_never_attributes_the_new_run_to_the_report_operator(tmp_path: Path) -> None:
+    report = parse_untrusted_report(report_json(tmp_path))
+
+    request = CctvJobRequest.model_validate(job_body_from_report(report, TOKEN))
+
+    assert report.case.operator_name == "Santiago"
+    assert request.operator_name is None and request.case_label == "Case 7"
+
+
+def test_reproduce_names_the_operator_who_runs_it(tmp_path: Path) -> None:
+    report = parse_untrusted_report(report_json(tmp_path))
+
+    request = CctvJobRequest.model_validate(job_body_from_report(report, TOKEN, operator_name="Ana"))
+
+    assert request.operator_name == "Ana"
+
+
+def test_the_reproduction_points_to_the_report_file_upflow_wrote(tmp_path: Path) -> None:
+    original = report_for(tmp_path)
+    written = report_json_text(original)
+
+    source = reproduction_source(parse_untrusted_report(json.loads(written)))
+
+    assert source.report_sha256 == hashlib.sha256(written.encode("utf-8")).hexdigest()
+    assert source.generated_at_utc == original.generated_at.utc
+    assert source.generated_at_local == original.generated_at.local
+    assert source.upflow_version == original.upflow.version
+
+
+def test_the_reproduction_reaches_the_case_of_the_new_report(tmp_path: Path) -> None:
+    report = parse_untrusted_report(report_json(tmp_path))
+    options = cctv_options(CctvJobRequest.model_validate(job_body_from_report(report, TOKEN, operator_name="Ana")))
+
+    _, case = parse_case_details(replace(options, reproduction_of=reproduction_source(report)))
+
+    assert case.operator_name == "Ana" and case.reproduction_of is not None
+    assert case.reproduction_of.report_sha256 == reproduction_source(report).report_sha256
+    assert case.reproduction_of.generated_at == report.generated_at
 
 
 def test_reproduce_never_carries_the_report_argv_into_the_request(tmp_path: Path) -> None:

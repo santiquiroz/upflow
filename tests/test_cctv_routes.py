@@ -784,8 +784,8 @@ def fake_report(tmp_path: Path, sha256: str = CLIP_SHA, **fields) -> dict:
     return {**payload, **fields}
 
 
-async def post_reproduce(manager: VideoJobManager, report: dict, token: str = TOKEN):
-    body = cctv_routes.CctvReproduceRequest.model_validate({"token": token, "report": report})
+async def post_reproduce(manager: VideoJobManager, report: dict, token: str = TOKEN, **fields):
+    body = cctv_routes.CctvReproduceRequest.model_validate({"token": token, "report": report, **fields})
     return await cctv_routes.reproduce_cctv_job(request=None, body=body, video_jobs=manager, settings=manager.settings)
 
 
@@ -800,6 +800,28 @@ async def test_reproduce_queues_a_clarify_job_from_the_report_and_warns_about_th
     assert job.metadata["reproduce"]["sourceSha256"] == CLIP_SHA
     assert started.result_url == f"/api/v1/video/jobs/{job.id}/reproduce"
     assert {"cctv.reproduce.otherBuild", "cctv.reproduce.otherCpu"} <= set(started.warnings)
+
+
+async def test_reproduce_runs_under_the_caller_operator_and_records_the_report_it_reproduces(tmp_path: Path) -> None:
+    from app.services.cctv_report import load_report, report_json_text
+
+    manager = fake_manager(tmp_path)
+    report = fake_report(tmp_path)
+
+    started = await post_reproduce(manager, report, operatorName="Ana")
+
+    options = manager.get_job(started.job_id).cctv
+    written = report_json_text(load_report(json.dumps(report)))
+    assert options.operator_name == "Ana" and options.case_label == "Case 7"
+    assert options.reproduction_of.report_sha256 == hashlib.sha256(written.encode("utf-8")).hexdigest()
+
+
+async def test_reproduce_without_an_operator_leaves_it_blank_instead_of_copying_the_report(tmp_path: Path) -> None:
+    manager = fake_manager(tmp_path)
+
+    started = await post_reproduce(manager, fake_report(tmp_path))
+
+    assert manager.get_job(started.job_id).cctv.operator_name is None
 
 
 @pytest.mark.parametrize(
@@ -862,7 +884,7 @@ async def test_reproduce_repeats_a_real_job_frame_for_frame_and_file_for_file(an
     manager = real_manager(settings)
     steps = [{"id": "denoise", "params": {"filter": "hqdn3d", "luma_spatial": 4}}]
     first = await run_route_job(manager, {**job_body(token=result.token, steps=steps, trim=[3, 40], stillFrames=[7]),
-                                          "caseLabel": "Caso 7", "device": "cpu"})  # fmt: skip
+                                          "caseLabel": "Caso 7", "operatorName": "Santiago", "device": "cpu"})  # fmt: skip
     again = await analyze(settings, file=clip_upload(clip))
 
     started = await post_reproduce(manager, job_report(settings, first), token=again.token)
@@ -873,6 +895,10 @@ async def test_reproduce_repeats_a_real_job_frame_for_frame_and_file_for_file(an
     assert outcome.identical and outcome.frames_identical, [c for c in outcome.checks if not c.match]
     kinds = [check.kind for check in outcome.checks]
     assert kinds.count("framehash") == 2 and kinds.count("output") == 2 and "file" in kinds
+    first_json = cctv_session.cctv_job_dir(settings.outputs_path, first.id) / "report.json"
+    case = job_report(settings, manager.get_job(started.job_id))["case"]
+    assert case["reproductionOf"]["reportSha256"] == hashlib.sha256(first_json.read_bytes()).hexdigest()
+    assert case["operatorName"] is None and case["caseLabel"] == "Caso 7"
 
 
 @needs_ffmpeg

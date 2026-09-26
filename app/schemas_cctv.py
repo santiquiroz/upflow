@@ -103,6 +103,8 @@ class CctvJobRequest(CamelRequest):
 
 class CctvReproduceRequest(CamelRequest):
     token: str = Field(max_length=64)
+    # Quien corre la reproduccion; el operador del informe de origen nunca se hereda.
+    operator_name: str | None = Field(default=None, max_length=MAX_TEXT)
     # Input no confiable: lo valida `parse_untrusted_report` para devolver una clave y no un 422.
     report: dict[str, Any]
 

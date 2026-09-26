@@ -11,17 +11,19 @@ entrada, el `framehash` de los cuadros exportados, los archivos que promete
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import ValidationError
 
-from app.schemas_cctv import CctvJobRequest, CctvReproduceRequest
+from app.models import CctvOptions, ReproductionSource
+from app.schemas_cctv import CctvJobRequest, CctvReproduceRequest, cctv_options
 from app.services.cctv_artifacts import resolve_artifact
 from app.services.cctv_chain import FILTER_KEY, CctvChainError, ResolvedStep, steps_from_request
-from app.services.cctv_report import load_report
+from app.services.cctv_report import load_report, report_json_text
 from app.services.cctv_report_model import CctvReportV1, ReportStep
 from app.services.cctv_session import load_session
 from app.services.ffmpeg_capabilities import FfmpegCapabilities
@@ -131,12 +133,13 @@ def chosen_steps(steps: Sequence[ResolvedStep]) -> list[dict[str, Any]]:
     return [{"id": step.id, "params": {**step.params, FILTER_KEY: step.filter}} for step in kept]
 
 
-def case_fields(report: CctvReportV1) -> dict[str, Any]:
-    fields = {"caseLabel": report.case.case_label, "operatorName": report.case.operator_name}
+def case_fields(report: CctvReportV1, operator_name: str | None) -> dict[str, Any]:
+    # El caso es el mismo; el operador no: la reproduccion la firma quien la corre.
+    fields = {"caseLabel": report.case.case_label, "operatorName": operator_name}
     return {name: value for name, value in fields.items() if value is not None}
 
 
-def job_body_from_report(report: CctvReportV1, token: str) -> dict[str, Any]:
+def job_body_from_report(report: CctvReportV1, token: str, operator_name: str | None = None) -> dict[str, Any]:
     steps = check_report_steps(report)
     return {
         "token": token,
@@ -148,7 +151,7 @@ def job_body_from_report(report: CctvReportV1, token: str) -> dict[str, Any]:
         "trim": trim_of(steps),
         "stillFrames": [pair.frame for pair in report.stills],
         "acquisition": report.acquisition.model_dump(by_alias=True, exclude_none=True),
-        **case_fields(report),
+        **case_fields(report, operator_name),
     }
 
 
@@ -159,17 +162,31 @@ def checked_job_request(body: dict[str, Any]) -> CctvJobRequest:
         raise CctvChainError(REPORT_INVALID, f"The report asks for more than a job allows: {exc.errors()[0]['msg']}") from exc
 
 
+def reproduction_source(report: CctvReportV1) -> ReproductionSource:
+    written = report_json_text(report).encode("utf-8")
+    return ReproductionSource(
+        generated_at_utc=report.generated_at.utc,
+        generated_at_local=report.generated_at.local,
+        report_sha256=hashlib.sha256(written).hexdigest(),
+        upflow_version=report.upflow.version,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class ReproduceRequest:
     report: CctvReportV1
     job: CctvJobRequest
+
+    def options(self) -> CctvOptions:
+        return replace(cctv_options(self.job), reproduction_of=reproduction_source(self.report))
 
 
 def reproduce_request(body: CctvReproduceRequest, work_root: Path) -> ReproduceRequest:
     report = parse_untrusted_report(body.report)
     check_reproducible(report)
     check_same_source(report, load_session(work_root, body.token).record.sha256)
-    return ReproduceRequest(report, checked_job_request(job_body_from_report(report, body.token)))
+    job_body = job_body_from_report(report, body.token, body.operator_name)
+    return ReproduceRequest(report, checked_job_request(job_body))
 
 
 # --- Lo esperado, guardado en el job ---

@@ -14,11 +14,11 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from app.models import CctvOptions, RoiFusionRequest
+from app.models import CctvOptions, ReproductionSource, RoiFusionRequest
 from app.services.cctv_ai_models import AI_UPSCALE_SCALES, runs_in_stream
 from app.services.cctv_chain import CctvChainError, Lane, ResolvedStep, steps_from_request
 from app.services.cctv_presets import preset_spec
-from app.services.cctv_report_model import Acquisition, CaseInfo
+from app.services.cctv_report_model import Acquisition, CaseInfo, ReproductionOf, Timestamp
 from app.services.devices_service import AUTO_DEVICE_ID, CPU_DEVICE_ID
 from app.services.ffmpeg_capabilities import (
     FILTER_UNAVAILABLE,
@@ -383,10 +383,28 @@ def ai_lane_upscale(
 # --- Datos del caso ---
 
 
+def reproduction_of(source: ReproductionSource | None) -> ReproductionOf | None:
+    if source is None:
+        return None
+    return ReproductionOf(
+        generated_at=Timestamp(utc=source.generated_at_utc, local=source.generated_at_local),
+        report_sha256=source.report_sha256,
+        upflow_version=source.upflow_version,
+    )
+
+
+def case_info(options: CctvOptions) -> CaseInfo:
+    return CaseInfo(
+        case_label=options.case_label,
+        operator_name=options.operator_name,
+        reproduction_of=reproduction_of(options.reproduction_of),
+    )
+
+
 def parse_case_details(options: CctvOptions) -> tuple[Acquisition, CaseInfo]:
     try:
         acquisition = Acquisition.model_validate(dict(options.acquisition))
-        case = CaseInfo(case_label=options.case_label, operator_name=options.operator_name)
+        case = case_info(options)
     except ValidationError as exc:
         raise CctvChainError(INVALID_ACQUISITION, f"Case details are not valid: {exc.errors()[0]['msg']}") from exc
     return acquisition, case

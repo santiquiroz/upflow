@@ -113,6 +113,15 @@ class RedactionRequest:
 
 
 @dataclass(slots=True, frozen=True)
+class ReproductionSource:
+    # El report.json de origen, tal como Upflow lo escribe: su SHA-256 es el de su SHA256SUMS.txt si nadie lo edito.
+    generated_at_utc: str
+    generated_at_local: str
+    report_sha256: str
+    upflow_version: str
+
+
+@dataclass(slots=True, frozen=True)
 class CctvOptions:
     task: CctvTask
     session_token: str
@@ -130,6 +139,8 @@ class CctvOptions:
     acquisition: Mapping[str, Any] = field(default_factory=dict)
     case_label: str | None = None
     operator_name: str | None = None
+    # Solo lo pone POST /cctv/reproduce: un job comun no puede declararse reproduccion de nada.
+    reproduction_of: ReproductionSource | None = None
 
 
 @dataclass(slots=True)

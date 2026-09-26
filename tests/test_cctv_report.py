@@ -54,6 +54,7 @@ from app.services.cctv_report_model import (
     SCHEMA_PATH,
     Acquisition,
     CaseInfo,
+    ReproductionOf,
     CctvReportV1,
     EngineInfo,
     report_schema,
@@ -465,6 +466,43 @@ def test_html_escapes_user_text(tmp_path: Path) -> None:
     assert "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;" in html_text
     assert "O&#x27;Brien &amp; &lt;b&gt;" in html_text
     assert "<img src=x>" not in html_text
+
+
+REPRODUCED = ReproductionOf.model_validate(
+    {"generatedAt": {"utc": "2026-09-01T10:00:00Z", "local": "2026-09-01 05:00:00 -05:00"},
+     "reportSha256": "ab" * 32, "upflowVersion": "0.80.0"}
+)  # fmt: skip
+
+
+def test_a_reproduction_says_which_report_it_reproduces_in_its_json(tmp_path: Path) -> None:
+    case = CaseInfo(case_label="Case 7", operator_name="Ana", reproduction_of=REPRODUCED)
+    text = report_json_text(report_for(tmp_path, case=case))
+
+    block = json.loads(text)["case"]["reproductionOf"]
+    assert block == {"generatedAt": REPRODUCED.generated_at.model_dump(), "reportSha256": "ab" * 32,
+                     "upflowVersion": "0.80.0"}  # fmt: skip
+    jsonschema.Draft202012Validator(json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))).validate(json.loads(text))
+    assert load_report(text).case.reproduction_of == REPRODUCED
+
+
+def test_a_report_that_is_not_a_reproduction_is_written_as_before(tmp_path: Path) -> None:
+    # Sin la clave, un informe viejo re-serializado da los mismos bytes: su SHA-256 sigue siendo el de SHA256SUMS.
+    text = report_json_text(report_for(tmp_path))
+
+    assert "reproductionOf" not in text
+
+
+def test_html_says_up_front_that_the_run_reproduces_an_earlier_report(tmp_path: Path) -> None:
+    case = CaseInfo(operator_name="Ana", reproduction_of=REPRODUCED)
+    html_text = render_report_html(report_for(tmp_path, case=case))
+
+    header = html_text.split("</header>")[0]
+    assert "Reproduction of an earlier report" in header
+    assert "ab" * 32 in html_text and "2026-09-01T10:00:00Z" in html_text and "0.80.0" in html_text
+
+
+def test_html_of_an_original_run_does_not_mention_a_reproduction(tmp_path: Path) -> None:
+    assert "Reproduction of" not in render_report_html(report_for(tmp_path))
 
 
 def test_html_shows_the_acquisition_export_fields_escaped(tmp_path: Path) -> None:

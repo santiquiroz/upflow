@@ -151,6 +151,17 @@
           ],
           "default": null,
           "title": "Operatorname"
+        },
+        "reproductionOf": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReproductionOf"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "title": "CaseInfo",
@@ -1013,6 +1024,31 @@
         "framesOut"
       ],
       "title": "ReportStep",
+      "type": "object"
+    },
+    "ReproductionOf": {
+      "additionalProperties": false,
+      "properties": {
+        "generatedAt": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "reportSha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Reportsha256",
+          "type": "string"
+        },
+        "upflowVersion": {
+          "maxLength": 200,
+          "title": "Upflowversion",
+          "type": "string"
+        }
+      },
+      "required": [
+        "generatedAt",
+        "reportSha256",
+        "upflowVersion"
+      ],
+      "title": "ReproductionOf",
       "type": "object"
     },
     "RoiFusionInfo": {

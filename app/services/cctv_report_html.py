@@ -24,6 +24,7 @@ from app.services.cctv_report_model import (
     OutputFile,
     ProcessInfo,
     ReportStep,
+    ReproductionOf,
     RoiFusionInfo,
     RoiSampleInfo,
     StillFrameInfo,
@@ -98,18 +99,45 @@ def header(report: CctvReportV1) -> str:
     verdict = "YES" if report.ai_used else "NO"
     css_class = "ai yes" if report.ai_used else "ai"
     return join(
-        (
+        part
+        for part in (
             "<header>",
             "<h1>Upflow processing report</h1>",
             f"<p>Original file: <strong>{esc(source.name)}</strong></p>",
             f"<p>SHA-256 (as Upflow received it): {hash_cell(source.sha256)}</p>",
             f"<p>Lane: <strong>{esc(LANE_NAMES[report.mode])}</strong></p>",
+            reproduction_notice(report.case.reproduction_of),
             f'<div class="{css_class}">AI used: {verdict}</div>',
             f"<p>Report generated {esc(report.generated_at.local)} ({esc(report.generated_at.utc)})"
             f" · Upflow {esc(report.upflow.version)}</p>",
             "</header>",
         )
+        if part
     )
+
+
+def reproduction_notice(source: ReproductionOf | None) -> str:
+    if source is None:
+        return ""
+    return (
+        f"<p><strong>Reproduction of an earlier report</strong> generated {esc(source.generated_at.utc)}: "
+        "this run repeated its steps; it is not an original processing.</p>"
+    )
+
+
+def reproduction_section(source: ReproductionOf | None) -> str:
+    if source is None:
+        return ""
+    pairs = (
+        ("Source report generated", f"{source.generated_at.local} ({source.generated_at.utc})"),
+        ("Source report.json SHA-256", source.report_sha256),
+        ("Source Upflow version", source.upflow_version),
+    )
+    note = (
+        "<p>The SHA-256 is the one of the source report.json as Upflow writes it: it matches that job's "
+        "SHA256SUMS.txt only if the file was not edited.</p>"
+    )
+    return section("Reproduction of an earlier report", facts(pairs) + note)
 
 
 def case_section(report: CctvReportV1) -> str:
@@ -317,6 +345,7 @@ def render_report_html(report: CctvReportV1) -> str:
         for part in (
             header(report),
             case_section(report),
+            reproduction_section(report.case.reproduction_of),
             steps_section(report),
             input_section(report.inputs[0]),
             acquisition_section(report.acquisition),
