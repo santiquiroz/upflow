@@ -31,6 +31,7 @@ from app.services.label_band import AI_LABEL, LabelAssets, metadata_comment
 from app.services.progress import build_cctv_stages
 from app.services.redaction import (
     REDACTED_DIRNAME,
+    LIMITATIONS,
     REDACTED_LABEL,
     REDACTION_FRAMES,
     REDACTION_INVALID,
@@ -42,11 +43,17 @@ from app.services.redaction import (
     blur_region,
     box_at,
     boxes_at,
+    Region,
     check_redaction,
     check_redaction_steps,
+    check_redaction_window,
+    grid_pixelated,
     pixelate_region,
     redact_frame,
+    redact_regions,
     redaction_log,
+    regions_at,
+    uncovered_ranges,
 )
 from app.services.redaction_runner import (
     EncodeTarget,
@@ -123,6 +130,19 @@ def test_boxes_at_collects_every_track_that_covers_the_frame() -> None:
     assert len(boxes_at((MOVING, STATIC), 20)) == 2
 
 
+def test_the_frames_without_any_box_are_listed_as_ranges() -> None:
+    assert uncovered_ranges((MOVING,), 0, 40) == [(0, 9), (31, 40)]
+    assert uncovered_ranges((MOVING, STATIC), 0, FRAMES - 1) == []
+    apart = (track(3, 4, (3, (0, 0, 4, 4))), track(6, 6, (6, (0, 0, 4, 4))))
+    assert uncovered_ranges(apart, 2, 8) == [(2, 2), (5, 5), (7, 8)]
+
+
+def test_a_moving_box_keeps_one_cell_size_for_its_whole_span() -> None:
+    growing = track(0, 10, (0, (0, 0, 12, 12)), (10, (0, 0, 96, 60)))
+    cells = {region.cell for frame in range(11) for region in regions_at((growing,), frame)}
+    assert cells == {16}
+
+
 # --- Pixelado y desenfoque ---
 
 
@@ -133,7 +153,7 @@ def test_pixelation_leaves_a_few_flat_cells_and_the_rest_of_the_frame_untouched(
 
     assert np.array_equal(frame, before)
     region = redacted[8:44, 10:58]
-    assert len(np.unique(region.reshape(-1, 3), axis=0)) <= 6 * 5
+    assert len(np.unique(region.reshape(-1, 3), axis=0)) <= 7 * 6
     outside = redacted.copy()
     outside[8:44, 10:58] = before[8:44, 10:58]
     assert np.array_equal(outside, before)
@@ -153,6 +173,32 @@ def test_even_a_large_box_keeps_only_a_handful_of_pixelated_cells() -> None:
 def test_a_frame_without_boxes_is_returned_as_is() -> None:
     frame = noisy_frame()
     assert redact_frame(frame, (), "blur") is frame
+
+
+def test_the_solid_fill_leaves_nothing_of_the_region_and_the_rest_untouched() -> None:
+    frame = noisy_frame()
+    redacted = redact_frame(frame, ((10, 8, 48, 36),), "fill")
+    assert not redacted[8:44, 10:58].any()
+    outside = redacted.copy()
+    outside[8:44, 10:58] = frame[8:44, 10:58]
+    assert np.array_equal(outside, frame)
+
+
+def test_the_pixel_grid_is_anchored_to_the_frame_so_a_moving_box_samples_the_same_cells() -> None:
+    frame = noisy_frame(96, 128)
+    first = redact_regions(frame, (Region((16, 16, 48, 32), 16),), "pixelate")
+    moved = redact_regions(frame, (Region((21, 19, 48, 32), 16),), "pixelate")
+    assert np.array_equal(first[19:48, 21:64], moved[19:48, 21:64])
+
+
+def test_the_pixel_grid_near_the_frame_edge_keeps_the_box_shape() -> None:
+    frame = noisy_frame(64, 96)
+    region = grid_pixelated(frame, (90, 60, 6, 4), 16)
+    assert region.shape == (4, 6, 3) and len(np.unique(region.reshape(-1, 3), axis=0)) == 1
+
+
+def test_the_limitations_warn_that_pixelation_and_blur_can_be_reversed() -> None:
+    assert any("Only the solid fill" in line for line in LIMITATIONS)
 
 
 # --- Validacion ---
@@ -189,6 +235,19 @@ def test_the_redacted_copy_needs_boxes_and_other_tasks_refuse_them() -> None:
 
 def test_a_valid_redaction_passes() -> None:
     check_redaction(redact_options(redaction=RedactionRequest((MOVING, STATIC), "blur")), GEOMETRY, FRAMES)
+    check_redaction(redact_options(redaction=RedactionRequest((MOVING,), "fill")), GEOMETRY, FRAMES)
+
+
+def test_the_solid_fill_is_the_default_style() -> None:
+    assert RedactionRequest((STATIC,)).style == "fill"
+
+
+def test_a_box_that_misses_the_trim_is_rejected_and_one_that_overlaps_it_passes() -> None:
+    options = redact_options(redaction=RedactionRequest((STATIC, MOVING)))
+    check_redaction_window(options, 25, 60)
+    with pytest.raises(CctvChainError) as caught:
+        check_redaction_window(options, 31, 60)
+    assert caught.value.code == REDACTION_FRAMES and "Box 2" in str(caught.value)
 
 
 def resolved(step_id: str) -> ResolvedStep:
@@ -210,6 +269,8 @@ async def test_the_manager_validates_and_admits_a_redaction_job_on_the_cpu(tmp_p
     assert (await rejected(manager, redact_options(redaction=outside))).code == REDACTION_OUTSIDE_FRAME
     denoise = (CctvStep("denoise", {"filter": "hqdn3d"}),)
     assert (await rejected(manager, redact_options(steps=denoise))).code == REDACTION_STEPS
+    before_trim = RedactionRequest((track(0, 4, (0, (0, 0, 10, 10))),))
+    assert (await rejected(manager, redact_options(redaction=before_trim, trim=(5, 60)))).code == REDACTION_FRAMES
     job = await manager.create_cctv_job(cctv=redact_options(trim=(5, 60)), device="dml:0")
     assert job.device == "cpu" and job.metadata["cctv"]["lane"] == "classic"
 
@@ -325,6 +386,11 @@ def test_the_log_records_the_boxes_the_source_and_the_notice() -> None:
     assert "not part of the handover package" in log["notice"]
 
 
+def test_the_log_lists_the_frames_of_the_copy_that_no_box_covers() -> None:
+    facts = RedactionLogFacts("0.81.0", "j", "clip.mp4", "ab" * 32, 5, 40, 36, "25/1", "05_redacted/x.mp4", "cd" * 32)
+    assert redaction_log(RedactionRequest((MOVING,)), facts)["uncoveredFrames"] == [[5, 9], [31, 40]]
+
+
 # --- Cuadros hacia el encoder ---
 
 
@@ -412,7 +478,8 @@ async def test_a_real_redaction_job_writes_a_labeled_copy_outside_the_package(tm
     session = await analyzed_session(settings, TOKEN)
     manager = real_manager(settings)
     box = (200, 20, 96, 64)
-    request = RedactionRequest((track(10, 30, (10, box)), track(0, 49, (0, (0, 0, 40, 40)), (49, (40, 40, 40, 40)))))
+    tracks = (track(10, 30, (10, box)), track(0, 49, (0, (0, 0, 40, 40)), (49, (40, 40, 40, 40))))
+    request = RedactionRequest(tracks, "pixelate")
     job = await manager.create_cctv_job(cctv=redact_options(redaction=request, trim=(5, 44)))
 
     await manager._process_next()
@@ -426,7 +493,7 @@ async def test_a_real_redaction_job_writes_a_labeled_copy_outside_the_package(tm
     sums = (job_dir / "SHA256SUMS.txt").read_text("utf-8")
     assert f"*{REDACTED_DIRNAME}/{output.name}" in sums and "*redaction.json" in sums
     log = json.loads((job_dir / "redaction.json").read_text("utf-8"))
-    assert log["frames"] == {"first": 5, "last": 44, "out": 40}
+    assert log["frames"] == {"first": 5, "last": 44, "out": 40} and log["uncoveredFrames"] == []
     assert job.metadata["stage"] == "completed" and job.metadata["progress"] == 1.0
 
     probe = ffprobe_json(settings, output)
@@ -438,9 +505,11 @@ async def test_a_real_redaction_job_writes_a_labeled_copy_outside_the_package(tm
 
     x, y, w, h = box
     work = session / "work.mkv"
-    original = decoded_frame(settings, work, 20, WIDTH, HEIGHT)[y : y + h, x : x + w]
+    source = decoded_frame(settings, work, 20, WIDTH, HEIGHT)
+    original = source[y : y + h, x : x + w]
+    expected = redact_regions(source, regions_at(tracks, 20), "pixelate")[y : y + h, x : x + w]
     redacted = decoded_frame(settings, output, 15, video["width"], video["height"])[y : y + h, x : x + w]
-    assert mean_abs_diff(redacted, pixelate_region(original)) * 5 < mean_abs_diff(redacted, original)
+    assert mean_abs_diff(redacted, expected) * 5 < mean_abs_diff(redacted, original)
     untouched = decoded_frame(settings, output, 0, video["width"], video["height"])[y : y + h, x : x + w]
     source_start = decoded_frame(settings, work, 5, WIDTH, HEIGHT)[y : y + h, x : x + w]
     assert mean_abs_diff(untouched, source_start) * 5 < mean_abs_diff(untouched, pixelate_region(source_start))

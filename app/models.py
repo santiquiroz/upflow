@@ -70,7 +70,7 @@ class UpdateStatus:
 
 
 CctvTask = Literal["clarify", "enhance", "roi_fusion", "redact"]
-RedactionStyle = Literal["blur", "pixelate"]
+RedactionStyle = Literal["fill", "pixelate", "blur"]
 RoiKind = Literal["plate", "face_or_object"]
 RoiFusionMethod = Literal["median", "trimmed_mean"]
 
@@ -109,7 +109,7 @@ class RedactionTrack:
 @dataclass(slots=True, frozen=True)
 class RedactionRequest:
     tracks: tuple[RedactionTrack, ...]
-    style: RedactionStyle = "pixelate"
+    style: RedactionStyle = "fill"
 
 
 @dataclass(slots=True, frozen=True)

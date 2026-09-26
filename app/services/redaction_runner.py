@@ -48,9 +48,9 @@ from app.services.redaction import (
     REDACTED_TAG,
     REDACTION_LOG_NAME,
     RedactionLogFacts,
-    boxes_at,
-    redact_frame,
+    redact_regions,
     redaction_log,
+    regions_at,
 )
 
 STAGE_REDACTING = "redacting"
@@ -193,7 +193,7 @@ def write_redacted(
     written = 0
     for offset, batch in enumerate(frames):
         frame = batch[0]
-        encoder.write_frame(redact_frame(frame, boxes_at(plan.request.tracks, plan.first_frame + offset), plan.request.style))
+        encoder.write_frame(redact_regions(frame, regions_at(plan.request.tracks, plan.first_frame + offset), plan.request.style))
         written += 1
         on_frame(written)
     return written

@@ -26,12 +26,18 @@ export interface ActiveBox {
   isKeyframe: boolean;
 }
 
-export const REDACTION_STYLES: readonly CctvRedactionStyle[] = ["pixelate", "blur"];
+// El relleno va primero y por defecto: es el unico estilo que no deja nada que recuperar.
+export const REDACTION_STYLES: readonly CctvRedactionStyle[] = ["fill", "pixelate", "blur"];
 // Igual que redaction.MAX_TRACKS y MAX_KEYFRAMES del backend.
 export const MAX_REDACTION_TRACKS = 32;
 export const MAX_REDACTION_KEYFRAMES = 256;
 
-export const EMPTY_REDACTION: RedactionChoice = { style: "pixelate", tracks: [], nextId: 1 };
+export const EMPTY_REDACTION: RedactionChoice = { style: "fill", tracks: [], nextId: 1 };
+
+// Una caja nueva tapa todo lo que la copia va a tener: el recorte, o el video entero.
+export function redactionSpan(trim: TrimRange | null, frameCount: number): TrimRange {
+  return trim ?? [0, Math.max(0, frameCount - 1)];
+}
 
 // Mismo redondeo que redaction.round_half_up: la vista previa y la copia ponen la caja en el mismo pixel.
 function roundHalfUp(value: number): number {
@@ -132,6 +138,49 @@ export function withTrackEnd(choice: RedactionChoice, id: number, frame: number)
   return mapTrack(choice, id, (track) => withSpan(track, Math.min(frame, track.firstFrame), frame));
 }
 
+function followedEdge(value: number, before: number, after: number): number {
+  return value === before ? after : value;
+}
+
+// Un borde que coincidia con el recorte lo sigue; lo que queda fuera del recorte nuevo se recorta.
+function followedTrack(track: RedactionTrack, before: TrimRange, after: TrimRange): RedactionTrack {
+  const first = Math.max(after[0], followedEdge(track.firstFrame, before[0], after[0]));
+  const last = Math.min(after[1], followedEdge(track.lastFrame, before[1], after[1]));
+  return first <= last ? withSpan(track, first, last) : track;
+}
+
+export function withSpanFollowed(choice: RedactionChoice, before: TrimRange, after: TrimRange): RedactionChoice {
+  return { ...choice, tracks: choice.tracks.map((track) => followedTrack(track, before, after)) };
+}
+
+export function overlapsSpan(track: RedactionTrack, span: TrimRange): boolean {
+  return track.firstFrame <= span[1] && span[0] <= track.lastFrame;
+}
+
+function clippedSpans(choice: RedactionChoice, span: TrimRange): TrimRange[] {
+  return choice.tracks
+    .map((track): TrimRange => [Math.max(span[0], track.firstFrame), Math.min(span[1], track.lastFrame)])
+    .filter(([first, last]) => first <= last)
+    .sort((a, b) => a[0] - b[0]);
+}
+
+// Mismos tramos que redaction.uncovered_ranges: los cuadros de la copia que ninguna caja tapa.
+export function uncoveredRanges(choice: RedactionChoice, span: TrimRange): TrimRange[] {
+  const gaps: TrimRange[] = [];
+  let following = span[0];
+  for (const [first, last] of clippedSpans(choice, span)) {
+    if (first > following) {
+      gaps.push([following, first - 1]);
+    }
+    following = Math.max(following, last + 1);
+  }
+  return following <= span[1] ? [...gaps, [following, span[1]]] : gaps;
+}
+
+export function rangesText(ranges: readonly TrimRange[]): string {
+  return ranges.map(([first, last]) => (first === last ? `${first}` : `${first}–${last}`)).join(", ");
+}
+
 export function withStyle(choice: RedactionChoice, style: CctvRedactionStyle): RedactionChoice {
   return { ...choice, style };
 }
@@ -165,8 +214,11 @@ export function withEditedBoxes(
   return withKeyframe(choice, active[index].id, frame, boxes[index]);
 }
 
-export function redactionBlockerKey(choice: RedactionChoice): string | null {
-  return choice.tracks.length === 0 ? "cctv.redact.blocked.noBoxes" : null;
+export function redactionBlockerKey(choice: RedactionChoice, span: TrimRange): string | null {
+  if (choice.tracks.length === 0) {
+    return "cctv.redact.blocked.noBoxes";
+  }
+  return choice.tracks.every((track) => overlapsSpan(track, span)) ? null : "cctv.redact.blocked.outsideTrim";
 }
 
 export function redactionRequest(choice: RedactionChoice): CctvRedactionRequest {

@@ -6,7 +6,7 @@ import type { UploadOptions } from "../lib/uploadRequest";
 
 export type CctvLane = "classic" | "ai";
 export type CctvTask = "clarify" | "enhance" | "roi_fusion" | "redact";
-export type CctvRedactionStyle = "pixelate" | "blur";
+export type CctvRedactionStyle = "fill" | "pixelate" | "blur";
 export type CctvParamValue = number | string;
 export type CctvParams = Readonly<Record<string, CctvParamValue>>;
 export type CctvBox = readonly [number, number, number, number];

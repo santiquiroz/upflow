@@ -5,11 +5,15 @@ import {
   boxAt,
   EMPTY_REDACTION,
   MAX_REDACTION_TRACKS,
+  rangesText,
   redactionBlockerKey,
   redactionRequest,
+  redactionSpan,
+  uncoveredRanges,
   withEditedBoxes,
   withKeyframe,
   withKeyframeRemoved,
+  withSpanFollowed,
   withStyle,
   withTrackAdded,
   withTrackEnd,
@@ -140,10 +144,67 @@ describe("start and end of a box", () => {
   });
 });
 
+describe("boxes that follow the trim", () => {
+  const drawnInTrim = withTrackAdded(EMPTY_REDACTION, [10, 10, 40, 40], 150, [100, 200]);
+
+  it("a box drawn over the whole trim grows with it, so the new frames stay hidden", () => {
+    const widened = withSpanFollowed(drawnInTrim, [100, 200], [0, 300]);
+
+    expect(widened.tracks[0]).toMatchObject({ firstFrame: 0, lastFrame: 300 });
+    expect(widened.tracks[0].keyframes).toEqual([{ frame: 150, box: [10, 10, 40, 40] }]);
+    expect(uncoveredRanges(widened, [0, 300])).toEqual([]);
+  });
+
+  it("a box drawn over the whole trim moves with a trim that moves", () => {
+    const moved = withSpanFollowed(drawnInTrim, [100, 200], [400, 500]);
+
+    expect(moved.tracks[0]).toMatchObject({ firstFrame: 400, lastFrame: 500 });
+    expect(moved.tracks[0].keyframes).toEqual([{ frame: 400, box: [10, 10, 40, 40] }]);
+  });
+
+  it("a box with its own frames keeps them when the trim grows and is cut when it shrinks", () => {
+    const own = withTrackAdded(EMPTY_REDACTION, [10, 10, 40, 40], 150, [120, 180]);
+
+    expect(withSpanFollowed(own, [100, 200], [0, 300]).tracks[0]).toMatchObject({ firstFrame: 120, lastFrame: 180 });
+    expect(withSpanFollowed(own, [100, 200], [130, 170]).tracks[0]).toMatchObject({ firstFrame: 130, lastFrame: 170 });
+  });
+
+  it("a box left entirely outside the trim is kept as it was and blocks Start", () => {
+    const own = withTrackAdded(EMPTY_REDACTION, [10, 10, 40, 40], 150, [120, 180]);
+    const outside = withSpanFollowed(own, [100, 200], [300, 400]);
+
+    expect(outside.tracks[0]).toMatchObject({ firstFrame: 120, lastFrame: 180 });
+    expect(redactionBlockerKey(outside, [300, 400])).toBe("cctv.redact.blocked.outsideTrim");
+  });
+
+  it("lists the frames of the copy that no box covers", () => {
+    const own = withTrackAdded(EMPTY_REDACTION, [10, 10, 40, 40], 150, [120, 180]);
+    const gaps = uncoveredRanges(withTrackAdded(own, [0, 0, 8, 8], 190, [190, 190]), [100, 200]);
+
+    expect(gaps).toEqual([
+      [100, 119],
+      [181, 189],
+      [191, 200],
+    ]);
+    expect(rangesText([[5, 5], [7, 9]])).toBe("5, 7–9");
+  });
+
+  it("uses the whole video when there is no trim", () => {
+    expect(redactionSpan(null, 750)).toEqual([0, 749]);
+    expect(redactionSpan([3, 9], 750)).toEqual([3, 9]);
+  });
+});
+
 describe("request", () => {
-  it("blocks Start until there is a box", () => {
-    expect(redactionBlockerKey(EMPTY_REDACTION)).toBe("cctv.redact.blocked.noBoxes");
-    expect(redactionBlockerKey(withOneBox())).toBeNull();
+  it("blocks Start until there is a box and while a box misses the trim", () => {
+    expect(redactionBlockerKey(EMPTY_REDACTION, [0, 99])).toBe("cctv.redact.blocked.noBoxes");
+    expect(redactionBlockerKey(withOneBox(), [0, 99])).toBeNull();
+    expect(redactionBlockerKey(withOneBox(), [99, 200])).toBeNull();
+    expect(redactionBlockerKey(withOneBox(), [100, 200])).toBe("cctv.redact.blocked.outsideTrim");
+  });
+
+  it("starts with the solid box, the only style that leaves nothing to recover", () => {
+    expect(EMPTY_REDACTION.style).toBe("fill");
   });
 
   it("sends the style and each box with its keyframes", () => {

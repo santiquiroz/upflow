@@ -30,7 +30,7 @@ from app.services.ffmpeg_filters import FrameGeometry, output_dims_after
 from app.services.frame_export import StillFrameError, checked_still_frames, TOO_MANY_STILL_FRAMES
 from app.services.missing_pack import missing_pack_message
 from app.services.osd_check import OsdSelection, validate_osd_selection
-from app.services.redaction import check_redaction, check_redaction_steps
+from app.services.redaction import check_redaction, check_redaction_steps, check_redaction_window
 from app.services.release_gates import CCTV_AI_DISABLED_MESSAGE
 
 UNKNOWN_TASK = "cctv.error.unknownTask"
@@ -413,6 +413,7 @@ def plan_cctv_job(
     check_redaction(options, facts.geometry, facts.frame_count)
     check_redaction_steps(options, steps)
     first, last = trim_range(steps, facts.frame_count)
+    check_redaction_window(options, first, last)
     stills = still_frames_in(options.still_frames, first, last, facts.max_still_frames)
     acquisition, case = parse_case_details(options)
     check_task_available(options.task, facts.task_available)

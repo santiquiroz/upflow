@@ -9,10 +9,12 @@ import {
   withPreset,
   withAiUpscale,
   withCaseDetails,
+  withRedaction,
   withRoi,
   withTask,
   withTrim,
 } from "./cctvChoices";
+import { EMPTY_REDACTION, withTrackAdded } from "./cctvRedaction";
 import { EMPTY_ROI } from "./cctvRoi";
 import { EMPTY_CASE_DETAILS } from "./cctvCase";
 import { ANALYSIS, PRESETS_RESPONSE } from "./cctvFixtures";
@@ -119,9 +121,22 @@ describe("buildCctvJobRequest", () => {
   });
 
   it("sends the trim as first and last frame", () => {
-    const choices = withTrim({ ...initialChoices(ANALYSIS, PRESETS_RESPONSE), noOsd: true }, [25, 99]);
+    const choices = withTrim({ ...initialChoices(ANALYSIS, PRESETS_RESPONSE), noOsd: true }, [25, 99], 750);
 
     expect(buildCctvJobRequest("tok-1", choices, PRESETS_RESPONSE).trim).toEqual([25, 99]);
+  });
+
+  it("widening the trim of a redacted copy keeps every new frame hidden", () => {
+    const redact = withTask(initialChoices(ANALYSIS, PRESETS_RESPONSE), "redact", ANALYSIS, PRESETS_RESPONSE);
+    const trimmed = withTrim(redact, [100, 200], 750);
+    const boxed = withRedaction(trimmed, withTrackAdded(EMPTY_REDACTION, [10, 10, 40, 40], 150, [100, 200]));
+
+    const widened = buildCctvJobRequest("tok-1", withTrim(boxed, [0, 300], 750), PRESETS_RESPONSE);
+    const untrimmed = buildCctvJobRequest("tok-1", withTrim(boxed, null, 750), PRESETS_RESPONSE);
+
+    expect(widened.trim).toEqual([0, 300]);
+    expect(widened.redaction?.tracks[0]).toMatchObject({ firstFrame: 0, lastFrame: 300 });
+    expect(untrimmed.redaction?.tracks[0]).toMatchObject({ firstFrame: 0, lastFrame: 749 });
   });
 
   it("sends the case details the operator filled in", () => {
@@ -203,7 +218,7 @@ describe("multi-frame still", () => {
 
   it("sends the region with no trim, no on-screen text and no AI model", () => {
     const base = withTask(initialChoices(ANALYSIS, PRESETS_RESPONSE), "roi_fusion", ANALYSIS, PRESETS_RESPONSE);
-    const choices = withAiUpscale(withTrim(withRoi({ ...base, noOsd: true }, ROI), [0, 99]), {
+    const choices = withAiUpscale(withTrim(withRoi({ ...base, noOsd: true }, ROI), [0, 99], 750), {
       modelId: "realesrgan-x4plus",
       scale: 2,
     });

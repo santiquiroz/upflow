@@ -76,7 +76,7 @@ class RedactionTrackIn(CamelRequest):
 
 
 class CctvRedactionIn(CamelRequest):
-    style: str = Field(default="pixelate", max_length=32)
+    style: str = Field(default="fill", max_length=32)
     tracks: list[RedactionTrackIn] = Field(max_length=MAX_TRACKS)
 
 

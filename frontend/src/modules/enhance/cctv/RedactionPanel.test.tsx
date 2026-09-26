@@ -7,6 +7,7 @@ import type { VideoCapabilities } from "../../../lib/apiTypes";
 import { DISPLAYED_LITE, drag, installPointerEvent } from "./boxEditorTestUtils";
 import { CctvJobSetup } from "./CctvJobSetup";
 import { ANALYSIS, PRESETS_RESPONSE } from "./cctvFixtures";
+import type { TrimRange } from "./cctvFrames";
 import { EMPTY_REDACTION, withTrackAdded, type RedactionChoice } from "./cctvRedaction";
 import { RedactionPanel } from "./RedactionPanel";
 
@@ -21,14 +22,21 @@ const CAPS: VideoCapabilities = {
   cctvUnavailableSteps: [],
 };
 
-function StatefulPanel({ initial, frame, onShowFrame }: { initial: RedactionChoice; frame: number; onShowFrame: (frame: number) => void }) {
-  const [redaction, setRedaction] = useState(initial);
-  return <RedactionPanel redaction={redaction} frame={frame} onChange={setRedaction} onShowFrame={onShowFrame} />;
+interface StatefulPanelProps {
+  initial: RedactionChoice;
+  frame: number;
+  span: TrimRange;
+  onShowFrame: (frame: number) => void;
 }
 
-function renderPanel(initial: RedactionChoice, frame = 40) {
+function StatefulPanel({ initial, frame, span, onShowFrame }: StatefulPanelProps) {
+  const [redaction, setRedaction] = useState(initial);
+  return <RedactionPanel redaction={redaction} frame={frame} span={span} onChange={setRedaction} onShowFrame={onShowFrame} />;
+}
+
+function renderPanel(initial: RedactionChoice, frame = 40, span: TrimRange = [0, 749]) {
   const onShowFrame = vi.fn();
-  render(<StatefulPanel initial={initial} frame={frame} onShowFrame={onShowFrame} />);
+  render(<StatefulPanel initial={initial} frame={frame} span={span} onShowFrame={onShowFrame} />);
   return onShowFrame;
 }
 
@@ -66,12 +74,32 @@ describe("RedactionPanel", () => {
     expect(screen.getByText(en["cctv.redact.empty"])).toBeInTheDocument();
   });
 
-  it("offers pixelate by default and blur", () => {
+  it("offers the solid box by default, then pixelate and blur with a warning that they can be reversed", () => {
     renderPanel(ONE_BOX);
 
-    expect(screen.getByRole("radio", { name: en["cctv.redact.style.pixelate"] })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("radio", { name: en["cctv.redact.style.fill"] })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByText(en["cctv.redact.style.fillHint"])).toBeInTheDocument();
     fireEvent.click(screen.getByRole("radio", { name: en["cctv.redact.style.blur"] }));
     expect(screen.getByRole("radio", { name: en["cctv.redact.style.blur"] })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByText(en["cctv.redact.style.blurHint"])).toBeInTheDocument();
+  });
+
+  it("names the frames of the copy that no box covers", () => {
+    renderPanel(withTrackAdded(EMPTY_REDACTION, [10, 10, 40, 40], 150, [120, 180]), 150, [100, 200]);
+
+    expect(screen.getByRole("status")).toHaveTextContent("No box covers frames 100–119, 181–200.");
+  });
+
+  it("marks a box that hides nothing because it is outside the trim", () => {
+    renderPanel(withTrackAdded(EMPTY_REDACTION, [10, 10, 40, 40], 150, [120, 180]), 150, [300, 400]);
+
+    expect(screen.getByText("Outside the trim (300–400): this box hides nothing.")).toBeInTheDocument();
+  });
+
+  it("says nothing about uncovered frames while there are no boxes or every frame is covered", () => {
+    renderPanel(ONE_BOX);
+
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
   it("moves the start and the end of a box to the frame on screen", () => {

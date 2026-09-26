@@ -13,7 +13,7 @@ import { suggestedOsdBoxes } from "./cctvBoxes";
 import { caseRequestOf, EMPTY_CASE_DETAILS, type CaseDetails } from "./cctvCase";
 import { storedSizeOf, type TrimRange } from "./cctvFrames";
 import { defaultTask, usesFilters } from "./cctvLanes";
-import { EMPTY_REDACTION, redactionRequest, type RedactionChoice } from "./cctvRedaction";
+import { EMPTY_REDACTION, redactionRequest, redactionSpan, withSpanFollowed, type RedactionChoice } from "./cctvRedaction";
 import { EMPTY_ROI, roiCatalog, roiRequest, type RoiChoice } from "./cctvRoi";
 import { choicesFromPreset, presetContextOf, stepRequests, type StepChoices } from "./cctvSteps";
 
@@ -128,8 +128,11 @@ export function withNoOsd(choices: CctvChoices, noOsd: boolean): CctvChoices {
   return { ...choices, noOsd, osdBoxesConfirmed: false };
 }
 
-export function withTrim(choices: CctvChoices, trim: TrimRange | null): CctvChoices {
-  return { ...choices, trim };
+// Las cajas de la copia anonimizada siguen al recorte: ampliarlo no puede dejar cuadros nuevos sin tapar.
+export function withTrim(choices: CctvChoices, trim: TrimRange | null, frameCount: number): CctvChoices {
+  const before = redactionSpan(choices.trim, frameCount);
+  const redaction = withSpanFollowed(choices.redaction, before, redactionSpan(trim, frameCount));
+  return { ...choices, trim, redaction };
 }
 
 export function withCaseDetails(choices: CctvChoices, caseDetails: CaseDetails): CctvChoices {

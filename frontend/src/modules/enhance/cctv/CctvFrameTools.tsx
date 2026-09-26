@@ -5,9 +5,10 @@ import { BoxEditor } from "./BoxEditor";
 import { CctvFilterPreview } from "./CctvFilterPreview";
 import type { FrameSize } from "./cctvBoxes";
 import { withRedaction, withRoi, withTrim, type CctvChoices } from "./cctvChoices";
-import { displaySizeOf, storedSizeOf, type TrimRange } from "./cctvFrames";
+import { displaySizeOf, storedSizeOf } from "./cctvFrames";
 import { isVideoTask, usesFilters, usesTrim } from "./cctvLanes";
 import { roiReferenceRequest, withRoiBox } from "./cctvRoi";
+import { redactionSpan } from "./cctvRedaction";
 import { hasChosenAiSteps, previewStepRequests } from "./cctvSteps";
 import { FrameScrubber } from "./FrameScrubber";
 import { RedactionBoxEditor, RedactionPanel } from "./RedactionPanel";
@@ -45,11 +46,6 @@ function RoiBoxEditor({
   );
 }
 
-// Una caja nueva tapa todo lo que la copia va a tener: el recorte, o el video entero.
-function redactionSpan(trim: TrimRange | null, frameCount: number): TrimRange {
-  return trim ?? [0, Math.max(0, frameCount - 1)];
-}
-
 export function CctvFrameTools({ analysis, choices, catalog, onChange }: FrameToolsProps) {
   const { t } = useTranslation();
   const [frame, setFrame] = useState(0);
@@ -60,6 +56,7 @@ export function CctvFrameTools({ analysis, choices, catalog, onChange }: FrameTo
   const isVideo = isVideoTask(choices.task);
   const isRedact = choices.task === "redact";
   const isRoi = choices.task === "roi_fusion";
+  const span = redactionSpan(choices.trim, frameCount);
   const osd = useOsdTools({ token: analysis.token, choices, frame, frameSize, onChange });
   const roiEditor = <RoiBoxEditor choices={choices} frame={frame} frameSize={frameSize} onChange={onChange} />;
   const redactEditor = (
@@ -67,7 +64,7 @@ export function CctvFrameTools({ analysis, choices, catalog, onChange }: FrameTo
       redaction={choices.redaction}
       frame={frame}
       frameSize={frameSize}
-      span={redactionSpan(choices.trim, frameCount)}
+      span={span}
       onChange={(redaction) => onChange(withRedaction(choices, redaction))}
     />
   );
@@ -102,13 +99,14 @@ export function CctvFrameTools({ analysis, choices, catalog, onChange }: FrameTo
           currentFrame={frame}
           index={analysis.frameIndex}
           trim={choices.trim}
-          onChange={(trim) => onChange(withTrim(choices, trim))}
+          onChange={(trim) => onChange(withTrim(choices, trim, frameCount))}
         />
       )}
       {isRedact && hasFrames && (
         <RedactionPanel
           redaction={choices.redaction}
           frame={frame}
+          span={span}
           onChange={(redaction) => onChange(withRedaction(choices, redaction))}
           onShowFrame={setFrame}
         />

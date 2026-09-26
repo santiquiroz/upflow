@@ -9,7 +9,10 @@ import {
   activeBoxes,
   hasKeyframeAt,
   MAX_REDACTION_TRACKS,
+  overlapsSpan,
+  rangesText,
   REDACTION_STYLES,
+  uncoveredRanges,
   withEditedBoxes,
   withKeyframeRemoved,
   withStyle,
@@ -50,6 +53,7 @@ export function RedactionBoxEditor({ redaction, frame, frameSize, span, onChange
 interface RedactionPanelProps {
   redaction: RedactionChoice;
   frame: number;
+  span: TrimRange;
   onChange: (redaction: RedactionChoice) => void;
   onShowFrame: (frame: number) => void;
 }
@@ -58,6 +62,7 @@ function TrackRow({
   track,
   number,
   frame,
+  span,
   redaction,
   onChange,
   onShowFrame,
@@ -65,14 +70,17 @@ function TrackRow({
   track: RedactionTrack;
   number: number;
   frame: number;
+  span: TrimRange;
   redaction: RedactionChoice;
   onChange: (redaction: RedactionChoice) => void;
   onShowFrame: (frame: number) => void;
 }) {
   const { t } = useTranslation();
   const canRemoveKeyframe = hasKeyframeAt(track, frame) && track.keyframes.length > 1;
+  const isOutside = !overlapsSpan(track, span);
+  const rowClass = isOutside ? "border-danger" : "border-border";
   return (
-    <li className="flex flex-col gap-1 rounded-sm border border-border bg-surface px-3 py-2">
+    <li className={`flex flex-col gap-1 rounded-sm border bg-surface px-3 py-2 ${rowClass}`}>
       <span className="font-mono-tabular text-xs text-text">
         {t("cctv.redact.track", {
           index: number,
@@ -81,6 +89,7 @@ function TrackRow({
           count: track.keyframes.length,
         })}
       </span>
+      {isOutside && <span className="text-xs text-danger">{t("cctv.redact.outsideTrim", { first: span[0], last: span[1] })}</span>}
       <div className="flex flex-wrap items-center gap-2">
         <button type="button" onClick={() => onShowFrame(track.firstFrame)} className={LINK_BUTTON_CLASS}>
           {t("cctv.redact.showStart")}
@@ -112,7 +121,7 @@ function TrackRow({
   );
 }
 
-function TrackList({ redaction, frame, onChange, onShowFrame }: RedactionPanelProps) {
+function TrackList({ redaction, frame, span, onChange, onShowFrame }: RedactionPanelProps) {
   const { t } = useTranslation();
   if (redaction.tracks.length === 0) {
     return <p className="text-xs text-text-dim">{t("cctv.redact.empty")}</p>;
@@ -125,6 +134,7 @@ function TrackList({ redaction, frame, onChange, onShowFrame }: RedactionPanelPr
           track={track}
           number={position + 1}
           frame={frame}
+          span={span}
           redaction={redaction}
           onChange={onChange}
           onShowFrame={onShowFrame}
@@ -134,7 +144,21 @@ function TrackList({ redaction, frame, onChange, onShowFrame }: RedactionPanelPr
   );
 }
 
-export function RedactionPanel({ redaction, frame, onChange, onShowFrame }: RedactionPanelProps) {
+// Los cuadros de la copia que ninguna caja tapa salen como se grabaron: se nombran para que nadie lo descubra al compartir.
+function UncoveredNotice({ redaction, span }: { redaction: RedactionChoice; span: TrimRange }) {
+  const { t } = useTranslation();
+  const gaps = uncoveredRanges(redaction, span);
+  if (redaction.tracks.length === 0 || gaps.length === 0) {
+    return null;
+  }
+  return (
+    <p role="status" className="text-xs text-warn">
+      {t("cctv.redact.uncovered", { frames: rangesText(gaps) })}
+    </p>
+  );
+}
+
+export function RedactionPanel({ redaction, frame, span, onChange, onShowFrame }: RedactionPanelProps) {
   const { t } = useTranslation();
   const styles = REDACTION_STYLES.map((style) => ({ value: style, label: t(`cctv.redact.style.${style}`) }));
   return (
@@ -150,7 +174,9 @@ export function RedactionPanel({ redaction, frame, onChange, onShowFrame }: Reda
         value={redaction.style}
         onChange={(style) => onChange(withStyle(redaction, style))}
       />
-      <TrackList redaction={redaction} frame={frame} onChange={onChange} onShowFrame={onShowFrame} />
+      <p className="text-xs text-text-dim">{t(`cctv.redact.style.${redaction.style}Hint`)}</p>
+      <TrackList redaction={redaction} frame={frame} span={span} onChange={onChange} onShowFrame={onShowFrame} />
+      <UncoveredNotice redaction={redaction} span={span} />
       <p className="text-xs text-warn">{t("cctv.redact.noDetector")}</p>
     </div>
   );

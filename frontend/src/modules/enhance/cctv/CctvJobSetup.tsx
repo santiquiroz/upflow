@@ -33,7 +33,7 @@ import {
 } from "./cctvChoices";
 import { isTrimValid } from "./cctvFrames";
 import { aiLaneState, LANE_TASKS, needsAiConfirmation, startBlocker, usesFilters, type AiLaneState } from "./cctvLanes";
-import { redactionBlockerKey } from "./cctvRedaction";
+import { redactionBlockerKey, redactionSpan } from "./cctvRedaction";
 import { roiBlockerKey } from "./cctvRoi";
 import { incompleteStepIds, visibleSteps, withStepEnabled, withStepFilter, withStepParam, withStepParams } from "./cctvSteps";
 
@@ -128,7 +128,7 @@ function setupBlocker(
     trimValid: isTrimValid(choices.trim, frameCount),
     caseDetailsValid: isCaseDetailsValid(choices.caseDetails),
     roiBlockerKey: roiBlockerKey(choices.roi, frameCount),
-    redactionBlockerKey: redactionBlockerKey(choices.redaction),
+    redactionBlockerKey: redactionBlockerKey(choices.redaction, redactionSpan(choices.trim, frameCount)),
   });
 }
 
