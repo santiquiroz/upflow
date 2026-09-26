@@ -12,11 +12,11 @@ import pytest
 
 from app.config import Settings
 from app.services import cctv_clarify_runner as runner
-from app.services.cctv_chain import ResolvedStep, steps_from_request
+from app.services.cctv_chain import STABILIZE_GATE, ResolvedStep, steps_from_request
 from app.services.cctv_frame_index import FrameEntry
 from app.services.cctv_ingest import MediaTools, ingest_working_copy
 from app.services.ffmpeg_capabilities import FfmpegCapabilities
-from app.services.ffmpeg_filters import FrameGeometry
+from app.services.ffmpeg_filters import FrameGeometry, escape_filter_path
 from app.services.ffmpeg_progress_runner import spawn_process
 from app.services.media_signature import sniff_file
 from app.services.video_analysis import FrameStats, SourceFacts
@@ -34,12 +34,15 @@ def frames(count: int, fps: float = 25.0) -> tuple[FrameEntry, ...]:
 
 
 def steps(*raw: dict) -> tuple[ResolvedStep, ...]:
-    return steps_from_request(list(raw), "classic")
+    return steps_from_request(list(raw), "classic", frozenset({STABILIZE_GATE}))
 
 
 TRIM = {"id": "trim", "params": {"start_frame": 5, "end_frame": 54}}
 DENOISE = {"id": "denoise", "params": {"filter": "hqdn3d"}}
 GRAY = {"id": "gray", "params": {}}
+DEINTERLACE = {"id": "deinterlace"}
+STABILIZE = {"id": "stabilize", "params": {"shakiness": 6, "smoothing": 15}}
+TRANSFORMS = Path("C:/out/transforms.trf")
 
 
 def plan(*raw: dict, has_audio: bool = True, geometry: FrameGeometry = GEOMETRY, boxes=()) -> runner.ClarifyPlan:
@@ -299,6 +302,51 @@ def test_threads_use_every_core_for_filters_and_the_settings_for_x264_and_slices
     assert runner.clarify_threads(4, 4).filter_threads == (os.cpu_count() or 1)
 
 
+# --- Estabilizacion en dos pasadas ---
+
+
+def detect_argv(p: runner.ClarifyPlan, threads: runner.ClarifyThreads = THREADS) -> list[str]:
+    return runner.build_detect_command(FFMPEG, p, TRANSFORMS, threads)
+
+
+def test_the_detection_pass_sees_the_frames_the_transform_will_move() -> None:
+    argv = detect_argv(plan(TRIM, DEINTERLACE, STABILIZE, DENOISE, boxes=((8, 8, 96, 24),)))
+
+    vf = value_after(argv, "-vf")
+    assert vf == (
+        "trim=start_frame=5:end_frame=55,bwdif=mode=send_frame:parity=auto,"
+        "pad=w=iw+32:h=ih+32:x=0:y=0:color=black,crop=w=iw-32:h=ih-32:x=0:y=0:exact=1,"
+        "vidstabdetect=shakiness=6:accuracy=15:stepsize=6:mincontrast=0.25:tripod=0:show=0:fileformat=ascii"
+        f":result={escape_filter_path(TRANSFORMS)}"
+    )
+    assert value_after(argv, "-i") == str(WORK) and value_after(argv, "-map") == "0:v:0"
+    assert value_after(argv, "-fps_mode") == "passthrough"
+    assert argv[-3:] == ["-f", "null", "-"]
+    assert value_after(argv, "-progress") == "pipe:1"
+
+
+def test_the_detection_pass_alone_has_no_filters_before_it() -> None:
+    vf = value_after(detect_argv(plan(STABILIZE)), "-vf")
+
+    assert vf.startswith("pad=w=iw+32:") and ",vidstabdetect=shakiness=6:" in vf
+
+
+def test_the_analysis_pass_moves_the_frames_with_the_detected_transforms() -> None:
+    bound = runner.with_transforms(plan(DEINTERLACE, STABILIZE, DENOISE), TRANSFORMS)
+
+    graph = value_after(analysis_argv(bound), "-filter_complex")
+
+    assert f"vidstabtransform=input={escape_filter_path(TRANSFORMS)}:smoothing=15:" in graph
+    assert graph.index("bwdif") < graph.index("vidstabtransform") < graph.index("hqdn3d")
+
+
+def test_a_plan_without_stabilization_is_left_as_is() -> None:
+    p = plan(DENOISE)
+
+    assert runner.with_transforms(p, TRANSFORMS) is p
+    assert runner.stabilize_step(p.steps) is None
+
+
 # --- reproduce.cmd ---
 
 
@@ -331,6 +379,26 @@ def test_reproduce_cmd_holds_the_exact_argv_with_package_relative_paths() -> Non
     expected = [path_map.get(arg, arg).replace("/", "\\") for arg in argv[1:]]
     assert command == '"%FFMPEG%" ' + " ".join(f'"{arg}"' for arg in expected)
     assert "C:\\" not in command and "C:/" not in command
+
+
+def test_reproduce_cmd_rewrites_paths_inside_filter_arguments() -> None:
+    p = runner.with_transforms(plan(STABILIZE, DENOISE), TRANSFORMS)
+    argv = analysis_argv(p)
+    path_map = {str(WORK): "work.mkv", str(TRANSFORMS): "reproduced/clip.trf"}
+
+    text = reproduce_text(argv, path_map)
+
+    command = next(line for line in text.splitlines() if line.startswith('"%FFMPEG%"'))
+    assert "vidstabtransform=input=reproduced/clip.trf:smoothing=15:" in command
+    assert "C\\" not in command and "C:/" not in command
+
+
+def test_reproduce_cmd_runs_openmp_filters_on_one_thread() -> None:
+    lines = reproduce_text(["ffmpeg", "-i", "x"], {}).splitlines()
+
+    setting = lines.index('set "OMP_NUM_THREADS=1"')
+    assert lines.index("setlocal EnableExtensions DisableDelayedExpansion") < setting
+    assert setting < next(i for i, line in enumerate(lines) if line.startswith('"%FFMPEG%"'))
 
 
 def test_reproduce_cmd_names_the_build_and_compares_against_sha256sums() -> None:
@@ -392,6 +460,62 @@ async def test_a_frame_count_mismatch_stops_before_the_viewing_copy(tmp_path: Pa
         await runner.run_clarify(fake_tools([b"75\n", b"74\n"], spawned), plan(DENOISE), tmp_path, THREADS)
 
     assert len(spawned) == 1 and spawned[0][-1].endswith(runner.ANALYSIS_NAME)
+
+
+def recording_spawn(spawned: list[tuple[str, list[str]]], name: str):
+    async def spawn(command: list[str]):
+        spawned.append((name, command))
+        return await spawn_process([sys.executable, "-c", "print('frame=1'); print('progress=end')"])
+
+    return spawn
+
+
+def stabilizing_tools(spawned: list[tuple[str, list[str]]]) -> runner.ClarifyTools:
+    async def run(command: list[str], timeout: float) -> tuple[bytes, bytes, int]:
+        return (b"75\n" if "-count_frames" in command else b""), b"", 0
+
+    return runner.ClarifyTools(
+        FFMPEG,
+        FFPROBE,
+        run=run,
+        spawn=recording_spawn(spawned, "default"),
+        spawn_serial_openmp=recording_spawn(spawned, "serial"),
+    )
+
+
+async def test_stabilization_detects_first_and_runs_both_vidstab_passes_on_one_openmp_thread(tmp_path: Path) -> None:
+    spawned: list[tuple[str, list[str]]] = []
+    stages: list[tuple[str, float]] = []
+
+    result = await runner.run_clarify(
+        stabilizing_tools(spawned), plan(STABILIZE, DENOISE), tmp_path, THREADS, lambda s, f: stages.append((s, f))
+    )
+
+    assert [(name, command[-1]) for name, command in spawned[:3]] == [
+        ("serial", "-"),
+        ("serial", str(tmp_path / runner.ANALYSIS_NAME)),
+        ("default", str(tmp_path / runner.VIEWING_NAME)),
+    ]
+    detection = result.stabilize_detection
+    assert detection is not None and detection.transforms == tmp_path / runner.TRANSFORMS_NAME
+    assert escape_filter_path(detection.transforms) in value_after(list(result.analysis_command), "-filter_complex")
+    assert [step.label for step in result.reproduce_steps()] == [
+        "stabilization motion (vidstabdetect)",
+        "analysis copy (FFV1)",
+        "viewing copy (H.264)",
+    ]
+    clarifying = [f for s, f in stages if s == "clarifying"]
+    assert clarifying == sorted(clarifying) and clarifying[-1] == pytest.approx(1.0)
+
+
+async def test_without_stabilization_nothing_runs_on_the_serial_openmp_spawner(tmp_path: Path) -> None:
+    spawned: list[tuple[str, list[str]]] = []
+
+    result = await runner.run_clarify(stabilizing_tools(spawned), plan(DENOISE), tmp_path, THREADS)
+
+    assert {name for name, _ in spawned} == {"default"}
+    assert result.stabilize_detection is None
+    assert len(result.reproduce_steps()) == 2
 
 
 async def test_a_failed_count_step_names_the_step(tmp_path: Path) -> None:
@@ -545,3 +669,35 @@ async def test_real_reproduce_cmd_rebuilds_the_outputs_and_matches_sha256sums(tm
 
     assert changed.returncode == 1
     assert f'DIFFERENT "{listed["viewing"]}"' in changed.stdout and f'MATCH "{listed["analysis"]}"' in changed.stdout
+
+
+@needs_ffmpeg
+@pytest.mark.skipif(sys.platform != "win32", reason="reproduce.cmd is a Windows batch file")
+async def test_real_reproduce_cmd_measures_the_motion_again_and_matches_the_listed_motion_file(tmp_path: Path) -> None:
+    ingested = await ingest(tmp_path, make_clip(tmp_path))
+    out = tmp_path / "out"
+    out.mkdir()
+    result = await runner.run_clarify(real_tools(), real_plan(ingested, TRIM, STABILIZE, DENOISE), out, THREADS)
+    package = tmp_path / "package folder"
+    package.mkdir()
+    shutil.copyfile(ingested.working_copy.path, package / "work.mkv")
+    stem = "02_processed/cam 1__upflow-clarify__1"
+    produced = {
+        result.stabilize_detection.transforms: ("reproduced/motion.trf", f"{stem}.trf"),
+        result.analysis: ("reproduced/analysis.mkv", f"{stem}.mkv"),
+        result.viewing: ("reproduced/viewing.mp4", f"{stem}.mp4"),
+    }
+    sums = "".join(f"{sha256(path)} *{listed}\n" for path, (_, listed) in produced.items())
+    (package / "SHA256SUMS.txt").write_text(sums, encoding="utf-8")
+    path_map = {str(ingested.working_copy.path): "work.mkv", **{str(p): again for p, (again, _) in produced.items()}}
+    checks = [runner.ReproduceCheck(again, listed) for again, listed in produced.values()]
+    caps = FfmpegCapabilities(sha256(ffmpeg_path()), "ffmpeg version test", (), frozenset(), frozenset(), ())
+    script = runner.build_reproduce_script(result.reproduce_steps(), checks, path_map, caps)
+    (package / "reproduce.cmd").write_bytes(script.encode("utf-8"))
+    env = {**os.environ, "FFMPEG": str(ffmpeg_path())}
+
+    ok = subprocess.run(["cmd", "/c", str(package / "reproduce.cmd")], capture_output=True, text=True, env=env)
+
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+    assert ok.stdout.count("MATCH") == 3 and "DIFFERENT" not in ok.stdout
+    assert (package / "reproduced" / "motion.trf").read_bytes().startswith(b"VID.STAB 1")

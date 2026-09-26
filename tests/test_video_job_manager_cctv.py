@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -569,6 +570,41 @@ async def test_two_real_jobs_on_the_same_token_each_verify_the_original_and_buil
     assert first.metadata["cctv"]["framesOut"] == 38
     second_report = cctv_session.cctv_job_dir(settings.outputs_path, second.id) / "report.json"
     assert load_report(second_report.read_text("utf-8")).osd.no_osd
+
+
+@needs_ffmpeg
+async def test_a_real_stabilized_job_hands_over_the_motion_file_and_its_detection_pass(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    await analyzed_session(settings, TOKEN)
+    manager = real_manager(settings)
+    stabilize = CctvStep("stabilize", {"shakiness": 5, "smoothing": 10})
+    job = await manager.create_cctv_job(
+        cctv=CctvOptions(task="clarify", session_token=TOKEN, steps=(stabilize, DENOISE), no_osd=True, trim=(3, 40))
+    )
+
+    await manager._process_next()
+
+    job_dir = assert_finished_cleanly(settings, job)
+    report = load_report((job_dir / "report.json").read_text("utf-8"))
+    motion = [output for output in report.outputs if output.role == "stabilization-motion"]
+    assert len(motion) == 1 and motion[0].path.startswith("02_processed/") and motion[0].path.endswith(".trf")
+    assert hashlib.sha256((job_dir / motion[0].path).read_bytes()).hexdigest() == motion[0].sha256
+    assert report.processes[0].label == "stabilization motion (vidstabdetect)"
+    assert "cctv.limitation.stabilized" in [limitation.key for limitation in report.limitations]
+    reproduce = (job_dir / "reproduce.cmd").read_text("utf-8")
+    assert "vidstabdetect=" in reproduce and "vidstabtransform=input=reproduced/" in reproduce
+    if sys.platform == "win32":
+        verdicts = reproduce_verdicts(job_dir, settings)
+        assert verdicts[".trf"] == verdicts[".mkv"] == "MATCH", verdicts
+
+
+def reproduce_verdicts(job_dir: Path, settings: Settings) -> dict[str, str]:
+    env = {**os.environ, "FFMPEG": str(settings.ffmpeg_binary_path)}
+    run = subprocess.run(["cmd", "/c", str(job_dir / "reproduce.cmd")], capture_output=True, env=env)
+    lines = run.stdout.decode("utf-8", errors="replace").splitlines()
+    verdicts = [line.split(" ", 1) for line in lines if line.startswith(("MATCH ", "DIFFERENT "))]
+    # La copia H.264 queda fuera: x264 con AVX-512 a veces codifica distinto el mismo cuadro.
+    return {Path(listed.strip('"')).suffix: verdict for verdict, listed in verdicts}
 
 
 def roi_job_dir(settings: Settings, job) -> Path:

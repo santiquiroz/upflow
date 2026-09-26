@@ -23,6 +23,7 @@ from app.core.version import get_app_version
 from app.models import CctvOptions, VideoUpscaleJob, utc_now
 from app.services.cctv_chain import ResolvedStep
 from app.services.cctv_clarify_runner import (
+    DETECT_LABEL,
     ClarifyPlan,
     ClarifyResult,
     ClarifyThreads,
@@ -299,6 +300,18 @@ def clarify_runs(outputs: ClarifyOutputs) -> tuple[ProcessRun, ProcessRun, Proce
     )
 
 
+def detection_runs(outputs: ClarifyOutputs) -> tuple[ProcessRun, ...]:
+    result = outputs.result
+    detection = result.stabilize_detection
+    if detection is None:
+        return ()
+    return (process_run(DETECT_LABEL, detection.command, detection.timing, (result.expected_frames, None)),)
+
+
+def motion_artifacts(placed: ProcessedFiles) -> tuple[OutputArtifact, ...]:
+    return () if placed.transforms is None else (OutputArtifact(placed.transforms, "stabilization-motion"),)
+
+
 def still_artifacts(stills: Sequence[StillPair]) -> tuple[OutputArtifact, ...]:
     return tuple(OutputArtifact(still.path, "still") for pair in stills for still in (pair.original, pair.processed))
 
@@ -307,6 +320,7 @@ def output_artifacts(outputs: ClarifyOutputs) -> tuple[OutputArtifact, ...]:
     return (
         OutputArtifact(outputs.placed.analysis, "analysis-lossless"),
         OutputArtifact(outputs.placed.viewing, "viewing-copy"),
+        *motion_artifacts(outputs.placed),
         OutputArtifact(outputs.comparison.path, "comparison"),
         *still_artifacts(outputs.stills),
     )
@@ -333,7 +347,7 @@ def report_parts(
         osd=inputs.osd,
         chain=clarify.steps,
         chain_run=runs[0],
-        processes=runs,
+        processes=(*detection_runs(outputs), *runs),
         outputs=output_artifacts(outputs),
         base_dir=clarify.job_dir,
         stills=outputs.stills,
@@ -343,12 +357,25 @@ def report_parts(
     )
 
 
+def reproduced_transforms(outputs: ClarifyOutputs, job_dir: Path) -> tuple[ReproducedOutput, ...]:
+    detection, placed = outputs.result.stabilize_detection, outputs.placed.transforms
+    if detection is None or placed is None:
+        return ()
+    return (ReproducedOutput(detection.transforms, placed.relative_to(job_dir).as_posix()),)
+
+
 def reproduced_outputs(outputs: ClarifyOutputs, job_dir: Path) -> tuple[ReproducedOutput, ...]:
     placed, result = outputs.placed, outputs.result
     return (
+        *reproduced_transforms(outputs, job_dir),
         ReproducedOutput(result.analysis, placed.analysis.relative_to(job_dir).as_posix()),
         ReproducedOutput(result.viewing, placed.viewing.relative_to(job_dir).as_posix()),
     )
+
+
+def transforms_of(result: ClarifyResult) -> Path | None:
+    detection = result.stabilize_detection
+    return None if detection is None else detection.transforms
 
 
 def relative(path: Path | None, base: Path) -> str | None:
@@ -418,7 +445,9 @@ class CctvClarifyRunner:
 
     async def _clarify(self, clarify: ClarifyJob, source: IngestedSource) -> ClarifyOutputs:
         result = await self._run_clarify(clarify, source)
-        placed = place_processed(clarify.job_dir, source.record.original_name, clarify.job.id, result.analysis, result.viewing)
+        placed = place_processed(
+            clarify.job_dir, source.record.original_name, clarify.job.id, result.analysis, result.viewing, transforms_of(result)
+        )
         stills = await self._export_stills(clarify, source, placed.analysis)
         comparison, timing = await self._compare(clarify, source, result, placed.analysis)
         return ClarifyOutputs(result, placed, stills, comparison, timing)

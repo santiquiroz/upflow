@@ -122,6 +122,19 @@ def test_place_processed_moves_both_copies_under_02_processed(tmp_path: Path) ->
     assert placed.analysis.read_bytes() == b"ffv1" and not analysis.exists() and not viewing.exists()
 
 
+def test_place_processed_keeps_the_stabilization_motion_file_next_to_the_copies(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    analysis, viewing = write(out / "analysis.mkv", b"ffv1"), write(out / "viewing.mp4", b"x264")
+    transforms = write(out / "transforms.trf", b"VID.STAB 1\n")
+    job = tmp_path / "job"
+
+    placed = package.place_processed(job, ORIGINAL, JOB_ID, analysis, viewing, transforms)
+
+    assert placed.transforms == job / "02_processed" / "camara 1 _ _50____upflow-clarify__0123abcd.trf"
+    assert placed.transforms.read_bytes() == b"VID.STAB 1\n" and not transforms.exists()
+    assert package.place_processed(job, ORIGINAL, "x", write(out / "a.mkv", b""), write(out / "v.mp4", b"")).transforms is None
+
+
 # --- Contenido del paquete ---
 
 

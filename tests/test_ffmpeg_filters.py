@@ -13,6 +13,7 @@ from app.config import Settings
 from app.services.cctv_chain import (
     CCTV_CHAIN,
     INVALID_PARAM,
+    STABILIZE_GATE,
     MISSING_PARAM,
     CctvChainError,
     ResolvedStep,
@@ -25,7 +26,9 @@ from app.services.ffmpeg_filters import (
     FrameGeometry,
     build_filter,
     build_osd_graph,
+    bind_transforms,
     build_scale_to,
+    build_stabilize_detect,
     compose_vf,
     escape_filter_path,
     osd_boxes_after,
@@ -44,6 +47,8 @@ REQUIRED_PARAMS = {
 CLIP_SIZE = (64, 48)
 CLIP_FRAMES = 10
 TRICKY_DIR = "osd dir, [x]; it's"
+# osd_protect necesita el grafo con ramas; stabilize, su pasada de deteccion antes.
+NOT_A_SINGLE_VF = frozenset({"osd_protect", "stabilize"})
 
 
 def classic(*raw: dict) -> tuple[ResolvedStep, ...]:
@@ -62,7 +67,7 @@ def classic_filter_cases() -> list[tuple[str, str]]:
     return [
         (step.id, spec.name)
         for step in CCTV_CHAIN
-        if "classic" in step.lanes and step.id != "osd_protect"
+        if "classic" in step.lanes and step.id not in NOT_A_SINGLE_VF
         for spec in step.filters
     ]
 
@@ -297,6 +302,75 @@ def test_without_osd_boxes_the_graph_is_the_plain_chain() -> None:
     )
 
 
+STABILIZE = {"id": "stabilize", "params": {"shakiness": 7, "smoothing": 12}}
+EDGE_GUARD = "pad=w=iw+32:h=ih+32:x=0:y=0:color=black,crop=w=iw-32:h=ih-32:x=0:y=0:exact=1"
+TRANSFORMS = PureWindowsPath("C:/cases/job 1/transforms.trf")
+
+
+def stabilized(*raw: dict) -> tuple[ResolvedStep, ...]:
+    return steps_from_request([*raw, STABILIZE], "classic", frozenset({STABILIZE_GATE}))
+
+
+def stabilize_step() -> ResolvedStep:
+    return next(step for step in stabilized() if step.id == "stabilize")
+
+
+def test_the_stabilize_transform_needs_its_transforms_file() -> None:
+    with pytest.raises(CctvChainError) as error:
+        build_filter(stabilize_step())
+
+    assert error.value.code == NOT_A_FILTER
+
+
+def test_the_stabilize_transform_reads_the_escaped_file_and_never_zooms_or_reuses_old_pixels() -> None:
+    built = build_filter(bind_transforms(stabilize_step(), TRANSFORMS))
+
+    assert built == (
+        f"{EDGE_GUARD},vidstabtransform=input={escape_filter_path(TRANSFORMS)}:smoothing=12"
+        ":crop=black:optzoom=0:zoom=0:interpol=bilinear:relative=1"
+    )
+    assert r"input=C\\:/cases/job 1/transforms.trf:" in built
+
+
+def test_the_stabilize_detection_pins_every_option_and_writes_a_text_file() -> None:
+    built = build_stabilize_detect(stabilize_step(), TRANSFORMS)
+
+    assert built == (
+        f"{EDGE_GUARD},vidstabdetect=shakiness=7:accuracy=15:stepsize=6:mincontrast=0.25:tripod=0:show=0"
+        f":fileformat=ascii:result={escape_filter_path(TRANSFORMS)}"
+    )
+
+
+@pytest.mark.parametrize("path", ["C:/x.trf", None, 3])
+def test_a_transforms_file_must_be_a_path_object(path) -> None:
+    step = ResolvedStep("stabilize", "vidstab", MappingProxyType({"shakiness": 5, "smoothing": 10, "transforms": path}))
+
+    with pytest.raises(CctvChainError) as error:
+        build_filter(step)
+
+    assert error.value.code == INVALID_PARAM
+
+
+def test_stabilization_keeps_the_frame_size() -> None:
+    steps = (bind_transforms(stabilize_step(), TRANSFORMS),)
+
+    assert output_dims_after(steps, 352, 288, Fraction(2)) == FrameGeometry(352, 288, Fraction(2))
+
+
+def test_the_stabilized_graph_moves_the_picture_but_restores_the_osd_from_the_original() -> None:
+    steps = tuple(
+        bind_transforms(step, TRANSFORMS) if step.id == "stabilize" else step
+        for step in stabilized({"id": "deinterlace"}, {"id": "denoise"}, {"id": "osd_protect"})
+    )
+
+    graph = build_osd_graph(steps, [(6, 6, 10, 4)], FrameGeometry(64, 48))
+
+    main, osd = graph.split(";")[1:3]
+    assert main.startswith(f"[m]bwdif=mode=send_frame:parity=auto,{EDGE_GUARD},vidstabtransform=input=")
+    assert main.index("vidstabtransform") < main.index("hqdn3d")
+    assert "vidstab" not in osd
+
+
 def test_an_empty_chain_without_boxes_is_a_null_graph() -> None:
     assert build_osd_graph((), [], FrameGeometry(64, 48)) == "[0:v]null[v]"
 
@@ -400,6 +474,20 @@ def test_every_classic_filter_runs_in_the_real_binary_with_its_defaults(
 
     kept = 4 if step_id == "trim" else CLIP_FRAMES
     assert frames.shape == (kept, expected.height, expected.width)
+
+
+@needs_ffmpeg
+def test_stabilization_detects_then_transforms_in_the_real_binary_keeping_size_and_count(tmp_path: Path) -> None:
+    clip, transforms = make_clip(tmp_path), tmp_path / "motion dir, [x]" / "transforms.trf"
+    transforms.parent.mkdir()
+    detect = run_ffmpeg("-i", str(clip), "-vf", build_stabilize_detect(stabilize_step(), transforms), "-f", "null", "-")
+    assert detect.returncode == 0, detect.stderr.decode(errors="replace")
+    step = bind_transforms(stabilize_step(), transforms)
+
+    frames = gray_frames(decode_gray(clip, *vf_args((step,))), output_dims_after((step,), *CLIP_SIZE))
+
+    assert transforms.read_bytes().startswith(b"VID.STAB 1")
+    assert frames.shape == (CLIP_FRAMES, CLIP_SIZE[1], CLIP_SIZE[0])
 
 
 @needs_ffmpeg

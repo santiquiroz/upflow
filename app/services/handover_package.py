@@ -60,6 +60,7 @@ ROOT_FILES = (FRAME_INDEX_NAME, REPORT_JSON_NAME, REPORT_HTML_NAME, SHA256SUMS_N
 PROCESSED_TAG = "__upflow-clarify__"
 ANALYSIS_EXTENSION = ".mkv"
 VIEWING_EXTENSION = ".mp4"
+TRANSFORMS_EXTENSION = ".trf"
 FALLBACK_STEM = "clip"
 PACKAGE_SUFFIX = "upflow"
 MAX_LABEL_CHARS = 60
@@ -117,6 +118,7 @@ def package_root_name(case_label: str | None, original_name: str, day: date) -> 
 class ProcessedFiles:
     analysis: Path
     viewing: Path
+    transforms: Path | None = None
 
 
 def place_file(source: Path, destination: Path) -> Path:
@@ -129,10 +131,19 @@ def processed_path(job_dir: Path, original_name: str, job_id: str, extension: st
     return job_dir / PROCESSED_DIRNAME / processed_name(original_name, job_id, extension)
 
 
-def place_processed(job_dir: Path, original_name: str, job_id: str, analysis: Path, viewing: Path) -> ProcessedFiles:
+def place_transforms(job_dir: Path, original_name: str, job_id: str, transforms: Path | None) -> Path | None:
+    if transforms is None:
+        return None
+    return place_file(transforms, processed_path(job_dir, original_name, job_id, TRANSFORMS_EXTENSION))
+
+
+def place_processed(
+    job_dir: Path, original_name: str, job_id: str, analysis: Path, viewing: Path, transforms: Path | None = None
+) -> ProcessedFiles:
     return ProcessedFiles(
         analysis=place_file(analysis, processed_path(job_dir, original_name, job_id, ANALYSIS_EXTENSION)),
         viewing=place_file(viewing, processed_path(job_dir, original_name, job_id, VIEWING_EXTENSION)),
+        transforms=place_transforms(job_dir, original_name, job_id, transforms),
     )
 
 

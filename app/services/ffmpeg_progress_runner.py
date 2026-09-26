@@ -9,6 +9,7 @@ solo la cola del stderr.
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -94,13 +95,21 @@ def has_progress_pipe(command: Sequence[str]) -> bool:
     return any(flag == "-progress" and target == "pipe:1" for flag, target in pairs)
 
 
-async def spawn_process(command: list[str]) -> asyncio.subprocess.Process:
+async def spawn_process(command: list[str], env: Mapping[str, str] | None = None) -> asyncio.subprocess.Process:
     return await asyncio.create_subprocess_exec(
         *command,
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        env=None if env is None else dict(env),
     )
+
+
+def spawner_with_env(extra: Mapping[str, str]) -> Spawner:
+    async def spawn(command: list[str]) -> asyncio.subprocess.Process:
+        return await spawn_process(command, {**os.environ, **extra})
+
+    return spawn
 
 
 async def _kill_process(process: asyncio.subprocess.Process) -> None:

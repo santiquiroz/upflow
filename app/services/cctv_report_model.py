@@ -26,6 +26,7 @@ StepCategory = Literal["classic", "ai", "label"]
 OutputRole = Literal[
     "analysis-lossless",
     "viewing-copy",
+    "stabilization-motion",
     "comparison",
     "still",
     "roi-fused",

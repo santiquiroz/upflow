@@ -10,6 +10,8 @@ from app.services.cctv_chain import (
     AI_LANE_PLACEMENT,
     CCTV_CHAIN,
     FFMPEG_FILTERS_DOC,
+    OPEN_GATES,
+    STABILIZE_GATE,
     CctvChainError,
     ai_lane_plan,
     catalog_schema,
@@ -111,10 +113,44 @@ def test_interpolation_is_out_of_v1_in_both_lanes():
     assert _error_code([{"id": "interpolate"}], "ai") == "cctv.error.stepDeferred"
 
 
-@pytest.mark.parametrize("step_id", ["stabilize", "lens"])
 @pytest.mark.parametrize("lane", ["classic", "ai"])
-def test_stabilize_and_lens_are_rejected_in_v1(step_id, lane):
-    assert _error_code([{"id": step_id}], lane) == "cctv.error.stepDeferred"
+def test_lens_correction_is_rejected_in_v1(lane):
+    assert _error_code([{"id": "lens"}], lane) == "cctv.error.stepDeferred"
+
+
+def _ids_of_schema(schema):
+    return [step["id"] for step in schema]
+
+
+def test_stabilize_is_open_because_its_determinism_test_passes():
+    assert STABILIZE_GATE in OPEN_GATES
+
+
+def test_stabilize_runs_only_in_the_classic_lane():
+    raw = [{"id": "denoise"}, {"id": "stabilize", "params": {"shakiness": 7}}, {"id": "deblock"}]
+
+    steps = steps_from_request(raw, "classic")
+
+    assert _ids(steps) == ["deblock", "stabilize", "denoise"]
+    assert dict(steps[1].params) == {"shakiness": 7, "smoothing": 10}
+    assert _error_code([{"id": "stabilize"}], "ai") == "cctv.error.stepNotInLane"
+    assert "stabilize" in _ids_of_schema(catalog_schema("classic"))
+    assert "stabilize" not in _ids_of_schema(catalog_schema("ai"))
+
+
+def test_a_closed_gate_hides_and_refuses_its_step():
+    closed = frozenset()
+
+    assert _ids_of_schema(catalog_schema("classic", closed)).count("stabilize") == 0
+    with pytest.raises(CctvChainError) as caught:
+        steps_from_request([{"id": "stabilize"}], "classic", closed)
+    assert caught.value.code == "cctv.error.stepDeferred"
+
+
+def test_stabilization_declares_that_frames_were_moved_and_resampled():
+    steps = steps_from_request([{"id": "stabilize"}], "classic")
+
+    assert [limitation.key for limitation in limitations_for(steps)] == ["cctv.limitation.stabilized"]
 
 
 @pytest.mark.parametrize("step_id", ["denoise", "deblock"])

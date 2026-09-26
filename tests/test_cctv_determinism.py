@@ -11,7 +11,7 @@ import pytest
 
 from app.config import Settings
 from app.services import cctv_clarify_runner as runner
-from app.services.cctv_chain import steps_from_request
+from app.services.cctv_chain import OPEN_GATES, STABILIZE_GATE, steps_from_request
 from app.services.cctv_ingest import MediaTools, WorkingIngest, ingest_working_copy
 from app.services.cctv_presets import PresetContext, preset_steps
 from app.services.ffmpeg_capabilities import cached_capabilities
@@ -26,6 +26,13 @@ OSD_BOX = (8, 8, 128, 24)
 X264_THREADS = 4
 FFV1_SLICES = 4
 MANY_THREADS = 12
+STATIC_VIDEO = "testsrc2=size=352x288:rate=50,noise=alls=16:allf=t+u,interlace=scan=tff"
+# Camara que tiembla: el recorte se mueve un poco en cada cuadro antes de entrelazar.
+SHAKY_VIDEO = (
+    "testsrc2=size=384x320:rate=50,crop=w=352:h=288:x='16+8*sin(n*0.45)':y='16+6*cos(n*0.65)',"
+    "noise=alls=16:allf=t+u,interlace=scan=tff"
+)
+STABILIZE_RAW = {"id": "stabilize", "params": {"shakiness": 5, "smoothing": 10}}
 # Cabecera IMKH de 40 bytes armada con la descripcion publica del formato:
 # firma, version, codec (H.264), audio y resolucion; el resto en cero.
 IMKH_HEADER = (
@@ -43,8 +50,7 @@ def ffmpeg_binary() -> Path:
     return Settings().ffmpeg_binary_path
 
 
-def synthetic_command(output: Path, *container: str) -> list[str]:
-    video = "testsrc2=size=352x288:rate=50,noise=alls=16:allf=t+u,interlace=scan=tff"
+def synthetic_command(output: Path, *container: str, video: str = STATIC_VIDEO) -> list[str]:
     return [
         str(ffmpeg_binary()), "-hide_banner", "-v", "error", "-y",
         "-f", "lavfi", "-i", video, "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=8000",
@@ -53,9 +59,9 @@ def synthetic_command(output: Path, *container: str) -> list[str]:
     ]  # fmt: skip
 
 
-def make_mkv_clip(folder: Path) -> Path:
+def make_mkv_clip(folder: Path, video: str = STATIC_VIDEO) -> Path:
     clip = folder / "camera.mkv"
-    subprocess.run(synthetic_command(clip, "-c:a", "pcm_alaw"), check=True, capture_output=True)
+    subprocess.run(synthetic_command(clip, "-c:a", "pcm_alaw", video=video), check=True, capture_output=True)
     return clip
 
 
@@ -77,18 +83,28 @@ async def ingest(folder: Path, clip: Path) -> WorkingIngest:
     return ingested
 
 
-def preset_plan(ingested: WorkingIngest, preset: str) -> runner.ClarifyPlan:
-    raw = preset_steps(preset, "classic", PresetContext(interlaced=True))
+def raw_plan(ingested: WorkingIngest, raw: list[dict], boxes: tuple = (OSD_BOX,)) -> runner.ClarifyPlan:
     return runner.ClarifyPlan(
         work=ingested.working_copy.path,
-        steps=steps_from_request(raw, "classic"),
+        steps=steps_from_request(raw, "classic", frozenset({STABILIZE_GATE})),
         geometry=FrameGeometry(ingested.video.width, ingested.video.height),
         source_pix_fmt="yuv420p",
         frames=ingested.index.frames,
         has_audio=bool(ingested.audio),
         app_version="0.0.0-test",
-        osd_boxes=(OSD_BOX,),
+        osd_boxes=boxes,
     )
+
+
+def preset_plan(ingested: WorkingIngest, preset: str, *extra: dict) -> runner.ClarifyPlan:
+    return raw_plan(ingested, [*preset_steps(preset, "classic", PresetContext(interlaced=True)), *extra])
+
+
+def vidstab_plan(ingested: WorkingIngest, preset: str | None) -> runner.ClarifyPlan:
+    # Sin preset ni OSD, vidstab lee los cuadros tal como salen del decoder: el caso que cambiaba en cada corrida.
+    if preset is None:
+        return raw_plan(ingested, [STABILIZE_RAW], boxes=())
+    return preset_plan(ingested, preset, STABILIZE_RAW)
 
 
 def clarify_tools() -> runner.ClarifyTools:
@@ -112,6 +128,12 @@ class RunFingerprint:
     frames: tuple[str, ...]
     analysis_sha256: str
     viewing_sha256: str
+    transforms_sha256: str | None = None
+
+
+def transforms_sha256(result: runner.ClarifyResult) -> str | None:
+    detection = result.stabilize_detection
+    return None if detection is None else sha256(detection.transforms)
 
 
 async def clarify_once(folder: Path, plan: runner.ClarifyPlan, filter_threads: int) -> RunFingerprint:
@@ -119,7 +141,8 @@ async def clarify_once(folder: Path, plan: runner.ClarifyPlan, filter_threads: i
     threads = runner.ClarifyThreads(filter_threads, FFV1_SLICES, X264_THREADS)
     result = await runner.run_clarify(clarify_tools(), plan, folder, threads)
     assert result.output_frames == result.expected_frames == CLIP_FRAMES
-    return RunFingerprint(tuple(framehash(result.analysis)), sha256(result.analysis), sha256(result.viewing))
+    frames = tuple(framehash(result.analysis))
+    return RunFingerprint(frames, sha256(result.analysis), sha256(result.viewing), transforms_sha256(result))
 
 
 async def three_runs(folder: Path, plan: runner.ClarifyPlan) -> tuple[RunFingerprint, RunFingerprint, RunFingerprint]:
@@ -201,3 +224,54 @@ async def test_analysis_copy_matches_the_golden_hash_of_this_build(tmp_path: Pat
     fingerprint = await clarify_once(tmp_path / "golden", preset_plan(ingested, preset), MANY_THREADS)
 
     assert fingerprint.analysis_sha256 == golden["analysisSha256"][preset]
+
+
+# --- vidstab (P4-STABILIZE): entra al carril clasico solo si esto pasa ---
+
+
+def differing_frames(first: RunFingerprint, other: RunFingerprint) -> int:
+    return sum(a != b for a, b in zip(first.frames, other.frames, strict=True))
+
+
+def vidstab_nondeterminism(first: RunFingerprint, second: RunFingerprint, single: RunFingerprint) -> str | None:
+    repeated, threaded = differing_frames(first, second), differing_frames(first, single)
+    motion_same = first.transforms_sha256 == second.transforms_sha256 == single.transforms_sha256
+    files_same = first.analysis_sha256 == second.analysis_sha256 and first.viewing_sha256 == second.viewing_sha256
+    if not repeated and not threaded and motion_same and files_same:
+        return None
+    motion = "is identical" if motion_same else "differs"
+    return (
+        f"vidstab is not deterministic with {cached_capabilities(ffmpeg_binary()).version}: the motion file {motion} "
+        f"across runs; {repeated} of {len(first.frames)} frames differ between two identical runs "
+        f"and {threaded} between {MANY_THREADS} threads and 1"
+    )
+
+
+@needs_ffmpeg
+async def test_vidstab_detection_on_one_openmp_thread_writes_the_same_motion_file(tmp_path: Path) -> None:
+    ingested = await ingest(tmp_path, make_mkv_clip(tmp_path, SHAKY_VIDEO))
+    plan = vidstab_plan(ingested, None)
+    digests = []
+    for name, filter_threads in (("many", MANY_THREADS), ("again", MANY_THREADS), ("one", 1)):
+        folder = tmp_path / name
+        folder.mkdir()
+        threads = runner.ClarifyThreads(filter_threads, FFV1_SLICES, X264_THREADS)
+        detection = await runner.run_detect_pass(clarify_tools(), plan, folder, threads, lambda stage, fraction: None)
+        digests.append(sha256(detection.transforms))
+
+    assert len(set(digests)) == 1
+    assert (tmp_path / "one" / runner.TRANSFORMS_NAME).read_bytes().startswith(b"VID.STAB 1")
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize("preset", [None, "analog", "night_ir"])
+async def test_vidstab_two_runs_and_one_thread_give_the_same_frames_and_files(tmp_path: Path, preset: str | None) -> None:
+    ingested = await ingest(tmp_path, make_mkv_clip(tmp_path, SHAKY_VIDEO))
+
+    runs = await three_runs(tmp_path, vidstab_plan(ingested, preset))
+
+    reason = vidstab_nondeterminism(*runs)
+    if reason is not None and STABILIZE_GATE not in OPEN_GATES:
+        pytest.skip(f"{reason}; the stabilize step stays closed (P4-STABILIZE)")
+    assert reason is None, reason
+    assert_deterministic(*runs)

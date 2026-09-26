@@ -204,4 +204,4 @@ async def test_la_ruta_con_una_build_lgpl_dice_por_que_no(tmp_path: Path, monkey
 
     assert response.cctv_available is False
     assert response.cctv_reason_key == "capability.setup.ffmpegBuildLacksCctv"
-    assert response.cctv_unavailable_steps == []
+    assert response.cctv_unavailable_steps == ["stabilize"]

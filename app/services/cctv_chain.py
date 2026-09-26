@@ -100,6 +100,7 @@ class StepSpec:
     deferred_to: str | None = None
     conflicts_with: tuple[str, ...] = ()
     default_on: bool = False
+    gate: str | None = None
 
     @property
     def label_key(self) -> str:
@@ -135,8 +136,13 @@ def _ffmpeg_filter(name: str, description: str, *params: ParamSpec, anchor: str 
 
 
 CLASSIC_AND_AI: frozenset[Lane] = frozenset(LANES)
+CLASSIC_ONLY: frozenset[Lane] = frozenset({"classic"})
 AI_ONLY: frozenset[Lane] = frozenset({"ai"})
 NO_LANE: frozenset[Lane] = frozenset()
+
+STABILIZE_GATE = "stabilize"
+# vidstab sigue abierto mientras `test_cctv_determinism.py -k vidstab` pase con el ffmpeg vendorizado.
+OPEN_GATES: frozenset[str] = frozenset({STABILIZE_GATE})
 
 _DEINTERLACE_PARAMS: tuple[ParamSpec, ...] = (
     EnumParam("mode", ("send_frame", "send_field"), "send_frame", ai_only=("send_field",)),
@@ -265,8 +271,8 @@ CCTV_CHAIN: tuple[StepSpec, ...] = (
                 ffmpeg_doc("vidstabdetect"),
             ),
         ),
-        NO_LANE,
-        deferred_to="P4-STABILIZE",
+        CLASSIC_ONLY,
+        gate=STABILIZE_GATE,
     ),
     StepSpec(
         "denoise",
@@ -546,6 +552,11 @@ NEW_PIXEL_VALUES = Limitation(
     "Bicubic or Lanczos scaling: new pixel values were computed.",
 )
 SHARPEN_HALOS = Limitation("cctv.limitation.sharpenHalos", "Sharpening can create halos around edges.")
+STABILIZED = Limitation(
+    "cctv.limitation.stabilized",
+    "Stabilization moved and resampled every frame: positions and pixel values differ from the original, "
+    "and edges the motion uncovered are black.",
+)
 
 
 def step_spec(step_id: str) -> StepSpec:
@@ -640,9 +651,15 @@ def _resolve_params(step: StepSpec, raw: Mapping[str, Any], lane: Lane) -> Resol
     return ResolvedStep(step.id, spec.name, MappingProxyType(params))
 
 
-def _check_lane(step: StepSpec, lane: Lane) -> None:
+def is_open(step: StepSpec, gates: frozenset[str]) -> bool:
+    return step.gate is None or step.gate in gates
+
+
+def _check_lane(step: StepSpec, lane: Lane, gates: frozenset[str]) -> None:
     if step.deferred_to is not None:
         raise CctvChainError(STEP_DEFERRED, f"Step {step.id!r} is not available in this version ({step.deferred_to}).")
+    if not is_open(step, gates):
+        raise CctvChainError(STEP_DEFERRED, f"Step {step.id!r} is not available in this version.")
     if lane not in step.lanes:
         raise CctvChainError(STEP_NOT_IN_LANE, f"Step {step.id!r} isn't allowed in {_LANE_NAMES[lane]}.")
 
@@ -656,10 +673,10 @@ def _raw_step_parts(raw: Any) -> tuple[str, Mapping[str, Any]]:
     return raw["id"], params
 
 
-def _resolve_step(raw: Any, lane: Lane) -> ResolvedStep:
+def _resolve_step(raw: Any, lane: Lane, gates: frozenset[str]) -> ResolvedStep:
     step_id, params = _raw_step_parts(raw)
     step = step_spec(step_id)
-    _check_lane(step, lane)
+    _check_lane(step, lane, gates)
     return _resolve_params(step, params, lane)
 
 
@@ -693,8 +710,10 @@ def in_catalog_order(steps: Sequence[ResolvedStep]) -> tuple[ResolvedStep, ...]:
     return tuple(sorted(steps, key=lambda step: _POSITION_BY_ID[step.id]))
 
 
-def steps_from_request(raw_steps: Sequence[Any], lane: Lane) -> tuple[ResolvedStep, ...]:
-    resolved = [_resolve_step(raw, lane) for raw in raw_steps]
+def steps_from_request(
+    raw_steps: Sequence[Any], lane: Lane, gates: frozenset[str] = OPEN_GATES
+) -> tuple[ResolvedStep, ...]:
+    resolved = [_resolve_step(raw, lane, gates) for raw in raw_steps]
     _reject_duplicates(resolved)
     _reject_conflicts(resolved)
     return in_catalog_order(_with_ai_label(resolved, lane))
@@ -728,6 +747,7 @@ _LIMITATION_RULES: tuple[tuple[Callable[[ResolvedStep], bool], Limitation], ...]
     (lambda step: step.id == "gray", GRAYSCALE),
     (_computes_new_pixels, NEW_PIXEL_VALUES),
     (lambda step: step.id == "sharpen", SHARPEN_HALOS),
+    (lambda step: step.id == "stabilize", STABILIZED),
 )
 
 
@@ -777,5 +797,5 @@ def _step_schema(step: StepSpec, lane: Lane) -> dict[str, Any]:
     }
 
 
-def catalog_schema(lane: Lane) -> list[dict[str, Any]]:
-    return [_step_schema(step, lane) for step in CCTV_CHAIN if lane in step.lanes]
+def catalog_schema(lane: Lane, gates: frozenset[str] = OPEN_GATES) -> list[dict[str, Any]]:
+    return [_step_schema(step, lane) for step in CCTV_CHAIN if lane in step.lanes and is_open(step, gates)]

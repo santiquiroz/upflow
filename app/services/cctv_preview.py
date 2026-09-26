@@ -34,7 +34,8 @@ STDERR_TAIL_CHARS = 500
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 PREVIEW_LANE = "classic"
 # Un cuadro suelto no tiene recorte que mostrar, y la proteccion del OSD necesita el grafo del job.
-PREVIEW_SKIPPED_STEPS = frozenset({"trim", "osd_protect"})
+# stabilize necesita su pasada de deteccion sobre todo el clip: un cuadro suelto no la muestra.
+PREVIEW_SKIPPED_STEPS = frozenset({"trim", "osd_protect", "stabilize"})
 
 FRAME_OUT_OF_RANGE = "cctv.error.frameOutOfRange"
 FRAME_WITHOUT_TIMESTAMP = "cctv.error.frameWithoutTimestamp"

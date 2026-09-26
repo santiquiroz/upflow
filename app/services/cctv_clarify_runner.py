@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from fractions import Fraction
 from pathlib import Path
@@ -25,9 +25,13 @@ from app.services.ffmpeg_capabilities import FfmpegCapabilities
 from app.services.ffmpeg_filters import (
     Box,
     FrameGeometry,
+    bind_transforms,
     build_filter,
     build_osd_graph,
     build_scale_to,
+    build_stabilize_detect,
+    compose_vf,
+    escape_filter_path,
     output_dims_after,
 )
 from app.services.ffmpeg_progress_runner import (
@@ -35,6 +39,7 @@ from app.services.ffmpeg_progress_runner import (
     Spawner,
     run_ffmpeg_with_progress,
     spawn_process,
+    spawner_with_env,
 )
 from app.services.process_runner import run_guarded_process
 from app.services.video_analysis import (
@@ -50,6 +55,10 @@ from app.services.video_analysis import (
 
 ANALYSIS_NAME = "analysis.mkv"
 VIEWING_NAME = "viewing.mp4"
+TRANSFORMS_NAME = "transforms.trf"
+STABILIZE_STEP = "stabilize"
+# libvidstab reparte la deteccion en hilos OpenMP y el .trf cambia de una corrida a otra si son varios.
+SERIAL_OPENMP_ENV: Mapping[str, str] = {"OMP_NUM_THREADS": "1"}
 VIDEO_LABEL = "v"
 AUDIO_LABEL = "a"
 GRAY_PIX_FMT = "gray"
@@ -66,6 +75,8 @@ CLIPPING_INCREASE_LIMIT_PCT = 0.5
 CLIPPING_INCREASED_KEY = "cctv.limitation.clippingIncreased"
 
 ANALYSIS_SHARE = 0.6
+DETECT_SHARE = 0.2
+DETECT_LABEL = "stabilization motion (vidstabdetect)"
 STAGE_CLARIFYING = "clarifying"
 STAGE_VERIFYING = "verifying"
 
@@ -121,6 +132,7 @@ class ClarifyTools:
     run: ProcessRunner = run_guarded_process
     spawn: Spawner = spawn_process
     timeout: float = STEP_TIMEOUT_SECONDS
+    spawn_serial_openmp: Spawner = spawner_with_env(SERIAL_OPENMP_ENV)
 
 
 # --- Recorte y pix_fmt ---
@@ -156,6 +168,53 @@ def atrim_filter(trim: ResolvedStep, frames: Sequence[FrameEntry]) -> str:
         raise ValueError("The first trimmed frame has no timestamp in the frame index")
     end = frame_time(frames, int(trim.params["end_frame"]) + 1)
     return f"atrim=start={seconds_text(start)}" + ("" if end is None else f":end={seconds_text(end)}")
+
+
+# --- Estabilizacion: deteccion (pasada 1) y transformacion dentro del analisis (pasada 2) ---
+
+
+def stabilize_step(steps: Sequence[ResolvedStep]) -> ResolvedStep | None:
+    return next((step for step in steps if step.id == STABILIZE_STEP), None)
+
+
+def steps_before(steps: Sequence[ResolvedStep], step_id: str) -> tuple[ResolvedStep, ...]:
+    ordered = in_catalog_order(steps)
+    ids = [step.id for step in ordered]
+    return ordered[: ids.index(step_id)]
+
+
+def detect_vf(plan: ClarifyPlan, transforms: Path) -> str:
+    step = stabilize_step(plan.steps)
+    if step is None:
+        raise ValueError("The plan has no stabilize step")
+    earlier = compose_vf(steps_before(plan.steps, STABILIZE_STEP))
+    detect = build_stabilize_detect(step, transforms)
+    return f"{earlier},{detect}" if earlier else detect
+
+
+def build_detect_command(ffmpeg: Path, plan: ClarifyPlan, transforms: Path, threads: ClarifyThreads) -> list[str]:
+    n = str(threads.filter_threads)
+    return [
+        *ffmpeg_head(ffmpeg),
+        *("-threads", n, "-filter_threads", n),
+        *("-i", str(plan.work), "-map", "0:v:0"),
+        *("-vf", detect_vf(plan, transforms)),
+        *("-fps_mode", "passthrough", "-f", "null", "-"),
+    ]
+
+
+def with_transforms(plan: ClarifyPlan, transforms: Path) -> ClarifyPlan:
+    if stabilize_step(plan.steps) is None:
+        return plan
+    bound = tuple(bind_transforms(step, transforms) if step.id == STABILIZE_STEP else step for step in plan.steps)
+    return replace(plan, steps=bound)
+
+
+@dataclass(frozen=True, slots=True)
+class StabilizeDetection:
+    transforms: Path
+    command: tuple[str, ...]
+    timing: PassTiming
 
 
 # --- Pasada de analisis (FFV1) ---
@@ -362,8 +421,18 @@ def cmd_set(name: str, value: str) -> str:
     return f'set "{name}={cmd_safe(value)}"'
 
 
+def relative_filter_paths(arg: str, path_map: Mapping[str, str]) -> str:
+    for absolute, relative in path_map.items():
+        arg = arg.replace(escape_filter_path(absolute), escape_filter_path(relative))
+    return arg
+
+
+def relative_arg(arg: str, path_map: Mapping[str, str]) -> str:
+    return windows_path(path_map[arg]) if arg in path_map else relative_filter_paths(arg, path_map)
+
+
 def relative_argv(argv: Sequence[str], path_map: Mapping[str, str]) -> list[str]:
-    return [windows_path(path_map[arg]) if arg in path_map else arg for arg in argv[1:]]
+    return [relative_arg(arg, path_map) for arg in argv[1:]]
 
 
 def command_line(step: ReproduceStep, path_map: Mapping[str, str]) -> list[str]:
@@ -378,6 +447,8 @@ def build_header(caps: FfmpegCapabilities) -> list[str]:
         "for /f \"tokens=2 delims=:.\" %%C in ('chcp') do set \"UPFLOW_CODEPAGE=%%C\"",
         "chcp 65001 >nul",
         "setlocal EnableExtensions DisableDelayedExpansion",
+        "rem libvidstab uses OpenMP threads; with more than one its motion file changes from run to run.",
+        'set "OMP_NUM_THREADS=1"',
         "rem Reproduces the Upflow classic-filter outputs of this package and compares them with SHA256SUMS.txt.",
         f"rem Expected ffmpeg build: {cmd_escape(caps.version)}",
         f"rem Expected ffmpeg.exe sha256: {caps.binary_sha256}",
@@ -465,9 +536,15 @@ class ClarifyResult:
     limitations: tuple[Limitation, ...] = ()
     analysis_timing: PassTiming | None = None
     viewing_timing: PassTiming | None = None
+    stabilize_detection: StabilizeDetection | None = None
+
+    def detection_steps(self) -> tuple[ReproduceStep, ...]:
+        detection = self.stabilize_detection
+        return () if detection is None else (ReproduceStep(DETECT_LABEL, detection.command),)
 
     def reproduce_steps(self) -> tuple[ReproduceStep, ...]:
         return (
+            *self.detection_steps(),
             ReproduceStep("analysis copy (FFV1)", self.analysis_command),
             ReproduceStep("viewing copy (H.264)", self.viewing_command),
         )
@@ -519,13 +596,52 @@ async def verified_counts(tools: ClarifyTools, plan: ClarifyPlan, analysis: Path
     return expected, actual
 
 
+def planned_frames(plan: ClarifyPlan) -> int:
+    return trimmed_count(len(plan.frames), trim_step(plan.steps))
+
+
+async def run_detect_pass(
+    tools: ClarifyTools,
+    plan: ClarifyPlan,
+    output_dir: Path,
+    threads: ClarifyThreads,
+    on_progress: StageProgress,
+    now: Callable[[], datetime] = utc_now,
+) -> StabilizeDetection | None:
+    if stabilize_step(plan.steps) is None:
+        return None
+    transforms = output_dir / TRANSFORMS_NAME
+    command = build_detect_command(tools.ffmpeg, plan, transforms, threads)
+    report = scaled_progress(on_progress, 0.0, DETECT_SHARE)
+    started = now()
+    await run_ffmpeg_with_progress(
+        command, total_frames=planned_frames(plan), on_progress=report, spawn=tools.spawn_serial_openmp
+    )
+    return StabilizeDetection(transforms, tuple(command), PassTiming(started, now()))
+
+
+def analysis_window(detection: StabilizeDetection | None) -> tuple[float, float]:
+    offset = 0.0 if detection is None else DETECT_SHARE
+    return offset, ANALYSIS_SHARE - offset
+
+
+def analysis_spawner(tools: ClarifyTools, detection: StabilizeDetection | None) -> Spawner:
+    return tools.spawn if detection is None else tools.spawn_serial_openmp
+
+
 async def run_analysis_pass(
-    tools: ClarifyTools, plan: ClarifyPlan, analysis: Path, threads: ClarifyThreads, on_progress: StageProgress
+    tools: ClarifyTools,
+    plan: ClarifyPlan,
+    analysis: Path,
+    threads: ClarifyThreads,
+    on_progress: StageProgress,
+    detection: StabilizeDetection | None = None,
 ) -> list[str]:
-    command = build_analysis_command(tools.ffmpeg, plan, analysis, threads)
-    total = trimmed_count(len(plan.frames), trim_step(plan.steps))
-    report = scaled_progress(on_progress, 0.0, ANALYSIS_SHARE)
-    await run_ffmpeg_with_progress(command, total_frames=total, on_progress=report, spawn=tools.spawn)
+    bound = plan if detection is None else with_transforms(plan, detection.transforms)
+    command = build_analysis_command(tools.ffmpeg, bound, analysis, threads)
+    report = scaled_progress(on_progress, *analysis_window(detection))
+    spawn = analysis_spawner(tools, detection)
+    await run_ffmpeg_with_progress(command, total_frames=planned_frames(plan), on_progress=report, spawn=spawn)
     return command
 
 
@@ -564,8 +680,9 @@ async def run_clarify(
 ) -> ClarifyResult:
     geometry = plan_output_geometry(plan)
     analysis, viewing = output_dir / ANALYSIS_NAME, output_dir / VIEWING_NAME
+    detection = await run_detect_pass(tools, plan, output_dir, threads, on_progress, now)
     analysis_started = now()
-    analysis_command = await run_analysis_pass(tools, plan, analysis, threads, on_progress)
+    analysis_command = await run_analysis_pass(tools, plan, analysis, threads, on_progress, detection)
     analysis_timing = PassTiming(analysis_started, now())
     counts = await verified_counts(tools, plan, analysis)
     viewing_started = now()
@@ -586,4 +703,5 @@ async def run_clarify(
         limitations=limitations_of(clipping),
         analysis_timing=analysis_timing,
         viewing_timing=viewing_timing,
+        stabilize_detection=detection,
     )

@@ -251,6 +251,7 @@ def test_the_lgpl_build_disables_the_gpl_filters_with_a_reason(tmp_path: Path) -
         ("deblock", "pp7"),
         ("deblock", "uspp"),
         ("levels", "eq"),
+        ("stabilize", "vidstab"),
     }
     assert all(item.reason_key == FILTER_UNAVAILABLE for item in disabled)
 
@@ -269,8 +270,8 @@ def test_the_reason_names_the_missing_ffmpeg_filter() -> None:
     }
 
 
-def test_the_lgpl_build_keeps_every_step_because_each_has_an_lgpl_filter(tmp_path: Path) -> None:
-    assert unavailable_steps(probed(tmp_path, "lgpl")) == ()
+def test_the_lgpl_build_only_loses_stabilize_whose_only_filter_is_gpl(tmp_path: Path) -> None:
+    assert unavailable_steps(probed(tmp_path, "lgpl")) == ("stabilize",)
 
 
 def test_a_step_is_disabled_when_none_of_its_filters_exist() -> None:
@@ -289,9 +290,15 @@ def test_a_filter_needing_two_ffmpeg_filters_names_only_the_missing_one() -> Non
 
 
 def test_steps_not_offered_in_any_lane_are_not_reported() -> None:
-    caps = capabilities(every_catalog_filter() - {"vidstabdetect", "vidstabtransform", "lenscorrection", "v360"})
+    caps = capabilities(every_catalog_filter() - {"lenscorrection", "v360"})
 
     assert unavailable_filters(caps) == ()
+
+
+def test_a_build_without_libvidstab_disables_stabilize() -> None:
+    caps = capabilities(every_catalog_filter() - {"vidstabtransform"})
+
+    assert unavailable_filters(caps) == (UnavailableFilter("stabilize", "vidstab", ("vidstabtransform",)),)
 
 
 def test_ai_filters_do_not_depend_on_ffmpeg() -> None:

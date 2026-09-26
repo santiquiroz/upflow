@@ -400,6 +400,12 @@ def test_preview_steps_are_classic_only_and_skip_trim_and_osd() -> None:
     assert caught.value.code == "cctv.error.stepNotInLane"
 
 
+def test_the_single_frame_preview_leaves_out_stabilization() -> None:
+    raw = [{"id": "stabilize"}, {"id": "denoise", "params": {"filter": "hqdn3d"}}]
+
+    assert [step.id for step in preview_steps(raw, CAPS, GEOMETRY)] == ["denoise"]
+
+
 def test_the_presets_payload_marks_what_the_build_lacks() -> None:
     lgpl = FfmpegCapabilities("cd" * 32, "ffmpeg lgpl", (), ALL_FILTERS - {"hqdn3d"}, frozenset({"libx264"}), ())
 

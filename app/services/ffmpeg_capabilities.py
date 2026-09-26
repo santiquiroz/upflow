@@ -19,7 +19,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
-from app.services.cctv_chain import CCTV_CHAIN, FilterSpec, StepSpec
+from app.services.cctv_chain import CCTV_CHAIN, OPEN_GATES, FilterSpec, StepSpec, is_open
 from app.services.cctv_ingest import sha256_file
 
 VERSION_ARGS: tuple[str, ...] = ("-version",)
@@ -227,7 +227,7 @@ def _step_unavailable_filters(step: StepSpec, caps: FfmpegCapabilities) -> tuple
 
 
 def _offered(chain: Sequence[StepSpec]) -> tuple[StepSpec, ...]:
-    return tuple(step for step in chain if step.lanes)
+    return tuple(step for step in chain if step.lanes and is_open(step, OPEN_GATES))
 
 
 def unavailable_filters(

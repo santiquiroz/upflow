@@ -727,6 +727,7 @@
           "enum": [
             "analysis-lossless",
             "viewing-copy",
+            "stabilization-motion",
             "comparison",
             "still",
             "roi-fused",

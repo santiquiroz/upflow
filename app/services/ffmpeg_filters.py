@@ -15,6 +15,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import PurePath
+from types import MappingProxyType
 from typing import Any
 
 from app.services.cctv_chain import (
@@ -47,6 +48,19 @@ _TOKEN = re.compile(r"[A-Za-z0-9_]+")
 _LABEL = re.compile(r"[A-Za-z0-9_:]+")
 _OSD_BRANCH_STEPS = frozenset({"aspect", "deinterlace", "crop", "gray", "scale"})
 _UNBUILDABLE_STEPS = frozenset({"osd_protect"})
+
+TRANSFORMS_PARAM = "transforms"
+# Opciones de vidstab fijadas a mano: los defaults de la biblioteca cambian entre versiones.
+STABILIZE_DETECT_OPTIONS = "accuracy=15:stepsize=6:mincontrast=0.25:tripod=0:show=0:fileformat=ascii"
+# crop=black: con keep, los bordes descubiertos repiten pixeles de cuadros anteriores.
+STABILIZE_TRANSFORM_OPTIONS = "crop=black:optzoom=0:zoom=0:interpol=bilinear:relative=1"
+STABILIZE_EDGE_MARGIN = 32
+# vidstab lee pasado el borde derecho e inferior: con el relleno sin inicializar del buffer del decoder
+# el resultado cambiaba en cada corrida. pad+crop deja ese margen en negro sin tocar la imagen visible.
+STABILIZE_EDGE_GUARD = (
+    f"pad=w=iw+{STABILIZE_EDGE_MARGIN}:h=ih+{STABILIZE_EDGE_MARGIN}:x=0:y=0:color=black,"
+    f"crop=w=iw-{STABILIZE_EDGE_MARGIN}:h=ih-{STABILIZE_EDGE_MARGIN}:x=0:y=0:exact=1"
+)
 
 Box = tuple[int, int, int, int]
 
@@ -177,6 +191,32 @@ def _tmedian_filter(spec: FilterSpec, step: ResolvedStep) -> str:
     return _join([pad, _generic_filter(spec, step)])
 
 
+def bind_transforms(step: ResolvedStep, transforms: PurePath) -> ResolvedStep:
+    return ResolvedStep(step.id, step.filter, MappingProxyType({**step.params, TRANSFORMS_PARAM: transforms}))
+
+
+def _transforms_path(step: ResolvedStep) -> str:
+    if TRANSFORMS_PARAM not in step.params:
+        raise _not_a_filter(step, "it needs the transforms file of its detection pass (bind_transforms)")
+    path = step.params[TRANSFORMS_PARAM]
+    if not isinstance(path, PurePath):
+        raise _unsafe(f"the transforms file must be a path, got {path!r}")
+    return escape_filter_path(path)
+
+
+def _stabilize_filter(spec: FilterSpec, step: ResolvedStep) -> str:
+    source = _transforms_path(step)
+    smoothing = _format_number(_int_param(step, "smoothing"))
+    return f"{STABILIZE_EDGE_GUARD},vidstabtransform=input={source}:smoothing={smoothing}:{STABILIZE_TRANSFORM_OPTIONS}"
+
+
+def build_stabilize_detect(step: ResolvedStep, transforms: PurePath) -> str:
+    _buildable_spec(step)
+    shakiness = _format_number(_int_param(step, "shakiness"))
+    result = _transforms_path(bind_transforms(step, transforms))
+    return f"{STABILIZE_EDGE_GUARD},vidstabdetect=shakiness={shakiness}:{STABILIZE_DETECT_OPTIONS}:result={result}"
+
+
 def _gray_filter(spec: FilterSpec, step: ResolvedStep) -> str:
     return "format=pix_fmts=gray"
 
@@ -193,6 +233,7 @@ _BUILDERS: Mapping[str, Callable[[FilterSpec, ResolvedStep], str]] = {
     "gray": _gray_filter,
     "tmedian": _tmedian_filter,
     "scale": _scale_filter,
+    "vidstab": _stabilize_filter,
 }
 
 
