@@ -6,6 +6,10 @@ ampliado con `neighbor` al tamano del procesado para no "mejorarlo" sin querer;
 bilingue. Los contadores del original (`drawtext`) usan la fuente OFL
 bundleada: Consolas cambia entre builds de Windows y romperia la
 reproducibilidad. Si `drawtext` falla, sale sin contadores y con aviso.
+
+El modo "difference" (P4-DIFF) usa las mismas dos entradas pero las resta con
+`blend=all_mode=difference` en RGB: negro donde el procesado no cambio nada.
+Los contadores van despues de la resta para no contar como diferencia.
 """
 
 from __future__ import annotations
@@ -14,6 +18,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
+from typing import Literal
 
 from PIL import Image
 
@@ -49,11 +54,19 @@ from app.services.label_band import (
 
 COMPARISON_NAME = "comparison.mp4"
 TITLE_NAME = "comparison_title.png"
+DIFFERENCE_NAME = "difference.mp4"
+DIFFERENCE_TITLE_NAME = "difference_title.png"
 Caption = tuple[str, str]
 ORIGINAL_CAPTION: Caption = ("ORIGINAL", "ORIGINAL")
 CLASSIC_CAPTION: Caption = ("PROCESSED (classic filters)", "PROCESADO (filtros clásicos)")
 AI_CAPTION: Caption = ("AI VISUALIZATION", "VISUALIZACIÓN CON IA")
-COUNTERS_MISSING = "cctv.warning.comparisonWithoutCounters"
+DIFFERENCE_CAPTIONS: dict[str, Caption] = {
+    "classic": ("DIFFERENCE: ORIGINAL vs PROCESSED (black = unchanged)",
+                "DIFERENCIA: ORIGINAL vs PROCESADO (negro = sin cambios)"),
+    "ai": ("DIFFERENCE: ORIGINAL vs AI VISUALIZATION (black = unchanged)",
+           "DIFERENCIA: ORIGINAL vs VISUALIZACIÓN CON IA (negro = sin cambios)"),
+}  # fmt: skip
+COUNTERS_MISSING ="cctv.warning.comparisonWithoutCounters"
 
 COUNTER_TEXT = "#%{frame_num}  %{pts:hms}"
 COUNTER_FONT_DIVISOR = 24
@@ -64,9 +77,13 @@ PROCESSED_LABEL = "sbs_processed"
 TITLE_LABEL = "sbs_title"
 OUTPUT_LABEL = "sbs_out"
 STACK_PIX_FMT = "yuv420p"
+# En YUV la resta de croma deja U=V=0 (verde); en RGB lo que no cambio queda negro.
+DIFFERENCE_PIX_FMT = "gbrp"
+DIFFERENCE_BLEND = "blend=all_mode=difference"
 RESTART_PTS = "setpts=PTS-STARTPTS"
 
 ProgressCallback = Callable[[float], None]
+ComparisonMode = Literal["side_by_side", "difference"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +95,7 @@ class ComparisonPlan:
     lane: Lane
     processed_frames: int
     with_counters: bool = True
+    mode: ComparisonMode = "side_by_side"
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,42 +152,73 @@ def counters_filter(font: Path, start_frame: int, height: int) -> str:
 # --- Grafo ---
 
 
-def original_chain(steps: Sequence[ResolvedStep], size: tuple[int, int], counters: str | None) -> str:
+def original_chain(
+    steps: Sequence[ResolvedStep], size: tuple[int, int], counters: str | None, pix_fmt: str = STACK_PIX_FMT
+) -> str:
     filters = [
         *same_cut_filters(steps),
         build_scale_to(*size),
         "setsar=1",
         *([counters] if counters else []),
-        f"format={STACK_PIX_FMT}",
+        f"format={pix_fmt}",
         RESTART_PTS,
     ]
     return f"[0:v]{FILTER_SEPARATOR.join(filters)}[{ORIGINAL_LABEL}]"
 
 
-def processed_chain(geometry: FrameGeometry, size: tuple[int, int]) -> str:
+def processed_chain(geometry: FrameGeometry, size: tuple[int, int], pix_fmt: str = STACK_PIX_FMT) -> str:
     scale = [] if (geometry.width, geometry.height) == size else [build_scale_to(*size)]
-    filters = [*scale, "setsar=1", f"format={STACK_PIX_FMT}", RESTART_PTS]
+    filters = [*scale, "setsar=1", f"format={pix_fmt}", RESTART_PTS]
     return f"[1:v]{FILTER_SEPARATOR.join(filters)}[{PROCESSED_LABEL}]"
 
 
-def stack_chain(title_height: int) -> str:
+def title_chain(title_height: int) -> str:
     return (
-        f"[{ORIGINAL_LABEL}][{PROCESSED_LABEL}]hstack=inputs=2,"
         f"pad=w=iw:h=ih+{title_height}:x=0:y={title_height}:color=black[sbs_stacked];"
         f"[sbs_stacked][{TITLE_LABEL}]overlay=x=0:y=0:eval=init[{OUTPUT_LABEL}]"
     )
 
 
-def comparison_graph(plan: ComparisonPlan, title: Path, title_height: int, counters: str | None) -> str:
+def stack_chain(title_height: int) -> str:
+    return f"[{ORIGINAL_LABEL}][{PROCESSED_LABEL}]hstack=inputs=2,{title_chain(title_height)}"
+
+
+def difference_chain(title_height: int, counters: str | None) -> str:
+    filters = [DIFFERENCE_BLEND, f"format={STACK_PIX_FMT}", *([counters] if counters else [])]
+    return f"[{ORIGINAL_LABEL}][{PROCESSED_LABEL}]{FILTER_SEPARATOR.join(filters)},{title_chain(title_height)}"
+
+
+def title_source(title: Path) -> str:
+    return f"movie={escape_filter_path(title)}[{TITLE_LABEL}]"
+
+
+def side_by_side_graph(plan: ComparisonPlan, title: Path, title_height: int, counters: str | None) -> str:
     size = display_size(plan.processed_geometry)
     return ";".join(
         [
             original_chain(plan.steps, size, counters),
             processed_chain(plan.processed_geometry, size),
-            f"movie={escape_filter_path(title)}[{TITLE_LABEL}]",
+            title_source(title),
             stack_chain(title_height),
         ]
     )
+
+
+def difference_graph(plan: ComparisonPlan, title: Path, title_height: int, counters: str | None) -> str:
+    size = display_size(plan.processed_geometry)
+    return ";".join(
+        [
+            original_chain(plan.steps, size, None, DIFFERENCE_PIX_FMT),
+            processed_chain(plan.processed_geometry, size, DIFFERENCE_PIX_FMT),
+            title_source(title),
+            difference_chain(title_height, counters),
+        ]
+    )
+
+
+def comparison_graph(plan: ComparisonPlan, title: Path, title_height: int, counters: str | None) -> str:
+    graph = difference_graph if plan.mode == "difference" else side_by_side_graph
+    return graph(plan, title, title_height, counters)
 
 
 def x264_args(threads: ClarifyThreads) -> list[str]:
@@ -229,13 +278,38 @@ def render_title(font: Path, size: tuple[int, int], lane: Lane) -> Image.Image:
     return title
 
 
-def write_title(path: Path, font: Path, size: tuple[int, int], lane: Lane) -> int:
-    image = render_title(font, size, lane)
+def difference_caption(lane: Lane) -> Caption:
+    return DIFFERENCE_CAPTIONS["ai" if lane == "ai" else "classic"]
+
+
+def render_difference_title(font: Path, size: tuple[int, int], lane: Lane) -> Image.Image:
+    width, height = size
+    block = caption_block(font, difference_caption(lane), width, height)
+    return render_block(block, width, font, BLACK, BAND_PADDING_RATIO).convert("RGB")
+
+
+def render_mode_title(font: Path, size: tuple[int, int], lane: Lane, mode: ComparisonMode) -> Image.Image:
+    render = render_difference_title if mode == "difference" else render_title
+    return render(font, size, lane)
+
+
+def write_title(
+    path: Path, font: Path, size: tuple[int, int], lane: Lane, mode: ComparisonMode = "side_by_side"
+) -> int:
+    image = render_mode_title(font, size, lane, mode)
     image.save(path, format="PNG")
     return image.height
 
 
 # --- Orquestacion ---
+
+
+def output_name(plan: ComparisonPlan) -> str:
+    return DIFFERENCE_NAME if plan.mode == "difference" else COMPARISON_NAME
+
+
+def title_name(plan: ComparisonPlan) -> str:
+    return DIFFERENCE_TITLE_NAME if plan.mode == "difference" else TITLE_NAME
 
 
 def planned_counters(plan: ComparisonPlan, font: Path) -> str | None:
@@ -300,9 +374,9 @@ async def run_side_by_side(
     font_path: Path = FONT_PATH,
 ) -> ComparisonResult:
     font = verified_font(font_path)
-    title = assets_dir / TITLE_NAME
-    title_height = write_title(title, font, display_size(plan.processed_geometry), plan.lane)
-    output = output_dir / COMPARISON_NAME
+    title = assets_dir / title_name(plan)
+    title_height = write_title(title, font, display_size(plan.processed_geometry), plan.lane, plan.mode)
+    output = output_dir / output_name(plan)
 
     def build(counters: str | None) -> list[str]:
         return build_comparison_command(tools.ffmpeg, plan, title, title_height, output, threads, counters)

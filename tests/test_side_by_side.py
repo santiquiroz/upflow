@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import subprocess
+from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
 
@@ -190,9 +191,9 @@ def probe(path: Path) -> str:
     return subprocess.run(command, check=True, capture_output=True, text=True).stdout.strip()
 
 
-def first_frame(path: Path, width: int, height: int) -> np.ndarray:
-    command = [str(Settings().ffmpeg_binary_path), "-v", "error", "-i", str(path), "-frames:v", "1",
-               "-f", "rawvideo", "-pix_fmt", "gray", "-"]  # fmt: skip
+def gray_frame(path: Path, width: int, height: int, index: int = 0) -> np.ndarray:
+    command = [str(Settings().ffmpeg_binary_path), "-v", "error", "-i", str(path), "-vf", rf"select=eq(n\,{index})",
+               "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "gray", "-"]  # fmt: skip
     raw = subprocess.run(command, check=True, capture_output=True).stdout
     return np.frombuffer(raw, np.uint8).reshape(height, width)
 
@@ -235,7 +236,7 @@ async def test_real_drawtext_failure_falls_back_without_counters_and_warns(tmp_p
     assert not any("drawtext=" in arg for arg in fallback.command)
     height = 288 + Image.open(good.title).height
     title = Image.open(good.title).height
-    counted, plain = first_frame(good.path, 704, height), first_frame(fallback.path, 704, height)
+    counted, plain = gray_frame(good.path, 704, height), gray_frame(fallback.path, 704, height)
     counter_area = (slice(title, title + 40), slice(0, 200))
     assert np.abs(counted[counter_area].astype(int) - plain[counter_area]).mean() > 10
     right_half = (slice(title + 60, height), slice(352, 704))
@@ -253,3 +254,96 @@ async def test_a_tampered_font_stops_the_comparison_before_ffmpeg(tmp_path: Path
 
     with pytest.raises(FontIntegrityError):
         await sbs.run_side_by_side(tools, plan(TRIM), tmp_path, tmp_path, THREADS, font_path=font)
+
+
+# --- Modo difference (P4-DIFF) ---
+
+
+def difference_plan(*raw: dict, lane="classic", counters=True) -> sbs.ComparisonPlan:
+    return replace(plan(*raw, lane=lane, counters=counters), mode="difference")
+
+
+def test_the_default_mode_is_side_by_side() -> None:
+    assert plan(TRIM).mode == "side_by_side"
+    assert sbs.output_name(plan(TRIM)) == "comparison.mp4"
+
+
+def test_difference_mode_blends_both_sides_in_rgb_instead_of_stacking() -> None:
+    graph = value_after(argv_of(difference_plan(TRIM, CROP, DENOISE)), "-filter_complex")
+
+    assert "hstack" not in graph
+    assert "[sbs_original][sbs_processed]blend=all_mode=difference,format=yuv420p," in graph
+    assert "format=gbrp,setpts=PTS-STARTPTS[sbs_original]" in graph
+    assert "format=gbrp,setpts=PTS-STARTPTS[sbs_processed]" in graph
+    assert "hqdn3d" not in graph.split("[sbs_original]")[0]
+
+
+def test_difference_counters_are_drawn_after_the_blend_so_they_never_count_as_a_change() -> None:
+    graph = value_after(argv_of(difference_plan(TRIM), counters="drawtext=x"), "-filter_complex")
+
+    original_side = graph.split("[sbs_original]")[0]
+    assert "drawtext" not in original_side
+    assert "blend=all_mode=difference,format=yuv420p,drawtext=x,pad=w=iw:h=ih+40:x=0:y=40:color=black" in graph
+    assert graph.endswith("[sbs_stacked][sbs_title]overlay=x=0:y=0:eval=init[sbs_out]")
+
+
+def test_difference_without_counters_goes_straight_to_the_title_pad() -> None:
+    graph = value_after(argv_of(difference_plan(TRIM), counters=None), "-filter_complex")
+
+    assert "blend=all_mode=difference,format=yuv420p,pad=w=iw:h=ih+40" in graph
+
+
+def test_difference_mode_writes_its_own_file_with_the_same_deterministic_encode() -> None:
+    p = difference_plan(TRIM)
+    argv = sbs.build_comparison_command(
+        FFMPEG, p, Path("C:/out/difference_title.png"), 40, Path("C:/out") / sbs.output_name(p), THREADS, None
+    )
+
+    assert sbs.output_name(p) == "difference.mp4" and sbs.title_name(p) == "difference_title.png"
+    assert argv[-1] == str(Path("C:/out/difference.mp4"))
+    assert value_after(argv, "-x264-params") == "threads=4:lookahead_threads=1"
+    assert value_after(argv, "-map") == "[sbs_out]"
+
+
+@pytest.mark.parametrize(
+    ("lane", "processed"),
+    [("classic", ("PROCESSED", "PROCESADO")), ("ai", ("AI VISUALIZATION", "VISUALIZACIÓN CON IA"))],
+)  # fmt: skip
+def test_the_difference_caption_is_bilingual_and_says_black_means_unchanged(lane: str, processed: tuple) -> None:
+    english, spanish = sbs.difference_caption(lane)
+
+    assert english.startswith("DIFFERENCE") and processed[0] in english and "black = unchanged" in english
+    assert spanish.startswith("DIFERENCIA") and processed[1] in spanish and "negro = sin cambios" in spanish
+
+
+def test_the_difference_title_is_one_caption_as_wide_as_a_single_frame(tmp_path: Path) -> None:
+    height = sbs.write_title(tmp_path / "d.png", FONT_PATH, (352, 288), "classic", "difference")
+    image = Image.open(tmp_path / "d.png")
+
+    assert image.size == (352, height) and height % 2 == 0
+    assert np.asarray(image).max() > 200
+
+
+@needs_ffmpeg
+async def test_real_difference_is_black_where_nothing_changed_and_reproducible(tmp_path: Path) -> None:
+    (tmp_path / "a").mkdir(), (tmp_path / "b").mkdir()
+    unchanged = replace(await clarified(tmp_path / "a", TRIM, CROP), mode="difference")
+    denoised = replace(await clarified(tmp_path / "b", TRIM, CROP, DENOISE), mode="difference")
+    runs = [tmp_path / name for name in ("same", "same2", "denoised")]
+    for run in runs:
+        run.mkdir()
+
+    same = await sbs.run_side_by_side(settings_tools(), unchanged, runs[0], runs[0], THREADS)
+    again = await sbs.run_side_by_side(settings_tools(), unchanged, runs[1], runs[1], THREADS)
+    changed = await sbs.run_side_by_side(settings_tools(), denoised, runs[2], runs[2], THREADS)
+
+    title = Image.open(same.title).height
+    assert same.path.name == "difference.mp4" and same.warnings == ()
+    assert probe(same.path) == f"stream|codec_name=h264|width=320|height={272 + title}|nb_read_frames=50"
+    assert sha256(same.path) == sha256(again.path)
+    below_counters = (slice(title + 60, 272 + title), slice(0, 320))
+    # Cuadro 25: hqdn3d es temporal y en el primer cuadro casi no cambia nada.
+    quiet = gray_frame(same.path, 320, 272 + title, 25)[below_counters].astype(int)
+    noisy = gray_frame(changed.path, 320, 272 + title, 25)[below_counters].astype(int)
+    assert quiet.max() <= 4
+    assert noisy.mean() > quiet.mean() + 0.3 and noisy.max() > quiet.max()
