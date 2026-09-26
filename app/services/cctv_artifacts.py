@@ -2,8 +2,9 @@
 
 Un nombre de la lista se resuelve contra `job.metadata["cctv"]["outputs"]` (rutas
 relativas a `outputs/{id}.cctv/`) o contra los archivos fijos del paquete. Todo lo
-demas, y cualquier ruta que escape del directorio del job, se rechaza.
-TODO(P1-12): unificar con `job_artifacts.py` de la familia image cuando entre.
+demas, y cualquier ruta que escape del directorio del job, se rechaza. Los artefactos de la
+familia image (restauracion de fotos) viven en `job_artifacts.py`: las rutas de CCTV salen de la
+metadata del job, no de una tabla de nombres fijos.
 """
 
 from __future__ import annotations

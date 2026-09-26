@@ -11,10 +11,6 @@ from app.services.restore_outputs import RestoreOutputPaths, restore_output_path
 from app.services.restore_provenance import DownloadNames, download_names, sanitize_stem
 from app.services.restore_recompose import load_faces_manifest
 
-IMAGE_FAMILY = "image"
-VIDEO_FAMILY = "video"
-CCTV_DIR_SUFFIX = ".cctv"
-
 IMAGE_FILE_ROLES: Mapping[str, Callable[[RestoreOutputPaths], Path]] = MappingProxyType(
     {
         "preview": lambda paths: paths.preview,
@@ -26,37 +22,12 @@ IMAGE_FILE_ROLES: Mapping[str, Callable[[RestoreOutputPaths], Path]] = MappingPr
 )
 FACE_ARTIFACT = re.compile(r"face:(?P<index>\d{1,3}):(?P<side>before|after)")
 
-# Nombres fijos dentro de outputs/{id}.cctv/ (§4.1, §4.11); P2 los escribe con estos nombres.
-VIDEO_FILES: Mapping[str, str] = MappingProxyType(
-    {
-        "analysis": "analysis.mkv",
-        "viewing": "viewing.mp4",
-        "enhanced": "enhanced.mp4",
-        "comparison": "comparison.mp4",
-        "report_json": "report.json",
-        "report_html": "report.html",
-        "sha256sums": "SHA256SUMS.txt",
-        "reproduce": "reproduce.cmd",
-        "package": "handover.zip",
-        "frame_index": "frame_index.csv",
-    }
-)
-STILL_ARTIFACT = re.compile(r"still:(?P<frame>\d{1,9}):(?P<side>original|processed)")
-ROI_ARTIFACT = re.compile(r"roi:(?P<name>[a-z0-9][a-z0-9_-]{0,63})")
-
 MEDIA_TYPES: Mapping[str, str] = MappingProxyType(
     {
         ".jpg": "image/jpeg",
         ".png": "image/png",
         ".webp": "image/webp",
         ".json": "application/json",
-        ".mkv": "video/x-matroska",
-        ".mp4": "video/mp4",
-        ".html": "text/html",
-        ".txt": "text/plain",
-        ".csv": "text/csv",
-        ".cmd": "text/plain",
-        ".zip": "application/zip",
     }
 )
 
@@ -92,20 +63,6 @@ def face_artifact_path(artifact_dir: Path, index: int, side: str) -> Path:
         if face.index == index:
             return inside(artifact_dir, face.aligned if side == "before" else face.restored)
     raise UnknownArtifact(f"Face {index} was not restored in this result")
-
-
-def video_artifact_path(outputs_dir: Path, job_id: str, name: str) -> Path:
-    directory = outputs_dir / f"{job_id}{CCTV_DIR_SUFFIX}"
-    fixed = VIDEO_FILES.get(name)
-    if fixed is not None:
-        return inside(directory, fixed)
-    still = STILL_ARTIFACT.fullmatch(name)
-    if still is not None:
-        return inside(directory, f"{still['side']}_f{int(still['frame'])}.png")
-    roi = ROI_ARTIFACT.fullmatch(name)
-    if roi is not None:
-        return inside(directory, f"roi_{roi['name']}.png")
-    raise UnknownArtifact(f"Unknown artifact {name!r}")
 
 
 def inside(directory: Path, name: str) -> Path:

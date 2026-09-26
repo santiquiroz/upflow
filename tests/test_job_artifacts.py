@@ -13,7 +13,6 @@ from app.services.job_artifacts import (
     media_type_for,
     restore_artifact,
     restored_download_name,
-    video_artifact_path,
 )
 
 JOB = "0123456789abcdef0123456789abcdef"
@@ -90,32 +89,6 @@ def test_names_outside_the_whitelist_are_refused(tmp_path: Path, name: str) -> N
 
     with pytest.raises(UnknownArtifact):
         image_artifact_path(tmp_path, JOB, "png", name)
-
-
-@pytest.mark.parametrize(
-    ("name", "file"),
-    [
-        ("analysis", "analysis.mkv"),
-        ("viewing", "viewing.mp4"),
-        ("comparison", "comparison.mp4"),
-        ("report_json", "report.json"),
-        ("report_html", "report.html"),
-        ("sha256sums", "SHA256SUMS.txt"),
-        ("reproduce", "reproduce.cmd"),
-        ("frame_index", "frame_index.csv"),
-        ("still:120:original", "original_f120.png"),
-        ("still:0007:processed", "processed_f7.png"),
-        ("roi:plate_1", "roi_plate_1.png"),
-    ],
-)
-def test_video_artifacts_map_into_the_cctv_folder(tmp_path: Path, name: str, file: str) -> None:
-    assert video_artifact_path(tmp_path, JOB, name) == tmp_path / f"{JOB}.cctv" / file
-
-
-@pytest.mark.parametrize("name", ["roi:../x", "roi:", "still:1:both", "still:x:original", "report", "../analysis"])
-def test_video_names_outside_the_whitelist_are_refused(tmp_path: Path, name: str) -> None:
-    with pytest.raises(UnknownArtifact):
-        video_artifact_path(tmp_path, JOB, name)
 
 
 @pytest.mark.parametrize(
