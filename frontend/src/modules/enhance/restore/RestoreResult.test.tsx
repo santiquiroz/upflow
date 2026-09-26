@@ -2,6 +2,8 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import { createEditorHandoffStore } from "../../../lib/editorHandoffStore";
+import { createJobQueueStore } from "../../../lib/jobQueueStore";
+import type { CreateRestoreJobParams } from "../../../services/restore";
 import { RestoreResult } from "./RestoreResult";
 import { readRestoreSummary } from "./restoreResultModel";
 import { makeCompletedRestoreJob, makeRestoreMetadata } from "./restoreTestFixtures";
@@ -24,7 +26,21 @@ const WITH_FACES = {
   faces: [{ index: 0, enabled: true, restored: true, blend: 0.6 }],
 };
 
-function renderResult(overrides: Record<string, unknown> = {}, recompose = vi.fn()) {
+const BATCH_BASE: CreateRestoreJobParams = {
+  source: { token: "tok-1" },
+  steps: ["repair"],
+  options: { repair: { sensitivity: 0.5 } },
+  scale: 1,
+  modelId: null,
+  device: null,
+  outputFormat: "png",
+};
+
+function renderResult(
+  overrides: Record<string, unknown> = {},
+  recompose = vi.fn(),
+  batchBase: CreateRestoreJobParams | null = null,
+) {
   const job = makeCompletedRestoreJob(makeRestoreMetadata(overrides));
   const summary = readRestoreSummary(job);
   if (summary === null) {
@@ -43,6 +59,8 @@ function renderResult(overrides: Record<string, unknown> = {}, recompose = vi.fn
               beforeUrl={BEFORE_URL}
               handoffStore={handoffStore}
               recompose={recompose}
+              batchBase={batchBase}
+              batchDeps={{ createJob: vi.fn(), queue: createJobQueueStore() }}
             />
           }
         />
@@ -127,6 +145,21 @@ describe("RestoreResult", () => {
   it("says the photo never left the computer", () => {
     renderResult();
     expect(screen.getByText("Runs on your computer. Your photos are not uploaded anywhere.")).toBeInTheDocument();
+  });
+
+  it("offers to apply the same settings to more photos", () => {
+    renderResult({}, vi.fn(), BATCH_BASE);
+    expect(screen.getByLabelText("Apply these settings to more photos")).toHaveAttribute("type", "file");
+  });
+
+  it("has no batch without the settings that produced the result", () => {
+    renderResult();
+    expect(screen.queryByLabelText("Apply these settings to more photos")).not.toBeInTheDocument();
+  });
+
+  it("has no batch when the photo only restored faces", () => {
+    renderResult({}, vi.fn(), { ...BATCH_BASE, steps: ["faces"] });
+    expect(screen.queryByLabelText("Apply these settings to more photos")).not.toBeInTheDocument();
   });
 
   it("has no face controls when no face was restored", () => {

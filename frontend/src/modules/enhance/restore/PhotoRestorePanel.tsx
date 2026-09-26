@@ -12,6 +12,8 @@ import { DamageMaskSection } from "./DamageMaskSection";
 import { FaceGrid } from "./FaceGrid";
 import { stepBlendOf, withFaceChoices } from "./faceSelection";
 import { GeometryTools } from "./GeometryTools";
+import { PHOTO_ACCEPT, PHOTO_FORMATS } from "./photoFiles";
+import { PreviewCropTool } from "./PreviewCropTool";
 import { RestoreResult } from "./RestoreResult";
 import { readRestoreSummary } from "./restoreResultModel";
 import { RestoreSummary } from "./RestoreSummary";
@@ -22,8 +24,6 @@ import { useDamageMask, type DamageMaskState } from "./useDamageMask";
 import { useRestoreSelection, type RestoreSelection } from "./useRestoreSelection";
 import { useRestoreSession } from "./useRestoreSession";
 
-const PHOTO_ACCEPT = ".png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff,image/png,image/jpeg,image/webp,image/bmp,image/tiff";
-const PHOTO_FORMATS = "PNG, JPG, WEBP, BMP, TIFF";
 const RESTORE_CAPABILITIES_KEY = ["restore", "capabilities"];
 const RESTORE_OUTPUT_FORMAT = "png";
 const FACES_STEP = "faces";
@@ -133,17 +133,24 @@ function RestoreControls({
     return mask !== null && (await onSaveMask(mask));
   }
 
+  const useUserMask = repairOn && damage.edited;
+  const currentRequest = () => restoreJobRequest(analysis, selection, faces, { useUserMask, hasSavedMask });
+
+  async function prepareRequest(): Promise<RestoreJobRequest | null> {
+    setSending(true);
+    const saved = !useUserMask || (await saveEditedMask());
+    setSending(false);
+    return saved ? currentRequest() : null;
+  }
+
   async function handleRestore() {
     if (damage.needsReview && !damage.reviewed) {
       setMaskOpen(true);
       return;
     }
-    const useUserMask = repairOn && damage.edited;
-    setSending(true);
-    const saved = !useUserMask || (await saveEditedMask());
-    setSending(false);
-    if (saved) {
-      onRestore(restoreJobRequest(analysis, selection, faces, { useUserMask, hasSavedMask }));
+    const request = await prepareRequest();
+    if (request !== null) {
+      onRestore(request);
     }
   }
 
@@ -189,6 +196,16 @@ function RestoreControls({
           onChange={onFaceChange}
         />
       )}
+      <PreviewCropTool
+        key={`${analysis.token}-${imageRevision}`}
+        previewUrl={versionedUrl(analysis.previewUrl, imageRevision)}
+        alt={t("restore.preview.alt", { name: analysis.originalName })}
+        originalName={analysis.originalName}
+        workingSize={{ width: analysis.width, height: analysis.height }}
+        canRun={canRestore && !sending}
+        settingsKey={JSON.stringify(currentRequest().params)}
+        buildRequest={prepareRequest}
+      />
     </>
   );
 }
@@ -213,6 +230,7 @@ export function PhotoRestorePanel() {
   const engineQuery = useQuery({ queryKey: ["engine"], queryFn: getEngineInfo });
   const capabilitiesQuery = useQuery({ queryKey: RESTORE_CAPABILITIES_KEY, queryFn: getRestoreCapabilities });
   const restoreJob = useRestoreJob();
+  const [lastRequest, setLastRequest] = useState<RestoreJobRequest | null>(null);
   const statusText = useStatusText(session);
   const { analysis } = session;
   const resultSummary = restoreJob.job ? readRestoreSummary(restoreJob.job) : null;
@@ -281,7 +299,10 @@ export function PhotoRestorePanel() {
               hasSavedMask={session.maskCoverage !== null}
               onFaceChange={session.updateFace}
               onSaveMask={session.saveMask}
-              onRestore={restoreJob.submit}
+              onRestore={(request) => {
+                setLastRequest(request);
+                restoreJob.submit(request);
+              }}
             />
           ) : (
             <CapabilitiesStatus isError={capabilitiesQuery.isError} />
@@ -303,6 +324,7 @@ export function PhotoRestorePanel() {
           job={restoreJob.job}
           summary={resultSummary}
           beforeUrl={versionedUrl(analysis.previewUrl, session.revision)}
+          batchBase={lastRequest?.params ?? null}
         />
       ) : (
         <p className="text-xs text-text-faint">{t("restore.local")}</p>

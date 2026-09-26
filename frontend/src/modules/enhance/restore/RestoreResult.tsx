@@ -6,8 +6,10 @@ import { useTranslation } from "../../../i18n/LocaleProvider";
 import type { JobResponse } from "../../../lib/apiTypes";
 import { editorHandoffStore, type EditorHandoffStore } from "../../../lib/editorHandoffStore";
 import type { RecomposeFaceChoice, RecomposeResponse } from "../../../lib/restoreApiTypes";
-import { recomposeFaces, restoreArtifactUrl } from "../../../services/restore";
+import { recomposeFaces, restoreArtifactUrl, type CreateRestoreJobParams } from "../../../services/restore";
 import { FaceResultGrid } from "./FaceResultGrid";
+import { canBatch } from "./restoreBatch";
+import { RestoreBatchSection } from "./RestoreBatchSection";
 import {
   editorSource,
   hasUncolored,
@@ -16,6 +18,7 @@ import {
   type RestoreResultSummary,
 } from "./restoreResultModel";
 import { revisedUrl } from "./restoreUrls";
+import type { RestoreBatchDeps } from "./useRestoreBatch";
 
 export interface RestoreResultProps {
   job: JobResponse;
@@ -23,6 +26,9 @@ export interface RestoreResultProps {
   beforeUrl: string;
   handoffStore?: EditorHandoffStore;
   recompose?: (jobId: string, faces: Record<number, RecomposeFaceChoice>) => Promise<RecomposeResponse>;
+  // Lo que se pidio para esta foto: el lote lo repite en las demas.
+  batchBase?: CreateRestoreJobParams | null;
+  batchDeps?: RestoreBatchDeps;
 }
 
 const EDITOR_PATH = "/editor";
@@ -125,6 +131,8 @@ export function RestoreResult({
   beforeUrl,
   handoffStore = editorHandoffStore,
   recompose = recomposeFaces,
+  batchBase = null,
+  batchDeps,
 }: RestoreResultProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -170,6 +178,7 @@ export function RestoreResult({
       {showsInfoCard(summary) && <InfoCard />}
       <RestoreDownloads job={job} summary={summary} revision={revision} />
       <OpenInEditorButton onOpen={openInEditor} />
+      {batchBase && canBatch(batchBase) && <RestoreBatchSection base={batchBase} deps={batchDeps} />}
       <p className="text-xs text-text-faint">{t("restore.local")}</p>
     </section>
   );

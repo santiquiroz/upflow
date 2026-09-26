@@ -225,6 +225,57 @@ describe("PhotoRestorePanel: summary and Restore", () => {
     expect(screen.getAllByText("Runs on your computer. Your photos are not uploaded anywhere.")).toHaveLength(1);
   });
 
+  it("previews a chosen area with the same settings as its own job", async () => {
+    vi.mocked(restoreService.analyzePhoto).mockResolvedValue(makeAnalysis());
+    vi.mocked(restoreService.createRestoreJob).mockResolvedValue(QUEUED);
+    vi.mocked(api.getJob).mockResolvedValue({ ...QUEUED, status: "running" } as JobResponse);
+    renderPanel();
+    dropPhoto();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Choose an area" }));
+    fireEvent.click(screen.getByRole("button", { name: "Preview this area" }));
+
+    await waitFor(() => expect(restoreService.createRestoreJob).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(restoreService.createRestoreJob).mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        source: { token: "tok-1" },
+        steps: ["repair"],
+        options: {
+          preset: "gentle",
+          repair: { engine: "fast", sensitivity: 0.5, grow_px: 0 },
+          preview_crop: [344, 144, 512, 512],
+        },
+      }),
+    );
+    expect(screen.queryByRole("heading", { name: "Result" })).not.toBeInTheDocument();
+  });
+
+  it("applies the settings of the finished photo to more photos", async () => {
+    const completed = makeCompletedRestoreJob(makeRestoreMetadata());
+    vi.mocked(restoreService.analyzePhoto).mockResolvedValue(makeAnalysis());
+    vi.mocked(restoreService.createRestoreJob).mockResolvedValue({ ...completed, status: "queued" });
+    vi.mocked(api.getJob).mockResolvedValue(completed);
+    renderPanel();
+    dropPhoto();
+    fireEvent.click(await screen.findByRole("button", { name: "Restore" }));
+    await screen.findByRole("heading", { name: "Result" });
+
+    const more = new File(["y"], "grandpa.jpg", { type: "image/jpeg" });
+    fireEvent.change(screen.getByLabelText("Apply these settings to more photos"), { target: { files: [more] } });
+
+    await waitFor(() => expect(restoreService.createRestoreJob).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(restoreService.createRestoreJob).mock.calls[1][0]).toEqual({
+      source: { file: more },
+      steps: ["repair"],
+      options: { preset: "gentle", repair: { engine: "fast", sensitivity: 0.5, grow_px: 0 } },
+      scale: 1,
+      modelId: null,
+      device: null,
+      outputFormat: "png",
+    });
+    expect(await screen.findByText("1 photo added to the job queue.")).toBeInTheDocument();
+  });
+
   it("says when the restore options can't be loaded", async () => {
     vi.mocked(restoreService.getRestoreCapabilities).mockRejectedValue(new Error("boom"));
     vi.mocked(restoreService.analyzePhoto).mockResolvedValue(makeAnalysis());
