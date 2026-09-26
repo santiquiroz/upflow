@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import types
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -1193,3 +1194,43 @@ def test_run_lock_covers_upload_run_and_readback_of_apollo(
 
     assert result == "frame"
     assert seen == ["upload", "bind_input", "bind_output", "run", "readback"]
+
+
+class RingLockCheckingBinding(LockCheckingBinding):
+    def bind_output(self, name: str, *args: Any, **kwargs: Any) -> None:
+        self._check("bind_output")
+
+
+class RingLockCheckingSession(LockCheckingSession):
+    def __init__(self, lock: Any, seen: list[str]) -> None:
+        self.binding = RingLockCheckingBinding(lock, seen)
+
+    def get_inputs(self) -> list[Any]:
+        return [types.SimpleNamespace(name="input")]
+
+    def get_outputs(self) -> list[Any]:
+        return [types.SimpleNamespace(name="output")]
+
+
+def test_run_lock_covers_upload_and_run_of_the_readback_ring_bind(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import numpy as np
+    import onnxruntime as ort
+
+    from app.services.devices_service import DevicesService
+    from app.services.engines.onnx_video_upscaler import OnnxVideoUpscaler
+    from app.services.gpu_session_coordinator import GpuSessionCoordinator
+    from app.services.model_registry import ModelRegistry
+
+    seen: list[str] = []
+    lock = ep_registry.device_run_lock("dml:0")
+    monkeypatch.setattr(ort.OrtValue, "ortvalue_from_numpy", staticmethod(locked_upload(lock, seen)))
+    settings = make_settings(tmp_path)
+    engine = OnnxVideoUpscaler(settings, ModelRegistry(settings), DevicesService(settings), GpuSessionCoordinator())
+    buffer = np.zeros((1, 4, 4, 3), dtype=np.uint8)
+
+    bound = engine._bind_output_to_buffer(RingLockCheckingSession(lock, seen), object(), "dml:0", buffer)
+
+    assert bound is True
+    assert seen == ["upload", "bind_input", "bind_output", "run"]

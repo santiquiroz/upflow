@@ -74,12 +74,14 @@ MIN_READBACK_RING_CAPACITY = 2
 class FrameReadbackRing:
     """Anillo de K buffers CPU preasignados para el readback GPU→CPU de frames.
 
-    Alocar un array de salida nuevo por frame costaba ~11% del tiempo de frame
-    (54.3→48.4 ms medido); el anillo preasigna los buffers una vez y rota. El
-    output de ORT se COPIA al buffer (np.copyto): lo que se evita es la
-    allocación por frame, no la copia. K=1 está prohibido porque reusar el
-    único buffer mientras el frame anterior sigue en la cola downstream
-    corrompe frames (medido) — de ahí el mínimo del constructor.
+    Un prototipo que reusaba un buffer CPU preasignado en vez de
+    copy_outputs_to_cpu() midió ~11% del tiempo de frame (54.3→48.4 ms); este
+    anillo aún no se midió en GPU. Preasigna los buffers una vez y rota.
+    `next_buffer` entrega el buffer sin copiar, para que ORT escriba ahí su
+    salida (bind_output con buffer_ptr); `copy_in` queda para cuando la salida
+    ya existe como array aparte. K=1 está prohibido porque reusar el único
+    buffer mientras el frame anterior sigue en la cola downstream corrompe
+    frames (medido) — de ahí el mínimo del constructor.
     """
 
     def __init__(self, capacity: int) -> None:
@@ -93,16 +95,23 @@ class FrameReadbackRing:
         self._shape: tuple[int, ...] | None = None
         self._dtype: Any = None
 
-    def copy_in(self, frame: np.ndarray) -> np.ndarray:
-        """Copia `frame` al siguiente buffer del anillo y devuelve ese buffer."""
-        if frame.shape != self._shape or frame.dtype != self._dtype:
-            self._reallocate(frame.shape, frame.dtype)
+    def next_buffer(self, shape: tuple[int, ...], dtype: Any) -> np.ndarray:
+        """Siguiente buffer del anillo con ese shape/dtype, sin copiar nada en él."""
+        shape = tuple(shape)
+        dtype = np.dtype(dtype)
+        if shape != self._shape or dtype != self._dtype:
+            self._reallocate(shape, dtype)
         buffer = self._buffers[self._index]
         self._index = (self._index + 1) % self.capacity
+        return buffer
+
+    def copy_in(self, frame: np.ndarray) -> np.ndarray:
+        """Copia `frame` al siguiente buffer del anillo y devuelve ese buffer."""
+        buffer = self.next_buffer(frame.shape, frame.dtype)
         np.copyto(buffer, frame)
         return buffer
 
-    def _reallocate(self, shape: tuple[int, ...], dtype: Any) -> None:
+    def _reallocate(self, shape: tuple[int, ...], dtype: np.dtype) -> None:
         # Cambio de resolución mid-run: los buffers viejos tienen otro shape,
         # así que el anillo completo se re-aloca para el shape nuevo.
         self._buffers = [np.empty(shape, dtype=dtype) for _ in range(self.capacity)]

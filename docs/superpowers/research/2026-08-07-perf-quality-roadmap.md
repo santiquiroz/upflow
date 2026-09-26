@@ -26,8 +26,9 @@ SD3.5 Large/Turbo) con 3.1-3.8x medido vs PyTorch — integrables directo en nue
 ## Quick wins (días)
 
 - Gate A/B de `ENABLE_STREAM_PIPELINE` (definido en el diseño, nunca corrido). Medición pura.
-- Anillo de K buffers CPU preasignados para readback en onnx_video_upscaler (~11% medido,
-  54.3→48.4 ms/frame). NUNCA K=1 (corrompe, medido). K > frames en vuelo.
+- Anillo de K buffers CPU preasignados para readback en onnx_video_upscaler (~11% medido
+  en un prototipo, 54.3→48.4 ms/frame; la implementación con bind_output al anillo, ad5d09d,
+  falta medirla en GPU). NUNCA K=1 (corrompe, medido). K > frames en vuelo.
 - Garantía fp16 en builtins + alerta visible cuando un job cae a fp32 (evita regresión 7.26x silenciosa).
 - Speed-presets de scheduler en generación (`Scheduler.from_config` bajo `_pipeline_run_locks`;
   LCMScheduler, Euler trailing; exponer scheduler/steps/guidance + metadata por modelo).
