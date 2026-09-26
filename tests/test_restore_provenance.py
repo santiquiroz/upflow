@@ -44,6 +44,8 @@ from app.services.restore_provenance import (
     restoration_description,
     sanitize_stem,
     sha256_file,
+    uncolored_marks,
+    uncolored_sidecar,
     with_badge,
     write_sidecar,
     xmp_fields,
@@ -402,6 +404,37 @@ def test_a_model_file_that_cannot_be_found_has_no_hash(tmp_path: Path) -> None:
 
     assert catalog.sha256_of("m", "fp32") is None
     assert catalog.expected_sha256_of("m", "fp32") == SHA
+
+
+def colorized(sidecar: dict, *, faces: bool) -> dict:
+    steps = [*sidecar["steps"], {"id": "colorize"}]
+    return {**sidecar, "steps": steps, "colorize": {"strength": 1.0}, "faces": sidecar["faces"] if faces else []}
+
+
+def test_the_uncolored_copy_does_not_declare_the_colorization(tmp_path: Path) -> None:
+    pre, post, context, catalog = sidecar_inputs(tmp_path)
+    sidecar = colorized(build_sidecar(pre, post, context, catalog), faces=False)
+
+    view = uncolored_sidecar(sidecar)
+    xmp, badge = uncolored_marks(sidecar, True, None)
+
+    assert [step["id"] for step in view["steps"]] == ["repair", "denoise", "faces"]
+    assert view["colorize"] is None and view["compositeReasons"] == []
+    properties = read_xmp_properties(xmp)
+    assert properties["Iptc4xmpExt:DigitalSourceType"] == DIGITAL_SOURCE_ENHANCED
+    assert "colorization" not in xmp.lower()
+    assert badge is False
+
+
+def test_an_uncolored_copy_with_regenerated_faces_keeps_the_badge(tmp_path: Path) -> None:
+    pre, post, context, catalog = sidecar_inputs(tmp_path)
+    sidecar = colorized(build_sidecar(pre, post, context, catalog), faces=True)
+
+    xmp, badge = uncolored_marks(sidecar, True, None)
+
+    assert read_xmp_properties(xmp)["Iptc4xmpExt:DigitalSourceType"] == DIGITAL_SOURCE_COMPOSITE
+    assert badge is True
+    assert uncolored_marks(sidecar, False, None)[1] is False
 
 
 def test_the_xmp_fields_describe_the_steps_and_round_trip(tmp_path: Path) -> None:

@@ -30,6 +30,7 @@ from app.services.restore_outputs import saved_bit_depth
 from app.services.restore_provenance import UpscaleInfo
 from app.services.restore_session import SessionInputs, SessionNotFound
 from app.services.scale_fit import engine_output_path
+from app.services.xmp_packet import DIGITAL_SOURCE_ENHANCED, extract_xmp, read_xmp_properties
 
 ONNX_MODEL = "fake-onnx-2x"
 BUILTIN_MODEL = "realesrgan-x4plus"
@@ -974,6 +975,10 @@ def test_colorized_job_keeps_the_uncolored_output_and_is_composite(tmp_path: Pat
     assert restore["badge"] is True
     assert "uncolored" in restore["artifacts"]
     assert [stage["key"] for stage in job.metadata["stages"]] == ["restore_tone", "restore_colorize", "saving"]
+    with Image.open(settings.outputs_path / f"{job.id}.uncolored.png") as uncolored:
+        packet = extract_xmp(uncolored)
+    assert packet is not None and "colorization" not in packet.lower()
+    assert read_xmp_properties(packet)["Iptc4xmpExt:DigitalSourceType"] == DIGITAL_SOURCE_ENHANCED
 
 
 def test_badge_can_be_turned_off_for_the_main_output(tmp_path: Path) -> None:

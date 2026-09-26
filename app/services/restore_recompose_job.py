@@ -27,6 +27,7 @@ from app.services.restore_provenance import (
     facts_from_sidecar,
     is_composite,
     recomposed_sidecar,
+    uncolored_marks,
     with_badge,
     write_sidecar,
     xmp_fields,
@@ -135,7 +136,9 @@ def _rewrite_outputs(
     _save_like(previous, final, paths.final, xmp, keep_gps)
     outputs = [OutputFile("restored", paths.final)]
     if result.uncolored is not None:
-        _save_like(previous, result.uncolored, paths.uncolored, xmp, keep_gps)
+        uncolored_xmp, uncolored_badge = uncolored_marks(draft, bool(options.get("badge", True)), photo_date)
+        uncolored = with_badge(result.uncolored) if uncolored_badge else result.uncolored
+        _save_like(previous, uncolored, paths.uncolored, uncolored_xmp, keep_gps)
         outputs.append(OutputFile("uncolored", paths.uncolored))
     outputs.extend(save_views(final, paths, previous.icc))
     before = before_half(_read_rgb8(paths.before_after), result.image.shape[:2])

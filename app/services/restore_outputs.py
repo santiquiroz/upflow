@@ -27,6 +27,7 @@ from app.services.restore_provenance import (
     is_composite,
     output_bit_depth,
     sha256_file,
+    uncolored_marks,
     with_badge,
     write_sidecar,
     xmp_fields,
@@ -125,8 +126,7 @@ def save_full_outputs(
     privacy = _save_image(final, paths.final, loaded, context, xmp)
     outputs = [OutputFile("restored", paths.final)]
     if post.uncolored is not None:
-        _save_image(post.uncolored, paths.uncolored, loaded, context, xmp)
-        outputs.append(OutputFile("uncolored", paths.uncolored))
+        outputs.append(_save_uncolored(post.uncolored, paths, loaded, context, draft))
     outputs.extend(save_views(final, paths, loaded.icc))
     # El antes/despues se comparte fuera de Upflow: lleva la insignia en todo composite (§3.6).
     before_after = before_after_image(pre.request.image, post.image, badge=is_composite(facts))
@@ -165,6 +165,14 @@ def _save_image(
     depth = saved_bit_depth(context.fmt, loaded.bit_depth, context.upscale)
     keep_gps = bool(context.options.get("keep_gps", False))
     return save_restored(rgb, path, context.fmt, depth, loaded.icc, loaded.exif, xmp, keep_gps=keep_gps)
+
+
+def _save_uncolored(
+    rgb: np.ndarray, paths: RestoreOutputPaths, loaded: LoadedImage, context: OutputContext, draft: Mapping[str, Any]
+) -> OutputFile:
+    xmp, badge = uncolored_marks(draft, _wants_badge(context), _photo_date(context))
+    _save_image(with_badge(rgb) if badge else rgb, paths.uncolored, loaded, context, xmp)
+    return OutputFile("uncolored", paths.uncolored)
 
 
 def save_views(final: np.ndarray, paths: RestoreOutputPaths, icc: bytes | None) -> list[OutputFile]:

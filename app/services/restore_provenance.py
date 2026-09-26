@@ -19,7 +19,7 @@ from app.services.image_io import MetadataPrivacy
 from app.services.photo_restore_chain import STEP_PLAIN_NAMES
 from app.services.photo_restore_pipeline import PostResult, PreResult, StepRecord, restore_metadata
 from app.services.restore_models import RESTORE_BUNDLES, RESTORE_MODELS, VENDORED_MODELS, RestoreModelSpec
-from app.services.xmp_packet import DIGITAL_SOURCE_COMPOSITE, DIGITAL_SOURCE_ENHANCED, XmpFields
+from app.services.xmp_packet import DIGITAL_SOURCE_COMPOSITE, DIGITAL_SOURCE_ENHANCED, XmpFields, build_xmp_packet
 
 SIDECAR_SCHEMA_VERSION = 1
 # Un relleno de mas del 1% de la foto ya es contenido inventado a la vista (§3.6).
@@ -290,6 +290,20 @@ def build_sidecar(
 def used_a_model(record: StepRecord) -> bool:
     # Un detector (p. ej. BOPBTL) que decide que pixeles se rellenan tambien es IA, aunque el relleno sea Telea.
     return record.model is not None or bool(record.aux_models)
+
+
+def uncolored_sidecar(sidecar: Mapping[str, Any]) -> dict[str, Any]:
+    # La copia sin color no lleva la colorizacion: su XMP y su insignia salen de estos hechos.
+    steps = [step for step in sidecar.get("steps") or [] if step.get("id") != "colorize"]
+    base = {**sidecar, "steps": steps, "colorize": None}
+    facts = facts_from_sidecar(base)
+    return {**base, "digitalSourceType": digital_source_type(facts), "compositeReasons": list(composite_reasons(facts))}
+
+
+def uncolored_marks(sidecar: Mapping[str, Any], badge_requested: bool, photo_date: str | None) -> tuple[str, bool]:
+    view = uncolored_sidecar(sidecar)
+    xmp = build_xmp_packet(xmp_fields(view, photo_date))
+    return xmp, badge_applies(facts_from_sidecar(view), badge_requested)
 
 
 def recomposed_sidecar(
