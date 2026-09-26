@@ -477,6 +477,21 @@ en un recorte de hasta 512×512 ("Preview this area"); revisar y corregir la má
 pincel; y elegir cara por cara cuáles restaurar. El resultado se compara con un deslizador antes y
 después, y los mismos ajustes se pueden aplicar a más fotos, cada una como su propio trabajo.
 
+**Hojas de escáner y fotos de celular.** Si la foto está sobre una hoja de escáner más grande, el
+análisis lo nota y ofrece "Auto crop": la endereza (el ángulo sale del borde de la foto) y la recorta
+unos píxeles hacia adentro para no dejar franjas de la tapa. Con varias fotos en la misma hoja las
+numera en orden de lectura, dibuja su contorno sobre la hoja y cada botón "Photo N" deja lista esa
+foto para restaurar; el original no cambia, así que después se puede volver a la hoja y elegir otra.
+Si la copia parece fotografiada en ángulo, "Fix perspective" la rectifica con las cuatro esquinas que
+encontró, y "Perspective" / "Adjust corners" deja moverlas a mano (arrastrando o con las flechas;
+Shift da pasos más grandes). La perspectiva ya fija el giro, así que mientras está puesta "Straighten"
+queda bloqueado. Cuando la foto tiene reflejos o perspectiva aparece la ficha "Looks like a phone photo
+of a print (glare/perspective)" con el consejo de reescanear a 600 dpi o más, o volver a fotografiar
+en ángulo. Nada de esto se aplica solo: son sugerencias con su botón. La detección necesita un fondo
+parejo alrededor (la tapa del escáner, una mesa lisa) y sus umbrales son una propuesta que se
+recalibra con escaneos reales; en el sidecar la geometría registra las esquinas (`corners`) solo si hay
+perspectiva.
+
 **Varias fotos con caras.** "Apply these settings to more photos" repite los pasos y ajustes en
 cada foto nueva, con su propia máscara automática. Las caras quedan afuera salvo que marques "Also
 restore faces in these photos": entonces cada foto elige sus caras con la misma política de siempre
