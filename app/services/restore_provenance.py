@@ -6,8 +6,9 @@ import json
 import os
 import re
 import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -122,25 +123,48 @@ class SidecarContext:
     environment: Mapping[str, Any] = field(default_factory=dict)
 
 
+ModelFileResolver = Callable[[str, str], "Path | None"]
+MODEL_HASH_CACHE_SIZE = 64
+
+
 @dataclass(frozen=True, slots=True)
 class ModelCatalog:
     specs: Mapping[str, RestoreModelSpec]
     file_hashes: Mapping[tuple[str, str], str]
+    resolve_file: ModelFileResolver | None = None
 
     def license_of(self, model_id: str) -> dict[str, object] | None:
         spec = self.specs.get(model_id)
         return None if spec is None else model_license(spec)
 
-    def sha256_of(self, model_id: str, precision: str) -> str | None:
+    def expected_sha256_of(self, model_id: str, precision: str) -> str | None:
         return self.file_hashes.get((model_id, precision))
 
+    def sha256_of(self, model_id: str, precision: str) -> str | None:
+        # Con resolvedor se hashea el archivo que se cargo de verdad; el catalogo es solo lo esperado.
+        if self.resolve_file is None:
+            return self.expected_sha256_of(model_id, precision)
+        path = self.resolve_file(model_id, precision)
+        return None if path is None or not path.is_file() else cached_file_sha256(path)
 
-def default_model_catalog() -> ModelCatalog:
+
+def default_model_catalog(resolve_file: ModelFileResolver | None = None) -> ModelCatalog:
     specs = {**{key: model.spec for key, model in VENDORED_MODELS.items()}, **RESTORE_MODELS}
-    # Los vendorizados se usan sin cambios: el sha256 del archivo es el de la fuente.
+    # Los vendorizados se usan sin cambios: el sha256 esperado del archivo es el de la fuente.
     vendored = {(key, "fp32"): model.spec.source_sha256 for key, model in VENDORED_MODELS.items()}
     published = {(a.model_id, a.precision): a.sha256 for bundle in RESTORE_BUNDLES.values() for a in bundle.artifacts}
-    return ModelCatalog(specs, {**vendored, **published})
+    return ModelCatalog(specs, {**vendored, **published}, resolve_file)
+
+
+def cached_file_sha256(path: Path) -> str:
+    stat = path.stat()
+    return _sha256_of_version(str(path.resolve()), stat.st_mtime_ns, stat.st_size)
+
+
+@lru_cache(maxsize=MODEL_HASH_CACHE_SIZE)
+def _sha256_of_version(path: str, mtime_ns: int, size: int) -> str:
+    # mtime y tamaño son parte de la clave: un archivo reemplazado se vuelve a hashear.
+    return sha256_file(Path(path))
 
 
 def model_license(spec: RestoreModelSpec) -> dict[str, object]:
@@ -405,7 +429,12 @@ def _models_of(record: StepRecord) -> tuple[Any, ...]:
 
 def _model_entry(model: dict[str, object], catalog: ModelCatalog) -> dict[str, object]:
     model_id, precision = str(model["id"]), str(model["precision"])
-    return {**model, "sha256": catalog.sha256_of(model_id, precision), "license": catalog.license_of(model_id)}
+    return {
+        **model,
+        "sha256": catalog.sha256_of(model_id, precision),
+        "expectedSha256": catalog.expected_sha256_of(model_id, precision),
+        "license": catalog.license_of(model_id),
+    }
 
 
 def _recomposed_face(face: Mapping[str, Any], states: Mapping[int, tuple[bool, float]], at: str) -> dict[str, object]:

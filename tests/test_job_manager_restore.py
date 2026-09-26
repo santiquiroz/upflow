@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import sys
 import threading
@@ -22,7 +23,7 @@ from app.services.job_manager import ALLOWED_RESTORE_FORMATS, JobManager
 from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry, ModelStatus
 from app.services.photo_restore_chain import UnknownRestoreStep
 from app.services.photo_restore_job import PhotoRestoreJobRunner, PreStage
-from app.services.photo_restore_pipeline import RestoreTooLarge, StepCall, StepOutcome
+from app.services.photo_restore_pipeline import ModelUse, RestoreTooLarge, StepCall, StepOutcome
 from app.services.photo_restorer_registry import validate_step_ready
 from app.services.process_runner import run_guarded_process
 from app.services.restore_outputs import saved_bit_depth
@@ -582,6 +583,41 @@ def test_restore_job_writes_outputs_sidecar_and_progress(tmp_path: Path) -> None
     assert [stage["key"] for stage in job.metadata["stages"]] == ["restore_tone", "saving"]
     assert engine.phases == ["cpu", "cpu"]
     assert not (settings.video_work_path / job.id).exists()
+
+
+class ModelFileEngine(FakeRestoreEngine):
+    def __init__(self, files: dict[str, Path]) -> None:
+        super().__init__()
+        self.files = files
+
+    def model_file(self, model_id: str, precision: str) -> Path:
+        if model_id not in self.files:
+            raise RuntimeError("pack missing")
+        return self.files[model_id]
+
+
+def tone_with_a_model(image: np.ndarray, call: StepCall) -> StepOutcome:
+    return StepOutcome(image.copy(), model=ModelUse("drunet-color", "cpu", "fp32"), aux_models=(ModelUse("gone", "cpu", "fp32"),))
+
+
+def test_the_sidecar_hashes_the_model_files_the_engine_loaded(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    weights = tmp_path / "drunet-color.onnx"
+    weights.write_bytes(b"weights of this install")
+    engine = ModelFileEngine({"drunet-color": weights})
+    manager = make_manager(settings, runner=make_runner(settings, engine, step_runners={"tone": tone_with_a_model}))
+
+    async def scenario() -> UpscaleJob:
+        job = await create_restore_job(manager, write_image(tmp_path / "in.png"))
+        await run_to_end(manager, job)
+        return job
+
+    job = asyncio.run(scenario())
+
+    assert job.status == JobStatus.completed, job.error
+    step = json.loads((settings.outputs_path / f"{job.id}.restore.json").read_text(encoding="utf-8"))["steps"][0]
+    assert step["model"]["sha256"] == hashlib.sha256(b"weights of this install").hexdigest()
+    assert step["auxiliaryModels"][0]["sha256"] is None
 
 
 def test_restore_progress_uses_the_step_stage_not_upscaling(tmp_path: Path) -> None:

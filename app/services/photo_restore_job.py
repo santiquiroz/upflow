@@ -287,6 +287,12 @@ class PhotoRestoreJobRunner:
         self._catalog = catalog
         self._app_version = app_version
 
+    def _loaded_model_file(self, model_id: str, precision: str) -> Path | None:
+        try:
+            return self.engine.model_file(model_id, precision)
+        except (KeyError, ValueError, RuntimeError):
+            return None
+
     def release_before_ncnn(self, device: str) -> bool:
         return self.engine.release_before_ncnn(device)
 
@@ -363,7 +369,7 @@ class PhotoRestoreJobRunner:
             fmt=job.output_format,
             upscale=upscale,
             app_version=self._app_version or get_app_version(self.settings.update_package_name),
-            catalog=self._catalog or default_model_catalog(),
+            catalog=self._catalog or default_model_catalog(self._loaded_model_file),
             options=job.restore_options,
             environment={"os": platform.platform(), "device": _device_of(job)},
         )

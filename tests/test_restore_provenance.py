@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -366,6 +367,41 @@ def test_the_sidecar_carries_the_migan_license_from_the_default_catalog() -> Non
 
     assert license_info is not None and license_info["spdx"] == "MIT"
     assert catalog.sha256_of(MIGAN_MODEL_ID, "fp32") is not None
+
+
+def test_the_sidecar_hashes_the_model_file_that_was_loaded_not_the_catalog(tmp_path: Path) -> None:
+    pre, post, context, _ = sidecar_inputs(tmp_path)
+    loaded = tmp_path / "drunet-color-fp16.onnx"
+    loaded.write_bytes(b"another revision")
+    catalog = ModelCatalog(
+        {"drunet-color": fake_spec("drunet-color")},
+        {("drunet-color", "fp16"): SHA},
+        lambda model_id, precision: loaded if model_id == "drunet-color" else None,
+    )
+
+    denoise = build_sidecar(pre, post, context, catalog)["steps"][1]
+
+    assert denoise["model"]["sha256"] == hashlib.sha256(b"another revision").hexdigest()
+    assert denoise["model"]["expectedSha256"] == SHA
+
+
+def test_a_replaced_model_file_of_the_same_size_is_hashed_again(tmp_path: Path) -> None:
+    model = tmp_path / "m.onnx"
+    model.write_bytes(b"AAAA")
+    catalog = ModelCatalog({}, {}, lambda model_id, precision: model)
+    first = catalog.sha256_of("m", "fp32")
+
+    model.write_bytes(b"BBBB")
+    os.utime(model, ns=(model.stat().st_atime_ns, model.stat().st_mtime_ns + 1_000_000_000))
+
+    assert catalog.sha256_of("m", "fp32") == hashlib.sha256(b"BBBB").hexdigest() != first
+
+
+def test_a_model_file_that_cannot_be_found_has_no_hash(tmp_path: Path) -> None:
+    catalog = ModelCatalog({}, {("m", "fp32"): SHA}, lambda model_id, precision: None)
+
+    assert catalog.sha256_of("m", "fp32") is None
+    assert catalog.expected_sha256_of("m", "fp32") == SHA
 
 
 def test_the_xmp_fields_describe_the_steps_and_round_trip(tmp_path: Path) -> None:
