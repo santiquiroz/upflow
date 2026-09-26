@@ -885,7 +885,8 @@ class TestRestauracionDeFotosEnElArbol:
         _install_bundle(settings.restore_model_dir_path, published)
         touch(settings.migan_model_path)
 
-        resolved = _find(resolve_capabilities(settings, FakeRegistry()), capability_id)
+        # Con restore-core y ffmpeg en disco, video.cctvAi llega a sondear la GPU: sin probes inyectados lanza.
+        resolved = _find(resolve_capabilities(settings, FakeRegistry(), _probes()), capability_id)
 
         assert resolved.status == "available"
 
