@@ -883,6 +883,15 @@ class ModelResponse(BaseModel):
     error: str | None = None
     # Para la etiqueta "Generative (invents texture)" / "Non-generative" del selector.
     generative: bool = True
+    # Capacidades declaradas por Spandrel; null = no se sabe (ver ModelEntry).
+    purpose: str | None = None
+    channels_in: int | None = Field(default=None, serialization_alias="channelsIn")
+    channels_out: int | None = Field(default=None, serialization_alias="channelsOut")
+    size_minimum: int | None = Field(default=None, serialization_alias="sizeMinimum")
+    size_multiple: int | None = Field(default=None, serialization_alias="sizeMultiple")
+    size_square: bool | None = Field(default=None, serialization_alias="sizeSquare")
+    tiling: str | None = None
+    fp16_file: str | None = Field(default=None, serialization_alias="fp16File")
 
 
 class ModelsResponse(BaseModel):

@@ -436,6 +436,52 @@ async def test_install_validates_converted_model_at_its_probe_size(
     assert registry.get(job.model_id).scale == 1
 
 
+async def test_install_records_the_capabilities_spandrel_declared(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # MNT-03: proposito y requisitos de tamano del ConversionResult quedan en el
+    # registro; sin ellos el selector de reescalado ofreceria un denoiser 1x.
+    installer, registry, _, _ = make_installer(tmp_path, NON_ONNX_FILES)
+    monkeypatch.setattr(installer, "_create_validation_session", lambda path: RecordingSession(scale=1))
+    result = ConversionResult(
+        arch="SCUNet",
+        scale=1,
+        purpose="Restoration",
+        size_minimum=40,
+        size_multiple=8,
+        size_square=False,
+        tiling="discouraged",
+        probe_size=(64, 64),
+    )
+    _install_fake_convert_to_onnx(monkeypatch, result=result)
+
+    install_id = await installer.install_from_hf("org/scunet")
+    await installer._process_next()
+
+    entry = registry.get(installer.status(install_id).model_id)
+    assert entry.purpose == "Restoration"
+    assert (entry.channels_in, entry.channels_out) == (3, 3)
+    assert (entry.size_minimum, entry.size_multiple, entry.size_square) == (40, 8, False)
+    assert entry.tiling == "discouraged"
+    # El conversor exporta solo fp32: no hay archivo fp16 que registrar.
+    assert entry.fp16_file is None
+
+
+async def test_install_of_a_published_onnx_leaves_capabilities_unknown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installer, registry, _, _ = make_installer(tmp_path, ONNX_FILES)
+    monkeypatch.setattr(installer, "_create_validation_session", lambda path: FakeValidSession(scale=4))
+
+    install_id = await installer.install_from_hf("org/published")
+    await installer._process_next()
+
+    entry = registry.get(installer.status(install_id).model_id)
+    assert entry.purpose is None
+    assert entry.tiling is None
+    assert entry.size_minimum is None
+
+
 async def test_install_rejects_converted_grayscale_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     installer, registry, _, settings = make_installer(tmp_path, NON_ONNX_FILES)
     monkeypatch.setattr(installer, "_create_validation_session", lambda path: FakeValidSession(scale=1))

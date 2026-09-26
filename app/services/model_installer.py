@@ -170,6 +170,21 @@ def _require_rgb_conversion(result: ConversionResult) -> None:
         )
 
 
+def _declared_capabilities(result: ConversionResult | None) -> dict[str, Any]:
+    # Un .onnx publicado no trae metadata de Spandrel: sus capacidades quedan sin saber.
+    if result is None:
+        return {}
+    return {
+        "purpose": result.purpose,
+        "channels_in": result.channels_in,
+        "channels_out": result.channels_out,
+        "size_minimum": result.size_minimum,
+        "size_multiple": result.size_multiple,
+        "size_square": result.size_square,
+        "tiling": result.tiling,
+    }
+
+
 def _require_single_input(inputs: list[Any]) -> Any:
     if len(inputs) != 1:
         raise ValueError(f"ONNX model must have exactly 1 input, found {len(inputs)}")
@@ -316,6 +331,7 @@ class ModelInstaller(SingleWorkerJobQueue[InstallJob]):
                 arch=arch,
                 file_path=self._relative_onnx_path(model_id),
                 status=ModelStatus.installed,
+                **_declared_capabilities(conversion_result),
             )
             await asyncio.to_thread(self.registry.register, entry)
             job.model_id = model_id

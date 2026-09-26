@@ -271,6 +271,7 @@ export const en = {
   "enhance.model.notReady": "Not ready",
   "enhance.model.loading": "Loading models…",
   "enhance.model.loadError": "Could not load models.",
+  "enhance.model.hiddenByPurpose": "Not shown here because they do not upscale: {{names}}",
   "enhance.encoder.autoGpuHint": "Uses the GPU encoder — far faster in 4K (NVENC/AMF/QSV)",
   "enhance.runtime.onnxHint": "DirectML plus native accelerators (TensorRT-RTX, OpenVINO), engaged automatically",
   "enhance.encoder.softwareHint": "Always compatible — best quality per bit",

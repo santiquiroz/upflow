@@ -702,6 +702,14 @@ def model_entry_to_response(entry: ModelEntry) -> ModelResponse:
         status=entry.status.value,
         error=entry.error,
         generative=entry.generative,
+        purpose=entry.purpose,
+        channels_in=entry.channels_in,
+        channels_out=entry.channels_out,
+        size_minimum=entry.size_minimum,
+        size_multiple=entry.size_multiple,
+        size_square=entry.size_square,
+        tiling=entry.tiling,
+        fp16_file=entry.fp16_file,
     )
 
 

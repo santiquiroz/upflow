@@ -238,3 +238,64 @@ describe("ModelPicker generative tag", () => {
     expect(within(group).queryByText("Generative (invents texture)")).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Filtro por proposito (MNT-03): el registro guarda el proposito que declara
+// Spandrel. Un denoiser 1x convertido no reescala nada, asi que el selector de
+// reescalado no lo ofrece; lo nombra aparte para que no parezca perdido.
+// ---------------------------------------------------------------------------
+
+const RESTORATION_MODEL: ModelResponse = {
+  ...ONNX_MODEL,
+  id: "org--scunet",
+  name: "org/scunet",
+  scale: 1,
+  arch: "SCUNet",
+  purpose: "Restoration",
+};
+
+function renderPickerForPurpose(models: ModelResponse[], purpose: string) {
+  vi.mocked(api.getModels).mockResolvedValue({ models } satisfies ModelsResponse);
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  function Wrapper({ children }: { children: ReactNode }) {
+    return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+  }
+  return render(<ModelPicker value={null} onChange={vi.fn()} purpose={purpose} />, { wrapper: Wrapper });
+}
+
+describe("ModelPicker purpose filter", () => {
+  it("offers only super-resolution models by default", async () => {
+    renderPicker([{ ...BUILTIN_MODEL, purpose: "SR" }, { ...ONNX_MODEL, purpose: "SR" }, RESTORATION_MODEL]);
+
+    await screen.findByRole("group", { name: "ONNX" });
+
+    expect(screen.getByRole("radio", { name: /Custom Anime 2x/ })).toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: /org\/scunet/ })).toBeNull();
+  });
+
+  it("keeps models whose purpose is unknown, like those from an older backend", async () => {
+    renderPicker([ONNX_MODEL]);
+
+    expect(await screen.findByRole("radio", { name: /Custom Anime 2x/ })).toBeInTheDocument();
+  });
+
+  it("names the installed models it hides so they do not look lost", async () => {
+    renderPicker([{ ...ONNX_MODEL, purpose: "SR" }, RESTORATION_MODEL]);
+
+    expect(await screen.findByText("Not shown here because they do not upscale: org/scunet")).toBeInTheDocument();
+  });
+
+  it("says nothing about hidden models when none are hidden", async () => {
+    renderPicker([{ ...ONNX_MODEL, purpose: "SR" }]);
+    await screen.findByRole("group", { name: "ONNX" });
+
+    expect(screen.queryByText(/Not shown here/)).toBeNull();
+  });
+
+  it("offers the models of the purpose it is asked for", async () => {
+    renderPickerForPurpose([{ ...ONNX_MODEL, purpose: "SR" }, RESTORATION_MODEL], "Restoration");
+
+    expect(await screen.findByRole("radio", { name: /org\/scunet/ })).toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: /Custom Anime 2x/ })).toBeNull();
+  });
+});

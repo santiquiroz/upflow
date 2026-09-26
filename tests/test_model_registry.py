@@ -648,3 +648,139 @@ def test_the_model_response_carries_generative() -> None:
     payload = model_entry_to_response(make_onnx_entry(generative=False)).model_dump(by_alias=True)
 
     assert payload["generative"] is False
+
+
+# ---------------------------------------------------------------------------
+# Proposito y capacidades (MNT-03): lo que Spandrel declara de un modelo
+# convertido -- para que sirve, cuantos canales, que tamanos acepta, si se
+# puede partir en tiles -- y el archivo fp16 si existe. Todo opcional: None
+# significa "no se sabe", nunca un valor inventado.
+# ---------------------------------------------------------------------------
+
+CAPABILITY_FIELDS = (
+    "purpose",
+    "channels_in",
+    "channels_out",
+    "size_minimum",
+    "size_multiple",
+    "size_square",
+    "tiling",
+    "fp16_file",
+)
+
+
+def make_restoration_entry(**overrides: object) -> ModelEntry:
+    capabilities: dict[str, object] = {
+        "id": "scunet-color-real-psnr",
+        "arch": "SCUNet",
+        "scale": 1,
+        "purpose": "Restoration",
+        "channels_in": 3,
+        "channels_out": 3,
+        "size_minimum": 40,
+        "size_multiple": 8,
+        "size_square": False,
+        "tiling": "discouraged",
+        "fp16_file": "onnx/scunet-color-real-psnr.fp16.onnx",
+    }
+    capabilities.update(overrides)
+    return make_onnx_entry(**capabilities)
+
+
+def _strip_fields_from_registry_json(registry_path: Path, names: tuple[str, ...]) -> None:
+    raw = json.loads(registry_path.read_text(encoding="utf-8"))
+    for item in raw:
+        for name in names:
+            item.pop(name, None)
+    registry_path.write_text(json.dumps(raw), encoding="utf-8")
+
+
+def test_a_custom_model_declares_nothing_it_was_not_told() -> None:
+    entry = make_onnx_entry()
+
+    assert {name: getattr(entry, name) for name in CAPABILITY_FIELDS} == dict.fromkeys(CAPABILITY_FIELDS)
+
+
+def test_capabilities_persist_and_reload(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    registered = ModelRegistry(settings).register(make_restoration_entry())
+
+    reloaded = ModelRegistry(settings).get(registered.id)
+
+    assert reloaded is not None
+    for name in CAPABILITY_FIELDS:
+        assert getattr(reloaded, name) == getattr(registered, name), name
+
+
+def test_registry_json_written_without_capabilities_loads_them_as_unknown(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    ModelRegistry(settings).register(make_restoration_entry())
+    _strip_fields_from_registry_json(settings.models_path / "registry.json", CAPABILITY_FIELDS)
+
+    entry = ModelRegistry(settings).get("scunet-color-real-psnr")
+
+    assert entry is not None
+    assert all(getattr(entry, name) is None for name in CAPABILITY_FIELDS)
+    assert list(settings.models_path.glob("registry.json.corrupt-*")) == []
+
+
+def test_builtin_and_classic_upscalers_are_rgb_super_resolution(tmp_path: Path) -> None:
+    registry = ModelRegistry(make_settings(tmp_path))
+
+    for entry in registry.list():
+        assert entry.purpose == "SR", entry.id
+        assert (entry.channels_in, entry.channels_out) == (3, 3), entry.id
+
+
+def test_builtins_persisted_by_an_older_version_gain_their_purpose(tmp_path: Path) -> None:
+    # Un registry.json anterior ya tiene los builtins sembrados, sin proposito: el
+    # sembrado solo agregaba los que faltaban, asi que sin este relleno se quedarian
+    # "sin proposito conocido" para siempre.
+    settings = make_settings(tmp_path)
+    ModelRegistry(settings).register(make_onnx_entry())
+    registry_path = settings.models_path / "registry.json"
+    _strip_fields_from_registry_json(registry_path, CAPABILITY_FIELDS)
+
+    registry = ModelRegistry(settings)
+
+    builtin_id = MODEL_CATALOG[0]["key"]
+    assert registry.get(builtin_id).purpose == "SR"
+    assert registry.get("swinir-real-sr-x4").purpose is None
+    persisted = {item["id"]: item for item in json.loads(registry_path.read_text(encoding="utf-8"))}
+    assert persisted[builtin_id]["purpose"] == "SR"
+
+
+def test_refreshing_a_builtin_keeps_when_it_was_first_seeded(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    builtin_id = MODEL_CATALOG[0]["key"]
+    first = ModelRegistry(settings).get(builtin_id)
+    _strip_fields_from_registry_json(settings.models_path / "registry.json", ("purpose",))
+
+    refreshed = ModelRegistry(settings).get(builtin_id)
+
+    assert refreshed.created_at == first.created_at
+
+
+def test_the_model_response_carries_capabilities_in_camel_case() -> None:
+    from app.api.routes import model_entry_to_response
+
+    payload = model_entry_to_response(make_restoration_entry()).model_dump(by_alias=True)
+
+    assert payload["purpose"] == "Restoration"
+    assert payload["channelsIn"] == 3
+    assert payload["channelsOut"] == 3
+    assert payload["sizeMinimum"] == 40
+    assert payload["sizeMultiple"] == 8
+    assert payload["sizeSquare"] is False
+    assert payload["tiling"] == "discouraged"
+    assert payload["fp16File"] == "onnx/scunet-color-real-psnr.fp16.onnx"
+
+
+def test_the_model_response_leaves_unknown_capabilities_null() -> None:
+    from app.api.routes import model_entry_to_response
+
+    payload = model_entry_to_response(make_onnx_entry()).model_dump(by_alias=True)
+
+    assert payload["purpose"] is None
+    assert payload["tiling"] is None
+    assert payload["fp16File"] is None

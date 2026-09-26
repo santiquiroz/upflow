@@ -10,7 +10,11 @@ interface ModelPickerProps {
   // existe para video. Default false (fail-closed): ofrecerlo donde el pipeline no lo
   // sabe ejecutar seria una opcion que falla al enviar.
   allowNoAi?: boolean;
+  // El proposito de Spandrel que sirve aca. Default "SR": los tres usos de hoy reescalan.
+  purpose?: string;
 }
+
+const SUPER_RESOLUTION = "SR";
 
 interface ModelGroup {
   label: string;
@@ -37,6 +41,25 @@ function groupModels(
     },
   ];
   return groups.filter((group) => group.models.length > 0);
+}
+
+// Sin proposito (un .onnx publicado, un backend anterior) se ofrece igual: asi se
+// comportaba el selector antes de que el registro lo supiera.
+function servesPurpose(model: ModelResponse, purpose: string): boolean {
+  return model.purpose == null || model.purpose === purpose;
+}
+
+function modelsOffPurpose(models: ModelResponse[], purpose: string): ModelResponse[] {
+  return models.filter((model) => !servesPurpose(model, purpose));
+}
+
+function HiddenModelsNote({ models }: { models: ModelResponse[] }) {
+  const { t } = useTranslation();
+  if (models.length === 0) {
+    return null;
+  }
+  const names = models.map((model) => model.name).join(", ");
+  return <p className="text-xs text-text-faint">{t("enhance.model.hiddenByPurpose", { names })}</p>;
 }
 
 function formatModelMeta(model: ModelResponse): string {
@@ -115,7 +138,12 @@ function ModelOption({
   );
 }
 
-export function ModelPicker({ value, onChange, allowNoAi = false }: ModelPickerProps) {
+export function ModelPicker({
+  value,
+  onChange,
+  allowNoAi = false,
+  purpose = SUPER_RESOLUTION,
+}: ModelPickerProps) {
   const { t } = useTranslation();
   const modelsQuery = useQuery({ queryKey: ["models"], queryFn: getModels });
 
@@ -127,7 +155,9 @@ export function ModelPicker({ value, onChange, allowNoAi = false }: ModelPickerP
     return <p className="text-sm text-danger">{t("enhance.model.loadError")}</p>;
   }
 
-  const groups = groupModels(modelsQuery.data?.models ?? [], allowNoAi, t("enhance.model.noAi"));
+  const models = modelsQuery.data?.models ?? [];
+  const offered = models.filter((model) => servesPurpose(model, purpose));
+  const groups = groupModels(offered, allowNoAi, t("enhance.model.noAi"));
 
   return (
     <fieldset className="flex flex-col gap-4">
@@ -140,6 +170,7 @@ export function ModelPicker({ value, onChange, allowNoAi = false }: ModelPickerP
           ))}
         </div>
       ))}
+      <HiddenModelsNote models={modelsOffPurpose(models, purpose)} />
     </fieldset>
   );
 }

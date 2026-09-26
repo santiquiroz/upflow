@@ -495,6 +495,15 @@ export interface ModelResponse {
   error: string | null;
   // "Generative (invents texture)" / "Non-generative"; ausente en respuestas anteriores.
   generative?: boolean;
+  // Capacidades que declara Spandrel ("SR", "Restoration", ...). null o ausente = no se sabe.
+  purpose?: string | null;
+  channelsIn?: number | null;
+  channelsOut?: number | null;
+  sizeMinimum?: number | null;
+  sizeMultiple?: number | null;
+  sizeSquare?: boolean | null;
+  tiling?: string | null;
+  fp16File?: string | null;
 }
 
 export interface ModelsResponse {

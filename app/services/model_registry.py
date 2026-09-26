@@ -18,6 +18,22 @@ logger = logging.getLogger(__name__)
 
 REGISTRY_FILENAME = "registry.json"
 
+# El proposito de Spandrel ("SR", "Restoration", ...) de los reescaladores que trae
+# la app. Los modelos convertidos guardan el que declare su arquitectura.
+PURPOSE_SUPER_RESOLUTION = "SR"
+RGB_CHANNELS = 3
+
+CAPABILITY_FIELDS = (
+    "purpose",
+    "channels_in",
+    "channels_out",
+    "size_minimum",
+    "size_multiple",
+    "size_square",
+    "tiling",
+    "fp16_file",
+)
+
 CLASSIC_MODEL_IDS = frozenset(entry["key"] for entry in classic_catalog_entries())
 
 # Ids que nadie puede sobrescribir ni borrar. Incluye los clasicos: no tienen archivos
@@ -64,6 +80,17 @@ class ModelEntry:
     created_at: datetime = field(default_factory=utc_now)
     # Si inventa textura. True por defecto: de un modelo sin declarar no se sabe.
     generative: bool = True
+    # Capacidades que declara Spandrel al convertir. None = no se sabe: un .onnx
+    # publicado o una entrada de una version anterior no las trae.
+    purpose: str | None = None
+    channels_in: int | None = None
+    channels_out: int | None = None
+    size_minimum: int | None = None
+    size_multiple: int | None = None
+    size_square: bool | None = None
+    tiling: str | None = None
+    # Relativo a models_path, como file_path. Solo si la variante fp16 existe.
+    fp16_file: str | None = None
 
 
 def _entry_to_json_dict(entry: ModelEntry) -> dict[str, Any]:
@@ -81,6 +108,7 @@ def _entry_to_json_dict(entry: ModelEntry) -> dict[str, Any]:
         "error": entry.error,
         "created_at": entry.created_at.isoformat(),
         "generative": entry.generative,
+        **{name: getattr(entry, name) for name in CAPABILITY_FIELDS},
     }
 
 
@@ -101,6 +129,8 @@ def _entry_from_json_dict(data: dict[str, Any]) -> ModelEntry:
         created_at=datetime.fromisoformat(data["created_at"]),
         # .get: las entradas escritas antes del campo se tratan como generativas.
         generative=bool(data.get("generative", True)),
+        # .get: las entradas escritas antes de MNT-03 no las traen y quedan "sin saber".
+        **{name: data.get(name) for name in CAPABILITY_FIELDS},
     )
 
 
@@ -119,7 +149,18 @@ def _builtin_entry_from_catalog(option: ModelOption) -> ModelEntry:
         scale=_single_scale(option),
         status=ModelStatus.installed,
         generative=option["generative"],
+        purpose=PURPOSE_SUPER_RESOLUTION,
+        channels_in=RGB_CHANNELS,
+        channels_out=RGB_CHANNELS,
     )
+
+
+def _refreshed_builtin(stored: ModelEntry, option: ModelOption) -> ModelEntry:
+    return replace(_builtin_entry_from_catalog(option), created_at=stored.created_at)
+
+
+def _lacks_purpose(entry: ModelEntry | None) -> bool:
+    return entry is not None and entry.purpose is None
 
 
 def _classic_entries() -> list[ModelEntry]:
@@ -146,6 +187,9 @@ def _classic_entries() -> list[ModelEntry]:
             scale=None,
             status=ModelStatus.installed,
             generative=option["generative"],
+            purpose=PURPOSE_SUPER_RESOLUTION,
+            channels_in=RGB_CHANNELS,
+            channels_out=RGB_CHANNELS,
         )
         for option in classic_catalog_entries()
     ]
@@ -289,16 +333,27 @@ class ModelRegistry:
 
     def _seed_builtins(self) -> None:
         with self._lock:
-            missing = [
-                _builtin_entry_from_catalog(option)
-                for option in MODEL_CATALOG
-                if option["key"] not in self._entries
-            ]
-            if not missing:
+            seeded = [*self._missing_builtins(), *self._builtins_without_purpose()]
+            if not seeded:
                 return
-            for entry in missing:
+            for entry in seeded:
                 self._entries[entry.id] = entry
             self._persist()
+
+    def _missing_builtins(self) -> list[ModelEntry]:
+        return [
+            _builtin_entry_from_catalog(option)
+            for option in MODEL_CATALOG
+            if option["key"] not in self._entries
+        ]
+
+    def _builtins_without_purpose(self) -> list[ModelEntry]:
+        # Los sembro una version anterior a MNT-03: el catalogo sabe su proposito.
+        return [
+            _refreshed_builtin(self._entries[option["key"]], option)
+            for option in MODEL_CATALOG
+            if _lacks_purpose(self._entries.get(option["key"]))
+        ]
 
     def _persist(self) -> None:
         # Callers must hold self._lock.
