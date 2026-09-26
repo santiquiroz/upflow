@@ -1,3 +1,4 @@
+import type { JobResponse } from "../../../lib/apiTypes";
 import type {
   RestoreAnalysis,
   RestoreCapabilities,
@@ -81,4 +82,42 @@ export function makeCapabilities(missingPacks: string[] = []): RestoreCapabiliti
     steps: [],
   }));
   return { steps, presets, halftoneDenoiseLimit: 0.3 };
+}
+
+export function makeRestoreMetadata(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    artifacts: ["preview", "view", "beforeafter", "sidecar"],
+    downloadNames: {
+      restored: "grandma_restored.png",
+      uncolored: "grandma_uncolored.png",
+      before_after: "grandma_before-after.jpg",
+      sidecar: "grandma_restore.json",
+    },
+    viewFullResolution: true,
+    compositeReasons: [],
+    digitalSourceType: "http://cv.iptc.org/newscodes/digitalsourcetype/algorithmicallyEnhanced",
+    ...overrides,
+  };
+}
+
+export function makeCompletedRestoreJob(restore: Record<string, unknown> | undefined): JobResponse {
+  return {
+    jobId: "job-1",
+    status: "completed",
+    originalFilename: "grandma.jpg",
+    modelName: "",
+    scale: 1,
+    outputFormat: "png",
+    modelId: null,
+    device: "cpu",
+    createdAt: "2026-09-25T10:00:00Z",
+    startedAt: "2026-09-25T10:00:01Z",
+    finishedAt: "2026-09-25T10:00:40Z",
+    error: null,
+    ownerId: null,
+    metadata: restore === undefined ? {} : { restore },
+    progressPct: 100,
+    downloadUrl: "/api/v1/jobs/job-1/download",
+    restoreSteps: ["repair"],
+  };
 }

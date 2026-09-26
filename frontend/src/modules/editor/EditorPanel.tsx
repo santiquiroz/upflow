@@ -24,6 +24,7 @@ import type { DeviceInfoResponse, GenerationModelSummary, InitImageResponse } fr
 import { fetchEditorCapabilities, segmentEditorObject } from "../../services/editor";
 import { uploadGenerationInitImage, type CreateGenerationJobParams } from "../../services/generation";
 import { InsertObjectPanel } from "./InsertObjectPanel";
+import { useEditorHandoff } from "./useEditorHandoff";
 import {
   appendPoint,
   drawStrokes,
@@ -338,6 +339,8 @@ export function EditorPanel() {
     },
     [reset],
   );
+
+  useEditorHandoff(handleBaseSelected, setUploadError);
 
   function imagePointFromEvent(event: React.PointerEvent | React.MouseEvent): { x: number; y: number } | null {
     const canvas = canvasRef.current;

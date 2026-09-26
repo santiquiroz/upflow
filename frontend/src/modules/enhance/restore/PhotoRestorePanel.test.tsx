@@ -1,12 +1,18 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "../../../lib/api";
 import type { EngineInfoResponse, JobResponse } from "../../../lib/apiTypes";
 import * as restoreService from "../../../services/restore";
 import { PhotoRestorePanel, versionedUrl } from "./PhotoRestorePanel";
-import { makeAnalysis, makeCapabilities } from "./restoreTestFixtures";
+import {
+  makeAnalysis,
+  makeCapabilities,
+  makeCompletedRestoreJob,
+  makeRestoreMetadata,
+} from "./restoreTestFixtures";
 
 vi.mock("../../../lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../lib/api")>();
@@ -31,7 +37,11 @@ function renderPanel() {
   vi.mocked(api.getEngineInfo).mockResolvedValue(ENGINE_INFO);
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   function Wrapper({ children }: { children: ReactNode }) {
-    return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+    return (
+      <MemoryRouter>
+        <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+      </MemoryRouter>
+    );
   }
   render(<PhotoRestorePanel />, { wrapper: Wrapper });
   return queryClient;
@@ -154,6 +164,25 @@ describe("PhotoRestorePanel: summary and Restore", () => {
     });
     await waitFor(() => expect(api.getJob).toHaveBeenCalledWith("job-9"));
     expect(screen.getByRole("button", { name: "Restore" })).toBeDisabled();
+  });
+
+  it("shows the comparison and downloads once the restoration finishes", async () => {
+    const completed = makeCompletedRestoreJob(makeRestoreMetadata());
+    vi.mocked(restoreService.analyzePhoto).mockResolvedValue(makeAnalysis());
+    vi.mocked(restoreService.createRestoreJob).mockResolvedValue({ ...completed, status: "queued" });
+    vi.mocked(api.getJob).mockResolvedValue(completed);
+    renderPanel();
+    dropPhoto();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Restore" }));
+
+    expect(await screen.findByRole("heading", { name: "Result" })).toBeInTheDocument();
+    expect(screen.getByAltText("Before: grandma.jpg")).toHaveAttribute(
+      "src",
+      "/api/v1/restore/analysis/tok-1/preview.jpg?v=1",
+    );
+    expect(screen.getByRole("link", { name: "Download restored" })).toHaveAttribute("download", "grandma_restored.png");
+    expect(screen.getAllByText("Runs on your computer. Your photos are not uploaded anywhere.")).toHaveLength(1);
   });
 
   it("says when the restore options can't be loaded", async () => {

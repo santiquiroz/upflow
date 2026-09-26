@@ -8,6 +8,8 @@ import type { RestoreAnalysis, RestoreCapabilities } from "../../../lib/restoreA
 import { getRestoreCapabilities } from "../../../services/restore";
 import { exceedsUploadLimit, formatMegabytes } from "../uploadLimit";
 import { GeometryTools } from "./GeometryTools";
+import { RestoreResult } from "./RestoreResult";
+import { readRestoreSummary } from "./restoreResultModel";
 import { RestoreSummary } from "./RestoreSummary";
 import type { RestoreSessionState } from "./restoreSessionState";
 import { useRestoreJob, type RestoreJobRequest, type UseRestoreJobResult } from "./useRestoreJob";
@@ -109,6 +111,7 @@ export function PhotoRestorePanel() {
   const restoreJob = useRestoreJob();
   const statusText = useStatusText(session);
   const { analysis } = session;
+  const resultSummary = restoreJob.job ? readRestoreSummary(restoreJob.job) : null;
 
   function handleFilesSelected(selected: File[]) {
     const [photo] = selected;
@@ -185,7 +188,15 @@ export function PhotoRestorePanel() {
           onCancel={restoreJob.cancel}
         />
       )}
-      <p className="text-xs text-text-faint">{t("restore.local")}</p>
+      {analysis && restoreJob.job && resultSummary ? (
+        <RestoreResult
+          job={restoreJob.job}
+          summary={resultSummary}
+          beforeUrl={versionedUrl(analysis.previewUrl, session.revision)}
+        />
+      ) : (
+        <p className="text-xs text-text-faint">{t("restore.local")}</p>
+      )}
     </div>
   );
 }
