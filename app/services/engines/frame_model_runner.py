@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import math
 import threading
+import time
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
@@ -13,13 +14,17 @@ import numpy as np
 from app.services.dml_device import try_parse_dml_device_id
 from app.services.engines.drunet_restore import deblock_level
 from app.services.engines.onnx_video_upscaler import is_device_removed_error, is_oom_error
-from app.services.engines.photo_restore_engine import InferFactory, PhotoRestoreEngine
+from app.services.engines.photo_restore_engine import InferFactory, PhotoRestoreEngine, is_gpu_device
 from app.services.engines.tiled_restore_runner import (
+    TARGET_BUDGET_FRACTION,
+    TDR_BUDGET_REASON,
     CalibrationSpec,
+    Clock,
     Padding,
     RestoreCancelled,
     TileInfer,
     TilePlan,
+    calibrate_tile,
     crop_padding,
     pad_to_requirements,
     run_tiled,
@@ -39,6 +44,7 @@ STRENGTH_PERCENT_MAX = 100
 CPU_DEVICE = "cpu"
 DML_DEVICE_TYPE = "dml"
 U8_PEAK = 255.0
+OOM_REASON = "oom"
 
 OrtValueFactory = Callable[[np.ndarray, str, int], Any]
 RemovalGuard = Callable[[], AbstractContextManager[None]]
@@ -52,6 +58,18 @@ class FrameModelReport:
     precision: str
     tile: int | None
     io_binding: bool
+    tile_reason: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TdrBudget:
+    budget_ms: float
+    clock: Clock = time.perf_counter
+
+
+class TdrBudgetExceeded(RuntimeError):
+    pass
+
 
 
 def level_for_strength(strength_percent: int) -> float:
@@ -91,6 +109,19 @@ def oom_tile_ladder(spec: RestoreModelSpec, precision: str, padded_shape: tuple[
     # Un tile tan grande como el cuadro repite la misma asignacion que acaba de fallar.
     longest = max(padded_shape)
     return tuple(tile for tile in reversed(ladder) if tile % FRAME_MULTIPLE == 0 and tile < longest)
+
+
+def whole_frame_ms(ms_per_mpx: float, padded_shape: tuple[int, int]) -> float:
+    return ms_per_mpx * padded_shape[0] * padded_shape[1] / 1_000_000
+
+
+def tdr_calibration_spec(spec: RestoreModelSpec, precision: str) -> CalibrationSpec:
+    candidates = tuple(tile for tile in spec.tile_candidates if tile % FRAME_MULTIPLE == 0)
+    return CalibrationSpec(spec.tile_min, candidates, ceiling=spec.tile_by_precision.get(precision))
+
+
+def start_tile_index(ladder: tuple[int, ...], tile: int) -> int | None:
+    return next((index for index, size in enumerate(ladder) if size <= tile), None)
 
 
 def strength_feed(level: float) -> np.ndarray:
@@ -180,6 +211,7 @@ class FrameModelRunner:
         overlap: int,
         removal_guard: RemovalGuard,
         cancel_event: threading.Event | None = None,
+        start_tile: int | None = None,
     ) -> None:
         self._model_id = model_id
         self._device = device
@@ -190,7 +222,8 @@ class FrameModelRunner:
         self._overlap = overlap
         self._removal_guard = removal_guard
         self._cancel_event = cancel_event
-        self._tile_index: int | None = None
+        self._tile_index = None if start_tile is None else start_tile_index(tile_ladder, start_tile)
+        self._tile_reason = None if self._tile_index is None else TDR_BUDGET_REASON
 
     def __call__(self, frame_nhwc: np.ndarray) -> np.ndarray:
         self._raise_if_cancelled()
@@ -201,7 +234,9 @@ class FrameModelRunner:
 
     def report(self) -> FrameModelReport:
         tile = None if self._tile_index is None else self._tile_ladder[self._tile_index]
-        return FrameModelReport(self._model_id, self._device, self._precision, tile, self._inference.uses_iobinding)
+        return FrameModelReport(
+            self._model_id, self._device, self._precision, tile, self._inference.uses_iobinding, self._tile_reason
+        )
 
     def _checked(self, frame_nhwc: np.ndarray) -> np.ndarray:
         image = as_frame(frame_nhwc)
@@ -243,10 +278,49 @@ class FrameModelRunner:
             self._tile_ladder[next_index],
         )
         self._tile_index = next_index
+        self._tile_reason = OOM_REASON
 
     def _raise_if_cancelled(self) -> None:
         if self._cancel_event is not None and self._cancel_event.is_set():
             raise RestoreCancelled("Restoration cancelled")
+
+
+StartTileFor = Callable[[FrameInference, RestoreModelSpec, str, tuple[int, int], str, TdrBudget], int | None]
+
+
+def tdr_start_tile(
+    inference: FrameInference,
+    spec: RestoreModelSpec,
+    precision: str,
+    padded_shape: tuple[int, int],
+    device: str,
+    budget: TdrBudget,
+) -> int | None:
+    # Sin reloj del driver en CPU: solo una GPU se resetea (TDR) si una llamada tarda demasiado.
+    if not is_gpu_device(device):
+        return None
+    calibration = calibrate_tile(
+        _probe_infer(inference),
+        tdr_calibration_spec(spec, precision),
+        precision=precision,
+        budget_ms=budget.budget_ms,
+        clock=budget.clock,
+    )
+    if whole_frame_ms(calibration.ms_per_mpx, padded_shape) <= budget.budget_ms * TARGET_BUDGET_FRACTION:
+        return None
+    if calibration.tile is None:
+        raise TdrBudgetExceeded(
+            f"The video model is too slow on {device} to stay within the GPU driver timeout "
+            f"({budget.budget_ms:.0f} ms per call) even with {spec.tile_min} px tiles"
+        )
+    return calibration.tile
+
+
+def _probe_infer(inference: FrameInference) -> TileInfer:
+    def infer(tile: np.ndarray) -> np.ndarray:
+        return inference(np.ascontiguousarray(to_uint8(tile * U8_PEAK)[np.newaxis]))[0]
+
+    return infer
 
 
 def build_frame_model_runner(
@@ -259,6 +333,8 @@ def build_frame_model_runner(
     reference_device: str = CPU_DEVICE,
     ortvalue_factory: OrtValueFactory = dml_ortvalue,
     cancel_event: threading.Event | None = None,
+    tdr_budget: TdrBudget | None = None,
+    start_tile_for: StartTileFor = tdr_start_tile,
 ) -> FrameModelRunner:
     _require_level(level)
     image = as_frame(sample_frame)
@@ -275,16 +351,21 @@ def build_frame_model_runner(
     session = engine.session(model_id, device, precision)
     require_video_contract(session)
     padded_shape = pad_frame(image)[0].shape[:2]
+    inference = FrameInference(session, level, device, ortvalue_factory)
+    budget = tdr_budget or TdrBudget(float(engine.settings.restore_call_budget_ms))
+    with engine.removal_classified(device):
+        start_tile = start_tile_for(inference, spec, precision, padded_shape, device, budget)
     return FrameModelRunner(
         model_id=model_id,
         device=device,
         precision=precision,
         frame_shape=image.shape[:2],
-        inference=FrameInference(session, level, device, ortvalue_factory),
+        inference=inference,
         tile_ladder=oom_tile_ladder(spec, precision, padded_shape),
         overlap=spec.overlap,
         removal_guard=lambda: engine.removal_classified(device),
         cancel_event=cancel_event,
+        start_tile=start_tile,
     )
 
 

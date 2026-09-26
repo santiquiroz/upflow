@@ -220,6 +220,7 @@ def restore_json(report: ComposedStageReport) -> dict[str, Any] | None:
         "precision": restore.precision,
         "tile": restore.tile,
         "ioBinding": restore.io_binding,
+        "tileReason": restore.tile_reason,
     }
 
 

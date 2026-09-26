@@ -12,6 +12,8 @@ from app.services.devices_service import DevicesService
 from app.services.engines.drunet_restore import deblock_level
 from app.services.engines.frame_model_runner import (
     VIDEO_DEBLOCK_MODEL_ID,
+    TdrBudget,
+    TdrBudgetExceeded,
     build_frame_model_runner,
     canary_crop,
     level_for_strength,
@@ -202,10 +204,39 @@ def frame(height: int = 30, width: int = 44, seed: int = 7) -> np.ndarray:
     return rng.integers(0, 256, (1, height, width, 3), dtype=np.uint8)
 
 
+def whole_frame(*args) -> None:
+    return None
+
+
 def build(engine, device=CPU, sample=None, level=0.4, **kwargs):
+    # La calibracion TDR hace sus propias llamadas: se prueba aparte para no contar sus corridas aca.
+    kwargs.setdefault("start_tile_for", whole_frame)
     return build_frame_model_runner(
         engine, device, frame() if sample is None else sample, level, ortvalue_factory=FakeOrtValue, **kwargs
     )
+
+
+class PixelClock:
+    def __init__(self, ms_per_pixel: float) -> None:
+        self.ms_per_pixel = ms_per_pixel
+        self.now_ms = 0.0
+
+    def __call__(self) -> float:
+        return self.now_ms / 1000.0
+
+    def transform(self, batch: np.ndarray, level: float) -> np.ndarray:
+        self.now_ms += batch.shape[1] * batch.shape[2] * self.ms_per_pixel
+        return batch.copy()
+
+
+def build_with_tdr(tmp_path, ms_per_pixel: float, sample):
+    clock = PixelClock(ms_per_pixel)
+    factory = U8SessionFactory({FP32_FILE: clock.transform})
+    engine = make_engine(tmp_path, factory, video_spec())
+    runner = build_frame_model_runner(
+        engine, GPU, sample, 0.4, ortvalue_factory=FakeOrtValue, tdr_budget=TdrBudget(1200.0, clock)
+    )
+    return runner, factory.session_for(FP32_FILE, GPU)
 
 
 # ---------------------------------------------------------------- escala de la fuerza
@@ -664,3 +695,67 @@ def test_real_uint8_nhwc_graph_with_a_scalar_strength_on_the_cpu_ep(tmp_path) ->
 
     np.testing.assert_array_equal(output, source + 30)
     assert output.shape == (1, 30, 44, 3)
+
+
+# ---------------------------------------------------------------- presupuesto TDR (no verificado en GPU)
+
+
+def test_a_frame_whose_whole_call_would_pass_the_tdr_budget_starts_in_the_largest_verified_tile(tmp_path) -> None:
+    source = frame(30, 44)
+    runner, session = build_with_tdr(tmp_path, 0.5, source)
+    calibration_calls = len(session.shapes())
+
+    np.testing.assert_array_equal(runner(source), source)
+
+    frame_shapes = session.shapes()[calibration_calls:]
+    assert (1, 32, 48, 3) not in session.shapes()
+    assert set(frame_shapes) == {(1, 32, 32, 3)}
+    report = runner.report()
+    assert (report.tile, report.tile_reason) == (32, "tdrBudget")
+
+
+def test_a_fast_model_keeps_the_whole_frame_after_the_tdr_calibration(tmp_path) -> None:
+    source = frame(30, 44)
+    runner, session = build_with_tdr(tmp_path, 0.01, source)
+    calibration_calls = len(session.shapes())
+
+    runner(source)
+
+    assert session.shapes()[calibration_calls:] == [(1, 32, 48, 3)]
+    assert (runner.report().tile, runner.report().tile_reason) == (None, None)
+
+
+def test_a_model_too_slow_even_for_the_smallest_tile_refuses_to_start(tmp_path) -> None:
+    with pytest.raises(TdrBudgetExceeded, match="driver timeout"):
+        build_with_tdr(tmp_path, 10.0, frame(30, 44))
+
+
+def test_the_cpu_skips_the_tdr_calibration(tmp_path) -> None:
+    clock = PixelClock(10.0)
+    factory = U8SessionFactory({FP32_FILE: clock.transform})
+    engine = make_engine(tmp_path, factory, video_spec())
+
+    runner = build_frame_model_runner(engine, CPU, frame(), 0.4, tdr_budget=TdrBudget(1200.0, clock))
+
+    assert factory.session_for(FP32_FILE, CPU).shapes() == []
+    assert runner.report().tile is None
+
+
+def test_an_oom_after_the_start_reports_oom_as_the_tile_reason(tmp_path) -> None:
+    factory = U8SessionFactory({FP32_FILE: raising_above(32 * 32)})
+    runner = build(make_engine(tmp_path, factory, video_spec()), sample=frame(30, 44))
+
+    runner(frame(seed=8))
+
+    assert (runner.report().tile, runner.report().tile_reason) == (32, "oom")
+
+
+def test_a_device_removed_during_the_tdr_calibration_is_classified(tmp_path) -> None:
+    coordinator = RecordingCoordinator()
+    factory = U8SessionFactory({FP32_FILE: raising(DEVICE_REMOVED_TEXT)})
+    engine = make_engine(tmp_path, factory, video_spec(), coordinator=coordinator)
+
+    with pytest.raises(DeviceRemovedError):
+        build_frame_model_runner(engine, GPU, frame(), 0.4, ortvalue_factory=FakeOrtValue)
+
+    assert coordinator.invalidated == [GPU]
