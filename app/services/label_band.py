@@ -228,11 +228,13 @@ def movie_source(path: Path, label: str) -> str:
     return f"movie={escape_filter_path(path)}[{label}]"
 
 
-def label_band_graph(assets: LabelAssets, prefix: Sequence[str] = ()) -> str:
+def label_band_graph(assets: LabelAssets, prefix: Sequence[str] = (), head_graph: str | None = None) -> str:
+    # head_graph: un grafo que ya termina en [lb_image] (p. ej. el que protege el OSD del carril IA).
     m = assets.margin
+    head = head_graph or FILTER_SEPARATOR.join([*prefix, "null"]) + "[lb_image]"
     return ";".join(
         [
-            FILTER_SEPARATOR.join([*prefix, "null"]) + "[lb_image]",
+            head,
             movie_source(assets.mark, "lb_mark"),
             f"[lb_image][lb_mark]overlay=x={m}:y=main_h-overlay_h-{m}:eval=init,"
             f"pad=w=iw:h=ih+{assets.band_height}:x=0:y=0:color=black[lb_padded]",
@@ -242,8 +244,11 @@ def label_band_graph(assets: LabelAssets, prefix: Sequence[str] = ()) -> str:
     )
 
 
-def label_band_args(assets: LabelAssets, version: str, job_id: str, prefix: Sequence[str] = ()) -> list[str]:
-    return ["-vf", label_band_graph(assets, prefix), "-metadata", f"comment={metadata_comment(version, job_id)}"]
+def label_band_args(
+    assets: LabelAssets, version: str, job_id: str, prefix: Sequence[str] = (), head_graph: str | None = None
+) -> list[str]:
+    graph = label_band_graph(assets, prefix, head_graph)
+    return ["-vf", graph, "-metadata", f"comment={metadata_comment(version, job_id)}"]
 
 
 # --- XMP de los PNG exportados ---

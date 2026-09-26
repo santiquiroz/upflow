@@ -366,10 +366,10 @@ def _crop_text(box: Box) -> str:
     return f"crop=w={w}:h={h}:x={x}:y={y}:exact=1"
 
 
-def _overlay_text(box: Box) -> str:
+def _overlay_text(box: Box, overlay_format: str = "auto") -> str:
     # shortest=1 y repeatlast=0: si una rama pierde cuadros, el grafo termina
     # antes y el chequeo de conteo lo ve, en vez de rellenar con repetidos.
-    return f"overlay=x={box[0]}:y={box[1]}:format=auto:shortest=1:repeatlast=0"
+    return f"overlay=x={box[0]}:y={box[1]}:format={_checked_token(overlay_format)}:shortest=1:repeatlast=0"
 
 
 def _split(count: int, labels: Sequence[str]) -> str:
@@ -391,13 +391,13 @@ def _osd_branch_segments(branch: Sequence[ResolvedStep], boxes: Sequence[Box]) -
     return [fan_out, *crops]
 
 
-def _overlay_segments(boxes: Sequence[Box], output: str, pix_fmt: str | None) -> list[str]:
+def _overlay_segments(boxes: Sequence[Box], output: str, pix_fmt: str | None, overlay_format: str) -> list[str]:
     segments = []
     for index, box in enumerate(boxes):
         last = index == len(boxes) - 1
         target = output if last else f"p{index + 1}"
         suffix = _output_suffix(pix_fmt) if last else ""
-        segments.append(f"[p{index}][osd{index}]{_overlay_text(box)}{suffix}[{target}]")
+        segments.append(f"[p{index}][osd{index}]{_overlay_text(box, overlay_format)}{suffix}[{target}]")
     return segments
 
 
@@ -413,6 +413,7 @@ def build_osd_graph(
     input_label: str = "0:v",
     output_label: str = "v",
     pix_fmt: str | None = None,
+    overlay_format: str = "auto",
 ) -> str:
     source_label, output = _checked_label(input_label), _checked_label(output_label)
     ordered = tuple(step for step in in_catalog_order(steps) if step.id not in _UNBUILDABLE_STEPS)
@@ -426,6 +427,6 @@ def build_osd_graph(
         _head_segment(source_label, trim, ["m", "o"]),
         f"[m]{_chain_or_null(chain)}[p0]",
         *_osd_branch_segments(branch, placed),
-        *_overlay_segments(placed, output, pix_fmt),
+        *_overlay_segments(placed, output, pix_fmt, overlay_format),
     ]
     return ";".join(segments)

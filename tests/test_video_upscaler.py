@@ -1590,8 +1590,12 @@ async def test_cctv_enhance_streams_at_scale_1_with_a_classic_upscaler_and_write
     assert work_dir_seen == [True]
     assert not (upscaler.settings.video_work_path / job.id).exists()
     decode = decode_commands[0]
+    # Las cajas del OSD salen de una rama propia (solo geometria) y se ponen sobre el cuadro prefiltrado.
     assert decode[decode.index("-vf") + 1] == (
-        "trim=start_frame=25:end_frame=60,setpts=PTS-STARTPTS,crop=w=320:h=240:x=16:y=16:exact=1"
+        "trim=start_frame=25:end_frame=60,setpts=PTS-STARTPTS[t];[t]split=2[m][o];"
+        "[m]crop=w=320:h=240:x=16:y=16:exact=1[p0];"
+        "[o]crop=w=320:h=240:x=16:y=16:exact=1,crop=w=64:h=24:x=16:y=16:exact=1[osd0];"
+        "[p0][osd0]overlay=x=16:y=16:format=auto:shortest=1:repeatlast=0[out]"
     )
     assert decode[decode.index("-r") + 1] == "25/1"
     encode = RecordingRawPipeEncoder.commands[0]

@@ -10,9 +10,9 @@ import pytest
 
 from app.config import Settings
 from app.services.cctv_chain import ai_lane_plan, steps_from_request
-from app.services.cctv_enhance_plan import prefilter_args
+from app.services.cctv_enhance_plan import decode_args, prefilter_args
 from app.services.engines.ffmpeg_frame_source import FfmpegFrameSource
-from app.services.ffmpeg_filters import output_dims_after
+from app.services.ffmpeg_filters import FrameGeometry, output_dims_after
 from ffmpeg_support import needs_ffmpeg
 
 
@@ -177,3 +177,32 @@ def test_cctv_real_crop_decodes_whole_frames_at_the_cropped_size(tmp_path: Path)
 
     assert len(frames) == 50
     assert all(frame.shape == (1, 48, 64, 3) for frame in frames)
+
+
+def decode_with(clip: Path, args: tuple[str, ...]) -> list[np.ndarray]:
+    source = FfmpegFrameSource(
+        Settings().ffmpeg_binary_path, clip, 128, 96, decode_threads=1, fps="25/1", prefilter_args=args
+    )
+    return list(source.frames(threading.Event()))
+
+
+@needs_ffmpeg
+def test_cctv_real_osd_boxes_skip_the_temporal_denoise_and_the_deblock(tmp_path: Path) -> None:
+    raw = [
+        {"id": "denoise", "params": {"filter": "hqdn3d", "luma_spatial": 40, "luma_tmp": 60}},
+        {"id": "deblock", "params": {"filter": "deblock", "filter_type": "strong"}},
+        {"id": "osd_protect", "params": {}},
+        {"id": "ai_upscale", "params": {}},
+    ]
+    lane = ai_lane_plan(steps_from_request(raw, "ai"))
+    clip = make_cctv_clip(tmp_path)
+
+    protected = decode_with(clip, decode_args(lane, [(16, 8, 32, 16)], FrameGeometry(128, 96)))
+    untouched = decode_with(clip, ())
+    filtered = decode_with(clip, prefilter_args(lane.decode))
+
+    box = (0, slice(8, 24), slice(16, 48))
+    assert len(protected) == len(untouched) == 50
+    assert all(np.array_equal(p[box], u[box]) for p, u in zip(protected, untouched))
+    assert not all(np.array_equal(f[box], u[box]) for f, u in zip(filtered, untouched))
+    assert not np.array_equal(protected[10][0, 40:], untouched[10][0, 40:])

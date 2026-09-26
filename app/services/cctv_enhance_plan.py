@@ -18,7 +18,14 @@ from app.services.cctv_clarify_runner import atrim_filter, trim_step, trimmed_co
 from app.services.cctv_frame_index import FrameEntry, FrameIndexSummary
 from app.services.cctv_ingest import SourceRecord
 from app.services.engines.frame_restorer import ComposedStageReport
-from app.services.ffmpeg_filters import Box, FrameGeometry, build_filter, osd_boxes_after, output_dims_after
+from app.services.ffmpeg_filters import (
+    Box,
+    FrameGeometry,
+    build_filter,
+    build_osd_graph,
+    osd_boxes_after,
+    output_dims_after,
+)
 from app.services.media_tools import parse_fps_fraction
 
 if TYPE_CHECKING:
@@ -37,6 +44,13 @@ MAX_RATE_DENOMINATOR = 1001
 MIN_AI_UPSCALE = 2
 NO_RATE_MESSAGE = "The frame rate of this video could not be measured and its header does not declare one."
 UPSCALE_WITHOUT_SCALE_MESSAGE = "AI upscale needs a scale of 2 or more."
+# Etiquetas por defecto de la entrada y la salida de un -vf; "t" es el cuadro ya recortado y rebasado.
+VF_INPUT = "in"
+VF_OUTPUT = "out"
+TRIMMED = "t"
+LABEL_INPUT = "lb_image"
+# El encode recibe rgb24: con format=auto el overlay pasaria el OSD por yuv despues de levels (eq es solo yuv).
+RGB_OVERLAY = "rgb"
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,6 +64,7 @@ class EnhancePlan:
     osd_boxes: tuple[Box, ...]
     encode_filters: tuple[str, ...] = ()
     encoded: FrameGeometry | None = None
+    encode_graph: str | None = None
 
     @property
     def rate_text(self) -> str:
@@ -98,6 +113,25 @@ def prefilter_args(steps: Sequence[ResolvedStep]) -> tuple[str, ...]:
     return ("-vf", ",".join(filters)) if filters else ()
 
 
+def osd_protected_decode(steps: Sequence[ResolvedStep], boxes: Sequence[Box], geometry: FrameGeometry) -> str:
+    # Las cajas salen de una rama con solo geometria y desentrelazado: ni deblock ni denoise tocan el OSD.
+    trim = [text for step in in_catalog_order(steps) if step.id == "trim" for text in step_filters(step)]
+    rest = tuple(step for step in steps if step.id != "trim")
+    head = f"{','.join(trim)}[{TRIMMED}];" if trim else ""
+    source = TRIMMED if trim else VF_INPUT
+    return head + build_osd_graph(rest, boxes, geometry, input_label=source, output_label=VF_OUTPUT)
+
+
+def decode_args(lane: AiLanePlan, boxes: Sequence[Sequence[int]], geometry: FrameGeometry) -> tuple[str, ...]:
+    if not protects_osd(lane, boxes):
+        return prefilter_args(lane.decode)
+    return ("-vf", osd_protected_decode(lane.decode, [tuple(box) for box in boxes], geometry))
+
+
+def protects_osd(lane: AiLanePlan, boxes: Sequence[Sequence[int]]) -> bool:
+    return step_of(lane.composite, "osd_protect") is not None and bool(boxes)
+
+
 def fields_per_frame(steps: Sequence[ResolvedStep]) -> int:
     deinterlace = step_of(steps, "deinterlace")
     sends_fields = deinterlace is not None and deinterlace.params.get("mode") == FIELD_RATE_MODE
@@ -142,7 +176,7 @@ def upscale_factor(composite: Sequence[ResolvedStep], scale: int) -> int:
 
 
 def decoded_osd_boxes(lane: AiLanePlan, boxes: Sequence[Sequence[int]], geometry: FrameGeometry) -> tuple[Box, ...]:
-    if step_of(lane.composite, "osd_protect") is None or not boxes:
+    if not protects_osd(lane, boxes):
         return ()
     return osd_boxes_after(lane.decode, [tuple(box) for box in boxes], geometry)
 
@@ -160,6 +194,23 @@ def encode_filters(lane: AiLanePlan) -> tuple[str, ...]:
     return tuple(build_filter(step) for step in post_ai_steps(lane))
 
 
+def scaled_box(box: Box, factor: int) -> Box:
+    x, y, w, h = box
+    return x * factor, y * factor, w * factor, h * factor
+
+
+def encode_graph(lane: AiLanePlan, boxes: tuple[Box, ...], decoded: FrameGeometry, upscale: int) -> str | None:
+    # Levels y sharpen corren despues del pegado: el OSD se recorta antes y se vuelve a poner encima.
+    steps = post_ai_steps(lane)
+    if not boxes or not steps:
+        return None
+    frame = FrameGeometry(decoded.width * upscale, decoded.height * upscale, decoded.sar)
+    placed = [scaled_box(box, upscale) for box in boxes]
+    return build_osd_graph(
+        steps, placed, frame, input_label=VF_INPUT, output_label=LABEL_INPUT, overlay_format=RGB_OVERLAY
+    )
+
+
 def encoded_geometry(lane: AiLanePlan, decoded: FrameGeometry, upscale: int) -> FrameGeometry:
     return output_dims_after(post_ai_steps(lane), decoded.width * upscale, decoded.height * upscale, decoded.sar)
 
@@ -170,16 +221,18 @@ def build_enhance_plan(
     geometry = source.geometry
     decoded = output_dims_after(lane.decode, geometry.width, geometry.height, geometry.sar)
     upscale = upscale_factor(lane.composite, scale)
+    boxes = decoded_osd_boxes(lane, osd_boxes, geometry)
     return EnhancePlan(
-        prefilter_args=prefilter_args(lane.decode),
+        prefilter_args=decode_args(lane, osd_boxes, geometry),
         decoded=decoded,
         rate=source_rate(source.index, source.header_rate) * fields_per_frame(lane.decode),
         frames_in=decoded_frames(lane, source.index.frame_count),
         strength=deblock_strength(lane.composite),
         upscale=upscale,
-        osd_boxes=decoded_osd_boxes(lane, osd_boxes, geometry),
+        osd_boxes=boxes,
         encode_filters=encode_filters(lane),
         encoded=encoded_geometry(lane, decoded, upscale),
+        encode_graph=encode_graph(lane, boxes, decoded, upscale),
     )
 
 

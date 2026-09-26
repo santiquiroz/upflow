@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import subprocess
 from fractions import Fraction
 from pathlib import Path
 
+import numpy as np
 import pytest
 
+from app.config import Settings
 from app.services import cctv_enhance_plan as plan_module
 from app.services.cctv_chain import ai_lane_plan, steps_from_request
 from app.services.cctv_frame_index import FrameEntry, summarize_frame_index
@@ -12,6 +15,7 @@ from app.services.cctv_ingest import ReceivedAt, SourceRecord
 from app.services.engines.frame_model_runner import FrameModelReport
 from app.services.engines.frame_restorer import ComposedStageReport
 from app.services.ffmpeg_filters import FrameGeometry
+from ffmpeg_support import needs_ffmpeg
 
 GEOMETRY = FrameGeometry(704, 576)
 DEBLOCK = {"id": "ai_deblock", "params": {"filter": "drunet_deblock", "strength": 60}}
@@ -69,6 +73,65 @@ def test_cctv_osd_boxes_move_with_the_crop_into_decoded_coordinates() -> None:
     plan = build(CROP, DEBLOCK, OSD, boxes=((120, 60, 40, 20),))
 
     assert plan.osd_boxes == ((20, 10, 40, 20),)
+
+
+DENOISE = {"id": "denoise", "params": {"filter": "hqdn3d", "luma_spatial": 4}}
+CLASSIC_DEBLOCK = {"id": "deblock", "params": {"filter": "deblock"}}
+
+
+def osd_branch(graph: str) -> str:
+    return next(segment for segment in graph.split(";") if segment.startswith("[o]"))
+
+
+def test_cctv_osd_boxes_are_decoded_from_a_branch_without_deblock_or_denoise() -> None:
+    plan = build(TRIM, CROP, DENOISE, CLASSIC_DEBLOCK, OSD, UPSCALE, boxes=((120, 60, 40, 20),), scale=2)
+
+    graph = plan.prefilter_args[1]
+
+    assert graph.startswith("trim=start_frame=10:end_frame=20,setpts=PTS-STARTPTS[t];[t]split=2[m][o];")
+    assert "hqdn3d" not in osd_branch(graph) and "deblock" not in osd_branch(graph)
+    assert "hqdn3d" in graph and "deblock=" in graph
+    assert osd_branch(graph) == "[o]crop=w=320:h=240:x=100:y=50:exact=1,crop=w=40:h=20:x=20:y=10:exact=1[osd0]"
+    assert graph.endswith("overlay=x=20:y=10:format=auto:shortest=1:repeatlast=0[out]")
+
+
+def test_cctv_without_boxes_the_decode_stays_a_plain_chain() -> None:
+    plan = build(CROP, DENOISE, OSD, UPSCALE, scale=2)
+
+    assert ";" not in plan.prefilter_args[1]
+
+
+def test_cctv_post_ai_levels_and_sharpen_do_not_touch_the_pasted_osd() -> None:
+    plan = build(OSD, UPSCALE, LEVELS, SHARPEN, boxes=((120, 60, 40, 20),), scale=2)
+
+    graph = plan.encode_graph
+
+    assert graph is not None and graph.startswith("[in]split=2[m][o];")
+    assert osd_branch(graph) == "[o]crop=w=80:h=40:x=240:y=120:exact=1[osd0]"
+    assert graph.endswith("overlay=x=240:y=120:format=rgb:shortest=1:repeatlast=0[lb_image]")
+
+
+@needs_ffmpeg
+def test_cctv_real_encode_graph_keeps_the_osd_pixels_while_levels_change_the_rest() -> None:
+    plan = build(OSD, UPSCALE, LEVELS, SHARPEN, boxes=((120, 60, 40, 20),), scale=2)
+    width, height = plan.output_size
+    frame = np.random.default_rng(1).integers(0, 256, (height, width, 3), dtype=np.uint8)
+    command = [
+        str(Settings().ffmpeg_binary_path), "-v", "error", "-f", "rawvideo", "-pix_fmt", "rgb24",
+        "-s", f"{width}x{height}", "-i", "pipe:0", "-vf", f"{plan.encode_graph};[lb_image]null",
+        "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1",
+    ]  # fmt: skip
+
+    done = subprocess.run(command, input=frame.tobytes(), capture_output=True, check=True)
+
+    result = np.frombuffer(done.stdout, np.uint8).reshape(height, width, 3)
+    box = (slice(120, 160), slice(240, 320))
+    np.testing.assert_array_equal(result[box], frame[box])
+    assert not np.array_equal(result[:100], frame[:100])
+
+
+def test_cctv_without_post_ai_steps_there_is_no_encode_graph() -> None:
+    assert build(OSD, UPSCALE, boxes=((120, 60, 40, 20),), scale=2).encode_graph is None
 
 
 def test_cctv_boxes_without_osd_protect_are_not_pasted() -> None:

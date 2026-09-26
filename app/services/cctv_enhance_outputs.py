@@ -105,7 +105,7 @@ def write_enhance_label(directory: Path, plan: EnhancePlan, version: str, job_id
     directory.mkdir(parents=True, exist_ok=True)
     width, height = plan.encoded_size
     assets = write_label_assets(directory, width, height, version, job_id)
-    args = label_band_args(assets, version, job_id, prefix=plan.encode_filters)
+    args = label_band_args(assets, version, job_id, prefix=plan.encode_filters, head_graph=plan.encode_graph)
     return EnhanceLabel(assets, tuple(args), band_text(version, job_id))
 
 
