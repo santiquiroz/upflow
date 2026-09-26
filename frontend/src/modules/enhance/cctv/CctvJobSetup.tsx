@@ -12,10 +12,12 @@ import type {
   CctvTask,
 } from "../../../services/cctv";
 import { AiLaneConfirmDialog } from "./AiLaneConfirmDialog";
+import { CctvFrameTools } from "./CctvFrameTools";
 import { CctvLaneSelector } from "./CctvLaneSelector";
 import { CctvPresetPicker } from "./CctvPresetPicker";
 import { CctvStepCard } from "./CctvStepCard";
 import { buildCctvJobRequest, initialChoices, withLane, withPreset, type CctvChoices } from "./cctvChoices";
+import { isTrimValid } from "./cctvFrames";
 import { aiLaneState, isTaskReady, LANE_TASKS, startBlocker } from "./cctvLanes";
 import { incompleteStepIds, visibleSteps, withStepEnabled, withStepFilter, withStepParam } from "./cctvSteps";
 
@@ -86,25 +88,6 @@ function StepList({
   );
 }
 
-// Las cajas del OSD se dibujan sobre el cuadro (BoxEditor, P2-17); aca solo la decision "sin texto".
-function OsdDecision({ noOsd, onChange }: { noOsd: boolean; onChange: (noOsd: boolean) => void }) {
-  const { t } = useTranslation();
-  return (
-    <div className="flex flex-col gap-1.5">
-      <p className="text-xs text-text-dim">{t("cctv.osd.confirm")}</p>
-      <label className="flex items-center gap-2 text-sm text-text">
-        <input
-          type="checkbox"
-          checked={noOsd}
-          onChange={(event) => onChange(event.target.checked)}
-          className="h-3.5 w-3.5 accent-accent"
-        />
-        {t("cctv.osd.none")}
-      </label>
-    </div>
-  );
-}
-
 function AiBanner() {
   const { t } = useTranslation();
   return (
@@ -131,6 +114,7 @@ export function CctvJobSetup({ analysis, presets, capabilities, busy, onSubmit }
     osdBoxesConfirmed: choices.osdBoxesConfirmed,
     osdBoxCount: choices.osdBoxes.length,
     incompleteStepIds: incompleteStepIds(choices.steps, catalog),
+    trimValid: isTrimValid(choices.trim, analysis.frameIndex?.frameCount ?? 0),
   });
 
   function submit(): void {
@@ -158,7 +142,7 @@ export function CctvJobSetup({ analysis, presets, capabilities, busy, onSubmit }
         onChange={(presetId) => setChoices(withPreset(choices, presetId, analysis, presets))}
       />
       <StepList steps={visibleSteps(catalog, choices.lane)} choices={choices} onChange={(steps) => setChoices({ ...choices, steps })} />
-      <OsdDecision noOsd={choices.noOsd} onChange={(noOsd) => setChoices({ ...choices, noOsd })} />
+      <CctvFrameTools analysis={analysis} choices={choices} catalog={catalog} onChange={setChoices} />
       <div className="flex flex-col gap-2">
         {blocker && (
           <p role="status" className="text-xs text-warn">

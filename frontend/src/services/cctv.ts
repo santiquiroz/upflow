@@ -1,4 +1,6 @@
 import { apiGet, apiPostForm, apiPostJson } from "../lib/api";
+
+const API_BASE = "/api/v1";
 import type { VideoJobResponse } from "../lib/apiTypes";
 import type { UploadOptions } from "../lib/uploadRequest";
 
@@ -199,6 +201,21 @@ export interface CctvJobRequest {
   osdBoxes: CctvBox[];
   osdBoxesConfirmed: boolean;
   noOsd: boolean;
+  trim: [number, number] | null;
+}
+
+export interface CctvOsdBoxCheck {
+  box: number[];
+  frames: number;
+  contrast: number;
+  staticFraction: number | null;
+  looksLikeText: boolean;
+  warningKey: string | null;
+}
+
+export interface CctvOsdCheckResponse {
+  checks: CctvOsdBoxCheck[];
+  warnings: string[];
 }
 
 export function toAnalyzeReply(body: CctvAnalysis | CctvAnalysisJob): CctvAnalyzeReply {
@@ -226,4 +243,25 @@ export function getCctvPresets(): Promise<CctvPresetsResponse> {
 
 export function createCctvJob(request: CctvJobRequest): Promise<VideoJobResponse> {
   return apiPostJson<VideoJobResponse>("/video/cctv/jobs", request);
+}
+
+function previewPath(token: string): string {
+  return `${API_BASE}/video/cctv/${encodeURIComponent(token)}/preview`;
+}
+
+// El navegador no reproduce PS ni H.265: cada cuadro lo decodifica el backend como PNG.
+export function cctvFrameUrl(token: string, frame: number): string {
+  return `${previewPath(token)}?frame=${frame}`;
+}
+
+export function cctvFilterPreviewUrl(token: string, frame: number, steps: readonly CctvStepRequest[]): string {
+  const query = new URLSearchParams({ frame: String(frame), steps: JSON.stringify(steps) });
+  return `${previewPath(token)}?${query.toString()}`;
+}
+
+export function checkCctvOsd(token: string, boxes: readonly CctvBox[], frame: number): Promise<CctvOsdCheckResponse> {
+  return apiPostJson<CctvOsdCheckResponse>(`/video/cctv/${encodeURIComponent(token)}/osd-check`, {
+    boxes: boxes.map((box) => [...box]),
+    frame,
+  });
 }

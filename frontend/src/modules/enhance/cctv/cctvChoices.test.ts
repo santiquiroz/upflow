@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { buildCctvJobRequest, initialChoices, withLane, withPreset } from "./cctvChoices";
+import {
+  buildCctvJobRequest,
+  initialChoices,
+  withLane,
+  withNoOsd,
+  withOsdBoxes,
+  withOsdConfirmed,
+  withPreset,
+  withTrim,
+} from "./cctvChoices";
 import { ANALYSIS, PRESETS_RESPONSE } from "./cctvFixtures";
 
 describe("initialChoices", () => {
@@ -23,6 +32,41 @@ describe("initialChoices", () => {
 
     expect(choices.noOsd).toBe(false);
     expect(choices.osdBoxesConfirmed).toBe(false);
+  });
+
+  it("suggests the Hikvision on-screen text boxes on the stored frame, still unconfirmed", () => {
+    const choices = initialChoices(ANALYSIS, PRESETS_RESPONSE);
+
+    expect(choices.osdBoxes).toEqual([
+      [19, 22, 384, 64],
+      [701, 994, 240, 64],
+    ]);
+    expect(choices.trim).toBeNull();
+  });
+});
+
+describe("on-screen text decision", () => {
+  it("confirms the boxes and drops the confirmation when a box changes", () => {
+    const confirmed = withOsdConfirmed(initialChoices(ANALYSIS, PRESETS_RESPONSE));
+
+    expect(confirmed.osdBoxesConfirmed).toBe(true);
+    expect(withOsdBoxes(confirmed, [[0, 0, 20, 20]]).osdBoxesConfirmed).toBe(false);
+  });
+
+  it("can't confirm an empty list of boxes", () => {
+    const empty = withOsdBoxes(initialChoices(ANALYSIS, PRESETS_RESPONSE), []);
+
+    expect(withOsdConfirmed(empty).osdBoxesConfirmed).toBe(false);
+  });
+
+  it("clears the confirmation when switching to no on-screen text", () => {
+    const confirmed = withOsdConfirmed(initialChoices(ANALYSIS, PRESETS_RESPONSE));
+
+    const none = withNoOsd(confirmed, true);
+
+    expect(none.noOsd).toBe(true);
+    expect(none.osdBoxesConfirmed).toBe(false);
+    expect(withOsdConfirmed(none).noOsd).toBe(false);
   });
 });
 
@@ -60,7 +104,14 @@ describe("buildCctvJobRequest", () => {
       osdBoxes: [],
       osdBoxesConfirmed: false,
       noOsd: true,
+      trim: null,
     });
+  });
+
+  it("sends the trim as first and last frame", () => {
+    const choices = withTrim({ ...initialChoices(ANALYSIS, PRESETS_RESPONSE), noOsd: true }, [25, 99]);
+
+    expect(buildCctvJobRequest("tok-1", choices, PRESETS_RESPONSE).trim).toEqual([25, 99]);
   });
 
   it("sends confirmed boxes only when there is on-screen text", () => {

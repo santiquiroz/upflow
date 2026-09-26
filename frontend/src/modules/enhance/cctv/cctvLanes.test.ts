@@ -31,6 +31,7 @@ const READY: StartInputs = {
   osdBoxesConfirmed: false,
   osdBoxCount: 0,
   incompleteStepIds: [],
+  trimValid: true,
 };
 
 describe("tasks", () => {
@@ -104,5 +105,6 @@ describe("startBlocker", () => {
     expect(startBlocker({ ...READY, lane: "ai", task: "enhance" })).toEqual({ key: "cctv.blocked.aiUnavailable" });
     expect(startBlocker({ ...READY, task: "roi_fusion" })).toEqual({ key: "cctv.task.unavailable" });
     expect(startBlocker({ ...READY, incompleteStepIds: ["crop"] })).toEqual({ key: "cctv.blocked.incompleteSteps" });
+    expect(startBlocker({ ...READY, trimValid: false })).toEqual({ key: "cctv.trim.invalid" });
   });
 });

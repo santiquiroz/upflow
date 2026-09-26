@@ -3,6 +3,9 @@ import { capturedUploads, mockUploadOnce } from "../lib/uploadTestStub";
 import { ANALYSIS } from "../modules/enhance/cctv/cctvFixtures";
 import {
   analyzeCctv,
+  cctvFilterPreviewUrl,
+  cctvFrameUrl,
+  checkCctvOsd,
   createCctvJob,
   getCctvAnalysis,
   getCctvPresets,
@@ -102,6 +105,7 @@ describe("createCctvJob", () => {
       osdBoxes: [],
       osdBoxesConfirmed: false,
       noOsd: true,
+      trim: [10, 20],
     };
 
     await createCctvJob(request);
@@ -109,5 +113,31 @@ describe("createCctvJob", () => {
     const [url, init] = vi.mocked(fetch).mock.calls[0];
     expect(url).toBe("/api/v1/video/cctv/jobs");
     expect(JSON.parse(String((init as RequestInit).body))).toEqual(request);
+  });
+});
+
+describe("frame previews", () => {
+  it("asks for one decoded frame of the session", () => {
+    expect(cctvFrameUrl("tok/1", 42)).toBe("/api/v1/video/cctv/tok%2F1/preview?frame=42");
+  });
+
+  it("sends the preview steps as a JSON array", () => {
+    const url = new URL(cctvFilterPreviewUrl("tok-1", 7, [{ id: "gray", params: { filter: "gray" } }]), "http://localhost");
+
+    expect(url.pathname).toBe("/api/v1/video/cctv/tok-1/preview");
+    expect(url.searchParams.get("frame")).toBe("7");
+    expect(JSON.parse(url.searchParams.get("steps") ?? "")).toEqual([{ id: "gray", params: { filter: "gray" } }]);
+  });
+});
+
+describe("checkCctvOsd", () => {
+  it("posts the boxes and the frame the user looked at", async () => {
+    mockFetchOnce({ checks: [], warnings: [] });
+
+    await checkCctvOsd("tok-1", [[0, 0, 10, 10]], 12);
+
+    const [url, init] = vi.mocked(fetch).mock.calls[0];
+    expect(url).toBe("/api/v1/video/cctv/tok-1/osd-check");
+    expect(JSON.parse(String((init as RequestInit).body))).toEqual({ boxes: [[0, 0, 10, 10]], frame: 12 });
   });
 });

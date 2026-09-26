@@ -7,6 +7,8 @@ import type {
   CctvPresetsResponse,
   CctvTask,
 } from "../../../services/cctv";
+import { suggestedOsdBoxes } from "./cctvBoxes";
+import { storedSizeOf, type TrimRange } from "./cctvFrames";
 import { defaultTask } from "./cctvLanes";
 import { choicesFromPreset, presetContextOf, stepRequests, type StepChoices } from "./cctvSteps";
 
@@ -18,6 +20,7 @@ export interface CctvChoices {
   noOsd: boolean;
   osdBoxes: readonly CctvBox[];
   osdBoxesConfirmed: boolean;
+  trim: TrimRange | null;
 }
 
 function findPreset(presets: CctvPresetsResponse, presetId: string | null): CctvPreset | null {
@@ -46,8 +49,9 @@ export function initialChoices(analysis: CctvAnalysis, presets: CctvPresetsRespo
     presetId,
     steps: presetSteps(presetId, "classic", analysis, presets),
     noOsd: false,
-    osdBoxes: [],
+    osdBoxes: suggestedOsdBoxes(storedSizeOf(analysis)),
     osdBoxesConfirmed: false,
+    trim: null,
   };
 }
 
@@ -69,6 +73,23 @@ export function withPreset(
   return { ...choices, presetId, steps: presetSteps(presetId, choices.lane, analysis, presets) };
 }
 
+// Mover o dibujar una caja invalida la confirmacion: hay que volver a mirarla sobre un cuadro con la hora.
+export function withOsdBoxes(choices: CctvChoices, osdBoxes: readonly CctvBox[]): CctvChoices {
+  return { ...choices, osdBoxes, osdBoxesConfirmed: false };
+}
+
+export function withOsdConfirmed(choices: CctvChoices): CctvChoices {
+  return { ...choices, noOsd: false, osdBoxesConfirmed: choices.osdBoxes.length > 0 };
+}
+
+export function withNoOsd(choices: CctvChoices, noOsd: boolean): CctvChoices {
+  return { ...choices, noOsd, osdBoxesConfirmed: false };
+}
+
+export function withTrim(choices: CctvChoices, trim: TrimRange | null): CctvChoices {
+  return { ...choices, trim };
+}
+
 export function buildCctvJobRequest(
   token: string,
   choices: CctvChoices,
@@ -82,5 +103,6 @@ export function buildCctvJobRequest(
     osdBoxes: choices.noOsd ? [] : [...choices.osdBoxes],
     osdBoxesConfirmed: !choices.noOsd && choices.osdBoxesConfirmed,
     noOsd: choices.noOsd,
+    trim: choices.trim ? [choices.trim[0], choices.trim[1]] : null,
   };
 }

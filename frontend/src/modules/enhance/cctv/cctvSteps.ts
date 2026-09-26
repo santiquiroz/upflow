@@ -170,3 +170,16 @@ export function stepWarningKey(stepId: string, choice: StepChoice): string | nul
   }
   return null;
 }
+
+function isClassicStep(step: CctvStepSchema): boolean {
+  return step.category === "classic";
+}
+
+// La vista previa corre en CPU con el carril clasico: los pasos IA solo existen en el job.
+export function previewStepRequests(choices: StepChoices, catalog: readonly CctvStepSchema[]): CctvStepRequest[] {
+  return stepRequests(choices, catalog.filter(isClassicStep));
+}
+
+export function hasChosenAiSteps(choices: StepChoices, catalog: readonly CctvStepSchema[]): boolean {
+  return catalog.some((step) => !isClassicStep(step) && choices[step.id] !== undefined);
+}

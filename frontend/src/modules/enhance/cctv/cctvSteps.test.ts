@@ -3,10 +3,12 @@ import { AI_STEPS, ANALYSIS, CLASSIC_STEPS, DAY_PRESET, NIGHT_PRESET } from "./c
 import {
   choicesFromPreset,
   defaultChoice,
+  hasChosenAiSteps,
   incompleteStepIds,
   missingParams,
   paramValue,
   presetContextOf,
+  previewStepRequests,
   stepRequests,
   stepWarningKey,
   visibleSteps,
@@ -165,6 +167,22 @@ describe("stepRequests", () => {
     const choices: StepChoices = { ai_deblock: { filter: "drunet_deblock", params: {} } };
 
     expect(stepRequests(choices, CLASSIC_STEPS)).toEqual([]);
+  });
+});
+
+describe("filter preview steps", () => {
+  const AI_CHOICES: StepChoices = {
+    ai_deblock: { filter: "drunet_deblock", params: { strength: 40 } },
+    gray: { filter: "gray", params: {} },
+  };
+
+  it("previews only the classic steps of the AI lane", () => {
+    expect(previewStepRequests(AI_CHOICES, AI_STEPS)).toEqual([{ id: "gray", params: { filter: "gray" } }]);
+  });
+
+  it("says when AI steps are left out of the preview", () => {
+    expect(hasChosenAiSteps(AI_CHOICES, AI_STEPS)).toBe(true);
+    expect(hasChosenAiSteps({ gray: AI_CHOICES.gray }, AI_STEPS)).toBe(false);
   });
 });
 

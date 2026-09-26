@@ -150,6 +150,7 @@ describe("CctvModeSection", () => {
       osdBoxes: [],
       osdBoxesConfirmed: false,
       noOsd: true,
+      trim: null,
     });
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
