@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as api from "../lib/api";
 import type { ModelResponse, ModelsResponse } from "../lib/apiTypes";
 import { ModelPicker } from "./ModelPicker";
+import { IMAGE_PIPELINE_PURPOSES } from "./modelPurposes";
 
 vi.mock("../lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/api")>();
@@ -241,8 +242,8 @@ describe("ModelPicker generative tag", () => {
 
 // ---------------------------------------------------------------------------
 // Filtro por proposito (MNT-03): el registro guarda el proposito que declara
-// Spandrel. Un denoiser 1x convertido no reescala nada, asi que el selector de
-// reescalado no lo ofrece; lo nombra aparte para que no parezca perdido.
+// Spandrel. Un denoiser 1x convertido no reescala nada: Generate no lo ofrece y lo
+// nombra aparte; imagen y video si, porque lo corren y reescalan el resto.
 // ---------------------------------------------------------------------------
 
 const RESTORATION_MODEL: ModelResponse = {
@@ -254,13 +255,13 @@ const RESTORATION_MODEL: ModelResponse = {
   purpose: "Restoration",
 };
 
-function renderPickerForPurpose(models: ModelResponse[], purpose: string) {
+function renderPickerForPurposes(models: ModelResponse[], purposes: readonly string[]) {
   vi.mocked(api.getModels).mockResolvedValue({ models } satisfies ModelsResponse);
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   function Wrapper({ children }: { children: ReactNode }) {
     return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
   }
-  return render(<ModelPicker value={null} onChange={vi.fn()} purpose={purpose} />, { wrapper: Wrapper });
+  return render(<ModelPicker value={null} onChange={vi.fn()} purposes={purposes} />, { wrapper: Wrapper });
 }
 
 describe("ModelPicker purpose filter", () => {
@@ -292,10 +293,19 @@ describe("ModelPicker purpose filter", () => {
     expect(screen.queryByText(/Not shown here/)).toBeNull();
   });
 
-  it("offers the models of the purpose it is asked for", async () => {
-    renderPickerForPurpose([{ ...ONNX_MODEL, purpose: "SR" }, RESTORATION_MODEL], "Restoration");
+  it("offers the models of the purposes it is asked for", async () => {
+    renderPickerForPurposes([{ ...ONNX_MODEL, purpose: "SR" }, RESTORATION_MODEL], ["Restoration"]);
 
     expect(await screen.findByRole("radio", { name: /org\/scunet/ })).toBeInTheDocument();
     expect(screen.queryByRole("radio", { name: /Custom Anime 2x/ })).toBeNull();
+  });
+
+  it("offers 1x cleanup models where the image pipeline runs them, tagged as not upscaling", async () => {
+    renderPickerForPurposes([{ ...ONNX_MODEL, purpose: "SR" }, RESTORATION_MODEL], IMAGE_PIPELINE_PURPOSES);
+
+    expect(await screen.findByRole("radio", { name: /org\/scunet/ })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /Custom Anime 2x/ })).toBeInTheDocument();
+    expect(screen.getByText("Cleans up at 1x; any larger scale is a plain resize")).toBeInTheDocument();
+    expect(screen.queryByText(/Not shown here/)).toBeNull();
   });
 });

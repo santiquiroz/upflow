@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "../i18n/LocaleProvider";
 import { getModels } from "../lib/api";
 import type { ModelResponse } from "../lib/apiTypes";
+import { RESTORATION, UPSCALE_ONLY } from "./modelPurposes";
 
 interface ModelPickerProps {
   value: string | null;
@@ -10,11 +11,10 @@ interface ModelPickerProps {
   // existe para video. Default false (fail-closed): ofrecerlo donde el pipeline no lo
   // sabe ejecutar seria una opcion que falla al enviar.
   allowNoAi?: boolean;
-  // El proposito de Spandrel que sirve aca. Default "SR": los tres usos de hoy reescalan.
-  purpose?: string;
+  // Los propositos de Spandrel que sirven aca. Default solo "SR" (fail-closed).
+  purposes?: readonly string[];
 }
 
-const SUPER_RESOLUTION = "SR";
 
 interface ModelGroup {
   label: string;
@@ -45,12 +45,12 @@ function groupModels(
 
 // Sin proposito (un .onnx publicado, un backend anterior) se ofrece igual: asi se
 // comportaba el selector antes de que el registro lo supiera.
-function servesPurpose(model: ModelResponse, purpose: string): boolean {
-  return model.purpose == null || model.purpose === purpose;
+function servesPurpose(model: ModelResponse, purposes: readonly string[]): boolean {
+  return model.purpose == null || purposes.includes(model.purpose);
 }
 
-function modelsOffPurpose(models: ModelResponse[], purpose: string): ModelResponse[] {
-  return models.filter((model) => !servesPurpose(model, purpose));
+function modelsOffPurpose(models: ModelResponse[], purposes: readonly string[]): ModelResponse[] {
+  return models.filter((model) => !servesPurpose(model, purposes));
 }
 
 function HiddenModelsNote({ models }: { models: ModelResponse[] }) {
@@ -84,6 +84,14 @@ function GenerativeTag({ model }: { model: ModelResponse }) {
     return <span className="pl-[22px] text-xs text-warn">{t("model.tag.generative")}</span>;
   }
   return <span className="pl-[22px] text-xs text-text-faint">{t("model.tag.nonGenerative")}</span>;
+}
+
+function RestorationTag({ model }: { model: ModelResponse }) {
+  const { t } = useTranslation();
+  if (model.purpose !== RESTORATION) {
+    return null;
+  }
+  return <span className="pl-[22px] text-xs text-text-dim">{t("model.tag.restoration")}</span>;
 }
 
 function isModelSelectable(model: ModelResponse): boolean {
@@ -129,6 +137,7 @@ function ModelOption({
       </span>
       <span className="font-mono-tabular pl-[22px] text-xs text-text-dim">{formatModelMeta(model)}</span>
       <GenerativeTag model={model} />
+      <RestorationTag model={model} />
       {isDisabled && (
         <span className="pl-[22px] text-xs text-warn">
           {model.status === "converting" ? t("models.status.converting") : (model.error ?? t("enhance.model.notReady"))}
@@ -142,7 +151,7 @@ export function ModelPicker({
   value,
   onChange,
   allowNoAi = false,
-  purpose = SUPER_RESOLUTION,
+  purposes = UPSCALE_ONLY,
 }: ModelPickerProps) {
   const { t } = useTranslation();
   const modelsQuery = useQuery({ queryKey: ["models"], queryFn: getModels });
@@ -156,7 +165,7 @@ export function ModelPicker({
   }
 
   const models = modelsQuery.data?.models ?? [];
-  const offered = models.filter((model) => servesPurpose(model, purpose));
+  const offered = models.filter((model) => servesPurpose(model, purposes));
   const groups = groupModels(offered, allowNoAi, t("enhance.model.noAi"));
 
   return (
@@ -170,7 +179,7 @@ export function ModelPicker({
           ))}
         </div>
       ))}
-      <HiddenModelsNote models={modelsOffPurpose(models, purpose)} />
+      <HiddenModelsNote models={modelsOffPurpose(models, purposes)} />
     </fieldset>
   );
 }

@@ -7,6 +7,7 @@ import { DevicePicker } from "../../components/DevicePicker";
 import { FileDropzone } from "../../components/FileDropzone";
 import { JobCard } from "../../components/JobCard";
 import { ModelPicker } from "../../components/ModelPicker";
+import { IMAGE_PIPELINE_PURPOSES } from "../../components/modelPurposes";
 import { useImageJob, type ImageJobPhase } from "../../hooks/useImageJob";
 import { getDevices, getEngineInfo } from "../../lib/api";
 import type { DeviceInfoResponse, DevicesResponse, ModelResponse } from "../../lib/apiTypes";
@@ -192,7 +193,7 @@ export function ImagePanel() {
           </p>
         )}
         <AccordionSection title={t("enhance.summary.model")} summary={formatModelSummary(model, t)} tooltip={t(MODEL_TOOLTIP)} defaultOpen>
-          <ModelPicker value={model?.id ?? null} onChange={setModel} />
+          <ModelPicker value={model?.id ?? null} onChange={setModel} purposes={IMAGE_PIPELINE_PURPOSES} />
         </AccordionSection>
         <AccordionSection title={t("enhance.summary.device")} summary={formatDeviceSummary(device, t)} tooltip={t(DEVICE_TOOLTIP)}>
           <DevicePicker value={device?.id ?? null} onChange={setDevice} requiresGpu={requiresGpu} />

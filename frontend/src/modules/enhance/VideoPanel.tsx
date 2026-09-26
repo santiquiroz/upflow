@@ -7,6 +7,7 @@ import { FileDropzone } from "../../components/FileDropzone";
 import { FormatOptionFieldset, type FormatOption } from "../../components/FormatOptionFieldset";
 import { JobCard } from "../../components/JobCard";
 import { ModelPicker } from "../../components/ModelPicker";
+import { IMAGE_PIPELINE_PURPOSES } from "../../components/modelPurposes";
 import { RuntimePicker, formatRuntimeSummary } from "../../components/RuntimePicker";
 import { EncoderPicker, formatEncoderSummary } from "../../components/EncoderPicker";
 import { SlowPresetCostHint } from "../../components/SlowPresetCostHint";
@@ -614,7 +615,7 @@ export function VideoPanel() {
           onAdd={handleAddVideoStep}
         />
         <AccordionSection title={t("enhance.summary.model")} summary={formatModelSummary(model, t)} tooltip={t(MODEL_TOOLTIP)}>
-          <ModelPicker value={model?.id ?? null} onChange={setModel} allowNoAi />
+          <ModelPicker value={model?.id ?? null} onChange={setModel} allowNoAi purposes={IMAGE_PIPELINE_PURPOSES} />
         </AccordionSection>
         <AccordionSection title={t("enhance.summary.device")} summary={formatDeviceSummary(device, t)} tooltip={t(DEVICE_TOOLTIP)}>
           <DevicePicker value={device?.id ?? null} onChange={setDevice} requiresGpu={requiresGpu} />

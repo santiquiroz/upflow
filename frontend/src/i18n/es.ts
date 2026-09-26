@@ -267,6 +267,7 @@ export const es = {
   "enhance.model.loading": "Cargando los modelos…",
   "enhance.model.loadError": "No se pudieron cargar los modelos.",
   "enhance.model.hiddenByPurpose": "No se muestran aquí porque no agrandan: {{names}}",
+  "model.tag.restoration": "Limpia a 1x; una escala mayor es un reescalado común",
   "enhance.encoder.autoGpuHint": "Usa el codificador de la GPU — mucho más rápido en 4K (NVENC/AMF/QSV)",
   "enhance.runtime.onnxHint": "DirectML más los aceleradores nativos (TensorRT-RTX, OpenVINO), activados automáticamente",
   "enhance.encoder.softwareHint": "Compatible siempre — la mejor calidad por bit",
