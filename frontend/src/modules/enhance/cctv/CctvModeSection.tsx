@@ -4,13 +4,14 @@ import { JobCard } from "../../../components/JobCard";
 import { useVideoCapabilities, type VideoJobPhase } from "../../../hooks/useVideoJob";
 import { useTranslation } from "../../../i18n/LocaleProvider";
 import { getEngineInfo } from "../../../lib/api";
-import type { VideoCapabilities } from "../../../lib/apiTypes";
+import type { VideoCapabilities, VideoJobResponse } from "../../../lib/apiTypes";
 import { getCctvPresets } from "../../../services/cctv";
 import { exceedsUploadLimit, formatMegabytes } from "../uploadLimit";
 import { CctvDiagnosisCard } from "./CctvDiagnosisCard";
 import { CctvDropzone } from "./CctvDropzone";
 import { CctvJobSetup } from "./CctvJobSetup";
 import { CctvModeToggle } from "./CctvModeToggle";
+import { CctvResult } from "./CctvResult";
 import { errorInfoOf, errorText } from "./cctvText";
 import { useCctvJob } from "./useCctvJob";
 import { useCctvSession, type CctvSession } from "./useCctvSession";
@@ -45,6 +46,13 @@ function ModeUnavailable({ capabilities }: { capabilities: VideoCapabilities | u
     return null;
   }
   return <p role="status" className="text-xs text-warn">{t(capabilities.cctvReasonKey)}</p>;
+}
+
+function CompletedResult({ job, retentionHours }: { job: VideoJobResponse | undefined; retentionHours: number | null }) {
+  if (job?.status !== "completed" || !job.cctv) {
+    return null;
+  }
+  return <CctvResult key={job.jobId} jobId={job.jobId} summary={job.cctv} retentionHours={retentionHours} />;
 }
 
 function useAnalyzeOnMount(initialFile: File | null, analyze: (file: File) => void): void {
@@ -107,14 +115,17 @@ export function CctvModeSection({ initialFile, onExit }: { initialFile: File | n
           />
         )}
       </div>
-      <JobCard
-        phase={cctvJob.phase}
-        job={cctvJob.job}
-        fileName={fileName ?? undefined}
-        errorMessage={jobError}
-        onCancel={cctvJob.cancel}
-        uploadPercent={null}
-      />
+      <div className="flex flex-col gap-4">
+        <JobCard
+          phase={cctvJob.phase}
+          job={cctvJob.job}
+          fileName={fileName ?? undefined}
+          errorMessage={jobError}
+          onCancel={cctvJob.cancel}
+          uploadPercent={null}
+        />
+        <CompletedResult job={cctvJob.job} retentionHours={engineQuery.data?.outputTtlHours ?? null} />
+      </div>
     </div>
   );
 }

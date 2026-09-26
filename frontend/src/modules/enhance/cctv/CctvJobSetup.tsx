@@ -12,11 +12,20 @@ import type {
   CctvTask,
 } from "../../../services/cctv";
 import { AiLaneConfirmDialog } from "./AiLaneConfirmDialog";
+import { CaseDetailsForm } from "./CaseDetailsForm";
 import { CctvFrameTools } from "./CctvFrameTools";
 import { CctvLaneSelector } from "./CctvLaneSelector";
 import { CctvPresetPicker } from "./CctvPresetPicker";
 import { CctvStepCard } from "./CctvStepCard";
-import { buildCctvJobRequest, initialChoices, withLane, withPreset, type CctvChoices } from "./cctvChoices";
+import { isCaseDetailsValid } from "./cctvCase";
+import {
+  buildCctvJobRequest,
+  initialChoices,
+  withCaseDetails,
+  withLane,
+  withPreset,
+  type CctvChoices,
+} from "./cctvChoices";
 import { isTrimValid } from "./cctvFrames";
 import { aiLaneState, isTaskReady, LANE_TASKS, startBlocker } from "./cctvLanes";
 import { incompleteStepIds, visibleSteps, withStepEnabled, withStepFilter, withStepParam } from "./cctvSteps";
@@ -115,6 +124,7 @@ export function CctvJobSetup({ analysis, presets, capabilities, busy, onSubmit }
     osdBoxCount: choices.osdBoxes.length,
     incompleteStepIds: incompleteStepIds(choices.steps, catalog),
     trimValid: isTrimValid(choices.trim, analysis.frameIndex?.frameCount ?? 0),
+    caseDetailsValid: isCaseDetailsValid(choices.caseDetails),
   });
 
   function submit(): void {
@@ -143,6 +153,7 @@ export function CctvJobSetup({ analysis, presets, capabilities, busy, onSubmit }
       />
       <StepList steps={visibleSteps(catalog, choices.lane)} choices={choices} onChange={(steps) => setChoices({ ...choices, steps })} />
       <CctvFrameTools analysis={analysis} choices={choices} catalog={catalog} onChange={setChoices} />
+      <CaseDetailsForm value={choices.caseDetails} onChange={(caseDetails) => setChoices(withCaseDetails(choices, caseDetails))} />
       <div className="flex flex-col gap-2">
         {blocker && (
           <p role="status" className="text-xs text-warn">

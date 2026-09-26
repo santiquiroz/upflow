@@ -7,8 +7,10 @@ import {
   withOsdBoxes,
   withOsdConfirmed,
   withPreset,
+  withCaseDetails,
   withTrim,
 } from "./cctvChoices";
+import { EMPTY_CASE_DETAILS } from "./cctvCase";
 import { ANALYSIS, PRESETS_RESPONSE } from "./cctvFixtures";
 
 describe("initialChoices", () => {
@@ -19,6 +21,10 @@ describe("initialChoices", () => {
     expect(choices.task).toBe("clarify");
     expect(choices.presetId).toBe("night_ir");
     expect(Object.keys(choices.steps)).toEqual(["deblock", "gray"]);
+  });
+
+  it("starts with empty case details", () => {
+    expect(initialChoices(ANALYSIS, PRESETS_RESPONSE).caseDetails).toEqual(EMPTY_CASE_DETAILS);
   });
 
   it("falls back to the first preset when the suggestion is unknown", () => {
@@ -112,6 +118,22 @@ describe("buildCctvJobRequest", () => {
     const choices = withTrim({ ...initialChoices(ANALYSIS, PRESETS_RESPONSE), noOsd: true }, [25, 99]);
 
     expect(buildCctvJobRequest("tok-1", choices, PRESETS_RESPONSE).trim).toEqual([25, 99]);
+  });
+
+  it("sends the case details the operator filled in", () => {
+    const base = { ...initialChoices(ANALYSIS, PRESETS_RESPONSE), noOsd: true };
+    const choices = withCaseDetails(base, {
+      ...EMPTY_CASE_DETAILS,
+      caseLabel: "2026-114",
+      recorderMake: "Hikvision",
+      clockOffset: "-12",
+    });
+
+    const request = buildCctvJobRequest("tok-1", choices, PRESETS_RESPONSE);
+
+    expect(request.caseLabel).toBe("2026-114");
+    expect(request.acquisition).toEqual({ recorderMake: "Hikvision", clockOffsetSeconds: -12 });
+    expect(request).not.toHaveProperty("operatorName");
   });
 
   it("sends confirmed boxes only when there is on-screen text", () => {

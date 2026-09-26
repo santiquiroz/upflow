@@ -26,6 +26,7 @@ export interface StartInputs {
   osdBoxCount: number;
   incompleteStepIds: readonly string[];
   trimValid: boolean;
+  caseDetailsValid: boolean;
 }
 
 export const LANE_TASKS: Readonly<Record<CctvLane, readonly CctvTask[]>> = {
@@ -98,6 +99,7 @@ export function startBlocker(inputs: StartInputs): StartBlocker | null {
     [!isTaskReady(inputs.task), "cctv.task.unavailable"],
     [inputs.incompleteStepIds.length > 0, "cctv.blocked.incompleteSteps"],
     [!inputs.trimValid, "cctv.trim.invalid"],
+    [!inputs.caseDetailsValid, "cctv.case.offsetInvalid"],
     [!hasOsdDecision(inputs), "cctv.osd.confirm"],
   ];
   const failed = checks.find(([blocked]) => blocked);

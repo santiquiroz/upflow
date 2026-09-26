@@ -33,3 +33,11 @@ def test_the_published_limits_are_usable_numbers() -> None:
 
     assert payload["maxUploadMb"] > 0
     assert payload["maxVideoUploadMb"] >= payload["maxUploadMb"]
+
+
+def test_engine_info_publishes_the_output_retention() -> None:
+    """El aviso "Results are deleted after {{hours}} hours" del modo CCTV sale de aca."""
+    with TestClient(app) as client:
+        payload = client.get("/api/v1/engine").json()
+
+    assert payload["outputTtlHours"] == get_settings().output_ttl_hours

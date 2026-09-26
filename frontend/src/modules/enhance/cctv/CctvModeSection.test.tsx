@@ -35,6 +35,22 @@ const CAPS: VideoCapabilities = {
 };
 
 const QUEUED_JOB = { jobId: "job-1", status: "queued", originalFilename: "ch01.dav" } as VideoJobResponse;
+const COMPLETED_JOB = {
+  ...QUEUED_JOB,
+  status: "completed",
+  metadata: {},
+  cctv: {
+    task: "clarify",
+    lane: "classic",
+    preset: "night_ir",
+    sourceSha256: "b".repeat(64),
+    noOsd: true,
+    osdBoxesConfirmed: false,
+    warnings: [],
+    artifacts: [{ name: "package", url: "/api/v1/video/jobs/job-1/artifacts/package" }],
+    verifyUrl: "/api/v1/video/jobs/job-1/verify",
+  },
+} as VideoJobResponse;
 
 function renderSection(
   caps: VideoCapabilities = CAPS,
@@ -43,7 +59,7 @@ function renderSection(
 ) {
   vi.mocked(api.getVideoCapabilities).mockResolvedValue(caps);
   vi.mocked(api.getVideoJob).mockResolvedValue(QUEUED_JOB);
-  vi.mocked(api.getEngineInfo).mockResolvedValue({ maxVideoUploadMb: 1 } as EngineInfoResponse);
+  vi.mocked(api.getEngineInfo).mockResolvedValue({ maxVideoUploadMb: 1, outputTtlHours: 36 } as EngineInfoResponse);
   vi.mocked(cctvService.getCctvPresets).mockResolvedValue(presets);
   vi.mocked(cctvService.analyzeCctv).mockResolvedValue({ kind: "done", analysis: ANALYSIS });
   vi.mocked(cctvService.createCctvJob).mockResolvedValue(QUEUED_JOB);
@@ -153,6 +169,42 @@ describe("CctvModeSection", () => {
       trim: null,
     });
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("sends the case details with the job", async () => {
+    await analyzedSection();
+    fireEvent.click(screen.getByRole("checkbox", { name: en["cctv.osd.none"] }));
+    fireEvent.change(screen.getByLabelText(en["cctv.case.caseLabel"]), { target: { value: "2026-114" } });
+    fireEvent.change(screen.getByLabelText(en["cctv.case.clockOffset"]), { target: { value: "-12" } });
+
+    fireEvent.click(screen.getByRole("button", { name: en["cctv.start"] }));
+
+    await waitFor(() => expect(cctvService.createCctvJob).toHaveBeenCalled());
+    const request = vi.mocked(cctvService.createCctvJob).mock.calls[0][0];
+    expect(request.caseLabel).toBe("2026-114");
+    expect(request.acquisition).toEqual({ clockOffsetSeconds: -12 });
+  });
+
+  it("blocks Start while the clock offset isn't a number", async () => {
+    await analyzedSection();
+    fireEvent.click(screen.getByRole("checkbox", { name: en["cctv.osd.none"] }));
+
+    fireEvent.change(screen.getByLabelText(en["cctv.case.clockOffset"]), { target: { value: "1,5" } });
+
+    expect(screen.getByRole("button", { name: en["cctv.start"] })).toBeDisabled();
+    expect(screen.getAllByText(en["cctv.case.offsetInvalid"]).length).toBeGreaterThan(0);
+  });
+
+  it("shows the result with the server's retention once the job completes", async () => {
+    await analyzedSection();
+    vi.mocked(cctvService.createCctvJob).mockResolvedValue(COMPLETED_JOB);
+    vi.mocked(api.getVideoJob).mockResolvedValue(COMPLETED_JOB);
+    fireEvent.click(screen.getByRole("checkbox", { name: en["cctv.osd.none"] }));
+
+    fireEvent.click(screen.getByRole("button", { name: en["cctv.start"] }));
+
+    expect(await screen.findByRole("link", { name: en["cctv.package.download"] })).toBeInTheDocument();
+    expect(screen.getByText(en["cctv.retention"].replace("{{hours}}", "36"))).toBeInTheDocument();
   });
 
   it("disables the AI lane without a GPU and says how long the CPU would take", async () => {

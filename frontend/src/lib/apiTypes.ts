@@ -404,6 +404,8 @@ export interface EngineInfoResponse {
   // escrita a mano en el frontend se desincroniza con el .env del servidor.
   maxUploadMb: number;
   maxVideoUploadMb: number;
+  // Horas que las salidas quedan en disco (OUTPUT_TTL_HOURS); el modo CCTV avisa antes del borrado.
+  outputTtlHours: number;
   videoProfiles: VideoProfileResponse[];
   ffmpegAvailable: boolean;
 }

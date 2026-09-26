@@ -193,7 +193,21 @@ export type CctvAnalyzeReply =
   | { kind: "done"; analysis: CctvAnalysis }
   | { kind: "pending"; analysisJobId: string };
 
-export interface CctvJobRequest {
+export interface CctvAcquisition {
+  recorderMake?: string;
+  recorderModel?: string;
+  channel?: string;
+  clockOffsetSeconds?: number;
+  clockOffsetMethod?: string;
+}
+
+export interface CctvCaseRequest {
+  caseLabel?: string;
+  operatorName?: string;
+  acquisition?: CctvAcquisition;
+}
+
+export interface CctvJobRequest extends CctvCaseRequest {
   token: string;
   task: CctvTask;
   preset: string | null;
@@ -202,6 +216,13 @@ export interface CctvJobRequest {
   osdBoxesConfirmed: boolean;
   noOsd: boolean;
   trim: [number, number] | null;
+}
+
+export interface CctvVerifyResult {
+  ok: boolean;
+  checked: number;
+  mismatches: string[];
+  missing: string[];
 }
 
 export interface CctvOsdBoxCheck {
@@ -264,4 +285,8 @@ export function checkCctvOsd(token: string, boxes: readonly CctvBox[], frame: nu
     boxes: boxes.map((box) => [...box]),
     frame,
   });
+}
+
+export function verifyCctvFiles(jobId: string): Promise<CctvVerifyResult> {
+  return apiPostJson<CctvVerifyResult>(`/video/jobs/${encodeURIComponent(jobId)}/verify`, {});
 }

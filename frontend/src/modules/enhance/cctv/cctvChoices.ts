@@ -8,6 +8,7 @@ import type {
   CctvTask,
 } from "../../../services/cctv";
 import { suggestedOsdBoxes } from "./cctvBoxes";
+import { caseRequestOf, EMPTY_CASE_DETAILS, type CaseDetails } from "./cctvCase";
 import { storedSizeOf, type TrimRange } from "./cctvFrames";
 import { defaultTask } from "./cctvLanes";
 import { choicesFromPreset, presetContextOf, stepRequests, type StepChoices } from "./cctvSteps";
@@ -21,6 +22,7 @@ export interface CctvChoices {
   osdBoxes: readonly CctvBox[];
   osdBoxesConfirmed: boolean;
   trim: TrimRange | null;
+  caseDetails: CaseDetails;
 }
 
 function findPreset(presets: CctvPresetsResponse, presetId: string | null): CctvPreset | null {
@@ -52,6 +54,7 @@ export function initialChoices(analysis: CctvAnalysis, presets: CctvPresetsRespo
     osdBoxes: suggestedOsdBoxes(storedSizeOf(analysis)),
     osdBoxesConfirmed: false,
     trim: null,
+    caseDetails: EMPTY_CASE_DETAILS,
   };
 }
 
@@ -90,6 +93,10 @@ export function withTrim(choices: CctvChoices, trim: TrimRange | null): CctvChoi
   return { ...choices, trim };
 }
 
+export function withCaseDetails(choices: CctvChoices, caseDetails: CaseDetails): CctvChoices {
+  return { ...choices, caseDetails };
+}
+
 export function buildCctvJobRequest(
   token: string,
   choices: CctvChoices,
@@ -104,5 +111,6 @@ export function buildCctvJobRequest(
     osdBoxesConfirmed: !choices.noOsd && choices.osdBoxesConfirmed,
     noOsd: choices.noOsd,
     trim: choices.trim ? [choices.trim[0], choices.trim[1]] : null,
+    ...caseRequestOf(choices.caseDetails),
   };
 }

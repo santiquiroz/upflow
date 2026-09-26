@@ -77,6 +77,7 @@ describe("getEngineInfo", () => {
       supportedModels: [],
       maxUploadMb: 50,
       maxVideoUploadMb: 2048,
+      outputTtlHours: 24,
       videoProfiles: [],
       ffmpegAvailable: true,
     };

@@ -1,5 +1,6 @@
 import type { VideoJobResponse } from "../apiTypes";
 import { formatFps } from "../formatFps";
+import { buildCctvSections } from "./cctv";
 import { buildTiming, pushDevice, pushIdentity, readMetadataString } from "./common";
 import {
   type DetailContext,
@@ -79,6 +80,9 @@ export function buildVideoSections(
   job: VideoJobResponse,
   context: DetailContext,
 ): JobDetailSections {
+  if (job.cctv) {
+    return buildCctvSections(job, job.cctv, context);
+  }
   const parameters: DetailItem[] = [];
   pushIdentity(parameters, "video", job.status, context);
   push(parameters, "job.detail.field.file", job.originalFilename);

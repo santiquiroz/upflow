@@ -813,6 +813,8 @@ class EngineInfoResponse(BaseModel):
     # cuanto alguien toca el .env.
     max_upload_mb: int = Field(serialization_alias="maxUploadMb")
     max_video_upload_mb: int = Field(serialization_alias="maxVideoUploadMb")
+    # Horas que las salidas quedan en disco: el modo CCTV avisa cuando se borran.
+    output_ttl_hours: int = Field(serialization_alias="outputTtlHours")
 
 
 class HealthDeviceResponse(BaseModel):
