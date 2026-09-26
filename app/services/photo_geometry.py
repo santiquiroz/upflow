@@ -45,13 +45,10 @@ class Geometry:
             corners=None if corners is None else quad_from_points(corners),
         )
 
+    # Sin perspectiva no se escribe "corners": sidecars y jobs anteriores siguen iguales.
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "rotate90": self.rotate90,
-            "crop": None if self.crop is None else list(self.crop),
-            "angle": self.angle,
-            "corners": None if self.corners is None else [list(point) for point in self.corners],
-        }
+        framing = {"rotate90": self.rotate90, "crop": None if self.crop is None else list(self.crop), "angle": self.angle}
+        return framing if self.corners is None else {**framing, "corners": [list(point) for point in self.corners]}
 
     def apply(self, rgb: np.ndarray) -> np.ndarray:
         return apply_geometry(rgb, self.rotate90, self.crop, self.angle, self.corners)

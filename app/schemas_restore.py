@@ -9,6 +9,7 @@ from app.services.engines.scratch_detect import MAX_GROW_PX
 from app.services.photo_geometry import MAX_STRAIGHTEN_DEG
 
 Box = tuple[int, int, int, int]
+CornerPoint = tuple[float, float]
 
 
 def _unit() -> Any:
@@ -23,6 +24,7 @@ class RestoreGeometry(_StrictModel):
     rotate90: int = Field(default=0, ge=0, le=3)
     crop: Box | None = None
     angle: float = Field(default=0.0, ge=-MAX_STRAIGHTEN_DEG, le=MAX_STRAIGHTEN_DEG)
+    corners: tuple[CornerPoint, CornerPoint, CornerPoint, CornerPoint] | None = None
 
 
 class DescreenOptions(_StrictModel):
@@ -156,6 +158,12 @@ class RestorePresetSelectionResponse(BaseModel):
     options: dict[str, dict[str, Any]]
 
 
+class RestoreCaptureResponse(BaseModel):
+    auto_crop: RestoreGeometry | None = Field(default=None, serialization_alias="autoCrop")
+    photos: list[RestoreGeometry] = Field(default_factory=list)
+    perspective: RestoreGeometry | None = None
+
+
 class RestoreAnalysisResponse(BaseModel):
     token: str
     original_name: str = Field(serialization_alias="originalName")
@@ -175,6 +183,7 @@ class RestoreAnalysisResponse(BaseModel):
     damage: RestoreDamageResponse
     damage_over_faces: bool = Field(serialization_alias="damageOverFaces")
     eta: RestoreEtaResponse
+    capture: RestoreCaptureResponse = Field(default_factory=RestoreCaptureResponse)
 
 
 class RestoreMaskResponse(BaseModel):

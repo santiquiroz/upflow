@@ -27,6 +27,7 @@ from app.services.photo_diagnosis import (
     PhotoDiagnosis,
     diagnose_photo,
 )
+from app.services.photo_capture import CaptureSuggestions, suggest_capture
 from app.services.photo_geometry import Geometry
 from app.services.photo_restore_pipeline import FaceSelection, ModelUse, PixelLimits, check_pixel_limits
 from app.services.photo_restore_runners import detected_selections, scratch_detector_use
@@ -147,6 +148,7 @@ class SessionAnalysis:
     faces: tuple[FaceSelection, ...]
     damage_over_faces: bool
     has_damage_map: bool
+    capture: CaptureSuggestions = field(default_factory=CaptureSuggestions)
 
 
 @dataclass(frozen=True, slots=True)
@@ -452,6 +454,7 @@ class RestoreSessionStore:
             faces=analysis.faces,
             damage_over_faces=damage_over_faces(analysis.probability, analysis.faces),
             has_damage_map=analysis.probability is not None,
+            capture=suggest_capture(loaded.rgb, record.geometry.rotate90),
         )
 
     def _load_checked(self, path: Path) -> LoadedImage:

@@ -534,3 +534,24 @@ def test_diagnosis_does_not_mutate_the_photo() -> None:
 def test_diagnosis_rejects_an_image_without_three_channels() -> None:
     with pytest.raises(ValueError, match="3 channels"):
         diagnose_photo(np.zeros((32, 32), np.float32))
+
+
+def test_phone_photo_of_a_print_gets_an_informative_capture_finding() -> None:
+    rows, cols = np.mgrid[0:400, 0:600].astype(np.float32)
+    photo = np.repeat((0.35 + 0.15 * np.sin(cols / 17.0) * np.cos(rows / 23.0))[..., None], 3, axis=2)
+    glare = 1.6 * np.exp(-((cols - 300) ** 2 + (rows - 180) ** 2) / (2 * 30.0**2))
+    rgb = np.clip(photo + glare[..., None], 0.0, 1.0).astype(np.float32)
+
+    diagnosis = diagnose_photo(rgb)
+
+    capture = finding(diagnosis, "capture")
+    assert capture.reason_key == "restore.diag.phoneCapture"
+    assert dict(capture.params) == {"glare": 1, "perspective": 0}
+    assert capture.proposes == ()
+
+
+def test_a_plain_scan_has_no_capture_finding() -> None:
+    rows, cols = np.mgrid[0:400, 0:600].astype(np.float32)
+    photo = np.repeat((0.35 + 0.15 * np.sin(cols / 17.0) * np.cos(rows / 23.0))[..., None], 3, axis=2)
+
+    assert "capture" not in finding_keys(diagnose_photo(photo.astype(np.float32)))

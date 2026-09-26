@@ -27,6 +27,7 @@ from app.services.engines.face_detect import FaceDetection, priors
 from app.services.engines.face_restore import FaceRestoreResult, RestoredFace, blended_patch, paste_faces
 from app.services.face_geometry import TEMPLATE_FFHQ_512, align_face, align_matrix
 from app.services.job_manager import JobManager
+from app.services.photo_geometry import Geometry
 from app.services.photo_restore_chain import RESTORE_CHAIN, step_ids
 from app.services.photo_restore_job import PhotoRestoreJobRunner
 from app.services.photo_restore_pipeline import ModelUse, StepCall, StepOutcome
@@ -197,7 +198,7 @@ def test_analyze_opens_a_session_with_preview_diagnosis_damage_and_faces(harness
     assert len(body["token"]) == 32
     assert (body["width"], body["height"], body["bitDepth"], body["hasIcc"]) == (SIZE, SIZE, 8, False)
     assert body["originalName"] == "Grandma 1952.png"
-    assert body["geometry"] == {"rotate90": 0, "crop": None, "angle": 0.0}
+    assert body["geometry"] == {"rotate90": 0, "crop": None, "angle": 0.0, "corners": None}
     assert body["diagnosis"]["toneKind"] in {"mono", "toned", "hand_tinted", "color"}
     assert body["proposedPreset"] and isinstance(body["proposedSteps"], list)
     assert body["damage"]["coverage"] > 0
@@ -367,7 +368,7 @@ def test_geometry_redoes_the_working_copy_and_drops_the_painted_mask(harness_fac
     assert response.status_code == 200, response.text
     body = response.json()
     assert (body["width"], body["height"]) == (128, SIZE)
-    assert body["geometry"] == {"rotate90": 1, "crop": None, "angle": 2.5}
+    assert body["geometry"] == {"rotate90": 1, "crop": None, "angle": 2.5, "corners": None}
     assert harness.sessions.job_inputs(token).user_mask is None
     assert harness.sessions.original_path(token).is_file(), "geometry never touches the original"
 
@@ -391,6 +392,71 @@ def test_geometry_rejects_an_angle_beyond_the_straighten_limit(harness_factory) 
     response = harness.client.post(f"/api/v1/restore/analysis/{token}/geometry", json={"angle": 60})
 
     assert response.status_code == 422
+
+
+def sheet_png(boxes: list[tuple[int, int, int, int]]) -> bytes:
+    sheet = np.full((SIZE, 2 * SIZE, 3), 245, dtype=np.uint8)
+    for x, y, width, height in boxes:
+        sheet[y : y + height, x : x + width] = np.round(smooth_rgb(width, height) * 120.0 + 40.0).astype(np.uint8)
+    buffer = io.BytesIO()
+    Image.fromarray(sheet, mode="RGB").save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def test_analysis_offers_auto_crop_for_one_photo_on_a_scanner_sheet(harness_factory) -> None:
+    harness = harness_factory()
+
+    capture = harness.analyze(sheet_png([(100, 40, 240, 160)]))["capture"]
+
+    assert capture["autoCrop"]["angle"] == 0.0
+    x, y, width, height = capture["autoCrop"]["crop"]
+    assert 100 <= x <= 106 and 40 <= y <= 46 and 228 <= width <= 240 and 148 <= height <= 160
+    assert capture["photos"] == [] and capture["perspective"] is None
+
+
+def test_analysis_splits_a_sheet_and_each_photo_applies_as_geometry(harness_factory) -> None:
+    harness = harness_factory()
+    body = harness.analyze(sheet_png([(20, 30, 200, 150), (280, 60, 200, 170)]))
+    photos = body["capture"]["photos"]
+    assert len(photos) == 2 and body["capture"]["autoCrop"] is None
+
+    response = harness.client.post(f"/api/v1/restore/analysis/{body['token']}/geometry", json=photos[1])
+
+    assert response.status_code == 200, response.text
+    moved = response.json()
+    assert moved["geometry"] == photos[1]
+    assert (moved["width"], moved["height"]) == tuple(photos[1]["crop"][2:])
+
+
+def test_geometry_accepts_perspective_corners(harness_factory) -> None:
+    harness = harness_factory()
+    token = harness.analyze()["token"]
+    corners = [[40.0, 30.0], [220.0, 20.0], [240.0, 230.0], [10.0, 200.0]]
+
+    response = harness.client.post(f"/api/v1/restore/analysis/{token}/geometry", json={"corners": corners})
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["geometry"]["corners"] == corners
+    assert (body["height"], body["width"]) == Geometry(corners=corners).output_size(SIZE, SIZE)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"corners": [[0, 0], [200, 0], [200, 200], [0, 200]], "angle": 2.0},
+        {"corners": [[0, 0], [400, 0], [400, 200], [0, 200]]},
+        {"corners": [[0, 0], [100, 100], [200, 0], [100, 200]]},
+    ],
+)
+def test_geometry_refuses_bad_perspective_corners(harness_factory, payload: dict) -> None:
+    harness = harness_factory()
+    token = harness.analyze()["token"]
+
+    response = harness.client.post(f"/api/v1/restore/analysis/{token}/geometry", json=payload)
+
+    assert response.status_code == 400
+    assert "Perspective" in response.json()["detail"]
 
 
 @pytest.mark.parametrize("token", ["0" * 32, "not-a-token", "../" + "0" * 29])

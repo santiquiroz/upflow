@@ -34,6 +34,7 @@ from app.schemas_restore import (
     RecomposeResponse,
     RestoreAnalysisResponse,
     RestoreCapabilitiesResponse,
+    RestoreCaptureResponse,
     RestoreDamageResponse,
     RestoreDiagnosisResponse,
     RestoreEtaResponse,
@@ -53,6 +54,7 @@ from app.services.auth.permissions import Permission
 from app.services.devices_service import DevicesService
 from app.services.job_artifacts import UnknownArtifact, restore_artifact
 from app.services.job_manager import JobManager
+from app.services.photo_capture import CaptureSuggestions
 from app.services.photo_diagnosis import Finding, PhotoDiagnosis
 from app.services.photo_geometry import Geometry
 from app.services.photo_restore_chain import HALFTONE_DENOISE_LIMIT, RESTORE_CHAIN
@@ -134,7 +136,7 @@ def analysis_response(analysis: SessionAnalysis) -> RestoreAnalysisResponse:
         height=record.height,
         bit_depth=record.bit_depth,
         has_icc=record.has_icc,
-        geometry=RestoreGeometry(**record.geometry.to_dict()),
+        geometry=geometry_response(record.geometry),
         preview_url=session_url(record.token, PREVIEW_NAME),
         diagnosis=RestoreDiagnosisResponse(
             findings=[finding_response(finding) for finding in diagnosis.findings],
@@ -149,6 +151,19 @@ def analysis_response(analysis: SessionAnalysis) -> RestoreAnalysisResponse:
         damage=damage_response(analysis),
         damage_over_faces=analysis.damage_over_faces,
         eta=eta_response(diagnosis),
+        capture=capture_response(analysis.capture),
+    )
+
+
+def geometry_response(geometry: Geometry) -> RestoreGeometry:
+    return RestoreGeometry(**geometry.to_dict())
+
+
+def capture_response(capture: CaptureSuggestions) -> RestoreCaptureResponse:
+    return RestoreCaptureResponse(
+        auto_crop=None if capture.auto_crop is None else geometry_response(capture.auto_crop),
+        photos=[geometry_response(geometry) for geometry in capture.photos],
+        perspective=None if capture.perspective is None else geometry_response(capture.perspective),
     )
 
 
@@ -330,7 +345,7 @@ async def set_photo_geometry(
 ) -> RestoreAnalysisResponse:
     require_session(sessions, token, request)
     try:
-        geometry = Geometry(rotate90=payload.rotate90, crop=payload.crop, angle=payload.angle)
+        geometry = Geometry(rotate90=payload.rotate90, crop=payload.crop, angle=payload.angle, corners=payload.corners)
         analysis = await sessions.set_geometry(token, geometry)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

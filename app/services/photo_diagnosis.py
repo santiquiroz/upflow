@@ -10,6 +10,7 @@ import numpy as np
 from scipy import ndimage
 
 from app.services.missing_pack import missing_pack_message
+from app.services.photo_capture import CaptureSigns, capture_signs
 from app.services.photo_dsp import (
     FIX_FADED_DEFAULT_STRENGTH,
     LUMA_WEIGHTS,
@@ -198,6 +199,7 @@ class _Measurements:
     cast: ColorCast | None
     damage: DamageStats | None
     faces: tuple[DetectedFace, ...] | None
+    capture: CaptureSigns | None = None
 
 
 DamageDetector = Callable[[np.ndarray], np.ndarray]
@@ -265,6 +267,7 @@ def _measure(
         cast=measure_color_cast(rgb) if tone.kind == "color" else None,
         damage=damage_stats(damage_detector(rgb), rgb.shape[:2]) if damage_detector else None,
         faces=detect_faces(rgb, face_detector) if face_detector else None,
+        capture=capture_signs(rgb),
     )
 
 
@@ -290,6 +293,7 @@ def _findings(measures: _Measurements) -> tuple[Finding, ...]:
         _blur_finding(measures.sharpness),
         _faded_finding(measures.cast),
         _faces_finding(measures.faces),
+        _capture_finding(measures.capture),
     )
     return tuple(item for item in candidates if item is not None)
 
@@ -565,6 +569,14 @@ def _faces_finding(faces: tuple[DetectedFace, ...] | None) -> Finding | None:
         return None
     restore = StepProposal("faces", {"model": FACE_MODEL_DEFAULT, "blend": PORTRAIT_BLEND}, enabled=False)
     return Finding("faces", len(faces), "restore.diag.faces", (restore,), {"count": len(faces)})
+
+
+# Solo informa: el consejo (reescanear a 600 dpi o fotografiar en angulo) no es un paso.
+def _capture_finding(signs: CaptureSigns | None) -> Finding | None:
+    if signs is None or not signs.phone_capture:
+        return None
+    params = {"glare": int(signs.glare), "perspective": int(signs.perspective)}
+    return Finding("capture", "phone", "restore.diag.phoneCapture", params=params)
 
 
 def _pack_missing_finding(key: str, pack: str) -> Finding:
