@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import sys
 from collections.abc import Awaitable, Callable
@@ -410,9 +411,17 @@ def print_error(message: str, code: int, json_mode: bool, key: str | None = None
     print(f"error: {message}{suffix}", file=sys.stderr)
 
 
+def run_handler(args: argparse.Namespace, handler: Handler) -> dict[str, Any]:
+    if not args.json:
+        return asyncio.run(handler(args))
+    # Con --json, stdout es solo el payload: onnxruntime imprime ahi al caer de DML a CPU.
+    with contextlib.redirect_stdout(sys.stderr):
+        return asyncio.run(handler(args))
+
+
 def run_command(args: argparse.Namespace, handler: Handler) -> int:
     try:
-        payload = asyncio.run(handler(args))
+        payload = run_handler(args, handler)
     except headless.HeadlessError as exc:
         print_error(str(exc), exc.exit_code, args.json, exc.key)
         return exc.exit_code

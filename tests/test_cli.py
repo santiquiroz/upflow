@@ -109,6 +109,33 @@ def test_restore_json_builds_the_spec_from_flags(monkeypatch, capsys):
     }
 
 
+def test_json_stdout_stays_parseable_when_a_library_prints_during_the_command(monkeypatch, capsys):
+    # onnxruntime avisa con print() en stdout cuando una sesion DML cae a CPU (visto con DDColor en P1-GPU-smoke).
+    payload = {"ok": True, "output": "b.png", "width": 8, "height": 4, "steps": ["colorize"]}
+
+    async def noisy(ctx, output, spec, **kwargs):
+        print("*************** EP Error ***************")
+        return payload
+
+    monkeypatch.setattr(headless, "build_context", lambda: object())
+    monkeypatch.setattr(headless, "restore_image", noisy)
+    assert cli.main(["restore", "--in", "a.jpg", "--out", "b.png", "--steps", "colorize", "--json"]) == 0
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == payload
+    assert "EP Error" in captured.err
+
+
+def test_json_error_stays_parseable_when_a_library_prints_before_failing(monkeypatch, capsys):
+    async def noisy_failure(ctx, output, spec, **kwargs):
+        print("EP Error: falling back")
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(headless, "build_context", lambda: object())
+    monkeypatch.setattr(headless, "restore_image", noisy_failure)
+    assert cli.main(["restore", "--in", "a.jpg", "--out", "b.png", "--steps", "denoise", "--json"]) == 5
+    assert json.loads(capsys.readouterr().out) == {"ok": False, "error": "boom", "code": 5}
+
+
 def test_restore_without_flags_lets_the_analysis_choose(monkeypatch, capsys):
     calls = _capture_restore(monkeypatch)
     assert cli.main(["restore", "--in", "a.jpg", "--out", "b.png"]) == 0
