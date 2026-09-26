@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchLicenses, type LicensesResponse } from "./licenses";
+import { fetchLicenses, fetchPackLicense, type LicensesResponse } from "./licenses";
 
 const BODY: LicensesResponse = {
   packs: [],
@@ -22,5 +22,22 @@ describe("fetchLicenses", () => {
 
     expect(String(vi.mocked(fetch).mock.calls[0][0])).toMatch(/\/api\/v1\/licenses$/);
     expect(licenses).toEqual(BODY);
+  });
+});
+
+describe("fetchPackLicense", () => {
+  it("reads the license gate of one pack", async () => {
+    const body = { pack: "restore-faces-nc", gated: true, licenseText: "S-Lab License 1.0" };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } }),
+      ),
+    );
+
+    const gate = await fetchPackLicense("restore-faces-nc");
+
+    expect(String(vi.mocked(fetch).mock.calls[0][0])).toMatch(/\/api\/v1\/packs\/restore-faces-nc\/license$/);
+    expect(gate).toEqual(body);
   });
 });

@@ -1206,6 +1206,16 @@ export const en = {
   "pack.downloading": "Downloading…",
   "pack.done": "Done. You can use it now.",
   "pack.takesAWhile": "It is a few hundred MB. You can keep using the rest meanwhile.",
+  "pack.license.title": "License agreement required",
+  "pack.license.intro":
+    "This package has a restrictive license (for example, non-commercial use only). " +
+    "Read the full text below and accept it to download.",
+  "pack.license.textLabel": "Full license text",
+  "pack.license.accept": "I have read the full license and accept its terms",
+  "pack.license.acceptAndDownload": "Accept and download",
+  "pack.license.loading": "Loading the license…",
+  "pack.license.unavailableText":
+    "The license text of this package is not available, so it cannot be accepted or downloaded.",
   "capability.setup.missingPack": "The package it needs is not downloaded yet.",
   "capability.setup.missingModel": "No compatible model is installed yet.",
   "capability.setup.ffmpegBuildLacksCctv":

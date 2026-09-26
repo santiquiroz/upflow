@@ -19,7 +19,18 @@ export function getProvisionStatus(jobId: string): Promise<ProvisionJob> {
  * Casi toda pantalla sabe QUÉ le falta pero no a qué capacidad pertenece, y
  * varios paquetes existen sin figurar en el catálogo.
  */
-export function provisionPack(pack: string, variant?: string): Promise<ProvisionJob> {
-  const query = variant ? `?variant=${encodeURIComponent(variant)}` : "";
-  return apiPost<ProvisionJob>(`/packs/${pack}/provision${query}`);
+export function provisionPack(
+  pack: string,
+  variant?: string,
+  acceptLicense = false,
+): Promise<ProvisionJob> {
+  return apiPost<ProvisionJob>(`/packs/${pack}/provision${provisionQuery(variant, acceptLicense)}`);
+}
+
+export function provisionQuery(variant: string | undefined, acceptLicense: boolean): string {
+  const params = new URLSearchParams();
+  if (variant) params.set("variant", variant);
+  if (acceptLicense) params.set("acceptLicense", "true");
+  const query = params.toString();
+  return query ? `?${query}` : "";
 }

@@ -2,13 +2,19 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Download } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "../i18n/LocaleProvider";
+import { ApiError } from "../lib/api";
 import type { ProvisionJob } from "../lib/apiTypes";
 import { getProvisionStatus, provisionPack } from "../services/capabilities";
+import { isLicenseGateKey, PackLicenseGate } from "./PackLicenseGate";
 
 const POLL_MS = 2000;
 
 function isFinished(job: ProvisionJob | undefined): boolean {
   return job?.status === "done" || job?.status === "error";
+}
+
+function asksForLicense(error: unknown): boolean {
+  return error instanceof ApiError && isLicenseGateKey(error.key);
 }
 
 /**
@@ -36,7 +42,7 @@ export function PackDownload({
   const [jobId, setJobId] = useState<string | null>(null);
 
   const start = useMutation({
-    mutationFn: () => provisionPack(pack, variant),
+    mutationFn: (acceptLicense: boolean) => provisionPack(pack, variant, acceptLicense),
     onSuccess: (job) => setJobId(job.jobId),
   });
 
@@ -58,8 +64,11 @@ export function PackDownload({
   }, [terminoBien, queryClient, onDone]);
 
   const trabajando = start.isPending || (jobId !== null && !isFinished(status.data));
+  // El backend responde 403 con clave a un pack con compuerta: no es un error
+  // para mostrar sino la licencia que hay que aceptar.
+  const pideLicencia = asksForLicense(start.error);
   const error =
-    (start.error instanceof Error ? start.error.message : null) ??
+    (start.error instanceof Error && !pideLicencia ? start.error.message : null) ??
     (status.data?.status === "error" ? status.data.error : null);
 
   return (
@@ -70,10 +79,12 @@ export function PackDownload({
         <p role="status" className="text-sm text-ok">
           {t("pack.done")}
         </p>
+      ) : pideLicencia ? (
+        <PackLicenseGate pack={pack} busy={trabajando} onAccept={() => start.mutate(true)} />
       ) : (
         <button
           type="button"
-          onClick={() => start.mutate()}
+          onClick={() => start.mutate(false)}
           disabled={trabajando}
           className="inline-flex w-fit items-center gap-2 rounded bg-accent px-3 py-1.5 text-sm font-medium text-bg hover:bg-accent-hover disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
         >

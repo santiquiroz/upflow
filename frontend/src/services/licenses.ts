@@ -42,3 +42,14 @@ export interface LicensesResponse {
 export function fetchLicenses(): Promise<LicensesResponse> {
   return apiGet<LicensesResponse>("/licenses");
 }
+
+// Espejo de app/schemas_restore.py::LicenseGateResponse.
+export interface PackLicense {
+  pack: string;
+  gated: boolean;
+  licenseText: string | null;
+}
+
+export function fetchPackLicense(pack: string): Promise<PackLicense> {
+  return apiGet<PackLicense>(`/packs/${encodeURIComponent(pack)}/license`);
+}
