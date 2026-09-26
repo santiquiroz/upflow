@@ -1,4 +1,4 @@
-"""Modo headless de Upflow: reescalado en proceso, sin servidor.
+"""Modo headless de Upflow: reescalado y carril clasico de CCTV en proceso, sin servidor.
 
 Lo consumen la CLI (`upflow`) y el servidor MCP en modo in-process. Arma los
 mismos servicios que el lifespan de app.main pero sin colas, workers ni sweeper:
@@ -19,31 +19,57 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import re
 import shutil
 import subprocess
 import time
-from dataclasses import asdict, dataclass
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from typing import Any
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any
 
 from PIL import Image
 
 from app.config import Settings, get_settings
-from app.models import UpscaleJob
+from app.models import CctvOptions, CctvStep, UpscaleJob, VideoUpscaleJob
+from app.services.cctv_analysis import (
+    FFMPEG_UNAVAILABLE,
+    AnalysisRequest,
+    AnalysisTools,
+    CctvAnalysisError,
+    analysis_tools,
+    discard_session,
+    new_session,
+    run_session_analysis,
+    upload_destination,
+)
+from app.services.cctv_chain import CctvChainError
+from app.services.cctv_presets import CCTV_PRESETS, PresetContext, preset_steps
+from app.services.cctv_report import REPORT_HTML_NAME, REPORT_JSON_NAME
+from app.services.cctv_session import cctv_job_dir, session_dir
 from app.services.compat_strategy import strategy_for
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
 from app.services.engines.onnx_upscaler import OnnxUpscaler
 from app.services.engines.realesrgan_ncnn import RealEsrganNcnnEngine
+from app.services.ffmpeg_capabilities import cached_capabilities
+from app.services.ffmpeg_filters import Box
+from app.services.frame_export import StillFrameError
 from app.services.gpu_session_coordinator import GpuSessionCoordinator
+from app.services.handover_package import check_files_unchanged
 from app.services.health_report import build_health_report
 from app.services.hf_client import HfClient
 from app.services.job_manager import JobManager
 from app.services.model_installer import InstallStatus, ModelInstaller
 from app.services.model_preflight import preflight_upscaler
 from app.services.model_registry import ModelKind, ModelRegistry, ModelStatus
+from app.services.osd_check import OsdSelection, validate_osd_decision
 from app.services.resource_probes import DxgiVramProbe, SystemRamProbe
 from app.services.tile_params import validate_tile_params
+
+if TYPE_CHECKING:
+    from app.services.video_job_manager import VideoJobManager
 
 EXIT_OK = 0
 EXIT_USAGE = 2
@@ -59,10 +85,17 @@ FFMPEG_ENCODERS: dict[str, list[str]] = {
 }
 INSTALL_TERMINAL = (InstallStatus.installed, InstallStatus.error)
 INSTALL_POLL_SECONDS = 1.0
+CCTV_CLARIFY_TASK = "clarify"
+CCTV_CLASSIC_LANE = "classic"
+CCTV_JOB_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
 
 class HeadlessError(RuntimeError):
     exit_code = EXIT_FAILED
+
+    def __init__(self, message: str, key: str | None = None) -> None:
+        super().__init__(message)
+        self.key = key
 
 
 class UsageError(HeadlessError):
@@ -374,3 +407,268 @@ async def _wait_install(installer: ModelInstaller, install_id: str, poll_seconds
         if job.status in INSTALL_TERMINAL:
             return job
         await asyncio.sleep(poll_seconds)
+
+
+# ---------------------------------------------------------------- CCTV (carril clasico)
+
+
+@dataclass(frozen=True, slots=True)
+class CctvClarifyChoices:
+    preset: str | None = None
+    steps: tuple[Mapping[str, Any], ...] | None = None
+    osd_boxes: tuple[Box, ...] = ()
+    osd_confirmed: bool = False
+    no_osd: bool = False
+    trim: tuple[int, int] | None = None
+    still_frames: tuple[int, ...] = ()
+    acquisition: Mapping[str, Any] = field(default_factory=lambda: MappingProxyType({}))
+
+
+def existing_file(source: Path) -> Path:
+    resolved = Path(source).expanduser().resolve()
+    if not resolved.is_file():
+        raise UsageError(f"input file not found: {resolved}")
+    return resolved
+
+
+def checked_job_id(job_id: str) -> str:
+    if not CCTV_JOB_ID.fullmatch(job_id):
+        raise UsageError(f"invalid job id {job_id!r}")
+    return job_id
+
+
+def cctv_error(exc: BaseException) -> HeadlessError:
+    if isinstance(exc, HeadlessError):
+        return exc
+    if isinstance(exc, CctvAnalysisError):
+        return analysis_headless_error(exc)
+    if isinstance(exc, CctvChainError):
+        return UsageError(str(exc), key=exc.code)
+    if isinstance(exc, StillFrameError):
+        return UsageError(str(exc), key=exc.key)
+    return InferenceError(str(exc), key=getattr(exc, "key", None))
+
+
+def analysis_headless_error(exc: CctvAnalysisError) -> HeadlessError:
+    if exc.key == FFMPEG_UNAVAILABLE:
+        return ModelNotInstalledError(str(exc), key=exc.key)
+    if exc.status >= 500:
+        return InferenceError(str(exc), key=exc.key)
+    return UsageError(str(exc), key=exc.key)
+
+
+def check_osd_decision(choices: CctvClarifyChoices) -> None:
+    try:
+        validate_osd_decision(OsdSelection(choices.osd_boxes, choices.osd_confirmed, choices.no_osd))
+    except CctvChainError as exc:
+        raise UsageError(str(exc), key=exc.code) from exc
+
+
+def check_out_dir(out_dir: Path | None) -> None:
+    if out_dir is not None and Path(out_dir).exists() and not Path(out_dir).is_dir():
+        raise UsageError(f"the output folder is a file: {out_dir}")
+
+
+# --- Pasos del preset, con el mismo contexto que arma la UI (cctvSteps.presetContextOf)
+
+
+def parse_sample_aspect(sar: object) -> tuple[int, int] | None:
+    parts = str(sar or "").split(":")
+    if len(parts) != 2 or not all(part.isdigit() and int(part) > 0 for part in parts):
+        return None
+    return int(parts[0]), int(parts[1])
+
+
+def preset_context_of(analysis: Mapping[str, Any]) -> PresetContext:
+    interlace = (analysis.get("quality") or {}).get("interlace") or {}
+    lite = (analysis.get("video") or {}).get("lite") or {}
+    return PresetContext(interlaced=bool(interlace.get("interlaced")), sample_aspect=parse_sample_aspect(lite.get("sar")))
+
+
+def classic_preset_steps(analysis: Mapping[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    context = preset_context_of(analysis)
+    return {preset.id: preset_steps(preset.id, CCTV_CLASSIC_LANE, context) for preset in CCTV_PRESETS}
+
+
+def steps_for_preset(analysis: Mapping[str, Any], preset: str) -> tuple[dict[str, Any], ...]:
+    try:
+        return tuple(preset_steps(preset, CCTV_CLASSIC_LANE, preset_context_of(analysis)))
+    except CctvChainError as exc:
+        raise UsageError(str(exc), key=exc.code) from exc
+
+
+def with_preset_steps(analysis: Mapping[str, Any]) -> dict[str, Any]:
+    return {**analysis, "presetSteps": classic_preset_steps(analysis)}
+
+
+def require_cctv_mode(analysis: Mapping[str, Any]) -> None:
+    if analysis.get("modeAvailable") is False:
+        reason = analysis.get("modeUnavailableReason")
+        raise ModelNotInstalledError(f"this ffmpeg build cannot run CCTV mode ({reason})", key=reason)
+
+
+def choices_with_preset_steps(analysis: Mapping[str, Any], choices: CctvClarifyChoices) -> CctvClarifyChoices:
+    if choices.steps is not None:
+        return choices
+    preset = choices.preset or analysis.get("suggestedPreset")
+    if preset is None:
+        return replace(choices, steps=())
+    return replace(choices, preset=preset, steps=steps_for_preset(analysis, preset))
+
+
+def require_steps_for_preset(choices: CctvClarifyChoices) -> None:
+    if choices.steps is None and choices.preset:
+        raise UsageError(
+            f"pass the steps of preset {choices.preset!r}: copy presetSteps[{choices.preset!r}] from the CCTV probe"
+        )
+
+
+# --- Opciones del job
+
+
+def normalized_step(raw: object) -> dict[str, Any]:
+    step_id = raw.get("id") if isinstance(raw, Mapping) else None
+    params = (raw.get("params") or {}) if isinstance(raw, Mapping) else None
+    if not isinstance(step_id, str) or not isinstance(params, Mapping):
+        raise UsageError(f"each CCTV step needs an 'id' and an optional 'params' object, got {raw!r}")
+    return {"id": step_id, "params": dict(params)}
+
+
+def cctv_step_of(raw: object) -> CctvStep:
+    step = normalized_step(raw)
+    return CctvStep(step["id"], MappingProxyType(step["params"]))
+
+
+def cctv_options_of(token: str, choices: CctvClarifyChoices) -> CctvOptions:
+    return CctvOptions(
+        task=CCTV_CLARIFY_TASK,
+        session_token=token,
+        preset=choices.preset,
+        steps=tuple(cctv_step_of(step) for step in choices.steps or ()),
+        osd_boxes=tuple(tuple(box) for box in choices.osd_boxes),
+        osd_boxes_confirmed=choices.osd_confirmed,
+        no_osd=choices.no_osd,
+        trim=choices.trim,
+        still_frames=choices.still_frames,
+        acquisition=MappingProxyType(dict(choices.acquisition)),
+    )
+
+
+# --- Sesion, job y entrega
+
+
+def cctv_analysis_tools(settings: Settings) -> AnalysisTools:
+    ffmpeg = settings.ffmpeg_binary_path
+    return analysis_tools(ffmpeg, settings.ffprobe_binary_path, lambda: cached_capabilities(ffmpeg))
+
+
+def open_cctv_session(work_root: Path, source: Path) -> AnalysisRequest:
+    token, directory = new_session(work_root)
+    try:
+        upload = upload_destination(directory, source.name)
+        shutil.copy2(source, upload)
+    except BaseException:
+        discard_session(directory)
+        raise
+    return AnalysisRequest(token, directory, upload)
+
+
+def cctv_job_manager(ctx: HeadlessContext) -> VideoJobManager:
+    # Import diferido: el pipeline de video suma ~1,7 s al arranque de cada comando de la CLI.
+    from app.services.cctv_job_runner import build_cctv_runners
+    from app.services.media_tools import MediaTools as VideoMediaTools
+    from app.services.video_job_manager import VideoJobManager
+    from app.services.video_upscaler import VideoUpscaler
+
+    settings = ctx.settings
+    media = VideoMediaTools(settings)
+    upscaler = VideoUpscaler(
+        settings, ctx.ncnn_engine, media, devices=ctx.devices, cctv_runners=build_cctv_runners(settings)
+    )
+    semaphores = DeviceSemaphores(settings, resource_probes=ctx.probes)
+    return VideoJobManager(settings, upscaler, media, semaphores, registry=ctx.registry, devices=ctx.devices)
+
+
+def deliver_cctv_outputs(job_dir: Path, out_dir: Path | None) -> Path:
+    if out_dir is None:
+        return job_dir
+    destination = Path(out_dir).expanduser().resolve() / job_dir.name
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(job_dir), str(destination))
+    return destination
+
+
+def describe_cctv_result(job: VideoUpscaleJob, result_dir: Path, seconds: float) -> dict[str, Any]:
+    meta = job.metadata.get("cctv") or {}
+    return {
+        "ok": True,
+        "jobId": job.id,
+        "task": job.cctv.task,
+        "lane": meta.get("lane"),
+        "preset": job.cctv.preset,
+        "outputDir": str(result_dir),
+        "sourceSha256": meta.get("sourceSha256"),
+        "receivedAt": meta.get("receivedAt"),
+        "framesIn": meta.get("framesIn"),
+        "framesOut": meta.get("framesOut"),
+        "outputs": meta.get("outputs", {}),
+        "report": str(result_dir / REPORT_HTML_NAME),
+        "reportJson": str(result_dir / REPORT_JSON_NAME),
+        "warnings": list(meta.get("warnings", [])),
+        "seconds": round(seconds, 2),
+    }
+
+
+async def cctv_probe(ctx: HeadlessContext, source: Path, *, keep_session: bool = False) -> dict[str, Any]:
+    source = existing_file(source)
+    request = await asyncio.to_thread(open_cctv_session, ctx.settings.video_work_path, source)
+    try:
+        analysis = await run_session_analysis(request, cctv_analysis_tools(ctx.settings))
+    except Exception as exc:  # noqa: BLE001 - run_session_analysis ya borro la sesion
+        raise cctv_error(exc) from exc
+    if not keep_session:
+        await asyncio.to_thread(discard_session, request.directory)
+        analysis = {**analysis, "token": None}
+    return {"ok": True, **with_preset_steps(analysis)}
+
+
+async def cctv_clarify(
+    ctx: HeadlessContext, token: str, choices: CctvClarifyChoices, out_dir: Path | None = None
+) -> dict[str, Any]:
+    check_osd_decision(choices)
+    require_steps_for_preset(choices)
+    check_out_dir(out_dir)
+    started = time.perf_counter()
+    try:
+        job = await cctv_job_manager(ctx).run_cctv_inline(cctv=cctv_options_of(token, choices))
+    except Exception as exc:  # noqa: BLE001 - la CLI traduce cualquier fallo a un codigo estable
+        raise cctv_error(exc) from exc
+    job_dir = cctv_job_dir(ctx.settings.outputs_path, job.id)
+    result_dir = await asyncio.to_thread(deliver_cctv_outputs, job_dir, out_dir)
+    return describe_cctv_result(job, result_dir, time.perf_counter() - started)
+
+
+async def cctv_clarify_file(
+    ctx: HeadlessContext, source: Path, out_dir: Path, choices: CctvClarifyChoices
+) -> dict[str, Any]:
+    check_osd_decision(choices)
+    check_out_dir(out_dir)
+    analysis = await cctv_probe(ctx, source, keep_session=True)
+    token = analysis["token"]
+    try:
+        require_cctv_mode(analysis)
+        return await cctv_clarify(ctx, token, choices_with_preset_steps(analysis, choices), out_dir)
+    finally:
+        # Sin sweeper en modo headless: la sesion solo servia para este job.
+        await asyncio.to_thread(discard_session, session_dir(ctx.settings.video_work_path, token))
+
+
+def cctv_result_dir(ctx: HeadlessContext, job_id: str) -> Path:
+    return cctv_job_dir(ctx.settings.outputs_path, checked_job_id(job_id))
+
+
+def cctv_check_unchanged(directory: Path) -> dict[str, Any]:
+    directory = Path(directory).expanduser().resolve()
+    if not directory.is_dir():
+        raise UsageError(f"CCTV result folder not found: {directory}")
+    return {"directory": str(directory), **check_files_unchanged(directory).to_json()}

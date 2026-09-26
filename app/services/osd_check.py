@@ -110,9 +110,13 @@ def _require_confirmation(selection: OsdSelection) -> None:
         )
 
 
-def validate_osd_selection(selection: OsdSelection, width: int, height: int) -> None:
+def validate_osd_decision(selection: OsdSelection) -> None:
     _reject_conflict(selection)
     _require_confirmation(selection)
+
+
+def validate_osd_selection(selection: OsdSelection, width: int, height: int) -> None:
+    validate_osd_decision(selection)
     _check_box_count(selection.boxes)
     for box in selection.boxes:
         _check_even(check_box_inside(box, width, height))

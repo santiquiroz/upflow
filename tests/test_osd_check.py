@@ -30,6 +30,7 @@ from app.services.osd_check import (
     sample_osd_frames,
     split_gray_frames,
     temporal_filters_in,
+    validate_osd_decision,
     validate_osd_selection,
 )
 from app.services.video_analysis import VideoAnalysisError
@@ -170,6 +171,17 @@ def test_no_osd_excludes_boxes_and_confirmation(selection: OsdSelection) -> None
     with pytest.raises(CctvChainError) as error:
         validate_osd_selection(selection, WIDTH, HEIGHT)
     assert error.value.code == OSD_CONFLICT
+
+
+def test_the_decision_alone_is_checked_before_the_frame_size_is_known() -> None:
+    far_outside = (4000, 4000, 10, 10)
+    validate_osd_decision(confirmed(far_outside))
+    validate_osd_decision(OsdSelection(boxes=(), confirmed=False, no_osd=True))
+    with pytest.raises(CctvChainError) as unconfirmed:
+        validate_osd_decision(OsdSelection(boxes=(far_outside,), confirmed=False, no_osd=False))
+    with pytest.raises(CctvChainError) as conflict:
+        validate_osd_decision(OsdSelection(boxes=(far_outside,), confirmed=True, no_osd=True))
+    assert (unconfirmed.value.code, conflict.value.code) == (OSD_UNCONFIRMED, OSD_CONFLICT)
 
 
 def test_confirmed_boxes_or_no_osd_are_accepted() -> None:

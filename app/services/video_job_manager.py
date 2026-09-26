@@ -10,7 +10,7 @@ from fractions import Fraction
 from pathlib import Path
 
 from app.config import AUDIO_ENHANCE_MODES, AUDIO_RESTORE_MODES, GMFSS_ENGINE, INTERP_ENGINES, RIFE_ENGINE, Settings
-from app.models import TERMINAL_JOB_STATUSES, CctvOptions, VideoUpscaleJob
+from app.models import TERMINAL_JOB_STATUSES, CctvOptions, JobStatus, VideoUpscaleJob
 from app.services.auth.identity import AuthenticatedUser
 from app.services.auth.quotas import QuotaService
 from app.services.backend_registry import (
@@ -201,6 +201,26 @@ class VideoJobManager(QueuedJobManager[VideoUpscaleJob]):
         job_id: str | None = None,
         owner: AuthenticatedUser | None = None,
     ) -> VideoUpscaleJob:
+        job = await self._admit_cctv_job(cctv, device, job_id, owner)
+        self._enqueue_cctv(job)
+        return job
+
+    async def run_cctv_inline(self, *, cctv: CctvOptions, device: str | None = None) -> VideoUpscaleJob:
+        # Puerta del modo headless (CLI / MCP in-process): sin cola ni retencion, un fallo no deja el directorio.
+        job = await self._admit_cctv_job(cctv, device, None, None)
+        job.status = JobStatus.running
+        try:
+            job.output_path = await self.upscaler.run(job)
+        except BaseException:
+            job.status = JobStatus.failed
+            await asyncio.to_thread(shutil.rmtree, cctv_job_dir(self.settings.outputs_path, job.id), True)
+            raise
+        job.status = JobStatus.completed
+        return job
+
+    async def _admit_cctv_job(
+        self, cctv: CctvOptions, device: str | None, job_id: str | None, owner: AuthenticatedUser | None
+    ) -> VideoUpscaleJob:
         session = await asyncio.to_thread(load_session, self.settings.video_work_path, cctv.session_token)
         plan = plan_cctv_job(cctv, await self._cctv_facts(session, cctv.task), device)
         if plan.device is not None and plan.device != AUTO_DEVICE_ID and self.devices is not None:
@@ -211,7 +231,6 @@ class VideoJobManager(QueuedJobManager[VideoUpscaleJob]):
         if job_id is not None:
             job.id = job_id
         await self._prepare_cctv_outputs(session, job)
-        self._enqueue_cctv(job)
         return job
 
     async def _cctv_facts(self, session: CctvSession, task: str) -> CctvJobFacts:

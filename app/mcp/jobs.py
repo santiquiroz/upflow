@@ -77,6 +77,7 @@ def normalize_job(family: JobFamily, payload: dict[str, Any]) -> dict[str, Any]:
         extras["code"] = payload.get("code")
     if family.name == "video":
         extras["stage"] = (payload.get("metadata") or {}).get("stage")
+        extras["cctv"] = payload.get("cctv")
     normalized.update({key: value for key, value in extras.items() if value is not None})
     return normalized
 

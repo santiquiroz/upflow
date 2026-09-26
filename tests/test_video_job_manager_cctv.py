@@ -414,6 +414,44 @@ async def test_a_verified_copy_changed_before_the_run_stops_the_job(manager: Vid
         await CctvClarifyRunner(config).run(job, tmp_path / "work", lambda stage, fraction: None)
 
 
+# --- Modo headless (run_cctv_inline) ---
+
+
+class FailingUpscaler(FakeUpscaler):
+    async def run(self, job, fps_multiplier: int = 1) -> Path:
+        raise RuntimeError("ffmpeg died")
+
+
+async def test_an_inline_job_runs_without_the_queue_and_keeps_its_outputs(manager: VideoJobManager) -> None:
+    job = await manager.run_cctv_inline(cctv=clarify())
+
+    assert job.status == JobStatus.completed and job.device == "cpu"
+    assert manager.upscaler.ran == [job.id]
+    assert manager.queue_depth() == 0 and job.id not in manager.jobs
+    assert (cctv_session.cctv_job_dir(manager.settings.outputs_path, job.id) / "01_original" / "clip.mp4").is_file()
+
+
+async def test_an_inline_job_is_validated_like_a_queued_one(manager: VideoJobManager) -> None:
+    with pytest.raises(CctvChainError) as caught:
+        await manager.run_cctv_inline(cctv=clarify(osd_boxes_confirmed=False))
+
+    assert caught.value.code == "cctv.error.osdUnconfirmed"
+    assert manager.upscaler.ran == []
+
+
+async def test_a_failed_inline_job_leaves_no_output_directory(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    write_fake_session(settings)
+    manager = VideoJobManager(
+        settings, FailingUpscaler(("clarify",)), FakeMediaTools(), DeviceSemaphores(settings), cctv_capabilities=lambda: CAPS
+    )
+
+    with pytest.raises(RuntimeError, match="ffmpeg died"):
+        await manager.run_cctv_inline(cctv=clarify())
+
+    assert not list(settings.outputs_path.glob("*" + cctv_session.JOB_DIR_SUFFIX))
+
+
 # --- De punta a punta con ffmpeg real ---
 
 

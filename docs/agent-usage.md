@@ -81,6 +81,60 @@ Lanczos de Pillow también, y el id interno del job es un hash del contenido y
 los parámetros (`cli-<sha1>`), así que no queda ningún nombre temporal
 aleatorio en la metadata. `seconds` es el único campo que varía entre corridas.
 
+## Video de cámaras de seguridad (`upflow cctv`, carril clásico)
+
+Corre en proceso, en CPU y sin IA: filtros clásicos de ffmpeg con salida
+determinista (sin publicar todavía).
+
+```powershell
+# 1. SHA-256 del archivo antes de tocarlo, contenedor (IMKH, DHAV, H.264 crudo...), índice de cuadros y diagnóstico
+upflow cctv probe --in clip.mp4 --json
+
+# 2. "Clarify video": copia sin pérdida, copia para ver, comparativo, cuadros, informe y paquete
+upflow cctv clarify --in clip.mp4 --out-dir caso --preset night_ir `
+  --osd 0,0,480,40 --osd 1500,1040,400,36 --osd-confirmed --trim 120:980 --frames 300,512 --json
+
+# 3. "Check files are unchanged": vuelve a calcular cada SHA-256 de SHA256SUMS.txt
+upflow cctv verify --dir caso/<jobId>.cctv --json
+```
+
+`probe --json` devuelve el mismo JSON que `POST /api/v1/video/cctv/analyze`
+(`sourceSha256`, `receivedAt`, `container`, `video`, `frameIndex`, `gop`,
+`quality`, `suggestedPreset`, `warnings`...) más `ok` y `presetSteps`: los pasos
+clásicos de cada preset **para ese clip** (el desentrelazado y el aspecto dependen
+del diagnóstico). `token` sale en `null` porque la CLI borra su copia de trabajo.
+
+| Flag de `clarify` | Default | Qué hace |
+|---|---|---|
+| `--in PATH` | — | el clip tal como salió del grabador; no lo conviertas antes con otra herramienta |
+| `--out-dir DIR` | — | ahí queda `<jobId>.cctv/`: `01_original` (copia verificada), `02_processed` (`.mkv` FFV1 y `.mp4` H.264), comparativo, cuadros, `report.html`/`report.json`, `frame_index.csv`, `SHA256SUMS.txt`, `reproduce.cmd` y el `.zip` de entrega |
+| `--preset` | el sugerido por `probe` | `day`, `night_ir`, `analog`, `low_res` |
+| `--osd X,Y,W,H` | — | una por caja de texto en pantalla (hora, cámara), en píxeles del cuadro guardado; ancho y alto pares. Esas cajas se copian del original sin denoise temporal |
+| `--osd-confirmed` \| `--no-osd` | — | **hay que elegir uno**: las cajas tapan la hora y la cámara en un cuadro donde se ven, o el video no tiene texto en pantalla. Sin ninguno sale con `2` y `Confirm the on-screen text boxes on a frame where the time is visible, or choose 'No on-screen text'.` |
+| `--trim A:B` | clip entero | primer y último cuadro, inclusive, contados en el índice |
+| `--frames N,M` | ninguno | cuadros exportados como PNG (original y procesado, con su *framehash*) |
+
+Salida de `clarify --json` (las rutas de `outputs` son relativas a `outputDir`):
+
+```json
+{"ok": true, "jobId": "8f0c...", "task": "clarify", "lane": "classic", "preset": "night_ir",
+ "outputDir": "C:/.../caso/8f0c....cctv", "sourceSha256": "...", "receivedAt": {"utc": "...", "local": "..."},
+ "framesIn": 861, "framesOut": 861,
+ "outputs": {"analysis": "02_processed/...mkv", "viewing": "02_processed/...mp4", "comparison": "...",
+             "stills": [{"frame": 300, "original": {...}, "processed": {...}}], "package": "....zip"},
+ "report": "C:/.../report.html", "reportJson": "C:/.../report.json", "warnings": [], "seconds": 41.2}
+```
+
+`verify` sale con `0` si todo coincide y con `5` si algo cambió o falta
+(`{"ok": false, "mismatches": [...], "missing": [...]}`). Detecta cambios
+accidentales después de que Upflow recibió el archivo; no prueba que la
+grabación sea auténtica ni dice qué pasó antes.
+
+Códigos propios del modo: `2` para la decisión del OSD, un preset, recorte,
+cuadro o caja inválidos; `3` si no hay ffmpeg o la build no trae FFV1/libx264;
+`5` si el video no se puede decodificar o ffmpeg falla. Con `--json` el error
+suma `key` (`cctv.error.*`), la misma clave que usa la API.
+
 ## MCP
 
 `upflow-mcp` expone los mismos parámetros y el mismo JSON que la CLI:
@@ -93,6 +147,9 @@ aleatorio en la metadata. `seconds` es el único campo que varía entre corridas
 | `upflow_list_models` | `upflow models --json` |
 | `upflow_preflight_upscaler` | `upflow preflight --repo` (en proceso; `upflow_model_preflight` es la variante por servidor, multi-kind) |
 | `upflow_install_upscaler(repo_id, confirm=true)` | `upflow install --repo --yes` (en proceso, espera a que termine; `upflow_install_model` es la variante por servidor, asíncrona) |
+| `upflow_cctv_probe(file_path)` | `upflow cctv probe`. Con servidor sube el clip y espera el análisis aunque la API responda 202; en proceso la sesión queda viva para `upflow_cctv_clarify` (la barre el sweeper del servidor cuando arranca) |
+| `upflow_cctv_clarify(token, preset, steps, osd_boxes, osd_confirmed, no_osd, trim, still_frames, acquisition, destination_dir)` | `upflow cctv clarify`. `steps` = `presetSteps[preset]` del probe (`[]` = sin filtros; preset sin `steps` es un error). Con servidor crea un job de la familia `video` (seguilo con `upflow_wait_job`; `cctv.artifacts` lista los archivos); en proceso espera y, con `destination_dir`, mueve ahí `<jobId>.cctv` |
+| `upflow_cctv_check_unchanged(job_id, output_dir)` | `upflow cctv verify`; `output_dir` para una carpeta ya movida |
 
 Modos (`--mode` o variable `UPFLOW_MCP_MODE`): `auto` (default: servidor si
 responde en `UPFLOW_URL`, si no in-process), `server`, `inprocess`.
