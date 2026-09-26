@@ -477,6 +477,17 @@ en un recorte de hasta 512×512 ("Preview this area"); revisar y corregir la má
 pincel; y elegir cara por cara cuáles restaurar. El resultado se compara con un deslizador antes y
 después, y los mismos ajustes se pueden aplicar a más fotos, cada una como su propio trabajo.
 
+**Varias fotos con caras.** "Apply these settings to more photos" repite los pasos y ajustes en
+cada foto nueva, con su propia máscara automática. Las caras quedan afuera salvo que marques "Also
+restore faces in these photos": entonces cada foto elige sus caras con la misma política de siempre
+(solo las de 32 px o más entre ojos que no se ven nítidas; nada por debajo de 8 px) y la mezcla que
+elegiste. Lo que se decidió mirando la primera foto —qué cara, su mezcla propia, la geometría, el
+recorte de prueba, el punto gris o la máscara pintada— no viaja: el backend rechaza un lote que lo
+mande. Debajo aparece la lista de fotos del lote, con el progreso de cada una y, cuando terminan,
+cuántas caras se restauraron y el control cara por cara sobre ese resultado ("Review faces"), con
+un aviso de cuántas fotos faltan revisar. La lista dura mientras no abras otra foto; los trabajos
+siguen en Tareas. El sidecar de cada foto del lote lleva `"batch": true`.
+
 **Los pasos, siempre en este orden** (el orden sale del catálogo y no del pedido: cada paso
 necesita que el anterior ya haya pasado):
 
