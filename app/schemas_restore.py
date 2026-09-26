@@ -89,6 +89,7 @@ class RestoreOptions(_StrictModel):
     badge: bool | None = None
     keep_gps: bool | None = None
     photo_date: str | None = None
+    batch: bool | None = None
 
 
 class RecomposeFace(_StrictModel):

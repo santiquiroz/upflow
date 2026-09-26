@@ -42,6 +42,7 @@ from app.services.photo_restore_presets import ToneKind
 from app.services.photo_restore_runners import RunnerDeps, build_step_runners, detected_selections, face_detector_use
 from app.services.photo_restorer_registry import validate_step_ready
 from app.services.progress import SAVING_STAGE, apply_image_tile_progress, enter_image_stage
+from app.services.restore_batch import validate_batch
 from app.services.restore_outputs import (
     OutputContext,
     RestoreOutputPaths,
@@ -135,6 +136,7 @@ def validate_restore_selection(
     for spec in specs:
         check_ready(settings, spec.id, uses_model=step_uses_model(spec, options))
     _validate_photo_date(options.get("photo_date"))
+    validate_batch(options, session)
     mode = restore_upscale_mode(options, scale)
     steps_in_order = tuple(spec.id for spec in specs)
     with_geometry = options_with_session_geometry(options, session, check_session)

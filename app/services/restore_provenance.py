@@ -121,6 +121,7 @@ class SidecarContext:
     privacy: MetadataPrivacy | None = None
     photo_date: str | None = None
     environment: Mapping[str, Any] = field(default_factory=dict)
+    batch: bool = False
 
 
 ModelFileResolver = Callable[[str, str], "Path | None"]
@@ -268,6 +269,7 @@ def build_sidecar(
         "upflow": {"version": context.app_version, "commit": context.commit},
         "input": context.input.to_metadata(),
         "geometry": dict(context.geometry),
+        "batch": context.batch,
         "privacy": privacy_metadata(context.privacy, context.photo_date),
         "steps": [sidecar_step(record, catalog) for record in records],
         "damage": summary["damage"],

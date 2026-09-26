@@ -11,6 +11,7 @@ from PIL import Image
 
 from app.services.image_io import LoadedImage, MetadataPrivacy, save_restored
 from app.services.photo_restore_pipeline import PostResult, PreResult, restore_metadata
+from app.services.restore_batch import is_batch
 from app.services.restore_provenance import (
     EXTENSIONS,
     InputInfo,
@@ -156,6 +157,7 @@ def restore_summary(
         "downloadNames": asdict(names),
         "artifacts": _artifact_names(post),
         "viewFullResolution": view_full,
+        "batch": is_batch(context.options),
     }
 
 
@@ -200,6 +202,7 @@ def _sidecar(
         privacy=privacy,
         photo_date=_photo_date(context),
         environment=context.environment,
+        batch=is_batch(context.options),
     )
     return build_sidecar(pre, post, sidecar_context, context.catalog)
 

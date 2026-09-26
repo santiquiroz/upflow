@@ -586,6 +586,86 @@ def test_create_restore_job_coroutine_refuses_a_missing_selection(tmp_path: Path
 
 
 # ---------------------------------------------------------------------------
+# Lote con caras (P4-BATCH)
+# ---------------------------------------------------------------------------
+
+
+def read_sidecar(harness: Harness, job_id: str) -> dict:
+    return json.loads((harness.settings.outputs_path / f"{job_id}.restore.json").read_text(encoding="utf-8"))
+
+
+def test_a_batch_photo_restores_its_own_faces_and_is_marked_as_batch(harness_factory) -> None:
+    harness = harness_factory(step_runners={"faces": fake_faces})
+    options = json.dumps({"batch": True, "faces": {"blend": 0.6}})
+
+    job_id = harness.restore(file=png_bytes(), restore_steps="faces", restore_options=options)["jobId"]
+
+    job = harness.manager.jobs[job_id]
+    assert job.restore_options["batch"] is True
+    assert job.metadata["restore"]["batch"] is True
+    sidecar = read_sidecar(harness, job_id)
+    assert sidecar["batch"] is True
+    assert [step["id"] for step in sidecar["steps"]] == ["faces"]
+
+
+def test_each_batch_result_can_be_reviewed_face_by_face(harness_factory) -> None:
+    harness = harness_factory(step_runners={"faces": fake_faces})
+    options = json.dumps({"batch": True, "faces": {"blend": 0.6}})
+    job_id = harness.restore(file=png_bytes(), restore_steps="faces", restore_options=options)["jobId"]
+
+    response = harness.client.post(
+        f"/api/v1/restore/jobs/{job_id}/recompose", json={"faces": {"0": {"enabled": False, "blend": 0.6}}}
+    )
+
+    assert response.status_code == 200, response.text
+    sidecar = response.json()["sidecar"]
+    assert sidecar["batch"] is True
+    assert next(face for face in sidecar["faces"] if face["index"] == 0)["enabled"] is False
+
+
+def test_a_single_photo_is_not_marked_as_batch(harness_factory) -> None:
+    harness = harness_factory()
+
+    job_id = harness.restore(file=png_bytes())["jobId"]
+
+    assert harness.manager.jobs[job_id].metadata["restore"]["batch"] is False
+    assert read_sidecar(harness, job_id)["batch"] is False
+
+
+@pytest.mark.parametrize(
+    ("options", "named"),
+    [
+        ({"faces": {"selected": [0]}}, "faces.selected"),
+        ({"faces": {"per_face": {"0": 0.4}}}, "faces.per_face"),
+        ({"geometry": {"rotate90": 1}}, "geometry"),
+        ({"preview_crop": [0, 0, 64, 64]}, "preview_crop"),
+        ({"tone": {"gray_point": [10, 10]}}, "tone.gray_point"),
+        ({"repair": {"use_user_mask": True}}, "repair.use_user_mask"),
+    ],
+)
+def test_a_batch_refuses_choices_made_on_another_photo(harness_factory, options: dict, named: str) -> None:
+    harness = harness_factory()
+
+    response = harness.post_job(
+        file=png_bytes(), restore_steps="tone,faces", restore_options=json.dumps({"batch": True, **options})
+    )
+
+    assert response.status_code == 400, response.text
+    assert named in response.json()["detail"]
+    assert not any(harness.settings.uploads_path.iterdir()), "a refused batch photo must not stay on disk"
+
+
+def test_a_batch_photo_cannot_reuse_an_analysis_session(harness_factory) -> None:
+    harness = harness_factory()
+    token = harness.analyze()["token"]
+
+    response = harness.post_job(token=token, restore_options=json.dumps({"batch": True}))
+
+    assert response.status_code == 400
+    assert "batch" in response.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
 # Recomposicion
 # ---------------------------------------------------------------------------
 
