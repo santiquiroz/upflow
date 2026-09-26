@@ -3,7 +3,7 @@ from __future__ import annotations
 import io
 import os
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import cv2
@@ -25,7 +25,16 @@ LOSSY_QUALITY = 95
 PNG_COMPRESSION = 6
 MAX_VALUE = {8: 255.0, 16: 65535.0}
 SUPPORTED_INPUT_FORMATS = frozenset({"JPEG", "MPO", "PNG", "WEBP", "BMP", "TIFF"})
-OUTPUT_FORMATS = {"png": "PNG", "jpg": "JPEG", "jpeg": "JPEG", "webp": "WEBP"}
+OUTPUT_FORMATS = {
+    "png": "PNG",
+    "jpg": "JPEG",
+    "jpeg": "JPEG",
+    "webp": "WEBP",
+    "tif": "TIFF",
+    "tiff": "TIFF",
+}
+SIXTEEN_BIT_FORMATS = frozenset({"PNG", "TIFF"})
+TIFF_XMP_TAG = 700
 ALPHA_MODES = frozenset({"RGBA", "LA", "PA", "RGBa", "La"})
 ALPHA_DROPPED = "alpha_dropped"
 CMYK_ICC_DROPPED = "cmyk_icc_dropped"
@@ -71,6 +80,7 @@ class LoadedImage:
 class MetadataPrivacy:
     gps_removed: bool
     date_time_original_moved: bool
+    metadata_not_embedded: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -149,10 +159,11 @@ def save_restored(
     pillow_format = _output_format(fmt, bit_depth)
     prepared = prepare_output_exif(exif, keep_gps)
     pixels = _quantize(rgb, bit_depth)
-    encoders = {"PNG": _encode_png, "JPEG": _encode_jpeg, "WEBP": _encode_webp}
+    encoders = {"PNG": _encode_png, "JPEG": _encode_jpeg, "WEBP": _encode_webp, "TIFF": _encode_tiff}
     encoded = encoders[pillow_format](pixels, icc, prepared.exif, xmp)
     _write_atomically(Path(path), encoded)
-    return prepared.privacy
+    not_embedded = _metadata_not_embedded(pillow_format, bit_depth, icc, prepared.exif, xmp)
+    return replace(prepared.privacy, metadata_not_embedded=not_embedded)
 
 
 def _read_header(image: Image.Image) -> _Header:
@@ -244,8 +255,8 @@ def _output_exif(
 def _output_format(fmt: str, bit_depth: int) -> str:
     pillow_format = OUTPUT_FORMATS.get(fmt.lower())
     if pillow_format is None:
-        raise ValueError(f"Restore output format must be png, jpg, jpeg or webp: {fmt!r}")
-    if bit_depth not in MAX_VALUE or (bit_depth == 16 and pillow_format != "PNG"):
+        raise ValueError(f"Restore output format must be png, jpg, jpeg, webp, tif or tiff: {fmt!r}")
+    if bit_depth not in MAX_VALUE or (bit_depth == 16 and pillow_format not in SIXTEEN_BIT_FORMATS):
         raise ValueError(f"{bit_depth}-bit output is not available for {fmt}")
     return pillow_format
 
@@ -273,6 +284,41 @@ def _encode_jpeg(pixels: np.ndarray, icc: bytes | None, exif: bytes | None, xmp:
 
 def _encode_webp(pixels: np.ndarray, icc: bytes | None, exif: bytes | None, xmp: str) -> bytes:
     return _encode_with_pillow(pixels, "WEBP", icc, exif, xmp=xmp.encode("utf-8"))
+
+
+def _encode_tiff(pixels: np.ndarray, icc: bytes | None, exif: bytes | None, xmp: str) -> bytes:
+    if pixels.dtype == np.uint16:
+        return _encode_tiff16(pixels)
+    buffer = io.BytesIO()
+    options = {"icc_profile": icc} if icc else {}
+    # Uncompressed on purpose: Pillow's libtiff path (any compression) cannot write the EXIF sub-IFD.
+    Image.fromarray(pixels, "RGB").save(buffer, "TIFF", tiffinfo=_tiff_tags(exif, xmp), **options)
+    return buffer.getvalue()
+
+
+def _tiff_tags(exif: bytes | None, xmp: str) -> Image.Exif:
+    tags = Image.Exif()
+    if exif:
+        tags.load(exif)
+    tags[TIFF_XMP_TAG] = xmp.encode("utf-8")
+    return tags
+
+
+def _encode_tiff16(pixels: np.ndarray) -> bytes:
+    # Pillow cannot write 16-bit RGB, and cv2 writes no ICC, EXIF or XMP: save_restored declares it.
+    ok, encoded = cv2.imencode(".tiff", cv2.cvtColor(pixels, cv2.COLOR_RGB2BGR))
+    if not ok:
+        raise ValueError("TIFF encoding failed")
+    return encoded.tobytes()
+
+
+def _metadata_not_embedded(
+    pillow_format: str, bit_depth: int, icc: bytes | None, exif: bytes | None, xmp: str
+) -> tuple[str, ...]:
+    if pillow_format != "TIFF" or bit_depth != 16:
+        return ()
+    present = {"icc": bool(icc), "exif": bool(exif), "xmp": bool(xmp)}
+    return tuple(name for name, is_present in present.items() if is_present)
 
 
 def _encode_with_pillow(

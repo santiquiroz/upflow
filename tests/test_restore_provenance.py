@@ -41,6 +41,7 @@ from app.services.restore_provenance import (
     facts_from_records,
     facts_from_sidecar,
     output_bit_depth,
+    privacy_metadata,
     restoration_description,
     sanitize_stem,
     sha256_file,
@@ -354,6 +355,7 @@ def test_the_sidecar_records_hashes_licenses_and_the_digital_source_type(tmp_pat
     assert sidecar["privacy"] == {
         "gpsRemoved": True,
         "dateTimeOriginalMovedToDigitized": True,
+        "metadataNotEmbedded": [],
         "approximatePhotoDate": "1958",
     }
     assert sidecar["cpuFallback"] == [{"model": "drunet-color", "reason": "tdrBudget"}]
@@ -463,3 +465,14 @@ def test_write_sidecar_writes_json_atomically(tmp_path: Path) -> None:
 
     assert json.loads(path.read_text(encoding="utf-8"))["input"]["name"] == "Medellín.jpg"
     assert [p.name for p in tmp_path.iterdir()] == ["job.restore.json"]
+
+
+def test_privacy_block_declares_metadata_a_sixteen_bit_tiff_could_not_embed() -> None:
+    privacy = MetadataPrivacy(
+        gps_removed=True, date_time_original_moved=False, metadata_not_embedded=("icc", "xmp")
+    )
+
+    block = privacy_metadata(privacy, None)
+
+    assert block["metadataNotEmbedded"] == ["icc", "xmp"]
+    assert privacy_metadata(None, None)["metadataNotEmbedded"] == []

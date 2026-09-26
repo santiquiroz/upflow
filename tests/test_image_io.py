@@ -346,14 +346,15 @@ def test_out_of_range_values_are_clipped(tmp_path: Path) -> None:
     np.testing.assert_array_equal(np.asarray(reopen(path))[0, 0], [0, 128, 255])
 
 
-def test_sixteen_bit_is_only_for_png(tmp_path: Path) -> None:
+@pytest.mark.parametrize("fmt", ["jpg", "webp"])
+def test_sixteen_bit_is_only_for_png_and_tiff(tmp_path: Path, fmt: str) -> None:
     with pytest.raises(ValueError):
-        save_restored(float_image(), tmp_path / "x.jpg", "jpg", 16, None, None, xmp())
+        save_restored(float_image(), tmp_path / f"x.{fmt}", fmt, 16, None, None, xmp())
 
 
 def test_unknown_output_format_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
-        save_restored(float_image(), tmp_path / "x.tif", "tiff", 8, None, None, xmp())
+        save_restored(float_image(), tmp_path / "x.gif", "gif", 8, None, None, xmp())
 
 
 def test_no_exif_in_means_no_exif_out(tmp_path: Path) -> None:
@@ -382,3 +383,93 @@ def test_save_does_not_modify_the_input_array(tmp_path: Path) -> None:
     save_restored(rgb, tmp_path / "x.png", "png", 16, None, None, xmp())
 
     np.testing.assert_array_equal(rgb, before)
+
+
+# --- TIFF -------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("fmt", ["tif", "tiff", "TIFF"])
+def test_eight_bit_tiff_keeps_icc_exif_and_xmp(tmp_path: Path, fmt: str) -> None:
+    path = tmp_path / "out.tif"
+
+    privacy = save_restored(
+        float_image(), path, fmt, 8, srgb_icc(), phone_exif(orientation=6).tobytes(), xmp("1974")
+    )
+
+    image = reopen(path)
+    assert image.format == "TIFF" and image.mode == "RGB"
+    assert image.info["icc_profile"] == srgb_icc()
+    exif = image.getexif()
+    assert exif[ORIENTATION] == 1
+    assert exif[MAKE] == "PhoneMaker"
+    assert exif.get_ifd(IFD.Exif)[DATE_TIME_DIGITIZED] == REPRODUCTION_DATE
+    assert exif.get_ifd(IFD.GPSInfo) == {}
+    assert read_xmp_properties(extract_xmp(image))["photoshop:DateCreated"] == "1974"
+    assert privacy.gps_removed and privacy.date_time_original_moved
+    assert privacy.metadata_not_embedded == ()
+
+
+def test_eight_bit_tiff_pixels_round_trip_through_the_loader(tmp_path: Path) -> None:
+    path = tmp_path / "out.tif"
+    rgb = float_image()
+
+    save_restored(rgb, path, "tif", 8, None, None, xmp())
+
+    loaded = load_image_for_restore(path)
+    assert loaded.bit_depth == 8
+    np.testing.assert_allclose(loaded.rgb, np.rint(rgb * 255) / 255, atol=1e-6)
+
+
+def test_eight_bit_tiff_without_exif_still_carries_xmp(tmp_path: Path) -> None:
+    path = tmp_path / "plain.tif"
+
+    save_restored(float_image(), path, "tiff", 8, None, None, xmp())
+
+    image = reopen(path)
+    assert "icc_profile" not in image.info
+    assert image.getexif().get(MAKE) is None
+    assert read_xmp_properties(extract_xmp(image))["xmp:CreatorTool"] == "Upflow test"
+
+
+def test_sixteen_bit_tiff_round_trips_exactly(tmp_path: Path) -> None:
+    source = tmp_path / "scan16.png"
+    pixels = np.random.default_rng(7).integers(0, 65536, (6, 5, 3), dtype=np.uint16)
+    assert cv2.imwrite(str(source), pixels)
+    loaded = load_image_for_restore(source)
+    output = tmp_path / "restored.tif"
+
+    save_restored(loaded.rgb, output, "tif", 16, None, None, xmp())
+
+    reloaded = cv2.imread(str(output), cv2.IMREAD_UNCHANGED)
+    assert reloaded.dtype == np.uint16
+    np.testing.assert_array_equal(reloaded, pixels)
+    assert load_image_for_restore(output).bit_depth == 16
+
+
+def test_sixteen_bit_tiff_declares_the_metadata_it_could_not_embed(tmp_path: Path) -> None:
+    output = tmp_path / "restored.tif"
+
+    privacy = save_restored(
+        float_image(), output, "tiff", 16, srgb_icc(), phone_exif().tobytes(), xmp()
+    )
+
+    image = reopen(output)
+    assert "icc_profile" not in image.info
+    assert image.getexif().get(MAKE) is None
+    assert privacy.metadata_not_embedded == ("icc", "exif", "xmp")
+    assert privacy.gps_removed
+
+
+def test_sixteen_bit_tiff_declares_only_metadata_that_existed(tmp_path: Path) -> None:
+    privacy = save_restored(float_image(), tmp_path / "x.tif", "tif", 16, None, None, xmp())
+
+    assert privacy.metadata_not_embedded == ("xmp",)
+
+
+@pytest.mark.parametrize("fmt,depth", [("png", 16), ("png", 8), ("jpg", 8), ("webp", 8)])
+def test_other_formats_embed_everything(tmp_path: Path, fmt: str, depth: int) -> None:
+    privacy = save_restored(
+        float_image(), tmp_path / f"x.{fmt}", fmt, depth, srgb_icc(), phone_exif().tobytes(), xmp()
+    )
+
+    assert privacy.metadata_not_embedded == ()

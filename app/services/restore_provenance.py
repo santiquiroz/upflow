@@ -323,6 +323,7 @@ def privacy_metadata(privacy: MetadataPrivacy | None, photo_date: str | None) ->
     return {
         "gpsRemoved": bool(privacy and privacy.gps_removed),
         "dateTimeOriginalMovedToDigitized": bool(privacy and privacy.date_time_original_moved),
+        "metadataNotEmbedded": list(privacy.metadata_not_embedded) if privacy else [],
         "approximatePhotoDate": photo_date,
     }
 
