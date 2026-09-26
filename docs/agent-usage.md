@@ -1,6 +1,6 @@
 # Upflow para agentes (Claude Code, Codex, cualquier cliente MCP)
 
-Todo lo que un agente necesita para reescalar una imagen **sin abrir la UI y sin
+Todo lo que un agente necesita para reescalar o restaurar una foto **sin abrir la UI y sin
 levantar el servidor**: una CLI headless, un servidor MCP que sabe correr en
 proceso, y una API con `/health` y parámetros de tiling explícitos.
 
@@ -61,13 +61,69 @@ Salida de `upscale --json`:
 Otros subcomandos: `upflow models`, `upflow health`, `upflow preflight --repo <hf-repo>`,
 `upflow install --repo <hf-repo> --yes` (sin `--yes` no descarga nada y sale con 2).
 
+## Restaurar fotos (`upflow restore`)
+
+La misma cadena que la pestaña "Restore photo" (daños, trama de impresión,
+bloques JPEG, ruido, tono, caras, color), en proceso y sin servidor. Todo corre
+en la PC: la foto nunca sale de ella.
+
+```powershell
+# Pasos elegidos a mano, con los ajustes del preset "gentle" como base
+upflow restore --in escaneo.tif --out abuela.png --steps repair,denoise,tone --preset gentle --json
+
+# Sin --steps: Upflow analiza la foto y corre lo que propone el preset
+# (el que pasás con --preset o el que sugiere el análisis)
+upflow restore --in recorte.jpg --out recorte-restaurado.png --json
+
+# Girar, recortar y agrandar x2 con Lanczos (sin IA)
+upflow restore --in foto.jpg --out foto.png --steps tone --rotate 90 --crop 10,10,800,600 --scale 2 --upscale classic
+```
+
+| Flag | Default | Qué hace |
+|---|---|---|
+| `--in PATH` | — | foto de entrada (png/jpg/webp/bmp/tif) |
+| `--out PATH` | — | salida; la extensión define el formato salvo `--format` (`png`, `jpg`, `jpeg`, `webp`) |
+| `--steps CSV` | omitido = análisis | `descreen,repair,deblock,denoise,tone,faces,colorize`. El orden lo fija Upflow, no el de la lista |
+| `--preset ID` | con `--steps`: ninguno; sin `--steps`: el que propone el análisis | `gentle`, `heavy_damage`, `newspaper`, `faded_color_print`, `portrait`. Con `--steps` solo aporta los ajustes de esos pasos; sin `--steps` elige también los pasos según lo que encontró el análisis |
+| `--scale N` | `1` | `1` = sin agrandar; `2`–`4` agranda la foto restaurada |
+| `--upscale none\|classic\|ai` | `none` con `--scale 1`, `ai` si no | `classic` = Lanczos en CPU; `ai` usa `--model` (default `realesrgan-x4plus`, inventa textura) |
+| `--face-blend 0..1` | el del preset | mezcla de las caras restauradas con las originales (paso `faces`) |
+| `--rotate 0\|90\|180\|270` | `0` | giro antes de todo lo demás |
+| `--crop x,y,w,h` | — | recorte en píxeles, medido después de girar |
+| `--device ID` | `DEFAULT_DEVICE` | `cpu`, `dml:0`... (`auto` necesita el servidor) |
+
+Junto a `--out` quedan `<nombre>.restore.json` (los detalles: pasos, modelos,
+placa y precisión, caras, qué se inventó, hashes) y, si hubo color,
+`<nombre>.uncolored.<ext>`. La vista, el antes/después y los recortes de caras
+se borran al terminar, así que **recomponer caras necesita el servidor**.
+
+Salida de `restore --json` (recortada):
+
+```json
+{"ok": true, "output": "C:/.../foto.png", "uncolored": null, "details": "C:/.../foto.restore.json",
+ "width": 1600, "height": 1200, "steps": ["descreen", "tone"], "preset": "gentle",
+ "options": {"tone": {"strength": 0.7, "fix_faded": true}, "upscale_mode": "classic"},
+ "scale": 2, "upscale": {"mode": "classic", "scale": 2.0}, "device": "cpu", "format": "png",
+ "faces": [], "compositeReasons": [], "badge": false, "warnings": [], "cpuFallback": [],
+ "recomposeAvailable": false, "token": null, "seconds": 0.2}
+```
+
+`compositeReasons` no vacío (caras, color, rellenos grandes, agrandado
+generativo) significa que la foto tiene detalle inventado: el JSON de
+detalles lo declara y la imagen lleva la insignia (`"badge": true`); por MCP
+se apaga con `options.badge = false`.
+
+Si falta un pack de modelos para un paso, sale con `3` y el mensaje dice cuál
+bajar desde la app. Mismo input + mismos parámetros ⇒ mismos bytes (id
+`cli-<sha1>` como en `upscale`).
+
 ## Códigos de salida y errores
 
 | Código | Significado | Ejemplo de `error` |
 |---|---|---|
 | `0` | ok | — |
-| `2` | argumentos inválidos | `Scale must be one of [2, 3, 4]`, `unsupported output format 'tiff'`, `downloads need --yes` |
-| `3` | modelo no instalado | `builtin model 'realesrgan-x4plus' needs the realesrgan-ncnn pack at ...`, `model 'x' is not installed (see upflow models)` |
+| `2` | argumentos inválidos | `Scale must be one of [2, 3, 4]`, `unsupported output format 'tiff'`, `downloads need --yes`, `--crop needs four integers x,y,w,h`, `the analysis found nothing for preset 'gentle' to fix; choose steps with --steps` |
+| `3` | modelo no instalado | `builtin model 'realesrgan-x4plus' needs the realesrgan-ncnn pack at ...`, `model 'x' is not installed (see upflow models)`, `Falta los modelos de restauración de fotos (...). Lo pide el paso de restauración 'denoise'.` |
 | `4` | dispositivo | `Unknown device id 'dml:9'`, `device 'auto' needs the server's router; pass an explicit device` |
 | `5` | fallo de inferencia u operación | `Real-ESRGAN NCNN reported a Vulkan failure (vkAllocateMemory failed -2); usually the tile does not fit in VRAM. Retry with a smaller tile_size`, `ffmpeg could not encode jxl: ...` |
 
@@ -93,9 +149,19 @@ aleatorio en la metadata. `seconds` es el único campo que varía entre corridas
 | `upflow_list_models` | `upflow models --json` |
 | `upflow_preflight_upscaler` | `upflow preflight --repo` (en proceso; `upflow_model_preflight` es la variante por servidor, multi-kind) |
 | `upflow_install_upscaler(repo_id, confirm=true)` | `upflow install --repo --yes` (en proceso, espera a que termine; `upflow_install_model` es la variante por servidor, asíncrona) |
+| `upflow_restore_analyze(file_path)` | diagnóstico de la foto: `token`, `proposedPreset`, `proposedSteps`, `proposedOptions`, `presetSelections`, caras y daño. En proceso suma `previewPath` |
+| `upflow_restore_photo(file_path \| token, steps, options, scale=1, device)` | `upflow restore`. `steps` es obligatorio (tomalo de `proposedSteps`); `options` tiene la forma de `proposedOptions` más `upscale_mode`, `geometry`, `badge`, `keep_gps`, `photo_date`. Con `token` usa las caras y la máscara del análisis. Con servidor devuelve el job (`restoreSteps`, `stage`) y con `destination_path` guarda el resultado; sin servidor devuelve el JSON de `restore --json` |
+| `upflow_restore_recompose(job_id, faces)` | rehace la mezcla de las caras de un job terminado sin volver a correr modelos (`faces`: `{"0": {"enabled": true, "blend": 0.4}}`). Solo con servidor |
+
+Un `token` de `upflow_restore_analyze` en proceso sirve para `upflow_restore_photo`
+en proceso; su sesión queda en `runtime/video-work/restore-<token>` hasta que el
+barrido del servidor la borra por edad (`upflow restore` sin `--steps` borra la
+suya al terminar).
 
 Modos (`--mode` o variable `UPFLOW_MCP_MODE`): `auto` (default: servidor si
 responde en `UPFLOW_URL`, si no in-process), `server`, `inprocess`.
+`upflow_job_status`/`upflow_wait_job` de un job de restauración suman
+`restoreSteps` y la etapa en curso (`stage`, p. ej. `restore_denoise`).
 `--autostart` levanta `uvicorn app.main:app` en el puerto de `UPFLOW_URL`
 (8090 por default) si no hay nadie escuchando, espera hasta 60 s y sigue en
 in-process si no arranca.

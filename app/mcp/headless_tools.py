@@ -1,4 +1,4 @@
-"""Tools MCP que pueden ejecutar Upflow sin un servidor HTTP."""
+"""Tools MCP que pueden ejecutar Upflow sin un servidor HTTP (reescalado y restauracion de fotos)."""
 
 from __future__ import annotations
 
@@ -138,9 +138,77 @@ async def upflow_upscale_image_headless(
         )
         return _dump(result)
     except headless.HeadlessError as exc:
-        return _dump({"ok": False, "error": str(exc), "code": exc.exit_code})
+        return headless_error(exc)
     except Exception as exc:
         return f"Error: {exc}"
+
+
+def headless_error(exc: headless.HeadlessError) -> str:
+    return _dump({"ok": False, "error": str(exc), "code": exc.exit_code})
+
+
+async def upflow_restore_analyze_headless(file_path: str) -> str:
+    """Analiza una foto para restaurarla en proceso, sin servidor."""
+    try:
+        return _dump(await headless.analyze_photo(get_context(), Path(file_path)))
+    except headless.HeadlessError as exc:
+        return headless_error(exc)
+    except Exception as exc:
+        return f"Error: {exc}"
+
+
+def restore_destination(file_path: str, destination_path: str, output_format: str) -> Path:
+    fmt = output_format or "png"
+    stem = Path(file_path).stem if file_path else "photo"
+    if destination_path:
+        return client.resolve_output_path(destination_path, f"{stem}-restored.{fmt}")
+    if not file_path:
+        raise headless.UsageError("pass destination_path when restoring from an analysis token")
+    return Path(file_path).parent / f"{stem}-restored.{fmt}"
+
+
+async def upflow_restore_photo_headless(
+    file_path: str = "",
+    token: str = "",
+    steps: list[str] | None = None,
+    options: dict[str, Any] | None = None,
+    scale: int = 1,
+    device: str = "",
+    model_name: str = headless.DEFAULT_SR_MODEL,
+    output_format: str = "",
+    destination_path: str = "",
+) -> str:
+    """Restaura una foto local directamente, sin servidor."""
+    try:
+        spec = headless.RestoreSpec(
+            steps=tuple(steps or ()),
+            options=dict(options or {}),
+            scale=scale,
+            model=model_name,
+            device=device or None,
+            output_format=output_format or None,
+        )
+        result = await headless.restore_image(
+            get_context(),
+            restore_destination(file_path, destination_path, output_format),
+            spec,
+            source=Path(file_path) if file_path else None,
+            token=token or None,
+        )
+        return _dump(result)
+    except headless.HeadlessError as exc:
+        return headless_error(exc)
+    except Exception as exc:
+        return f"Error: {exc}"
+
+
+async def upflow_restore_recompose_headless(job_id: str, faces: dict[str, Any]) -> str:
+    """Sin servidor no hay caras que recomponer: lo explica en vez de fallar a ciegas."""
+    message = (
+        f"recomposing the faces of {job_id!r} needs the Upflow server: an in-process restore keeps no face "
+        "artifacts. Start the server (upflow-mcp --autostart) and restore the photo there."
+    )
+    return headless_error(headless.UsageError(message))
 
 
 async def autostart_server(port: int) -> bool:

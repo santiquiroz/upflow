@@ -141,26 +141,20 @@ class JobManager(QueuedJobManager[UpscaleJob]):
         restore_options: Mapping[str, Any] | None = None,
         restore_session: str | None = None,
     ) -> UpscaleJob:
-        restore = self._restore_selection(restore_steps, restore_options, restore_session, scale)
-        await asyncio.to_thread(self._validate_input_image, source_path, restore)
-        validate_tile_params(tile_size, tile_overlap)
-        resolved_model_id = model_id if model_id is not None else model_name
-        if device is not None and device != AUTO_DEVICE_ID and self.devices is not None:
-            await asyncio.to_thread(self.devices.validate, device)
-        resolution = self._resolution_for(resolved_model_id, scale, output_format, device, restore)
-        job = UpscaleJob(
+        job = await self.build_job(
             source_path=source_path,
             original_filename=original_filename,
-            model_name=model_name if resolution is None else resolution.engine_model_name,
-            scale=scale if resolution is None else resolution.scale,
+            model_name=model_name,
+            scale=scale,
             output_format=output_format,
-            model_id=None if resolution is None else resolution.model_id,
+            model_id=model_id,
             device=device,
-            native_scale=scale if resolution is None else resolution.native_scale,
+            owner_id=owner.id if owner is not None else None,
             tile_size=tile_size,
             tile_overlap=tile_overlap,
-            owner_id=owner.id if owner is not None else None,
-            **restore_job_fields(restore),
+            restore_steps=restore_steps,
+            restore_options=restore_options,
+            restore_session=restore_session,
         )
         if device == AUTO_DEVICE_ID:
             await self._validate_auto_kind(self._job_kind(job))
@@ -171,6 +165,45 @@ class JobManager(QueuedJobManager[UpscaleJob]):
         self._enqueue(job)
         self.jobs[job.id] = job
         return job
+
+    async def build_job(
+        self,
+        *,
+        source_path: Path,
+        original_filename: str,
+        model_name: str,
+        scale: int,
+        output_format: str,
+        model_id: str | None = None,
+        device: str | None = None,
+        owner_id: str | None = None,
+        tile_size: int | None = None,
+        tile_overlap: int | None = None,
+        restore_steps: Sequence[str] | None = None,
+        restore_options: Mapping[str, Any] | None = None,
+        restore_session: str | None = None,
+    ) -> UpscaleJob:
+        restore = self._restore_selection(restore_steps, restore_options, restore_session, scale)
+        await asyncio.to_thread(self._validate_input_image, source_path, restore)
+        validate_tile_params(tile_size, tile_overlap)
+        resolved_model_id = model_id if model_id is not None else model_name
+        if device is not None and device != AUTO_DEVICE_ID and self.devices is not None:
+            await asyncio.to_thread(self.devices.validate, device)
+        resolution = self._resolution_for(resolved_model_id, scale, output_format, device, restore)
+        return UpscaleJob(
+            source_path=source_path,
+            original_filename=original_filename,
+            model_name=model_name if resolution is None else resolution.engine_model_name,
+            scale=scale if resolution is None else resolution.scale,
+            output_format=output_format,
+            model_id=None if resolution is None else resolution.model_id,
+            device=device,
+            native_scale=scale if resolution is None else resolution.native_scale,
+            tile_size=tile_size,
+            tile_overlap=tile_overlap,
+            owner_id=owner_id,
+            **restore_job_fields(restore),
+        )
 
     def _restore_selection(
         self,

@@ -1,6 +1,7 @@
-"""CLI headless `upflow`: reescalado sin servidor ni UI, pensada para agentes.
+"""CLI headless `upflow`: reescalado y restauracion de fotos sin servidor ni UI, pensada para agentes.
 
     upflow upscale --in a.png --out b.webp --model realesrgan-x4plus --scale 2 --json
+    upflow restore --in scan.tif --out foto.png --steps repair,denoise,tone --preset gentle --json
     upflow models --json | upflow health --json | upflow preflight --repo X | upflow install --repo X --yes
 
 `--json` imprime UNA sola linea JSON en stdout (contrato en app/headless.py). Codigos
@@ -19,9 +20,15 @@ from pathlib import Path
 from typing import Any
 
 from app import headless
+from app.services.photo_restore_chain import RESTORE_CHAIN, step_ids
+from app.services.photo_restore_presets import PHOTO_PRESETS
 
 Handler = Callable[[argparse.Namespace], Awaitable[dict[str, Any]]]
 FORMATS = ("png", "jpg", "jpeg", "webp", "jxl", "avif")
+RESTORE_FORMATS = ("png", "jpg", "jpeg", "webp")
+UPSCALE_MODES = ("none", "classic", "ai")
+ROTATIONS = (0, 90, 180, 270)
+QUARTER_TURN = 90
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -47,11 +54,31 @@ def build_parser() -> argparse.ArgumentParser:
     preflight.add_argument("--repo", required=True)
     _add_json_flag(preflight).set_defaults(handler=run_preflight)
 
+    add_restore_parser(subparsers)
+
     install = subparsers.add_parser("install", help="instala un upscaler desde Hugging Face")
     install.add_argument("--repo", required=True)
     install.add_argument("--yes", action="store_true", help="obligatorio: autoriza la descarga")
     _add_json_flag(install).set_defaults(handler=run_install)
     return parser
+
+
+def add_restore_parser(subparsers: Any) -> None:
+    restore = subparsers.add_parser("restore", help="restaura una foto (sin servidor)")
+    restore.add_argument("--in", dest="input_path", required=True)
+    restore.add_argument("--out", dest="output_path", required=True)
+    steps_help = f"CSV de {','.join(step_ids(RESTORE_CHAIN))}; omitido = lo que proponga el analisis"
+    restore.add_argument("--steps", default=None, help=steps_help)
+    restore.add_argument("--preset", choices=[preset.id for preset in PHOTO_PRESETS], default=None)
+    restore.add_argument("--scale", type=int, default=1)
+    restore.add_argument("--upscale", choices=UPSCALE_MODES, default=None, help="omitido: none con --scale 1, si no ai")
+    restore.add_argument("--model", default=headless.DEFAULT_SR_MODEL, help="modelo SR para --upscale ai")
+    restore.add_argument("--face-blend", type=float, default=None)
+    restore.add_argument("--rotate", type=int, choices=ROTATIONS, default=0)
+    restore.add_argument("--crop", default=None, help="x,y,w,h en pixeles, despues de girar")
+    restore.add_argument("--device", default=None, help="cpu, dml:0... (omitido = DEFAULT_DEVICE)")
+    restore.add_argument("--format", choices=RESTORE_FORMATS, default=None, help="omitido = extension de --out")
+    _add_json_flag(restore).set_defaults(handler=run_restore)
 
 
 def _add_json_flag(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
@@ -74,6 +101,65 @@ async def run_upscale(args: argparse.Namespace) -> dict[str, Any]:
         device=args.device,
         output_format=args.format,
     )
+
+
+async def run_restore(args: argparse.Namespace) -> dict[str, Any]:
+    return await headless.restore_image(
+        headless.build_context(),
+        Path(args.output_path),
+        restore_spec_from_args(args),
+        source=Path(args.input_path),
+    )
+
+
+def restore_spec_from_args(args: argparse.Namespace) -> headless.RestoreSpec:
+    return headless.RestoreSpec(
+        steps=parse_steps(args.steps),
+        options=restore_options_from_args(args),
+        preset=args.preset,
+        scale=args.scale,
+        model=args.model,
+        device=args.device,
+        output_format=args.format,
+    )
+
+
+def parse_steps(raw: str | None) -> tuple[str, ...]:
+    if raw is None:
+        return ()
+    return tuple(step.strip() for step in raw.split(",") if step.strip())
+
+
+def parse_box(raw: str) -> list[int]:
+    parts = raw.split(",")
+    try:
+        box = [int(part) for part in parts]
+    except ValueError as exc:
+        raise headless.UsageError(f"--crop needs four integers x,y,w,h, got {raw!r}") from exc
+    if len(box) != 4:
+        raise headless.UsageError(f"--crop needs four integers x,y,w,h, got {raw!r}")
+    return box
+
+
+def geometry_from_args(rotate: int, crop: str | None) -> dict[str, Any]:
+    geometry: dict[str, Any] = {}
+    if rotate:
+        geometry["rotate90"] = rotate // QUARTER_TURN
+    if crop is not None:
+        geometry["crop"] = parse_box(crop)
+    return geometry
+
+
+def restore_options_from_args(args: argparse.Namespace) -> dict[str, Any]:
+    options: dict[str, Any] = {}
+    geometry = geometry_from_args(args.rotate, args.crop)
+    if geometry:
+        options["geometry"] = geometry
+    if args.upscale is not None:
+        options["upscale_mode"] = args.upscale
+    if args.face_blend is not None:
+        options["faces"] = {"blend": args.face_blend}
+    return options
 
 
 async def run_models(args: argparse.Namespace) -> dict[str, Any]:
@@ -104,6 +190,12 @@ def print_human(command: str, payload: dict[str, Any]) -> None:
             f"wrote {payload.get('output')} ({payload.get('width')}x{payload.get('height')}) "
             f"model={payload.get('model')} device={payload.get('device')} "
             f"tile={tile.get('size')} {payload.get('seconds')}s"
+        )
+        return
+    if command == "restore":
+        print(
+            f"wrote {payload.get('output')} ({payload.get('width')}x{payload.get('height')}) "
+            f"steps={','.join(payload.get('steps', []))} device={payload.get('device')} {payload.get('seconds')}s"
         )
         return
     if command == "models":

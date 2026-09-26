@@ -95,3 +95,22 @@ def test_is_terminal_non_terminal_statuses():
     assert is_terminal({"status": "queued"}) is False
     assert is_terminal({"status": "running"}) is False
     assert is_terminal({}) is False
+
+
+def test_normalize_restore_job_adds_steps_and_stage():
+    payload = {
+        "jobId": "r1",
+        "status": "running",
+        "restoreSteps": ["denoise", "tone"],
+        "metadata": {"stage": "restore_denoise"},
+    }
+    job = normalize_job(FAMILIES["image"], payload)
+    assert job["restoreSteps"] == ["denoise", "tone"]
+    assert job["stage"] == "restore_denoise"
+
+
+def test_normalize_plain_image_job_has_no_restore_fields():
+    payload = {"jobId": "i1", "status": "running", "restoreSteps": [], "metadata": {"stage": "upscaling"}}
+    job = normalize_job(FAMILIES["image"], payload)
+    assert "restoreSteps" not in job
+    assert "stage" not in job
