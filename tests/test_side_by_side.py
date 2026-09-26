@@ -272,19 +272,29 @@ def test_difference_mode_blends_both_sides_in_rgb_instead_of_stacking() -> None:
     graph = value_after(argv_of(difference_plan(TRIM, CROP, DENOISE)), "-filter_complex")
 
     assert "hstack" not in graph
-    assert "[sbs_original][sbs_processed]blend=all_mode=difference,format=yuv420p," in graph
+    assert "[sbs_original][sbs_processed]blend=all_mode=difference,format=yuv420p" in graph
     assert "format=gbrp,setpts=PTS-STARTPTS[sbs_original]" in graph
     assert "format=gbrp,setpts=PTS-STARTPTS[sbs_processed]" in graph
     assert "hqdn3d" not in graph.split("[sbs_original]")[0]
 
 
-def test_difference_counters_are_drawn_after_the_blend_so_they_never_count_as_a_change() -> None:
+def test_difference_counters_are_laid_over_the_blend_so_they_never_count_as_a_change() -> None:
     graph = value_after(argv_of(difference_plan(TRIM), counters="drawtext=x"), "-filter_complex")
 
     original_side = graph.split("[sbs_original]")[0]
-    assert "drawtext" not in original_side
-    assert "blend=all_mode=difference,format=yuv420p,drawtext=x,pad=w=iw:h=ih+40:x=0:y=40:color=black" in graph
+    assert "drawtext" not in original_side.split("[sbs_counters_split]")[0]
+    assert "blend=all_mode=difference,format=yuv420p[sbs_difference]" in graph
+    assert "[sbs_difference][sbs_counters]overlay=x=0:y=0,format=yuv420p,pad=w=iw:h=ih+40:x=0:y=40:color=black" in graph
     assert graph.endswith("[sbs_stacked][sbs_title]overlay=x=0:y=0:eval=init[sbs_out]")
+
+
+def test_difference_counters_are_drawn_on_a_clear_layer_before_the_pts_restart_like_side_by_side() -> None:
+    graph = value_after(argv_of(difference_plan(TRIM), counters="drawtext=x"), "-filter_complex")
+
+    assert "trim=start_frame=5:end_frame=55" in graph.split("split=2")[0]
+    layer = "[sbs_counters_split]format=rgba,drawbox=x=0:y=0:w=iw:h=ih:color=black@0:t=fill:replace=1,drawtext=x,"
+    assert layer + "setpts=PTS-STARTPTS[sbs_counters]" in graph
+    assert "[sbs_original_split]format=gbrp,setpts=PTS-STARTPTS[sbs_original]" in graph
 
 
 def test_difference_without_counters_goes_straight_to_the_title_pad() -> None:
@@ -347,3 +357,44 @@ async def test_real_difference_is_black_where_nothing_changed_and_reproducible(t
     noisy = gray_frame(changed.path, 320, 272 + title, 25)[below_counters].astype(int)
     assert quiet.max() <= 4
     assert noisy.mean() > quiet.mean() + 0.3 and noisy.max() > quiet.max()
+
+
+# Negro debajo de los contadores en los dos modos: lo unico que cambia entre ambos es el texto.
+def make_black_clip(tmp_path: Path) -> Path:
+    clip = tmp_path / "black.mkv"
+    command = [
+        str(Settings().ffmpeg_binary_path), "-hide_banner", "-v", "error", "-y",
+        "-f", "lavfi", "-i", "color=c=black:size=640x480:rate=7", "-t", "5", "-c:v", "ffv1", str(clip),
+    ]  # fmt: skip
+    subprocess.run(command, check=True, capture_output=True)
+    return clip
+
+
+LATE_TRIM = {"id": "trim", "params": {"start_frame": 20, "end_frame": 29}}
+# "#20  00:00:02.857" en SourceCodePro de 20 px: los segundos y milisegundos, lo que el PTS reiniciado pondria en cero.
+SECONDS_AREA = (slice(6, 30), slice(140, 216))
+
+
+def counter_seconds(tmp_path: Path, clip: Path, mode: sbs.ComparisonMode) -> np.ndarray:
+    tmp_path.mkdir()
+    comparison = sbs.ComparisonPlan(clip, clip, steps(LATE_TRIM), FrameGeometry(640, 480), "classic", 10, mode=mode)
+    title = tmp_path / sbs.title_name(comparison)
+    title_height = sbs.write_title(title, FONT_PATH, (640, 480), "classic", mode)
+    output = tmp_path / sbs.output_name(comparison)
+    counters = sbs.planned_counters(comparison, FONT_PATH)
+    ffmpeg = Settings().ffmpeg_binary_path
+    subprocess.run(sbs.build_comparison_command(ffmpeg, comparison, title, title_height, output, THREADS, counters), check=True)
+    width = 1280 if mode == "side_by_side" else 640
+    return gray_frame(output, width, 480 + title_height)[title_height:][SECONDS_AREA].astype(int)
+
+
+@needs_ffmpeg
+def test_real_difference_counters_show_the_same_original_time_as_side_by_side_after_a_trim(tmp_path: Path) -> None:
+    clip = make_black_clip(tmp_path)
+
+    side = counter_seconds(tmp_path / "sbs", clip, "side_by_side")
+    difference = counter_seconds(tmp_path / "diff", clip, "difference")
+
+    assert side.max() > 200
+    # Con el PTS reiniciado ("00:00:00.000") la diferencia media en esta zona pasa de 18.
+    assert np.abs(side - difference).mean() < 8

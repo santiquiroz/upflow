@@ -9,7 +9,9 @@ reproducibilidad. Si `drawtext` falla, sale sin contadores y con aviso.
 
 El modo "difference" (P4-DIFF) usa las mismas dos entradas pero las resta con
 `blend=all_mode=difference` en RGB: negro donde el procesado no cambio nada.
-Los contadores van despues de la resta para no contar como diferencia.
+Los contadores van encima de la resta para no contar como diferencia, pero se
+dibujan sobre una capa transparente sacada del original ANTES de reiniciar el
+PTS: asi muestran la hora real del original, igual que el lado a lado.
 """
 
 from __future__ import annotations
@@ -76,11 +78,16 @@ ORIGINAL_LABEL = "sbs_original"
 PROCESSED_LABEL = "sbs_processed"
 TITLE_LABEL = "sbs_title"
 OUTPUT_LABEL = "sbs_out"
+COUNTERS_LABEL = "sbs_counters"
+DIFFERENCE_LABEL = "sbs_difference"
+SPLIT_ORIGINAL_LABEL = "sbs_original_split"
+SPLIT_COUNTERS_LABEL = "sbs_counters_split"
 STACK_PIX_FMT = "yuv420p"
 # En YUV la resta de croma deja U=V=0 (verde); en RGB lo que no cambio queda negro.
 DIFFERENCE_PIX_FMT = "gbrp"
 DIFFERENCE_BLEND = "blend=all_mode=difference"
 RESTART_PTS = "setpts=PTS-STARTPTS"
+CLEAR_CANVAS = "format=rgba,drawbox=x=0:y=0:w=iw:h=ih:color=black@0:t=fill:replace=1"
 
 ProgressCallback = Callable[[float], None]
 ComparisonMode = Literal["side_by_side", "difference"]
@@ -166,6 +173,17 @@ def original_chain(
     return f"[0:v]{FILTER_SEPARATOR.join(filters)}[{ORIGINAL_LABEL}]"
 
 
+def difference_original_chain(steps: Sequence[ResolvedStep], size: tuple[int, int], counters: str) -> str:
+    cut = FILTER_SEPARATOR.join([*same_cut_filters(steps), build_scale_to(*size), "setsar=1"])
+    original = FILTER_SEPARATOR.join([f"format={DIFFERENCE_PIX_FMT}", RESTART_PTS])
+    layer = FILTER_SEPARATOR.join([CLEAR_CANVAS, counters, RESTART_PTS])
+    return (
+        f"[0:v]{cut},split=2[{SPLIT_ORIGINAL_LABEL}][{SPLIT_COUNTERS_LABEL}];"
+        f"[{SPLIT_ORIGINAL_LABEL}]{original}[{ORIGINAL_LABEL}];"
+        f"[{SPLIT_COUNTERS_LABEL}]{layer}[{COUNTERS_LABEL}]"
+    )
+
+
 def processed_chain(geometry: FrameGeometry, size: tuple[int, int], pix_fmt: str = STACK_PIX_FMT) -> str:
     scale = [] if (geometry.width, geometry.height) == size else [build_scale_to(*size)]
     filters = [*scale, "setsar=1", f"format={pix_fmt}", RESTART_PTS]
@@ -183,9 +201,15 @@ def stack_chain(title_height: int) -> str:
     return f"[{ORIGINAL_LABEL}][{PROCESSED_LABEL}]hstack=inputs=2,{title_chain(title_height)}"
 
 
-def difference_chain(title_height: int, counters: str | None) -> str:
-    filters = [DIFFERENCE_BLEND, f"format={STACK_PIX_FMT}", *([counters] if counters else [])]
-    return f"[{ORIGINAL_LABEL}][{PROCESSED_LABEL}]{FILTER_SEPARATOR.join(filters)},{title_chain(title_height)}"
+def difference_chain(title_height: int) -> str:
+    return f"[{ORIGINAL_LABEL}][{PROCESSED_LABEL}]{DIFFERENCE_BLEND},format={STACK_PIX_FMT},{title_chain(title_height)}"
+
+
+def counted_difference_chain(title_height: int) -> str:
+    return (
+        f"[{ORIGINAL_LABEL}][{PROCESSED_LABEL}]{DIFFERENCE_BLEND},format={STACK_PIX_FMT}[{DIFFERENCE_LABEL}];"
+        f"[{DIFFERENCE_LABEL}][{COUNTERS_LABEL}]overlay=x=0:y=0,format={STACK_PIX_FMT},{title_chain(title_height)}"
+    )
 
 
 def title_source(title: Path) -> str:
@@ -206,13 +230,12 @@ def side_by_side_graph(plan: ComparisonPlan, title: Path, title_height: int, cou
 
 def difference_graph(plan: ComparisonPlan, title: Path, title_height: int, counters: str | None) -> str:
     size = display_size(plan.processed_geometry)
+    if counters is None:
+        original, blend = original_chain(plan.steps, size, None, DIFFERENCE_PIX_FMT), difference_chain(title_height)
+    else:
+        original, blend = difference_original_chain(plan.steps, size, counters), counted_difference_chain(title_height)
     return ";".join(
-        [
-            original_chain(plan.steps, size, None, DIFFERENCE_PIX_FMT),
-            processed_chain(plan.processed_geometry, size, DIFFERENCE_PIX_FMT),
-            title_source(title),
-            difference_chain(title_height, counters),
-        ]
+        [original, processed_chain(plan.processed_geometry, size, DIFFERENCE_PIX_FMT), title_source(title), blend]
     )
 
 
