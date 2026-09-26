@@ -574,6 +574,13 @@ Si alguna de esas clases se descarta, el pack correspondiente no se publica y la
 ese modelo (por ejemplo, sin D1b no hay restauración de caras). Los modelos no comerciales
 (CodeFormer y afines) no están en v1.
 
+**Compuerta de licencias.** Un pack de `LICENSE_GATED_PACKS` (los de modelos con
+`commercial_use == "no"`) no se baja sin aceptar su licencia: `POST /api/v1/packs/{pack}/provision`
+responde 403 con la clave `pack.license.required` hasta que llega `?acceptLicense=true`, y el botón
+de descarga muestra entonces el texto **completo** (`GET /api/v1/packs/{pack}/license`, leído de
+`app/licenses/gated/<pack>.txt`) con una casilla. Si ese texto falta, la descarga se rechaza aunque
+se acepte (`pack.license.unavailable`). Hoy la lista está vacía.
+
 ## Configuración
 
 Todas las variables leen de `.env` (ver [`.env.example`](.env.example) con los defaults y comentarios). `get_settings()` cachea el resultado — reiniciá el servidor después de cambiar `.env`.
