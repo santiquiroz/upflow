@@ -226,3 +226,36 @@ def test_licenses_endpoint_serializes_camel_case(tmp_path: Path) -> None:
     assert set(body) == {"packs", "thirdParty"}
     first = body["thirdParty"][0]
     assert set(first) == {"title", "section", "fields", "licenseText"}
+
+
+def license_gate_client(monkeypatch, tmp_path: Path, gated: frozenset[str]) -> TestClient:
+    import functools
+
+    from app.services.license_gate import license_gate
+
+    monkeypatch.setattr(
+        licenses_routes, "license_gate", functools.partial(license_gate, gated=gated, directory=tmp_path)
+    )
+    app = FastAPI()
+    app.include_router(licenses_routes.router)
+    return TestClient(app)
+
+
+def test_the_license_of_an_ungated_pack_says_there_is_no_gate(monkeypatch, tmp_path: Path) -> None:
+    body = license_gate_client(monkeypatch, tmp_path, frozenset()).get("/api/v1/packs/rife/license").json()
+
+    assert body == {"pack": "rife", "gated": False, "licenseText": None}
+
+
+def test_the_license_of_a_gated_pack_carries_its_full_text(monkeypatch, tmp_path: Path) -> None:
+    (tmp_path / "rife.txt").write_text("S-Lab License 1.0\n\nNon-commercial use only.\n", encoding="utf-8")
+
+    body = license_gate_client(monkeypatch, tmp_path, frozenset({"rife"})).get("/api/v1/packs/rife/license").json()
+
+    assert body == {"pack": "rife", "gated": True, "licenseText": "S-Lab License 1.0\n\nNon-commercial use only.\n"}
+
+
+def test_the_license_of_an_unknown_pack_is_a_404(monkeypatch, tmp_path: Path) -> None:
+    response = license_gate_client(monkeypatch, tmp_path, frozenset()).get("/api/v1/packs/no-such-pack/license")
+
+    assert response.status_code == 404

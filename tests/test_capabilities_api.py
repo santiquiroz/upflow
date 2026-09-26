@@ -135,16 +135,24 @@ async def test_every_capability_reports_its_strategies(tmp_path: Path):
 
 
 class FakeProvisioner:
-    def __init__(self) -> None:
+    def __init__(self, *, gated: bool = False) -> None:
         self.requested: list[str] = []
         # (pack, variante) de cada pedido: audiosr viaja con la precision que
         # eligio el backend, y el resto de los packs con None.
         self.pedidos: list[tuple[str, str | None]] = []
+        self.accepted: list[bool] = []
+        self.gated = gated
         self._jobs: dict[str, object] = {}
 
-    async def provision(self, pack: str, variant: str | None = None) -> str:
+    async def provision(
+        self, pack: str, variant: str | None = None, *, accept_license: bool = False
+    ) -> str:
+        from app.services.license_gate import LICENSE_REQUIRED_KEY, LicenseNotAcceptedError
         from app.services.pack_provisioner import ProvisionJob
 
+        if self.gated and not accept_license:
+            raise LicenseNotAcceptedError(pack, LICENSE_REQUIRED_KEY, "Accept the license first.")
+        self.accepted.append(accept_license)
         self.requested.append(pack)
         self.pedidos.append((pack, variant))
         job = ProvisionJob(id=f"job-{len(self.requested)}", pack=pack)
@@ -180,6 +188,38 @@ async def test_provisioning_a_capability_starts_its_missing_pack(tmp_path: Path)
     assert response.pack == "rife"
     assert response.status == "queued"
     assert response.status_url.endswith(response.job_id)
+
+
+@pytest.mark.asyncio
+async def test_provisioning_a_license_gated_capability_without_acceptance_is_a_keyed_403(tmp_path: Path):
+    from fastapi import HTTPException
+
+    from app.api.routes import provision_capability
+    from app.services.license_gate import LICENSE_REQUIRED_KEY
+
+    settings = make_settings(tmp_path, RIFE_BINARY=str(tmp_path / "nope.exe"))
+    provisioner = FakeProvisioner(gated=True)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await provision_capability("video.interpolate", FakeRequest(provisioner), settings, FakeRegistry())
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail["key"] == LICENSE_REQUIRED_KEY
+    assert provisioner.requested == []
+
+
+@pytest.mark.asyncio
+async def test_provisioning_a_capability_forwards_the_license_acceptance(tmp_path: Path):
+    from app.api.routes import provision_capability
+
+    settings = make_settings(tmp_path, RIFE_BINARY=str(tmp_path / "nope.exe"))
+    provisioner = FakeProvisioner(gated=True)
+
+    await provision_capability(
+        "video.interpolate", FakeRequest(provisioner), settings, FakeRegistry(), accept_license=True
+    )
+
+    assert provisioner.accepted == [True]
 
 
 @pytest.mark.asyncio

@@ -18,7 +18,16 @@ from app.services.pack_provisioner import (
     provisioning_supported,
     script_for,
 )
-from app.services.restore_models import BUNDLE_NAMES
+from app.services.license_gate import (
+    LICENSE_REQUIRED_KEY,
+    LICENSE_UNAVAILABLE_KEY,
+    LicenseNotAcceptedError,
+    gated_license_path,
+    gated_license_text,
+    license_gate,
+    license_texts_on_disk,
+)
+from app.services.restore_models import BUNDLE_NAMES, LICENSE_GATED_PACKS
 
 
 def make_settings(tmp_path: Path) -> Settings:
@@ -341,3 +350,104 @@ class TestLosPacksDeRestauracion:
 
         assert provisioner.status(job_id).status is ProvisionStatus.done
         assert script.commands[0][-2:] == ["-Bundle", "faces"]
+
+
+class TestLicenseGate:
+    """Un pack no comercial no se baja sin que el usuario lea y acepte su licencia.
+
+    La compuerta vive en el provisioner y no solo en la UI: cualquier cliente de la
+    API (o un boton viejo) choca contra ella.
+    """
+
+    GATED = frozenset({"rife"})
+
+    def gated_provisioner(self, tmp_path: Path, text: str | None = "NON-COMMERCIAL LICENSE\n") -> PackProvisioner:
+        licenses = tmp_path / "gated"
+        licenses.mkdir(exist_ok=True)
+        if text is not None:
+            (licenses / "rife.txt").write_text(text, encoding="utf-8")
+        return PackProvisioner(make_settings(tmp_path), gated_packs=self.GATED, gated_licenses_dir=licenses)
+
+    async def test_a_gated_pack_without_accepting_the_license_never_becomes_a_job(self, tmp_path, script):
+        provisioner = self.gated_provisioner(tmp_path)
+
+        with pytest.raises(LicenseNotAcceptedError) as caught:
+            await provisioner.provision("rife")
+
+        assert caught.value.key == LICENSE_REQUIRED_KEY
+        assert await provisioner._process_next() is False
+        assert script.commands == []
+
+    async def test_a_gated_pack_with_the_license_accepted_runs(self, tmp_path, script):
+        provisioner = self.gated_provisioner(tmp_path)
+
+        job_id = await provisioner.provision("rife", accept_license=True)
+        await provisioner._process_next()
+
+        assert provisioner.status(job_id).status is ProvisionStatus.done
+        assert len(script.commands) == 1
+
+    async def test_a_gated_pack_whose_license_text_is_missing_is_refused_even_if_accepted(self, tmp_path, script):
+        # Aceptar un texto que nadie pudo leer no es consentimiento: falla cerrado.
+        provisioner = self.gated_provisioner(tmp_path, text=None)
+
+        with pytest.raises(LicenseNotAcceptedError) as caught:
+            await provisioner.provision("rife", accept_license=True)
+
+        assert caught.value.key == LICENSE_UNAVAILABLE_KEY
+        assert script.commands == []
+
+    async def test_a_blank_license_text_counts_as_missing(self, tmp_path, script):
+        provisioner = self.gated_provisioner(tmp_path, text="  \n")
+
+        with pytest.raises(LicenseNotAcceptedError) as caught:
+            await provisioner.provision("rife", accept_license=True)
+
+        assert caught.value.key == LICENSE_UNAVAILABLE_KEY
+
+    async def test_a_pack_outside_the_gate_needs_no_license(self, tmp_path, script):
+        provisioner = self.gated_provisioner(tmp_path)
+
+        job_id = await provisioner.provision("apollo")
+        await provisioner._process_next()
+
+        assert provisioner.status(job_id).status is ProvisionStatus.done
+
+    def test_the_license_error_is_not_a_value_error(self):
+        # La ruta traduce ValueError a 400: la compuerta tiene que llegar como 403.
+        assert not issubclass(LicenseNotAcceptedError, ValueError)
+
+    def test_the_default_provisioner_gates_the_catalog_license_gated_packs(self, tmp_path):
+        provisioner = PackProvisioner(make_settings(tmp_path))
+
+        assert provisioner._gated_packs == LICENSE_GATED_PACKS
+
+    def test_every_license_gated_pack_ships_its_full_license_text(self):
+        missing = sorted(pack for pack in LICENSE_GATED_PACKS if gated_license_text(pack) is None)
+        assert missing == [], f"Gated packs without app/licenses/gated/<pack>.txt: {missing}"
+
+    def test_every_gated_license_text_belongs_to_a_gated_pack_with_a_script(self):
+        orphans = sorted(license_texts_on_disk() - LICENSE_GATED_PACKS)
+        assert orphans == []
+        assert set(LICENSE_GATED_PACKS) <= set(PACK_SCRIPTS)
+
+
+class TestLicenseGateView:
+    def test_an_ungated_pack_reports_no_gate_and_no_text(self, tmp_path):
+        assert license_gate("rife", frozenset(), tmp_path) == {"pack": "rife", "gated": False, "licenseText": None}
+
+    def test_a_gated_pack_reports_its_full_license_text(self, tmp_path):
+        (tmp_path / "rife.txt").write_text("S-Lab License 1.0\n\nFull text.\n", encoding="utf-8")
+
+        gate = license_gate("rife", frozenset({"rife"}), tmp_path)
+
+        assert gate == {"pack": "rife", "gated": True, "licenseText": "S-Lab License 1.0\n\nFull text.\n"}
+
+    def test_a_gated_pack_without_its_text_reports_none(self, tmp_path):
+        assert license_gate("rife", frozenset({"rife"}), tmp_path)["licenseText"] is None
+
+    def test_the_license_text_path_is_named_after_the_pack(self, tmp_path):
+        assert gated_license_path("restore-faces-nc", tmp_path) == tmp_path / "restore-faces-nc.txt"
+
+    def test_no_texts_on_disk_when_the_directory_does_not_exist(self, tmp_path):
+        assert license_texts_on_disk(tmp_path / "missing") == frozenset()

@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import sys
+from collections.abc import Set
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -14,8 +15,9 @@ from app.config import Settings, resolve_against_project_root
 from app.services.capabilities import CATALOG, PathRequirement
 from app.services.engines.separation_models import SEPARATION_MODELS
 from app.services.install_queue_base import SingleWorkerJobQueue
+from app.services.license_gate import GATED_LICENSES_DIR, require_accepted_license
 from app.services.process_runner import run_guarded_process
-from app.services.restore_models import BUNDLE_NAMES, pack_id
+from app.services.restore_models import BUNDLE_NAMES, LICENSE_GATED_PACKS, pack_id
 
 logger = logging.getLogger(__name__)
 
@@ -247,16 +249,29 @@ def _tail(raw: bytes, limit: int = 600) -> str:
 class PackProvisioner(SingleWorkerJobQueue[ProvisionJob]):
     _error_status = ProvisionStatus.error
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        gated_packs: Set[str] = LICENSE_GATED_PACKS,
+        gated_licenses_dir: Path = GATED_LICENSES_DIR,
+    ) -> None:
         super().__init__()
         self._settings = settings
+        self._gated_packs = gated_packs
+        self._gated_licenses_dir = gated_licenses_dir
 
-    async def provision(self, pack: str, variant: str | None = None) -> str:
+    async def provision(
+        self, pack: str, variant: str | None = None, *, accept_license: bool = False
+    ) -> str:
         # Se valida ANTES de encolar: un pack desconocido, o una variante con
         # forma rara, tienen que fallar la request y no aparecer como un job que
         # despues se muere solo.
         script_for(pack)
         build_command(pack, variant)
+        require_accepted_license(pack, accept_license, self._gated_packs, self._gated_licenses_dir)
+        if pack in self._gated_packs:
+            logger.info("license accepted before provisioning", extra={"pack": pack})
         return await self._enqueue(ProvisionJob(id=uuid4().hex, pack=pack, variant=variant))
 
     async def _run(self, job: ProvisionJob) -> None:

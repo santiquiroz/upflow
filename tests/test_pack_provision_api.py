@@ -4,6 +4,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.api.routes import provision_pack
+from app.services.license_gate import LICENSE_REQUIRED_KEY, LicenseNotAcceptedError
 from app.services.pack_provisioner import UnknownPackError
 
 # ---------------------------------------------------------------------------
@@ -18,14 +19,21 @@ from app.services.pack_provisioner import UnknownPackError
 
 
 class ProvisionerFalso:
-    def __init__(self, *, falla: bool = False) -> None:
+    def __init__(self, *, falla: bool = False, exige_licencia: bool = False) -> None:
         self.falla = falla
+        self.exige_licencia = exige_licencia
         self.pedidos: list[tuple[str, str | None]] = []
+        self.aceptadas: list[bool] = []
 
-    async def provision(self, pack: str, variant: str | None = None) -> str:
+    async def provision(
+        self, pack: str, variant: str | None = None, *, accept_license: bool = False
+    ) -> str:
         if self.falla:
             raise UnknownPackError(pack)
+        if self.exige_licencia and not accept_license:
+            raise LicenseNotAcceptedError(pack, LICENSE_REQUIRED_KEY, "Accept the license first.")
         self.pedidos.append((pack, variant))
+        self.aceptadas.append(accept_license)
         return "job-1"
 
     def status(self, job_id: str):
@@ -87,3 +95,56 @@ def test_la_ruta_recibe_la_variante_por_el_nombre_que_manda_el_frontend() -> Non
 
     assert "variant" in parametros
     assert parametros["variant"].default is None
+
+
+@pytest.mark.asyncio
+async def test_a_license_gated_pack_without_acceptance_is_a_keyed_403():
+    provisioner = ProvisionerFalso(exige_licencia=True)
+
+    with pytest.raises(HTTPException) as capturado:
+        await provision_pack(pack="restore-faces-nc", request=PeticionFalsa(provisioner))
+
+    assert capturado.value.status_code == 403
+    assert capturado.value.detail == {"key": LICENSE_REQUIRED_KEY, "reason": "Accept the license first."}
+    assert provisioner.pedidos == []
+
+
+@pytest.mark.asyncio
+async def test_accepting_the_license_reaches_the_provisioner():
+    provisioner = ProvisionerFalso(exige_licencia=True)
+
+    await provision_pack(
+        pack="restore-faces-nc", request=PeticionFalsa(provisioner), accept_license=True
+    )
+
+    assert provisioner.aceptadas == [True]
+
+
+@pytest.mark.asyncio
+async def test_called_without_the_flag_the_license_is_not_accepted():
+    # El default tiene que ser False de verdad, no el objeto Query (que es truthy).
+    provisioner = ProvisionerFalso()
+
+    await provision_pack(pack="kokoro", request=PeticionFalsa(provisioner))
+
+    assert provisioner.aceptadas == [False]
+
+
+def test_the_license_flag_travels_by_the_name_the_frontend_sends() -> None:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api.routes import router
+
+    app = FastAPI()
+    app.include_router(router)
+    provisioner = ProvisionerFalso(exige_licencia=True)
+    app.state.pack_provisioner = provisioner
+
+    refused = TestClient(app).post("/api/v1/packs/restore-faces-nc/provision")
+    accepted = TestClient(app).post("/api/v1/packs/restore-faces-nc/provision?acceptLicense=true")
+
+    assert refused.status_code == 403
+    assert refused.json()["detail"]["key"] == LICENSE_REQUIRED_KEY
+    assert accepted.status_code == 202
+    assert provisioner.aceptadas == [True]

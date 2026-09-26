@@ -259,6 +259,14 @@ class ThirdPartyNoticeResponse(BaseModel):
     license_text: str | None = Field(default=None, alias="licenseText")
 
 
+class LicenseGateResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    pack: str
+    gated: bool
+    license_text: str | None = Field(default=None, alias="licenseText")
+
+
 class LicensesResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 

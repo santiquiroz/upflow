@@ -6,7 +6,7 @@ import re
 import subprocess
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Annotated, Any, NamedTuple
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile
@@ -222,6 +222,7 @@ from app.services.model3d_service import (
 from app.services.model3d_service import UnknownScaleViewError, UnknownViewNameError
 from app.services.turnaround import EmptySheetError, UnreadableSheetError
 from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry, ModelStatus
+from app.services.license_gate import LicenseNotAcceptedError
 from app.services.pack_provisioner import (
     PackProvisioner,
     ProvisionJob,
@@ -3589,6 +3590,13 @@ def _pack_to_provision(item: ResolvedCapability) -> str:
     return item.missing_packs[0]
 
 
+AcceptLicense = Annotated[bool, Query(alias="acceptLicense")]
+
+
+def _license_not_accepted(exc: LicenseNotAcceptedError) -> HTTPException:
+    return HTTPException(status_code=403, detail={"key": exc.key, "reason": exc.reason})
+
+
 def _provision_job_to_response(job: ProvisionJob) -> ProvisionJobResponse:
     return ProvisionJobResponse(
         job_id=job.id,
@@ -3610,14 +3618,17 @@ async def provision_capability(
     settings: Settings = Depends(get_settings),
     registry: ModelRegistry = Depends(get_model_registry),
     devices: DevicesService = Depends(get_devices_service),
+    accept_license: AcceptLicense = False,
 ) -> ProvisionJobResponse:
     item = await asyncio.to_thread(_resolved_by_id, settings, registry, capability_id, devices)
     pack = _pack_to_provision(item)
     provisioner: PackProvisioner = request.app.state.pack_provisioner
     try:
         job_id = await provisioner.provision(
-            pack, default_variant(pack, settings.default_device)
+            pack, default_variant(pack, settings.default_device), accept_license=accept_license
         )
+    except LicenseNotAcceptedError as exc:
+        raise _license_not_accepted(exc) from exc
     except UnknownPackError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     job = provisioner.status(job_id)
@@ -3630,6 +3641,7 @@ async def provision_pack(
     pack: str,
     request: Request,
     variant: str | None = None,
+    accept_license: AcceptLicense = False,
 ) -> ProvisionJobResponse:
     """Baja un paquete por su nombre, sin pasar por una capacidad.
 
@@ -3640,7 +3652,9 @@ async def provision_pack(
     """
     provisioner: PackProvisioner = request.app.state.pack_provisioner
     try:
-        job_id = await provisioner.provision(pack, variant)
+        job_id = await provisioner.provision(pack, variant, accept_license=accept_license)
+    except LicenseNotAcceptedError as exc:
+        raise _license_not_accepted(exc) from exc
     except (UnknownPackError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     job = provisioner.status(job_id)
