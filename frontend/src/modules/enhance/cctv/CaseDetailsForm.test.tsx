@@ -45,6 +45,40 @@ describe("CaseDetailsForm", () => {
     }
   });
 
+  it("asks for the recorder serial and how and when the footage was exported", () => {
+    renderForm();
+
+    expect(screen.getByLabelText(en["cctv.case.recorderSerial"])).toHaveAttribute("maxLength", String(SHORT_TEXT_MAX));
+    expect(screen.getByLabelText(en["cctv.case.exportMethod"])).toHaveAttribute("maxLength", String(SHORT_TEXT_MAX));
+    expect(screen.getByLabelText(en["cctv.case.exportDate"])).toHaveAttribute("type", "date");
+    expect(screen.getByText(en["cctv.case.exportMethod.hint"])).toBeInTheDocument();
+  });
+
+  it("suggests common export methods without forcing one", () => {
+    renderForm();
+    const method = screen.getByLabelText(en["cctv.case.exportMethod"]);
+    const list = document.getElementById(method.getAttribute("list") ?? "");
+
+    const suggestions = Array.from(list?.querySelectorAll("option") ?? []).map((option) => option.value);
+    expect(suggestions).toEqual([
+      en["cctv.case.exportMethod.usb"],
+      en["cctv.case.exportMethod.client"],
+      en["cctv.case.exportMethod.web"],
+      en["cctv.case.exportMethod.app"],
+      en["cctv.case.exportMethod.screen"],
+    ]);
+    fireEvent.change(method, { target: { value: "Copied by the installer" } });
+    expect(method).toHaveValue("Copied by the installer");
+  });
+
+  it("reports the export date as the picker's ISO value", () => {
+    const onChange = renderForm();
+
+    fireEvent.change(screen.getByLabelText(en["cctv.case.exportDate"]), { target: { value: "2026-09-20" } });
+
+    expect(onChange).toHaveBeenLastCalledWith({ ...EMPTY_CASE_DETAILS, exportDate: "2026-09-20" });
+  });
+
   it("suggests measuring the offset against the official time", () => {
     renderForm();
 

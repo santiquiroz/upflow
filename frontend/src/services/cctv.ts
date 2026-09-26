@@ -217,9 +217,12 @@ export type CctvAnalyzeReply =
 export interface CctvAcquisition {
   recorderMake?: string;
   recorderModel?: string;
+  recorderSerial?: string;
   channel?: string;
   clockOffsetSeconds?: number;
   clockOffsetMethod?: string;
+  exportMethod?: string;
+  exportDate?: string;
 }
 
 export interface CctvCaseRequest {

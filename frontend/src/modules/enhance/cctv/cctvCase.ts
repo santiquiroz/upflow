@@ -5,9 +5,12 @@ export interface CaseDetails {
   operatorName: string;
   recorderMake: string;
   recorderModel: string;
+  recorderSerial: string;
   channel: string;
   clockOffset: string;
   clockOffsetMethod: string;
+  exportMethod: string;
+  exportDate: string;
 }
 
 export type CaseField = keyof CaseDetails;
@@ -21,12 +24,23 @@ export const EMPTY_CASE_DETAILS: CaseDetails = {
   operatorName: "",
   recorderMake: "",
   recorderModel: "",
+  recorderSerial: "",
   channel: "",
   clockOffset: "",
   clockOffsetMethod: "",
+  exportMethod: "",
+  exportDate: "",
 };
 
-const TEXT_ACQUISITION_FIELDS = ["recorderMake", "recorderModel", "channel", "clockOffsetMethod"] as const;
+const TEXT_ACQUISITION_FIELDS = [
+  "recorderMake",
+  "recorderModel",
+  "recorderSerial",
+  "channel",
+  "clockOffsetMethod",
+  "exportMethod",
+  "exportDate",
+] as const;
 const DECIMAL_NUMBER = /^[+-]?(\d+\.?\d*|\.\d+)$/;
 
 export function withCaseField(details: CaseDetails, field: CaseField, value: string): CaseDetails {

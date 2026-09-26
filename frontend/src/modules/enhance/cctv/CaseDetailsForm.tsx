@@ -19,7 +19,17 @@ interface FieldProps {
   onChange: (next: CaseDetails) => void;
 }
 
-const SHORT_FIELDS: readonly CaseField[] = ["caseLabel", "operatorName", "recorderMake", "recorderModel", "channel"];
+const SHORT_FIELDS: readonly CaseField[] = [
+  "caseLabel",
+  "operatorName",
+  "recorderMake",
+  "recorderModel",
+  "recorderSerial",
+  "channel",
+];
+const EXPORT_METHOD_SUGGESTIONS = ["usb", "client", "web", "app", "screen"] as const;
+const EXPORT_METHOD_LIST_ID = "cctv-case-exportMethod-suggestions";
+const EXPORT_METHOD_HINT_ID = "cctv-case-exportMethod-hint";
 const FIELD_CLASS =
   "w-full rounded-sm border border-border bg-surface px-2 py-1 text-sm text-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent aria-[invalid=true]:border-danger";
 const LABEL_CLASS = "text-xs text-text-dim";
@@ -101,6 +111,53 @@ function OffsetMethodField({ value, onChange }: Omit<FieldProps, "field">) {
   );
 }
 
+function ExportMethodField({ value, onChange }: Omit<FieldProps, "field">) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex flex-col gap-1">
+      <label htmlFor={fieldId("exportMethod")} className={LABEL_CLASS}>
+        {t("cctv.case.exportMethod")}
+      </label>
+      <input
+        id={fieldId("exportMethod")}
+        type="text"
+        list={EXPORT_METHOD_LIST_ID}
+        maxLength={SHORT_TEXT_MAX}
+        value={value.exportMethod}
+        aria-describedby={EXPORT_METHOD_HINT_ID}
+        onChange={(event) => onChange(withCaseField(value, "exportMethod", event.target.value))}
+        className={FIELD_CLASS}
+      />
+      <datalist id={EXPORT_METHOD_LIST_ID}>
+        {EXPORT_METHOD_SUGGESTIONS.map((method) => (
+          <option key={method} value={t(`cctv.case.exportMethod.${method}`)} />
+        ))}
+      </datalist>
+      <p id={EXPORT_METHOD_HINT_ID} className="text-xs text-text-faint">
+        {t("cctv.case.exportMethod.hint")}
+      </p>
+    </div>
+  );
+}
+
+function ExportDateField({ value, onChange }: Omit<FieldProps, "field">) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex flex-col gap-1">
+      <label htmlFor={fieldId("exportDate")} className={LABEL_CLASS}>
+        {t("cctv.case.exportDate")}
+      </label>
+      <input
+        id={fieldId("exportDate")}
+        type="date"
+        value={value.exportDate}
+        onChange={(event) => onChange(withCaseField(value, "exportDate", event.target.value))}
+        className={`font-mono-tabular ${FIELD_CLASS} max-w-48`}
+      />
+    </div>
+  );
+}
+
 export function CaseDetailsForm({ value, onChange }: CaseDetailsFormProps) {
   const { t } = useTranslation();
   return (
@@ -116,6 +173,8 @@ export function CaseDetailsForm({ value, onChange }: CaseDetailsFormProps) {
           ))}
           <ClockOffsetField value={value} onChange={onChange} />
           <OffsetMethodField value={value} onChange={onChange} />
+          <ExportMethodField value={value} onChange={onChange} />
+          <ExportDateField value={value} onChange={onChange} />
         </div>
       </div>
     </details>

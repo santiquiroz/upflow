@@ -74,6 +74,21 @@ describe("acquisitionOf", () => {
     });
   });
 
+  it("sends the recorder serial and how and when the footage was exported", () => {
+    const details = {
+      ...EMPTY_CASE_DETAILS,
+      recorderSerial: " L12345678 ",
+      exportMethod: "USB export from the recorder menu",
+      exportDate: "2026-09-20",
+    };
+
+    expect(acquisitionOf(details)).toEqual({
+      recorderSerial: "L12345678",
+      exportMethod: "USB export from the recorder menu",
+      exportDate: "2026-09-20",
+    });
+  });
+
   it("leaves out blank fields", () => {
     expect(acquisitionOf({ ...EMPTY_CASE_DETAILS, channel: "   " })).toEqual({});
   });
