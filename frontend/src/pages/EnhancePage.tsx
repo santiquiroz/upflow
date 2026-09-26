@@ -1,19 +1,26 @@
 import { useRef, useState, type KeyboardEvent } from "react";
+import { useTranslation } from "../i18n/LocaleProvider";
 import { ImagePanel } from "../modules/enhance/ImagePanel";
 import { VideoPanel } from "../modules/enhance/VideoPanel";
+import { PhotoRestorePanel } from "../modules/enhance/restore/PhotoRestorePanel";
 
-type EnhanceMedium = "image" | "video";
+export type EnhanceMedium = "image" | "video" | "restore";
 
 interface MediumTab {
   value: EnhanceMedium;
-  label: string;
-  subtitle: string;
+  labelKey: string;
+  subtitleKey: string;
 }
 
 const MEDIUM_TABS: readonly MediumTab[] = [
-  { value: "image", label: "Image", subtitle: "Upscale a single image." },
-  { value: "video", label: "Video", subtitle: "Upscale, interpolate and clean up a video." },
+  { value: "image", labelKey: "enhance.tab.image", subtitleKey: "enhance.subtitle.image" },
+  { value: "video", labelKey: "enhance.tab.video", subtitleKey: "enhance.subtitle.video" },
+  { value: "restore", labelKey: "restore.tab", subtitleKey: "restore.subtitle" },
 ];
+
+export function isEnhanceMedium(value: string | undefined): value is EnhanceMedium {
+  return MEDIUM_TABS.some((tab) => tab.value === value);
+}
 
 function tabId(value: EnhanceMedium): string {
   return `enhance-tab-${value}`;
@@ -30,6 +37,16 @@ function tabClassName(isActive: boolean): string {
     return `${base} border-accent bg-accent text-bg`;
   }
   return `${base} border-border bg-surface text-text-dim hover:border-text-faint hover:text-text`;
+}
+
+function MediumPanel({ medium }: { medium: EnhanceMedium }) {
+  if (medium === "video") {
+    return <VideoPanel />;
+  }
+  if (medium === "restore") {
+    return <PhotoRestorePanel />;
+  }
+  return <ImagePanel />;
 }
 
 // WAI-ARIA APG tabs pattern: Right/Left roving focus wraps around the tab
@@ -54,6 +71,7 @@ export function EnhancePage({
 }: {
   initialMedium?: EnhanceMedium;
 }) {
+  const { t } = useTranslation();
   const [medium, setMedium] = useState<EnhanceMedium>(initialMedium);
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const activeTab = MEDIUM_TABS.find((tab) => tab.value === medium) ?? MEDIUM_TABS[0];
@@ -73,7 +91,7 @@ export function EnhancePage({
     <div className="flex flex-col gap-6">
       <div>
         <h1 className="font-heading text-2xl font-semibold text-text">Enhance</h1>
-        <p className="mt-1 text-sm text-text-dim">{activeTab.subtitle}</p>
+        <p className="mt-1 text-sm text-text-dim">{t(activeTab.subtitleKey)}</p>
       </div>
       <div role="tablist" aria-label="Enhance medium" className="flex w-fit gap-2">
         {MEDIUM_TABS.map((tab, index) => {
@@ -94,13 +112,13 @@ export function EnhancePage({
               onKeyDown={(event) => handleTabKeyDown(event, index)}
               className={tabClassName(isActive)}
             >
-              {tab.label}
+              {t(tab.labelKey)}
             </button>
           );
         })}
       </div>
       <div id={panelId(medium)} role="tabpanel" aria-labelledby={tabId(medium)} tabIndex={0}>
-        {medium === "image" ? <ImagePanel /> : <VideoPanel />}
+        <MediumPanel medium={medium} />
       </div>
     </div>
   );

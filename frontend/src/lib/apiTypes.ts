@@ -68,6 +68,8 @@ export interface JobResponse {
   metadata: JobMetadata;
   progressPct: number | null;
   downloadUrl: string | null;
+  // Pasos de restauracion de foto; opcional porque los jobs anteriores no lo mandan.
+  restoreSteps?: string[];
 }
 
 export interface VideoJobResponse {
@@ -433,6 +435,8 @@ export interface ModelResponse {
   sizeBytes: number;
   status: string;
   error: string | null;
+  // "Generative (invents texture)" / "Non-generative"; ausente en respuestas anteriores.
+  generative?: boolean;
 }
 
 export interface ModelsResponse {
