@@ -334,13 +334,13 @@ def test_auto_crop_follows_the_quarter_turn() -> None:
 
 
 def test_auto_crop_offers_nothing_when_the_photo_fills_the_frame() -> None:
-    suggestions = suggest_capture(photo_texture(300, 400), 0)
+    suggestions = suggest_capture(photo_texture(300, 400), 1)
 
-    assert suggestions == CaptureSuggestions()
+    assert suggestions == CaptureSuggestions(frame=(400, 300))
 
 
 def test_auto_crop_offers_nothing_on_a_blank_sheet() -> None:
-    assert suggest_capture(scanner_sheet(), 0) == CaptureSuggestions()
+    assert suggest_capture(scanner_sheet(), 0) == CaptureSuggestions(frame=(600, 800))
 
 
 def test_split_finds_each_photo_on_the_sheet_in_reading_order() -> None:

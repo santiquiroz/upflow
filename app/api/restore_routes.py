@@ -164,6 +164,8 @@ def capture_response(capture: CaptureSuggestions) -> RestoreCaptureResponse:
         auto_crop=None if capture.auto_crop is None else geometry_response(capture.auto_crop),
         photos=[geometry_response(geometry) for geometry in capture.photos],
         perspective=None if capture.perspective is None else geometry_response(capture.perspective),
+        frame_width=capture.frame[1],
+        frame_height=capture.frame[0],
     )
 
 

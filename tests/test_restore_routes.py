@@ -412,6 +412,7 @@ def test_analysis_offers_auto_crop_for_one_photo_on_a_scanner_sheet(harness_fact
     x, y, width, height = capture["autoCrop"]["crop"]
     assert 100 <= x <= 106 and 40 <= y <= 46 and 228 <= width <= 240 and 148 <= height <= 160
     assert capture["photos"] == [] and capture["perspective"] is None
+    assert (capture["frameWidth"], capture["frameHeight"]) == (2 * SIZE, SIZE)
 
 
 def test_analysis_splits_a_sheet_and_each_photo_applies_as_geometry(harness_factory) -> None:

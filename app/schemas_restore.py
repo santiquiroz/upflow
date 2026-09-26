@@ -162,6 +162,8 @@ class RestoreCaptureResponse(BaseModel):
     auto_crop: RestoreGeometry | None = Field(default=None, serialization_alias="autoCrop")
     photos: list[RestoreGeometry] = Field(default_factory=list)
     perspective: RestoreGeometry | None = None
+    frame_width: int = Field(default=0, serialization_alias="frameWidth")
+    frame_height: int = Field(default=0, serialization_alias="frameHeight")
 
 
 class RestoreAnalysisResponse(BaseModel):

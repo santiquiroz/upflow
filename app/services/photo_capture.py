@@ -68,6 +68,8 @@ class CaptureSuggestions:
     auto_crop: Geometry | None = None
     photos: tuple[Geometry, ...] = ()
     perspective: Geometry | None = None
+    # Alto y ancho de la foto girada: el marco de las esquinas y de los recortes sugeridos.
+    frame: tuple[int, int] = (0, 0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,6 +91,7 @@ def suggest_capture(rgb: np.ndarray, rotate90: int) -> CaptureSuggestions:
         auto_crop=auto_crop_geometry(regions, shape, rotate90),
         photos=split_geometries(regions, shape, rotate90),
         perspective=perspective_geometry(regions, rotate90),
+        frame=(int(shape[0]), int(shape[1])),
     )
 
 
