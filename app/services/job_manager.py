@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Mapping, Sequence
+import threading
+from collections.abc import Awaitable, Mapping, Sequence
 from dataclasses import dataclass, replace
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -461,15 +463,25 @@ class JobManager(QueuedJobManager[UpscaleJob]):
         source = await asyncio.to_thread(write_sr_input, image, work_dir / SR_INPUT_NAME)
         # replace copia el id y COMPARTE el dict metadata: el progreso del SR cae en el job.
         derived = replace(job, source_path=source, output_format="png")
-        engine = self._select_engine(derived)
-        if engine is self.engine:
-            await asyncio.to_thread(self._require_restore_runner().release_before_ncnn, str(job.device))
-        sr_path = await run_shielded(self._upscale_into(engine, derived, work_dir / SR_OUTPUT_NAME))
+        sr_path = await self._run_sr(job, derived, work_dir / SR_OUTPUT_NAME)
         return await asyncio.to_thread(load_sr_output, sr_path)
 
-    async def _upscale_into(self, engine: UpscaleEngine, derived: UpscaleJob, target: Path) -> Path:
+    async def _run_sr(self, job: UpscaleJob, derived: UpscaleJob, target: Path) -> Path:
+        engine = self._select_engine(derived)
+        if engine is not self.engine:
+            return await run_shielded(partial(self._onnx_sr_into, engine, derived, target))
+        await asyncio.to_thread(self._require_restore_runner().release_before_ncnn, str(job.device))
+        # Sin shield: la cancelacion llega a run_guarded_process, que mata el binario y lo espera.
+        return await self._upscale_into(engine.run(derived), derived, target)
+
+    async def _onnx_sr_into(
+        self, engine: UpscaleEngine, derived: UpscaleJob, target: Path, cancel_event: threading.Event
+    ) -> Path:
+        return await self._upscale_into(engine.run(derived, cancel_event=cancel_event), derived, target)  # type: ignore[call-arg]
+
+    async def _upscale_into(self, engine_run: Awaitable[Path], derived: UpscaleJob, target: Path) -> Path:
         # El motor escribe en outputs/{id}.png: se mueve ya, asi un fallo posterior no deja huerfanos.
-        native_output = await engine.run(derived)
+        native_output = await engine_run
         fitted = await asyncio.to_thread(fit_output_to_scale, native_output, derived, self.settings)
         return await asyncio.to_thread(move_into, fitted, target)
 

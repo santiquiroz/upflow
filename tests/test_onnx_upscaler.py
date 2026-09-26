@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -354,6 +355,42 @@ def test_upscale_tiled_reports_incremental_tile_progress(tmp_path: Path) -> None
     assert job.metadata["framesTotal"] == 4
     assert job.metadata["progress"] == pytest.approx(1.0)
     assert job.metadata["stage"] == "upscaling"
+
+
+class CancelAfterFirstTileSession(Double2xSession):
+    def __init__(self, cancel_event: threading.Event) -> None:
+        super().__init__()
+        self.cancel_event = cancel_event
+        self.calls = 0
+
+    def run(self, output_names, feed):
+        self.calls += 1
+        self.cancel_event.set()
+        return super().run(output_names, feed)
+
+
+def test_upscale_tiled_stops_between_tiles_once_cancelled(tmp_path: Path) -> None:
+    engine, _, _ = make_engine(tmp_path)
+    cancel_event = threading.Event()
+    session = CancelAfterFirstTileSession(cancel_event)
+    array = make_gradient_array(height=48, width=48)
+
+    with pytest.raises(RuntimeError, match="cancelled"):
+        engine._upscale_array(session, array, tile_size=32, cancel_event=cancel_event)
+
+    assert session.calls == 1
+
+
+def test_single_pass_upscale_does_not_start_once_cancelled(tmp_path: Path) -> None:
+    engine, _, _ = make_engine(tmp_path)
+    cancel_event = threading.Event()
+    cancel_event.set()
+    session = CancelAfterFirstTileSession(cancel_event)
+
+    with pytest.raises(RuntimeError, match="cancelled"):
+        engine._upscale_array(session, make_gradient_array(height=16, width=16), tile_size=0, cancel_event=cancel_event)
+
+    assert session.calls == 0
 
 
 def test_upscale_array_tiled_updates_progress_via_job(tmp_path: Path) -> None:

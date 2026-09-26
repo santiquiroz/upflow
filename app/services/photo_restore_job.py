@@ -244,13 +244,15 @@ def classic_upscale(image: np.ndarray, scale: float, cancel_event: threading.Eve
     return resized.astype(np.float32, copy=False)
 
 
-async def run_shielded(awaitable: Awaitable[T]) -> T:
-    # Como run_cancellable pero para una corrutina ajena (el motor SR): al cancelar se
-    # espera a que termine, asi el permiso del device se suelta con la GPU ya libre.
-    worker = asyncio.ensure_future(awaitable)
+async def run_shielded(start: Callable[[threading.Event], Awaitable[T]]) -> T:
+    # Como run_cancellable pero para una corrutina que corre en un hilo ajeno (el SR ONNX): al
+    # cancelar se avisa por el evento y se espera, asi el permiso se suelta con la GPU ya libre.
+    cancel_event = threading.Event()
+    worker = asyncio.ensure_future(start(cancel_event))
     try:
         return await asyncio.shield(worker)
     except asyncio.CancelledError:
+        cancel_event.set()
         with contextlib.suppress(BaseException):
             await worker
         raise

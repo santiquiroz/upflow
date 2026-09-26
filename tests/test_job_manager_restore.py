@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 import threading
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -22,6 +24,7 @@ from app.services.photo_restore_chain import UnknownRestoreStep
 from app.services.photo_restore_job import PhotoRestoreJobRunner, PreStage
 from app.services.photo_restore_pipeline import RestoreTooLarge, StepCall, StepOutcome
 from app.services.photo_restorer_registry import validate_step_ready
+from app.services.process_runner import run_guarded_process
 from app.services.restore_outputs import saved_bit_depth
 from app.services.restore_provenance import UpscaleInfo
 from app.services.restore_session import SessionInputs, SessionNotFound
@@ -136,7 +139,7 @@ class FakeSrEngine(UpscaleEngine):
     def available(self) -> bool:
         return True
 
-    async def run(self, job: UpscaleJob) -> Path:
+    async def run(self, job: UpscaleJob, cancel_event: threading.Event | None = None) -> Path:
         self.jobs.append(job)
         with Image.open(job.source_path) as image:
             size = (image.width * self.native_scale, image.height * self.native_scale)
@@ -811,6 +814,95 @@ def test_cancel_keeps_the_device_permit_until_the_worker_thread_finishes(tmp_pat
     assert finished_early is False
     assert thread_done.is_set()
     assert manager.device_semaphores.in_flight("cpu") == 0
+    assert job.status == JobStatus.cancelled
+
+
+class SleepingNcnnEngine(UpscaleEngine):
+    def __init__(self, started: Path) -> None:
+        self.started = started
+
+    def available(self) -> bool:
+        return True
+
+    async def run(self, job: UpscaleJob) -> Path:
+        script = f"import pathlib, time; pathlib.Path({str(self.started)!r}).touch(); time.sleep(60)"
+        await run_guarded_process([sys.executable, "-c", script], timeout=120)
+        raise AssertionError("the SR process must be killed before it finishes")
+
+
+async def wait_until(predicate, timeout: float = 20.0) -> bool:
+    for _ in range(int(timeout / 0.02)):
+        if predicate():
+            return True
+        await asyncio.sleep(0.02)
+    return predicate()
+
+
+def test_cancel_during_ncnn_sr_kills_the_process_before_freeing_the_device(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    started = tmp_path / "sr-started"
+    manager = make_manager(settings, runner=make_runner(settings), engine=SleepingNcnnEngine(started))
+
+    async def scenario() -> tuple[UpscaleJob, float]:
+        job = await create_restore_job(
+            manager, write_image(tmp_path / "in.png"), scale=2, device="dml:0", model_id=BUILTIN_MODEL
+        )
+        await manager.start()
+        try:
+            assert await wait_until(started.exists)
+            cancelled_at = time.monotonic()
+            manager.cancel_job(job.id)
+            assert await wait_until(lambda: manager.device_semaphores.in_flight("dml:0") == 0)
+            return job, time.monotonic() - cancelled_at
+        finally:
+            await manager.stop()
+
+    job, elapsed = asyncio.run(scenario())
+
+    assert elapsed < 15
+    assert job.status == JobStatus.cancelled
+
+
+class ThreadedOnnxSr(UpscaleEngine):
+    def __init__(self) -> None:
+        self.entered = threading.Event()
+        self.saw_cancel = threading.Event()
+
+    def available(self) -> bool:
+        return True
+
+    async def run(self, job: UpscaleJob, cancel_event: threading.Event | None = None) -> Path:
+        await asyncio.to_thread(self._tiles, cancel_event)
+        raise AssertionError("the SR must stop between tiles once cancelled")
+
+    def _tiles(self, cancel_event: threading.Event | None) -> None:
+        self.entered.set()
+        assert cancel_event is not None
+        if cancel_event.wait(timeout=30):
+            time.sleep(0.2)
+            self.saw_cancel.set()
+            raise RuntimeError("ONNX upscaling cancelled")
+
+
+def test_cancel_during_onnx_sr_signals_the_thread_and_waits_for_it(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    sr = ThreadedOnnxSr()
+    manager = make_manager(settings, runner=make_runner(settings), onnx_engine=sr, registry=make_registry(settings))
+
+    async def scenario() -> tuple[UpscaleJob, bool]:
+        job = await create_restore_job(manager, write_image(tmp_path / "in.png"), scale=2, model_id=ONNX_MODEL)
+        await manager.start()
+        try:
+            assert await wait_until(sr.entered.is_set)
+            manager.cancel_job(job.id)
+            assert await wait_until(lambda: manager.device_semaphores.in_flight("cpu") == 0)
+            return job, sr.saw_cancel.is_set()
+        finally:
+            await manager.stop()
+
+    job, thread_finished_first = asyncio.run(scenario())
+
+    assert thread_finished_first
     assert job.status == JobStatus.cancelled
 
 

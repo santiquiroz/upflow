@@ -83,6 +83,11 @@ def _save_rgb_array(array: np.ndarray, output_path: Path) -> None:
     Image.fromarray(array, mode="RGB").save(output_path)
 
 
+def _raise_if_cancelled(cancel_event: threading.Event | None) -> None:
+    if cancel_event is not None and cancel_event.is_set():
+        raise RuntimeError("ONNX upscaling cancelled")
+
+
 class OnnxUpscaler(UpscaleEngine):
     def __init__(
         self,
@@ -114,7 +119,7 @@ class OnnxUpscaler(UpscaleEngine):
             for key in keys_to_remove:
                 del self._session_cache[key]
 
-    async def run(self, job: UpscaleJob) -> Path:
+    async def run(self, job: UpscaleJob, cancel_event: threading.Event | None = None) -> Path:
         # Only the in-memory registry lookup happens synchronously here.
         # available()/devices.validate() touch native libraries (onnxruntime
         # import, real DXGI adapter enumeration) and are deferred into the
@@ -123,7 +128,7 @@ class OnnxUpscaler(UpscaleEngine):
         entry = self._resolve_installed_entry(job.model_id)
         output_path = self._output_path(job)
 
-        await asyncio.to_thread(self._run_and_save, job, entry, output_path)
+        await asyncio.to_thread(self._run_and_save, job, entry, output_path, cancel_event)
 
         if not is_non_empty_file(output_path):
             raise RuntimeError("ONNX upscaling completed but no output file was produced")
@@ -180,7 +185,9 @@ class OnnxUpscaler(UpscaleEngine):
             raise RuntimeError(f"Model {model_id!r} is not ready for inference (status={entry.status.value})")
         return entry
 
-    def _run_and_save(self, job: UpscaleJob, entry: ModelEntry, output_path: Path) -> None:
+    def _run_and_save(
+        self, job: UpscaleJob, entry: ModelEntry, output_path: Path, cancel_event: threading.Event | None = None
+    ) -> None:
         if not self.available():
             raise RuntimeError("ONNX engine is not available: onnxruntime is not installed")
         self.devices.validate(job.device)
@@ -189,7 +196,9 @@ class OnnxUpscaler(UpscaleEngine):
         tile_size = onnx_tile_size(job, self.settings)
         overlap = onnx_tile_overlap(job)
         job.metadata["effective"] = self._describe(job, entry, tile_size, overlap)
-        upscaled = self._upscale_array(session, image, tile_size, job=job, overlap=overlap)
+        upscaled = self._upscale_array(
+            session, image, tile_size, job=job, overlap=overlap, cancel_event=cancel_event
+        )
         _save_rgb_array(upscaled, output_path)
 
     @staticmethod
@@ -232,13 +241,15 @@ class OnnxUpscaler(UpscaleEngine):
         tile_size: int,
         job: UpscaleJob | None = None,
         overlap: int = TILE_OVERLAP_PX,
+        cancel_event: threading.Event | None = None,
     ) -> np.ndarray:
         height, width, _ = image.shape
         if tile_size <= 0 or (height <= tile_size and width <= tile_size):
             # Single pass: no honest sub-progress to report (tilesTotal=1 would
             # be a fake ETA), so job is intentionally not threaded through here.
+            _raise_if_cancelled(cancel_event)
             return finalize_uint8(self._infer_tile(session, image))
-        return self._upscale_tiled(session, image, tile_size, job, overlap)
+        return self._upscale_tiled(session, image, tile_size, job, overlap, cancel_event)
 
     def _upscale_tiled(
         self,
@@ -247,6 +258,7 @@ class OnnxUpscaler(UpscaleEngine):
         tile_size: int,
         job: UpscaleJob | None = None,
         overlap: int = TILE_OVERLAP_PX,
+        cancel_event: threading.Event | None = None,
     ) -> np.ndarray:
         height, width, channels = image.shape
         starts_y = tile_starts(height, tile_size, overlap)
@@ -259,6 +271,7 @@ class OnnxUpscaler(UpscaleEngine):
                 tile_h = min(tile_size, height - y0)
                 tile_w = min(tile_size, width - x0)
                 source_tile = image[y0 : y0 + tile_h, x0 : x0 + tile_w]
+                _raise_if_cancelled(cancel_event)
                 output_tile = self._infer_tile(session, source_tile)
                 tiles.append((y0, x0, tile_h, tile_w, output_tile))
                 self._report_tile_progress(job, len(tiles), tiles_total)
