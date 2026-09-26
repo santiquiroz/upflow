@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import io
 import json
+import subprocess
 import threading
 import time
+from fractions import Fraction
 from pathlib import Path
 
 import cv2
@@ -12,13 +15,18 @@ import numpy as np
 import pytest
 
 from app.config import Settings
-from app.models import CctvOptions, VideoUpscaleJob
+from app.models import CctvOptions, CctvStep, VideoUpscaleJob
+from app.services.cctv_enhance_plan import EnhancePlan
+from app.services.cctv_ingest import ingest_source, make_verified_copy, write_source_record
+from app.services.cctv_session import cctv_job_dir
 from app.services.devices_service import DevicesService
 from app.services.engines.ffmpeg_frame_source import FfmpegFrameSource
 from app.services.engines.ffmpeg_frame_sink import RawPipeEncoder
+from app.services.engines.frame_restorer import build_composed_stage
 from app.services.engines.gmfss.assets import GRAPH_NAMES
 from app.services.engines.gmfss_engine import GmfssEngine
 from app.services.engines.onnx_video_upscaler import OnnxVideoUpscaler
+from app.services.ffmpeg_filters import FrameGeometry
 from app.services.gpu_session_coordinator import GpuSessionCoordinator
 from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry, ModelStatus
 from app.services.video_upscaler import (
@@ -26,6 +34,7 @@ from app.services.video_upscaler import (
     STREAM_MODE_HYBRID,
     VideoUpscaler,
 )
+from ffmpeg_support import needs_ffmpeg
 
 # ---------------------------------------------------------------------------
 # Stream pipeline (spec 2026-07-25-stream-frame-pipeline-design.md) — ruteo de
@@ -1364,3 +1373,244 @@ async def test_a_cctv_job_without_a_runner_fails_before_touching_the_pipeline(tm
 
     with pytest.raises(RuntimeError, match="not available"):
         await upscaler.run(make_cctv_job(tmp_path, "clarify"))
+
+
+# ---------------------------------------------------------------------------
+# Carril IA de CCTV (enhance, spec §4.7): gate propio, siempre por stream.
+# ---------------------------------------------------------------------------
+
+
+class IdentityFrameRestorer:
+    """FrameRestorer falso: la etapa compuesta es la real, con un restore que no cambia el cuadro."""
+
+    def __init__(self, on_build=None, error: Exception | None = None) -> None:
+        self.calls: list[dict] = []
+        self.restored = 0
+        self._on_build = on_build
+        self._error = error
+
+    def build_stage(
+        self, device, sample_frame, strength_percent, *, upscaler_factory=None, osd_boxes=(), cancel_event=None
+    ):
+        self.calls.append(
+            {"device": device, "shape": sample_frame.shape, "strength": strength_percent, "boxes": tuple(osd_boxes)}
+        )
+        if self._on_build is not None:
+            self._on_build()
+        if self._error is not None:
+            raise self._error
+        upscale = None if upscaler_factory is None else upscaler_factory()
+        return build_composed_stage(self._restore, upscale, osd_boxes=osd_boxes)
+
+    def _restore(self, frame: np.ndarray) -> np.ndarray:
+        self.restored += 1
+        return frame
+
+
+def make_enhance_upscaler(tmp_path: Path, restorer: object | None) -> VideoUpscaler:
+    return VideoUpscaler(
+        make_stream_settings(tmp_path),
+        FakeNcnnEngine(),  # type: ignore[arg-type]
+        ProbeForbiddenMediaTools(),  # type: ignore[arg-type]
+        frame_restorer=restorer,  # type: ignore[arg-type]
+    )
+
+
+def make_enhance_job(source: Path, cctv: CctvOptions, **overrides: object) -> VideoUpscaleJob:
+    fields: dict[str, object] = dict(
+        source_path=source,
+        original_filename=source.name,
+        model_name="cctv-enhance",
+        scale=1,
+        output_container="mp4",
+        video_codec="libx264",
+        video_preset="ultrafast",
+        crf=18,
+        keep_audio=True,
+        device="dml:0",
+        video_encoder="software",
+        cctv=cctv,
+        metadata={"cctv": {"task": "enhance", "lane": "ai", "sourceSha256": "admitted"}},
+    )
+    fields.update(overrides)
+    return VideoUpscaleJob(**fields)
+
+
+def make_cctv_camera_clip(tmp_path: Path, video: str, seconds: str, with_audio: bool) -> Path:
+    clip = tmp_path / "camera.mkv"
+    audio = ["-f", "lavfi", "-i", "sine=sample_rate=8000"] if with_audio else []
+    audio_codec = ["-c:a", "pcm_alaw", "-shortest"] if with_audio else []
+    command = [
+        str(Settings().ffmpeg_binary_path), "-hide_banner", "-v", "error", "-y",
+        "-f", "lavfi", "-i", video, *audio, "-t", seconds, "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        *audio_codec, str(clip),
+    ]  # fmt: skip
+    subprocess.run(command, check=True, capture_output=True)
+    return clip
+
+
+def admit_cctv_source(settings: Settings, job: VideoUpscaleJob, clip: Path) -> Path:
+    job_dir = cctv_job_dir(settings.outputs_path, job.id)
+    record = ingest_source(clip, clip.name)
+    make_verified_copy(clip, record, job_dir)
+    write_source_record(job_dir, record)
+    return job_dir
+
+
+def probe_streams(path: Path) -> list[dict]:
+    command = [
+        str(Settings().ffprobe_binary_path), "-v", "error", "-show_entries",
+        "stream=codec_type,codec_name,width,height,r_frame_rate,nb_frames,duration", "-of", "json", str(path),
+    ]  # fmt: skip
+    return json.loads(subprocess.run(command, check=True, capture_output=True).stdout)["streams"]
+
+
+def pngs_under(*roots: Path) -> list[Path]:
+    return [path for root in roots if root.exists() for path in root.rglob("*.png")]
+
+
+class RecordingRawPipeEncoder(RawPipeEncoder):
+    commands: list[list[str]] = []
+
+    def __init__(self, command: list[str], *args: object, **kwargs: object) -> None:
+        RecordingRawPipeEncoder.commands.append(list(command))
+        super().__init__(command, *args, **kwargs)
+
+
+def record_decode_commands(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
+    commands: list[list[str]] = []
+    original = FfmpegFrameSource.build_command
+
+    def recording(self: FfmpegFrameSource) -> list[str]:
+        command = original(self)
+        commands.append(command)
+        return command
+
+    monkeypatch.setattr(FfmpegFrameSource, "build_command", recording)
+    return commands
+
+
+def forbid_png_path(monkeypatch: pytest.MonkeyPatch, upscaler: VideoUpscaler) -> None:
+    def forbidden(*args: object, **kwargs: object) -> None:
+        raise AssertionError("the CCTV AI lane must never take the PNG path nor the upscale gate")
+
+    monkeypatch.setattr(upscaler, "_resolve_stream_pipeline_mode", forbidden)
+    monkeypatch.setattr(upscaler, "_build_extract_frames_command", forbidden)
+    monkeypatch.setattr(upscaler, "_interpolate_and_upscale", forbidden)
+
+
+def test_cctv_enhance_is_available_only_with_a_frame_restorer(tmp_path: Path) -> None:
+    cctv = CctvOptions(task="enhance", session_token="session0token1", no_osd=True)
+    job = make_enhance_job(tmp_path / "clip.mkv", cctv)
+
+    assert make_enhance_upscaler(tmp_path, IdentityFrameRestorer()).available_for(job)
+    assert not make_enhance_upscaler(tmp_path, None).available_for(job)
+
+
+def test_cctv_enhance_closes_the_decode_when_the_stage_cannot_be_built(tmp_path: Path) -> None:
+    closed: list[bool] = []
+
+    def decoded(cancel_event: threading.Event):
+        try:
+            for _ in range(3):
+                yield np.zeros((1, 2, 4, 3), dtype=np.uint8)
+        finally:
+            closed.append(True)
+
+    class FakeSource:
+        frames = staticmethod(decoded)
+
+    restorer = IdentityFrameRestorer(error=RuntimeError("canary failed"))
+    upscaler = make_enhance_upscaler(tmp_path, restorer)
+    cctv = CctvOptions(task="enhance", session_token="session0token1", no_osd=True)
+    plan = EnhancePlan((), FrameGeometry(4, 2), Fraction(25), 3, 40, 1, ())
+
+    with pytest.raises(RuntimeError, match="canary failed"):
+        upscaler._run_cctv_stream_blocking(
+            make_enhance_job(tmp_path / "clip.mkv", cctv), plan, FakeSource(), ["ffmpeg"], {"n": 0}, threading.Event()
+        )
+
+    assert closed == [True]
+    assert restorer.calls[0]["shape"] == (1, 2, 4, 3) and restorer.calls[0]["strength"] == 40
+
+
+@needs_ffmpeg
+async def test_cctv_enhance_streams_at_scale_1_with_a_classic_upscaler_and_writes_no_png(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clip = make_cctv_camera_clip(tmp_path, "testsrc2=size=352x288:rate=25", "3", with_audio=True)
+    cctv = CctvOptions(
+        task="enhance",
+        session_token="session0token1",
+        steps=(
+            CctvStep("ai_deblock", {"strength": 40}),
+            CctvStep("crop", {"x": 16, "y": 16, "w": 320, "h": 240}),
+        ),
+        osd_boxes=((32, 32, 64, 24),),
+        osd_boxes_confirmed=True,
+        trim=(25, 59),
+    )
+    job = make_enhance_job(clip, cctv, model_id="classic-lanczos")
+    work_dir_seen: list[bool] = []
+    upscaler_box: list[VideoUpscaler] = []
+
+    def inside_the_stream() -> None:
+        settings = upscaler_box[0].settings
+        work_dir = settings.video_work_path / job.id
+        work_dir_seen.append(work_dir.is_dir() and not (work_dir / "frames-in").exists())
+        assert not pngs_under(work_dir, settings.outputs_path)
+
+    restorer = IdentityFrameRestorer(on_build=inside_the_stream)
+    upscaler = make_enhance_upscaler(tmp_path, restorer)
+    upscaler_box.append(upscaler)
+    forbid_png_path(monkeypatch, upscaler)
+    decode_commands = record_decode_commands(monkeypatch)
+    RecordingRawPipeEncoder.commands = []
+    monkeypatch.setattr("app.services.video_upscaler.RawPipeEncoder", RecordingRawPipeEncoder)
+    job_dir = admit_cctv_source(upscaler.settings, job, clip)
+
+    output = await upscaler.run(job)
+
+    assert output == job_dir / "02_processed" / "enhanced.mp4"
+    assert work_dir_seen == [True]
+    assert not (upscaler.settings.video_work_path / job.id).exists()
+    decode = decode_commands[0]
+    assert decode[decode.index("-vf") + 1] == (
+        "trim=start_frame=25:end_frame=60,setpts=PTS-STARTPTS,crop=w=320:h=240:x=16:y=16:exact=1"
+    )
+    assert decode[decode.index("-r") + 1] == "25/1"
+    encode = RecordingRawPipeEncoder.commands[0]
+    assert encode[encode.index("-framerate") + 1] == "25/1"
+    assert encode[encode.index("-s") + 1] == "320x240"
+    assert "-vf" not in encode
+    expected_call = {"device": "dml:0", "shape": (1, 240, 320, 3), "strength": 40, "boxes": ((16, 16, 64, 24),)}
+    assert restorer.calls == [expected_call]
+    video, audio = sorted(probe_streams(output), key=lambda stream: stream["codec_type"] != "video")
+    assert (video["width"], video["height"], video["r_frame_rate"], video["nb_frames"]) == (320, 240, "25/1", "35")
+    assert audio["codec_name"] == "aac" and float(audio["duration"]) == pytest.approx(1.4, abs=0.1)
+    metadata = job.metadata["cctv"]
+    assert metadata["lane"] == "ai" and metadata["cfrNormalized"] is True and metadata["measuredFps"] == "25/1"
+    assert (metadata["framesIn"], metadata["framesOut"], metadata["duplicatesReused"]) == (35, 35, 0)
+    assert metadata["outputs"]["enhanced"] == "02_processed/enhanced.mp4"
+    assert metadata["sourceSha256"] == hashlib.sha256(clip.read_bytes()).hexdigest()
+    assert job.metadata["stage"] == "completed" and job.metadata["streamPipeline"] is True
+    assert (job.metadata["outputWidth"], job.metadata["outputHeight"]) == (320, 240)
+
+
+@needs_ffmpeg
+async def test_cctv_enhance_reuses_the_previous_output_for_identical_frames(tmp_path: Path) -> None:
+    clip = make_cctv_camera_clip(tmp_path, "color=c=gray:size=64x48:rate=25", "0.8", with_audio=False)
+    cctv = CctvOptions(
+        task="enhance", session_token="session0token1", steps=(CctvStep("ai_deblock", {"strength": 60}),), no_osd=True
+    )
+    job = make_enhance_job(clip, cctv)
+    restorer = IdentityFrameRestorer()
+    upscaler = make_enhance_upscaler(tmp_path, restorer)
+    admit_cctv_source(upscaler.settings, job, clip)
+
+    output = await upscaler.run(job)
+
+    assert [stream["codec_type"] for stream in probe_streams(output)] == ["video"]
+    metadata = job.metadata["cctv"]
+    assert metadata["framesOut"] == 20 and metadata["duplicatesReused"] == 19
+    assert restorer.restored == 1

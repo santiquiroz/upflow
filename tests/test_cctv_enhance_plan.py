@@ -1,0 +1,160 @@
+from __future__ import annotations
+
+from fractions import Fraction
+from pathlib import Path
+
+import pytest
+
+from app.services import cctv_enhance_plan as plan_module
+from app.services.cctv_chain import ai_lane_plan, steps_from_request
+from app.services.cctv_frame_index import FrameEntry, summarize_frame_index
+from app.services.cctv_ingest import ReceivedAt, SourceRecord
+from app.services.engines.frame_model_runner import FrameModelReport
+from app.services.engines.frame_restorer import ComposedStageReport
+from app.services.ffmpeg_filters import FrameGeometry
+
+GEOMETRY = FrameGeometry(704, 576)
+DEBLOCK = {"id": "ai_deblock", "params": {"filter": "drunet_deblock", "strength": 60}}
+TRIM = {"id": "trim", "params": {"filter": "trim", "start_frame": 10, "end_frame": 19}}
+CROP = {"id": "crop", "params": {"filter": "crop", "x": 100, "y": 50, "w": 320, "h": 240}}
+GRAY = {"id": "gray", "params": {}}
+OSD = {"id": "osd_protect", "params": {}}
+UPSCALE = {"id": "ai_upscale", "params": {}}
+
+
+def lane(*raw: dict):
+    return ai_lane_plan(steps_from_request(list(raw), "ai"))
+
+
+def deinterlace(mode: str) -> dict:
+    return {"id": "deinterlace", "params": {"filter": "bwdif", "mode": mode}}
+
+
+def frames(count: int, delta: float) -> tuple[FrameEntry, ...]:
+    return tuple(FrameEntry(n, round(n * delta, 6), n % 25 == 0, "P", 900) for n in range(count))
+
+
+def source(count: int = 50, delta: float = 0.04, header: str | None = "25/1") -> plan_module.EnhanceSource:
+    return plan_module.EnhanceSource(GEOMETRY, summarize_frame_index(frames(count, delta)), header)
+
+
+def build(*raw: dict, src: plan_module.EnhanceSource | None = None, boxes=(), scale: int = 1):
+    return plan_module.build_enhance_plan(lane(*raw), src or source(), boxes, scale)
+
+
+def test_cctv_plan_without_prefilters_decodes_the_whole_frame_at_the_measured_rate() -> None:
+    plan = build(DEBLOCK)
+
+    assert plan.prefilter_args == ()
+    assert (plan.decoded.width, plan.decoded.height) == (704, 576)
+    assert plan.rate_text == "25/1" and plan.frames_in == 50
+    assert plan.strength == 60 and plan.upscale == 1 and plan.output_size == (704, 576)
+
+
+def test_cctv_trim_rebases_timestamps_so_cfr_does_not_pad_the_start() -> None:
+    plan = build(TRIM, DEBLOCK, GRAY)
+
+    assert plan.prefilter_args == ("-vf", "trim=start_frame=10:end_frame=20,setpts=PTS-STARTPTS,format=pix_fmts=gray")
+    assert plan.frames_in == 10
+
+
+def test_cctv_crop_sets_the_decoded_size_before_the_source_exists() -> None:
+    plan = build(CROP, DEBLOCK)
+
+    assert (plan.decoded.width, plan.decoded.height) == (320, 240)
+    assert plan.prefilter_args == ("-vf", "crop=w=320:h=240:x=100:y=50:exact=1")
+
+
+def test_cctv_osd_boxes_move_with_the_crop_into_decoded_coordinates() -> None:
+    plan = build(CROP, DEBLOCK, OSD, boxes=((120, 60, 40, 20),))
+
+    assert plan.osd_boxes == ((20, 10, 40, 20),)
+
+
+def test_cctv_boxes_without_osd_protect_are_not_pasted() -> None:
+    assert build(DEBLOCK, boxes=((120, 60, 40, 20),)).osd_boxes == ()
+
+
+def test_cctv_send_field_doubles_the_rate_and_the_frame_count() -> None:
+    plan = build(deinterlace("send_field"), DEBLOCK)
+
+    assert plan.rate == Fraction(50) and plan.frames_in == 100
+
+
+def test_cctv_send_frame_keeps_the_rate() -> None:
+    assert build(deinterlace("send_frame"), DEBLOCK).rate == Fraction(25)
+
+
+def test_cctv_rate_is_the_measured_one_when_the_container_lies() -> None:
+    plan = build(DEBLOCK, src=source(delta=0.08, header="25/1"))
+
+    assert plan.rate_text == "25/2"
+
+
+def test_cctv_rate_snaps_to_the_header_within_the_millisecond_pts_resolution() -> None:
+    # 29.97 fps en Matroska: los deltas quedan en 33/34 ms y la mediana da 30.303 fps.
+    plan = build(DEBLOCK, src=source(delta=0.033, header="30000/1001"))
+
+    assert plan.rate_text == "30000/1001"
+
+
+def test_cctv_rate_without_a_measurement_falls_back_to_the_header() -> None:
+    assert build(DEBLOCK, src=source(count=1, header="15/1")).rate_text == "15/1"
+
+
+def test_cctv_rate_without_measurement_nor_header_fails_clearly() -> None:
+    with pytest.raises(RuntimeError, match="frame rate"):
+        build(DEBLOCK, src=source(count=1, header=None))
+
+
+def test_cctv_ai_upscale_multiplies_the_output_size() -> None:
+    plan = build(DEBLOCK, UPSCALE, scale=2)
+
+    assert plan.upscale == 2 and plan.output_size == (1408, 1152)
+
+
+def test_cctv_ai_upscale_without_a_scale_is_rejected() -> None:
+    with pytest.raises(RuntimeError, match="scale of 2"):
+        build(DEBLOCK, UPSCALE, scale=1)
+
+
+def test_cctv_without_ai_deblock_there_is_no_strength() -> None:
+    assert build({"id": "denoise", "params": {"filter": "hqdn3d"}}).strength is None
+
+
+def test_cctv_audio_is_trimmed_at_the_frame_timestamps_and_rebased() -> None:
+    decode = lane(TRIM, DEBLOCK).decode
+    atrim = plan_module.audio_trim(decode, frames(50, 0.04))
+
+    command = plan_module.build_audio_command(Path("ffmpeg.exe"), Path("work.mkv"), atrim, Path("audio.m4a"))
+
+    assert command[command.index("-af") + 1] == "atrim=start=0.4:end=0.8,asetpts=PTS-STARTPTS"
+    assert command[command.index("-map") + 1] == "0:a:0" and command[-1] == "audio.m4a"
+
+
+def test_cctv_audio_without_trim_has_no_filter() -> None:
+    atrim = plan_module.audio_trim(lane(DEBLOCK).decode, frames(50, 0.04))
+
+    command = plan_module.build_audio_command(Path("ffmpeg.exe"), Path("work.mkv"), atrim, Path("audio.m4a"))
+
+    assert atrim is None and "-af" not in command
+
+
+def test_cctv_enhance_metadata_records_the_stream_and_keeps_the_admission_fields() -> None:
+    plan = build(TRIM, CROP, DEBLOCK)
+    restore = FrameModelReport("drunet-deblock-color-u8", "dml:0", "fp16", None, True)
+    report = ComposedStageReport(frames=12, duplicates_reused=3, upscaled=False, osd_boxes=0, restore=restore)
+    record = SourceRecord("cam.mp4", 10, "2026-09-01T00:00:00Z", "ab" * 32, ReceivedAt("u", "l"), "MP4/MOV")
+    base = {"task": "enhance", "lane": "ai", **plan_module.source_json(record)}
+
+    stream = plan_module.stream_json(plan, report, 12)
+    metadata = plan_module.enhance_metadata(base, stream, "02_processed/enhanced.mp4", ["cctv.lite", "cctv.lite"])
+
+    assert metadata["lane"] == "ai" and metadata["sourceSha256"] == "ab" * 32
+    assert metadata["receivedAt"] == {"utc": "u", "local": "l"}
+    assert metadata["cfrNormalized"] is True and metadata["measuredFps"] == "25/1"
+    assert (metadata["framesIn"], metadata["framesOut"], metadata["duplicatesReused"]) == (10, 12, 3)
+    assert metadata["decodedSize"] == [320, 240] and metadata["outputSize"] == [320, 240]
+    assert metadata["restore"]["model"] == "drunet-deblock-color-u8" and metadata["restore"]["ioBinding"] is True
+    assert metadata["outputs"] == {"enhanced": "02_processed/enhanced.mp4"}
+    assert metadata["warnings"] == ["cctv.lite"]

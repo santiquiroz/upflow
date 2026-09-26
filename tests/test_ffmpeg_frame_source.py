@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import io
+import subprocess
 import threading
 from pathlib import Path
 
 import numpy as np
 import pytest
 
+from app.config import Settings
+from app.services.cctv_chain import ai_lane_plan, steps_from_request
+from app.services.cctv_enhance_plan import prefilter_args
 from app.services.engines.ffmpeg_frame_source import FfmpegFrameSource
+from app.services.ffmpeg_filters import output_dims_after
+from ffmpeg_support import needs_ffmpeg
 
 
 class FakeDecodeProc:
@@ -105,3 +111,69 @@ def test_frames_kills_process_when_cancelled(tmp_path: Path, monkeypatch: pytest
 
     assert remaining == []
     assert fake.killed is True
+
+
+# --- Modo CCTV: pasos pre-IA en el -vf del decode (spec §4.7) ---
+
+
+def test_cctv_prefilter_goes_after_the_input_and_before_the_cfr_rate(tmp_path: Path) -> None:
+    source = FfmpegFrameSource(
+        Path("ffmpeg.exe"), tmp_path / "work.mkv", 320, 240, decode_threads=2, fps="25/2",
+        prefilter_args=("-vf", "crop=w=320:h=240:x=0:y=0:exact=1"),
+    )  # fmt: skip
+
+    command = source.build_command()
+
+    vf = command.index("-vf")
+    assert command.index("-i") < vf < command.index("-fps_mode")
+    assert command[vf + 1] == "crop=w=320:h=240:x=0:y=0:exact=1"
+    assert command[command.index("-r") + 1] == "25/2"
+
+
+def test_cctv_without_prefilter_the_decode_command_is_unchanged(tmp_path: Path) -> None:
+    command = make_source(tmp_path, fps="24/1").build_command()
+
+    assert command == [
+        "ffmpeg.exe", "-v", "error", "-threads", "2", "-i", str(tmp_path / "clip.mp4"),
+        "-fps_mode", "cfr", "-r", "24/1", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1",
+    ]  # fmt: skip
+
+
+def make_cctv_clip(tmp_path: Path) -> Path:
+    clip = tmp_path / "camera.mkv"
+    command = [
+        str(Settings().ffmpeg_binary_path), "-hide_banner", "-v", "error", "-y",
+        "-f", "lavfi", "-i", "testsrc2=size=128x96:rate=25", "-frames:v", "50",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", str(clip),
+    ]  # fmt: skip
+    subprocess.run(command, check=True, capture_output=True)
+    return clip
+
+
+def cctv_decode(tmp_path: Path, raw_steps: list[dict]) -> list[np.ndarray]:
+    lane = ai_lane_plan(steps_from_request(raw_steps, "ai"))
+    decoded = output_dims_after(lane.decode, 128, 96)
+    source = FfmpegFrameSource(
+        Settings().ffmpeg_binary_path, make_cctv_clip(tmp_path), decoded.width, decoded.height,
+        decode_threads=1, fps="25/1", prefilter_args=prefilter_args(lane.decode),
+    )  # fmt: skip
+    return list(source.frames(threading.Event()))
+
+
+@needs_ffmpeg
+def test_cctv_real_trim_yields_only_the_kept_frames(tmp_path: Path) -> None:
+    trim = {"id": "trim", "params": {"start_frame": 25, "end_frame": 34}}
+
+    frames = cctv_decode(tmp_path, [trim])
+
+    assert len(frames) == 10
+
+
+@needs_ffmpeg
+def test_cctv_real_crop_decodes_whole_frames_at_the_cropped_size(tmp_path: Path) -> None:
+    crop = {"id": "crop", "params": {"x": 16, "y": 8, "w": 64, "h": 48}}
+
+    frames = cctv_decode(tmp_path, [crop])
+
+    assert len(frames) == 50
+    assert all(frame.shape == (1, 48, 64, 3) for frame in frames)

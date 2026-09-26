@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import threading
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 
 import numpy as np
@@ -27,6 +27,7 @@ class FfmpegFrameSource:
         height: int,
         decode_threads: int,
         fps: str,
+        prefilter_args: Sequence[str] = (),
     ) -> None:
         self._ffmpeg_binary = ffmpeg_binary
         self._source_path = source_path
@@ -34,6 +35,8 @@ class FfmpegFrameSource:
         self._height = height
         self._decode_threads = decode_threads
         self._fps = fps
+        # Pasos pre-IA de CCTV: van antes de la normalizacion a CFR y definen el tamaño que se lee.
+        self._prefilter_args = list(prefilter_args)
         self._frame_bytes = width * height * _RGB24_BYTES_PER_PIXEL
 
     def build_command(self) -> list[str]:
@@ -51,6 +54,7 @@ class FfmpegFrameSource:
             "-v", "error",
             "-threads", str(self._decode_threads),
             "-i", str(self._source_path),
+            *self._prefilter_args,
             "-fps_mode", "cfr",
             "-r", self._fps,
             "-f", "rawvideo",

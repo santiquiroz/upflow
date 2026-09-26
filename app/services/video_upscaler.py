@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import logging
 import os
 import shutil
@@ -18,6 +19,23 @@ from app.models import VideoUpscaleJob
 from app.services.classic_upscalers import is_classic_upscaler, swscale_flag_for
 from app.services.target_resolution import plan_for_scale, plan_for_target
 from app.services import video_encoders
+from app.services.cctv_chain import ResolvedStep, ai_lane_plan
+from app.services.cctv_enhance_plan import (
+    AI_LANE,
+    EnhancePlan,
+    audio_trim,
+    build_audio_command,
+    build_enhance_plan,
+    enhance_metadata,
+    enhance_source,
+    enhanced_output_path,
+    source_json,
+    stream_json,
+)
+from app.services.cctv_ingest import MediaTools as CctvMediaTools
+from app.services.cctv_job_runner import IngestedSource, ingest_job_source
+from app.services.cctv_job_validation import resolve_steps
+from app.services.cctv_session import cctv_job_dir
 from app.services.backend_registry import (
     UpscaleBackend,
     ncnn_produces_correct_output,
@@ -28,6 +46,13 @@ from app.services.encoder_capability_probe import EncoderCapabilityProbe
 from app.services.engines.audio_enhance import AudioEnhancer
 from app.services.engines.ffmpeg_frame_source import FfmpegFrameSource
 from app.services.engines.ffmpeg_frame_sink import RawPipeEncoder
+from app.services.engines.frame_restorer import (
+    ComposedStage,
+    ComposedStageReport,
+    FrameRestorer,
+    UpscalerFactory,
+    build_composed_stage,
+)
 from app.services.engines.frame_workers import derive_readback_ring_capacity, load_frame
 from app.services.engines.gmfss_engine import GmfssEngine
 from app.services.engines.onnx_upscaler import OnnxUpscaler
@@ -49,6 +74,7 @@ from app.services.media_tools import (
     parse_fps_fraction,
     resolve_video_fps,
 )
+from app.services.handover_package import PROCESSED_DIRNAME, place_file
 from app.services.model_registry import ModelKind, ModelRegistry
 from app.services.process_runner import is_non_empty_file, run_guarded_process
 from app.services.progress import (
@@ -131,6 +157,11 @@ def estimate_png_workdir_bytes(
 # conserva su tramo PNG y solo upscale→encode va en streaming; None = clásico.
 STREAM_MODE_FULL = "full"
 STREAM_MODE_HYBRID = "hybrid"
+UPSCALE_STAGE = "upscaling_frames"
+
+CCTV_ENHANCE_TASK = "enhance"
+CCTV_ENHANCE_STAGE = "restoring_frames"
+CCTV_AUDIO_NAME = "audio.m4a"
 
 
 # Not a SubprocessTimeoutError: a stall is "hung, no new output", not
@@ -145,6 +176,48 @@ def _stall_message(missing_signal: str, stall_timeout_seconds: float) -> str:
         f"El proceso parece estancado: sin {missing_signal} por {stall_minutes:.0f} min. "
         "Puede ser un problema del modelo/GPU."
     )
+
+
+def unchanged_frame(frame: np.ndarray) -> np.ndarray:
+    return frame
+
+
+def prepend_frame(first: np.ndarray, rest: Iterator[np.ndarray]) -> Iterator[np.ndarray]:
+    # Generador (no itertools.chain): al cerrarlo el pipeline tambien cierra el decode y mata su ffmpeg.
+    yield first
+    yield from rest
+
+
+def close_quietly(frames: Iterator[np.ndarray]) -> None:
+    # Si un thread del pipeline no llego a soltar el generador, cerrarlo tira ValueError y taparia el error real.
+    with contextlib.suppress(ValueError):
+        frames.close()
+
+
+def counting_sink(encoder: RawPipeEncoder, counter: dict[str, int]) -> Callable[[np.ndarray], None]:
+    def sink(frame_nhwc: np.ndarray) -> None:
+        encoder.write_frame(frame_nhwc[0])
+        counter["n"] = encoder.frames_written
+
+    return sink
+
+
+def finish_encoded_pipeline(
+    pipeline: FramePipeline, encoder: RawPipeEncoder, cancel_event: threading.Event
+) -> int | None:
+    try:
+        delivered = pipeline.run(cancel_event)
+    except BaseException:
+        encoder.kill()
+        raise
+    if cancel_event.is_set():
+        encoder.kill()
+        return None
+    if delivered == 0:
+        encoder.kill()
+        raise RuntimeError("The enhancement stream delivered no frames.")
+    encoder.finish()
+    return delivered
 
 
 class VideoUpscaler:
@@ -164,8 +237,11 @@ class VideoUpscaler:
         onnx_video_engine: OnnxVideoUpscaler | None = None,
         devices: DevicesService | None = None,
         cctv_runners: Mapping[str, CctvTaskRunner] | None = None,
+        frame_restorer: FrameRestorer | None = None,
     ) -> None:
         self.settings = settings
+        # Carril IA de CCTV (enhance): sin la etapa compuesta de restauracion no esta disponible.
+        self.frame_restorer = frame_restorer
         # Un runner por tarea CCTV (clarify, roi_fusion); una tarea sin runner no esta disponible.
         self.cctv_runners = dict(cctv_runners or {})
         self.engine = engine
@@ -194,6 +270,8 @@ class VideoUpscaler:
         return not self._job_uses_ncnn(job) or self.engine.available()
 
     def cctv_task_available(self, task: str) -> bool:
+        if task == CCTV_ENHANCE_TASK:
+            return self.frame_restorer is not None
         return task in self.cctv_runners
 
     @staticmethod
@@ -217,8 +295,9 @@ class VideoUpscaler:
         frames_out = work_dir / "frames-out"
         audio_path = work_dir / "audio.m4a"
         work_dir.mkdir(parents=True, exist_ok=True)
-        frames_in.mkdir(parents=True, exist_ok=True)
-        frames_out.mkdir(parents=True, exist_ok=True)
+        if job.cctv is None:
+            frames_in.mkdir(parents=True, exist_ok=True)
+            frames_out.mkdir(parents=True, exist_ok=True)
 
         try:
             return await self._run_pipeline(job, frames_in, frames_out, audio_path, fps_multiplier)
@@ -322,12 +401,195 @@ class VideoUpscaler:
 
     async def _run_cctv(self, job: VideoUpscaleJob, work_dir: Path) -> Path:
         # CCTV no pasa por el reescalado: ese camino fuerza -fps_mode cfr, incompatible con el carril clasico.
+        if job.cctv.task == CCTV_ENHANCE_TASK:
+            return await self._run_cctv_enhance(job, work_dir)
         runner = self.cctv_runners[job.cctv.task]
         output_path = await runner.run(
             job, work_dir, lambda stage, fraction: apply_video_stage_fraction(job, stage, fraction)
         )
         complete_video_stages(job)
         return output_path
+
+    async def _run_cctv_enhance(self, job: VideoUpscaleJob, work_dir: Path) -> Path:
+        # Gate propio (spec §4.7): siempre por stream, sin _resolve_stream_pipeline_mode ni PNG intermedios.
+        lane = ai_lane_plan(resolve_steps(job.cctv, AI_LANE))
+        job_dir = cctv_job_dir(self.settings.outputs_path, job.id)
+        on_stage = functools.partial(apply_video_stage_fraction, job)
+        source = await ingest_job_source(self._cctv_media_tools(), job_dir, work_dir, on_stage)
+        plan = build_enhance_plan(lane, enhance_source(source), job.cctv.osd_boxes, job.scale)
+        # Se encodea en video-work y se mueve al final: un job que falla no deja un video a medias en outputs.
+        encoded = enhanced_output_path(work_dir, job.output_container)
+        audio_mux_path, audio_codec_args = await self._cctv_audio(job, source, lane.decode, work_dir)
+        command = await self._cctv_encode_command(job, plan, encoded, audio_mux_path, audio_codec_args)
+        report = await self._run_cctv_stream(job, plan, source.work, command, encoded)
+        output_path = place_file(encoded, enhanced_output_path(job_dir / PROCESSED_DIRNAME, job.output_container))
+        self._stamp_cctv_enhance(job, plan, source, report, output_path.relative_to(job_dir).as_posix())
+        return output_path
+
+    def _cctv_media_tools(self) -> CctvMediaTools:
+        return CctvMediaTools(self.settings.ffmpeg_binary_path, self.settings.ffprobe_binary_path)
+
+    async def _cctv_audio(
+        self, job: VideoUpscaleJob, source: IngestedSource, decode: tuple[ResolvedStep, ...], work_dir: Path
+    ) -> tuple[Path | None, list[str]]:
+        if not job.keep_audio or not source.ingest.audio:
+            return None, []
+        audio_path = work_dir / CCTV_AUDIO_NAME
+        atrim = audio_trim(decode, source.frames)
+        await self._run_process(build_audio_command(self.settings.ffmpeg_binary_path, source.work, atrim, audio_path))
+        return self._usable_audio_or_none(audio_path), ["-c:a", "copy"]
+
+    async def _cctv_encode_command(
+        self,
+        job: VideoUpscaleJob,
+        plan: EnhancePlan,
+        output_path: Path,
+        audio_mux_path: Path | None,
+        audio_codec_args: list[str],
+    ) -> list[str]:
+        width, height = plan.output_size
+        encoder = await asyncio.to_thread(self._resolve_video_encoder, job, width, height)
+        job.metadata["videoEncoder"] = encoder
+        return self._build_rawpipe_command(
+            width, height, plan.rate_text, audio_mux_path, audio_codec_args, output_path, job, encoder
+        )
+
+    async def _run_cctv_stream(
+        self, job: VideoUpscaleJob, plan: EnhancePlan, work: Path, command: list[str], output_path: Path
+    ) -> ComposedStageReport:
+        advance_video_stage(job, CCTV_ENHANCE_STAGE)
+        job.metadata["framesTotal"] = plan.frames_in
+        source = FfmpegFrameSource(
+            self.settings.ffmpeg_binary_path,
+            work,
+            plan.decoded.width,
+            plan.decoded.height,
+            self.settings.ffmpeg_decode_threads,
+            plan.rate_text,
+            prefilter_args=plan.prefilter_args,
+        )
+        counter = {"n": 0}
+        cancel_event = threading.Event()
+        blocking = functools.partial(self._run_cctv_stream_blocking, job, plan, source, command, counter, cancel_event)
+        report = await self._await_cctv_worker(job, counter, cancel_event, blocking)
+        if report is None or not is_non_empty_file(output_path):
+            raise RuntimeError("The enhanced video was not produced.")
+        job.metadata["framesTotal"] = counter["n"]
+        return report
+
+    async def _await_cctv_worker(
+        self,
+        job: VideoUpscaleJob,
+        counter: dict[str, int],
+        cancel_event: threading.Event,
+        blocking: Callable[[], ComposedStageReport | None],
+    ) -> ComposedStageReport | None:
+        # Mismo patron que _run_stream_pipeline: el cancel senala y espera a que el worker mate sus procesos.
+        worker = asyncio.ensure_future(asyncio.to_thread(blocking))
+        try:
+            async with self._track_streaming_progress(job, counter, CCTV_ENHANCE_STAGE):
+                return await asyncio.shield(worker)
+        except BaseException:
+            cancel_event.set()
+            with contextlib.suppress(BaseException):
+                await worker
+            raise
+
+    def _run_cctv_stream_blocking(
+        self,
+        job: VideoUpscaleJob,
+        plan: EnhancePlan,
+        source: FfmpegFrameSource,
+        command: list[str],
+        counter: dict[str, int],
+        cancel_event: threading.Event,
+    ) -> ComposedStageReport | None:
+        frames = source.frames(cancel_event)
+        try:
+            return self._pipe_cctv_frames(job, plan, frames, command, counter, cancel_event)
+        finally:
+            close_quietly(frames)
+
+    def _pipe_cctv_frames(
+        self,
+        job: VideoUpscaleJob,
+        plan: EnhancePlan,
+        frames: Iterator[np.ndarray],
+        command: list[str],
+        counter: dict[str, int],
+        cancel_event: threading.Event,
+    ) -> ComposedStageReport | None:
+        first = next(frames, None)
+        if first is None:
+            return self._no_frames_to_enhance(cancel_event)
+        maxsizes = self._cctv_queue_sizes(plan)
+        # El primer cuadro decodificado es la muestra del canario y fija la forma del job.
+        stage = self._cctv_composed_stage(job, plan, first, maxsizes, cancel_event)
+        encoder = RawPipeEncoder(command, summarize_error=lambda stderr: self._summarize_process_error(stderr, b""))
+        encoder.start()
+        pipeline = FramePipeline(prepend_frame(first, frames), [stage], counting_sink(encoder, counter), maxsizes)
+        delivered = finish_encoded_pipeline(pipeline, encoder, cancel_event)
+        return None if delivered is None else stage.report()
+
+    @staticmethod
+    def _no_frames_to_enhance(cancel_event: threading.Event) -> None:
+        if cancel_event.is_set():
+            return None
+        raise RuntimeError("The working copy produced no frames to enhance.")
+
+    def _cctv_queue_sizes(self, plan: EnhancePlan) -> list[int]:
+        input_bytes = plan.decoded.width * plan.decoded.height * 3
+        budget_bytes = max(1, self.settings.onnx_video_max_pipeline_mb) * 1024 * 1024
+        return derive_stream_queue_maxsizes(input_bytes, input_bytes * plan.upscale * plan.upscale, 1, budget_bytes)
+
+    def _cctv_composed_stage(
+        self,
+        job: VideoUpscaleJob,
+        plan: EnhancePlan,
+        sample: np.ndarray,
+        maxsizes: list[int],
+        cancel_event: threading.Event,
+    ) -> ComposedStage:
+        device = job.device or self.settings.default_device
+        upscaler = self._cctv_upscaler_factory(job, plan, device, maxsizes)
+        if plan.strength is None:
+            upscale = None if upscaler is None else upscaler()
+            return build_composed_stage(unchanged_frame, upscale, osd_boxes=plan.osd_boxes)
+        return self.frame_restorer.build_stage(
+            device,
+            sample,
+            plan.strength,
+            upscaler_factory=upscaler,
+            osd_boxes=plan.osd_boxes,
+            cancel_event=cancel_event,
+        )
+
+    def _cctv_upscaler_factory(
+        self, job: VideoUpscaleJob, plan: EnhancePlan, device: str, maxsizes: list[int]
+    ) -> UpscalerFactory | None:
+        if plan.upscale == 1:
+            return None
+        if self.onnx_video_engine is None:
+            raise RuntimeError("AI upscale needs the ONNX video engine.")
+        ring = derive_readback_ring_capacity(maxsizes[-1], 1)
+        engine = self.onnx_video_engine
+        return lambda: engine.build_frame_upscaler(job.model_name, device, plan.upscale, readback_ring_capacity=ring)
+
+    def _stamp_cctv_enhance(
+        self,
+        job: VideoUpscaleJob,
+        plan: EnhancePlan,
+        source: IngestedSource,
+        report: ComposedStageReport,
+        enhanced: str,
+    ) -> None:
+        base = {**job.metadata.get("cctv", {}), "task": job.cctv.task, **source_json(source.record)}
+        stream = stream_json(plan, report, job.metadata["framesTotal"])
+        job.metadata["cctv"] = enhance_metadata(base, stream, enhanced, source.ingest.warnings)
+        job.metadata["streamPipeline"] = True
+        job.metadata["outputFps"] = plan.rate_text
+        job.metadata["outputWidth"], job.metadata["outputHeight"] = plan.output_size
+        complete_video_stages(job)
 
     async def _interpolate_and_upscale(
         self,
@@ -1795,7 +2057,7 @@ class VideoUpscaler:
 
     @contextlib.asynccontextmanager
     async def _track_streaming_progress(
-        self, job: VideoUpscaleJob, counter: dict[str, int]
+        self, job: VideoUpscaleJob, counter: dict[str, int], stage_key: str = UPSCALE_STAGE
     ) -> AsyncIterator[None]:
         # Like _track_frame_progress but reads an in-memory frame counter (there are
         # no output files to count in the raw-pipe path). Same stall-watchdog
@@ -1804,7 +2066,9 @@ class VideoUpscaler:
         job.metadata["framesDone"] = 0
         stage_task = asyncio.current_task()
         stall_watchdog = StallWatchdog(self.frame_stall_timeout_seconds)
-        poller = asyncio.create_task(self._poll_streaming_progress(job, counter, frames_total, stall_watchdog, stage_task))
+        poller = asyncio.create_task(
+            self._poll_streaming_progress(job, counter, frames_total, stall_watchdog, stage_task, stage_key)
+        )
         try:
             yield
         except asyncio.CancelledError:
@@ -1816,7 +2080,7 @@ class VideoUpscaler:
             # Publicar el contador final: un clip que termina antes del primer
             # tick del poller quedaba en framesDone=0 pese a haber entregado
             # todos sus frames (mismo cierre que hace _track_frame_progress).
-            self._apply_frame_progress(job, "upscaling_frames", counter["n"], frames_total)
+            self._apply_frame_progress(job, stage_key, counter["n"], frames_total)
 
     async def _poll_streaming_progress(
         self,
@@ -1825,11 +2089,12 @@ class VideoUpscaler:
         frames_total: int | None,
         stall_watchdog: StallWatchdog,
         stage_task: asyncio.Task[None],
+        stage_key: str = UPSCALE_STAGE,
     ) -> None:
         while True:
             await asyncio.sleep(self.frame_poll_interval_seconds)
             frames_done = counter["n"]
-            self._apply_frame_progress(job, "upscaling_frames", frames_done, frames_total)
+            self._apply_frame_progress(job, stage_key, frames_done, frames_total)
             if stall_watchdog.observe(frames_done):
                 stage_task.cancel()
                 return
