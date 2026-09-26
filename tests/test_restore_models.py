@@ -530,3 +530,159 @@ def test_the_anti_drift_reads_a_published_table_as_powershell_does() -> None:
 
     assert comparable(table) == expected_catalog(published, models)
     assert comparable(table) != expected_catalog(RESTORE_BUNDLES, RESTORE_MODELS)
+
+
+LINEAGE_DOC = Path(__file__).resolve().parents[1] / "docs/superpowers/specs/2026-09-26-restore-data-lineage.md"
+P4_DATASETS = ("gopro", "sidd", "dpdd", "davis-2017", "reds", "lol", "sa-1b")
+
+
+def make_dataset(**overrides) -> rm.TrainingDataset:
+    fields = dict(
+        key="gopro",
+        name="GoPro",
+        terms="GOPRO dataset is released under CC BY 4.0 license.",
+        clause="permissive",
+        primary_source="https://seungjunnah.github.io/Datasets/gopro.html",
+        verified_on="2026-09-26",
+    )
+    return rm.TrainingDataset(**{**fields, **overrides})
+
+
+def test_the_p4_datasets_are_verified_at_their_primary_source() -> None:
+    for key in P4_DATASETS:
+        dataset = rm.TRAINING_DATASETS[key]
+        assert dataset.primary_source.startswith("https://")
+        assert dataset.verified_on == "2026-09-26"
+        assert dataset.terms.strip()
+
+
+def test_training_dataset_keys_are_their_keys() -> None:
+    assert all(key == dataset.key for key, dataset in rm.TRAINING_DATASETS.items())
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"key": "Go Pro"}, "key"),
+        ({"clause": "maybe"}, "clause"),
+        ({"primary_source": "http://example.com"}, "https"),
+        ({"verified_on": "26/09/2026"}, "verified_on"),
+        ({"terms": " "}, "terms"),
+        ({"name": ""}, "name"),
+    ],
+)
+def test_training_datasets_are_validated(overrides: dict, message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        make_dataset(**overrides)
+
+
+@pytest.mark.parametrize(
+    ("clause", "lineage"),
+    [
+        ("permissive", None),
+        ("research-only", "D1a"),
+        ("no-license", "D1a"),
+        ("unclear-scope", "D1a"),
+        ("share-alike", "D1b"),
+        ("no-derivatives", "D1b"),
+        ("undeclared", "D1c"),
+    ],
+)
+def test_each_clause_type_maps_to_its_decision(clause: str, lineage: str | None) -> None:
+    assert make_dataset(clause=clause).lineage == lineage
+
+
+def test_the_primary_sources_classify_the_p4_datasets() -> None:
+    lineage = {key: rm.TRAINING_DATASETS[key].lineage for key in P4_DATASETS}
+    assert lineage == {
+        "gopro": None,
+        "sidd": None,
+        "reds": None,
+        "dpdd": "D1a",
+        "davis-2017": "D1a",
+        "lol": "D1a",
+        "sa-1b": "D1a",
+    }
+
+
+def test_sa1b_forbids_surveillance_and_biometric_uses() -> None:
+    excluded = rm.TRAINING_DATASETS["sa-1b"].excluded_uses
+    assert {"surveillance", "biometric processing"} <= set(excluded)
+
+
+def test_lineage_of_permissive_data_has_no_debt() -> None:
+    assert rm.lineage_of(("gopro", "sidd", "reds")) == rm.NO_DATA_DEBT
+
+
+def test_lineage_of_joins_each_decision_once_in_order() -> None:
+    datasets = {
+        "a": make_dataset(key="a", clause="undeclared"),
+        "b": make_dataset(key="b", clause="research-only"),
+        "c": make_dataset(key="c", clause="no-license"),
+        "d": make_dataset(key="d"),
+    }
+    assert rm.lineage_of(("a", "b", "c", "d"), datasets) == "D1a + D1c"
+
+
+def test_lineage_of_needs_known_datasets() -> None:
+    with pytest.raises(KeyError):
+        rm.lineage_of(("unknown",))
+    with pytest.raises(ValueError, match="at least one"):
+        rm.lineage_of(())
+
+
+def test_excluded_uses_collect_every_dataset_restriction() -> None:
+    assert "surveillance" in rm.excluded_uses_of(("gopro", "sa-1b"))
+    assert rm.excluded_uses_of(("gopro", "sidd")) == ()
+
+
+@pytest.mark.parametrize(
+    ("model", "lineage"),
+    [
+        ("nafnet-gopro", rm.NO_DATA_DEBT),
+        ("nafnet-sidd", rm.NO_DATA_DEBT),
+        ("restormer-motion-deblur", rm.NO_DATA_DEBT),
+        ("restormer-real-denoise", rm.NO_DATA_DEBT),
+        ("restormer-defocus-deblur", "D1a"),
+        ("fastdvdnet", "D1a"),
+        ("realbasicvsr", "D1a"),
+        ("retinexformer-lol-v1", "D1a"),
+        ("mobilesam", "D1a"),
+    ],
+)
+def test_p4_candidates_carry_the_lineage_of_their_training_data(model: str, lineage: str) -> None:
+    assert rm.lineage_of(rm.P4_MODEL_DATASETS[model]) == lineage
+
+
+def test_every_p4_candidate_dataset_is_catalogued() -> None:
+    used = {key for keys in rm.P4_MODEL_DATASETS.values() for key in keys}
+    assert used <= set(rm.TRAINING_DATASETS)
+    assert set(P4_DATASETS) <= used
+
+
+def test_mobilesam_can_never_run_in_cctv() -> None:
+    assert "surveillance" in rm.excluded_uses_of(rm.P4_MODEL_DATASETS["mobilesam"])
+
+
+@pytest.mark.parametrize("value", ["D1a", "D1b + D1a", "D1b+D1c", "D1a + D1b + D1c", rm.NO_DATA_DEBT])
+def test_data_lineage_accepts_decision_keys_or_no_debt(value: str) -> None:
+    assert make_spec(data_lineage=value).data_lineage == value
+
+
+@pytest.mark.parametrize("value", ["D1d", "D1a + research", "clean", "D1a +"])
+def test_data_lineage_rejects_values_outside_the_table(value: str) -> None:
+    with pytest.raises(ValueError, match="data_lineage"):
+        make_spec(data_lineage=value)
+
+
+def test_the_lineage_document_lists_every_dataset_with_its_primary_source() -> None:
+    text = LINEAGE_DOC.read_text(encoding="utf-8")
+    for dataset in rm.TRAINING_DATASETS.values():
+        assert f"`{dataset.key}`" in text
+        assert dataset.primary_source in text
+
+
+def test_the_lineage_document_lists_every_p4_candidate() -> None:
+    text = LINEAGE_DOC.read_text(encoding="utf-8")
+    for model in rm.P4_MODEL_DATASETS:
+        assert f"`{model}`" in text

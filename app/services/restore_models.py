@@ -42,7 +42,26 @@ LICENSE_FIELDS: tuple[str, ...] = (
     "modifications",
 )
 
+LINEAGE_KEYS: tuple[str, ...] = ("D1a", "D1b", "D1c")
+NO_DATA_DEBT = "none (permissive training data)"
+LINEAGE_SEPARATOR = " + "
+
+# Tipo de clausula de la tabla de linaje de §3.7 -> decision que la cubre; None = sin deuda.
+CLAUSE_LINEAGE: Mapping[str, str | None] = MappingProxyType(
+    {
+        "permissive": None,
+        "research-only": "D1a",
+        "no-license": "D1a",
+        # Licencia declarada sin decir si cubre las imagenes: D1a hasta que el autor lo confirme.
+        "unclear-scope": "D1a",
+        "share-alike": "D1b",
+        "no-derivatives": "D1b",
+        "undeclared": "D1c",
+    }
+)
+
 _SAFE_ID = re.compile(r"[a-z0-9][a-z0-9._-]*")
+_ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 _SAFE_ONNX_FILE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\.onnx")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _LICENSE_NAME = re.compile(r"LICENSE[A-Za-z0-9._-]*")
@@ -66,6 +85,16 @@ def is_license_name(name: str) -> bool:
 
 def is_license_file_name(name: str) -> bool:
     return name == NOTICE_NAME or is_license_name(name)
+
+
+def lineage_parts(value: str) -> list[str]:
+    return [part.strip() for part in value.split("+")]
+
+
+def is_data_lineage(value: str) -> bool:
+    if value == NO_DATA_DEBT:
+        return True
+    return all(part in LINEAGE_KEYS for part in lineage_parts(value))
 
 
 def pack_id(bundle: str) -> str:
@@ -147,6 +176,8 @@ def license_problems(spec: RestoreModelSpec) -> list[str]:
         problems.append(f"commercial_use must be one of {COMMERCIAL_USE}")
     if not is_sha256(spec.source_sha256):
         problems.append("source_sha256 must be 64 lowercase hex characters")
+    if spec.data_lineage.strip() and not is_data_lineage(spec.data_lineage):
+        problems.append(f"data_lineage must combine {LINEAGE_KEYS} or be {NO_DATA_DEBT!r}")
     return problems
 
 
@@ -325,6 +356,163 @@ VENDORED_MODELS: dict[str, VendoredModel] = {
         path_of=lambda settings: settings.migan_model_path,
     ),
 }
+
+
+@dataclass(frozen=True, slots=True)
+class TrainingDataset:
+    key: str
+    name: str
+    # Lo que dice la fuente primaria, citado o resumido sin interpretar.
+    terms: str
+    clause: str
+    primary_source: str
+    verified_on: str
+    excluded_uses: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _raise_on(repr(self.key), dataset_problems(self))
+
+    @property
+    def lineage(self) -> str | None:
+        return CLAUSE_LINEAGE[self.clause]
+
+
+def dataset_problems(dataset: TrainingDataset) -> list[str]:
+    problems = []
+    if not is_safe_id(dataset.key):
+        problems.append(f"key {dataset.key!r} is not a safe identifier")
+    if not dataset.name.strip():
+        problems.append("name is empty")
+    if not dataset.terms.strip():
+        problems.append("terms is empty")
+    if dataset.clause not in CLAUSE_LINEAGE:
+        problems.append(f"clause must be one of {tuple(CLAUSE_LINEAGE)}")
+    if not dataset.primary_source.startswith("https://"):
+        problems.append("primary_source must be https")
+    if not _ISO_DATE.fullmatch(dataset.verified_on):
+        problems.append("verified_on must be an ISO date")
+    return problems
+
+
+def _dataset(key: str, name: str, terms: str, clause: str, source: str, **extra: Any) -> TrainingDataset:
+    return TrainingDataset(key, name, terms, clause, source, verified_on="2026-09-26", **extra)
+
+
+# Tabla de linaje de §3.7 verificada en P4-LIC; el detalle y las citas estan en
+# docs/superpowers/specs/2026-09-26-restore-data-lineage.md.
+TRAINING_DATASETS: dict[str, TrainingDataset] = {
+    dataset.key: dataset
+    for dataset in (
+        _dataset(
+            "gopro",
+            "GoPro (Nah et al., CVPR 2017)",
+            "GOPRO dataset is released under CC BY 4.0 license.",
+            "permissive",
+            "https://seungjunnah.github.io/Datasets/gopro.html",
+        ),
+        _dataset(
+            "sidd",
+            "SIDD (Abdelhamed et al., CVPR 2018)",
+            "The dataset and the associated code repositories are under the MIT License.",
+            "permissive",
+            "https://abdokamel.github.io/sidd/",
+        ),
+        _dataset(
+            "dpdd",
+            "DPDD (Abuolaim and Brown, ECCV 2020)",
+            "The README states no dataset license; the repository LICENSE is MIT (software wording).",
+            "unclear-scope",
+            "https://github.com/Abdullah-Abuolaim/defocus-deblurring-dual-pixel",
+        ),
+        _dataset(
+            "davis-2017",
+            "DAVIS 2017 (Pont-Tuset et al.)",
+            "The download page states no terms; the toolkit README says 'DAVIS is released under the BSD "
+            "License' next to a software BSD-3 LICENSE.",
+            "unclear-scope",
+            "https://davischallenge.org/davis2017/code.html",
+        ),
+        _dataset(
+            "reds",
+            "REDS (Nah et al., CVPRW 2019)",
+            "REDS dataset is released under CC BY 4.0 license.",
+            "permissive",
+            "https://seungjunnah.github.io/Datasets/reds.html",
+        ),
+        _dataset(
+            "lol",
+            "LOL (Wei et al., BMVC 2018)",
+            "The project page offers the download with no license or terms.",
+            "no-license",
+            "https://daooshee.github.io/BMVC2018website/",
+        ),
+        _dataset(
+            "sa-1b",
+            "SA-1B (Kirillov et al., 2023)",
+            "SA-1B Dataset Research License: Research Purposes only, on a non-commercial basis; no use for "
+            "surveillance, biometric processing or identifying individuals.",
+            "research-only",
+            "https://ai.meta.com/datasets/segment-anything/",
+            excluded_uses=("surveillance", "biometric processing", "identifying individuals"),
+        ),
+        _dataset(
+            "mit-adobe-fivek",
+            "MIT-Adobe FiveK (Bychkovsky et al., CVPR 2011)",
+            "Adobe research license: solely for your own research purposes, not directed toward commercial "
+            "advantage or monetary compensation.",
+            "research-only",
+            "https://data.csail.mit.edu/graphics/fivek/",
+        ),
+        _dataset(
+            "imagenet",
+            "ImageNet",
+            "Researcher shall use the Database only for non-commercial research and educational purposes.",
+            "research-only",
+            "https://image-net.org/download.php",
+        ),
+        _dataset(
+            "sid",
+            "See-in-the-Dark (Chen et al., CVPR 2018)",
+            "The code repository README says 'License: MIT License' without saying whether it covers "
+            "the images.",
+            "unclear-scope",
+            "https://github.com/cchen156/Learning-to-See-in-the-Dark",
+        ),
+    )
+}
+
+# Checkpoints candidatos de P4 -> datos con que se entrenaron (incluidas las redes de la perdida).
+P4_MODEL_DATASETS: dict[str, tuple[str, ...]] = {
+    "nafnet-gopro": ("gopro",),
+    "nafnet-sidd": ("sidd",),
+    "restormer-motion-deblur": ("gopro",),
+    "restormer-defocus-deblur": ("dpdd",),
+    "restormer-real-denoise": ("sidd",),
+    "fastdvdnet": ("davis-2017",),
+    # REDS + la perdida perceptual VGG19 preentrenada en ImageNet.
+    "realbasicvsr": ("reds", "imagenet"),
+    "retinexformer-lol-v1": ("lol",),
+    "retinexformer-fivek": ("mit-adobe-fivek",),
+    "retinexformer-sid": ("sid",),
+    "mobilesam": ("sa-1b",),
+}
+
+
+def lineage_of(
+    dataset_keys: tuple[str, ...], datasets: Mapping[str, TrainingDataset] = TRAINING_DATASETS
+) -> str:
+    if not dataset_keys:
+        raise ValueError("lineage_of needs at least one dataset")
+    found = {datasets[key].lineage for key in dataset_keys}
+    keys = [key for key in LINEAGE_KEYS if key in found]
+    return LINEAGE_SEPARATOR.join(keys) if keys else NO_DATA_DEBT
+
+
+def excluded_uses_of(
+    dataset_keys: tuple[str, ...], datasets: Mapping[str, TrainingDataset] = TRAINING_DATASETS
+) -> tuple[str, ...]:
+    uses = (use for key in dataset_keys for use in datasets[key].excluded_uses)
+    return tuple(dict.fromkeys(uses))
 
 
 def gated_packs(models: Mapping[str, RestoreModelSpec]) -> frozenset[str]:
