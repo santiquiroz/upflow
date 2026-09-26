@@ -149,6 +149,17 @@ PHOTO_PRESETS: tuple[PhotoPreset, ...] = (
 PROPOSAL_PRIORITY: tuple[str, ...] = ("newspaper", "heavy_damage", "faded_color_print")
 
 
+# Sin analisis no se midio la dominante: "Fix faded" le quitaria el tono a una foto virada o iluminada (§2.3).
+UNMEASURED_WITHOUT_ANALYSIS: frozenset[PresetCondition] = frozenset({"faded_cast", "strong_faded_cast"})
+
+
+def options_without_analysis(step: PresetStep) -> dict[str, Any]:
+    options = dict(step.options)
+    if step.when in UNMEASURED_WITHOUT_ANALYSIS and "fix_faded" in options:
+        options["fix_faded"] = False
+    return options
+
+
 def photo_preset(preset_id: str) -> PhotoPreset:
     for preset in PHOTO_PRESETS:
         if preset.id == preset_id:

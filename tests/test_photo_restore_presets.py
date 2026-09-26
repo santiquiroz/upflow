@@ -13,6 +13,7 @@ from app.services.photo_restore_presets import (
     STRONG_FADED_CAST_MIN_DE,
     PhotoFacts,
     UnknownPhotoPreset,
+    options_without_analysis,
     photo_preset,
     proposed_preset,
     resolve_preset,
@@ -248,3 +249,14 @@ def test_proposals_only_name_suggestible_presets_and_never_portrait() -> None:
 
     assert set(PROPOSAL_PRIORITY) <= suggestible
     assert "portrait" not in PROPOSAL_PRIORITY
+
+
+def test_without_analysis_a_preset_never_turns_on_fix_faded() -> None:
+    tone = next(step for step in photo_preset("gentle").steps if step.step_id == "tone")
+    assert tone.options["fix_faded"] is True
+    assert options_without_analysis(tone) == {**tone.options, "fix_faded": False}
+
+
+def test_without_analysis_the_other_conditional_steps_keep_their_tuning() -> None:
+    repair = next(step for step in photo_preset("gentle").steps if step.step_id == "repair")
+    assert options_without_analysis(repair) == dict(repair.options)

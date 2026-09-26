@@ -182,9 +182,22 @@ def test_restore_plan_from_steps_uses_the_preset_as_defaults():
     plan = headless.plan_from_steps(spec)
     assert plan.steps == ("tone", "denoise")
     assert plan.options["tone"]["strength"] == 0.5
-    assert plan.options["tone"]["fix_faded"] is True
+    assert plan.options["tone"]["keep_tone"] is True
     assert plan.options["preset"] == "gentle"
     assert plan.preset == "gentle"
+
+
+@pytest.mark.parametrize("preset", ["gentle", "heavy_damage", "faded_color_print", "portrait"])
+def test_restore_plan_from_steps_never_assumes_a_faded_cast_it_did_not_measure(preset):
+    # Sin analisis no hay dominante medida: "Fix faded" borraria el sepia de una foto virada (P1-GPU-smoke).
+    plan = headless.plan_from_steps(headless.RestoreSpec(steps=("tone",), preset=preset))
+    assert plan.options["tone"]["fix_faded"] is False
+    assert plan.options["tone"]["keep_tone"] is True
+
+
+def test_restore_plan_from_steps_keeps_an_explicit_fix_faded():
+    spec = headless.RestoreSpec(steps=("tone",), preset="gentle", options={"tone": {"fix_faded": True}})
+    assert headless.plan_from_steps(spec).options["tone"]["fix_faded"] is True
 
 
 def test_restore_plan_from_analysis_resolves_the_proposed_preset():

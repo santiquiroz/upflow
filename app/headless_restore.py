@@ -33,7 +33,7 @@ from app.schemas_restore import RestoreOptions
 from app.services.photo_geometry import Geometry
 from app.services.photo_restore_chain import steps_from_selection
 from app.services.photo_restore_job import UPSCALE_AI, restore_upscale_mode, step_uses_model
-from app.services.photo_restore_presets import photo_preset, resolve_preset
+from app.services.photo_restore_presets import options_without_analysis, photo_preset, resolve_preset
 from app.services.restore_outputs import discard_restore_outputs, restore_output_paths
 from app.services.restore_provenance import EXTENSIONS, write_sidecar
 from app.services.restore_session import PREVIEW_NAME, SessionAnalysis, SessionNotFound, session_dir
@@ -98,7 +98,7 @@ def preset_step_options(preset_id: str, steps: Sequence[str]) -> dict[str, dict[
         preset = photo_preset(preset_id)
     except ValueError as exc:
         raise UsageError(str(exc)) from exc
-    return {step.step_id: dict(step.options) for step in preset.steps if step.step_id in steps}
+    return {step.step_id: options_without_analysis(step) for step in preset.steps if step.step_id in steps}
 
 
 def merge_restore_options(base: Mapping[str, Any], overrides: Mapping[str, Any]) -> dict[str, Any]:

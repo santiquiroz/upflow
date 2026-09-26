@@ -84,7 +84,7 @@ upflow restore --in foto.jpg --out foto.png --steps tone --rotate 90 --crop 10,1
 | `--in PATH` | — | foto de entrada (png/jpg/webp/bmp/tif) |
 | `--out PATH` | — | salida; la extensión define el formato salvo `--format` (`png`, `jpg`, `jpeg`, `webp`) |
 | `--steps CSV` | omitido = análisis | `descreen,repair,deblock,denoise,tone,faces,colorize`. El orden lo fija Upflow, no el de la lista |
-| `--preset ID` | con `--steps`: ninguno; sin `--steps`: el que propone el análisis | `gentle`, `heavy_damage`, `newspaper`, `faded_color_print`, `portrait`. Con `--steps` solo aporta los ajustes de esos pasos; sin `--steps` elige también los pasos según lo que encontró el análisis |
+| `--preset ID` | con `--steps`: ninguno; sin `--steps`: el que propone el análisis | `gentle`, `heavy_damage`, `newspaper`, `faded_color_print`, `portrait`. Con `--steps` solo aporta los ajustes de esos pasos, sin "Fix faded colors" (sin análisis no hay dominante medida y le quitaría el tono a una foto virada); sin `--steps` elige también los pasos según lo que encontró el análisis |
 | `--scale N` | `1` | `1` = sin agrandar; `2`–`4` agranda la foto restaurada |
 | `--upscale none\|classic\|ai` | `none` con `--scale 1`, `ai` si no | `classic` = Lanczos en CPU; `ai` usa `--model` (default `realesrgan-x4plus`, inventa textura) |
 | `--face-blend 0..1` | el del preset | mezcla de las caras restauradas con las originales (paso `faces`) |
