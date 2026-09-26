@@ -195,4 +195,8 @@ describe("stepWarningKey", () => {
     expect(stepWarningKey("scale", { filter: "scale", params: { flags: "lanczos" } })).toBe("cctv.scale.newPixels");
     expect(stepWarningKey("scale", { filter: "scale", params: {} })).toBeNull();
   });
+
+  it("warns that stabilization moves every frame and is missing from the single-frame preview", () => {
+    expect(stepWarningKey("stabilize", { filter: "vidstab", params: {} })).toBe("cctv.stabilize.moved");
+  });
 });

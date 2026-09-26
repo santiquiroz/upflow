@@ -165,6 +165,9 @@ export function stepWarningKey(stepId: string, choice: StepChoice): string | nul
   if (stepId === "sharpen") {
     return "cctv.sharpen.halos";
   }
+  if (stepId === "stabilize") {
+    return "cctv.stabilize.moved";
+  }
   if (stepId === "scale" && INTERPOLATED_SCALE_FLAGS.has(choice.params.flags)) {
     return "cctv.scale.newPixels";
   }
