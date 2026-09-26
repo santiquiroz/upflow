@@ -335,6 +335,39 @@ def test_user_reported_clock_offset_is_declared(tmp_path: Path) -> None:
     assert report.acquisition.clock_offset_seconds == -42.5
 
 
+EXPORT_FACTS = {"recorderSerial": "L12345678", "exportMethod": "USB export from the recorder menu",
+                "exportDate": "2026-09-20"}
+
+
+def test_acquisition_records_the_recorder_serial_and_how_and_when_it_was_exported(tmp_path: Path) -> None:
+    report = report_for(tmp_path, acquisition=Acquisition.model_validate(EXPORT_FACTS))
+    data = json.loads(report_json_text(report))
+    assert {key: data["acquisition"][key] for key in EXPORT_FACTS} == EXPORT_FACTS
+
+
+def test_acquisition_export_fields_are_optional() -> None:
+    acquisition = Acquisition()
+    assert (acquisition.recorder_serial, acquisition.export_method, acquisition.export_date) == (None, None, None)
+
+
+@pytest.mark.parametrize("value", ["20/09/2026", "2026-9-20", "2026-02-30", "2026-09-20T10:00", " 2026-09-20", ""])
+def test_acquisition_rejects_an_export_date_that_is_not_a_calendar_date(value: str) -> None:
+    with pytest.raises(ValidationError):
+        Acquisition(export_date=value)
+
+
+def test_acquisition_caps_the_export_text_like_the_other_recorder_fields() -> None:
+    with pytest.raises(ValidationError):
+        Acquisition(recorder_serial="x" * 201)
+    with pytest.raises(ValidationError):
+        Acquisition(export_method="x" * 201)
+
+
+def test_acquisition_export_fields_are_in_the_published_schema() -> None:
+    properties = report_schema()["$defs"]["Acquisition"]["properties"]
+    assert {"recorderSerial", "exportMethod", "exportDate"} <= set(properties)
+
+
 def test_increased_clipping_adds_limitation_and_warning(tmp_path: Path) -> None:
     report = report_for(tmp_path, clipping=ClippingReport(1.0, 2.0))
     texts = [item.text for item in report.limitations]
@@ -432,6 +465,14 @@ def test_html_escapes_user_text(tmp_path: Path) -> None:
     assert "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;" in html_text
     assert "O&#x27;Brien &amp; &lt;b&gt;" in html_text
     assert "<img src=x>" not in html_text
+
+
+def test_html_shows_the_acquisition_export_fields_escaped(tmp_path: Path) -> None:
+    acquisition = Acquisition.model_validate({**EXPORT_FACTS, "exportMethod": "Web client <v2> & USB"})
+    html_text = render_report_html(report_for(tmp_path, acquisition=acquisition))
+    assert "Recorder serial number" in html_text and "L12345678" in html_text
+    assert "Export method" in html_text and "Web client &lt;v2&gt; &amp; USB" in html_text
+    assert "Export date" in html_text and "2026-09-20" in html_text
 
 
 def test_html_escapes_the_original_file_name(tmp_path: Path) -> None:

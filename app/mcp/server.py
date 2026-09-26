@@ -668,7 +668,8 @@ async def upflow_cctv_clarify(
     OSD (hora y cámara en pantalla), obligatorio decidir: osd_boxes [[x,y,w,h], ...]
     en píxeles del cuadro guardado (lado par) + osd_confirmed=true, o no_osd=true.
     trim: [primer, último] cuadro, inclusive. still_frames: cuadros a exportar.
-    acquisition: datos del grabador ({"recorderMake": ..., "clockOffsetSeconds": ...}).
+    acquisition: datos del grabador ({"recorderMake": ..., "recorderSerial": ...,
+    "clockOffsetSeconds": ..., "exportMethod": ..., "exportDate": "AAAA-MM-DD"}).
     Con servidor devuelve el job de la familia video (seguilo con upflow_wait_job
     y leé cctv.artifacts). En proceso espera el resultado y, con destination_dir,
     mueve ahí la carpeta <jobId>.cctv. Equivale a `upflow cctv clarify --json`.

@@ -270,8 +270,9 @@ async def test_more_still_frames_than_the_setting_are_rejected(tmp_path: Path) -
         await built.create_cctv_job(cctv=clarify(still_frames=(1, 2, 3)))
 
 
-async def test_malformed_case_details_are_rejected(manager: VideoJobManager) -> None:
-    error = await rejected(manager, clarify(acquisition={"clockOffsetSeconds": "about ten"}))
+@pytest.mark.parametrize("acquisition", [{"clockOffsetSeconds": "about ten"}, {"exportDate": "20/09/2026"}])
+async def test_malformed_case_details_are_rejected(manager: VideoJobManager, acquisition: dict[str, str]) -> None:
+    error = await rejected(manager, clarify(acquisition=acquisition))
 
     assert error.code == "cctv.error.invalidCaseDetails"
 

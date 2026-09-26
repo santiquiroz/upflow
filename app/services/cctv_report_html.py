@@ -162,9 +162,12 @@ def acquisition_section(acquisition: Acquisition) -> str:
     pairs = (
         ("Recorder make", acquisition.recorder_make),
         ("Recorder model", acquisition.recorder_model),
+        ("Recorder serial number", acquisition.recorder_serial),
         ("Channel", acquisition.channel),
         ("Recorder clock offset (seconds, user-reported)", acquisition.clock_offset_seconds),
         ("How the offset was measured", acquisition.clock_offset_method),
+        ("Export method", acquisition.export_method),
+        ("Export date", acquisition.export_date),
     )
     return section("Acquisition", facts(pairs))
 

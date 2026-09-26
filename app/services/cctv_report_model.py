@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import date
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -37,6 +38,7 @@ OutputRole = Literal[
 ]
 
 SHA256_PATTERN = r"^[0-9a-f]{64}$"
+DATE_PATTERN = r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 
@@ -60,6 +62,14 @@ def check_relative_path(value: str) -> str:
     return value
 
 
+def check_calendar_date(value: str) -> str:
+    try:
+        date.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError("must be a calendar date as YYYY-MM-DD") from exc
+    return value
+
+
 def check_https_url(value: str) -> str:
     if not value.startswith("https://") or _CONTROL.search(value) is not None:
         raise ValueError("must be an https:// URL")
@@ -69,6 +79,7 @@ def check_https_url(value: str) -> str:
 Sha256 = Annotated[str, StringConstraints(pattern=SHA256_PATTERN)]
 RelativePath = Annotated[str, AfterValidator(check_relative_path)]
 HttpsUrl = Annotated[str, AfterValidator(check_https_url)]
+CalendarDate = Annotated[str, StringConstraints(pattern=DATE_PATTERN), AfterValidator(check_calendar_date)]
 UserText = Annotated[str, Field(max_length=MAX_USER_TEXT)]
 ShortText = Annotated[str, Field(max_length=MAX_SHORT_TEXT)]
 
@@ -179,9 +190,12 @@ class InputFile(ReportModel):
 class Acquisition(ReportModel):
     recorder_make: ShortText | None = None
     recorder_model: ShortText | None = None
+    recorder_serial: ShortText | None = None
     channel: ShortText | None = None
     clock_offset_seconds: float | None = Field(default=None, allow_inf_nan=False)
     clock_offset_method: UserText | None = None
+    export_method: ShortText | None = None
+    export_date: CalendarDate | None = None
 
 
 class OsdCheckInfo(ReportModel):
