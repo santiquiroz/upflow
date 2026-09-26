@@ -9,6 +9,7 @@ import { CapabilitySettingsSection } from "./CapabilitySettingsSection";
 import { EditableSettingsSection } from "./EditableSettingsSection";
 import { VideoUploadLimitSection } from "./VideoUploadLimitSection";
 import { LanguageSection } from "./LanguageSection";
+import { LicensesView } from "./LicensesView";
 import { OptimizationCenter } from "./OptimizationCenter";
 
 function AvailabilityRow({ label, available }: { label: string; available: boolean }) {
@@ -140,6 +141,7 @@ export function SettingsPage() {
         <LanguageSection />
       </div>
       <OptimizationCenter />
+      <LicensesView />
     </div>
   );
 }

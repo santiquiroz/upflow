@@ -30,12 +30,45 @@ function cleanupModelName(stage: LabelledStage): string {
 
 export type StageTranslator = (key: string, params?: Record<string, string>) => string;
 
-export function translateStageLabel(stage: LabelledStage, t: StageTranslator): string {
+export interface StageCount {
+  done: number;
+  total: number;
+}
+
+export interface StageCounterMetadata {
+  stage?: string | null;
+  framesDone?: number | null;
+  framesTotal?: number | null;
+}
+
+// El backend reusa framesDone/framesTotal para las areas de relleno y las caras
+// de la restauracion; solo valen para la etapa que los reporto.
+export function activeStageCount(stageKey: string, metadata: StageCounterMetadata | undefined): StageCount | null {
+  if (!metadata || metadata.stage !== stageKey) {
+    return null;
+  }
+  const { framesDone: done, framesTotal: total } = metadata;
+  if (typeof done !== "number" || typeof total !== "number" || total <= 0 || done > total) {
+    return null;
+  }
+  return { done, total };
+}
+
+// `translate` devuelve la clave tal cual cuando no existe en el catalogo.
+function translateOrNull(t: StageTranslator, key: string, params?: Record<string, string>): string | null {
+  const translated = t(key, params);
+  return translated === key ? null : translated;
+}
+
+function countedStageLabel(stageKey: string, count: StageCount, t: StageTranslator): string | null {
+  const params = { done: String(count.done), total: String(count.total) };
+  return translateOrNull(t, `${stageTranslationKey(stageKey)}.count`, params);
+}
+
+export function translateStageLabel(stage: LabelledStage, t: StageTranslator, count?: StageCount | null): string {
   if (stage.key.startsWith(CLEANUP_STAGE_PREFIX)) {
     return t("job.stage.cleanup", { model: cleanupModelName(stage) });
   }
-  const key = stageTranslationKey(stage.key);
-  const translated = t(key);
-  // `translate` devuelve la clave tal cual cuando no existe en el catalogo.
-  return translated === key ? stage.label : translated;
+  const counted = count ? countedStageLabel(stage.key, count, t) : null;
+  return counted ?? translateOrNull(t, stageTranslationKey(stage.key)) ?? stage.label;
 }

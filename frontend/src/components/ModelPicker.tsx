@@ -50,6 +50,19 @@ function formatModelMeta(model: ModelResponse): string {
   return `${scale} · ${arch}`;
 }
 
+// Sin el campo (backend anterior) se asume generativo, igual que el registro: es lo conservador.
+function isGenerative(model: ModelResponse): boolean {
+  return model.kind !== "classic" && model.generative !== false;
+}
+
+function GenerativeTag({ model }: { model: ModelResponse }) {
+  const { t } = useTranslation();
+  if (isGenerative(model)) {
+    return <span className="pl-[22px] text-xs text-warn">{t("model.tag.generative")}</span>;
+  }
+  return <span className="pl-[22px] text-xs text-text-faint">{t("model.tag.nonGenerative")}</span>;
+}
+
 function isModelSelectable(model: ModelResponse): boolean {
   return model.status === "installed";
 }
@@ -92,6 +105,7 @@ function ModelOption({
         <span className="text-sm text-text">{model.name}</span>
       </span>
       <span className="font-mono-tabular pl-[22px] text-xs text-text-dim">{formatModelMeta(model)}</span>
+      <GenerativeTag model={model} />
       {isDisabled && (
         <span className="pl-[22px] text-xs text-warn">
           {model.status === "converting" ? t("models.status.converting") : (model.error ?? t("enhance.model.notReady"))}

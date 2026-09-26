@@ -1,6 +1,7 @@
 import type { JobResponse } from "../apiTypes";
 import { buildTiming, pushDevice, pushIdentity } from "./common";
 import { type DetailContext, type DetailItem, type JobDetailSections, push, pushNumber } from "./types";
+import { pushRestoreResult, pushRestoreSteps } from "./restore";
 import { pushUpscaleRuntime } from "./upscaleRuntime";
 
 export function buildImageSections(job: JobResponse, context: DetailContext): JobDetailSections {
@@ -10,10 +11,12 @@ export function buildImageSections(job: JobResponse, context: DetailContext): Jo
   push(parameters, "job.detail.field.model", job.modelName);
   pushNumber(parameters, "job.detail.field.scale", job.scale, (value) => `${value}x`);
   push(parameters, "job.detail.field.format", job.outputFormat.toUpperCase());
+  pushRestoreSteps(parameters, job, context);
   pushDevice(parameters, job.device, context);
 
   const result: DetailItem[] = [];
   pushUpscaleRuntime(result, job, context);
+  pushRestoreResult(result, job, context);
 
   return { parameters, timing: buildTiming(job, context), result };
 }

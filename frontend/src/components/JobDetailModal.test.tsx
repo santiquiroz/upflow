@@ -185,6 +185,27 @@ describe("JobDetailModal", () => {
     expect(screen.getByText("Encoding video")).toBeInTheDocument();
   });
 
+  it("counts the faces of the restoration stage that is running", () => {
+    const entry = buildEntry({
+      metadata: {
+        stage: "restore_faces",
+        framesDone: 1,
+        framesTotal: 3,
+        stages: [
+          stage("restore_repair_fill", "Filling damage", "done"),
+          stage("restore_faces", "Restoring faces", "active"),
+          stage("saving", "Saving", "pending"),
+        ],
+      },
+    });
+
+    render(<JobDetailModal entry={entry} onClose={vi.fn()} />);
+
+    expect(screen.getByText("Filling damage")).toBeInTheDocument();
+    expect(screen.getByText("Restoring faces (1/3)")).toBeInTheDocument();
+    expect(screen.getByText("Saving")).toBeInTheDocument();
+  });
+
   it("falls back to the backend label for a stage the catalog does not know", () => {
     const entry = buildEntry({
       metadata: { stages: [stage("quantizing", "Quantizing weights", "active")] },
