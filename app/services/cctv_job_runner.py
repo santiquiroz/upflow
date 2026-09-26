@@ -490,7 +490,8 @@ def clarify_runner_config(settings: Settings) -> CctvRunnerConfig:
 
 
 def build_cctv_runners(settings: Settings) -> dict[str, CctvTaskRunner]:
-    # Import diferido: roi_fusion_runner reusa la ingesta de este modulo. "enhance" lo registra el carril IA (P3-03).
+    # Import diferido: roi_fusion_runner reusa la ingesta de este modulo. "enhance" lo registra VideoUpscaler
+    # (CctvEnhanceRunner) cuando tiene la etapa compuesta: necesita su encoder y su raw-pipe.
     from app.services.roi_fusion_runner import RoiFusionRunner
 
     config = clarify_runner_config(settings)

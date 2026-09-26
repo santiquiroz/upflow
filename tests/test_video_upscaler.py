@@ -1540,7 +1540,7 @@ def test_cctv_enhance_closes_the_decode_when_the_stage_cannot_be_built(tmp_path:
     plan = EnhancePlan((), FrameGeometry(4, 2), Fraction(25), 3, 40, 1, ())
 
     with pytest.raises(RuntimeError, match="canary failed"):
-        upscaler._run_cctv_stream_blocking(
+        upscaler.cctv_runners["enhance"]._run_stream_blocking(
             make_enhance_job(tmp_path / "clip.mkv", cctv), plan, FakeSource(), ["ffmpeg"], {"n": 0}, threading.Event()
         )
 
@@ -1581,7 +1581,7 @@ async def test_cctv_enhance_streams_at_scale_1_with_a_classic_upscaler_and_write
     forbid_png_path(monkeypatch, upscaler)
     decode_commands = record_decode_commands(monkeypatch)
     RecordingRawPipeEncoder.commands = []
-    monkeypatch.setattr("app.services.video_upscaler.RawPipeEncoder", RecordingRawPipeEncoder)
+    monkeypatch.setattr("app.services.cctv_enhance_runner.RawPipeEncoder", RecordingRawPipeEncoder)
     job_dir = admit_cctv_source(upscaler.settings, job, clip)
 
     output = await upscaler.run(job)
@@ -1742,7 +1742,7 @@ async def test_cctv_ai_label_band_goes_after_the_post_ai_steps_with_the_comment_
     job = make_enhance_job(clip, post_ai_steps_cctv())
     upscaler = make_enhance_upscaler(tmp_path, IdentityFrameRestorer())
     RecordingRawPipeEncoder.commands = []
-    monkeypatch.setattr("app.services.video_upscaler.RawPipeEncoder", RecordingRawPipeEncoder)
+    monkeypatch.setattr("app.services.cctv_enhance_runner.RawPipeEncoder", RecordingRawPipeEncoder)
     job_dir = admit_cctv_source(upscaler.settings, job, clip)
 
     output = await upscaler.run(job)
