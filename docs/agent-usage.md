@@ -67,6 +67,12 @@ La misma cadena que la pestaña "Restore photo" (daños, trama de impresión,
 bloques JPEG, ruido, tono, caras, color), en proceso y sin servidor. Todo corre
 en la PC: la foto nunca sale de ella.
 
+> **Apagado en esta versión** (`RESTORE_PHOTO_ENABLED=false`): sus packs de modelos
+> todavía no están publicados. `upflow restore` y las tools `upflow_restore_*` terminan
+> con error de uso ("Photo restoration is turned off in this release...") y el servidor
+> responde `404` en `/api/v1/restore/*`. Con `RESTORE_PHOTO_ENABLED=true` en `.env`
+> vuelve todo, con los pasos sin modelo mientras no haya packs.
+
 ```powershell
 # Pasos elegidos a mano, con los ajustes del preset "gentle" como base
 upflow restore --in escaneo.tif --out abuela.png --steps repair,denoise,tone --preset gentle --json
