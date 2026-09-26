@@ -373,6 +373,8 @@ Además del catálogo builtin, Upflow puede instalar cualquier modelo de super-r
 
 Si el repo de HF no expone un archivo compatible, el estado del install job pasa a `error` con el detalle.
 
+La conversión exporta lo mismo que Spandrel ejecuta (`descriptor(x)`, no `model.forward`: el canal de ruido de DRUNet/DnCNN, la primera salida de FBCNN, la escala de MixDehazeNet), recortado a [0, 1], y antes de registrar el modelo compara la salida ONNX contra la de PyTorch a dos tamaños de prueba. Se rechazan de entrada los modelos de inpainting, los de caras (FaceSR) y los que no son RGB. El registro guarda el propósito que declara Spandrel (`purpose`: SR, Restoration...), los canales y los requisitos de tamaño, y `GET /api/v1/models` los expone. El selector de modelos filtra por propósito: Image y Video ofrecen los de super-resolución y también los 1x de limpieza (DeJPEG, denoise), rotulados como que limpian a 1x y el resto de la escala es un reescalado común; Generate ofrece solo super-resolución, y el selector nombra los instalados que oculta.
+
 Un modelo instalado puede borrarse con `DELETE /api/v1/models/{model_id}` (los 6 builtins están protegidos: devuelve `403`). El límite de tamaño de descarga es `MAX_MODEL_DOWNLOAD_MB` (default 2048 MB).
 
 ### Instalar modelos de generación (text-to-image)
@@ -476,6 +478,9 @@ propone un punto de partida. Antes de restaurar podés girar, enderezar y recort
 en un recorte de hasta 512×512 ("Preview this area"); revisar y corregir la máscara de daños con un
 pincel; y elegir cara por cara cuáles restaurar. El resultado se compara con un deslizador antes y
 después, y los mismos ajustes se pueden aplicar a más fotos, cada una como su propio trabajo.
+El resultado sale en PNG, JPEG, WEBP o TIFF. El TIFF de 8 bits lleva el perfil ICC, el EXIF
+limpio y el XMP; el de 16 bits (cuando la foto de origen lo es) no puede llevarlos, y el sidecar lo
+declara en `privacy.metadataNotEmbedded`.
 
 **Hojas de escáner y fotos de celular.** Si la foto está sobre una hoja de escáner más grande, el
 análisis lo nota y ofrece "Auto crop": la endereza (el ángulo sale del borde de la foto) y la recorta
