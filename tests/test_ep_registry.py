@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import threading
+import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -955,3 +958,238 @@ def test_prefer_native_defaults_to_the_native_lane(
     assert calls == ["dml:0"]
     (_, _, providers), = FakeInferenceSession.calls
     assert providers is None
+
+
+# --- P4-LOCK: un Run de DirectML a la vez por adaptador -------------------
+# P3-GPU-2 reprodujo 887A0005 con la etapa GMFSS y la de reescalado corriendo
+# Run a la vez en hilos distintos sobre dml:0.
+
+
+class RunningFakeSession(FakeInferenceSession):
+    on_run: Callable[[], None] = staticmethod(lambda: None)
+
+    def run(self, output_names: Any, feeds: Any) -> list[str]:
+        RunningFakeSession.on_run()
+        return ["ran"]
+
+    def run_with_iobinding(self, io_binding: Any) -> None:
+        RunningFakeSession.on_run()
+
+
+class ConcurrencyProbe:
+    def __init__(self) -> None:
+        self._guard = threading.Lock()
+        self.active = 0
+        self.peak = 0
+
+    def __call__(self) -> None:
+        with self._guard:
+            self.active += 1
+            self.peak = max(self.peak, self.active)
+        time.sleep(0.05)
+        with self._guard:
+            self.active -= 1
+
+
+def use_running_sessions(monkeypatch: pytest.MonkeyPatch, on_run: Callable[[], None]) -> None:
+    import onnxruntime as ort
+
+    monkeypatch.setattr(ort, "InferenceSession", RunningFakeSession)
+    monkeypatch.setattr(RunningFakeSession, "on_run", staticmethod(on_run))
+
+
+def run_together(calls: list[Callable[[], object]]) -> list[BaseException]:
+    errors: list[BaseException] = []
+
+    def guarded(call: Callable[[], object]) -> None:
+        try:
+            call()
+        except BaseException as exc:  # noqa: BLE001 - el test reporta el error del hilo
+            errors.append(exc)
+
+    threads = [threading.Thread(target=guarded, args=(call,)) for call in calls]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+    return errors
+
+
+def test_run_lock_serializes_runs_of_two_dml_sessions_on_the_same_adapter(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    probe = ConcurrencyProbe()
+    use_running_sessions(monkeypatch, probe)
+    settings = make_settings(tmp_path)
+    gmfss = ep_registry.create_session("gmflow.onnx", "dml:0", settings)
+    upscale = ep_registry.create_session("upscale.onnx", "dml:0", settings)
+
+    errors = run_together([lambda: gmfss.run(None, {}), lambda: upscale.run(None, {})])
+
+    assert errors == []
+    assert probe.peak == 1
+
+
+def test_run_lock_also_covers_run_with_iobinding(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    probe = ConcurrencyProbe()
+    use_running_sessions(monkeypatch, probe)
+    settings = make_settings(tmp_path)
+    gmfss = ep_registry.create_session("gmflow.onnx", "dml:0", settings)
+    upscale = ep_registry.create_session("upscale.onnx", "dml:0", settings)
+
+    errors = run_together([lambda: gmfss.run(None, {}), lambda: upscale.run_with_iobinding(object())])
+
+    assert errors == []
+    assert probe.peak == 1
+
+
+def test_run_lock_serializes_the_native_ep_lane_too(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    probe = ConcurrencyProbe()
+    install_nvidia_plugin(monkeypatch, tmp_path)
+    use_running_sessions(monkeypatch, probe)
+    settings = make_settings(tmp_path)
+    native = ep_registry.create_session("a.onnx", "dml:0", settings)
+    baseline = ep_registry.create_session("b.onnx", "dml:0", settings, prefer_native=False)
+
+    errors = run_together([lambda: native.run(None, {}), lambda: baseline.run(None, {})])
+
+    assert errors == []
+    assert probe.peak == 1
+
+
+@pytest.mark.parametrize("devices", [("dml:0", "dml:1"), ("cpu", "cpu")], ids=["other-adapter", "cpu"])
+def test_run_lock_does_not_serialize_other_adapters_or_cpu(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, devices: tuple[str, str]
+) -> None:
+    both_inside = threading.Barrier(2, timeout=2)
+    use_running_sessions(monkeypatch, both_inside.wait)
+    settings = make_settings(tmp_path)
+    first, second = (ep_registry.create_session("m.onnx", device, settings) for device in devices)
+
+    errors = run_together([lambda: first.run(None, {}), lambda: second.run(None, {})])
+
+    assert errors == []
+
+
+def test_run_lock_keeps_the_session_type_and_its_result(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    use_running_sessions(monkeypatch, lambda: None)
+
+    session = ep_registry.create_session("model.onnx", "dml:0", make_settings(tmp_path))
+
+    assert isinstance(session, RunningFakeSession)
+    assert session.run(None, {}) == ["ran"]
+    assert session.run.__name__ == "run"
+
+
+
+def held_by_another_thread(lock: Any) -> bool:
+    outcome: list[bool] = []
+
+    def probe() -> None:
+        acquired = lock.acquire(blocking=False)
+        if acquired:
+            lock.release()
+        outcome.append(not acquired)
+
+    thread = threading.Thread(target=probe)
+    thread.start()
+    thread.join(timeout=5)
+    return outcome == [True]
+
+
+class LockCheckingBinding:
+    def __init__(self, lock: Any, seen: list[str]) -> None:
+        self._lock = lock
+        self._seen = seen
+
+    def _check(self, step: str) -> None:
+        if held_by_another_thread(self._lock):
+            self._seen.append(step)
+
+    def bind_ortvalue_input(self, name: str, value: Any) -> None:
+        self._check("bind_input")
+
+    def bind_cpu_input(self, name: str, value: Any) -> None:
+        self._check("bind_cpu_input")
+
+    def bind_output(self, name: str, *args: Any) -> None:
+        self._check("bind_output")
+
+    def copy_outputs_to_cpu(self) -> list[str]:
+        self._check("readback")
+        return ["frame"]
+
+
+class LockCheckingSession:
+    def __init__(self, lock: Any, seen: list[str]) -> None:
+        self.binding = LockCheckingBinding(lock, seen)
+
+    def io_binding(self) -> LockCheckingBinding:
+        return self.binding
+
+    def run_with_iobinding(self, binding: Any) -> None:
+        self.binding._check("run")
+
+
+def locked_upload(lock: Any, seen: list[str]) -> Callable[..., str]:
+    def upload(*args: Any) -> str:
+        if held_by_another_thread(lock):
+            seen.append("upload")
+        return "on-device"
+
+    return upload
+
+
+def test_run_lock_covers_upload_run_and_readback_of_the_video_upscaler(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import onnxruntime as ort
+
+    from app.services.devices_service import DevicesService
+    from app.services.engines.onnx_video_upscaler import OnnxVideoUpscaler
+    from app.services.gpu_session_coordinator import GpuSessionCoordinator
+    from app.services.model_registry import ModelRegistry
+
+    seen: list[str] = []
+    lock = ep_registry.device_run_lock("dml:0")
+    monkeypatch.setattr(ort.OrtValue, "ortvalue_from_numpy", staticmethod(locked_upload(lock, seen)))
+    settings = make_settings(tmp_path)
+    engine = OnnxVideoUpscaler(settings, ModelRegistry(settings), DevicesService(settings), GpuSessionCoordinator())
+
+    result = engine._infer_iobinding(LockCheckingSession(lock, seen), object(), "input", "output", "dml:0")
+
+    assert result == "frame"
+    assert seen == ["upload", "bind_input", "bind_output", "run", "readback"]
+
+
+def test_run_lock_covers_upload_run_and_readback_of_the_frame_model_runner() -> None:
+    from app.services.engines.frame_model_runner import iobinding_run
+
+    seen: list[str] = []
+    lock = ep_registry.adapter_run_lock(0)
+
+    result = iobinding_run(LockCheckingSession(lock, seen), object(), 0.4, 0, locked_upload(lock, seen))
+
+    assert result == "frame"
+    assert seen == ["upload", "bind_input", "bind_cpu_input", "bind_output", "run", "readback"]
+
+
+def test_run_lock_covers_upload_run_and_readback_of_apollo(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import onnxruntime as ort
+
+    from app.services.engines.apollo_restore import ApolloRestorer
+    from app.services.gpu_session_coordinator import GpuSessionCoordinator
+
+    seen: list[str] = []
+    lock = ep_registry.device_run_lock("dml:0")
+    monkeypatch.setattr(ort.OrtValue, "ortvalue_from_numpy", staticmethod(locked_upload(lock, seen)))
+    restorer = ApolloRestorer(make_settings(tmp_path), GpuSessionCoordinator())
+
+    result = restorer._infer_iobinding(LockCheckingSession(lock, seen), object(), "input", "output", "dml:0")
+
+    assert result == "frame"
+    assert seen == ["upload", "bind_input", "bind_output", "run", "readback"]

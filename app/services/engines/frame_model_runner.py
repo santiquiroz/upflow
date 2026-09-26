@@ -12,6 +12,7 @@ from typing import Any
 import numpy as np
 
 from app.services.dml_device import try_parse_dml_device_id
+from app.services.ep_registry import adapter_run_lock
 from app.services.engines.drunet_restore import deblock_level
 from app.services.engines.onnx_video_upscaler import is_device_removed_error, is_oom_error
 from app.services.engines.photo_restore_engine import InferFactory, PhotoRestoreEngine, is_gpu_device
@@ -135,12 +136,13 @@ def plain_run(session: Any, batch: np.ndarray, level: float) -> np.ndarray:
 def iobinding_run(
     session: Any, batch: np.ndarray, level: float, device_id: int, ortvalue_factory: OrtValueFactory
 ) -> np.ndarray:
-    binding = session.io_binding()
-    binding.bind_ortvalue_input(FRAME_INPUT, ortvalue_factory(batch, DML_DEVICE_TYPE, device_id))
-    binding.bind_cpu_input(STRENGTH_INPUT, strength_feed(level))
-    binding.bind_output(FRAME_OUTPUT, DML_DEVICE_TYPE, device_id)
-    session.run_with_iobinding(binding)
-    return binding.copy_outputs_to_cpu()[0]
+    with adapter_run_lock(device_id):
+        binding = session.io_binding()
+        binding.bind_ortvalue_input(FRAME_INPUT, ortvalue_factory(batch, DML_DEVICE_TYPE, device_id))
+        binding.bind_cpu_input(STRENGTH_INPUT, strength_feed(level))
+        binding.bind_output(FRAME_OUTPUT, DML_DEVICE_TYPE, device_id)
+        session.run_with_iobinding(binding)
+        return binding.copy_outputs_to_cpu()[0]
 
 
 def canary_infer_factory(level: float) -> InferFactory:

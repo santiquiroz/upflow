@@ -1469,7 +1469,9 @@ class VideoUpscaler:
             # ENTRADA de cache de GMFSS pero el driver ya retiene sus sesiones.
             # Ambos sets quedan residentes en VRAM durante el run — mismo
             # trade-off que documentaba la fusión eliminada; vigilarlo en el
-            # smoke real. La serialización sigue en el coordinator/semáforos.
+            # smoke real. Las dos etapas corren en hilos distintos: sus Run (y la
+            # subida/readback del IO binding) se serializan por adaptador en
+            # ep_registry, porque a la vez tiraban el device (887A0005, P3-GPU-2).
             stages.append(gmfss_stage_factory(device))
         input_bytes = width * height * 3
         output_bytes = input_bytes * job.scale * job.scale

@@ -12,6 +12,7 @@ from app.config import Settings
 from app.services.dml_device import DML_DEVICE_PREFIX, parse_dml_device_id
 from app.services.engines.audio_restore_base import OnnxAudioRestorer, is_cpu_device
 from app.services.engines.onnx_common import wrap_onnx_error
+from app.services.ep_registry import adapter_run_lock
 from app.services.gpu_session_coordinator import GpuSessionCoordinator
 
 logger = logging.getLogger(__name__)
@@ -146,12 +147,13 @@ class ApolloRestorer(OnnxAudioRestorer):
         try:
             ort = _import_onnxruntime()
             device_id = parse_dml_device_id(device)
-            io_binding = session.io_binding()
-            input_value = ort.OrtValue.ortvalue_from_numpy(batch, "dml", device_id)
-            io_binding.bind_ortvalue_input(input_name, input_value)
-            io_binding.bind_output(output_name, "dml")
-            session.run_with_iobinding(io_binding)
-            return io_binding.copy_outputs_to_cpu()[0]
+            with adapter_run_lock(device_id):
+                io_binding = session.io_binding()
+                input_value = ort.OrtValue.ortvalue_from_numpy(batch, "dml", device_id)
+                io_binding.bind_ortvalue_input(input_name, input_value)
+                io_binding.bind_output(output_name, "dml")
+                session.run_with_iobinding(io_binding)
+                return io_binding.copy_outputs_to_cpu()[0]
         except Exception:  # noqa: BLE001
             if not self._iobinding_warned:
                 self._iobinding_warned = True

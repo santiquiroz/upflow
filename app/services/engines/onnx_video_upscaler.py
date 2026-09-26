@@ -13,6 +13,7 @@ from typing import Any
 import numpy as np
 
 from app.config import Settings
+from app.services import ep_registry
 from app.services.backend_registry import get_builtin_onnx_model
 from app.services.devices_service import DevicesService
 from app.services.dml_device import DML_DEVICE_PREFIX, parse_dml_device_id
@@ -670,12 +671,13 @@ class OnnxVideoUpscaler:
             import onnxruntime as ort
 
             device_id = parse_dml_device_id(device)
-            io_binding = session.io_binding()
-            input_value = ort.OrtValue.ortvalue_from_numpy(frame_nhwc, "dml", device_id)
-            io_binding.bind_ortvalue_input(input_name, input_value)
-            io_binding.bind_output(output_name, "dml")
-            session.run_with_iobinding(io_binding)
-            return io_binding.copy_outputs_to_cpu()[0]
+            with ep_registry.device_run_lock(device):
+                io_binding = session.io_binding()
+                input_value = ort.OrtValue.ortvalue_from_numpy(frame_nhwc, "dml", device_id)
+                io_binding.bind_ortvalue_input(input_name, input_value)
+                io_binding.bind_output(output_name, "dml")
+                session.run_with_iobinding(io_binding)
+                return io_binding.copy_outputs_to_cpu()[0]
         except Exception:  # noqa: BLE001
             # Log once: a persistent failure silently downgrades EVERY frame to
             # the slower plain-run path, defeating the whole speedup, so surface

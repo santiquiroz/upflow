@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import functools
 import importlib
 import logging
 import os
@@ -128,6 +129,15 @@ _native_failed: set[str] = set()
 # Fuente de verdad del fallback silencioso DML→CPU: la lista pedida no dice
 # nada de la que ORT terminó usando.
 _effective_providers: dict[str, list[str]] = {}
+# Un lock por adaptador alrededor de cada Run: dos Run de DirectML a la vez sobre
+# el mismo adaptador, desde hilos distintos (GMFSS y el reescalado del stream
+# pipeline), tiraron el device con 887A0005 (P3-GPU-2). Reentrante porque los
+# caminos con IO binding lo toman también alrededor de la subida y el readback,
+# que tocan el mismo device fuera del Run. reset() no los borra: vaciarlos con
+# un Run en curso rompería la exclusión.
+_device_run_locks: dict[int, threading.RLock] = {}
+_device_run_locks_guard = threading.Lock()
+SERIALIZED_RUN_METHODS = ("run", "run_with_iobinding")
 
 
 def reset() -> None:
@@ -421,8 +431,37 @@ def create_session(
     if prefer_native:
         native = _try_native_session(model_path, device, settings, sess_options_factory)
         if native is not None:
-            return native
-    return _create_dml_session(model_path, device, sess_options_factory)
+            return serialize_runs_on_device(native, device)
+    return serialize_runs_on_device(_create_dml_session(model_path, device, sess_options_factory), device)
+
+
+def device_run_lock(device: str) -> threading.RLock:
+    return adapter_run_lock(parse_dml_device_id(device))
+
+
+def adapter_run_lock(adapter: int) -> threading.RLock:
+    with _device_run_locks_guard:
+        return _device_run_locks.setdefault(adapter, threading.RLock())
+
+
+def serialize_runs_on_device(session: Any, device: str) -> Any:
+    lock = device_run_lock(device)
+    for name in SERIALIZED_RUN_METHODS:
+        method = getattr(session, name, None)
+        if method is not None:
+            # Atributo de instancia y no un proxy: los callers y los tests
+            # siguen viendo el tipo real de la sesión.
+            setattr(session, name, _holding(lock, method))
+    return session
+
+
+def _holding(lock: threading.RLock, method: Callable[..., Any]) -> Callable[..., Any]:
+    @functools.wraps(method)
+    def call(*args: Any, **kwargs: Any) -> Any:
+        with lock:
+            return method(*args, **kwargs)
+
+    return call
 
 
 def _try_native_session(
