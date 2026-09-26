@@ -56,6 +56,7 @@ from app.services.cctv_report_model import (
     ProcessInfo,
     ReportMode,
     ReportStep,
+    RoiFusionInfo,
     StillPairInfo,
     Timestamp,
     TrimInfo,
@@ -167,6 +168,7 @@ class ReportParts:
     frame_hashes: FrameHashesInfo | None = None
     extra_limitations: tuple[Limitation, ...] = ()
     warnings: tuple[str, ...] = ()
+    roi: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -338,6 +340,10 @@ def clipping_info(clipping: ClippingReport | None) -> ClippingInfo | None:
     return None if clipping is None else ClippingInfo.model_validate(clipping.to_json())
 
 
+def roi_info(roi: Mapping[str, Any] | None) -> RoiFusionInfo | None:
+    return None if roi is None else RoiFusionInfo.model_validate(roi)
+
+
 # --- Limitaciones y avisos ---
 
 
@@ -423,6 +429,7 @@ def build_report(parts: ReportParts, tools: ReportTools = ReportTools()) -> Cctv
         stills=[still_pair_info(pair, base) for pair in parts.stills],
         clipping=clipping_info(parts.clipping),
         frame_hashes=parts.frame_hashes,
+        roi=roi_info(parts.roi),
         limitations=[LimitationInfo(key=item.key, text=item.text) for item in automatic_limitations(parts)],
         warnings=report_warnings(parts),
         guidelines=GUIDELINES_TEXT,

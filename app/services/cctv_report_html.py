@@ -24,6 +24,8 @@ from app.services.cctv_report_model import (
     OutputFile,
     ProcessInfo,
     ReportStep,
+    RoiFusionInfo,
+    RoiSampleInfo,
     StillFrameInfo,
     StillPairInfo,
     TrimInfo,
@@ -212,6 +214,43 @@ def clipping_section(clipping: ClippingInfo | None) -> str:
     return section("Clipped pixels", facts(pairs))
 
 
+def number_list(values: Sequence[float] | None) -> str | None:
+    return None if values is None else ", ".join(f"{value:.4f}" for value in values)
+
+
+def matrix_text(matrix: Sequence[Sequence[float]] | None) -> str:
+    return EMPTY if matrix is None else "<br>".join(esc(number_list(line)) for line in matrix)
+
+
+def roi_sample_row(sample: RoiSampleInfo) -> list[str]:
+    ecc = None if sample.ecc is None else f"{sample.ecc:.4f}"
+    cells = (sample.frame, sample.pict_type, sample.copy_group, sample.status, ecc, number_list(sample.shift))
+    return [*(esc(cell) for cell in cells), f'<span class="hash">{matrix_text(sample.matrix)}</span>']
+
+
+def roi_facts(roi: RoiFusionInfo) -> str:
+    return facts(
+        (
+            ("Region type", roi.kind),
+            ("Region (x, y, w, h) in stored pixels", box_text(roi.box)),
+            ("Frames", f"{roi.first_frame}-{roi.last_frame} (reference {roi.reference_frame})"),
+            ("Scale / combine", f"{roi.scale}x / {roi.method}"),
+            ("Alignment", f"{roi.motion} (ECC minimum {roi.ecc_min})"),
+            ("Frames used", f"{roi.frames_used} of {roi.frames_total} ({roi.effective_samples} carried new information)"),
+            ("Rejected frames", ", ".join(map(str, roi.rejected_frames)) or None),
+            ("Near-copies", "yes" if roi.near_copies else "no"),
+            ("Libraries", ", ".join(f"{name} {version}" for name, version in roi.libraries.items())),
+        )
+    )
+
+
+def roi_section(roi: RoiFusionInfo | None) -> str:
+    if roi is None:
+        return ""
+    headers = ("Frame", "Type", "Copy group", "Status", "ECC", "Shift (px)", "Matrix (reference to frame)")
+    return section("Multi-frame still", roi_facts(roi) + table(headers, map(roi_sample_row, roi.samples)))
+
+
 def environment_section(environment: EnvironmentInfo) -> str:
     gpus = "; ".join(f"{gpu.name} (driver {gpu.driver_version or EMPTY})" for gpu in environment.gpus)
     runtime = environment.onnx_runtime
@@ -281,6 +320,7 @@ def render_report_html(report: CctvReportV1) -> str:
             osd_section(report.osd),
             trim_section(report.trim),
             clipping_section(report.clipping),
+            roi_section(report.roi),
             environment_section(report.environment),
             outputs_section(report.outputs),
             stills_section(report.stills),

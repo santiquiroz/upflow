@@ -36,6 +36,7 @@ from app.services.handover_package import check_files_unchanged
 from app.services.media_signature import MATROSKA
 from app.services.media_tools import MediaTools
 from app.services.video_job_manager import VideoJobManager
+from app.services.roi_fusion_runner import RoiFusionRunner
 from app.services.video_upscaler import VideoUpscaler
 from ffmpeg_support import needs_ffmpeg
 
@@ -307,6 +308,36 @@ async def test_a_valid_region_is_accepted_without_osd(manager: VideoJobManager) 
     assert job.cctv.task == "roi_fusion" and job.device == "cpu"
 
 
+@pytest.mark.parametrize(
+    "steps",
+    [(DENOISE,), (CctvStep("deblock", {"filter": "pp7"}), CctvStep("sharpen", {"filter": "cas"}))],
+)
+async def test_roi_fusion_rejects_steps_other_than_deinterlace_and_deblock(manager: VideoJobManager, steps) -> None:
+    error = await rejected(manager, roi_task(steps=steps))
+
+    assert error.code == "cctv.error.roiSteps"
+
+
+async def test_roi_fusion_rejects_a_trim_because_the_region_has_its_own_range(manager: VideoJobManager) -> None:
+    error = await rejected(manager, roi_task(trim=(0, 50)))
+
+    assert error.code == "cctv.error.roiSteps"
+
+
+async def test_roi_fusion_accepts_deinterlace_and_deblock(manager: VideoJobManager) -> None:
+    steps = (CctvStep("deblock", {"filter": "pp7"}), CctvStep("deinterlace", {"filter": "bwdif"}))
+    job = await manager.create_cctv_job(cctv=roi_task(steps=steps))
+
+    assert [step.id for step in job.cctv.steps] == ["deblock", "deinterlace"]
+
+
+def test_the_roi_fusion_runner_is_registered_with_the_ecc_minimum_from_settings(tmp_path: Path) -> None:
+    settings = Settings(_env_file=None, RUNTIME_DIR=str(tmp_path / "runtime"), CCTV_ROI_ECC_MIN=0.7)
+    runner = build_cctv_runners(settings)["roi_fusion"]
+
+    assert isinstance(runner, RoiFusionRunner) and runner.ecc_min == 0.7
+
+
 @pytest.mark.parametrize("token", ["../escape", "short", "x" * 65])
 async def test_a_bad_token_is_rejected(manager: VideoJobManager, token: str) -> None:
     error = await rejected(manager, clarify(session_token=token))
@@ -536,3 +567,71 @@ async def test_two_real_jobs_on_the_same_token_each_verify_the_original_and_buil
     assert first.metadata["cctv"]["framesOut"] == 38
     second_report = cctv_session.cctv_job_dir(settings.outputs_path, second.id) / "report.json"
     assert load_report(second_report.read_text("utf-8")).osd.no_osd
+
+
+def roi_job_dir(settings: Settings, job) -> Path:
+    assert job.status == JobStatus.completed, job.error
+    assert not (settings.video_work_path / job.id).exists()
+    return cctv_session.cctv_job_dir(settings.outputs_path, job.id)
+
+
+def roi_file(job_dir: Path, job, name: str) -> Path:
+    return job_dir / job.metadata["cctv"]["outputs"]["roi"][name]
+
+
+@needs_ffmpeg
+async def test_real_roi_fusion_jobs_write_the_still_the_agreement_map_and_the_report_deterministically(
+    tmp_path: Path,
+) -> None:
+    settings = make_settings(tmp_path)
+    await analyzed_session(settings, TOKEN)
+    manager = real_manager(settings)
+    plate = roi_request(first_frame=5, last_frame=24, reference_frame=12, box=(40, 40, 64, 32))
+    face = roi_request(
+        first_frame=5, last_frame=24, reference_frame=12, box=(160, 100, 32, 40), kind="face_or_object",
+        scale=3, method="trimmed_mean",
+    )  # fmt: skip
+    deblock = (CctvStep("deblock", {"filter": "pp7"}),)
+    jobs = [
+        await manager.create_cctv_job(cctv=roi_task(roi=plate)),
+        await manager.create_cctv_job(cctv=roi_task(roi=plate)),
+        await manager.create_cctv_job(cctv=roi_task(roi=face, steps=deblock, case_label="Caso 9")),
+    ]
+    for _ in jobs:
+        await manager._process_next()
+
+    first_dir, second_dir, face_dir = (roi_job_dir(settings, job) for job in jobs)
+    first, second, face_job = jobs
+    fused = roi_file(first_dir, first, "fused")
+    assert first.output_path == fused and fused.name == "roi_fused_x2.png"
+    assert fused.parent.name == "04_stills"
+    for name in ("fused", "reference", "agreement", "stack", "samples"):
+        assert roi_file(first_dir, first, name).read_bytes() == roi_file(second_dir, second, name).read_bytes()
+    assert first.metadata["stage"] == "completed" and first.metadata["progress"] == 1.0
+    assert check_files_unchanged(first_dir).ok and check_files_unchanged(face_dir).ok
+
+    report = load_report((first_dir / "report.json").read_text("utf-8"))
+    assert report.roi is not None and report.roi.frames_total == 20 and len(report.roi.samples) == 20
+    assert report.roi.effective_samples == len([s for s in report.roi.samples if s.status in ("reference", "accepted")])
+    assert {output.role for output in report.outputs} == {"roi-fused", "roi-reference", "roi-agreement", "roi-stack"}
+    assert [process.frames_out for process in report.processes] == [20, report.roi.effective_samples]
+    assert report.steps == [] and not report.ai_used
+    html = (first_dir / "report.html").read_text("utf-8")
+    assert "Multi-frame still" in html and "Matrix (reference to frame)" in html
+    reference = next(sample for sample in report.roi.samples if sample.status == "reference")
+    assert reference.frame == 12 and reference.ecc == 1.0
+    summary = first.metadata["cctv"]["roi"]
+    assert summary["notices"][0] == {
+        "key": "cctv.roi.framesUsed",
+        "params": {"used": summary["framesUsed"], "total": 20, "effective": summary["effectiveSamples"]},
+    }
+    assert {"key": "cctv.roi.densityPlate", "params": {"px": 32}} in summary["notices"]
+    samples_csv = roi_file(first_dir, first, "samples").read_text("utf-8").splitlines()
+    assert samples_csv[0] == "frame,pict_type,copy_group,status,ecc,shift_x,shift_y" and len(samples_csv) == 21
+
+    face_report = load_report((face_dir / "report.json").read_text("utf-8"))
+    assert [step.id for step in face_report.steps] == ["deblock"]
+    assert "pp7" in face_report.processes[0].argv[face_report.processes[0].argv.index("-vf") + 1]
+    assert roi_file(face_dir, face_job, "fused").name == "roi_fused_x3.png"
+    assert {"key": "cctv.roi.densityFace", "params": {"px": 32}} in face_job.metadata["cctv"]["roi"]["notices"]
+    assert face_report.case.case_label == "Caso 9"

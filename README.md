@@ -515,7 +515,8 @@ Todas las variables leen de `.env` (ver [`.env.example`](.env.example) con los d
 | `CCTV_X264_THREADS` | `4` | Hilos **fijos** de x264 en el modo CCTV (copia de visualización y comparativo): es lo único del carril clásico cuya salida cambia con la cantidad de hilos, y el informe promete bytes reproducibles. Cambiarlo cambia los hashes de esas copias. Ver [Video de cámaras de seguridad](#video-de-cámaras-de-seguridad-modo-cctv) |
 | `CCTV_FFV1_SLICES` | `4` | Slices **fijos** de FFV1 de la copia sin pérdida (`analysis.mkv`); mismo motivo que el anterior |
 | `CCTV_MAX_STILL_FRAMES` | `20` | Tope de cuadros exactos exportados por job CCTV |
-| `CCTV_ROI_MAX_FRAMES` | `60` | Tope de cuadros para la fusión multi-cuadro de una región (placa o cara); la tarea todavía no está disponible |
+| `CCTV_ROI_MAX_FRAMES` | `60` | Tope de cuadros para la fusión multi-cuadro de una región (placa o cara); la tarea corre por la API pero todavía no tiene pantalla |
+| `CCTV_ROI_ECC_MIN` | `0.8` | Correlación ECC mínima (entre 0 y 1, sin incluirlos) para que un cuadro entre en la fusión de una región; los que quedan debajo se descartan y el informe los lista |
 | `LOG_FILE_MAX_MB` / `LOG_FILE_BACKUPS` | `10` / `3` | Techo por archivo antes de rotar y cuántos rotados se conservan |
 
 ## Optimization Center

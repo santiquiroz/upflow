@@ -974,6 +974,283 @@
       "title": "ReportStep",
       "type": "object"
     },
+    "RoiFusionInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "agreementFullScale": {
+          "title": "Agreementfullscale",
+          "type": "number"
+        },
+        "box": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 4,
+          "minItems": 4,
+          "title": "Box",
+          "type": "array"
+        },
+        "clippedFramesPct": {
+          "title": "Clippedframespct",
+          "type": "number"
+        },
+        "copyThreshold": {
+          "title": "Copythreshold",
+          "type": "number"
+        },
+        "density": {
+          "additionalProperties": true,
+          "title": "Density",
+          "type": "object"
+        },
+        "eccMin": {
+          "title": "Eccmin",
+          "type": "number"
+        },
+        "effectiveSamples": {
+          "minimum": 0,
+          "title": "Effectivesamples",
+          "type": "integer"
+        },
+        "firstFrame": {
+          "minimum": 0,
+          "title": "Firstframe",
+          "type": "integer"
+        },
+        "framesTotal": {
+          "minimum": 0,
+          "title": "Framestotal",
+          "type": "integer"
+        },
+        "framesUsed": {
+          "minimum": 0,
+          "title": "Framesused",
+          "type": "integer"
+        },
+        "kind": {
+          "enum": [
+            "plate",
+            "face_or_object"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "lastFrame": {
+          "minimum": 0,
+          "title": "Lastframe",
+          "type": "integer"
+        },
+        "libraries": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Libraries",
+          "type": "object"
+        },
+        "method": {
+          "enum": [
+            "median",
+            "trimmed_mean"
+          ],
+          "title": "Method",
+          "type": "string"
+        },
+        "motion": {
+          "enum": [
+            "translation",
+            "affine",
+            "homography"
+          ],
+          "title": "Motion",
+          "type": "string"
+        },
+        "nearCopies": {
+          "title": "Nearcopies",
+          "type": "boolean"
+        },
+        "noiseFloor": {
+          "title": "Noisefloor",
+          "type": "number"
+        },
+        "notices": {
+          "items": {
+            "$ref": "#/$defs/RoiNoticeInfo"
+          },
+          "title": "Notices",
+          "type": "array"
+        },
+        "referenceFrame": {
+          "minimum": 0,
+          "title": "Referenceframe",
+          "type": "integer"
+        },
+        "rejectedFrames": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Rejectedframes",
+          "type": "array"
+        },
+        "samples": {
+          "items": {
+            "$ref": "#/$defs/RoiSampleInfo"
+          },
+          "title": "Samples",
+          "type": "array"
+        },
+        "scale": {
+          "maximum": 4,
+          "minimum": 2,
+          "title": "Scale",
+          "type": "integer"
+        },
+        "spread": {
+          "additionalProperties": true,
+          "title": "Spread",
+          "type": "object"
+        },
+        "trimmedShare": {
+          "title": "Trimmedshare",
+          "type": "number"
+        }
+      },
+      "required": [
+        "kind",
+        "box",
+        "firstFrame",
+        "lastFrame",
+        "referenceFrame",
+        "scale",
+        "method",
+        "motion",
+        "eccMin",
+        "noiseFloor",
+        "copyThreshold",
+        "framesTotal",
+        "framesUsed",
+        "effectiveSamples",
+        "rejectedFrames",
+        "nearCopies",
+        "spread",
+        "density",
+        "clippedFramesPct",
+        "trimmedShare",
+        "agreementFullScale",
+        "libraries",
+        "samples",
+        "notices"
+      ],
+      "title": "RoiFusionInfo",
+      "type": "object"
+    },
+    "RoiNoticeInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "title": "Key",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": true,
+          "title": "Params",
+          "type": "object"
+        }
+      },
+      "required": [
+        "key",
+        "params"
+      ],
+      "title": "RoiNoticeInfo",
+      "type": "object"
+    },
+    "RoiSampleInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "copyGroup": {
+          "minimum": 0,
+          "title": "Copygroup",
+          "type": "integer"
+        },
+        "ecc": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Ecc"
+        },
+        "frame": {
+          "minimum": 0,
+          "title": "Frame",
+          "type": "integer"
+        },
+        "matrix": {
+          "anyOf": [
+            {
+              "items": {
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Matrix"
+        },
+        "pictType": {
+          "title": "Picttype",
+          "type": "string"
+        },
+        "shift": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Shift"
+        },
+        "status": {
+          "enum": [
+            "reference",
+            "accepted",
+            "copy",
+            "rejected"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "frame",
+        "pictType",
+        "copyGroup",
+        "status",
+        "ecc",
+        "shift",
+        "matrix"
+      ],
+      "title": "RoiSampleInfo",
+      "type": "object"
+    },
     "StillFrameInfo": {
       "additionalProperties": false,
       "properties": {
@@ -1276,6 +1553,17 @@
       },
       "title": "Processes",
       "type": "array"
+    },
+    "roi": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RoiFusionInfo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "schemaVersion": {
       "const": 1,

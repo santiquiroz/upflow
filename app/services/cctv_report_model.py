@@ -287,6 +287,48 @@ class LimitationInfo(ReportModel):
     text: str
 
 
+class RoiSampleInfo(ReportModel):
+    frame: int = Field(ge=0)
+    pict_type: str
+    copy_group: int = Field(ge=0)
+    status: Literal["reference", "accepted", "copy", "rejected"]
+    ecc: float | None
+    shift: list[float] | None = Field(min_length=2, max_length=2)
+    matrix: list[Annotated[list[float], Field(min_length=3, max_length=3)]] | None = Field(min_length=3, max_length=3)
+
+
+class RoiNoticeInfo(ReportModel):
+    key: str
+    params: dict[str, Any]
+
+
+class RoiFusionInfo(ReportModel):
+    kind: Literal["plate", "face_or_object"]
+    box: list[int] = Field(min_length=4, max_length=4)
+    first_frame: int = Field(ge=0)
+    last_frame: int = Field(ge=0)
+    reference_frame: int = Field(ge=0)
+    scale: int = Field(ge=2, le=4)
+    method: Literal["median", "trimmed_mean"]
+    motion: Literal["translation", "affine", "homography"]
+    ecc_min: float
+    noise_floor: float
+    copy_threshold: float
+    frames_total: int = Field(ge=0)
+    frames_used: int = Field(ge=0)
+    effective_samples: int = Field(ge=0)
+    rejected_frames: list[int]
+    near_copies: bool
+    spread: dict[str, Any]
+    density: dict[str, Any]
+    clipped_frames_pct: float
+    trimmed_share: float
+    agreement_full_scale: float
+    libraries: dict[str, str]
+    samples: list[RoiSampleInfo]
+    notices: list[RoiNoticeInfo]
+
+
 class CctvReportV1(ReportModel):
     schema_version: Literal[1] = SCHEMA_VERSION
     generated_at: Timestamp
@@ -305,6 +347,7 @@ class CctvReportV1(ReportModel):
     stills: list[StillPairInfo] = Field(default_factory=list)
     clipping: ClippingInfo | None = None
     frame_hashes: FrameHashesInfo | None = None
+    roi: RoiFusionInfo | None = None
     limitations: list[LimitationInfo]
     warnings: list[str] = Field(default_factory=list)
     guidelines: str

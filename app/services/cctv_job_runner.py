@@ -228,6 +228,17 @@ def keep_frame_index(ingest: WorkingIngest, job_dir: Path) -> None:
     shutil.copyfile(ingest.index.csv_path, job_dir / FRAME_INDEX_NAME)
 
 
+async def ingest_job_source(media: MediaTools, job_dir: Path, work_dir: Path, on_stage: StageProgress) -> IngestedSource:
+    on_stage(STAGE_INGESTING, 0.0)
+    record, verified = await asyncio.to_thread(job_verified_copy, job_dir)
+    ingest = await ingest_working_copy(media, verified.path, work_dir, record.container)
+    require_decodable(ingest)
+    keep_frame_index(ingest, job_dir)
+    probe = await probe_media(media, ingest.working_copy.path)
+    on_stage(STAGE_INGESTING, 1.0)
+    return IngestedSource(record, verified, ingest, frame_geometry(probe), pix_fmt_of(probe))
+
+
 # --- Planes de cada etapa ---
 
 
@@ -383,14 +394,7 @@ class CctvClarifyRunner:
         return outputs.placed.viewing
 
     async def _ingest(self, clarify: ClarifyJob) -> IngestedSource:
-        clarify.on_stage(STAGE_INGESTING, 0.0)
-        record, verified = await asyncio.to_thread(job_verified_copy, clarify.job_dir)
-        ingest = await ingest_working_copy(self.config.media, verified.path, clarify.work_dir, record.container)
-        require_decodable(ingest)
-        keep_frame_index(ingest, clarify.job_dir)
-        probe = await probe_media(self.config.media, ingest.working_copy.path)
-        clarify.on_stage(STAGE_INGESTING, 1.0)
-        return IngestedSource(record, verified, ingest, frame_geometry(probe), pix_fmt_of(probe))
+        return await ingest_job_source(self.config.media, clarify.job_dir, clarify.work_dir, clarify.on_stage)
 
     async def _analyze(self, clarify: ClarifyJob, source: IngestedSource) -> tuple[CctvDiagnosis, dict[str, Any]]:
         clarify.on_stage(STAGE_ANALYZING, 0.0)
@@ -486,5 +490,8 @@ def clarify_runner_config(settings: Settings) -> CctvRunnerConfig:
 
 
 def build_cctv_runners(settings: Settings) -> dict[str, CctvTaskRunner]:
-    # "roi_fusion" lo registra RoiFusionRunner (P3-06) y "enhance" el carril IA (P3-03).
-    return {"clarify": CctvClarifyRunner(clarify_runner_config(settings))}
+    # Import diferido: roi_fusion_runner reusa la ingesta de este modulo. "enhance" lo registra el carril IA (P3-03).
+    from app.services.roi_fusion_runner import RoiFusionRunner
+
+    config = clarify_runner_config(settings)
+    return {"clarify": CctvClarifyRunner(config), "roi_fusion": RoiFusionRunner(config, settings.cctv_roi_ecc_min)}

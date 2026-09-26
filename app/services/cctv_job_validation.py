@@ -43,6 +43,7 @@ ROI_ODD = "cctv.error.roiOdd"
 ROI_FRAMES = "cctv.error.roiFrames"
 ROI_UNEXPECTED = "cctv.error.roiUnexpected"
 ROI_INVALID = "cctv.error.roiInvalid"
+ROI_STEPS = "cctv.error.roiSteps"
 
 TASK_LANES: Mapping[str, Lane] = {"clarify": "classic", "enhance": "ai", "roi_fusion": "classic"}
 VIDEO_TASKS = frozenset({"clarify", "enhance"})
@@ -54,6 +55,8 @@ AI_DEBLOCK_PACK = "restore-core"
 ROI_SCALES = frozenset({2, 3, 4})
 ROI_KINDS = frozenset({"plate", "face_or_object"})
 ROI_METHODS = frozenset({"median", "trimmed_mean"})
+# Antes del denoise temporal, que correlaciona los cuadros (spec §4.9 paso 2).
+ROI_PREFILTER_STEPS = frozenset({"deinterlace", "deblock"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -219,6 +222,14 @@ def check_roi(options: CctvOptions, facts: CctvJobFacts) -> None:
     check_roi_box(roi.box, facts.geometry)
 
 
+def check_roi_steps(task: str, steps: Sequence[ResolvedStep]) -> None:
+    extra = [step.id for step in steps if step.id not in ROI_PREFILTER_STEPS]
+    if task == "roi_fusion" and extra:
+        raise CctvChainError(
+            ROI_STEPS, f"The multi-frame still only uses deinterlace and deblock before aligning; remove {extra[0]!r}."
+        )
+
+
 # --- Carril IA ---
 
 
@@ -265,6 +276,7 @@ def plan_cctv_job(options: CctvOptions, facts: CctvJobFacts, device: str | None)
     check_osd(options, facts.geometry)
     check_geometry(steps, facts.geometry)
     check_roi(options, facts)
+    check_roi_steps(options.task, steps)
     first, last = trim_range(steps, facts.frame_count)
     stills = still_frames_in(options.still_frames, first, last, facts.max_still_frames)
     acquisition, case = parse_case_details(options)
