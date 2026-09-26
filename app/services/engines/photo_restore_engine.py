@@ -37,6 +37,7 @@ _BYTES_PER_MB = 1024 * 1024
 DEVICE_REMOVED_CODE = "restore.error.deviceRemoved"
 DEVICE_REMOVED_MESSAGE = "The GPU driver reset. Restart Upflow to use the GPU again."
 NON_FINITE_REASON = "NaN/Inf output"
+SESSION_ON_CPU_REASON = "the fp16 session fell back to the CPU"
 
 
 class DeviceHealth(Protocol):
@@ -120,6 +121,14 @@ def dml_free_vram_mb(device: str) -> int | None:
 
 def is_gpu_device(device: str) -> bool:
     return try_parse_dml_device_id(device) is not None
+
+
+def fell_back_to_cpu(device: str, session: Any) -> bool:
+    # ORT abre en CPU sin lanzar cuando DML no inicializa el grafo (medido en P0-GPU con DDColor fp16).
+    get_providers = getattr(session, "get_providers", None)
+    if not is_gpu_device(device) or get_providers is None:
+        return False
+    return list(get_providers())[:1] == [ep_registry.CPU_PROVIDER]
 
 
 def configure_session_options(
@@ -330,6 +339,9 @@ class PhotoRestoreEngine:
     def _run_canary(
         self, model_id: str, device: str, sample: np.ndarray, reference_device: str, infer_for: InferFactory
     ) -> bool:
+        if self._fp16_on_cpu(model_id, device):
+            # Comparar CPU contra CPU aprobaria cualquier fp16: el canario no dice nada de DML.
+            return self._record_fp16(model_id, device, SESSION_ON_CPU_REASON)
         candidate = self._raw_infer(model_id, device, "fp16", infer_for)(sample)
         if has_non_finite(candidate):
             return self._record_fp16(model_id, device, NON_FINITE_REASON)
@@ -337,6 +349,10 @@ class PhotoRestoreEngine:
         rule = canary_rule_for(model_id)
         score = canary_score(rule, guard_finite(reference, model_id, "fp32"), candidate)
         return self._record_fp16(model_id, device, None if rule.passes(score) else rule.describe(score))
+
+    def _fp16_on_cpu(self, model_id: str, device: str) -> bool:
+        with self.removal_classified(device):
+            return fell_back_to_cpu(device, self.session(model_id, device, "fp16"))
 
     def _reference_output(
         self, model_id: str, reference_device: str, sample: np.ndarray, infer_for: InferFactory

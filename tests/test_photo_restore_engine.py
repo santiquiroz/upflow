@@ -16,11 +16,13 @@ from app.services.engines.photo_restore_engine import (
     DeviceRemovedError,
     NonFiniteOutputError,
     PhotoRestoreEngine,
+    SESSION_ON_CPU_REASON,
     SessionKey,
     clamp_unit,
     configure_session_options,
     dml_free_vram_mb,
     estimated_vram_mb,
+    fell_back_to_cpu,
     guard_finite,
     run_cancellable,
 )
@@ -706,6 +708,48 @@ def test_canary_catches_a_finite_wrong_output_a_nan_guard_alone_would_miss(model
 
     assert np.isfinite(fp16_output).all()
     assert engine.precision_for("drunet", "dml:0", sample_tile()) == "fp32"
+
+
+class CpuFallbackFactory(OrtSessionFactory):
+    def __init__(self, fell_back: set[str]) -> None:
+        super().__init__({})
+        self.fell_back = fell_back
+
+    def __call__(self, model_path: str, device: str, settings: Settings, **kwargs) -> OrtLikeSession:
+        session = super().__call__(model_path, device, settings, **kwargs)
+        on_cpu = Path(model_path).name in self.fell_back or device == "cpu"
+        session.get_providers = lambda: ["CPUExecutionProvider"] if on_cpu else ["DmlExecutionProvider", "CPUExecutionProvider"]
+        return session
+
+
+def test_canary_rejects_an_fp16_session_that_ort_opened_on_the_cpu(model_dir):
+    factory = CpuFallbackFactory({"drunet-fp16.onnx"})
+    engine = fp16_engine(model_dir, factory)
+    engine.begin_phase("dml:0")
+
+    assert engine.precision_for("drunet", "dml:0", sample_tile()) == "fp32"
+    assert engine.fp16_rejections()[0].reason == SESSION_ON_CPU_REASON
+    assert factory.runs_of("drunet-fp16.onnx") == 0
+    assert SessionKey("drunet", "dml:0", "fp16") not in engine.live_sessions("dml:0")
+
+
+def test_canary_still_runs_when_the_fp16_session_is_on_the_device(model_dir):
+    factory = CpuFallbackFactory(set())
+    engine = fp16_engine(model_dir, factory)
+    engine.begin_phase("dml:0")
+
+    assert engine.precision_for("drunet", "dml:0", sample_tile()) == "fp16"
+    assert factory.runs_of("drunet-fp16.onnx") == 1
+
+
+def test_fell_back_to_cpu_reads_the_session_providers():
+    on_cpu = SimpleNamespace(get_providers=lambda: ["CPUExecutionProvider"])
+    on_dml = SimpleNamespace(get_providers=lambda: ["DmlExecutionProvider", "CPUExecutionProvider"])
+
+    assert fell_back_to_cpu("dml:0", on_cpu)
+    assert not fell_back_to_cpu("dml:0", on_dml)
+    assert not fell_back_to_cpu("cpu", on_cpu)
+    assert not fell_back_to_cpu("dml:0", SimpleNamespace())
 
 
 def test_canary_good_fp16_keeps_fp16(model_dir):
