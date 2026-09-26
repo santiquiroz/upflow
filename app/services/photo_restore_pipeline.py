@@ -86,6 +86,7 @@ class RestoreHints:
     damage_probability: np.ndarray | None = None
     damage_detector: ModelUse | None = None
     user_mask: np.ndarray | None = None
+    face_detector: ModelUse | None = None
 
 
 @dataclass(frozen=True, slots=True)

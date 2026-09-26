@@ -22,7 +22,8 @@ from app.services.engines.base import UpscaleEngine
 from app.services.job_manager import ALLOWED_RESTORE_FORMATS, JobManager
 from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry, ModelStatus
 from app.services.photo_restore_chain import UnknownRestoreStep
-from app.services.photo_restore_job import PhotoRestoreJobRunner, PreStage
+from app.services.engines.face_detect import FaceDetection
+from app.services.photo_restore_job import PhotoRestoreJobRunner, PreStage, needs_face_search, requested_face_blend
 from app.services.photo_restore_pipeline import ModelUse, RestoreTooLarge, StepCall, StepOutcome
 from app.services.photo_restorer_registry import validate_step_ready
 from app.services.process_runner import run_guarded_process
@@ -1052,3 +1053,101 @@ def test_default_runners_restore_a_dsp_only_job_end_to_end(tmp_path: Path) -> No
     assert [step["id"] for step in steps] == ["descreen", "tone"]
     assert steps[1]["params"] == {"strength": 0.5}
     assert all(step["strategy"] == "dsp" for step in steps)
+
+
+# ---------------------------------------------------------------------------
+# Caras sin sesion de analisis (P1-GPU-smoke)
+# ---------------------------------------------------------------------------
+
+
+FACE_ON_THE_LEFT = FaceDetection(
+    box=(8.0, 10.0, 40.0, 50.0),
+    score=0.99,
+    landmarks=((16.0, 24.0), (32.0, 24.0), (24.0, 32.0), (18.0, 40.0), (30.0, 40.0)),
+)
+
+
+def repair_recording_faces(seen: list) -> object:
+    def repair(image: np.ndarray, call: StepCall) -> StepOutcome:
+        seen.append(call.request.faces)
+        return StepOutcome(image.copy(), details={"touchesFaces": bool(call.request.faces)})
+
+    return repair
+
+
+def test_a_job_without_analysis_finds_the_faces_the_repair_fill_must_avoid(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    seen: list = []
+    runner = make_runner(
+        settings,
+        step_runners={"repair": repair_recording_faces(seen)},
+        face_finder=lambda: lambda image: (FACE_ON_THE_LEFT,),
+    )
+    manager = make_manager(settings, runner=runner)
+
+    async def scenario() -> UpscaleJob:
+        job = await create_restore_job(
+            manager, write_image(tmp_path / "uploads" / "in.png", size=(96, 64)), restore_steps=["repair"]
+        )
+        await run_to_end(manager, job)
+        return job
+
+    job = asyncio.run(scenario())
+
+    assert job.status == JobStatus.completed, job.error
+    assert [face.box for face in seen[0]] == [FACE_ON_THE_LEFT.box]
+    sidecar = json.loads((settings.outputs_path / f"{job.id}.restore.json").read_text(encoding="utf-8"))
+    assert [face["box"] for face in sidecar["faces"]] == [list(FACE_ON_THE_LEFT.box)]
+
+
+def test_faces_are_not_searched_when_no_step_uses_them(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+
+    def never(image: np.ndarray):
+        raise AssertionError("no step needs the faces")
+
+    manager = make_manager(settings, runner=make_runner(settings, face_finder=lambda: never))
+
+    async def scenario() -> UpscaleJob:
+        job = await create_restore_job(manager, write_image(tmp_path / "uploads" / "in.png"))
+        await run_to_end(manager, job)
+        return job
+
+    job = asyncio.run(scenario())
+
+    assert job.status == JobStatus.completed, job.error
+
+
+def test_without_the_faces_pack_a_job_without_analysis_runs_with_no_faces(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    seen: list = []
+    runner = make_runner(settings, step_runners={"repair": repair_recording_faces(seen)}, face_finder=lambda: None)
+    manager = make_manager(settings, runner=runner)
+
+    async def scenario() -> UpscaleJob:
+        job = await create_restore_job(manager, write_image(tmp_path / "uploads" / "in.png"), restore_steps=["repair"])
+        await run_to_end(manager, job)
+        return job
+
+    job = asyncio.run(scenario())
+
+    assert job.status == JobStatus.completed, job.error
+    assert seen == [()]
+
+
+@pytest.mark.parametrize(
+    ("steps", "has_session", "expected"),
+    [
+        (("repair",), False, True),
+        (("denoise", "faces"), False, True),
+        (("denoise", "tone"), False, False),
+        (("repair", "faces"), True, False),
+    ],
+)
+def test_needs_face_search(steps, has_session, expected) -> None:
+    assert needs_face_search(steps, has_session=has_session) is expected
+
+
+@pytest.mark.parametrize(("options", "expected"), [({}, 0.6), ({"faces": {"blend": 0.8}}, 0.8), ({"faces": None}, 0.6)])
+def test_requested_face_blend(options, expected) -> None:
+    assert requested_face_blend(options) == pytest.approx(expected)

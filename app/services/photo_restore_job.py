@@ -18,11 +18,12 @@ from PIL import Image
 from app.config import Settings
 from app.core.version import get_app_version
 from app.models import UpscaleJob
+from app.services.engines.face_detect import FaceDetection, landmarked_face_detector
 from app.services.engines.photo_restore_engine import PhotoRestoreEngine
 from app.services.engines.scratch_fill import CLASSIC_ENGINE, FAST_ENGINE
 from app.services.engines.tiled_restore_runner import CalibrationCache, RestoreCancelled
 from app.services.image_io import LoadedImage, load_image_for_restore
-from app.services.photo_diagnosis import analyze_pattern, classify_tone, estimate_noise_sigma
+from app.services.photo_diagnosis import PORTRAIT_BLEND, analyze_pattern, classify_tone, estimate_noise_sigma
 from app.services.photo_geometry import Geometry
 from app.services.photo_restore_chain import RestoreStepSpec, steps_from_selection
 from app.services.photo_restore_pipeline import (
@@ -38,7 +39,7 @@ from app.services.photo_restore_pipeline import (
     restore_metadata,
 )
 from app.services.photo_restore_presets import ToneKind
-from app.services.photo_restore_runners import RunnerDeps, build_step_runners
+from app.services.photo_restore_runners import RunnerDeps, build_step_runners, detected_selections, face_detector_use
 from app.services.photo_restorer_registry import validate_step_ready
 from app.services.progress import SAVING_STAGE, apply_image_tile_progress, enter_image_stage
 from app.services.restore_outputs import (
@@ -65,6 +66,11 @@ StepReadiness = Callable[..., None]
 SessionCheck = Callable[[str], Mapping[str, Any]]
 Analyzer = Callable[[np.ndarray, Sequence[str]], "RestoreAnalysis"]
 ImageLoader = Callable[[Path], LoadedImage]
+FaceFinder = Callable[[np.ndarray], Sequence[FaceDetection]]
+FaceFinderSource = Callable[[], FaceFinder | None]
+
+# El relleno de daños declara si toca una cara (composite, §3.4.2) y el paso de caras las registra.
+FACE_AWARE_STEPS = frozenset({"repair", "faces"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,6 +187,25 @@ def with_session_hints(
     return replace(analysis, hints=hints, faces=inputs.faces)
 
 
+def needs_face_search(steps: Sequence[str], *, has_session: bool) -> bool:
+    # Con sesion, las caras ya vienen del analisis (y el usuario pudo confirmarlas).
+    return not has_session and bool(FACE_AWARE_STEPS.intersection(steps))
+
+
+def requested_face_blend(options: Mapping[str, Any]) -> float:
+    return float((options.get("faces") or {}).get("blend", PORTRAIT_BLEND))
+
+
+def with_found_faces(analysis: RestoreAnalysis, rgb: np.ndarray, find: FaceFinder, blend: float) -> RestoreAnalysis:
+    hints = replace(analysis.hints, face_detector=face_detector_use())
+    return replace(analysis, faces=detected_selections(rgb, find(rgb), blend), hints=hints)
+
+
+def installed_face_finder(settings: Settings, engine: PhotoRestoreEngine) -> FaceFinder | None:
+    # Se mira en cada job: el pack de caras se puede bajar con la app andando.
+    return landmarked_face_detector(engine) if settings.restore_faces_installed else None
+
+
 def with_geometry(loaded: LoadedImage, options: Mapping[str, Any]) -> LoadedImage:
     geometry = Geometry.from_mapping(options.get("geometry"))
     return loaded if geometry == Geometry() else replace(loaded, rgb=geometry.apply(loaded.rgb))
@@ -276,6 +301,7 @@ class PhotoRestoreJobRunner:
         app_version: str | None = None,
         check_ready: StepReadiness = validate_step_ready,
         sessions: SessionSource | None = None,
+        face_finder: FaceFinderSource | None = None,
     ) -> None:
         self.settings = settings
         self.engine = engine
@@ -286,6 +312,7 @@ class PhotoRestoreJobRunner:
         self._load_image = load_image
         self._catalog = catalog
         self._app_version = app_version
+        self._face_finder = face_finder or partial(installed_face_finder, settings, engine)
 
     def _loaded_model_file(self, model_id: str, precision: str) -> Path | None:
         try:
@@ -308,6 +335,7 @@ class PhotoRestoreJobRunner:
         inputs = self._session_inputs(job)
         loaded = with_geometry(self._load_image(job.source_path), job.restore_options)
         analysis = with_session_hints(self._analyze(loaded.rgb, job.restore_steps), inputs, loaded.rgb.shape[:2])
+        analysis = self._with_faces_if_needed(job, analysis, loaded.rgb, has_session=inputs is not None)
         pipeline = self._pipeline(job)
         self.engine.begin_phase(_device_of(job))
         pre = pipeline.run_pre(request_from_job(job, loaded, analysis), cancel_event)
@@ -347,6 +375,16 @@ class PhotoRestoreJobRunner:
             return save_preview_output(post, paths, stage.loaded.icc)
         job.metadata["restore"] = save_full_outputs(stage.loaded, stage.pre, post, paths, self._context(job, upscale))
         return paths.final
+
+    def _with_faces_if_needed(
+        self, job: UpscaleJob, analysis: RestoreAnalysis, rgb: np.ndarray, *, has_session: bool
+    ) -> RestoreAnalysis:
+        if not needs_face_search(job.restore_steps, has_session=has_session):
+            return analysis
+        find = self._face_finder()
+        if find is None:
+            return analysis
+        return with_found_faces(analysis, rgb, find, requested_face_blend(job.restore_options))
 
     def _session_inputs(self, job: UpscaleJob) -> SessionInputs | None:
         if job.restore_session is None:

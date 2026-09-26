@@ -25,6 +25,7 @@ from app.services.photo_restore_runners import (
     build_step_runners,
     descreen_mode,
     detected_selections,
+    face_detector_use,
     face_targets,
     mask_without_boxes,
     migan_or_none,
@@ -301,6 +302,40 @@ def test_run_faces_detects_when_the_analysis_did_not_confirm_faces(monkeypatch: 
     assert outcome.aux_models[0].model_id == "retinaface-r34"
     assert outcome.model is None
     assert outcome.details == {"restored": []}
+
+
+def face_at_the_center() -> FaceSelection:
+    landmarks = ((50.0, 60.0), (80.0, 60.0), (65.0, 75.0), (55.0, 90.0), (75.0, 90.0))
+    return FaceSelection(index=0, landmarks=landmarks, blend=0.6)
+
+
+def test_run_faces_declares_the_detector_that_found_the_job_faces(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        runners,
+        "restore_faces",
+        lambda context, source, base, targets, **kwargs: FaceRestoreResult(base.copy(), (), 1.0),
+    )
+    image = photo(160, 160)
+    hints = RestoreHints(face_detector=face_detector_use())
+    call = call_for("faces", image, source=image, faces=(face_at_the_center(),), hints=hints)
+
+    outcome = run_faces(fake_deps(), image, call)
+
+    assert [model.model_id for model in outcome.aux_models] == ["retinaface-r34"]
+
+
+def test_run_faces_with_confirmed_faces_and_no_detector_hint_declares_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        runners,
+        "restore_faces",
+        lambda context, source, base, targets, **kwargs: FaceRestoreResult(base.copy(), (), 1.0),
+    )
+    image = photo(160, 160)
+    call = call_for("faces", image, source=image, faces=(face_at_the_center(),))
+
+    outcome = run_faces(fake_deps(), image, call)
+
+    assert outcome.aux_models == ()
 
 
 def test_detected_selections_follow_the_face_policy() -> None:

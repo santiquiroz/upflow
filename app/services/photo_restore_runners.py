@@ -278,11 +278,15 @@ def faces_to_restore(
 ) -> tuple[tuple[FaceSelection, ...], tuple[ModelUse, ...]]:
     # Si el usuario confirmo caras en el analisis se usan esas; si no, se detecta con la politica de §2.4.
     if call.request.faces:
-        return call.request.faces, ()
+        declared = call.request.hints.face_detector
+        return call.request.faces, () if declared is None else (declared,)
     detections = landmarked_face_detector(deps.engine)(source)
     blend = float(call.params.get("blend", PORTRAIT_BLEND))
-    detector = ModelUse(RETINAFACE_MODEL_ID, DETECT_DEVICE, DETECT_PRECISION)
-    return detected_selections(source, detections, blend), (detector,)
+    return detected_selections(source, detections, blend), (face_detector_use(),)
+
+
+def face_detector_use() -> ModelUse:
+    return ModelUse(RETINAFACE_MODEL_ID, DETECT_DEVICE, DETECT_PRECISION)
 
 
 def detected_selections(
