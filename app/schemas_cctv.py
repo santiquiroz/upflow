@@ -101,6 +101,12 @@ class CctvJobRequest(CamelRequest):
     device: str | None = Field(default=None, max_length=64)
 
 
+class CctvReproduceRequest(CamelRequest):
+    token: str = Field(max_length=64)
+    # Input no confiable: lo valida `parse_untrusted_report` para devolver una clave y no un 422.
+    report: dict[str, Any]
+
+
 class RoiReferenceRequest(CamelRequest):
     first_frame: StrictInt
     last_frame: StrictInt
@@ -185,6 +191,29 @@ class VerifyFilesResponse(CamelModel):
     checked: int
     mismatches: list[str]
     missing: list[str]
+
+
+class CctvReproduceStartResponse(CamelModel):
+    job_id: str
+    status_url: str
+    result_url: str
+    warnings: list[str]
+
+
+class ReproduceCheckResponse(CamelModel):
+    kind: str
+    name: str
+    expected: str
+    actual: str | None
+    match: bool
+
+
+class CctvReproduceResultResponse(CamelModel):
+    job_id: str
+    identical: bool
+    frames_identical: bool | None
+    checks: list[ReproduceCheckResponse]
+    notes: list[str]
 
 
 class CctvArtifactLink(CamelModel):

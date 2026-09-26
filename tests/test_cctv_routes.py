@@ -769,3 +769,123 @@ def test_the_presets_list_only_installed_stream_upscalers_with_their_generative_
     assert [(model["id"], model["scales"], model["generativeLabel"]) for model in models] == [
         ("realesrgan-x4plus", [2], "Generative (invents texture)")
     ]
+
+
+# --- Reproduce (P4-REPRODUCE) ---
+
+CLIP_SHA = hashlib.sha256(b"clip").hexdigest()
+
+
+def fake_report(tmp_path: Path, sha256: str = CLIP_SHA, **fields) -> dict:
+    from test_cctv_report import report_for
+
+    payload = report_for(tmp_path / "report").model_dump(mode="json", by_alias=True)
+    payload["inputs"][0].update(sha256=sha256, verifiedCopySha256=sha256)
+    return {**payload, **fields}
+
+
+async def post_reproduce(manager: VideoJobManager, report: dict, token: str = TOKEN):
+    body = cctv_routes.CctvReproduceRequest.model_validate({"token": token, "report": report})
+    return await cctv_routes.reproduce_cctv_job(request=None, body=body, video_jobs=manager, settings=manager.settings)
+
+
+async def test_reproduce_queues_a_clarify_job_from_the_report_and_warns_about_the_build(tmp_path: Path) -> None:
+    manager = fake_manager(tmp_path)
+
+    started = await post_reproduce(manager, fake_report(tmp_path))
+
+    job = manager.get_job(started.job_id)
+    assert job.cctv.task == "clarify" and job.cctv.trim == (2, 5) and job.cctv.still_frames == (3,)
+    assert [step.id for step in job.cctv.steps] == ["deblock", "denoise"] and job.device == "cpu"
+    assert job.metadata["reproduce"]["sourceSha256"] == CLIP_SHA
+    assert started.result_url == f"/api/v1/video/jobs/{job.id}/reproduce"
+    assert {"cctv.reproduce.otherBuild", "cctv.reproduce.otherCpu"} <= set(started.warnings)
+
+
+@pytest.mark.parametrize(
+    ("report", "key"),
+    [
+        (lambda tmp: {"schemaVersion": 1, "steps": []}, "cctv.error.reproduceReportInvalid"),
+        (lambda tmp: fake_report(tmp, sha256="0" * 64), "cctv.error.reproduceSourceMismatch"),
+        (lambda tmp: fake_report(tmp, mode="ai-visual", aiUsed=True), "cctv.error.reproduceNotClassic"),
+    ],
+)
+async def test_reproduce_rejects_untrusted_reports_with_their_key(tmp_path: Path, report, key) -> None:
+    manager = fake_manager(tmp_path)
+
+    error = await rejected(post_reproduce(manager, report(tmp_path)))
+
+    assert error.status_code == 400 and error.detail["key"] == key and manager.jobs == {}
+
+
+async def test_reproduce_of_an_expired_session_is_a_404(tmp_path: Path) -> None:
+    error = await rejected(post_reproduce(fake_manager(tmp_path), fake_report(tmp_path), token="someothertoken"))
+
+    assert error.status_code == 404 and error.detail["key"] == "cctv.error.sessionNotFound"
+
+
+async def test_the_reproduce_result_of_an_ordinary_job_is_a_404(tmp_path: Path) -> None:
+    manager = fake_manager(tmp_path)
+    created = await post_job(manager, job_body(device="cpu"))
+    manager.get_job(created.job_id).status = JobStatus.completed
+
+    error = await rejected(cctv_routes.get_reproduce_result(created.job_id, None, manager, manager.settings))
+
+    assert error.status_code == 404 and error.detail["key"] == "cctv.error.notAReproduction"
+
+
+async def test_the_reproduce_result_of_an_unfinished_job_is_a_409(tmp_path: Path) -> None:
+    manager = fake_manager(tmp_path)
+    started = await post_reproduce(manager, fake_report(tmp_path))
+
+    error = await rejected(cctv_routes.get_reproduce_result(started.job_id, None, manager, manager.settings))
+
+    assert error.status_code == 409
+
+
+async def run_route_job(manager: VideoJobManager, body: dict) -> VideoUpscaleJob:
+    created = await post_job(manager, body)
+    await manager._process_next()
+    job = manager.get_job(created.job_id)
+    assert job.status == JobStatus.completed, job.error
+    return job
+
+
+def job_report(settings: Settings, job: VideoUpscaleJob) -> dict:
+    path = cctv_session.cctv_job_dir(settings.outputs_path, job.id) / "report.json"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+@needs_ffmpeg
+async def test_reproduce_repeats_a_real_job_frame_for_frame_and_file_for_file(analyzed) -> None:
+    settings, clip, result = analyzed
+    manager = real_manager(settings)
+    steps = [{"id": "denoise", "params": {"filter": "hqdn3d", "luma_spatial": 4}}]
+    first = await run_route_job(manager, {**job_body(token=result.token, steps=steps, trim=[3, 40], stillFrames=[7]),
+                                          "caseLabel": "Caso 7", "device": "cpu"})  # fmt: skip
+    again = await analyze(settings, file=clip_upload(clip))
+
+    started = await post_reproduce(manager, job_report(settings, first), token=again.token)
+    await manager._process_next()
+    outcome = await cctv_routes.get_reproduce_result(started.job_id, None, manager, settings)
+
+    assert started.warnings == [] and manager.get_job(started.job_id).status == JobStatus.completed
+    assert outcome.identical and outcome.frames_identical, [c for c in outcome.checks if not c.match]
+    kinds = [check.kind for check in outcome.checks]
+    assert kinds.count("framehash") == 2 and kinds.count("output") == 2 and "file" in kinds
+
+
+@needs_ffmpeg
+async def test_reproduce_of_an_edited_report_does_not_match(analyzed) -> None:
+    settings, _, result = analyzed
+    manager = real_manager(settings)
+    first = await run_route_job(manager, {**job_body(token=result.token, stillFrames=[7]), "device": "cpu"})
+    report = job_report(settings, first)
+    report["stills"][0]["processed"]["framehashSha256"] = "0" * 64
+
+    started = await post_reproduce(manager, report, token=result.token)
+    await manager._process_next()
+    outcome = await cctv_routes.get_reproduce_result(started.job_id, None, manager, settings)
+
+    failed = [check.name for check in outcome.checks if not check.match]
+    assert failed == ["frame 7 processed"] and not outcome.identical and outcome.frames_identical is False

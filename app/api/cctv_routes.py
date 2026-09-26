@@ -25,6 +25,7 @@ from app.api.routes import (
     video_job_to_response,
 )
 from app.config import MODEL_CATALOG, Settings, get_settings
+from app.core.version import get_app_version
 from app.exceptions import QueueFullError, QuotaExceededError
 from app.models import JobStatus, VideoUpscaleJob
 from app.schemas import VideoJobResponse
@@ -35,6 +36,9 @@ from app.schemas_cctv import (
     CctvAnalysisResponse,
     CctvJobRequest,
     CctvPresetsResponse,
+    CctvReproduceRequest,
+    CctvReproduceResultResponse,
+    CctvReproduceStartResponse,
     OsdBoxCheckResponse,
     OsdCheckRequest,
     OsdCheckResponse,
@@ -76,6 +80,15 @@ from app.services.cctv_preview import (
     preview_steps,
     render_frame,
     render_processed_frame,
+)
+from app.services.cctv_reproduce import (
+    METADATA_KEY as REPRODUCE_KEY,
+    NOT_A_REPRODUCTION,
+    compare_reproduction,
+    expected_facts,
+    preflight_warnings,
+    produced_report,
+    reproduce_request,
 )
 from app.services.cctv_session import SESSION_NOT_FOUND, cctv_job_dir
 from app.services.devices_service import DevicesService
@@ -528,3 +541,67 @@ async def verify_cctv_job(
     job = completed_cctv_job(video_jobs, job_id, current_user_from_request(request))
     result = await asyncio.to_thread(check_files_unchanged, cctv_job_dir(settings.outputs_path, job.id))
     return VerifyFilesResponse.model_validate(result.to_json())
+
+
+# --- Reproduce (P4-REPRODUCE) ---
+
+
+def reproduce_start_response(job: VideoUpscaleJob, warnings: list[str]) -> CctvReproduceStartResponse:
+    return CctvReproduceStartResponse(
+        job_id=job.id,
+        status_url=f"/api/v1/video/jobs/{job.id}",
+        result_url=f"/api/v1/video/jobs/{job.id}/reproduce",
+        warnings=warnings,
+    )
+
+
+@router.post(
+    "/cctv/reproduce",
+    response_model=CctvReproduceStartResponse,
+    status_code=202,
+    dependencies=[Depends(require(Permission.jobs_create))],
+)
+async def reproduce_cctv_job(
+    request: Request,
+    body: CctvReproduceRequest = Body(...),
+    video_jobs: VideoJobManager = Depends(get_video_job_manager),
+    settings: Settings = Depends(get_settings),
+) -> CctvReproduceStartResponse:
+    try:
+        wanted = await asyncio.to_thread(reproduce_request, body, settings.video_work_path)
+        job = await video_jobs.create_cctv_job(cctv=cctv_options(wanted.job), owner=current_user_from_request(request))
+    except Exception as exc:
+        raise job_creation_error(exc) from exc
+    expected = expected_facts(wanted.report)
+    job.metadata[REPRODUCE_KEY] = expected
+    caps = await asyncio.to_thread(video_jobs.cctv_capabilities)
+    return reproduce_start_response(job, preflight_warnings(expected, caps, get_app_version(settings.update_package_name)))
+
+
+def reproduce_expectation(job: VideoUpscaleJob) -> dict:
+    expected = job.metadata.get(REPRODUCE_KEY)
+    if not isinstance(expected, dict):
+        raise keyed_error(404, NOT_A_REPRODUCTION, "This job is not a reproduction of a report.")
+    return expected
+
+
+@router.get(
+    "/jobs/{job_id}/reproduce",
+    response_model=CctvReproduceResultResponse,
+    dependencies=[Depends(require(Permission.jobs_read_own))],
+)
+async def get_reproduce_result(
+    job_id: str,
+    request: Request,
+    video_jobs: VideoJobManager = Depends(get_video_job_manager),
+    settings: Settings = Depends(get_settings),
+) -> CctvReproduceResultResponse:
+    job = completed_cctv_job(video_jobs, job_id, current_user_from_request(request))
+    expected = reproduce_expectation(job)
+    job_dir = cctv_job_dir(settings.outputs_path, job.id)
+    try:
+        produced = await asyncio.to_thread(produced_report, job_dir, cctv_outputs(job))
+    except ArtifactNotFound as exc:
+        raise keyed_error(404, exc.key, str(exc)) from exc
+    comparison = compare_reproduction(expected, produced)
+    return CctvReproduceResultResponse.model_validate({"jobId": job.id, **comparison.to_json()})
