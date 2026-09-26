@@ -114,6 +114,25 @@ export interface VideoJobResponse {
   metadata: JobMetadata;
   progressPct: number | null;
   downloadUrl: string | null;
+  // Solo en jobs del modo CCTV (`POST /video/cctv/jobs`); null en el resto.
+  cctv?: CctvJobSummary | null;
+}
+
+export interface CctvArtifactLink {
+  name: string;
+  url: string;
+}
+
+export interface CctvJobSummary {
+  task: string;
+  lane: string | null;
+  preset: string | null;
+  sourceSha256: string | null;
+  noOsd: boolean;
+  osdBoxesConfirmed: boolean;
+  warnings: string[];
+  artifacts: CctvArtifactLink[];
+  verifyUrl: string | null;
 }
 
 // Mirrors app/schemas.py::AudioTrackResponse / SubtitleTrackResponse — one

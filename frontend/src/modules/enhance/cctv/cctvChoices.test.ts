@@ -1,0 +1,79 @@
+import { describe, expect, it } from "vitest";
+import { buildCctvJobRequest, initialChoices, withLane, withPreset } from "./cctvChoices";
+import { ANALYSIS, PRESETS_RESPONSE } from "./cctvFixtures";
+
+describe("initialChoices", () => {
+  it("starts in the classic lane with the preset the diagnosis suggested", () => {
+    const choices = initialChoices(ANALYSIS, PRESETS_RESPONSE);
+
+    expect(choices.lane).toBe("classic");
+    expect(choices.task).toBe("clarify");
+    expect(choices.presetId).toBe("night_ir");
+    expect(Object.keys(choices.steps)).toEqual(["deblock", "gray"]);
+  });
+
+  it("falls back to the first preset when the suggestion is unknown", () => {
+    const choices = initialChoices({ ...ANALYSIS, suggestedPreset: "moon" }, PRESETS_RESPONSE);
+
+    expect(choices.presetId).toBe("day");
+  });
+
+  it("asks for an on-screen text decision instead of assuming one", () => {
+    const choices = initialChoices(ANALYSIS, PRESETS_RESPONSE);
+
+    expect(choices.noOsd).toBe(false);
+    expect(choices.osdBoxesConfirmed).toBe(false);
+  });
+});
+
+describe("changing lane and preset", () => {
+  it("rebuilds the steps from the preset chain of the new lane", () => {
+    const classic = initialChoices(ANALYSIS, PRESETS_RESPONSE);
+
+    const ai = withLane(classic, "ai", ANALYSIS, PRESETS_RESPONSE);
+
+    expect(ai.task).toBe("enhance");
+    expect(Object.keys(ai.steps)).toEqual(["ai_deblock", "gray"]);
+    expect(classic.lane).toBe("classic");
+  });
+
+  it("replaces the steps with the chosen preset", () => {
+    const choices = withPreset(initialChoices(ANALYSIS, PRESETS_RESPONSE), "day", ANALYSIS, PRESETS_RESPONSE);
+
+    expect(choices.presetId).toBe("day");
+    expect(Object.keys(choices.steps)).toEqual(["aspect", "deinterlace", "deblock", "denoise"]);
+  });
+});
+
+describe("buildCctvJobRequest", () => {
+  it("sends the session token, the task, the preset and the ordered steps", () => {
+    const choices = { ...initialChoices(ANALYSIS, PRESETS_RESPONSE), noOsd: true };
+
+    expect(buildCctvJobRequest("tok-1", choices, PRESETS_RESPONSE)).toEqual({
+      token: "tok-1",
+      task: "clarify",
+      preset: "night_ir",
+      steps: [
+        { id: "deblock", params: { filter: "deblock", filter_type: "strong", block: 8 } },
+        { id: "gray", params: { filter: "gray" } },
+      ],
+      osdBoxes: [],
+      osdBoxesConfirmed: false,
+      noOsd: true,
+    });
+  });
+
+  it("sends confirmed boxes only when there is on-screen text", () => {
+    const choices = {
+      ...initialChoices(ANALYSIS, PRESETS_RESPONSE),
+      osdBoxes: [[0, 0, 320, 40] as const],
+      osdBoxesConfirmed: true,
+    };
+
+    const request = buildCctvJobRequest("tok-1", choices, PRESETS_RESPONSE);
+
+    expect(request.osdBoxes).toEqual([[0, 0, 320, 40]]);
+    expect(request.osdBoxesConfirmed).toBe(true);
+    expect(request.noOsd).toBe(false);
+  });
+});

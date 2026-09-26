@@ -628,6 +628,18 @@ describe("error handling", () => {
     );
   });
 
+  it("reads a keyed detail as its reason and keeps the key for translation", async () => {
+    mockFetchOnce({ detail: { key: "cctv.error.unknownPreset", reason: "Unknown CCTV preset 'x'." } }, { status: 400 });
+
+    const failure = getHealth();
+
+    await expect(failure).rejects.toMatchObject({
+      status: 400,
+      message: "Unknown CCTV preset 'x'.",
+      key: "cctv.error.unknownPreset",
+    });
+  });
+
   it("falls back to statusText when the error body has no detail field", async () => {
     const response = new Response("not json", { status: 500, statusText: "Internal Server Error" });
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));

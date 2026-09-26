@@ -25,6 +25,7 @@ import type {
 } from "../../lib/apiTypes";
 import { restoreLabel } from "../../lib/audioLabels";
 import { formatDeviceSummary, formatModelSummary } from "./accordionSummaries";
+import { CctvModeSection, CctvModeToggle, CctvSuggestBanner, useCctvModeFlag, useCctvSuggestion } from "./cctv";
 import { AUDIO_ENHANCE_OPTIONS, AudioEnhanceControls } from "./AudioEnhanceControls";
 import { FpsBoostControls, TARGET_FPS_OPTIONS, type FpsBoostValue } from "./FpsBoostControls";
 import { InterpEngineControls } from "./InterpEngineControls";
@@ -370,6 +371,8 @@ export function VideoPanel() {
   const [analyzeResult, setAnalyzeResult] = useState<AnalyzeVideoResponse | null>(null);
   const [selectedAudioIndices, setSelectedAudioIndices] = useState<number[]>([]);
   const [keepSubtitles, setKeepSubtitles] = useState(false);
+  const [cctvMode, setCctvMode] = useCctvModeFlag();
+  const suggestCctv = useCctvSuggestion(file, sourceDimensions);
 
   const modelsQuery = useQuery({ queryKey: ["models"], queryFn: getModels });
   const devicesQuery = useQuery({ queryKey: ["devices"], queryFn: getDevices });
@@ -606,10 +609,15 @@ export function VideoPanel() {
   const showNoGpuHint = model !== null && requiresGpu && !deviceUsable;
   const canSubmit = file !== null && profile !== null && scale !== null && deviceUsable && !isJobBusy(phase);
 
+  if (cctvMode) {
+    return <CctvModeSection initialFile={file} onExit={() => setCctvMode(false)} />;
+  }
   return (
     <div className="grid grid-cols-[1fr_320px] gap-6 max-[900px]:grid-cols-1">
       <div className="flex flex-col gap-6">
+        <CctvModeToggle checked={false} onChange={setCctvMode} />
         <Dropzone files={files} onFilesSelected={handleFilesSelected} />
+        {suggestCctv && <CctvSuggestBanner key={file?.name} onAccept={() => setCctvMode(true)} />}
         {rejectedUpload && (
           <p role="alert" className="text-xs text-danger">
             {rejectedUpload}

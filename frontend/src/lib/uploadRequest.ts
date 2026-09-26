@@ -1,4 +1,4 @@
-import { ApiError } from "./api";
+import { ApiError, readErrorDetail } from "./api";
 
 const API_BASE = "/api/v1";
 
@@ -11,16 +11,18 @@ export interface UploadOptions {
 
 type XhrFactory = () => XMLHttpRequest;
 
-function messageFromBody(status: number, body: string): string {
+function parseBody(body: string): unknown {
   try {
-    const parsed = JSON.parse(body) as { detail?: string };
-    if (typeof parsed.detail === "string" && parsed.detail.length > 0) {
-      return parsed.detail;
-    }
+    return JSON.parse(body);
   } catch {
     // No era JSON: el status es lo unico cierto que queda.
+    return null;
   }
-  return `Request failed with status ${status}`;
+}
+
+function errorFromBody(status: number, body: string): ApiError {
+  const { message, key } = readErrorDetail(parseBody(body));
+  return new ApiError(status, message ?? `Request failed with status ${status}`, key);
 }
 
 // `fetch` no expone el progreso de subida — no es una limitacion de la app sino
@@ -60,7 +62,7 @@ export function postFormWithProgress<T>(
         }
         return;
       }
-      reject(new ApiError(xhr.status, messageFromBody(xhr.status, xhr.responseText)));
+      reject(errorFromBody(xhr.status, xhr.responseText));
     };
 
     xhr.onerror = () => reject(new ApiError(0, "The connection failed during the upload"));

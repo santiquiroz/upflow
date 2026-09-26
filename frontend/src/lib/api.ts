@@ -26,30 +26,62 @@ const API_BASE = "/api/v1";
 
 export class ApiError extends Error {
   readonly status: number;
+  // Clave de catalogo cuando el backend responde `detail: {key, reason}`.
+  readonly key: string | null;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, key: string | null = null) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.key = key;
   }
 }
 
-async function extractErrorMessage(response: Response): Promise<string> {
-  try {
-    const body = (await response.json()) as { detail?: string };
-    if (typeof body.detail === "string" && body.detail.length > 0) {
-      return body.detail;
-    }
-  } catch {
-    // Body was not JSON (or empty) — fall through to statusText below.
+export interface ErrorDetail {
+  message: string | null;
+  key: string | null;
+}
+
+interface KeyedDetail {
+  key: string;
+  reason: string;
+}
+
+function isKeyedDetail(detail: unknown): detail is KeyedDetail {
+  const candidate = detail as Partial<KeyedDetail> | null;
+  return typeof candidate?.key === "string" && typeof candidate.reason === "string";
+}
+
+export function readErrorDetail(body: unknown): ErrorDetail {
+  const detail = (body as { detail?: unknown } | null)?.detail;
+  if (typeof detail === "string" && detail.length > 0) {
+    return { message: detail, key: null };
   }
-  return response.statusText || `Request failed with status ${response.status}`;
+  if (isKeyedDetail(detail)) {
+    return { message: detail.reason, key: detail.key };
+  }
+  return { message: null, key: null };
+}
+
+async function readJsonBody(response: Response): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch {
+    // Body was not JSON (or empty) — the caller falls back to statusText.
+    return null;
+  }
+}
+
+async function apiErrorFrom(response: Response): Promise<ApiError> {
+  const { message, key } = readErrorDetail(await readJsonBody(response));
+  const fallback = response.statusText || `Request failed with status ${response.status}`;
+  return new ApiError(response.status, message ?? fallback, key);
 }
 
 export async function apiGet<T>(path: string): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, { method: "GET" });
   if (!response.ok) {
-    throw new ApiError(response.status, await extractErrorMessage(response));
+    throw await apiErrorFrom(response);
   }
   return (await response.json()) as T;
 }
@@ -71,7 +103,7 @@ export async function apiPostJson<T>(path: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
   });
   if (!response.ok) {
-    throw new ApiError(response.status, await extractErrorMessage(response));
+    throw await apiErrorFrom(response);
   }
   return (await response.json()) as T;
 }
@@ -83,7 +115,7 @@ export async function apiPatchJson<T>(path: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
   });
   if (!response.ok) {
-    throw new ApiError(response.status, await extractErrorMessage(response));
+    throw await apiErrorFrom(response);
   }
   return (await response.json()) as T;
 }
@@ -95,7 +127,7 @@ export async function apiPutJson<T>(path: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
   });
   if (!response.ok) {
-    throw new ApiError(response.status, await extractErrorMessage(response));
+    throw await apiErrorFrom(response);
   }
   return (await response.json()) as T;
 }
@@ -103,7 +135,7 @@ export async function apiPutJson<T>(path: string, body: unknown): Promise<T> {
 export async function apiPost<T>(path: string): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, { method: "POST" });
   if (!response.ok) {
-    throw new ApiError(response.status, await extractErrorMessage(response));
+    throw await apiErrorFrom(response);
   }
   return (await response.json()) as T;
 }
@@ -111,7 +143,7 @@ export async function apiPost<T>(path: string): Promise<T> {
 export async function apiDelete(path: string): Promise<void> {
   const response = await fetch(`${API_BASE}${path}`, { method: "DELETE" });
   if (!response.ok) {
-    throw new ApiError(response.status, await extractErrorMessage(response));
+    throw await apiErrorFrom(response);
   }
 }
 
