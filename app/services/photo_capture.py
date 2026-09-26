@@ -83,10 +83,11 @@ class CaptureSigns:
         return self.perspective or self.glare
 
 
+# Se reduce antes de girar: girar la foto entera obligaria a copiar un escaneo de 24 Mpx en float.
 def suggest_capture(rgb: np.ndarray, rotate90: int) -> CaptureSuggestions:
-    rotated = rotate_quarter_turns(rgb, rotate90)
-    shape = rotated.shape[:2]
-    regions = find_regions(rotated)
+    small, factor = fit_within(rgb, CAPTURE_ANALYSIS_SIDE)
+    shape = rotated_shape(rgb.shape[:2], rotate90)
+    regions = regions_in(np.ascontiguousarray(rotate_quarter_turns(small, rotate90)), factor, shape)
     return CaptureSuggestions(
         auto_crop=auto_crop_geometry(regions, shape, rotate90),
         photos=split_geometries(regions, shape, rotate90),
@@ -106,15 +107,24 @@ def capture_signs(rgb: np.ndarray) -> CaptureSigns:
     )
 
 
+def rotated_shape(shape: tuple[int, ...], rotate90: int) -> tuple[int, int]:
+    height, width = int(shape[0]), int(shape[1])
+    return (width, height) if rotate90 % 2 else (height, width)
+
+
 def find_regions(rgb: np.ndarray) -> tuple[SheetRegion, ...]:
     small, factor = fit_within(rgb, CAPTURE_ANALYSIS_SIDE)
+    return regions_in(small, factor, rgb.shape[:2])
+
+
+def regions_in(small: np.ndarray, factor: float, shape: tuple[int, int]) -> tuple[SheetRegion, ...]:
     mask = foreground_mask(small)
     if mask is None:
         return ()
     total = float(mask.shape[0] * mask.shape[1])
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     regions = [
-        region_from_contour(contour, factor, rgb.shape[:2], total)
+        region_from_contour(contour, factor, shape, total)
         for contour in contours
         if cv2.contourArea(contour) >= MIN_PHOTO_FRACTION * total
     ]
