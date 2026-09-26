@@ -62,6 +62,14 @@ STABILIZE_EDGE_GUARD = (
     f"crop=w=iw-{STABILIZE_EDGE_MARGIN}:h=ih-{STABILIZE_EDGE_MARGIN}:x=0:y=0:exact=1"
 )
 
+FRAME_SIZE_PARAM = "frame_size"
+LENS_STEP = "lens"
+# Vecino mas cercano y centro fijos: sin valores de pixel nuevos, y los defaults no cambian entre versiones.
+LENSCORRECTION_CENTER = "cx=0.5:cy=0.5"
+LENSCORRECTION_SAMPLING = "i=nearest:fc=black"
+V360_PROJECTION = "input=fisheye:output=flat"
+V360_SAMPLING = "interp=near"
+
 Box = tuple[int, int, int, int]
 
 
@@ -217,6 +225,44 @@ def build_stabilize_detect(step: ResolvedStep, transforms: PurePath) -> str:
     return f"{STABILIZE_EDGE_GUARD},vidstabdetect=shakiness={shakiness}:{STABILIZE_DETECT_OPTIONS}:result={result}"
 
 
+def _lenscorrection_filter(spec: FilterSpec, step: ResolvedStep) -> str:
+    return f"lenscorrection={LENSCORRECTION_CENTER}:{_options(spec, step)}:{LENSCORRECTION_SAMPLING}"
+
+
+def _frame_size(step: ResolvedStep) -> tuple[int, int]:
+    if FRAME_SIZE_PARAM not in step.params:
+        raise _not_a_filter(step, "it needs the frame size where it runs (bind_frame_sizes)")
+    size = step.params[FRAME_SIZE_PARAM]
+    if not isinstance(size, tuple) or len(size) != 2:
+        raise _unsafe(f"the frame size must be (width, height), got {size!r}")
+    _require_positive_int("width", size[0])
+    _require_positive_int("height", size[1])
+    return size
+
+
+def _v360_filter(spec: FilterSpec, step: ResolvedStep) -> str:
+    width, height = _frame_size(step)
+    # w y h fijos: sin ellos v360 elige otro tamano y el OSD, el recorte y el informe quedarian corridos.
+    return f"v360={V360_PROJECTION}:{_options(spec, step)}:w={width}:h={height}:{V360_SAMPLING}"
+
+
+def _needs_frame_size(step: ResolvedStep) -> bool:
+    return step.id == LENS_STEP and step.filter == "v360"
+
+
+def _with_frame_size(step: ResolvedStep, geometry: FrameGeometry) -> ResolvedStep:
+    size = (geometry.width, geometry.height)
+    return ResolvedStep(step.id, step.filter, MappingProxyType({**step.params, FRAME_SIZE_PARAM: size}))
+
+
+def bind_frame_sizes(steps: Sequence[ResolvedStep], source: FrameGeometry) -> tuple[ResolvedStep, ...]:
+    geometry, bound = source, []
+    for step in in_catalog_order(steps):
+        bound.append(_with_frame_size(step, geometry) if _needs_frame_size(step) else step)
+        geometry = _apply_geometry(geometry, step)
+    return tuple(bound)
+
+
 def _gray_filter(spec: FilterSpec, step: ResolvedStep) -> str:
     return "format=pix_fmts=gray"
 
@@ -234,6 +280,8 @@ _BUILDERS: Mapping[str, Callable[[FilterSpec, ResolvedStep], str]] = {
     "tmedian": _tmedian_filter,
     "scale": _scale_filter,
     "vidstab": _stabilize_filter,
+    "lenscorrection": _lenscorrection_filter,
+    "v360": _v360_filter,
 }
 
 
@@ -457,7 +505,8 @@ def build_osd_graph(
     overlay_format: str = "auto",
 ) -> str:
     source_label, output = _checked_label(input_label), _checked_label(output_label)
-    ordered = tuple(step for step in in_catalog_order(steps) if step.id not in _UNBUILDABLE_STEPS)
+    kept = tuple(step for step in steps if step.id not in _UNBUILDABLE_STEPS)
+    ordered = bind_frame_sizes(kept, source)
     placed = osd_boxes_after(ordered, boxes, source)
     if not placed:
         return _plain_graph(ordered, source_label, output, pix_fmt)

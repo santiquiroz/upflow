@@ -565,6 +565,21 @@ async def test_the_processed_preview_applies_the_steps_on_the_frame(analyzed) ->
 
 
 @needs_ffmpeg
+async def test_the_processed_preview_flattens_a_fisheye_at_the_frame_size(analyzed) -> None:
+    settings, _, result = analyzed
+    work = cctv_session.session_dir(settings.video_work_path, result.token) / WORK_COPY_NAME
+    original = decode_exact(settings, work, 30)
+    height, width = original.shape[:2]
+    lens = json.dumps([{"id": "lens", "params": {"filter": "v360", "d_fov": 90.0}}])
+
+    shown = png_pixels(await preview(settings, result.token, 30, lens))
+
+    fisheye = "v360=input=fisheye:output=flat:ih_fov=180.0:iv_fov=180.0:d_fov=90.0:yaw=0.0:pitch=0.0"
+    assert np.array_equal(shown, decode_exact(settings, work, 30, f"{fisheye}:w={width}:h={height}:interp=near"))
+    assert not np.array_equal(shown, original)
+
+
+@needs_ffmpeg
 @pytest.mark.parametrize(
     ("frame", "steps", "window", "key"),
     [

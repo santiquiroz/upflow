@@ -10,6 +10,7 @@ from app.services.cctv_chain import (
     AI_LANE_PLACEMENT,
     CCTV_CHAIN,
     FFMPEG_FILTERS_DOC,
+    LENS_GATE,
     OPEN_GATES,
     STABILIZE_GATE,
     CctvChainError,
@@ -113,13 +114,64 @@ def test_interpolation_is_out_of_v1_in_both_lanes():
     assert _error_code([{"id": "interpolate"}], "ai") == "cctv.error.stepDeferred"
 
 
-@pytest.mark.parametrize("lane", ["classic", "ai"])
-def test_lens_correction_is_rejected_in_v1(lane):
-    assert _error_code([{"id": "lens"}], lane) == "cctv.error.stepDeferred"
-
-
 def _ids_of_schema(schema):
     return [step["id"] for step in schema]
+
+
+def test_lens_correction_runs_only_in_the_classic_lane_behind_its_gate():
+    crop = {"id": "crop", "params": {"w": 64, "h": 48, "x": 0, "y": 0}}
+
+    steps = steps_from_request([crop, {"id": "lens"}], "classic")
+
+    assert LENS_GATE in OPEN_GATES
+    assert _ids(steps) == ["lens", "crop"]
+    assert (steps[0].filter, dict(steps[0].params)) == ("lenscorrection", {"k1": 0.0, "k2": 0.0})
+    assert _error_code([{"id": "lens"}], "ai") == "cctv.error.stepNotInLane"
+    assert "lens" in _ids_of_schema(catalog_schema("classic"))
+    assert "lens" not in _ids_of_schema(catalog_schema("ai"))
+    assert "lens" not in _ids_of_schema(catalog_schema("classic", frozenset({STABILIZE_GATE})))
+
+
+def test_lens_correction_flattens_a_fisheye_with_bounded_angles():
+    (step,) = steps_from_request([{"id": "lens", "params": {"filter": "v360", "pitch": -30}}], "classic")
+
+    assert dict(step.params) == {"ih_fov": 180.0, "iv_fov": 180.0, "d_fov": 120.0, "yaw": 0.0, "pitch": -30}
+    too_wide = {"id": "lens", "params": {"filter": "v360", "d_fov": 180}}
+    assert _error_code([too_wide], "classic") == "cctv.error.invalidParam"
+    assert _error_code([{"id": "lens", "params": {"k1": "0.1:k2=9"}}], "classic") == "cctv.error.invalidParam"
+
+
+def _lens_presets():
+    return [(spec, preset) for spec in step_spec("lens").filters for preset in spec.presets]
+
+
+@pytest.mark.parametrize(("spec", "preset"), _lens_presets(), ids=lambda item: getattr(item, "name", ""))
+def test_every_lens_preset_is_a_valid_request_for_its_filter(spec, preset):
+    raw = {"id": "lens", "params": {"filter": spec.name, **preset.params}}
+
+    (step,) = steps_from_request([raw], "classic")
+
+    assert {name: step.params[name] for name in preset.params} == dict(preset.params)
+
+
+def test_lens_presets_reach_the_catalog_with_their_text_keys():
+    lens = next(step for step in catalog_schema("classic") if step["id"] == "lens")
+    presets = {filter_["name"]: filter_["presets"] for filter_ in lens["filters"]}
+
+    assert [preset["name"] for preset in presets["lenscorrection"]] == ["mild", "wide", "very_wide", "ultra_wide"]
+    assert presets["lenscorrection"][2] == {
+        "name": "very_wide",
+        "labelKey": "cctv.filter.lenscorrection.preset.very_wide",
+        "label": "Very wide angle (2.8 mm, common in dome cameras)",
+        "params": {"k1": -0.22, "k2": -0.02},
+    }
+    assert all(preset["params"]["ih_fov"] >= 180 for preset in presets["v360"])
+
+
+def test_lens_correction_declares_that_pixels_were_moved():
+    steps = steps_from_request([{"id": "lens", "params": {"k1": -0.2}}], "classic")
+
+    assert [limitation.key for limitation in limitations_for(steps)] == ["cctv.limitation.lensCorrected"]
 
 
 def test_stabilize_is_open_because_its_determinism_test_passes():

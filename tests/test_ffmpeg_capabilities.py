@@ -290,9 +290,16 @@ def test_a_filter_needing_two_ffmpeg_filters_names_only_the_missing_one() -> Non
 
 
 def test_steps_not_offered_in_any_lane_are_not_reported() -> None:
-    caps = capabilities(every_catalog_filter() - {"lenscorrection", "v360"})
+    no_lane = StepSpec("lens", "Lens", "classic", (FilterSpec("v360", "Flat.", (), ("v360",)),), frozenset())
 
-    assert unavailable_filters(caps) == ()
+    assert unavailable_filters(capabilities(set()), (no_lane,)) == ()
+
+
+def test_a_build_without_v360_keeps_lenscorrection_and_disables_only_the_fisheye() -> None:
+    caps = capabilities(every_catalog_filter() - {"v360"})
+
+    assert unavailable_filters(caps) == (UnavailableFilter("lens", "v360", ("v360",)),)
+    assert "lens" not in unavailable_steps(caps)
 
 
 def test_a_build_without_libvidstab_disables_stabilize() -> None:

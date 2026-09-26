@@ -24,6 +24,7 @@ from app.services.ffmpeg_filters import (
     NOT_A_FILTER,
     OSD_BOX_OUTSIDE_FRAME,
     FrameGeometry,
+    bind_frame_sizes,
     build_filter,
     build_osd_graph,
     bind_transforms,
@@ -113,6 +114,10 @@ def test_escape_filter_path_escapes_graph_separators_and_quotes() -> None:
         (one("levels", filter="curves", preset="lighter"), "curves=preset=lighter"),
         (one("scale"), f"scale=w=iw*2:h=ih*2:flags=neighbor{EXACT_FLAGS}"),
         (one("sharpen", strength=0.25), "cas=strength=0.25"),
+        (
+            one("lens", k1=-0.22, k2=-0.02),
+            "lenscorrection=cx=0.5:cy=0.5:k1=-0.22:k2=-0.02:i=nearest:fc=black",
+        ),
     ],
 )
 def test_build_filter_writes_the_ffmpeg_syntax(step: ResolvedStep, expected: str) -> None:
@@ -155,7 +160,7 @@ def test_build_scale_to_rejects_sizes_that_are_not_positive_integers(width, heig
         by_hand("ai_upscale", "onnx_upscale"),
         by_hand("ai_label", "label_band"),
         by_hand("stabilize", "vidstab", shakiness=5, smoothing=10),
-        by_hand("lens", "lenscorrection", k1=0.1, k2=0.0),
+        by_hand("lens", "v360", ih_fov=180.0, iv_fov=180.0, d_fov=120.0, yaw=0.0, pitch=0.0),
     ],
 )
 def test_steps_that_are_not_a_single_ffmpeg_filter_are_refused(step: ResolvedStep) -> None:
@@ -467,10 +472,10 @@ def probe_stream(path: Path) -> dict:
 def test_every_classic_filter_runs_in_the_real_binary_with_its_defaults(
     step_id: str, filter_name: str, tmp_path: Path
 ) -> None:
-    step = default_step(step_id, filter_name)
-    expected = output_dims_after((step,), *CLIP_SIZE)
+    steps = bind_frame_sizes((default_step(step_id, filter_name),), FrameGeometry(*CLIP_SIZE))
+    expected = output_dims_after(steps, *CLIP_SIZE)
 
-    frames = gray_frames(decode_gray(make_clip(tmp_path), *vf_args((step,))), expected)
+    frames = gray_frames(decode_gray(make_clip(tmp_path), *vf_args(steps)), expected)
 
     kept = 4 if step_id == "trim" else CLIP_FRAMES
     assert frames.shape == (kept, expected.height, expected.width)
@@ -633,3 +638,103 @@ def test_tmedian_keeps_every_frame_and_centres_its_window(radius: int) -> None:
 
     frames = gray_frames(result, FrameGeometry(8, 8))
     assert [int(frame[0, 0]) for frame in frames] == centered_medians(values, radius)
+
+
+FISHEYE = {"id": "lens", "params": {"filter": "v360", "ih_fov": 190.0, "iv_fov": 190.0, "d_fov": 100.0, "pitch": -30.0}}
+FISHEYE_OPTIONS = "input=fisheye:output=flat:ih_fov=190.0:iv_fov=190.0:d_fov=100.0:yaw=0.0:pitch=-30.0"
+
+
+def test_the_fisheye_lens_needs_the_frame_size_where_it_runs() -> None:
+    (step,) = classic(FISHEYE)
+
+    with pytest.raises(CctvChainError) as error:
+        compose_vf((step,))
+
+    assert error.value.code == NOT_A_FILTER
+
+
+def test_the_fisheye_lens_keeps_the_frame_size_it_receives_and_samples_the_nearest_pixel() -> None:
+    steps = classic(FISHEYE, {"id": "aspect", "params": {"num": 2, "den": 1}}, {"id": "gray"})
+
+    built = compose_vf(bind_frame_sizes(steps, FrameGeometry(352, 288)))
+
+    assert built == f"setsar=sar=2/1:max=1000,v360={FISHEYE_OPTIONS}:w=352:h=288:interp=near,format=pix_fmts=gray"
+
+
+@pytest.mark.parametrize("size", [(0, 288), (352,), "352x288", (352.0, 288)])
+def test_a_hand_built_lens_frame_size_must_be_two_positive_integers(size) -> None:
+    params = {"ih_fov": 180.0, "iv_fov": 180.0, "d_fov": 120.0, "yaw": 0.0, "pitch": 0.0, "frame_size": size}
+
+    with pytest.raises(CctvChainError) as error:
+        build_filter(by_hand("lens", "v360", **params))
+
+    assert error.value.code == INVALID_PARAM
+
+
+@pytest.mark.parametrize("raw", [{"id": "lens", "params": {"k1": -0.3}}, FISHEYE])
+def test_lens_correction_keeps_the_frame_size_so_crop_and_osd_keep_their_coordinates(raw: dict) -> None:
+    steps = classic(raw, {"id": "crop", "params": {"w": 32, "h": 24, "x": 4, "y": 2}})
+
+    assert output_dims_after(steps, 64, 48, Fraction(2)) == FrameGeometry(32, 24, Fraction(2))
+    assert osd_boxes_after(steps, [(6, 4, 10, 4)], FrameGeometry(64, 48)) == ((2, 2, 10, 4),)
+
+
+def test_the_lens_graph_bends_the_picture_but_restores_the_osd_unbent_from_the_original() -> None:
+    steps = classic(FISHEYE, {"id": "denoise"}, {"id": "osd_protect"})
+
+    graph = build_osd_graph(steps, [(6, 6, 10, 4)], FrameGeometry(64, 48))
+
+    main, osd = graph.split(";")[1:3]
+    assert main.startswith("[m]hqdn3d=")
+    assert f"v360={FISHEYE_OPTIONS}:w=64:h=48:interp=near" in main
+    assert "v360" not in osd and "lenscorrection" not in osd
+
+
+def lens_cases() -> list[dict]:
+    presets = [
+        {"id": "lens", "params": {"filter": spec.name, **preset.params}}
+        for step in CCTV_CHAIN
+        if step.id == "lens"
+        for spec in step.filters
+        for preset in spec.presets
+    ]
+    return [{"id": "lens"}, {"id": "lens", "params": {"k1": 0.4, "k2": 0.2}}, *presets]
+
+
+def lens_frames(clip: Path, raw: dict, *thread_args: str) -> np.ndarray:
+    steps = bind_frame_sizes(classic(raw), FrameGeometry(*CLIP_SIZE))
+    result = run_ffmpeg(*thread_args, "-i", str(clip), *vf_args(steps), "-f", "rawvideo", "-pix_fmt", "gray", "-")
+    return gray_frames(result, FrameGeometry(*CLIP_SIZE))
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize("raw", lens_cases(), ids=lambda raw: json.dumps(raw.get("params", {}), sort_keys=True))
+def test_lens_correction_in_the_real_binary_keeps_size_and_count_and_creates_no_new_values(
+    raw: dict, tmp_path: Path
+) -> None:
+    clip = make_clip(tmp_path)
+    original = lens_frames(clip, {"id": "gray"})
+
+    corrected = lens_frames(clip, raw)
+
+    assert corrected.shape == original.shape == (CLIP_FRAMES, CLIP_SIZE[1], CLIP_SIZE[0])
+    for before, after in zip(original, corrected):
+        assert set(np.unique(after)) <= set(np.unique(before)) | {0, 16}
+
+
+@needs_ffmpeg
+def test_lens_correction_without_bending_leaves_every_pixel_where_it_was(tmp_path: Path) -> None:
+    clip = make_clip(tmp_path)
+
+    assert np.array_equal(lens_frames(clip, {"id": "lens"}), lens_frames(clip, {"id": "gray"}))
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize("raw", [{"id": "lens", "params": {"k1": -0.22, "k2": -0.02}}, FISHEYE])
+def test_lens_correction_gives_the_same_frames_with_one_thread_or_many(raw: dict, tmp_path: Path) -> None:
+    clip = make_clip(tmp_path)
+
+    single = lens_frames(clip, raw, "-threads", "1", "-filter_threads", "1")
+    many = lens_frames(clip, raw, "-threads", "8", "-filter_threads", "8")
+
+    assert np.array_equal(single, many)

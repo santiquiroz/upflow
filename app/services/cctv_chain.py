@@ -78,16 +78,27 @@ ParamSpec = IntParam | FloatParam | EnumParam
 
 
 @dataclass(frozen=True, slots=True)
+class FilterPreset:
+    name: str
+    label: str
+    params: Mapping[str, EnumValue | float]
+
+
+@dataclass(frozen=True, slots=True)
 class FilterSpec:
     name: str
     description: str
     params: tuple[ParamSpec, ...] = ()
     ffmpeg_filters: tuple[str, ...] = ()
     doc_url: str | None = None
+    presets: tuple[FilterPreset, ...] = ()
 
     @property
     def description_key(self) -> str:
         return f"cctv.filter.{self.name}.description"
+
+    def preset_label_key(self, preset: FilterPreset) -> str:
+        return f"cctv.filter.{self.name}.preset.{preset.name}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,8 +142,18 @@ def ffmpeg_doc(anchor: str) -> str:
     return f"{FFMPEG_FILTERS_DOC}#{anchor}"
 
 
-def _ffmpeg_filter(name: str, description: str, *params: ParamSpec, anchor: str | None = None) -> FilterSpec:
-    return FilterSpec(name, description, params, (name,), ffmpeg_doc(anchor or name))
+def _ffmpeg_filter(
+    name: str,
+    description: str,
+    *params: ParamSpec,
+    anchor: str | None = None,
+    presets: tuple[FilterPreset, ...] = (),
+) -> FilterSpec:
+    return FilterSpec(name, description, params, (name,), ffmpeg_doc(anchor or name), presets)
+
+
+def _preset(name: str, label: str, **params: EnumValue | float) -> FilterPreset:
+    return FilterPreset(name, label, MappingProxyType(params))
 
 
 CLASSIC_AND_AI: frozenset[Lane] = frozenset(LANES)
@@ -141,8 +162,28 @@ AI_ONLY: frozenset[Lane] = frozenset({"ai"})
 NO_LANE: frozenset[Lane] = frozenset()
 
 STABILIZE_GATE = "stabilize"
-# vidstab sigue abierto mientras `test_cctv_determinism.py -k vidstab` pase con el ffmpeg vendorizado.
-OPEN_GATES: frozenset[str] = frozenset({STABILIZE_GATE})
+LENS_GATE = "lens"
+# Abiertas mientras sus tests de determinismo (`-k vidstab`, `test_ffmpeg_filters.py -k lens`) pasen.
+OPEN_GATES: frozenset[str] = frozenset({STABILIZE_GATE, LENS_GATE})
+
+# Puntos de partida sin calibrar contra exports reales: se ajustan en la vista previa hasta que las rectas lo sean.
+_LENSCORRECTION_PRESETS: tuple[FilterPreset, ...] = (
+    _preset("mild", "Slight bend (6 mm lens or longer)", k1=-0.05, k2=0.0),
+    _preset("wide", "Wide angle (about 4 mm)", k1=-0.12, k2=-0.01),
+    _preset("very_wide", "Very wide angle (2.8 mm, common in dome cameras)", k1=-0.22, k2=-0.02),
+    _preset("ultra_wide", "Ultra wide (2.0 to 2.2 mm)", k1=-0.3, k2=-0.04),
+)
+
+
+def _fisheye_preset(name: str, label: str, lens_fov: float, view_fov: float) -> FilterPreset:
+    return _preset(name, label, ih_fov=lens_fov, iv_fov=lens_fov, d_fov=view_fov, yaw=0.0, pitch=0.0)
+
+
+_V360_PRESETS: tuple[FilterPreset, ...] = (
+    _fisheye_preset("fisheye_180", "180° fisheye, straight ahead", 180.0, 120.0),
+    _fisheye_preset("fisheye_190", "190° fisheye, straight ahead", 190.0, 120.0),
+    _fisheye_preset("fisheye_180_narrow", "180° fisheye, narrow view", 180.0, 80.0),
+)
 
 _DEINTERLACE_PARAMS: tuple[ParamSpec, ...] = (
     EnumParam("mode", ("send_frame", "send_field"), "send_frame", ai_only=("send_field",)),
@@ -339,19 +380,26 @@ CCTV_CHAIN: tuple[StepSpec, ...] = (
         (
             _ffmpeg_filter(
                 "lenscorrection",
-                "Straightened lines bent by the lens (lenscorrection).",
+                "Straightened lines bent by the lens by moving pixels toward or away from the center; "
+                "no new pixel values were computed (lenscorrection).",
                 FloatParam("k1", -1.0, 1.0, 0.0),
                 FloatParam("k2", -1.0, 1.0, 0.0),
+                presets=_LENSCORRECTION_PRESETS,
             ),
             _ffmpeg_filter(
                 "v360",
-                "Flattened a fisheye image into a regular view (v360).",
+                "Flattened a fisheye image into a regular view of the same size by moving pixels; "
+                "no new pixel values were computed (v360).",
                 FloatParam("ih_fov", 1.0, 360.0, 180.0),
                 FloatParam("iv_fov", 1.0, 360.0, 180.0),
+                FloatParam("d_fov", 10.0, 170.0, 120.0),
+                FloatParam("yaw", -180.0, 180.0, 0.0),
+                FloatParam("pitch", -90.0, 90.0, 0.0),
+                presets=_V360_PRESETS,
             ),
         ),
-        NO_LANE,
-        deferred_to="P4-LENS",
+        CLASSIC_ONLY,
+        gate=LENS_GATE,
     ),
     StepSpec(
         "crop",
@@ -557,6 +605,11 @@ STABILIZED = Limitation(
     "Stabilization moved and resampled every frame: positions and pixel values differ from the original, "
     "and edges the motion uncovered are black.",
 )
+LENS_CORRECTED = Limitation(
+    "cctv.limitation.lensCorrected",
+    "Lens correction moved pixels to straighten lines: sizes and positions differ from the original, "
+    "and part of the recorded view can be cut off or turn black.",
+)
 
 
 def step_spec(step_id: str) -> StepSpec:
@@ -748,6 +801,7 @@ _LIMITATION_RULES: tuple[tuple[Callable[[ResolvedStep], bool], Limitation], ...]
     (_computes_new_pixels, NEW_PIXEL_VALUES),
     (lambda step: step.id == "sharpen", SHARPEN_HALOS),
     (lambda step: step.id == "stabilize", STABILIZED),
+    (lambda step: step.id == "lens", LENS_CORRECTED),
 )
 
 
@@ -774,6 +828,15 @@ def _param_schema(spec: ParamSpec, lane: Lane) -> dict[str, Any]:
     return schema
 
 
+def _preset_schema(spec: FilterSpec, preset: FilterPreset) -> dict[str, Any]:
+    return {
+        "name": preset.name,
+        "labelKey": spec.preset_label_key(preset),
+        "label": preset.label,
+        "params": dict(preset.params),
+    }
+
+
 def _filter_schema(spec: FilterSpec, lane: Lane) -> dict[str, Any]:
     return {
         "name": spec.name,
@@ -782,6 +845,7 @@ def _filter_schema(spec: FilterSpec, lane: Lane) -> dict[str, Any]:
         "docUrl": spec.doc_url,
         "ffmpegFilters": list(spec.ffmpeg_filters),
         "params": [_param_schema(param, lane) for param in spec.params],
+        "presets": [_preset_schema(spec, preset) for preset in spec.presets],
     }
 
 

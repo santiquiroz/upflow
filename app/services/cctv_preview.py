@@ -23,7 +23,7 @@ from app.services.cctv_job_runner import frame_geometry
 from app.services.cctv_job_validation import check_filters_available, check_geometry
 from app.services.cctv_session import SESSION_NOT_FOUND, SESSION_NOT_ANALYZED, session_dir, working_copy
 from app.services.ffmpeg_capabilities import FfmpegCapabilities
-from app.services.ffmpeg_filters import FrameGeometry, compose_vf
+from app.services.ffmpeg_filters import FrameGeometry, bind_frame_sizes, compose_vf
 from app.services.osd_check import Box, OsdBoxCheck, run_osd_check
 
 MAX_PREVIEW_WINDOW = 12
@@ -201,7 +201,7 @@ async def render_frame(media: MediaTools, source: PreviewSource, frame: int) -> 
 async def render_processed_frame(
     media: MediaTools, source: PreviewSource, window: FrameWindow, steps: Sequence[ResolvedStep]
 ) -> bytes:
-    vf = window_filter(source.frames, window, compose_vf(steps))
+    vf = window_filter(source.frames, window, compose_vf(bind_frame_sizes(steps, source.geometry)))
     seek = seek_seconds(source.frames, window.first)
     return await render_png(media, build_preview_command(media.ffmpeg, source.work, seek, vf))
 
