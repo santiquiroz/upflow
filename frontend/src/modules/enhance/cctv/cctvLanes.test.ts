@@ -94,6 +94,15 @@ describe("AI lane on the CPU", () => {
   it("stays closed while the capabilities load", () => {
     expect(aiLaneState(undefined, ANALYSIS).available).toBe(false);
   });
+
+  it("says the lane is off in this release instead of blaming the GPU", () => {
+    const off = { ...CAPS, cctvAiReasonKey: "capability.reason.pendingModelRelease" };
+
+    expect(aiLaneState(off, ANALYSIS)).toEqual({
+      available: false,
+      reason: { key: "capability.reason.pendingModelRelease", params: {} },
+    });
+  });
 });
 
 describe("startBlocker", () => {

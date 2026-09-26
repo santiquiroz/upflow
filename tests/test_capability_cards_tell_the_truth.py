@@ -19,7 +19,7 @@ import pytest
 
 from app.api.routes import capability_tree
 from app.config import Settings
-from app.services.capabilities import CATALOG
+from app.services.capabilities import CATALOG, PENDING_MODEL_RELEASE_REASON
 from app.services.model_registry import ModelRegistry
 
 
@@ -147,6 +147,9 @@ def test_no_quedan_claves_de_motivo_sin_capacidad_que_las_use() -> None:
     from pathlib import Path as _Path
 
     usadas = {c.unavailable_reason_key for c in CATALOG if c.unavailable_reason_key}
+    # Las capacidades con release_flag la toman al resolverse apagadas, no del CATALOG.
+    if any(c.release_flag for c in CATALOG):
+        usadas.add(PENDING_MODEL_RELEASE_REASON)
     for idioma in ("es", "en"):
         texto = _Path(f"frontend/src/i18n/{idioma}.ts").read_text(encoding="utf-8")
         declaradas = {

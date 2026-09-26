@@ -166,6 +166,14 @@ class Capability:
     strategies: tuple[Strategy, ...]
     requirements: tuple[Requirement, ...] = ()
     unavailable_reason_key: str | None = None
+    # Setting booleano que la habilita en este release. Apagado, la capacidad va
+    # al mapa de ruta sin packs faltantes: no se ofrece bajar lo que no se publico.
+    release_flag: str | None = None
+
+
+PENDING_MODEL_RELEASE_REASON = "capability.reason.pendingModelRelease"
+RESTORE_PHOTO_FLAG = "restore_photo_enabled"
+CCTV_AI_FLAG = "cctv_ai_enabled"
 
 
 @dataclass(frozen=True, slots=True)
@@ -344,6 +352,7 @@ _RESTORE_CAPABILITIES: tuple[Capability, ...] = (
     Capability(
         id="image.restore",
         domain="image",
+        release_flag=RESTORE_PHOTO_FLAG,
         label_key="capability.image.restore",
         # Los pasos clasicos (tramado, tono) son numpy en proceso: nada que bajar.
         provisioning="builtin",
@@ -353,6 +362,7 @@ _RESTORE_CAPABILITIES: tuple[Capability, ...] = (
     Capability(
         id="image.restoreModels",
         domain="image",
+        release_flag=RESTORE_PHOTO_FLAG,
         label_key="capability.image.restoreModels",
         provisioning="vendored_pack",
         job_kind="image",
@@ -367,6 +377,7 @@ _RESTORE_CAPABILITIES: tuple[Capability, ...] = (
     Capability(
         id="image.restoreFaces",
         domain="image",
+        release_flag=RESTORE_PHOTO_FLAG,
         label_key="capability.image.restoreFaces",
         provisioning="vendored_pack",
         job_kind="image",
@@ -376,6 +387,7 @@ _RESTORE_CAPABILITIES: tuple[Capability, ...] = (
     Capability(
         id="image.colorize",
         domain="image",
+        release_flag=RESTORE_PHOTO_FLAG,
         label_key="capability.image.colorize",
         provisioning="vendored_pack",
         job_kind="image",
@@ -442,6 +454,7 @@ CATALOG: tuple[Capability, ...] = (
     Capability(
         id="video.cctvAi",
         domain="video",
+        release_flag=CCTV_AI_FLAG,
         label_key="capability.video.cctvAi",
         provisioning="vendored_pack",
         job_kind="video",
@@ -807,6 +820,11 @@ def _resolve_one(
     installed_kinds: frozenset[ModelKind],
     probes: HostProbes = DEFAULT_HOST_PROBES,
 ) -> ResolvedCapability:
+    if not released(capability, settings):
+        return _as_resolved(
+            capability, "not_implemented", unavailable_reason_key=PENDING_MODEL_RELEASE_REASON
+        )
+
     if capability.provisioning == "builtin":
         # Anda sin bajar nada: es codigo en proceso, no un pack en disco.
         return _as_resolved(capability, "available")
@@ -827,6 +845,10 @@ def _resolve_one(
         )
 
     return _resolve_host(capability, settings, probes)
+
+
+def released(capability: Capability, settings: Settings) -> bool:
+    return capability.release_flag is None or bool(getattr(settings, capability.release_flag))
 
 
 def _resolve_host(
@@ -890,6 +912,7 @@ def _as_resolved(
     missing_packs: tuple[str, ...] = (),
     setup_reason_key: str | None = None,
     activatable_settings: tuple[str, ...] = (),
+    unavailable_reason_key: str | None = None,
 ) -> ResolvedCapability:
     return ResolvedCapability(
         id=capability.id,
@@ -900,7 +923,7 @@ def _as_resolved(
         job_kind=capability.job_kind,
         strategies=capability.strategies,
         missing_packs=missing_packs,
-        unavailable_reason_key=capability.unavailable_reason_key,
+        unavailable_reason_key=unavailable_reason_key or capability.unavailable_reason_key,
         setup_reason_key=setup_reason_key,
         activatable_settings=activatable_settings,
     )

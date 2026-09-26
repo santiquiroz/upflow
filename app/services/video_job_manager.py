@@ -258,6 +258,7 @@ class VideoJobManager(QueuedJobManager[VideoUpscaleJob]):
             max_roi_frames=self.settings.cctv_roi_max_frames,
             gpu_devices=await self._healthy_gpus(task),
             stream_upscaler_ready=lambda model_id, scale: self.upscaler.cctv_upscale_ready(model_id, scale),
+            ai_lane_enabled=self.settings.cctv_ai_enabled,
         )
 
     async def _healthy_gpus(self, task: str) -> tuple[str, ...] | None:

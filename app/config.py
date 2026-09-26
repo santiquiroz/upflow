@@ -478,9 +478,12 @@ class Settings(BaseSettings):
         default=8.0, alias="ROFORMER_SEPARATION_MARGIN_SECONDS"
     )
 
-    # Restauracion de fotos y modo CCTV (spec §5.8). Sin flags ENABLE_*: bajar el
-    # pack es poder usarlo, igual que karaoke. El catalogo de modelos vive en
+    # Restauracion de fotos y modo CCTV (spec §5.8). El catalogo de modelos vive en
     # app/services/restore_models.py.
+    # Apagados en este release: los packs de modelos no estan publicados (D1a/b/c
+    # y D2 pendientes) y sin ellos la pestaña y el carril IA prometen algo que no hay.
+    restore_photo_enabled: bool = Field(default=False, alias="RESTORE_PHOTO_ENABLED")
+    cctv_ai_enabled: bool = Field(default=False, alias="CCTV_AI_ENABLED")
     restore_model_dir: str = Field(default="vendor/restore", alias="RESTORE_MODEL_DIR")
     # Presupuesto TDR por llamada; la calibracion de tiles apunta a la mitad.
     restore_call_budget_ms: int = Field(default=1200, alias="RESTORE_CALL_BUDGET_MS")

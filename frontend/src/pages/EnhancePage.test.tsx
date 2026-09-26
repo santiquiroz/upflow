@@ -1,8 +1,19 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as capabilitiesService from "../services/capabilities";
 import { EnhancePage, type EnhanceMedium } from "./EnhancePage";
+import { treeWithRestore } from "./restoreReleaseTestUtils";
+
+vi.mock("../services/capabilities", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../services/capabilities")>()),
+  fetchCapabilityTree: vi.fn(),
+}));
+
+function releaseRestore(released: boolean): void {
+  vi.mocked(capabilitiesService.fetchCapabilityTree).mockResolvedValue(treeWithRestore(released));
+}
 
 function renderPage(initialMedium: EnhanceMedium = "image") {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -13,6 +24,10 @@ function renderPage(initialMedium: EnhanceMedium = "image") {
 }
 
 describe("EnhancePage", () => {
+  beforeEach(() => {
+    releaseRestore(true);
+  });
+
   it("shows the image panel by default", () => {
     renderPage();
 
@@ -65,11 +80,11 @@ describe("EnhancePage", () => {
     expect(screen.getByRole("button", { name: /upscale video/i })).toBeInTheDocument();
   });
 
-  it("wraps from the last tab back to the first on ArrowRight", () => {
+  it("wraps from the last tab back to the first on ArrowRight", async () => {
     renderPage();
 
+    const restoreTab = await screen.findByRole("tab", { name: "Restore photo" });
     const imageTab = screen.getByRole("tab", { name: /image/i });
-    const restoreTab = screen.getByRole("tab", { name: "Restore photo" });
     restoreTab.focus();
     fireEvent.click(restoreTab);
 
@@ -79,11 +94,11 @@ describe("EnhancePage", () => {
     expect(imageTab).toHaveFocus();
   });
 
-  it("wraps from the first tab back to the last on ArrowLeft", () => {
+  it("wraps from the first tab back to the last on ArrowLeft", async () => {
     renderPage();
 
+    const restoreTab = await screen.findByRole("tab", { name: "Restore photo" });
     const imageTab = screen.getByRole("tab", { name: /image/i });
-    const restoreTab = screen.getByRole("tab", { name: "Restore photo" });
     imageTab.focus();
 
     fireEvent.keyDown(imageTab, { key: "ArrowLeft" });
@@ -92,24 +107,55 @@ describe("EnhancePage", () => {
     expect(restoreTab).toHaveFocus();
   });
 
-  it("puts Restore photo third, after Image and Video", () => {
+  it("puts Restore photo third, after Image and Video", async () => {
     renderPage();
 
+    await screen.findByRole("tab", { name: "Restore photo" });
     expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Image", "Video", "Restore photo"]);
   });
 
-  it("switches to the photo restoration panel when Restore photo is picked", () => {
+  it("switches to the photo restoration panel when Restore photo is picked", async () => {
     renderPage();
 
-    fireEvent.click(screen.getByRole("tab", { name: "Restore photo" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "Restore photo" }));
 
     expect(screen.getByText("Drop a photo here or click to browse")).toBeInTheDocument();
     expect(screen.getByText("Repair scratches, fading and noise in an old photo.")).toBeInTheDocument();
   });
 
-  it("opens straight on the restore tab when asked to", () => {
+  it("opens straight on the restore tab when asked to", async () => {
     renderPage("restore");
 
-    expect(screen.getByRole("tab", { name: "Restore photo" })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByRole("tab", { name: "Restore photo" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("hides Restore photo while its models are not published", async () => {
+    releaseRestore(false);
+    renderPage();
+
+    await waitFor(() => expect(capabilitiesService.fetchCapabilityTree).toHaveBeenCalled());
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Image", "Video"]);
+    expect(screen.queryByRole("tab", { name: "Restore photo" })).not.toBeInTheDocument();
+  });
+
+  it("falls back to the image panel when asked for the hidden restore tab", async () => {
+    releaseRestore(false);
+    renderPage("restore");
+
+    await waitFor(() => expect(capabilitiesService.fetchCapabilityTree).toHaveBeenCalled());
+    expect(screen.getByRole("tab", { name: "Image" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByText("Drop a photo here or click to browse")).not.toBeInTheDocument();
+  });
+
+  it("wraps between Image and Video only when restore is hidden", async () => {
+    releaseRestore(false);
+    renderPage();
+    await waitFor(() => expect(capabilitiesService.fetchCapabilityTree).toHaveBeenCalled());
+
+    const imageTab = screen.getByRole("tab", { name: /image/i });
+    imageTab.focus();
+    fireEvent.keyDown(imageTab, { key: "ArrowLeft" });
+
+    expect(screen.getByRole("tab", { name: /video/i })).toHaveAttribute("aria-selected", "true");
   });
 });

@@ -1,9 +1,16 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router-dom";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as capabilitiesService from "../services/capabilities";
 import { EnhanceRoute } from "./EnhanceRoute";
+import { treeWithRestore } from "./restoreReleaseTestUtils";
+
+vi.mock("../services/capabilities", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../services/capabilities")>()),
+  fetchCapabilityTree: vi.fn(),
+}));
 
 function renderAt(path: string) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -22,10 +29,23 @@ function selectedTab(): string | null {
 }
 
 describe("EnhanceRoute", () => {
-  it("opens the restore tab from /enhance/restore", () => {
+  beforeEach(() => {
+    vi.mocked(capabilitiesService.fetchCapabilityTree).mockResolvedValue(treeWithRestore(true));
+  });
+
+  it("opens the restore tab from /enhance/restore", async () => {
     renderAt("/enhance/restore");
 
+    await screen.findByRole("tab", { name: "Restore photo" });
     expect(selectedTab()).toBe("Restore photo");
+  });
+
+  it("opens the image tab from /enhance/restore while restore is not released", async () => {
+    vi.mocked(capabilitiesService.fetchCapabilityTree).mockResolvedValue(treeWithRestore(false));
+    renderAt("/enhance/restore");
+
+    await waitFor(() => expect(capabilitiesService.fetchCapabilityTree).toHaveBeenCalled());
+    expect(selectedTab()).toBe("Image");
   });
 
   it("opens the video tab from /enhance/video", () => {

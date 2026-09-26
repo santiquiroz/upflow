@@ -11,6 +11,8 @@ from app.services import restore_models
 from app.services.restore_models import RestoreArtifact, RestoreBundle
 
 RESTORE_DEFAULTS = {
+    "RESTORE_PHOTO_ENABLED": ("restore_photo_enabled", False),
+    "CCTV_AI_ENABLED": ("cctv_ai_enabled", False),
     "RESTORE_MODEL_DIR": ("restore_model_dir", "vendor/restore"),
     "RESTORE_CALL_BUDGET_MS": ("restore_call_budget_ms", 1200),
     "RESTORE_GPU_THROTTLE_SECONDS": ("restore_gpu_throttle_seconds", 0.0),

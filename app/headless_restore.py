@@ -35,6 +35,7 @@ from app.services.photo_restore_chain import steps_from_selection
 from app.services.photo_restore_job import UPSCALE_AI, restore_upscale_mode, step_uses_model
 from app.services.photo_restore_presets import options_without_analysis, photo_preset, resolve_preset
 from app.services.restore_outputs import discard_restore_outputs, restore_output_paths
+from app.services.release_gates import FeatureDisabledError, ensure_restore_enabled
 from app.services.restore_provenance import EXTENSIONS, write_sidecar
 from app.services.restore_session import PREVIEW_NAME, SessionAnalysis, SessionNotFound, session_dir
 
@@ -136,7 +137,15 @@ def plan_for(spec: RestoreSpec, origin: RestoreSource) -> RestorePlan:
     return plan_from_steps(spec) if spec.steps else plan_from_analysis(spec, origin.analysis)
 
 
+def require_restore_enabled(settings: Settings) -> None:
+    try:
+        ensure_restore_enabled(settings)
+    except FeatureDisabledError as exc:
+        raise UsageError(str(exc)) from exc
+
+
 async def analyze_photo(ctx: HeadlessContext, source: Path) -> dict[str, Any]:
+    require_restore_enabled(ctx.settings)
     analysis = await open_restore_session(ctx, existing_file(source))
     return analysis_payload(ctx, analysis)
 
@@ -271,6 +280,7 @@ async def restore_image(
     source: Path | None = None,
     token: str | None = None,
 ) -> dict[str, Any]:
+    require_restore_enabled(ctx.settings)
     output = Path(output).expanduser().resolve()
     fmt = restore_format_for(output, spec.output_format)
     options = validated_restore_options(spec.options)

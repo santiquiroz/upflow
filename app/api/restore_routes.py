@@ -58,6 +58,7 @@ from app.services.photo_geometry import Geometry
 from app.services.photo_restore_chain import HALFTONE_DENOISE_LIMIT, RESTORE_CHAIN
 from app.services.photo_restore_pipeline import FaceSelection
 from app.services.photo_restore_presets import PHOTO_PRESETS, PhotoFacts, resolve_preset
+from app.services.release_gates import FeatureDisabledError, ensure_restore_enabled
 from app.services.restore_models import PACK_PREFIX
 from app.services.restore_recompose import FaceChoice, RecomposeUnavailable
 from app.services.restore_recompose_job import (
@@ -77,7 +78,14 @@ from app.services.restore_session import (
 )
 from app.services.storage import StorageService
 
-router = APIRouter(prefix="/api/v1", tags=["restore"])
+def require_restore_enabled(settings: Settings = Depends(get_settings)) -> None:
+    try:
+        ensure_restore_enabled(settings)
+    except FeatureDisabledError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+router = APIRouter(prefix="/api/v1", tags=["restore"], dependencies=[Depends(require_restore_enabled)])
 
 logger = logging.getLogger(__name__)
 

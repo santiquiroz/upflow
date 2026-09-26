@@ -1193,6 +1193,9 @@ export const en = {
   "capability.reason.notBuiltYet":
     "Not built yet. It is not a missing model or package: the feature does not " +
     "exist in the app, so there is nothing to download to turn it on.",
+  "capability.reason.pendingModelRelease":
+    "Turned off in this release. The feature is built, but the AI models it needs " +
+    "are not published yet, so there is nothing to download to turn it on.",
   "capability.reason.noOnnxPath":
     "No confirmed path to a runnable ONNX model yet. The model existing is not " +
     "enough: it also has to be executable by ONNX Runtime, and this hit the same " +

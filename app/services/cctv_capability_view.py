@@ -26,7 +26,9 @@ class CctvCapabilityView:
 
 
 def _reason_key(resolved: ResolvedCapability) -> str | None:
-    return None if resolved.status == "available" else resolved.setup_reason_key
+    if resolved.status == "available":
+        return None
+    return resolved.setup_reason_key or resolved.unavailable_reason_key
 
 
 def build_unavailable_steps(settings: Settings, load: CapabilitiesLoader) -> tuple[str, ...]:

@@ -3,6 +3,7 @@ import { useTranslation } from "../i18n/LocaleProvider";
 import { ImagePanel } from "../modules/enhance/ImagePanel";
 import { VideoPanel } from "../modules/enhance/VideoPanel";
 import { PhotoRestorePanel } from "../modules/enhance/restore/PhotoRestorePanel";
+import { useRestoreReleased } from "./restoreRelease";
 
 export type EnhanceMedium = "image" | "video" | "restore";
 
@@ -20,6 +21,10 @@ const MEDIUM_TABS: readonly MediumTab[] = [
 
 export function isEnhanceMedium(value: string | undefined): value is EnhanceMedium {
   return MEDIUM_TABS.some((tab) => tab.value === value);
+}
+
+export function visibleTabs(restoreReleased: boolean): readonly MediumTab[] {
+  return restoreReleased ? MEDIUM_TABS : MEDIUM_TABS.filter((tab) => tab.value !== "restore");
 }
 
 function tabId(value: EnhanceMedium): string {
@@ -52,12 +57,12 @@ function MediumPanel({ medium }: { medium: EnhanceMedium }) {
 // WAI-ARIA APG tabs pattern: Right/Left roving focus wraps around the tab
 // list and activates immediately (automatic selection model), matching the
 // click behavior these tabs already have.
-function resolveNextTabIndex(currentIndex: number, key: string): number | null {
+function resolveNextTabIndex(currentIndex: number, key: string, tabCount: number): number | null {
   if (key === "ArrowRight") {
-    return (currentIndex + 1) % MEDIUM_TABS.length;
+    return (currentIndex + 1) % tabCount;
   }
   if (key === "ArrowLeft") {
-    return (currentIndex - 1 + MEDIUM_TABS.length) % MEDIUM_TABS.length;
+    return (currentIndex - 1 + tabCount) % tabCount;
   }
   return null;
 }
@@ -74,15 +79,16 @@ export function EnhancePage({
   const { t } = useTranslation();
   const [medium, setMedium] = useState<EnhanceMedium>(initialMedium);
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  const activeTab = MEDIUM_TABS.find((tab) => tab.value === medium) ?? MEDIUM_TABS[0];
+  const tabs = visibleTabs(useRestoreReleased());
+  const activeTab = tabs.find((tab) => tab.value === medium) ?? tabs[0];
 
   function handleTabKeyDown(event: KeyboardEvent<HTMLButtonElement>, currentIndex: number): void {
-    const nextIndex = resolveNextTabIndex(currentIndex, event.key);
+    const nextIndex = resolveNextTabIndex(currentIndex, event.key, tabs.length);
     if (nextIndex === null) {
       return;
     }
     event.preventDefault();
-    const nextTab = MEDIUM_TABS[nextIndex];
+    const nextTab = tabs[nextIndex];
     setMedium(nextTab.value);
     tabRefs.current[nextIndex]?.focus();
   }
@@ -94,8 +100,8 @@ export function EnhancePage({
         <p className="mt-1 text-sm text-text-dim">{t(activeTab.subtitleKey)}</p>
       </div>
       <div role="tablist" aria-label="Enhance medium" className="flex w-fit gap-2">
-        {MEDIUM_TABS.map((tab, index) => {
-          const isActive = medium === tab.value;
+        {tabs.map((tab, index) => {
+          const isActive = activeTab.value === tab.value;
           return (
             <button
               key={tab.value}
@@ -117,8 +123,8 @@ export function EnhancePage({
           );
         })}
       </div>
-      <div id={panelId(medium)} role="tabpanel" aria-labelledby={tabId(medium)} tabIndex={0}>
-        <MediumPanel medium={medium} />
+      <div id={panelId(activeTab.value)} role="tabpanel" aria-labelledby={tabId(activeTab.value)} tabIndex={0}>
+        <MediumPanel medium={activeTab.value} />
       </div>
     </div>
   );

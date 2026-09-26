@@ -53,6 +53,7 @@ from app.services.progress import (
     enter_image_stage,
     running_image_stage,
 )
+from app.services.release_gates import ensure_restore_enabled
 from app.services.restore_provenance import UpscaleInfo
 from app.services.scale_fit import effective_scale, fit_output_to_scale, native_scale_for_engine_model
 from app.services.tile_params import validate_tile_params
@@ -218,6 +219,7 @@ class JobManager(QueuedJobManager[UpscaleJob]):
             if options or session is not None:
                 raise ValueError("Restore options need at least one restore step")
             return None
+        ensure_restore_enabled(self.settings)
         if self.restore_runner is None:
             raise ValueError("Photo restoration is not configured on this server")
         return validate_restore_selection(

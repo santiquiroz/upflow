@@ -42,6 +42,11 @@ def isolated_runtime_dir(tmp_path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("KARAOKE_MODEL_DIR", str(tmp_path / "karaoke-no-instalado"))
     # Y con los bundles de restauracion de fotos (vendor/restore).
     monkeypatch.setenv("RESTORE_MODEL_DIR", str(tmp_path / "restore-no-instalado"))
+    # El release las trae apagadas (packs sin publicar), pero la suite prueba las
+    # funciones: los defaults apagados los fijan test_release_gates.py y
+    # test_restore_config.py con delenv.
+    monkeypatch.setenv("RESTORE_PHOTO_ENABLED", "true")
+    monkeypatch.setenv("CCTV_AI_ENABLED", "true")
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()

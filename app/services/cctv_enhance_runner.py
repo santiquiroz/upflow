@@ -421,8 +421,8 @@ def enhance_runner_entry(
     onnx_video_engine: OnnxVideoUpscaler | None,
     tools: EnhanceVideoTools,
 ) -> dict[str, CctvEnhanceRunner]:
-    # Sin la etapa compuesta de restauracion el carril IA no esta disponible: no hay runner.
-    if frame_restorer is None:
+    # Sin la etapa compuesta de restauracion, o con el carril apagado en este release, no hay runner.
+    if frame_restorer is None or not settings.cctv_ai_enabled:
         return {}
     return {CCTV_ENHANCE_TASK: CctvEnhanceRunner(settings, frame_restorer, onnx_video_engine, tools)}
 

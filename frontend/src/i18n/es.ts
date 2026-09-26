@@ -1189,6 +1189,10 @@ export const es = {
     "Todavía no está construida. No es que falte un modelo ni un paquete: la " +
     "función no existe en la app, así que no hay nada que descargar para " +
     "activarla.",
+  "capability.reason.pendingModelRelease":
+    "Apagada en esta versión. La función está construida, pero los modelos de IA " +
+    "que necesita todavía no están publicados, así que no hay nada que descargar " +
+    "para activarla.",
   "capability.reason.noOnnxPath":
     "Todavía no hay un camino confirmado a un ONNX ejecutable. Que el modelo " +
     "exista no alcanza: también tiene que poder correrlo ONNX Runtime, y acá se " +

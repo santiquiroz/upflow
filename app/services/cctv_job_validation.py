@@ -30,12 +30,14 @@ from app.services.ffmpeg_filters import FrameGeometry, output_dims_after
 from app.services.frame_export import StillFrameError, checked_still_frames, TOO_MANY_STILL_FRAMES
 from app.services.missing_pack import missing_pack_message
 from app.services.osd_check import OsdSelection, validate_osd_selection
+from app.services.release_gates import CCTV_AI_DISABLED_MESSAGE
 
 UNKNOWN_TASK = "cctv.error.unknownTask"
 TASK_UNAVAILABLE = "cctv.error.taskUnavailable"
 MODE_UNAVAILABLE = "cctv.error.modeUnavailable"
 AI_CPU_BLOCKED = "cctv.ai.cpuBlocked"
 AI_PACK_MISSING = "cctv.error.aiPackMissing"
+AI_LANE_DISABLED = "cctv.error.aiLaneDisabled"
 AI_UPSCALE_MODEL = "cctv.error.aiUpscaleModel"
 TRIM_OUT_OF_RANGE = "cctv.error.trimOutOfRange"
 INVALID_ACQUISITION = "cctv.error.invalidCaseDetails"
@@ -91,6 +93,7 @@ class CctvJobFacts:
     # GPU sanas que ve DevicesService; None = no hay servicio de devices para enumerarlas.
     gpu_devices: tuple[str, ...] | None = None
     stream_upscaler_ready: Callable[[str, int], bool] = field(default=no_stream_upscaler)
+    ai_lane_enabled: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,6 +127,12 @@ def device_for_task(task: str, device: str | None) -> str | None:
 def check_preset(preset: str | None) -> None:
     if preset is not None:
         preset_spec(preset)
+
+
+def check_lane_released(lane: Lane, ai_lane_enabled: bool) -> None:
+    # Antes que los chequeos del carril: apagado en el release, no debe terminar mandando a bajar un pack.
+    if lane == "ai" and not ai_lane_enabled:
+        raise CctvChainError(AI_LANE_DISABLED, CCTV_AI_DISABLED_MESSAGE)
 
 
 def check_task_available(task: str, available: bool) -> None:
@@ -389,6 +398,7 @@ def plan_cctv_job(
     options: CctvOptions, facts: CctvJobFacts, device: str | None, upscale: AiUpscaleChoice = NO_UPSCALE
 ) -> CctvJobPlan:
     lane = lane_for_task(options.task)
+    check_lane_released(lane, facts.ai_lane_enabled)
     check_preset(options.preset)
     steps = resolve_steps(options, lane)
     resolved_device = ai_lane_device(lane, steps, device_for_task(options.task, device), facts)
