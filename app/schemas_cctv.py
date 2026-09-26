@@ -13,9 +13,19 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
 from pydantic.alias_generators import to_camel
 
-from app.models import CctvOptions, CctvStep, JobStatus, RoiFusionRequest, VideoUpscaleJob
+from app.models import (
+    CctvOptions,
+    CctvStep,
+    JobStatus,
+    RedactionKeyframe,
+    RedactionRequest,
+    RedactionTrack,
+    RoiFusionRequest,
+    VideoUpscaleJob,
+)
 from app.services.cctv_artifacts import listed_artifacts
 from app.services.cctv_job_validation import AiUpscaleChoice
+from app.services.redaction import MAX_KEYFRAMES, MAX_TRACKS
 
 MAX_TEXT = 2000
 MAX_STEPS = 32
@@ -54,6 +64,22 @@ class CctvRoiIn(CamelRequest):
     method: str = Field(default="median", max_length=32)
 
 
+class RedactionKeyframeIn(CamelRequest):
+    frame: StrictInt
+    box: BoxIn
+
+
+class RedactionTrackIn(CamelRequest):
+    first_frame: StrictInt
+    last_frame: StrictInt
+    keyframes: list[RedactionKeyframeIn] = Field(min_length=1, max_length=MAX_KEYFRAMES)
+
+
+class CctvRedactionIn(CamelRequest):
+    style: str = Field(default="pixelate", max_length=32)
+    tracks: list[RedactionTrackIn] = Field(max_length=MAX_TRACKS)
+
+
 class CctvJobRequest(CamelRequest):
     token: str = Field(max_length=64)
     task: str = Field(max_length=32)
@@ -65,6 +91,7 @@ class CctvJobRequest(CamelRequest):
     trim: tuple[StrictInt, StrictInt] | None = None
     still_frames: list[StrictInt] = Field(default_factory=list, max_length=MAX_STILLS)
     roi: CctvRoiIn | None = None
+    redaction: CctvRedactionIn | None = None
     acquisition: dict[str, AcquisitionValue] = Field(default_factory=dict)
     case_label: str | None = Field(default=None, max_length=MAX_TEXT)
     operator_name: str | None = Field(default=None, max_length=MAX_TEXT)
@@ -177,6 +204,8 @@ class CctvSummary(CamelModel):
     verify_url: str | None
     # Solo en la foto multi-cuadro: muestras efectivas, densidad y avisos (metadata.cctv.roi).
     roi: dict[str, Any] | None = None
+    # Solo en la copia anonimizada: estilo y cantidad de cajas (metadata.cctv.redaction).
+    redaction: dict[str, Any] | None = None
 
 
 # --- Conversion a los modelos del dominio ---
@@ -209,6 +238,17 @@ def roi_request(roi: CctvRoiIn | None) -> RoiFusionRequest | None:
     )
 
 
+def redaction_track(track: RedactionTrackIn) -> RedactionTrack:
+    keyframes = tuple(RedactionKeyframe(key.frame, tuple(key.box)) for key in track.keyframes)
+    return RedactionTrack(track.first_frame, track.last_frame, keyframes)
+
+
+def redaction_request(redaction: CctvRedactionIn | None) -> RedactionRequest | None:
+    if redaction is None:
+        return None
+    return RedactionRequest(tuple(redaction_track(track) for track in redaction.tracks), redaction.style)
+
+
 def cctv_options(request: CctvJobRequest) -> CctvOptions:
     return CctvOptions(
         task=request.task,
@@ -221,6 +261,7 @@ def cctv_options(request: CctvJobRequest) -> CctvOptions:
         trim=None if request.trim is None else tuple(request.trim),
         still_frames=tuple(request.still_frames),
         roi=roi_request(request.roi),
+        redaction=redaction_request(request.redaction),
         acquisition=MappingProxyType(dict(request.acquisition)),
         case_label=request.case_label,
         operator_name=request.operator_name,
@@ -243,9 +284,13 @@ def cctv_metadata(job: VideoUpscaleJob) -> dict[str, Any]:
     return meta if isinstance(meta, dict) else {}
 
 
+def dict_fact(meta: dict[str, Any], key: str) -> dict[str, Any] | None:
+    value = meta.get(key)
+    return value if isinstance(value, dict) else None
+
+
 def roi_facts(meta: dict[str, Any]) -> dict[str, Any] | None:
-    roi = meta.get("roi")
-    return roi if isinstance(roi, dict) else None
+    return dict_fact(meta, "roi")
 
 
 def cctv_summary(job: VideoUpscaleJob) -> CctvSummary | None:
@@ -263,4 +308,5 @@ def cctv_summary(job: VideoUpscaleJob) -> CctvSummary | None:
         artifacts=[CctvArtifactLink(name=name, url=artifact_url(job.id, name)) for name in listed_artifacts(job)],
         verify_url=verify_url(job),
         roi=roi_facts(meta),
+        redaction=dict_fact(meta, "redaction"),
     )

@@ -1,4 +1,4 @@
-"""Rotulo obligatorio del carril IA de CCTV (spec §4.7 puntos 8 y 10, §4.12).
+"""Rotulo obligatorio del carril IA de CCTV (spec §4.7 puntos 8 y 10, §4.12) y de la copia anonimizada.
 
 Banda bilingue fuera del area de imagen (`pad` + `overlay` de un PNG hecho con
 Pillow y la fuente OFL bundleada) y una marca chica dentro de la imagen, para
@@ -57,6 +57,22 @@ BAND_PADDING_RATIO = 0.4
 MARK_PADDING_RATIO = 0.3
 
 
+@dataclass(frozen=True, slots=True)
+class LabelTexts:
+    band_en: str
+    band_es: str
+    mark_prefix: str
+    comment: str
+
+
+AI_LABEL = LabelTexts(
+    BAND_EN,
+    BAND_ES,
+    MARK_PREFIX,
+    "AI-enhanced visualization by Upflow {version} (job {job_id}); not original footage",
+)
+
+
 class FontIntegrityError(RuntimeError):
     def __init__(self, path: Path, detail: str) -> None:
         super().__init__(f"The bundled font {path.name} can't be used: {detail}")
@@ -87,24 +103,24 @@ def load_font(path: Path, size: int) -> ImageFont.FreeTypeFont:
 # --- Textos del rotulo ---
 
 
-def band_lines(version: str, job_id: str) -> tuple[str, str, str]:
-    return (BAND_EN, BAND_ES, f"Upflow {version}{SEPARATOR}{job_id}")
+def band_lines(version: str, job_id: str, texts: LabelTexts = AI_LABEL) -> tuple[str, str, str]:
+    return (texts.band_en, texts.band_es, f"Upflow {version}{SEPARATOR}{job_id}")
 
 
-def band_text(version: str, job_id: str) -> str:
-    return f"{BAND_EN}{LANGUAGE_SEPARATOR}{BAND_ES}{SEPARATOR}Upflow {version}{SEPARATOR}{job_id}"
+def band_text(version: str, job_id: str, texts: LabelTexts = AI_LABEL) -> str:
+    return f"{texts.band_en}{LANGUAGE_SEPARATOR}{texts.band_es}{SEPARATOR}Upflow {version}{SEPARATOR}{job_id}"
 
 
 def short_job_id(job_id: str) -> str:
     return job_id[:SHORT_JOB_ID_LENGTH]
 
 
-def mark_text(job_id: str) -> str:
-    return f"{MARK_PREFIX}{short_job_id(job_id)}"
+def mark_text(job_id: str, texts: LabelTexts = AI_LABEL) -> str:
+    return f"{texts.mark_prefix}{short_job_id(job_id)}"
 
 
-def metadata_comment(version: str, job_id: str) -> str:
-    return f"AI-enhanced visualization by Upflow {version} (job {job_id}); not original footage"
+def metadata_comment(version: str, job_id: str, texts: LabelTexts = AI_LABEL) -> str:
+    return texts.comment.format(version=version, job_id=job_id)
 
 
 # --- Bloques de texto con Pillow ---
@@ -190,13 +206,15 @@ def mark_margin(frame_height: int) -> int:
     return even_up(max(MARK_MARGIN_FLOOR, frame_height // MARK_MARGIN_DIVISOR))
 
 
-def render_band(width: int, frame_height: int, version: str, job_id: str, font_path: Path) -> Image.Image:
-    block = fitted_block(font_path, band_lines(version, job_id), width, band_font_cap(frame_height))
+def render_band(
+    width: int, frame_height: int, version: str, job_id: str, font_path: Path, texts: LabelTexts = AI_LABEL
+) -> Image.Image:
+    block = fitted_block(font_path, band_lines(version, job_id, texts), width, band_font_cap(frame_height))
     return render_block(block, width, font_path, BLACK, BAND_PADDING_RATIO).convert("RGB")
 
 
-def render_mark(frame_height: int, job_id: str, font_path: Path) -> Image.Image:
-    block = TextBlock((mark_text(job_id),), mark_font_size(frame_height))
+def render_mark(frame_height: int, job_id: str, font_path: Path, texts: LabelTexts = AI_LABEL) -> Image.Image:
+    block = TextBlock((mark_text(job_id, texts),), mark_font_size(frame_height))
     padding = block_padding(block.size, MARK_PADDING_RATIO)
     width = even_up(text_width(font_path, block) + 2 * padding)
     return render_block(block, width, font_path, MARK_BACKGROUND, MARK_PADDING_RATIO)
@@ -211,13 +229,19 @@ class LabelAssets:
 
 
 def write_label_assets(
-    directory: Path, width: int, height: int, version: str, job_id: str, font_path: Path = FONT_PATH
+    directory: Path,
+    width: int,
+    height: int,
+    version: str,
+    job_id: str,
+    font_path: Path = FONT_PATH,
+    texts: LabelTexts = AI_LABEL,
 ) -> LabelAssets:
     font = verified_font(font_path)
-    band = render_band(width, height, version, job_id, font)
+    band = render_band(width, height, version, job_id, font, texts)
     band_path, mark_path = directory / BAND_NAME, directory / MARK_NAME
     band.save(band_path, format="PNG")
-    render_mark(height, job_id, font).save(mark_path, format="PNG")
+    render_mark(height, job_id, font, texts).save(mark_path, format="PNG")
     return LabelAssets(band_path, mark_path, band.height, mark_margin(height))
 
 
@@ -245,10 +269,15 @@ def label_band_graph(assets: LabelAssets, prefix: Sequence[str] = (), head_graph
 
 
 def label_band_args(
-    assets: LabelAssets, version: str, job_id: str, prefix: Sequence[str] = (), head_graph: str | None = None
+    assets: LabelAssets,
+    version: str,
+    job_id: str,
+    prefix: Sequence[str] = (),
+    head_graph: str | None = None,
+    texts: LabelTexts = AI_LABEL,
 ) -> list[str]:
     graph = label_band_graph(assets, prefix, head_graph)
-    return ["-vf", graph, "-metadata", f"comment={metadata_comment(version, job_id)}"]
+    return ["-vf", graph, "-metadata", f"comment={metadata_comment(version, job_id, texts)}"]
 
 
 # --- XMP de los PNG exportados ---

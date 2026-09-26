@@ -69,7 +69,8 @@ class UpdateStatus:
     error: str | None
 
 
-CctvTask = Literal["clarify", "enhance", "roi_fusion"]
+CctvTask = Literal["clarify", "enhance", "roi_fusion", "redact"]
+RedactionStyle = Literal["blur", "pixelate"]
 RoiKind = Literal["plate", "face_or_object"]
 RoiFusionMethod = Literal["median", "trimmed_mean"]
 
@@ -92,6 +93,26 @@ class RoiFusionRequest:
 
 
 @dataclass(slots=True, frozen=True)
+class RedactionKeyframe:
+    frame: int
+    box: tuple[int, int, int, int]
+
+
+@dataclass(slots=True, frozen=True)
+class RedactionTrack:
+    # Cuadros inclusivos donde la caja tapa; entre keyframes se interpola, fuera de ellos se sostiene.
+    first_frame: int
+    last_frame: int
+    keyframes: tuple[RedactionKeyframe, ...]
+
+
+@dataclass(slots=True, frozen=True)
+class RedactionRequest:
+    tracks: tuple[RedactionTrack, ...]
+    style: RedactionStyle = "pixelate"
+
+
+@dataclass(slots=True, frozen=True)
 class CctvOptions:
     task: CctvTask
     session_token: str
@@ -105,6 +126,7 @@ class CctvOptions:
     trim: tuple[int, int] | None = None
     still_frames: tuple[int, ...] = ()
     roi: RoiFusionRequest | None = None
+    redaction: RedactionRequest | None = None
     acquisition: Mapping[str, Any] = field(default_factory=dict)
     case_label: str | None = None
     operator_name: str | None = None

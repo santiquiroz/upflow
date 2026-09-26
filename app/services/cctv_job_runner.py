@@ -490,9 +490,14 @@ def clarify_runner_config(settings: Settings) -> CctvRunnerConfig:
 
 
 def build_cctv_runners(settings: Settings) -> dict[str, CctvTaskRunner]:
-    # Import diferido: roi_fusion_runner reusa la ingesta de este modulo. "enhance" lo registra VideoUpscaler
-    # (CctvEnhanceRunner) cuando tiene la etapa compuesta: necesita su encoder y su raw-pipe.
+    # Import diferido: roi_fusion_runner y redaction_runner reusan la ingesta de este modulo. "enhance" lo
+    # registra VideoUpscaler (CctvEnhanceRunner) cuando tiene la etapa compuesta: necesita su encoder y su raw-pipe.
+    from app.services.redaction_runner import RedactionRunner
     from app.services.roi_fusion_runner import RoiFusionRunner
 
     config = clarify_runner_config(settings)
-    return {"clarify": CctvClarifyRunner(config), "roi_fusion": RoiFusionRunner(config, settings.cctv_roi_ecc_min)}
+    return {
+        "clarify": CctvClarifyRunner(config),
+        "roi_fusion": RoiFusionRunner(config, settings.cctv_roi_ecc_min),
+        "redact": RedactionRunner(config),
+    }

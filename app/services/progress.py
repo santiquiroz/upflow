@@ -43,6 +43,7 @@ CCTV_STAGE_WEIGHTS: dict[str, tuple[str, float]] = {
     "building_comparison": ("Building side-by-side comparison", 14),
     "roi_registering": ("Aligning frames", 40),
     "roi_fusing": ("Combining frames", 30),
+    "redacting": ("Redacting", 85),
     "reporting": ("Writing report", 2),
     "packaging": ("Building handover package", 10),
 }
@@ -60,6 +61,7 @@ CCTV_STAGE_ORDER: dict[str, tuple[str, ...]] = {
     ),
     "enhance": ("ingesting", "restoring_frames", "exporting_frames", "reporting"),
     "roi_fusion": ("ingesting", "roi_registering", "roi_fusing", "reporting"),
+    "redact": ("ingesting", "redacting", "reporting"),
 }
 
 IMAGE_STAGE_WEIGHTS: dict[str, tuple[str, float]] = {

@@ -28,7 +28,9 @@ FIXED_ARTIFACTS: Mapping[str, str] = {
     "reproduce": REPRODUCE_NAME,
     "frame_index": FRAME_INDEX_NAME,
 }
-OUTPUT_ARTIFACTS = ("analysis", "viewing", "enhanced", "comparison", "package")
+OUTPUT_ARTIFACTS = ("analysis", "viewing", "enhanced", "comparison", "redacted", "redaction", "package")
+# La copia anonimizada no tiene informe, reproduce.cmd ni paquete: solo su registro y SHA256SUMS.txt.
+TASK_FIXED_ARTIFACTS: Mapping[str, tuple[str, ...]] = {"redact": ("sha256sums", "frame_index")}
 STILL_ROLES = ("original", "processed")
 MEDIA_TYPES: Mapping[str, str] = {
     ".mkv": "video/x-matroska",
@@ -121,10 +123,14 @@ def roi_names(outputs: Mapping[str, Any]) -> list[str]:
     return [f"roi:{name}" for name in rois] if isinstance(rois, Mapping) else []
 
 
+def fixed_artifacts_for(task: str) -> tuple[str, ...]:
+    return TASK_FIXED_ARTIFACTS.get(task, tuple(FIXED_ARTIFACTS))
+
+
 def listed_artifacts(job: VideoUpscaleJob) -> list[str]:
     # Sin tocar el disco: el resumen del job sale en cada listado de jobs.
     if job.cctv is None or job.status != JobStatus.completed:
         return []
     outputs = cctv_outputs(job)
     produced = [name for name in OUTPUT_ARTIFACTS if isinstance(outputs.get(name), str)]
-    return [*produced, *FIXED_ARTIFACTS, *still_names(outputs), *roi_names(outputs)]
+    return [*produced, *fixed_artifacts_for(job.cctv.task), *still_names(outputs), *roi_names(outputs)]

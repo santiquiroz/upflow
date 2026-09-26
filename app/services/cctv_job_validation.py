@@ -30,6 +30,7 @@ from app.services.ffmpeg_filters import FrameGeometry, output_dims_after
 from app.services.frame_export import StillFrameError, checked_still_frames, TOO_MANY_STILL_FRAMES
 from app.services.missing_pack import missing_pack_message
 from app.services.osd_check import OsdSelection, validate_osd_selection
+from app.services.redaction import check_redaction, check_redaction_steps
 from app.services.release_gates import CCTV_AI_DISABLED_MESSAGE
 
 UNKNOWN_TASK = "cctv.error.unknownTask"
@@ -49,9 +50,9 @@ ROI_UNEXPECTED = "cctv.error.roiUnexpected"
 ROI_INVALID = "cctv.error.roiInvalid"
 ROI_STEPS = "cctv.error.roiSteps"
 
-TASK_LANES: Mapping[str, Lane] = {"clarify": "classic", "enhance": "ai", "roi_fusion": "classic"}
+TASK_LANES: Mapping[str, Lane] = {"clarify": "classic", "enhance": "ai", "roi_fusion": "classic", "redact": "classic"}
 VIDEO_TASKS = frozenset({"clarify", "enhance"})
-CPU_TASKS = frozenset({"clarify", "roi_fusion"})
+CPU_TASKS = frozenset({"clarify", "roi_fusion", "redact"})
 OSD_STEP = "osd_protect"
 TRIM_STEP = "trim"
 AI_DEBLOCK_STEP = "ai_deblock"
@@ -409,6 +410,8 @@ def plan_cctv_job(
     check_geometry(steps, facts.geometry)
     check_roi(options, facts)
     check_roi_steps(options.task, steps)
+    check_redaction(options, facts.geometry, facts.frame_count)
+    check_redaction_steps(options, steps)
     first, last = trim_range(steps, facts.frame_count)
     stills = still_frames_in(options.still_frames, first, last, facts.max_still_frames)
     acquisition, case = parse_case_details(options)
