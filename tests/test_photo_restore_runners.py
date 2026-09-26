@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from app.services import photo_restore_runners as runners
-from app.services.engines.colorize import ColorizeResult
+from app.services.engines.colorize import ColorizeOptions, ColorizeResult
 from app.services.engines.drunet_restore import CpuFallback, DrunetResult
 from app.services.engines.face_detect import FaceDetection
 from app.services.engines.face_restore import FaceRestoreResult
@@ -361,8 +361,24 @@ def test_run_colorize_passes_the_options_and_keeps_the_predicted_ab(monkeypatch:
     outcome = run_colorize(fake_deps(), image, call_for("colorize", image, params={"strength": 0.5, "saturation": 1.5}))
 
     assert outcome.ab_512 is ab_512
-    assert outcome.details == {"model": "ddcolor-tiny", "strength": 0.5, "saturation": 1.5}
+    assert outcome.details == {"model": "ddcolor-tiny", "strength": 0.5, "saturation": 1.5, "fromLuminance": False}
     assert outcome.cpu_fallbacks[0].reason == "fp16Rejected"
+
+
+def test_run_recolorize_from_luminance_passes_the_flag_to_the_engine(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[ColorizeOptions] = []
+
+    def fake_colorize(context, image, *, tone_kind, device, options, model_id):
+        seen.append(options)
+        return ColorizeResult(image.copy(), np.zeros((512, 512, 2), dtype=np.float32), options, model_id, "cpu", "fp32")
+
+    monkeypatch.setattr(runners, "colorize", fake_colorize)
+    image = photo()
+
+    outcome = run_colorize(fake_deps(), image, call_for("colorize", image, params={"from_luminance": True}))
+
+    assert seen[0].from_luminance is True
+    assert outcome.details["fromLuminance"] is True
 
 
 def test_a_painted_mask_without_a_saved_probability_skips_the_detector(monkeypatch: pytest.MonkeyPatch) -> None:

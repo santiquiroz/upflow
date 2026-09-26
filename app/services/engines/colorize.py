@@ -47,6 +47,8 @@ COLORIZE_NEEDS_MONO_CODE = "restore.error.colorizeNeedsMono"
 COLORIZE_NEEDS_MONO_MESSAGE = "Colorize only works on black-and-white or toned photos."
 FP16_REJECTED_REASON = "fp16Rejected"
 FP16_UNAVAILABLE_REASON = "fp16Unavailable"
+MAX_FEATHER_PX = 64
+UINT8_MAX = 255.0
 
 # Las mismas constantes de sRGB D65 y Lab que OpenCV, que es el Lab con el que se exporto DDColor.
 SRGB_TO_XYZ = np.array(
@@ -80,10 +82,23 @@ class ColorizeNeedsMonoError(ValueError):
 class ColorizeOptions:
     strength: float = 1.0
     saturation: float = 1.0
+    from_luminance: bool = False
 
     def __post_init__(self) -> None:
         _require_within(self.strength, 1.0, "Color strength")
         _require_within(self.saturation, MAX_SATURATION, "Saturation")
+
+
+@dataclass(frozen=True, slots=True)
+class RecolorOptions:
+    ab: tuple[float, float]
+    strength: float = 1.0
+    feather_px: int = 0
+
+    def __post_init__(self) -> None:
+        _require_chosen_ab(self.ab)
+        _require_within(self.strength, 1.0, "Recolor strength")
+        _require_feather(self.feather_px)
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,9 +136,9 @@ def colorize(
     options: ColorizeOptions | None = None,
     model_id: str = COLORIZE_MODEL_ID,
 ) -> ColorizeResult:
-    require_colorizable(tone_kind)
-    _require_rgb_float(image)
     options = options or ColorizeOptions()
+    require_colorizable(tone_kind, from_luminance=options.from_luminance)
+    _require_rgb_float(image)
     _raise_if_cancelled(context.cancel_event)
     sample = model_input(image)
     model = prepare_colorize_model(context, model_id, device, sample)
@@ -140,8 +155,9 @@ def colorize(
     )
 
 
-def require_colorizable(tone_kind: str) -> None:
-    if tone_kind not in MONOCHROME_TONES:
+def require_colorizable(tone_kind: str, *, from_luminance: bool = False) -> None:
+    # "Re-colorize from luminance" descarta a proposito el color que queda (copias muy desvanecidas).
+    if not from_luminance and tone_kind not in MONOCHROME_TONES:
         raise ColorizeNeedsMonoError(tone_kind)
 
 
@@ -196,6 +212,71 @@ def colorize_band(rgb: np.ndarray, ab: np.ndarray, strength: float) -> np.ndarra
     gray = luminance[..., np.newaxis]
     mixed = gray + np.float32(strength) * (colored - gray)
     return linear_to_srgb(mixed)
+
+
+def recolor_region(
+    image: np.ndarray,
+    mask: np.ndarray,
+    options: RecolorOptions,
+    *,
+    cancel_event: threading.Event | None = None,
+) -> np.ndarray:
+    _require_rgb_float(image)
+    weight = region_weight(mask, image.shape, options.feather_px)
+    weight *= np.float32(options.strength)
+    output = np.empty_like(image)
+    for start in range(0, image.shape[0], BAND_ROWS):
+        _raise_if_cancelled(cancel_event)
+        rows = slice(start, start + BAND_ROWS)
+        output[rows] = recolor_band(image[rows], weight[rows], options.ab)
+    return output
+
+
+def recolor_band(rgb: np.ndarray, weight: np.ndarray, ab: tuple[float, float]) -> np.ndarray:
+    # Las dos puntas tienen la Y de la foto, asi que la mezcla en luz lineal tampoco mueve la L.
+    original = srgb_to_linear(rgb)
+    luminance = relative_luminance(rgb)
+    chosen = np.broadcast_to(np.asarray(ab, dtype=np.float32), (*luminance.shape, AB_CHANNELS))
+    target = fit_to_gamut(linear_rgb_from_luminance_ab(luminance, chosen), luminance)
+    mixed = linear_to_srgb(original + weight[..., np.newaxis] * (target - original))
+    return np.where(weight[..., np.newaxis] > 0.0, mixed, rgb)
+
+
+def region_weight(mask: np.ndarray, shape: tuple[int, ...], feather_px: int = 0) -> np.ndarray:
+    if mask.shape != tuple(shape[:2]):
+        raise ValueError(f"The recolor mask must be {tuple(shape[:2])}, got {mask.shape}")
+    weight = mask_weight(mask)
+    if feather_px == 0:
+        return weight
+    return cv2.GaussianBlur(weight, (0, 0), sigmaX=float(feather_px))
+
+
+def mask_weight(mask: np.ndarray) -> np.ndarray:
+    if mask.ndim != 2:
+        raise ValueError(f"The recolor mask must be a single channel, got {mask.shape}")
+    if mask.dtype == np.bool_:
+        return mask.astype(np.float32)
+    if mask.dtype == np.uint8:
+        return mask.astype(np.float32) / np.float32(UINT8_MAX)
+    return _unit_float_mask(mask)
+
+
+def ab_of_color(color: tuple[float, float, float]) -> tuple[float, float]:
+    rgb = np.asarray(color, dtype=np.float64)
+    if rgb.shape != (RGB_CHANNELS,) or not np.all(np.isfinite(rgb)) or rgb.min() < 0.0 or rgb.max() > 1.0:
+        raise ValueError(f"The picked color must be three values within [0, 1], got {color}")
+    linear = srgb_to_linear(rgb.astype(np.float32)).astype(np.float64)
+    f_x, f_y, f_z = lab_f((SRGB_TO_XYZ.astype(np.float64) @ linear) / LAB_WHITE)
+    return float(LAB_A_SCALE * (f_x - f_y)), float(LAB_B_SCALE * (f_y - f_z))
+
+
+def recolor_metadata(options: RecolorOptions, mask: np.ndarray) -> dict[str, object]:
+    return {
+        "ab": [float(options.ab[0]), float(options.ab[1])],
+        "strength": options.strength,
+        "featherPx": options.feather_px,
+        "coverage": float(mask_weight(mask).mean(dtype=np.float64)),
+    }
 
 
 def relative_luminance(rgb: np.ndarray) -> np.ndarray:
@@ -320,6 +401,7 @@ def colorize_metadata(result: ColorizeResult, artifacts: RecomposeArtifacts) -> 
         "strength": result.options.strength,
         "saturation": result.options.saturation,
         "abReusedOnRecompose": artifacts.available,
+        "fromLuminance": result.options.from_luminance,
     }
 
 
@@ -359,6 +441,26 @@ def _require_rgb_float(image: np.ndarray) -> None:
 def _require_ab_512(ab: np.ndarray) -> None:
     if ab.shape != (RENDER_SIZE, RENDER_SIZE, AB_CHANNELS):
         raise ValueError(f"Expected ab of shape {(RENDER_SIZE, RENDER_SIZE, AB_CHANNELS)}, got {ab.shape}")
+
+
+def _require_chosen_ab(ab: tuple[float, float]) -> None:
+    if len(ab) != AB_CHANNELS:
+        raise ValueError(f"The chosen color needs an a and a b, got {ab}")
+    for value in ab:
+        if not (math.isfinite(value) and abs(value) <= AB_LIMIT):
+            raise ValueError(f"The chosen a and b must be within [-{AB_LIMIT}, {AB_LIMIT}], got {ab}")
+
+
+def _require_feather(feather_px: int) -> None:
+    if isinstance(feather_px, bool) or not isinstance(feather_px, int) or not 0 <= feather_px <= MAX_FEATHER_PX:
+        raise ValueError(f"Feather must be a whole number of pixels within [0, {MAX_FEATHER_PX}], got {feather_px}")
+
+
+def _unit_float_mask(mask: np.ndarray) -> np.ndarray:
+    weight = mask.astype(np.float32)
+    if not np.all(np.isfinite(weight)) or weight.min() < 0.0 or weight.max() > 1.0:
+        raise ValueError("A float recolor mask must be within [0, 1]")
+    return weight
 
 
 def _require_within(value: float, upper: float, name: str) -> None:

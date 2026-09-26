@@ -335,6 +335,7 @@ def run_colorize(deps: RunnerDeps, image: np.ndarray, call: StepCall) -> StepOut
     options = ColorizeOptions(
         strength=float(call.params.get("strength", 1.0)),
         saturation=float(call.params.get("saturation", 1.0)),
+        from_luminance=bool(call.params.get("from_luminance", False)),
     )
     context = ColorizeContext(deps.engine, deps.calibrations, deps.budget_ms, deps.clock, call.cancel_event)
     model_id = str(call.params.get("model", COLORIZE_MODEL_ID))
@@ -347,7 +348,12 @@ def run_colorize(deps: RunnerDeps, image: np.ndarray, call: StepCall) -> StepOut
         model=ModelUse(result.model_id, result.device, result.precision),
         warnings=fp16_warnings(deps.engine, model_id),
         cpu_fallbacks=() if result.cpu_fallback is None else (result.cpu_fallback,),
-        details={"model": result.model_id, "strength": options.strength, "saturation": options.saturation},
+        details={
+            "model": result.model_id,
+            "strength": options.strength,
+            "saturation": options.saturation,
+            "fromLuminance": options.from_luminance,
+        },
         ab_512=result.ab_512,
     )
 

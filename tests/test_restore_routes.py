@@ -703,3 +703,9 @@ def test_the_app_lifespan_wires_sessions_into_the_restore_runner() -> None:
         assert client.get("/api/v1/restore/capabilities").status_code == 200
         assert client.get("/api/v1/licenses").status_code == 200
         assert client.post("/api/v1/restore/analysis/" + "0" * 32 + "/geometry", json={}).status_code == 404
+
+
+def test_the_recolorize_from_luminance_flag_reaches_the_colorize_step_params() -> None:
+    options = restore_routes.parse_restore_options(json.dumps({"colorize": {"from_luminance": True, "strength": 0.6}}))
+
+    assert options["colorize"] == {"from_luminance": True, "strength": 0.6}

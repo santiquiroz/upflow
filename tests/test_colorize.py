@@ -16,17 +16,24 @@ from app.services.engines.colorize import (
     COLORIZE_NEEDS_MONO_CODE,
     FP16_REJECTED_REASON,
     FP16_UNAVAILABLE_REASON,
+    MAX_FEATHER_PX,
     RENDER_SIZE,
     ColorizeContext,
     ColorizeNeedsMonoError,
     ColorizeOptions,
+    RecolorOptions,
     ab_artifact_bytes,
+    ab_of_color,
     apply_ab,
     colorize,
     colorize_band,
     colorize_metadata,
     load_ab_artifact,
     model_input,
+    recolor_band,
+    recolor_metadata,
+    recolor_region,
+    region_weight,
     require_colorizable,
     relative_luminance,
     save_ab_artifact,
@@ -626,5 +633,261 @@ def test_the_metadata_names_model_render_size_options_and_ab_reuse(tmp_path) -> 
         "strength": 0.8,
         "saturation": 1.2,
         "abReusedOnRecompose": True,
+        "fromLuminance": False,
     }
     assert skipped["abReusedOnRecompose"] is False
+
+
+# ---------------------------------------------------------------- re-colorize from luminance (copias muy desvanecidas)
+
+
+def faded_print(height: int = 300, width: int = 420) -> np.ndarray:
+    lab = np.empty((height, width, 3), dtype=np.float32)
+    lab[..., 0] = 30.0 + textured_luma(height, width) * 50.0
+    lab[..., 1], lab[..., 2] = 14.0, 9.0
+    return np.clip(cv2.cvtColor(lab, cv2.COLOR_Lab2RGB), 0.0, 1.0)
+
+
+@pytest.mark.parametrize("tone_kind", ["color", "hand_tinted"])
+def test_recolorize_from_luminance_accepts_a_photo_that_already_has_color(tone_kind) -> None:
+    require_colorizable(tone_kind, from_luminance=True)
+
+
+def test_recolorize_from_luminance_replaces_the_faded_color_and_keeps_the_lightness(tmp_path) -> None:
+    factory = SessionFactory(fake_ddcolor_session(ab=(-12.0, 22.0)))
+    photo = faded_print()
+    options = ColorizeOptions(from_luminance=True)
+
+    result = colorize(make_context(tmp_path, factory), photo, tone_kind="color", device=CPU, options=options)
+
+    np.testing.assert_allclose(exact_lightness(result.image), exact_lightness(photo), atol=LIGHTNESS_ATOL)
+    np.testing.assert_allclose(to_lab(result.image)[..., 1:].reshape(-1, 2).mean(axis=0), (-12.0, 22.0), atol=0.5)
+
+
+def test_recolorize_from_luminance_shows_the_model_only_the_luminance(tmp_path) -> None:
+    factory = SessionFactory(fake_ddcolor_session())
+    photo = faded_print()
+    options = ColorizeOptions(from_luminance=True)
+
+    colorize(make_context(tmp_path, factory), photo, tone_kind="color", device=CPU, options=options)
+
+    (batch,) = factory.batches()
+    expected = neutral_gray(cv2.resize(photo, (RENDER_SIZE, RENDER_SIZE), interpolation=cv2.INTER_LINEAR))
+    np.testing.assert_allclose(np.transpose(batch[0], (1, 2, 0)), expected, atol=1e-6)
+
+
+def test_recolorize_is_opt_in_a_color_photo_is_still_rejected_by_default(tmp_path) -> None:
+    factory = SessionFactory(fake_ddcolor_session())
+
+    with pytest.raises(ColorizeNeedsMonoError):
+        colorize(make_context(tmp_path, factory), faded_print(), tone_kind="color", device=CPU)
+    assert factory.sessions == []
+
+
+def test_recolorize_metadata_says_the_color_came_from_the_luminance(tmp_path) -> None:
+    factory = SessionFactory(fake_ddcolor_session())
+    options = ColorizeOptions(from_luminance=True)
+    result = colorize(make_context(tmp_path, factory), faded_print(), tone_kind="color", device=CPU, options=options)
+
+    metadata = colorize_metadata(result, RecomposeArtifacts(tmp_path))
+
+    assert metadata["fromLuminance"] is True
+
+
+# ---------------------------------------------------------------- recolor region: mascara + ab elegido, L conservada
+
+
+def region_mask(height: int = 300, width: int = 420) -> np.ndarray:
+    mask = np.zeros((height, width), dtype=np.float32)
+    mask[80:220, 100:300] = 1.0
+    return mask
+
+
+def test_recolor_region_sets_the_chosen_ab_inside_the_mask() -> None:
+    photo = gray_photo()
+    mask = region_mask()
+
+    recolored = recolor_region(photo, mask, RecolorOptions(ab=(-20.0, 30.0)))
+
+    inside = to_lab(recolored)[mask == 1.0]
+    np.testing.assert_allclose(inside[:, 1:].mean(axis=0), (-20.0, 30.0), atol=0.5)
+
+
+def test_recolor_region_keeps_the_lightness_everywhere() -> None:
+    photo = sepia_photo()
+
+    recolored = recolor_region(photo, region_mask(), RecolorOptions(ab=(40.0, -35.0)))
+
+    np.testing.assert_allclose(exact_lightness(recolored), exact_lightness(photo), atol=LIGHTNESS_ATOL)
+
+
+def test_recolor_region_leaves_pixels_outside_the_mask_bit_for_bit() -> None:
+    photo = sepia_photo()
+    mask = region_mask()
+
+    recolored = recolor_region(photo, mask, RecolorOptions(ab=(40.0, -35.0)))
+
+    np.testing.assert_array_equal(recolored[mask == 0.0], photo[mask == 0.0])
+
+
+def test_recolor_region_blends_a_soft_mask_in_linear_light() -> None:
+    photo = sepia_photo()
+    full = np.ones(photo.shape[:2], dtype=np.float32)
+    options = RecolorOptions(ab=(-20.0, 30.0))
+    target = srgb_to_linear(recolor_region(photo, full, options))
+
+    half = srgb_to_linear(recolor_region(photo, full * np.float32(0.5), options))
+
+    original = srgb_to_linear(photo)
+    np.testing.assert_allclose(half, original + 0.5 * (target - original), atol=2e-4)
+
+
+def test_recolor_region_strength_scales_the_mask() -> None:
+    photo = sepia_photo()
+    full = np.ones(photo.shape[:2], dtype=np.float32)
+
+    weak = recolor_region(photo, full, RecolorOptions(ab=(-20.0, 30.0), strength=0.3))
+    blended = recolor_region(photo, full * np.float32(0.3), RecolorOptions(ab=(-20.0, 30.0)))
+
+    np.testing.assert_allclose(weak, blended, atol=1e-6)
+
+
+def test_recolor_region_with_strength_zero_returns_the_photo_unchanged() -> None:
+    photo = sepia_photo()
+
+    same = recolor_region(photo, region_mask(), RecolorOptions(ab=(40.0, -35.0), strength=0.0))
+
+    np.testing.assert_array_equal(same, photo)
+
+
+def test_recolor_region_fits_a_vivid_color_into_the_gamut_without_moving_the_lightness() -> None:
+    photo = gray_photo()
+
+    fitted = recolor_region(photo, region_mask(), RecolorOptions(ab=(-AB_LIMIT, AB_LIMIT)))
+
+    assert float(fitted.min()) >= 0.0 and float(fitted.max()) <= 1.0
+    np.testing.assert_allclose(exact_lightness(fitted), exact_lightness(photo), atol=LIGHTNESS_ATOL)
+
+
+@pytest.mark.parametrize("kind", ["bool", "uint8"])
+def test_recolor_region_accepts_bool_and_uint8_masks(kind) -> None:
+    photo = gray_photo()
+    mask = region_mask()
+    painted = mask.astype(bool) if kind == "bool" else (mask * 255).astype(np.uint8)
+    options = RecolorOptions(ab=(-20.0, 30.0))
+
+    recolored = recolor_region(photo, painted, options)
+
+    np.testing.assert_array_equal(recolored, recolor_region(photo, mask, options))
+
+
+def test_recolor_region_feather_softens_the_mask_edge() -> None:
+    photo = gray_photo()
+    mask = region_mask()
+    options = RecolorOptions(ab=(-20.0, 30.0), feather_px=6)
+
+    recolored = recolor_region(photo, mask, options)
+
+    weight = region_weight(mask, photo.shape, options.feather_px)
+    assert 0.0 < float(weight[80, 200]) < 1.0
+    assert float(weight[150, 200]) == pytest.approx(1.0)
+    assert 0.5 < float(chroma(recolored)[79, 200]) < float(chroma(recolored)[150, 200])
+    np.testing.assert_allclose(exact_lightness(recolored), exact_lightness(photo), atol=LIGHTNESS_ATOL)
+
+
+def test_recolor_region_bands_join_without_seams() -> None:
+    photo = gray_photo(2100, 60)
+    mask = np.zeros(photo.shape[:2], dtype=np.float32)
+    mask[500:1900, 10:50] = 1.0
+    options = RecolorOptions(ab=(25.0, 10.0))
+
+    banded = recolor_region(photo, mask, options)
+
+    whole = recolor_band(photo, mask, options.ab)
+    np.testing.assert_array_equal(banded, whole)
+
+
+def test_recolor_region_does_not_modify_its_inputs() -> None:
+    photo = sepia_photo()
+    mask = region_mask()
+    photo_before, mask_before = photo.copy(), mask.copy()
+
+    recolor_region(photo, mask, RecolorOptions(ab=(25.0, 10.0), strength=0.5, feather_px=3))
+
+    np.testing.assert_array_equal(photo, photo_before)
+    np.testing.assert_array_equal(mask, mask_before)
+
+
+def test_recolor_region_rejects_a_mask_of_another_size() -> None:
+    with pytest.raises(ValueError):
+        recolor_region(gray_photo(), region_mask(100, 100), RecolorOptions(ab=(1.0, 1.0)))
+
+
+@pytest.mark.parametrize("value", [-0.1, 1.5, float("nan")])
+def test_recolor_region_rejects_a_float_mask_outside_zero_one(value) -> None:
+    mask = region_mask()
+    mask[0, 0] = value
+
+    with pytest.raises(ValueError):
+        recolor_region(gray_photo(), mask, RecolorOptions(ab=(1.0, 1.0)))
+
+
+def test_recolor_region_needs_an_rgb_float_image() -> None:
+    with pytest.raises(ValueError):
+        recolor_region((gray_photo() * 255).astype(np.uint8), region_mask(), RecolorOptions(ab=(1.0, 1.0)))
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"ab": (AB_LIMIT + 1.0, 0.0)},
+        {"ab": (0.0, -AB_LIMIT - 1.0)},
+        {"ab": (float("nan"), 0.0)},
+        {"ab": (1.0, 1.0), "strength": 1.2},
+        {"ab": (1.0, 1.0), "feather_px": -1},
+        {"ab": (1.0, 1.0), "feather_px": MAX_FEATHER_PX + 1},
+    ],
+)
+def test_recolor_options_outside_their_range_are_rejected(options) -> None:
+    with pytest.raises(ValueError):
+        RecolorOptions(**options)
+
+
+def test_a_cancelled_recolor_region_stops() -> None:
+    cancel = threading.Event()
+    cancel.set()
+
+    with pytest.raises(RestoreCancelled):
+        recolor_region(gray_photo(), region_mask(), RecolorOptions(ab=(1.0, 1.0)), cancel_event=cancel)
+
+
+@pytest.mark.parametrize("color", [(1.0, 0.0, 0.0), (0.2, 0.6, 0.3), (0.9, 0.8, 0.5)])
+def test_recolor_ab_of_a_picked_color_matches_its_lab(color) -> None:
+    rgb = np.array([[color]], dtype=np.float32)
+
+    ab = ab_of_color(color)
+
+    np.testing.assert_allclose(ab, to_lab(rgb)[0, 0, 1:], atol=0.3)
+
+
+def test_recolor_ab_of_a_gray_is_zero() -> None:
+    np.testing.assert_allclose(ab_of_color((0.4, 0.4, 0.4)), (0.0, 0.0), atol=1e-3)
+
+
+def test_recolor_ab_of_a_color_outside_zero_one_is_rejected() -> None:
+    with pytest.raises(ValueError):
+        ab_of_color((1.2, 0.0, 0.0))
+
+
+def test_recolor_metadata_names_the_color_strength_feather_and_coverage() -> None:
+    mask = region_mask()
+    options = RecolorOptions(ab=(-20.0, 30.0), strength=0.8, feather_px=2)
+
+    metadata = recolor_metadata(options, mask)
+
+    assert metadata == {
+        "ab": [-20.0, 30.0],
+        "strength": 0.8,
+        "featherPx": 2,
+        "coverage": pytest.approx(float(mask.mean()), abs=1e-6),
+    }

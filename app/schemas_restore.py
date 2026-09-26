@@ -71,6 +71,7 @@ class ColorizeOptionsRequest(_StrictModel):
     render_size: int | None = Field(default=None, ge=RENDER_SIZE, le=RENDER_SIZE)
     strength: float | None = _unit()
     saturation: float | None = Field(default=None, ge=0.0, le=MAX_SATURATION)
+    from_luminance: bool | None = None
 
 
 class RestoreOptions(_StrictModel):
