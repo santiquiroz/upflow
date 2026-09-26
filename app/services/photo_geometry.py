@@ -1,11 +1,55 @@
 from __future__ import annotations
 
+import math
+from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import Any
+
 import cv2
 import numpy as np
 
 MAX_STRAIGHTEN_DEG = 45.0
 
 Crop = tuple[int, int, int, int]
+
+
+@dataclass(frozen=True, slots=True)
+class Geometry:
+    rotate90: int = 0
+    crop: Crop | None = None
+    angle: float = 0.0
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.angle) or abs(self.angle) > MAX_STRAIGHTEN_DEG:
+            raise ValueError(f"Straighten angle must be within ±{MAX_STRAIGHTEN_DEG}°")
+        if self.crop is not None and len(self.crop) != 4:
+            raise ValueError(f"Crop must be (x, y, width, height), got {self.crop}")
+
+    @classmethod
+    def from_mapping(cls, raw: Mapping[str, Any] | None) -> Geometry:
+        values = dict(raw or {})
+        crop = values.get("crop")
+        return cls(
+            rotate90=int(values.get("rotate90", 0)) % 4,
+            crop=None if crop is None else tuple(int(value) for value in crop),
+            angle=float(values.get("angle", 0.0)),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"rotate90": self.rotate90, "crop": None if self.crop is None else list(self.crop), "angle": self.angle}
+
+    def apply(self, rgb: np.ndarray) -> np.ndarray:
+        return apply_geometry(rgb, self.rotate90, self.crop, self.angle)
+
+    def output_size(self, height: int, width: int) -> tuple[int, int]:
+        rotated = (width, height) if self.rotate90 % 2 else (height, width)
+        if self.crop is None:
+            return rotated
+        x, y, crop_width, crop_height = self.crop
+        inside = x >= 0 and y >= 0 and x + crop_width <= rotated[1] and y + crop_height <= rotated[0]
+        if crop_width <= 0 or crop_height <= 0 or not inside:
+            raise ValueError(f"Crop {self.crop} is outside the {rotated[1]}x{rotated[0]} image")
+        return crop_height, crop_width
 
 
 def apply_geometry(

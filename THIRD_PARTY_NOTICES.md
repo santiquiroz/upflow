@@ -204,3 +204,29 @@ listing them with `Ported into:` lines.
 - Copyright: Copyright (c) 2023 karaokenerds (python-audio-separator)
 - Source: https://github.com/santiquiroz/port-uvr-deecho-onnx (commit 02cd199), a NumPy port of the reference flow in https://github.com/nomadkaraoke/python-audio-separator
 - Modifications: vendored from `driver/` with only its internal imports rewritten.
+
+### RetinaFace priors and decoding
+
+- Ported into: app/services/engines/face_detect.py
+- License: MIT
+- Copyright: Copyright (c) 2024 Yakhyokhuja Valikhujaev
+- Copyright: Copyright (c) 2019 biubug6 (the upstream LICENSE names no holder)
+- Source: https://github.com/yakhyo/retinaface-pytorch (commit 7601e1c)
+- Source: https://github.com/biubug6/Pytorch_Retinaface (commit b984b4b), the prior box and decoding scheme yakhyo builds on
+- Modifications: the `cfg_re34` prior boxes, the box and landmark decoding, the NMS and the BGR mean of `detect.py` were rewritten in NumPy; candidates below the score threshold are dropped before NMS.
+
+### facexlib face alignment and paste
+
+- Ported into: app/services/face_geometry.py
+- License: MIT
+- Copyright: Copyright (c) 2020 Xintao Wang
+- Source: https://github.com/xinntao/facexlib (commit 260620a), `facexlib/utils/face_restoration_helper.py`
+- Modifications: the FFHQ-512 template, the LMEDS similarity alignment with the gray border and the square template mask were rewritten; the paste warps only the face's bounding box, the mask is built in template space, and the inverse transform adds 0.5 * (scale - 1) instead of 0.5 * scale to land on the upscaled pixel centers.
+
+### DDColor pre- and post-processing
+
+- Ported into: app/services/engines/colorize.py
+- License: Apache-2.0
+- Copyright: Copyright (c) 2023 Alibaba (DAMO Academy, Alibaba Group)
+- Source: https://github.com/piddnad/DDColor (commit 2adb63f, Apache-2.0 since d695d09), `ddcolor/pipeline.py`
+- Modifications: the gray Lab(L, 0, 0) model input and the join of the predicted ab with the photo's lightness were rewritten in NumPy; the ab is clipped to +-110 and resized with bicubic instead of nearest, and the join works in linear light with the photo's own luminance, pulling out-of-gamut colors toward the gray of the same luminance so the lightness is kept.

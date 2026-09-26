@@ -6,6 +6,7 @@ from typing import Any, Literal, Protocol
 from app.models import AudioJob, UpscaleJob, VideoUpscaleJob, utc_now
 from app.services.audio_conversion import is_conversion_only
 from app.services.media_tools import parse_fps_fraction
+from app.services.photo_restore_chain import RESTORE_CHAIN, STEP_STAGES
 from app.services.voice_chain import effective_voice_steps
 
 StageStatus = Literal["pending", "active", "done"]
@@ -38,6 +39,23 @@ IMAGE_STAGE_WEIGHTS: dict[str, tuple[str, float]] = {
 }
 
 IMAGE_STAGE_ORDER: tuple[str, ...] = ("validating", "upscaling")
+
+UPSCALING_STAGE = "upscaling"
+SAVING_STAGE = "saving"
+
+# Pesos [propuesta]: se recalibran con los tiempos por etapa de P1-GPU-2.
+RESTORE_IMAGE_STAGE_WEIGHTS: dict[str, tuple[str, float]] = {
+    "restore_descreen": ("Removing print pattern", 5),
+    "restore_repair_detect": ("Detecting damage", 5),
+    "restore_repair_fill": ("Filling damage", 15),
+    "restore_deblock": ("Removing JPEG artifacts", 15),
+    "restore_denoise": ("Reducing noise", 20),
+    "restore_tone": ("Fixing colors and tone", 5),
+    UPSCALING_STAGE: ("Upscaling", 25),
+    "restore_faces": ("Restoring faces", 15),
+    "restore_colorize": ("Colorizing", 10),
+    SAVING_STAGE: ("Saving", 5),
+}
 
 AUDIO_STAGE_WEIGHTS: dict[str, tuple[str, float]] = {
     # Etapa propia y unica de la conversion directa. No reusa
@@ -133,9 +151,33 @@ def build_video_stages(job: VideoUpscaleJob) -> list[Stage]:
     return _normalize_weights(raw_stages)
 
 
-def build_image_stages() -> list[Stage]:
-    raw_stages = [(key, *IMAGE_STAGE_WEIGHTS[key]) for key in IMAGE_STAGE_ORDER]
-    return _normalize_weights(raw_stages)
+def build_image_stages(job: UpscaleJob | None = None) -> list[Stage]:
+    if not _restore_steps_of(job):
+        return _normalize_weights([(key, *IMAGE_STAGE_WEIGHTS[key]) for key in IMAGE_STAGE_ORDER])
+    keys = restore_image_stage_keys(job)
+    return _normalize_weights([(key, *RESTORE_IMAGE_STAGE_WEIGHTS[key]) for key in keys])
+
+
+def restore_image_stage_keys(job: UpscaleJob) -> tuple[str, ...]:
+    upscale = (UPSCALING_STAGE,) if job.scale > 1 else ()
+    native = _restore_phase_stages(job.restore_steps, "native")
+    output = _restore_phase_stages(job.restore_steps, "output")
+    return (*native, *upscale, *output, SAVING_STAGE)
+
+
+def _restore_phase_stages(steps: list[str], phase: str) -> tuple[str, ...]:
+    selected = set(steps)
+    specs = (spec for spec in RESTORE_CHAIN if spec.id in selected and spec.phase == phase)
+    return tuple(stage for spec in specs for stage in STEP_STAGES[spec.id])
+
+
+def running_image_stage(job: UpscaleJob) -> str:
+    return build_image_stages(job)[0].key if _restore_steps_of(job) else UPSCALING_STAGE
+
+
+def _restore_steps_of(job: UpscaleJob | None) -> list[str]:
+    # Los motores tambien reportan progreso con jobs livianos que no son UpscaleJob.
+    return list(getattr(job, "restore_steps", None) or [])
 
 
 def _audio_stage_active(job: AudioJob, key: str) -> bool:
@@ -317,12 +359,19 @@ def complete_video_stages(job: VideoUpscaleJob) -> None:
 
 
 def advance_image_stage(job: UpscaleJob, stage_key: str) -> None:
-    stages = apply_stage_transition(build_image_stages(), stage_key)
+    stages = apply_stage_transition(build_image_stages(job), stage_key)
     _write_stage_metadata(job, stages, stage_key)
 
 
+def enter_image_stage(job: UpscaleJob, stage_key: str) -> None:
+    # Los contadores de tiles son de la etapa anterior: sin esto "Saving" mostraria 12/12 del denoise.
+    advance_image_stage(job, stage_key)
+    job.metadata["framesDone"] = 0
+    job.metadata["framesTotal"] = None
+
+
 def complete_image_stages(job: UpscaleJob) -> None:
-    stages = mark_all_done(build_image_stages())
+    stages = mark_all_done(build_image_stages(job))
     _write_stage_metadata(job, stages, "completed", progress_override=1.0)
 
 
@@ -336,13 +385,16 @@ def complete_audio_stages(job: AudioJob) -> None:
     _write_stage_metadata(job, stages, "completed", progress_override=1.0)
 
 
-def apply_image_tile_progress(job: UpscaleJob, tiles_done: int, tiles_total: int) -> None:
+def apply_image_tile_progress(
+    job: UpscaleJob, tiles_done: int, tiles_total: int, stage_key: str = UPSCALING_STAGE
+) -> None:
     # Called from the ONNX engine's worker thread between tiles (see
     # onnx_upscaler._upscale_tiled) -- only ever invoked for the tiled path,
     # so tiles_total is always >= 2 and framesTotal is never a fake "1/1".
-    stages = apply_stage_transition(build_image_stages(), "upscaling")
+    # stage_key: los tiles de denoise o deblock de una restauracion no son "Upscaling".
+    stages = apply_stage_transition(build_image_stages(job), stage_key)
     fraction = frame_stage_fraction(tiles_done, tiles_total)
-    job.metadata["stage"] = "upscaling"
+    job.metadata["stage"] = stage_key
     job.metadata["stages"] = [asdict(stage) for stage in stages]
     job.metadata["framesDone"] = tiles_done
     job.metadata["framesTotal"] = tiles_total

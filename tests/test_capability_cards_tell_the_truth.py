@@ -159,6 +159,20 @@ def test_no_quedan_claves_de_motivo_sin_capacidad_que_las_use() -> None:
         )
 
 
+def test_cada_tarjeta_tiene_su_nombre_en_los_dos_idiomas() -> None:
+    """Sin la clave, la tarjeta muestra el id crudo ("capability.image.colorize").
+
+    Pasa cada vez que se suma una capacidad al CATALOG y el texto queda para
+    despues: el arbol la lista igual, con el nombre interno a la vista.
+    """
+    from pathlib import Path as _Path
+
+    for idioma in ("es", "en"):
+        texto = _Path(f"frontend/src/i18n/{idioma}.ts").read_text(encoding="utf-8")
+        faltan = [c.label_key for c in CATALOG if f'"{c.label_key}":' not in texto]
+        assert faltan == [], f"{idioma}: faltan {faltan}"
+
+
 # ---------------------------------------------------------------------------
 # Una funcion con DOS motores: alcanza con tener uno
 # ---------------------------------------------------------------------------

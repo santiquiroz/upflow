@@ -1,8 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
-import { Film, UploadCloud } from "lucide-react";
-import { useEffect, useRef, useState, type ChangeEvent, type DragEvent } from "react";
+import { Film } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { AccordionSection } from "../../components/AccordionSection";
 import { DevicePicker } from "../../components/DevicePicker";
+import { FileDropzone } from "../../components/FileDropzone";
 import { FormatOptionFieldset, type FormatOption } from "../../components/FormatOptionFieldset";
 import { JobCard } from "../../components/JobCard";
 import { ModelPicker } from "../../components/ModelPicker";
@@ -267,57 +268,6 @@ function AdvancedVideoControls({
         />
       </label>
     </div>
-  );
-}
-
-function Dropzone({
-  files,
-  onFilesSelected,
-}: {
-  files: File[];
-  onFilesSelected: (files: File[]) => void;
-}) {
-  const { t } = useTranslation();
-  function handleDrop(event: DragEvent<HTMLLabelElement>) {
-    event.preventDefault();
-    const dropped = Array.from(event.dataTransfer.files);
-    if (dropped.length > 0) {
-      onFilesSelected(dropped);
-    }
-  }
-
-  function handleInputChange(event: ChangeEvent<HTMLInputElement>) {
-    const selected = Array.from(event.target.files ?? []);
-    if (selected.length > 0) {
-      onFilesSelected(selected);
-    }
-  }
-
-  return (
-    <label
-      htmlFor="video-file-input"
-      onDragOver={(event) => event.preventDefault()}
-      onDrop={handleDrop}
-      className="flex cursor-pointer flex-col items-center gap-2 rounded border border-dashed border-border bg-surface px-6 py-10 text-center transition-[border-color] duration-fast hover:border-accent"
-    >
-      <UploadCloud aria-hidden="true" className="h-6 w-6 text-text-faint" strokeWidth={1.5} />
-      <span className="text-sm text-text">
-        {files.length === 0
-          ? t("enhance.video.dropzone")
-          : files.length === 1
-            ? files[0].name
-            : t("enhance.batch.selected", { count: files.length })}
-      </span>
-      <span className="text-xs text-text-faint">MP4, MKV, MOV</span>
-      <input
-        id="video-file-input"
-        type="file"
-        accept="video/*"
-        multiple
-        className="sr-only"
-        onChange={handleInputChange}
-      />
-    </label>
   );
 }
 
@@ -609,7 +559,15 @@ export function VideoPanel() {
   return (
     <div className="grid grid-cols-[1fr_320px] gap-6 max-[900px]:grid-cols-1">
       <div className="flex flex-col gap-6">
-        <Dropzone files={files} onFilesSelected={handleFilesSelected} />
+        <FileDropzone
+          inputId="video-file-input"
+          accept="video/*"
+          multiple
+          files={files}
+          emptyLabel={t("enhance.video.dropzone")}
+          formatsHint="MP4, MKV, MOV"
+          onFilesSelected={handleFilesSelected}
+        />
         {rejectedUpload && (
           <p role="alert" className="text-xs text-danger">
             {rejectedUpload}

@@ -39,6 +39,7 @@ def test_whitelist_contains_the_ui_editable_settings() -> None:
             "hf_token",
             "rebar_confirmed",
             "enable_file_logging",
+            "max_upload_mb",
             "max_video_upload_mb",
             "enable_audiosr",
             "enable_audio_restore",
@@ -189,6 +190,7 @@ def test_editable_settings_status_reports_configured_flag() -> None:
         "enable_audiosr",
         "enable_file_logging",
         "hf_token",
+        "max_upload_mb",
         "max_video_upload_mb",
         "rebar_confirmed",
     ]
@@ -211,6 +213,7 @@ def test_status_exposes_the_value_only_for_the_boolean_flags() -> None:
     # Texto libre tampoco: puede traer una credencial en la URL.
     assert status["cad_llm_base_url"]["value"] is None
     assert status["max_video_upload_mb"]["value"] is None
+    assert status["max_upload_mb"]["value"] is None
 
 
 def test_status_marks_which_settings_need_a_restart() -> None:

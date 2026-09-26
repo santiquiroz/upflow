@@ -16,6 +16,7 @@ from app.services.download_job_manager import DownloadJobManager
 from app.services.generation_job_manager import GenerationJobManager
 from app.services.job_manager import JobManager
 from app.services.karaoke_job_manager import KaraokeJobManager
+from app.services.restore_session import SESSION_PREFIX
 from app.services.shape3d_job_manager import Shape3dJobManager
 from app.services.transcribe_job_manager import TranscribeJobManager
 from app.services.video_job_manager import VideoJobManager
@@ -151,9 +152,21 @@ class RetentionSweeper:
         return {job.source_path for job in all_jobs if not self._is_finished(job)}
 
     def _active_video_work_ids(self) -> set[str]:
-        return {
+        active_video = {
             job.id for job in self.video_job_manager.jobs.values() if not self._is_finished(job)
         }
+        return active_video | self._active_restore_work_names()
+
+    def _active_restore_work_names(self) -> set[str]:
+        # Un job de restauracion usa video-work/{id} y, si viene de un analisis, el original
+        # de video-work/restore-{token}: ninguno de los dos se barre mientras el job corre.
+        names: set[str] = set()
+        for job in self.job_manager.jobs.values():
+            if job.restore_steps and not self._is_finished(job):
+                names.add(job.id)
+                if job.restore_session is not None:
+                    names.add(f"{SESSION_PREFIX}{job.restore_session}")
+        return names
 
     @staticmethod
     def _is_finished(job: UpscaleJob | VideoUpscaleJob | AudioJob | GenerationJob) -> bool:

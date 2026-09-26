@@ -41,6 +41,11 @@ class UpscaleJob:
     # None = auto por motor, 0 = sin tiling, N >= 32 = explicito (services/tile_params.py).
     tile_size: int | None = None
     tile_overlap: int | None = None
+    # Restauracion de fotos: pasos ya normalizados y en el orden del catalogo
+    # (photo_restore_chain). Vacio = reescalado puro, como siempre.
+    restore_steps: list[str] = field(default_factory=list)
+    restore_options: dict[str, Any] = field(default_factory=dict)
+    restore_session: str | None = None
     id: str = field(default_factory=lambda: uuid4().hex)
     status: JobStatus = JobStatus.queued
     created_at: datetime = field(default_factory=utc_now)

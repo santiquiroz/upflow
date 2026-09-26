@@ -33,6 +33,14 @@ describe("surfaceFor", () => {
     );
   });
 
+  it("sends every photo restoration capability to the restore tab", () => {
+    for (const id of ["image.restore", "image.restoreModels", "image.restoreFaces", "image.colorize"]) {
+      expect(surfaceFor(capability({ id, domain: "image", jobKind: "image" }))).toBe(
+        "/enhance/restore",
+      );
+    }
+  });
+
   it("sends audio enhancement capabilities to the audio surface", () => {
     for (const id of ["audio.denoise", "audio.restore", "audio.restoreSr", "audio.voice"]) {
       expect(surfaceFor(capability({ id, domain: "audio", jobKind: "audio" }))).toBe(
@@ -78,6 +86,7 @@ describe("surfaceFor", () => {
     const RUTAS_REALES = [
       "/enhance/video",
       "/enhance/image",
+      "/enhance/restore",
       "/audio",
       "/transcribe",
       "/generate",
@@ -87,6 +96,10 @@ describe("surfaceFor", () => {
       "video.upscale",
       "video.interpolate",
       "image.upscale",
+      "image.restore",
+      "image.restoreModels",
+      "image.restoreFaces",
+      "image.colorize",
       "audio.denoise",
       "audio.restore",
       "audio.restoreSr",

@@ -11,11 +11,11 @@ para que P1-15 copie models.lock.json sin traducir nada.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import Literal
+from typing import Any, Literal
 
 CommercialUse = Literal["yes", "no", "unclear"]
 Precision = Literal["fp32", "fp16"]
@@ -286,6 +286,45 @@ RESTORE_BUNDLES: dict[str, RestoreBundle] = {name: RestoreBundle(name, ()) for n
 # Declarado a mano y no derivado: el test lo compara con gated_packs(RESTORE_MODELS),
 # asi un modelo no comercial nuevo no puede colarse sin pasar por la compuerta.
 LICENSE_GATED_PACKS: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True, slots=True)
+class VendoredModel:
+    spec: RestoreModelSpec
+    pack: str
+    # Recibe Settings; queda sin tipar para no importar app.config desde este modulo de datos.
+    path_of: Callable[[Any], Path]
+
+
+MIGAN_MODEL_ID = "migan"
+MIGAN_REVISION = "406830d0fa60666da0071c342ad2fbc8f30c5c64"
+
+# Ya vendorizado por su propio pack (download-migan.ps1), fuera de los bundles restore-*:
+# el dueno unico abre su sesion, pero la ruta la resuelve Settings.
+VENDORED_MODELS: dict[str, VendoredModel] = {
+    MIGAN_MODEL_ID: VendoredModel(
+        RestoreModelSpec(
+            id=MIGAN_MODEL_ID,
+            name="MI-GAN",
+            bundle="migan",
+            filename="migan_pipeline_v2.onnx",
+            license_spdx="MIT",
+            license_url=f"https://huggingface.co/andraniksargsyan/migan/blob/{MIGAN_REVISION}/LICENSE",
+            copyright="Copyright (c) 2024 Picsart AI Research",
+            attribution="MI-GAN (Sargsyan et al., ICCV 2023), Picsart AI Research",
+            data_lineage="D1a",
+            commercial_use="unclear",
+            source_url="https://huggingface.co/andraniksargsyan/migan",
+            source_revision=MIGAN_REVISION,
+            source_sha256="6f1f3530a1a2324b19752018ce756088b07973cda8d7d890034ace5c8a48c40b",
+            modifications=("none: the published migan_pipeline_v2.onnx is used unchanged",),
+            tile_min=512,
+            overlap=128,
+        ),
+        pack="migan",
+        path_of=lambda settings: settings.migan_model_path,
+    ),
+}
 
 
 def gated_packs(models: Mapping[str, RestoreModelSpec]) -> frozenset[str]:

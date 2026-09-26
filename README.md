@@ -35,6 +35,7 @@ la app y no 40 GB de modelos.
 | | |
 |---|---|
 | **Reescalar** | Fotos y anime, de a una o por lote, 2× a 4×. |
+| **Restaurar fotos** | Rayas, manchas, desvaído, ruido, trama de diario y bloques de JPEG en una foto vieja; caras y color si los pedís. Lo que la IA inventa, lo dice. *Sin publicar: los modelos todavía no se pueden bajar* ([detalle](#restaurar-fotos-mejorar--restore-photo)). |
 | **Borrar cosas** | Pintá lo que sobra —o tocá el objeto para seleccionarlo solo— y desaparece. |
 | **Generar** | Texto a imagen e imagen a imagen con Stable Diffusion, SDXL o Flux. |
 | **Detalle inventado** | Más textura de la que había, dibujada por IA. No es una copia más fiel: para eso está el reescalado. |
@@ -455,6 +456,93 @@ Caso de uso central: reescalar una **temporada completa** de anime encolando tod
 
 Cualquier campo del perfil puede sobreescribirse por request (ver "Crear un job de video" arriba). El catálogo completo vive en `app/config.py` (`MODEL_CATALOG` / `VIDEO_PROFILE_CATALOG`) — agregar un modelo o perfil ahí lo expone automáticamente en la web UI y en `GET /api/v1/engine`.
 
+## Restaurar fotos (Mejorar → Restore photo)
+
+> **Sin publicar.** La pestaña, la API (`/api/v1/restore/*`), la CLI (`upflow restore`) y las
+> tools MCP están, pero los tres packs de modelos (`restore-core`, `restore-faces` y
+> `restore-colorize`) todavía no tienen artefactos publicados. Hasta entonces corren los pasos sin
+> modelo: quitar la trama, color y tono, y reparar lo que pintás a mano con el relleno clásico.
+> Los tiempos por etapa y la revisión visual con fotos reales se miden en GPU antes de publicar;
+> este README no da cifras hasta tenerlas.
+
+Soltás la foto (PNG, JPG, WEBP, BMP o TIFF, también de 16 bits) y la app la analiza en la CPU:
+dice qué encontró (rayas y manchas, bloques de JPEG, ruido, trama de impresión, desvaído, caras) y
+propone un punto de partida. Antes de restaurar podés girar, enderezar y recortar; probar la cadena
+en un recorte de hasta 512×512 ("Preview this area"); revisar y corregir la máscara de daños con un
+pincel; y elegir cara por cara cuáles restaurar. El resultado se compara con un deslizador antes y
+después, y los mismos ajustes se pueden aplicar a más fotos, cada una como su propio trabajo.
+
+**Los pasos, siempre en este orden** (el orden sale del catálogo y no del pedido: cada paso
+necesita que el anterior ya haya pasado):
+
+| Paso (UI) | Qué arregla | Cómo | Inventa detalle |
+|---|---|---|---|
+| Remove print pattern | La trama de puntos de un recorte de diario o revista | Filtro clásico (FFT), sin modelo | No |
+| Repair damage | Rayas, grietas, manchas, polvo | Detector BOPBTL (pack `restore-core`, siempre en CPU) o tu máscara pintada; relleno con MI-GAN (pack del borrador) o Telea clásico | **Sí**, en los huecos grandes |
+| Remove JPEG artifacts | Bloques y halos de compresión | DRUNet (`restore-core`) | No |
+| Reduce noise | Grano y ruido del escaneo, conservando parte del grano | DRUNet (`restore-core`) | No |
+| Fix colors and tone | Desvaído y dominante de color; conserva sepia, virado e iluminado a mano salvo que pidas "Neutral gray" | Clásico, sin modelo | No |
+| *(agrandar)* | Opcional: ninguno, clásico o un modelo de super-resolución | Motor de reescalado existente | Solo con modelo IA generativo, y el selector lo dice |
+| Restore faces | Caras chicas o borrosas | RetinaFace-R34 + GFPGAN v1.4 (`restore-faces`), mezcla 60% por defecto | **Sí**: cada cara restaurada lleva su aviso |
+| Colorize | Solo fotos en blanco y negro o viradas | DDColor-tiny (`restore-colorize`) | **Sí**: los colores son una estimación |
+
+Puntos de partida: **Gentle** (solo lo que el análisis encontró, conserva el tono), **Heavy
+damage**, **Newspaper / magazine clipping**, **Faded color print** y **Portrait** (Gentle más las
+caras que dan para restaurar). Ninguno colorea ni neutraliza: eso lo pedís vos.
+
+**Lo que no recupera, dicho en la UI y acá.** Detalle que el papel nunca registró (una cara de
+15 px no vuelve), zonas quemadas, ni los colores reales de una foto en blanco y negro: la
+colorización es una estimación con sesgos conocidos (piel más clara, colores "seguros"). La
+identidad exacta de una cara chica tampoco: por eso las caras de menos de 8 px entre ojos no se
+restauran, de 8 a 32 px quedan apagadas (opt-in cara por cara, con confirmación por debajo de 16 px)
+y cada cara restaurada se puede apagar o re-mezclar sobre el resultado sin volver a correr nada.
+
+**Qué te llevás.** La foto restaurada; si colorizaste, también la versión sin color; y
+`<nombre>.restore.json` con los pasos, sus ajustes, qué modelo corrió en qué placa y precisión, y
+qué cayó a la CPU. La foto lleva XMP con `DigitalSourceType`: `compositeWithTrainedAlgorithmicMedia`
+cuando hay contenido inventado a la vista (caras restauradas, color, un relleno de más del 1% de la
+foto o sobre una cara, un agrandado generativo) y `algorithmicallyEnhanced` en los demás casos. El
+GPS del EXIF se quita salvo que pidas conservarlo. Todo corre local: un test
+(`tests/test_restore_is_local.py`) falla si algún módulo de restauración importa algo que hable por
+red.
+
+### Packs, licencias y linaje de datos
+
+Nada viene en el instalador: cada pack se baja aparte con su botón o con
+`scripts\download-restore.ps1 -Bundle core|faces|colorize`, e instala junto a los modelos su
+`LICENSE` y un `NOTICE.txt` que dice qué se modificó (export a ONNX opset 17, normalización
+incluida en el grafo y, donde aplica, conversión fp16). Los pesos se re-exportan desde los
+oficiales en un repo propio (`port-restore-onnx`, código MIT); **cada peso conserva la licencia de
+su origen**, la insignia MIT del repo de export no la reemplaza. En la app, Ajustes → **Licenses**
+muestra lo mismo por pack instalado, y [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) lista el
+código portado.
+
+| Pack | Modelo | Licencia (código / pesos) | Atribución | Datos de entrenamiento | Linaje |
+|---|---|---|---|---|---|
+| `restore-core` | Detector de rayas BOPBTL | MIT / MIT | Microsoft, *Bringing Old Photos Back to Life* | Pascal VOC (fotos de Flickr con sus propios términos) + 783 fotos antiguas de origen no declarado | D1a + D1c |
+| `restore-core` | DRUNet (de-JPEG y ruido) | MIT / MIT | Kai Zhang, KAIR / DPIR | BSD400, WED, DIV2K y Flickr2K | D1a |
+| `restore-faces` | RetinaFace-R34 (detector) | MIT / MIT | yakhyo, a partir de biubug6 | WIDER FACE (CC BY-NC-ND 4.0) + backbone de ImageNet | D1b + D1a |
+| `restore-faces` | GFPGAN v1.4 | Apache-2.0 con excepciones de terceros¹ | Tencent ARC | FFHQ (compilación CC BY-NC-SA 4.0); pérdida de identidad con un ArcFace de datos no declarados | D1b + D1c |
+| `restore-colorize` | DDColor-tiny | Apache-2.0 / Apache-2.0 | piddnad (DDColor) | ImageNet (investigación, no comercial) | D1a |
+| pack del borrador | MI-GAN | MIT / MIT | Picsart AI Research | Places2 (investigación, no comercial) | D1a |
+
+¹ El LICENSE de GFPGAN excluye StyleGAN2 (NVIDIA Source Code License-NC) y DFDNet (CC BY-NC-SA 4.0)
+sin decir qué archivos; la inferencia usa solo la arquitectura *clean* (`gfpganv1_clean_arch` +
+`stylegan2_clean_arch`), así que el riesgo residual es bajo, no nulo.
+
+**Ningún peso está libre de deuda de datos.** El tipo de cláusula es lo que distingue:
+
+- **D1a** — las imágenes de entrenamiento son "solo investigación" o no comerciales, o son
+  compilaciones de Flickr sin licencia propia (DIV2K, Flickr2K, BSD/WED, Places2, ImageNet,
+  Pascal VOC). Es el mismo criterio con el que Upflow ya distribuye Real-ESRGAN.
+- **D1b** — la compilación tiene cláusulas *NoDerivatives* o *ShareAlike* (WIDER FACE, FFHQ): el peso
+  podría leerse como obra derivada de la compilación.
+- **D1c** — datos no declarados (las 783 fotos de BOPBTL, el ArcFace de la pérdida de GFPGAN).
+
+Si alguna de esas clases se descarta, el pack correspondiente no se publica y la función queda sin
+ese modelo (por ejemplo, sin D1b no hay restauración de caras). Los modelos no comerciales
+(CodeFormer y afines) no están en v1.
+
 ## Configuración
 
 Todas las variables leen de `.env` (ver [`.env.example`](.env.example) con los defaults y comentarios). `get_settings()` cachea el resultado — reiniciá el servidor después de cambiar `.env`.
@@ -511,6 +599,13 @@ Todas las variables leen de `.env` (ver [`.env.example`](.env.example) con los d
 | `ONNX_VIDEO_MAX_PIPELINE_MB` | `1024` | Presupuesto de RAM para las colas de frames en vuelo. Es **global**: se reparte entre todas las colas del pipeline, no es por cola |
 | `ENABLE_FILE_LOGGING` | `False` | Escribe los logs a `runtime/logs/upflow.log` (rotado). Apagado por defecto: en uso normal es ruido y disco. Se enciende desde **Settings** sin reiniciar, para que quien reporta un problema pueda reproducirlo y mandar el archivo |
 | `LOG_FILE_MAX_MB` / `LOG_FILE_BACKUPS` | `10` / `3` | Techo por archivo antes de rotar y cuántos rotados se conservan |
+| `RESTORE_MODEL_DIR` | `vendor/restore` | Carpeta de los packs `restore-*` de [Restaurar fotos](#restaurar-fotos-mejorar--restore-photo). No hay flags `ENABLE_*`: bajar el pack es poder usarlo |
+| `RESTORE_CALL_BUDGET_MS` | `1200` | Presupuesto por llamada a la GPU (límite TDR de Windows); la calibración de tiles apunta a la mitad |
+| `RESTORE_GPU_THROTTLE_SECONDS` | `0.0` | Respiro entre tiles para que el escritorio siga fluido |
+| `RESTORE_SESSION_CACHE_MB` / `RESTORE_MAX_LIVE_SESSIONS` | `3000` / `3` | Tope de VRAM estimada y de cantidad de sesiones ONNX de restauración vivas a la vez |
+| `RESTORE_NCNN_HEADROOM_MB` | `2048` | VRAM libre mínima antes de un agrandado ncnn; si no alcanza, se liberan las sesiones de restauración |
+| `RESTORE_MAX_INPUT_PIXELS` / `RESTORE_MAX_OUTPUT_PIXELS` | `40000000` / `100000000` | Topes de memoria de la foto de entrada y de la salida (con agrandado) |
+| `RESTORE_ANALYSIS_CONCURRENCY` | `1` | Análisis de fotos simultáneos (corren en CPU) |
 
 ## Optimization Center
 
@@ -689,6 +784,7 @@ Guía completa: [docs/agent-usage.md](docs/agent-usage.md). Lo mínimo:
 upflow health --json                      # ¿GPU, pack ncnn, modelos?
 upflow upscale --in foto.png --out foto-2x.webp --model realesrgan-x4plus --scale 2 --json
 upflow models --json                      # ids válidos para --model
+upflow restore --in escaneo.tif --out foto.png --steps repair,denoise,tone --json
 ```
 
 - `upflow upscale` corre en proceso, **sin servidor**; `--json` imprime una sola línea JSON al final (`ok`, `output`, `width`, `height`, `model`, `device`, `scale`, `nativeScale`, `tile`, `seconds`). Códigos de salida: `0` ok, `2` argumentos, `3` modelo no instalado, `4` dispositivo, `5` fallo de inferencia. Sin prompts; las descargas exigen `--yes`. Formatos: `png`/`jpg`/`webp` (motor) y `jxl`/`avif` (ffmpeg vendorizado).
@@ -699,9 +795,10 @@ upflow models --json                      # ids válidos para --model
 
 Upflow expone toda su funcionalidad como **tools MCP** (Model Context Protocol) para que agentes de IA (Claude Code, Claude Desktop, o cualquier cliente MCP) puedan reescalar, transcribir, generar y procesar medios directamente.
 
-- **56 tools** que cubren la API entera: upscale de imagen/video, audio (denoise/restore/master), transcripción/doblaje, descargas (yt-dlp), generación de imágenes/video, TTS, 3D imprimible, **modelado 3D con Blender**, edición de imagen (seleccionar por clic, insertar objeto), reparación de mallas, prompts guardados, conversión y optimización de modelos, y ajustes/diagnóstico del sistema.
+- **62 tools** que cubren la API entera: upscale de imagen/video, restauración de fotos, audio (denoise/restore/master), transcripción/doblaje, descargas (yt-dlp), generación de imágenes/video, TTS, 3D imprimible, **modelado 3D con Blender**, edición de imagen (seleccionar por clic, insertar objeto), reparación de mallas, prompts guardados, conversión y optimización de modelos, y ajustes/diagnóstico del sistema.
 - `upflow_init_image` sube una imagen y devuelve su token: es la puerta de entrada de **todo lo que parte de una imagen** —img2img, inpaint, selección por clic, insertar objeto, foto a malla—, que antes solo existía para quien usaba la pantalla.
 - `upflow_segment_object` no reenvía lo que devuelve la ruta: `/editor/segment` contesta un PNG crudo, inservible para encadenar, así que la tool vuelve a subir la máscara y entrega el token que consume `upflow_insert_object`.
+- Restauración de fotos: `upflow_restore_analyze` (diagnóstico y punto de partida propuesto), `upflow_restore_photo` (con los pasos de `proposedSteps`) y `upflow_restore_recompose` (re-mezcla las caras de un job terminado sin volver a correr modelos). Detalle en [docs/agent-usage.md](docs/agent-usage.md).
 - Modelo de jobs unificado: `upflow_job_status` / `upflow_wait_job` / `upflow_cancel_job` / `upflow_download_result` funcionan igual para cualquier familia (`image | video | audio | generation | transcribe | download | shape3d`).
 - Las tools de creación aceptan **rutas de archivo locales** y resuelven la subida (multipart o staging por token) por sí solas.
 - Es un cliente HTTP fino: con el servidor corriendo, MCP y la web UI ven exactamente los mismos jobs. Sin servidor, `upflow_upscale_image`, `upflow_list_models` y `upflow_health` caen al modo **in-process** (`UPFLOW_MCP_MODE=auto|server|inprocess`, o `--mode`), y `upflow-mcp --autostart` lo levanta solo.
@@ -762,6 +859,9 @@ Backend (pytest):
 
 # con cobertura (requiere pytest-cov: pip install pytest-cov)
 .\.venv\Scripts\python -m pytest --cov=app --cov-report=term-missing
+
+# tests que ocupan la GPU: viven en tests/gpu (fuera de la colección por defecto), de a uno
+$env:UPFLOW_GPU_TESTS = "1"; .\.venv\Scripts\python -m pytest tests/gpu/<archivo>.py
 ```
 
 Frontend (vitest):

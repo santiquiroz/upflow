@@ -108,6 +108,8 @@ def catalog_entries() -> list[dict]:
             "category": CLASSIC_CATEGORY,
             "description": upscaler.description,
             "scales": list(CLASSIC_SCALES),
+            # Interpolan pixeles existentes: no inventan textura.
+            "generative": False,
         }
         for upscaler in CLASSIC_UPSCALERS
     ]

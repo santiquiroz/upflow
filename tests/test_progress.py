@@ -30,8 +30,10 @@ from app.services.progress import (
     complete_generation_stages,
     complete_image_stages,
     complete_video_stages,
+    enter_image_stage,
     mark_all_done,
     resolve_frames_total,
+    running_image_stage,
 )
 from app.services.storage import StorageService
 from app.services.video_upscaler import VideoUpscaler
@@ -440,6 +442,99 @@ def test_apply_image_tile_progress_is_monotonically_increasing_across_calls(tmp_
 
     assert progress_values == sorted(progress_values)
     assert progress_values[0] < progress_values[-1]
+
+
+# ---------------------------------------------------------------------------
+# Restauracion de fotos: etapas dinamicas por job (spec §2.5 / §5.9)
+# ---------------------------------------------------------------------------
+
+
+def make_restore_job(tmp_path: Path, steps: list[str], scale: int = 1) -> UpscaleJob:
+    return make_image_job(tmp_path / "in.png", scale=scale, restore_steps=steps)
+
+
+def test_build_image_stages_without_job_keeps_the_upscale_stages() -> None:
+    assert [stage.key for stage in build_image_stages()] == ["validating", "upscaling"]
+
+
+def test_build_image_stages_for_plain_job_is_unchanged(tmp_path: Path) -> None:
+    job = make_image_job(tmp_path / "in.png")
+
+    assert [stage.key for stage in build_image_stages(job)] == ["validating", "upscaling"]
+
+
+def test_restore_stages_follow_the_catalog_order_with_upscaling_between_phases(tmp_path: Path) -> None:
+    job = make_restore_job(tmp_path, ["colorize", "denoise", "repair", "faces"], scale=2)
+
+    keys = [stage.key for stage in build_image_stages(job)]
+
+    assert keys == [
+        "restore_repair_detect",
+        "restore_repair_fill",
+        "restore_denoise",
+        "upscaling",
+        "restore_faces",
+        "restore_colorize",
+        "saving",
+    ]
+    assert sum(stage.weight for stage in build_image_stages(job)) == pytest.approx(1.0)
+
+
+def test_restore_stages_skip_upscaling_at_scale_one(tmp_path: Path) -> None:
+    job = make_restore_job(tmp_path, ["tone"])
+
+    keys = [stage.key for stage in build_image_stages(job)]
+
+    assert keys == ["restore_tone", "saving"]
+    assert build_image_stages(job)[0].label == "Fixing colors and tone"
+
+
+def test_running_image_stage_is_upscaling_for_plain_jobs_and_first_step_for_restore(tmp_path: Path) -> None:
+    plain = make_image_job(tmp_path / "in.png")
+    restore = make_restore_job(tmp_path, ["tone", "descreen"])
+
+    assert running_image_stage(plain) == "upscaling"
+    assert running_image_stage(restore) == "restore_descreen"
+
+
+def test_apply_image_tile_progress_with_denoise_stage_key_does_not_show_upscaling(tmp_path: Path) -> None:
+    job = make_restore_job(tmp_path, ["denoise", "tone"], scale=2)
+    advance_image_stage(job, "restore_denoise")
+
+    apply_image_tile_progress(job, tiles_done=3, tiles_total=6, stage_key="restore_denoise")
+
+    assert job.metadata["stage"] == "restore_denoise"
+    statuses = {stage["key"]: stage["status"] for stage in job.metadata["stages"]}
+    assert statuses["restore_denoise"] == "active"
+    assert statuses["upscaling"] == "pending"
+    assert (job.metadata["framesDone"], job.metadata["framesTotal"]) == (3, 6)
+
+
+def test_enter_image_stage_resets_the_tile_counters_of_the_previous_stage(tmp_path: Path) -> None:
+    job = make_restore_job(tmp_path, ["denoise", "tone"])
+    advance_image_stage(job, "restore_denoise")
+    apply_image_tile_progress(job, tiles_done=6, tiles_total=6, stage_key="restore_denoise")
+
+    enter_image_stage(job, "restore_tone")
+
+    assert job.metadata["stage"] == "restore_tone"
+    assert (job.metadata["framesDone"], job.metadata["framesTotal"]) == (0, None)
+
+
+def test_restore_progress_is_monotonic_through_the_dynamic_stages(tmp_path: Path) -> None:
+    job = make_restore_job(tmp_path, ["repair", "deblock", "tone", "faces", "colorize"], scale=2)
+    values = []
+    for stage in build_image_stages(job):
+        enter_image_stage(job, stage.key)
+        values.append(job.metadata["progress"])
+        for done in (1, 2, 3):
+            apply_image_tile_progress(job, tiles_done=done, tiles_total=3, stage_key=stage.key)
+            values.append(job.metadata["progress"])
+    complete_image_stages(job)
+    values.append(job.metadata["progress"])
+
+    assert values == sorted(values)
+    assert values[-1] == pytest.approx(1.0)
 
 
 # ---------------------------------------------------------------------------

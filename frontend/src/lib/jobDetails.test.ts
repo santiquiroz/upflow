@@ -62,6 +62,11 @@ const IMAGE_JOB: JobResponse = {
   downloadUrl: null,
 };
 
+function withRestoreUpscale(job: JobResponse, upscale: Record<string, unknown>): JobResponse {
+  const restore = job.metadata.restore as Record<string, unknown>;
+  return { ...job, metadata: { ...job.metadata, restore: { ...restore, upscale } } };
+}
+
 const VIDEO_JOB: VideoJobResponse = {
   jobId: "vid-1",
   status: "running",
@@ -303,6 +308,112 @@ describe("buildJobDetailSections", () => {
       );
 
       expect(valueOf(sections.result, "job.detail.field.upscaleRuntime")).toBe("onnx fp16 · tiled");
+    });
+
+    describe("photo restoration", () => {
+      const RESTORE_JOB: JobResponse = {
+        ...IMAGE_JOB,
+        restoreSteps: ["repair", "denoise", "faces"],
+        metadata: {
+          restore: {
+            steps: [
+              {
+                id: "repair",
+                strategy: "model",
+                model: { id: "bopbtl-detect", device: "dml:0", precision: "fp16", tile: 512 },
+                auxiliaryModels: [{ id: "migan", device: "cpu", precision: "fp32", tile: null }],
+              },
+              { id: "denoise", strategy: "dsp", model: null, auxiliaryModels: [] },
+              {
+                id: "faces",
+                strategy: "model",
+                model: { id: "gfpgan-v1.4", device: "dml:0", precision: "fp32", tile: null },
+                auxiliaryModels: [],
+              },
+            ],
+            faces: [
+              { index: 0, restored: true },
+              { index: 1, restored: true },
+              { index: 2, restored: false },
+            ],
+            upscale: { mode: "ai", scale: 2, model: "realesrgan-x2", generative: true, backend: "onnx" },
+            cpuFallback: [{ model: "drunet-color", reason: "DirectML could not run DepthToSpace" }],
+          },
+        },
+      };
+
+      it("lists the requested fixes in chain order", () => {
+        const sections = buildJobDetailSections({ ...RESTORE_JOB, metadata: {} }, context());
+
+        expect(valueOf(sections.parameters, "job.detail.field.restoreSteps")).toBe(
+          "Repair damage, Reduce noise, Restore faces",
+        );
+      });
+
+      it("names the model, device and precision each fix ran with", () => {
+        const sections = buildJobDetailSections(RESTORE_JOB, context());
+
+        expect(valueOf(sections.result, "restore.step.repair")).toBe(
+          "bopbtl-detect · Radeon (dml:0) · fp16; migan · Radeon (cpu) · fp32",
+        );
+        expect(valueOf(sections.result, "restore.step.faces")).toBe("gfpgan-v1.4 · Radeon (dml:0) · fp32");
+      });
+
+      it("says when a fix ran as a classic filter without a model", () => {
+        const sections = buildJobDetailSections(RESTORE_JOB, context());
+
+        expect(valueOf(sections.result, "restore.step.denoise")).toBe("Classic filter (no AI)");
+      });
+
+      it("counts the restored faces", () => {
+        const sections = buildJobDetailSections(RESTORE_JOB, context());
+
+        expect(valueOf(sections.result, "job.detail.field.restoreFaces")).toBe("2 of 3 restored");
+      });
+
+      it("labels an AI upscale as generative", () => {
+        const sections = buildJobDetailSections(RESTORE_JOB, context());
+
+        expect(valueOf(sections.result, "job.detail.field.restoreUpscale")).toBe(
+          "realesrgan-x2 · 2x · Generative (invents texture)",
+        );
+      });
+
+      it("names the classic upscale and hides the row when nothing was upscaled", () => {
+        const classic = withRestoreUpscale(RESTORE_JOB, { mode: "classic", scale: 3, model: null, generative: false });
+        const none = withRestoreUpscale(RESTORE_JOB, { mode: "none", scale: 1, model: null, generative: false });
+
+        expect(valueOf(buildJobDetailSections(classic, context()).result, "job.detail.field.restoreUpscale")).toBe(
+          "Classic (Lanczos) · 3x · Non-generative",
+        );
+        expect(labels(buildJobDetailSections(none, context()).result)).not.toContain(
+          "job.detail.field.restoreUpscale",
+        );
+      });
+
+      it("explains which models fell back to the CPU", () => {
+        const sections = buildJobDetailSections(RESTORE_JOB, context());
+
+        expect(valueOf(sections.result, "job.detail.field.restoreCpuFallback")).toBe(
+          "drunet-color: DirectML could not run DepthToSpace",
+        );
+      });
+
+      it("ignores a malformed restoration summary instead of crashing", () => {
+        const broken = { ...RESTORE_JOB, metadata: { restore: { steps: "nope", faces: [null, 3] } } };
+
+        const sections = buildJobDetailSections(broken, context());
+
+        expect(labels(sections.result)).not.toContain("job.detail.field.restoreFaces");
+        expect(labels(sections.result).some((label) => label.startsWith("restore.step."))).toBe(false);
+      });
+
+      it("adds no restoration rows to a plain upscale", () => {
+        const sections = buildJobDetailSections(IMAGE_JOB, context());
+
+        expect(labels(sections.parameters)).not.toContain("job.detail.field.restoreSteps");
+        expect(labels(sections.result).some((label) => label.startsWith("job.detail.field.restore"))).toBe(false);
+      });
     });
   });
 

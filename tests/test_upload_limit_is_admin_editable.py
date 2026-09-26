@@ -60,3 +60,31 @@ def test_a_limit_that_would_reject_everything_is_refused(env_file, bad: str) -> 
     """Un cero o un negativo dejaria la app rechazando cualquier archivo."""
     with pytest.raises(SettingValueError):
         update_setting("max_video_upload_mb", bad)
+
+
+# ---------------------------------------------------------------------------
+# El limite de imagenes (MAX_UPLOAD_MB=50) queda corto para un escaneo TIFF de
+# una foto vieja: se edita igual que el de video, y por la misma razon tiene que
+# llegar como ENTERO a la instancia viva.
+# ---------------------------------------------------------------------------
+
+
+def test_the_image_upload_limit_is_editable_from_the_ui() -> None:
+    assert "max_upload_mb" in EDITABLE_SETTINGS_WHITELIST
+
+
+def test_updating_the_image_limit_leaves_a_number_not_a_string(env_file) -> None:
+    live = Settings(_env_file=None)
+    register_live_settings(live)
+
+    update_setting("max_upload_mb", "400")
+
+    assert live.max_upload_mb == 400
+    assert isinstance(live.max_upload_mb, int)
+    assert "MAX_UPLOAD_MB=400" in env_file.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("bad", ["0", "-1", "no-soy-un-numero", "1.5"])
+def test_an_image_limit_that_would_reject_everything_is_refused(env_file, bad: str) -> None:
+    with pytest.raises(SettingValueError):
+        update_setting("max_upload_mb", bad)

@@ -15,7 +15,7 @@ import {
   resolveFramesDenominator,
   toMonotonicProgressPct,
 } from "../lib/jobProgress";
-import { translateStageLabel } from "../lib/jobStageLabels";
+import { activeStageCount, type StageCounterMetadata, translateStageLabel } from "../lib/jobStageLabels";
 import { isCancellableJobStatus } from "../lib/jobStatus";
 import { isVideoJob, type AnyQueuedJob } from "../lib/jobTypeGuards";
 import { DeterminateProgressBar } from "./DeterminateProgressBar";
@@ -197,6 +197,10 @@ function stepTextClassName(state: "done" | "active" | "pending"): string {
   return state === "active" ? "text-text" : "text-text-dim";
 }
 
+function stageCounterMetadata(job: AnyQueuedJob | undefined): StageCounterMetadata | undefined {
+  return job && "metadata" in job ? (job.metadata ?? undefined) : undefined;
+}
+
 function Stepper({ job }: { job: AnyQueuedJob | undefined }) {
   const { t } = useTranslation();
   const steps = deriveStepper(resolveStages(job));
@@ -208,7 +212,9 @@ function Stepper({ job }: { job: AnyQueuedJob | undefined }) {
       {steps.map((step) => (
         <li key={step.key} className="flex items-center gap-2 text-xs">
           <StepIcon state={step.iconState} />
-          <span className={stepTextClassName(step.iconState)}>{translateStageLabel(step, t)}</span>
+          <span className={stepTextClassName(step.iconState)}>
+            {translateStageLabel(step, t, activeStageCount(step.key, stageCounterMetadata(job)))}
+          </span>
         </li>
       ))}
     </ol>

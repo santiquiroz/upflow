@@ -35,6 +35,7 @@ class JobResponse(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     progress_pct: float | None = Field(default=None, serialization_alias="progressPct")
     download_url: str | None = Field(default=None, serialization_alias="downloadUrl")
+    restore_steps: list[str] = Field(default_factory=list, serialization_alias="restoreSteps")
 
 
 class VideoJobResponse(BaseModel):
@@ -835,6 +836,7 @@ class HealthResponse(BaseModel):
     default_device: str | None = Field(default=None, serialization_alias="defaultDevice")
     models_installed: list[str] = Field(default_factory=list, serialization_alias="modelsInstalled")
     tile: HealthTileResponse | None = None
+    restore_packs_installed: list[str] = Field(default_factory=list, serialization_alias="restorePacksInstalled")
 
 
 class DeviceInfoResponse(BaseModel):
@@ -867,6 +869,8 @@ class ModelResponse(BaseModel):
     size_bytes: int = Field(serialization_alias="sizeBytes")
     status: str
     error: str | None = None
+    # Para la etiqueta "Generative (invents texture)" / "Non-generative" del selector.
+    generative: bool = True
 
 
 class ModelsResponse(BaseModel):

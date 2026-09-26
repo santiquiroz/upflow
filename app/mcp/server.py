@@ -302,24 +302,176 @@ async def upflow_upscale_image(
             files={"file": (name, content, "application/octet-stream")},
             timeout=client.UPLOAD_TIMEOUT,
         )
-        fam = FAMILIES["image"]
-        job_id = created.get("jobId")
-        if not wait:
-            return _dump(normalize_job(fam, created))
-        job = await fetch_job(fam, job_id)
-        while not is_terminal(job):
-            await asyncio.sleep(WAIT_POLL_SECONDS)
-            job = await fetch_job(fam, job_id)
-        if destination_path and job.get("status") == "completed":
-            destination = client.resolve_output_path(
-                destination_path, f"upscaled-{name}.{output_format}"
-            )
-            await client.api_download(f"{fam.base_path}/{job_id}/download", destination)
-            job["outputPath"] = str(destination)
-        return _dump(job)
+        default_name = f"upscaled-{name}.{output_format}"
+        return _dump(await finish_image_job(created, wait, destination_path, default_name))
     except Exception as exc:
         if headless_tools.should_fallback(exc):
             return await headless_fallback()
+        return format_tool_error(exc)
+
+
+async def finish_image_job(
+    created: dict[str, Any], wait: bool, destination_path: str, default_name: str
+) -> dict[str, Any]:
+    fam = FAMILIES["image"]
+    if not wait:
+        return normalize_job(fam, created)
+    job_id = created.get("jobId")
+    job = await fetch_job(fam, job_id)
+    while not is_terminal(job):
+        await asyncio.sleep(WAIT_POLL_SECONDS)
+        job = await fetch_job(fam, job_id)
+    if destination_path and job.get("status") == "completed":
+        destination = client.resolve_output_path(destination_path, default_name)
+        await client.api_download(f"{fam.base_path}/{job_id}/download", destination)
+        job["outputPath"] = str(destination)
+    return job
+
+
+# ---------------------------------------------------------------- restauracion de fotos
+
+
+@mcp.tool(name="upflow_restore_analyze", annotations={"title": "Analizar foto para restaurar", **CREATES_JOB})
+async def upflow_restore_analyze(file_path: str) -> str:
+    """Sube una foto vieja o escaneada y devuelve su diagnóstico de restauración:
+    token (reusable en upflow_restore_photo, así no se sube dos veces),
+    proposedPreset/proposedSteps/proposedOptions, presetSelections (pasos y
+    ajustes de cada preset), findings, caras, cobertura de daño y ETA.
+    Todo corre en la PC: la foto nunca sale de ella.
+    Sin servidor (UPFLOW_MCP_MODE=auto) corre en proceso y suma previewPath."""
+    if headless_tools.inprocess_only():
+        return await headless_tools.upflow_restore_analyze_headless(file_path)
+    try:
+        name, content = client.read_upload(file_path)
+        payload = await client.api_post(
+            "/api/v1/restore/analyze",
+            files={"file": (name, content, "application/octet-stream")},
+            timeout=client.UPLOAD_TIMEOUT,
+        )
+        return _dump(payload)
+    except Exception as exc:
+        if headless_tools.should_fallback(exc):
+            return await headless_tools.upflow_restore_analyze_headless(file_path)
+        return format_tool_error(exc)
+
+
+def restore_source_error(file_path: str, token: str, steps: list[str] | None) -> str | None:
+    if bool(file_path) == bool(token):
+        return "Error: pasá exactamente uno de file_path o token (de upflow_restore_analyze)."
+    if not steps:
+        return "Error: pasá steps (usá proposedSteps y proposedOptions de upflow_restore_analyze)."
+    return None
+
+
+def restore_form(
+    token: str,
+    steps: list[str],
+    options: dict[str, Any] | None,
+    scale: int,
+    device: str,
+    model_name: str,
+    output_format: str,
+) -> dict[str, str]:
+    form = {
+        "restore_steps": ",".join(steps),
+        "scale": str(scale),
+        "model_name": model_name,
+        "output_format": output_format or "png",
+    }
+    if options:
+        form["restore_options"] = json.dumps(options)
+    if device:
+        form["device"] = device
+    if token:
+        form["token"] = token
+    return form
+
+
+@mcp.tool(name="upflow_restore_photo", annotations={"title": "Restaurar foto", **CREATES_JOB})
+async def upflow_restore_photo(
+    file_path: str = "",
+    token: str = "",
+    steps: list[str] | None = None,
+    options: dict[str, Any] | None = None,
+    scale: int = 1,
+    device: str = "",
+    model_name: str = "realesrgan-x4plus",
+    output_format: str = "",
+    wait: bool = True,
+    destination_path: str = "",
+) -> str:
+    """Restaura una foto (daños, trama, bloques JPEG, ruido, tono, caras, color).
+
+    Pasá exactamente uno: file_path (ruta local) o token (de
+    upflow_restore_analyze, que además usa sus caras y su máscara de daño).
+    steps: ids de la cadena (descreen, repair, deblock, denoise, tone, faces,
+    colorize); el orden lo fija Upflow. options: ajustes por paso con la forma
+    de proposedOptions/presetSelections, más upscale_mode (none|classic|ai),
+    geometry {rotate90, crop, angle}, badge, keep_gps, photo_date.
+    scale 1 = sin agrandar; 2-4 agranda (upscale_mode ai usa model_name).
+    output_format: png|jpg|webp (vacío = png). wait=True espera; con
+    destination_path guarda el resultado y devuelve outputPath.
+    Caras y color inventan detalle: el JSON de detalles lo declara.
+    Sin servidor corre en proceso y devuelve el JSON de `upflow restore --json`.
+    """
+
+    async def headless_fallback() -> str:
+        return await headless_tools.upflow_restore_photo_headless(
+            file_path=file_path,
+            token=token,
+            steps=steps,
+            options=options,
+            scale=scale,
+            device=device,
+            model_name=model_name,
+            output_format=output_format,
+            destination_path=destination_path,
+        )
+
+    error = restore_source_error(file_path, token, steps)
+    if error is not None:
+        return error
+    if headless_tools.inprocess_only():
+        return await headless_fallback()
+    try:
+        form = restore_form(token, list(steps or ()), options, scale, device, model_name, output_format)
+        files = None
+        if file_path:
+            name, content = client.read_upload(file_path)
+            files = {"file": (name, content, "application/octet-stream")}
+        created = await client.api_post(
+            "/api/v1/restore/jobs", data=form, files=files, timeout=client.UPLOAD_TIMEOUT
+        )
+        default_name = f"restored.{form['output_format']}"
+        return _dump(await finish_image_job(created, wait, destination_path, default_name))
+    except Exception as exc:
+        if headless_tools.should_fallback(exc):
+            return await headless_fallback()
+        return format_tool_error(exc)
+
+
+@mcp.tool(name="upflow_restore_recompose", annotations={"title": "Recomponer caras restauradas", **CREATES_JOB})
+async def upflow_restore_recompose(
+    job_id: str, faces: dict[str, dict[str, Any]], destination_path: str = ""
+) -> str:
+    """Rehace la mezcla de las caras de una restauración ya terminada sin volver
+    a correr los modelos. faces: {"<índice>": {"enabled": true|false, "blend": 0-1}}
+    con los índices de metadata.restore.faces del job. Devuelve el sidecar
+    actualizado; con destination_path guarda la foto recompuesta (outputPath).
+    Necesita el servidor: una restauración en proceso no guarda las caras."""
+    if headless_tools.inprocess_only():
+        return await headless_tools.upflow_restore_recompose_headless(job_id, faces)
+    try:
+        payload = await client.api_post(f"/api/v1/restore/jobs/{job_id}/recompose", json_body={"faces": faces})
+        result: dict[str, Any] = {"jobId": job_id, **payload}
+        if destination_path:
+            destination = client.resolve_output_path(destination_path, "restored.png")
+            await client.api_download(f"{FAMILIES['image'].base_path}/{job_id}/download", destination)
+            result["outputPath"] = str(destination)
+        return _dump(result)
+    except Exception as exc:
+        if headless_tools.should_fallback(exc):
+            return await headless_tools.upflow_restore_recompose_headless(job_id, faces)
         return format_tool_error(exc)
 
 

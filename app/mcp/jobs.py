@@ -77,8 +77,17 @@ def normalize_job(family: JobFamily, payload: dict[str, Any]) -> dict[str, Any]:
         extras["code"] = payload.get("code")
     if family.name == "video":
         extras["stage"] = (payload.get("metadata") or {}).get("stage")
+    if family.name == "image":
+        extras.update(restore_extras(payload))
     normalized.update({key: value for key, value in extras.items() if value is not None})
     return normalized
+
+
+def restore_extras(payload: dict[str, Any]) -> dict[str, Any]:
+    steps = payload.get("restoreSteps")
+    if not steps:
+        return {}
+    return {"restoreSteps": steps, "stage": (payload.get("metadata") or {}).get("stage")}
 
 
 async def fetch_job(family: JobFamily, job_id: str) -> dict[str, Any]:

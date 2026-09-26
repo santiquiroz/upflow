@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from urllib.parse import parse_qs
 
 import httpx
 import pytest
@@ -18,6 +19,9 @@ from app.mcp.server import (
     upflow_download_result,
     upflow_job_status,
     upflow_list_jobs,
+    upflow_restore_analyze,
+    upflow_restore_photo,
+    upflow_restore_recompose,
     upflow_status,
     upflow_upscale_image,
     upflow_wait_job,
@@ -401,3 +405,105 @@ async def test_connection_refused_is_actionable(monkeypatch: pytest.MonkeyPatch)
     result = await upflow_job_status("image", "x")
     assert result.startswith("Error")
     assert "UPFLOW_URL" in result
+
+
+async def test_restore_analyze_uploads_the_photo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    source = tmp_path / "abuela.jpg"
+    source.write_bytes(b"jpg-bytes")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path == "/api/v1/restore/analyze"
+        assert b"jpg-bytes" in request.read()
+        return httpx.Response(200, json={"token": "t" * 32, "proposedSteps": ["repair"]})
+
+    install_mock(monkeypatch, handler)
+    result = json.loads(await upflow_restore_analyze(str(source)))
+    assert result["proposedSteps"] == ["repair"]
+
+
+async def test_restore_photo_with_token_sends_the_form_waits_and_downloads(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v1/restore/jobs":
+            form = {key: values[0] for key, values in parse_qs(request.read().decode()).items()}
+            assert form == {
+                "token": "tok123",
+                "restore_steps": "denoise,tone",
+                "restore_options": '{"tone": {"strength": 0.4}}',
+                "scale": "1",
+                "model_name": "realesrgan-x4plus",
+                "output_format": "png",
+            }
+            return httpx.Response(202, json={"jobId": "r1", "status": "queued", "restoreSteps": ["denoise", "tone"]})
+        if request.url.path == "/api/v1/jobs/r1":
+            return httpx.Response(
+                200, json={"jobId": "r1", "status": "completed", "restoreSteps": ["denoise", "tone"], "metadata": {}}
+            )
+        if request.url.path == "/api/v1/jobs/r1/download":
+            return httpx.Response(200, content=b"restaurada")
+        raise AssertionError(f"ruta inesperada: {request.url.path}")
+
+    install_mock(monkeypatch, handler)
+    monkeypatch.setattr("app.mcp.server.WAIT_POLL_SECONDS", 0.01)
+    result = json.loads(
+        await upflow_restore_photo(
+            token="tok123",
+            steps=["denoise", "tone"],
+            options={"tone": {"strength": 0.4}},
+            destination_path=str(tmp_path / "out"),
+        )
+    )
+
+    assert result["status"] == "completed"
+    assert result["restoreSteps"] == ["denoise", "tone"]
+    assert Path(result["outputPath"]).read_bytes() == b"restaurada"
+
+
+async def test_restore_photo_needs_one_source_and_steps(monkeypatch: pytest.MonkeyPatch) -> None:
+    install_mock(monkeypatch, lambda request: pytest.fail("no request expected"))
+    assert (await upflow_restore_photo(steps=["tone"])).startswith("Error")
+    assert (await upflow_restore_photo(file_path="a.png", token="t", steps=["tone"])).startswith("Error")
+    assert "upflow_restore_analyze" in await upflow_restore_photo(token="t")
+
+
+async def test_restore_recompose_posts_faces_and_downloads(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v1/restore/jobs/r1/recompose":
+            assert json.loads(request.read()) == {"faces": {"0": {"enabled": False, "blend": 0.3}}}
+            return httpx.Response(200, json={"sidecar": {"faces": []}})
+        if request.url.path == "/api/v1/jobs/r1/download":
+            return httpx.Response(200, content=b"recompuesta")
+        raise AssertionError(f"ruta inesperada: {request.url.path}")
+
+    install_mock(monkeypatch, handler)
+    faces = {"0": {"enabled": False, "blend": 0.3}}
+    result = json.loads(await upflow_restore_recompose("r1", faces, destination_path=str(tmp_path / "r.png")))
+    assert result["jobId"] == "r1"
+    assert result["sidecar"] == {"faces": []}
+    assert Path(result["outputPath"]).read_bytes() == b"recompuesta"
+
+
+async def test_restore_photo_runs_in_process_when_the_server_is_down(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def refused(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused", request=request)
+
+    seen: dict[str, object] = {}
+
+    async def inprocess(**kwargs) -> str:
+        seen.update(kwargs)
+        return json.dumps({"ok": True})
+
+    install_mock(monkeypatch, refused)
+    monkeypatch.delenv("UPFLOW_MCP_MODE", raising=False)
+    monkeypatch.setattr("app.mcp.headless_tools.upflow_restore_photo_headless", inprocess)
+    source = tmp_path / "foto.png"
+    source.write_bytes(b"png")
+    result = json.loads(await upflow_restore_photo(file_path=str(source), steps=["tone"], scale=2))
+    assert result == {"ok": True}
+    assert seen["file_path"] == str(source)
+    assert seen["steps"] == ["tone"]
+    assert seen["scale"] == 2

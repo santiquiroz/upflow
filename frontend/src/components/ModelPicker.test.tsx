@@ -195,3 +195,46 @@ describe("ModelPicker classic group", () => {
     expect(screen.queryByRole("group", { name: "No AI (classic resize)" })).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Etiqueta generativa (spec §4.7): un reescalador IA puede inventar rasgos o
+// caracteres que no estaban; el selector lo dice antes de elegirlo.
+// ---------------------------------------------------------------------------
+
+describe("ModelPicker generative tag", () => {
+  it("marks a model the registry declares generative", async () => {
+    renderPicker([{ ...BUILTIN_MODEL, generative: true }]);
+
+    const radio = await screen.findByRole("radio", { name: /RealESRGAN x4plus/ });
+    const option = radio.closest("label") as HTMLElement;
+
+    expect(within(option).getByText("Generative (invents texture)")).toBeInTheDocument();
+  });
+
+  it("marks a model the registry declares non-generative", async () => {
+    renderPicker([{ ...ONNX_MODEL, generative: false }]);
+
+    const radio = await screen.findByRole("radio", { name: /Custom Anime 2x/ });
+    const option = radio.closest("label") as HTMLElement;
+
+    expect(within(option).getByText("Non-generative")).toBeInTheDocument();
+  });
+
+  it("assumes generative when an older backend does not say, like the registry does", async () => {
+    renderPicker([ONNX_MODEL]);
+
+    const radio = await screen.findByRole("radio", { name: /Custom Anime 2x/ });
+    const option = radio.closest("label") as HTMLElement;
+
+    expect(within(option).getByText("Generative (invents texture)")).toBeInTheDocument();
+  });
+
+  it("never calls the classic resize generative", async () => {
+    renderPicker([CLASSIC_MODEL], vi.fn(), true);
+
+    const group = await screen.findByRole("group", { name: "No AI (classic resize)" });
+
+    expect(within(group).getByText("Non-generative")).toBeInTheDocument();
+    expect(within(group).queryByText("Generative (invents texture)")).toBeNull();
+  });
+});

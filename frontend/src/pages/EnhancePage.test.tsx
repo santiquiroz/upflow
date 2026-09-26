@@ -2,14 +2,14 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, expect, it } from "vitest";
-import { EnhancePage } from "./EnhancePage";
+import { EnhancePage, type EnhanceMedium } from "./EnhancePage";
 
-function renderPage() {
+function renderPage(initialMedium: EnhanceMedium = "image") {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   function Wrapper({ children }: { children: ReactNode }) {
     return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
   }
-  return render(<EnhancePage />, { wrapper: Wrapper });
+  return render(<EnhancePage initialMedium={initialMedium} />, { wrapper: Wrapper });
 }
 
 describe("EnhancePage", () => {
@@ -69,11 +69,11 @@ describe("EnhancePage", () => {
     renderPage();
 
     const imageTab = screen.getByRole("tab", { name: /image/i });
-    const videoTab = screen.getByRole("tab", { name: /video/i });
-    videoTab.focus();
-    fireEvent.click(videoTab);
+    const restoreTab = screen.getByRole("tab", { name: "Restore photo" });
+    restoreTab.focus();
+    fireEvent.click(restoreTab);
 
-    fireEvent.keyDown(videoTab, { key: "ArrowRight" });
+    fireEvent.keyDown(restoreTab, { key: "ArrowRight" });
 
     expect(imageTab).toHaveAttribute("aria-selected", "true");
     expect(imageTab).toHaveFocus();
@@ -83,12 +83,33 @@ describe("EnhancePage", () => {
     renderPage();
 
     const imageTab = screen.getByRole("tab", { name: /image/i });
-    const videoTab = screen.getByRole("tab", { name: /video/i });
+    const restoreTab = screen.getByRole("tab", { name: "Restore photo" });
     imageTab.focus();
 
     fireEvent.keyDown(imageTab, { key: "ArrowLeft" });
 
-    expect(videoTab).toHaveAttribute("aria-selected", "true");
-    expect(videoTab).toHaveFocus();
+    expect(restoreTab).toHaveAttribute("aria-selected", "true");
+    expect(restoreTab).toHaveFocus();
+  });
+
+  it("puts Restore photo third, after Image and Video", () => {
+    renderPage();
+
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Image", "Video", "Restore photo"]);
+  });
+
+  it("switches to the photo restoration panel when Restore photo is picked", () => {
+    renderPage();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Restore photo" }));
+
+    expect(screen.getByText("Drop a photo here or click to browse")).toBeInTheDocument();
+    expect(screen.getByText("Repair scratches, fading and noise in an old photo.")).toBeInTheDocument();
+  });
+
+  it("opens straight on the restore tab when asked to", () => {
+    renderPage("restore");
+
+    expect(screen.getByRole("tab", { name: "Restore photo" })).toHaveAttribute("aria-selected", "true");
   });
 });

@@ -12,6 +12,9 @@ vi.mock("../../lib/api", async (importOriginal) => {
   return { ...actual, getEngineInfo: vi.fn(), getHealth: vi.fn(), getDevices: vi.fn() };
 });
 vi.mock("../../services/settings", () => ({ fetchEditableSettings: vi.fn(), patchSetting: vi.fn() }));
+vi.mock("../../services/licenses", () => ({
+  fetchLicenses: vi.fn().mockResolvedValue({ packs: [], thirdParty: [] }),
+}));
 
 const ENGINE_INFO: EngineInfoResponse = {
   engine: "realesrgan-ncnn",
@@ -108,6 +111,13 @@ describe("SettingsPage", () => {
     // El nombre aparece en DeviceDefault y también en la tabla de Acceleration.
     expect((await screen.findAllByText("AMD Radeon RX 7900")).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText(/chosen automatically/i)).toBeInTheDocument();
+  });
+
+  it("shows the Licenses view in Settings", async () => {
+    renderPage();
+
+    expect(screen.getByRole("heading", { name: "Licenses" })).toBeInTheDocument();
+    expect(await screen.findByText("No restoration model packs are installed.")).toBeInTheDocument();
   });
 
   it("shows an error state when the engine request fails without crashing the page", async () => {
