@@ -302,7 +302,7 @@ def test_engine_detector_runs_the_real_graph_on_cpu_without_clamping_the_logits(
 
     probability = scratch_detector(engine)(photo_with_bright_line())
 
-    assert coordinator.acquired == ["cpu"]
+    assert coordinator.acquired == []  # CPU no ocupa VRAM: fuera de la exclusion del coordinator
     assert [key.device for key in engine.live_sessions("cpu")] == ["cpu"]
     assert probability.shape == (600, 800)
     assert probability[300, 400] > 0.99

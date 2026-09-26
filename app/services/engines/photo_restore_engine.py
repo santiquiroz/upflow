@@ -166,6 +166,7 @@ class PhotoRestoreEngine:
         self._device_health = device_health or DevicesService(settings)
         self._sessions: OrderedDict[SessionKey, _LiveSession] = OrderedDict()
         self._phase_devices: set[str] = set()
+        self._owned_devices: set[str] = set()
         self._fp16_verdicts: dict[tuple[str, str], bool] = {}
         self._fp16_rejections: dict[tuple[str, str], Fp16Rejection] = {}
         # Reentrante: la sesion se crea con el candado tomado para que desalojo y alta sean atomicos.
@@ -173,11 +174,10 @@ class PhotoRestoreEngine:
         gpu_coordinator.register(self)
 
     def begin_phase(self, device: str) -> None:
-        if not self._device_health.is_healthy(device):
-            raise DeviceRemovedError(device)
-        self.gpu_coordinator.acquire(device, self)
+        self._require_healthy(device)
         with self._lock:
             self._phase_devices.add(device)
+        self._own(device)
 
     def model_spec(self, model_id: str) -> RestoreModelSpec:
         return self._models[model_id]
@@ -185,6 +185,7 @@ class PhotoRestoreEngine:
     def session(self, model_id: str, device: str, precision: str) -> Any:
         spec = self._models[model_id]
         key = SessionKey(model_id, device, precision)
+        self._reclaim_if_evicted(device)
         with self._lock:
             self._require_phase(device)
             return self._cached_or_created(spec, key)
@@ -243,8 +244,9 @@ class PhotoRestoreEngine:
             return tuple(self._fp16_rejections.values())
 
     def release_device(self, device: str) -> None:
+        # Lo llama el coordinator cuando otro dueno toma el device: la fase sigue y se readquiere.
         with self._lock:
-            self._phase_devices.discard(device)
+            self._owned_devices.discard(device)
             for key in self._keys_on(device):
                 del self._sessions[key]
 
@@ -255,7 +257,7 @@ class PhotoRestoreEngine:
         free_mb = self._free_vram_mb(device)
         if free_mb is not None and free_mb >= self.settings.restore_ncnn_headroom_mb:
             return False
-        self.release_device(device)
+        self._end_phase(device)
         return True
 
     def live_sessions(self, device: str) -> tuple[SessionKey, ...]:
@@ -265,6 +267,31 @@ class PhotoRestoreEngine:
     def estimated_vram_mb(self, device: str) -> float:
         with self._lock:
             return self._estimated_mb_on(device)
+
+    def _end_phase(self, device: str) -> None:
+        with self._lock:
+            self._phase_devices.discard(device)
+        self.release_device(device)
+
+    def _require_healthy(self, device: str) -> None:
+        if not self._device_health.is_healthy(device):
+            raise DeviceRemovedError(device)
+
+    def _own(self, device: str) -> None:
+        # Una sesion de CPU no ocupa VRAM: no entra en la exclusion del coordinator.
+        if not is_gpu_device(device):
+            return
+        with self._lock:
+            self._owned_devices.add(device)
+        self.gpu_coordinator.acquire(device, self)
+
+    def _reclaim_if_evicted(self, device: str) -> None:
+        with self._lock:
+            evicted = device in self._phase_devices and device not in self._owned_devices
+        if not (evicted and is_gpu_device(device)):
+            return
+        self._require_healthy(device)
+        self._own(device)
 
     def _require_phase(self, device: str) -> None:
         if device not in self._phase_devices:

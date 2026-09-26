@@ -505,7 +505,7 @@ def test_the_engine_opens_mi_gan_from_the_vendor_path_and_fills_on_cpu(tmp_path:
 
     result = fill_damage(photo, mask, FillRequest(), migan=migan_infer(engine, "cpu"))
 
-    assert coordinator.acquired == ["cpu"]
+    assert coordinator.acquired == []  # CPU no ocupa VRAM: fuera de la exclusion del coordinator
     assert [key.model_id for key in engine.live_sessions("cpu")] == [MIGAN_MODEL_ID]
     assert result.engine == FAST_ENGINE
     np.testing.assert_allclose(result.image[:, 60:62], 200.0 / 255.0, atol=1e-6)

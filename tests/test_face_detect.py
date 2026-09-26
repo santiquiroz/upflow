@@ -372,7 +372,7 @@ def test_engine_detector_runs_retinaface_on_cpu_through_the_single_owner(tmp_pat
 
     (face,) = landmarked_face_detector(engine)(np.zeros((GRAPH_SIDE, GRAPH_SIDE, 3), np.float32))
 
-    assert coordinator.acquired == ["cpu"]
+    assert coordinator.acquired == []  # CPU no ocupa VRAM: fuera de la exclusion del coordinator
     assert [key.device for key in engine.live_sessions("cpu")] == ["cpu"]
     assert np.allclose(face.box, box, atol=1e-3)
 

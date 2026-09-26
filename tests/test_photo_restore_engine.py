@@ -163,18 +163,63 @@ def test_session_outside_a_phase_is_refused(model_dir):
     assert factory.calls == []
 
 
-def test_phase_ends_when_another_owner_takes_the_device(model_dir):
+def test_eviction_by_another_owner_mid_phase_takes_the_device_back(model_dir):
     models = write_models(model_dir, make_spec("drunet"))
     coordinator = GpuSessionCoordinator()
-    engine = make_engine(model_dir, models, coordinator=coordinator)
+    factory = SessionFactory()
+    engine = make_engine(model_dir, models, coordinator=coordinator, factory=factory)
     engine.begin_phase("dml:0")
     engine.session("drunet", "dml:0", "fp32")
+    other = RecordingOwner()
 
-    coordinator.acquire("dml:0", OtherOwner())
-
+    coordinator.acquire("dml:0", other)
     assert live_models(engine) == []
-    with pytest.raises(RuntimeError, match="begin_phase"):
+    engine.session("drunet", "dml:0", "fp32")
+
+    assert factory.paths == ["drunet.onnx", "drunet.onnx"]
+    assert other.released == ["dml:0"]
+    assert live_models(engine) == ["drunet"]
+
+
+def test_eviction_reacquires_once_and_not_on_every_session(model_dir):
+    models = write_models(model_dir, make_spec("drunet"))
+    coordinator = CountingCoordinator()
+    engine = make_engine(model_dir, models, coordinator=coordinator)
+    engine.begin_phase("dml:0")
+    engine.release_device("dml:0")
+
+    engine.session("drunet", "dml:0", "fp32")
+    engine.session("drunet", "dml:0", "fp32")
+
+    assert coordinator.acquired == [("dml:0", engine), ("dml:0", engine)]
+
+
+def test_an_evicted_device_that_was_removed_is_not_taken_back(model_dir):
+    models = write_models(model_dir, make_spec("drunet"))
+    health = DevicesService(make_settings(model_dir))
+    engine = health_engine(model_dir, models, SessionFactory(), health=health)
+    engine.begin_phase("dml:0")
+    health.mark_unhealthy("dml:0")
+    engine.release_device("dml:0")
+
+    with pytest.raises(DeviceRemovedError):
         engine.session("drunet", "dml:0", "fp32")
+
+
+def test_cpu_phase_stays_out_of_the_coordinator(model_dir):
+    models = write_models(model_dir, make_spec("drunet"))
+    coordinator = GpuSessionCoordinator()
+    counting = CountingCoordinator()
+    engine = make_engine(model_dir, models, coordinator=coordinator)
+    cpu_only = make_engine(model_dir, models, coordinator=counting)
+    engine.begin_phase("cpu")
+    engine.session("drunet", "cpu", "fp32")
+    cpu_only.begin_phase("cpu")
+
+    coordinator.acquire("cpu", OtherOwner())
+
+    assert live_models(engine, "cpu") == ["drunet"]
+    assert counting.acquired == []
 
 
 def test_phase_after_eviction_recreates_the_session(model_dir):
