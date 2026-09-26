@@ -12,7 +12,8 @@ import { aiUpscaleFields, withAiUpscaleStep, type AiUpscaleChoice } from "./cctv
 import { suggestedOsdBoxes } from "./cctvBoxes";
 import { caseRequestOf, EMPTY_CASE_DETAILS, type CaseDetails } from "./cctvCase";
 import { storedSizeOf, type TrimRange } from "./cctvFrames";
-import { defaultTask } from "./cctvLanes";
+import { defaultTask, usesFilters } from "./cctvLanes";
+import { EMPTY_REDACTION, redactionRequest, type RedactionChoice } from "./cctvRedaction";
 import { EMPTY_ROI, roiCatalog, roiRequest, type RoiChoice } from "./cctvRoi";
 import { choicesFromPreset, presetContextOf, stepRequests, type StepChoices } from "./cctvSteps";
 
@@ -28,9 +29,10 @@ export interface CctvChoices {
   caseDetails: CaseDetails;
   aiUpscale: AiUpscaleChoice | null;
   roi: RoiChoice;
+  redaction: RedactionChoice;
 }
 
-type JobTarget = Pick<CctvJobRequest, "osdBoxes" | "osdBoxesConfirmed" | "noOsd" | "trim" | "roi">;
+type JobTarget = Pick<CctvJobRequest, "osdBoxes" | "osdBoxesConfirmed" | "noOsd" | "trim" | "roi" | "redaction">;
 
 function findPreset(presets: CctvPresetsResponse, presetId: string | null): CctvPreset | null {
   return presets.presets.find((preset) => preset.id === presetId) ?? null;
@@ -46,6 +48,9 @@ function stepLaneOf(lane: CctvLane, task: CctvTask): CctvLane {
 }
 
 export function catalogFor(presets: CctvPresetsResponse, lane: CctvLane, task: CctvTask): CctvStepSchema[] {
+  if (!usesFilters(task)) {
+    return [];
+  }
   const catalog = presets.steps[stepLaneOf(lane, task)];
   return task === "roi_fusion" ? roiCatalog(catalog) : catalog;
 }
@@ -77,6 +82,7 @@ export function initialChoices(analysis: CctvAnalysis, presets: CctvPresetsRespo
     caseDetails: EMPTY_CASE_DETAILS,
     aiUpscale: null,
     roi: EMPTY_ROI,
+    redaction: EMPTY_REDACTION,
   };
 }
 
@@ -138,6 +144,10 @@ export function withRoi(choices: CctvChoices, roi: RoiChoice): CctvChoices {
   return { ...choices, roi };
 }
 
+export function withRedaction(choices: CctvChoices, redaction: RedactionChoice): CctvChoices {
+  return { ...choices, redaction };
+}
+
 function videoTarget(choices: CctvChoices): JobTarget {
   return {
     osdBoxes: choices.noOsd ? [] : [...choices.osdBoxes],
@@ -153,7 +163,16 @@ function roiTarget(choices: CctvChoices): JobTarget {
   return { osdBoxes: [], osdBoxesConfirmed: false, noOsd: false, trim: null, ...(roi ? { roi } : {}) };
 }
 
+// La copia anonimizada no toca el OSD: solo su recorte y sus cajas.
+function redactionTarget(choices: CctvChoices): JobTarget {
+  const trim: [number, number] | null = choices.trim ? [choices.trim[0], choices.trim[1]] : null;
+  return { osdBoxes: [], osdBoxesConfirmed: false, noOsd: false, trim, redaction: redactionRequest(choices.redaction) };
+}
+
 function jobTarget(choices: CctvChoices): JobTarget {
+  if (choices.task === "redact") {
+    return redactionTarget(choices);
+  }
   return choices.task === "roi_fusion" ? roiTarget(choices) : videoTarget(choices);
 }
 
@@ -171,7 +190,7 @@ export function buildCctvJobRequest(
   return {
     token,
     task: choices.task,
-    preset: choices.presetId,
+    preset: usesFilters(choices.task) ? choices.presetId : null,
     steps: stepRequests(withAiUpscaleStep(choices.steps, catalog, aiUpscale), catalog),
     ...jobTarget(choices),
     ...aiUpscaleFields(aiUpscale),

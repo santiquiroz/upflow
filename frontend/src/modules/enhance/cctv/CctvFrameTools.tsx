@@ -4,12 +4,13 @@ import type { CctvAnalysis, CctvStepSchema } from "../../../services/cctv";
 import { BoxEditor } from "./BoxEditor";
 import { CctvFilterPreview } from "./CctvFilterPreview";
 import type { FrameSize } from "./cctvBoxes";
-import { withRoi, withTrim, type CctvChoices } from "./cctvChoices";
-import { displaySizeOf, storedSizeOf } from "./cctvFrames";
-import { isVideoTask } from "./cctvLanes";
+import { withRedaction, withRoi, withTrim, type CctvChoices } from "./cctvChoices";
+import { displaySizeOf, storedSizeOf, type TrimRange } from "./cctvFrames";
+import { isVideoTask, usesFilters, usesTrim } from "./cctvLanes";
 import { roiReferenceRequest, withRoiBox } from "./cctvRoi";
 import { hasChosenAiSteps, previewStepRequests } from "./cctvSteps";
 import { FrameScrubber } from "./FrameScrubber";
+import { RedactionBoxEditor, RedactionPanel } from "./RedactionPanel";
 import { RoiFusionPanel } from "./RoiFusionPanel";
 import { TrimControls } from "./TrimControls";
 import { useOsdTools } from "./useOsdTools";
@@ -44,6 +45,11 @@ function RoiBoxEditor({
   );
 }
 
+// Una caja nueva tapa todo lo que la copia va a tener: el recorte, o el video entero.
+function redactionSpan(trim: TrimRange | null, frameCount: number): TrimRange {
+  return trim ?? [0, Math.max(0, frameCount - 1)];
+}
+
 export function CctvFrameTools({ analysis, choices, catalog, onChange }: FrameToolsProps) {
   const { t } = useTranslation();
   const [frame, setFrame] = useState(0);
@@ -52,8 +58,20 @@ export function CctvFrameTools({ analysis, choices, catalog, onChange }: FrameTo
   const frameSize = storedSizeOf(analysis);
   const displaySize = displaySizeOf(analysis);
   const isVideo = isVideoTask(choices.task);
+  const isRedact = choices.task === "redact";
+  const isRoi = choices.task === "roi_fusion";
   const osd = useOsdTools({ token: analysis.token, choices, frame, frameSize, onChange });
   const roiEditor = <RoiBoxEditor choices={choices} frame={frame} frameSize={frameSize} onChange={onChange} />;
+  const redactEditor = (
+    <RedactionBoxEditor
+      redaction={choices.redaction}
+      frame={frame}
+      frameSize={frameSize}
+      span={redactionSpan(choices.trim, frameCount)}
+      onChange={(redaction) => onChange(withRedaction(choices, redaction))}
+    />
+  );
+  const overlay = isRedact ? redactEditor : isVideo ? osd.overlay : roiEditor;
   const stepRequests = previewStepRequests(choices.steps, catalog);
   const suggestion = useRoiReferenceSuggestion({
     token: analysis.token,
@@ -74,11 +92,11 @@ export function CctvFrameTools({ analysis, choices, catalog, onChange }: FrameTo
           index={analysis.frameIndex}
           displaySize={displaySize}
           onFrameChange={setFrame}
-          overlay={isVideo ? osd.overlay : roiEditor}
+          overlay={overlay}
         />
       )}
       {isVideo && osd.panel}
-      {isVideo && hasFrames && (
+      {usesTrim(choices.task) && hasFrames && (
         <TrimControls
           frameCount={frameCount}
           currentFrame={frame}
@@ -87,7 +105,15 @@ export function CctvFrameTools({ analysis, choices, catalog, onChange }: FrameTo
           onChange={(trim) => onChange(withTrim(choices, trim))}
         />
       )}
-      {!isVideo && hasFrames && (
+      {isRedact && hasFrames && (
+        <RedactionPanel
+          redaction={choices.redaction}
+          frame={frame}
+          onChange={(redaction) => onChange(withRedaction(choices, redaction))}
+          onShowFrame={setFrame}
+        />
+      )}
+      {isRoi && hasFrames && (
         <RoiFusionPanel
           roi={choices.roi}
           frame={frame}
@@ -98,7 +124,7 @@ export function CctvFrameTools({ analysis, choices, catalog, onChange }: FrameTo
           suggestion={suggestion}
         />
       )}
-      {hasFrames && (
+      {usesFilters(choices.task) && hasFrames && (
         <CctvFilterPreview
           token={analysis.token}
           frame={frame}

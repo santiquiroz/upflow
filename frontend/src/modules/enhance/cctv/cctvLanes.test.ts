@@ -35,11 +35,12 @@ const READY: StartInputs = {
   trimValid: true,
   caseDetailsValid: true,
   roiBlockerKey: null,
+  redactionBlockerKey: null,
 };
 
 describe("tasks", () => {
   it("offers Clarify in the classic lane, Enhance in the AI lane and the multi-frame still in both", () => {
-    expect(LANE_TASKS.classic).toEqual(["clarify", "roi_fusion"]);
+    expect(LANE_TASKS.classic).toEqual(["clarify", "roi_fusion", "redact"]);
     expect(LANE_TASKS.ai).toEqual(["enhance", "roi_fusion"]);
     expect(defaultTask("classic")).toBe("clarify");
     expect(defaultTask("ai")).toBe("enhance");
@@ -136,5 +137,15 @@ describe("startBlocker", () => {
 
   it("ignores a stale region outside the multi-frame still", () => {
     expect(startBlocker({ ...READY, roiBlockerKey: "cctv.roi.blocked.box" })).toBeNull();
+  });
+
+  it("gates the redacted copy on its boxes, without an on-screen text decision", () => {
+    const redact = { ...READY, task: "redact" as const, noOsd: false };
+
+    expect(startBlocker(redact)).toBeNull();
+    expect(startBlocker({ ...redact, redactionBlockerKey: "cctv.redact.blocked.noBoxes" })).toEqual({
+      key: "cctv.redact.blocked.noBoxes",
+    });
+    expect(startBlocker({ ...READY, redactionBlockerKey: "cctv.redact.blocked.noBoxes" })).toBeNull();
   });
 });

@@ -32,7 +32,8 @@ import {
   type CctvChoices,
 } from "./cctvChoices";
 import { isTrimValid } from "./cctvFrames";
-import { aiLaneState, LANE_TASKS, needsAiConfirmation, startBlocker, type AiLaneState } from "./cctvLanes";
+import { aiLaneState, LANE_TASKS, needsAiConfirmation, startBlocker, usesFilters, type AiLaneState } from "./cctvLanes";
+import { redactionBlockerKey } from "./cctvRedaction";
 import { roiBlockerKey } from "./cctvRoi";
 import { incompleteStepIds, visibleSteps, withStepEnabled, withStepFilter, withStepParam } from "./cctvSteps";
 
@@ -126,6 +127,7 @@ function setupBlocker(
     trimValid: isTrimValid(choices.trim, frameCount),
     caseDetailsValid: isCaseDetailsValid(choices.caseDetails),
     roiBlockerKey: roiBlockerKey(choices.roi, frameCount),
+    redactionBlockerKey: redactionBlockerKey(choices.redaction),
   });
 }
 
@@ -155,13 +157,17 @@ export function CctvJobSetup({ analysis, presets, capabilities, busy, onSubmit }
       <CctvLaneSelector value={choices.lane} ai={ai} onChange={(lane) => setChoices(withLane(choices, lane, analysis, presets))} />
       {choices.lane === "ai" && <AiLaneBanner />}
       <TaskTabs lane={choices.lane} value={choices.task} onChange={(task) => setChoices(withTask(choices, task, analysis, presets))} />
-      <CctvPresetPicker
-        presets={presets.presets}
-        value={choices.presetId}
-        suggested={analysis.suggestedPreset}
-        onChange={(presetId) => setChoices(withPreset(choices, presetId, analysis, presets))}
-      />
-      <StepList steps={visibleSteps(catalog, choices.lane)} choices={choices} onChange={(steps) => setChoices({ ...choices, steps })} />
+      {usesFilters(choices.task) && (
+        <>
+          <CctvPresetPicker
+            presets={presets.presets}
+            value={choices.presetId}
+            suggested={analysis.suggestedPreset}
+            onChange={(presetId) => setChoices(withPreset(choices, presetId, analysis, presets))}
+          />
+          <StepList steps={visibleSteps(catalog, choices.lane)} choices={choices} onChange={(steps) => setChoices({ ...choices, steps })} />
+        </>
+      )}
       {choices.task === "enhance" && (
         <AiUpscalePicker
           models={presets.aiUpscaleModels}
@@ -171,7 +177,9 @@ export function CctvJobSetup({ analysis, presets, capabilities, busy, onSubmit }
         />
       )}
       <CctvFrameTools analysis={analysis} choices={choices} catalog={catalog} onChange={setChoices} />
-      <CaseDetailsForm value={choices.caseDetails} onChange={(caseDetails) => setChoices(withCaseDetails(choices, caseDetails))} />
+      {usesFilters(choices.task) && (
+        <CaseDetailsForm value={choices.caseDetails} onChange={(caseDetails) => setChoices(withCaseDetails(choices, caseDetails))} />
+      )}
       <div className="flex flex-col gap-2">
         {blocker && (
           <p role="status" className="text-xs text-warn">

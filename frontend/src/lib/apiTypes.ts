@@ -137,6 +137,13 @@ export interface CctvJobSummary {
   verifyUrl: string | null;
   // Solo en la foto multi-cuadro (roi_fusion); ausente en respuestas anteriores.
   roi?: CctvRoiSummary | null;
+  // Solo en la copia anonimizada (redact); ausente en respuestas anteriores.
+  redaction?: CctvRedactionSummary | null;
+}
+
+export interface CctvRedactionSummary {
+  style: string;
+  boxes: number;
 }
 
 export interface CctvRoiNotice {

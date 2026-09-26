@@ -50,6 +50,23 @@ afterEach(() => {
 });
 
 describe("CctvResult", () => {
+  it("labels a redacted copy as for sharing only, without a handover package or report", () => {
+    const redacted: CctvJobSummary = {
+      ...SUMMARY,
+      task: "redact",
+      preset: null,
+      artifacts: ["redacted", "redaction", "sha256sums", "frame_index"].map(artifact),
+      redaction: { style: "pixelate", boxes: 2 },
+    };
+    renderResult(redacted);
+
+    expect(screen.getByText(en["cctv.redact.resultNotice"])).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: en["cctv.package.download"] })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: en["cctv.report.open"] })).not.toBeInTheDocument();
+    const files = screen.getAllByRole("listitem").map((item) => item.textContent);
+    expect(files.slice(0, 2)).toEqual([en["cctv.result.file.redacted"], en["cctv.result.file.redaction"]]);
+  });
+
   it("offers the handover package and the report as links to the backend artifacts", () => {
     renderResult();
 

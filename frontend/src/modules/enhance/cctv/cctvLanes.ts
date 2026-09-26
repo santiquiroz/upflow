@@ -28,15 +28,18 @@ export interface StartInputs {
   trimValid: boolean;
   caseDetailsValid: boolean;
   roiBlockerKey: string | null;
+  redactionBlockerKey: string | null;
 }
 
 export const LANE_TASKS: Readonly<Record<CctvLane, readonly CctvTask[]>> = {
-  classic: ["clarify", "roi_fusion"],
+  classic: ["clarify", "roi_fusion", "redact"],
   ai: ["enhance", "roi_fusion"],
 };
 
 // Las tareas que producen video: piden decision sobre el OSD y recorte; la foto multi-cuadro usa su rango.
 const VIDEO_TASKS: ReadonlySet<CctvTask> = new Set<CctvTask>(["clarify", "enhance"]);
+// La copia anonimizada se puede recortar, pero no toca el OSD ni aplica filtros.
+const TRIM_TASKS: ReadonlySet<CctvTask> = new Set<CctvTask>([...VIDEO_TASKS, "redact"]);
 // DRUNet en CPU: unos 15 s por cuadro 1080p (derivado, spec 4.7), escalado por pixeles.
 const AI_CPU_SECONDS_PER_1080P_FRAME = 15;
 const PIXELS_1080P = 1920 * 1080;
@@ -46,6 +49,14 @@ const NEEDS_GPU_REASON = "capability.setup.needsGpu";
 
 export function isVideoTask(task: CctvTask): boolean {
   return VIDEO_TASKS.has(task);
+}
+
+export function usesTrim(task: CctvTask): boolean {
+  return TRIM_TASKS.has(task);
+}
+
+export function usesFilters(task: CctvTask): boolean {
+  return task !== "redact";
 }
 
 // Solo un job que genera video con IA pide el modal: la foto multi-cuadro es clasica en los dos carriles.
@@ -97,8 +108,16 @@ function hasOsdDecision(inputs: StartInputs): boolean {
   return !isVideoTask(inputs.task) || inputs.noOsd || (inputs.osdBoxesConfirmed && inputs.osdBoxCount > 0);
 }
 
-function roiBlocker(inputs: StartInputs): StartBlocker | null {
-  return inputs.task === "roi_fusion" && inputs.roiBlockerKey !== null ? { key: inputs.roiBlockerKey } : null;
+function taskBlockerKey(inputs: StartInputs): string | null {
+  if (inputs.task === "roi_fusion") {
+    return inputs.roiBlockerKey;
+  }
+  return inputs.task === "redact" ? inputs.redactionBlockerKey : null;
+}
+
+function taskBlocker(inputs: StartInputs): StartBlocker | null {
+  const key = taskBlockerKey(inputs);
+  return key === null ? null : { key };
 }
 
 export function startBlocker(inputs: StartInputs): StartBlocker | null {
@@ -112,5 +131,5 @@ export function startBlocker(inputs: StartInputs): StartBlocker | null {
     [!hasOsdDecision(inputs), "cctv.osd.confirm"],
   ];
   const failed = checks.find(([blocked]) => blocked);
-  return failed ? { key: failed[1] } : roiBlocker(inputs);
+  return failed ? { key: failed[1] } : taskBlocker(inputs);
 }

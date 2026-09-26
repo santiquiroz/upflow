@@ -16,8 +16,8 @@ export const REPORT_ARTIFACT = "report_html";
 export const PACKAGE_ARTIFACT = "package";
 
 // Primero lo que el usuario mira (videos y cuadros), despues los archivos tecnicos.
-const MEDIA_ARTIFACTS = ["analysis", "viewing", "enhanced", "comparison"] as const;
-const TECHNICAL_ARTIFACTS = ["report_json", "sha256sums", "reproduce", "frame_index"] as const;
+const MEDIA_ARTIFACTS = ["analysis", "viewing", "enhanced", "comparison", "redacted"] as const;
+const TECHNICAL_ARTIFACTS = ["report_json", "redaction", "sha256sums", "reproduce", "frame_index"] as const;
 const OWN_ACTION_ARTIFACTS: ReadonlySet<string> = new Set([REPORT_ARTIFACT, PACKAGE_ARTIFACT]);
 const STILL = /^still:(\d+):(original|processed)$/;
 const ROI = /^roi:(.+)$/;

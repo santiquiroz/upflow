@@ -1,6 +1,7 @@
 import { useState, type KeyboardEvent, type PointerEvent } from "react";
 import { useTranslation } from "../../../i18n/LocaleProvider";
 import type { CctvBox } from "../../../services/cctv";
+import { MAX_REDACTION_TRACKS } from "./cctvRedaction";
 import {
   boxAfterKey,
   boxFromCorners,
@@ -15,7 +16,7 @@ import {
   type FrameSize,
 } from "./cctvBoxes";
 
-export type BoxKind = "osd" | "roi";
+export type BoxKind = "osd" | "roi" | "redact";
 
 interface BoxEditorProps {
   kind: BoxKind;
@@ -24,6 +25,8 @@ interface BoxEditorProps {
   onChange: (boxes: CctvBox[]) => void;
   flagged?: readonly number[];
   disabled?: boolean;
+  // Numero que se muestra en cada caja; por defecto, su posicion. La anonimizacion numera por caja, no por cuadro.
+  labels?: readonly number[];
 }
 
 interface Draft {
@@ -33,8 +36,15 @@ interface Draft {
 
 const REMOVE_KEYS: ReadonlySet<string> = new Set(["Delete", "Backspace"]);
 
+const MAX_BOXES: Readonly<Record<BoxKind, number>> = { osd: MAX_OSD_BOXES, roi: MAX_ROI_BOXES, redact: MAX_REDACTION_TRACKS };
+const SURFACE_LABELS: Readonly<Record<BoxKind, string>> = {
+  osd: "cctv.box.surfaceOsd",
+  roi: "cctv.box.surfaceRoi",
+  redact: "cctv.box.surfaceRedact",
+};
+
 function maxBoxesOf(kind: BoxKind): number {
-  return kind === "roi" ? MAX_ROI_BOXES : MAX_OSD_BOXES;
+  return MAX_BOXES[kind];
 }
 
 function boxClassName(isFlagged: boolean): string {
@@ -64,7 +74,7 @@ function readingBox(draftBox: CctvBox | null, kind: BoxKind, boxes: readonly Cct
   return kind === "roi" ? boxes[0] ?? null : null;
 }
 
-export function BoxEditor({ kind, frameSize, boxes, onChange, flagged = [], disabled = false }: BoxEditorProps) {
+export function BoxEditor({ kind, frameSize, boxes, onChange, flagged = [], disabled = false, labels }: BoxEditorProps) {
   const { t } = useTranslation();
   const [draft, setDraft] = useState<Draft | null>(null);
   const draftBox = draft ? boxFromCorners(draft.start, draft.end, frameSize) : null;
@@ -111,7 +121,7 @@ export function BoxEditor({ kind, frameSize, boxes, onChange, flagged = [], disa
   return (
     <div
       role="group"
-      aria-label={t(kind === "roi" ? "cctv.box.surfaceRoi" : "cctv.box.surfaceOsd")}
+      aria-label={t(SURFACE_LABELS[kind])}
       aria-disabled={disabled}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
@@ -125,14 +135,14 @@ export function BoxEditor({ kind, frameSize, boxes, onChange, flagged = [], disa
           key={index}
           type="button"
           disabled={disabled}
-          aria-label={t("cctv.box.label", { index: index + 1, x: box[0], y: box[1], w: box[2], h: box[3] })}
+          aria-label={t("cctv.box.label", { index: labels?.[index] ?? index + 1, x: box[0], y: box[1], w: box[2], h: box[3] })}
           title={t("cctv.box.keyboard")}
           onKeyDown={(event) => handleBoxKey(event, index)}
           style={boxPercentStyle(box, frameSize)}
           className={boxClassName(flagged.includes(index))}
         >
           <span aria-hidden="true" className="absolute -top-5 left-0 rounded-sm bg-surface px-1 font-mono-tabular text-xs text-text">
-            {index + 1}
+            {labels?.[index] ?? index + 1}
           </span>
         </button>
       ))}

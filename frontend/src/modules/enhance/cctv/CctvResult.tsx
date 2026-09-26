@@ -1,5 +1,5 @@
 import { useMutation } from "@tanstack/react-query";
-import { Clock, Download, ExternalLink, ListChecks } from "lucide-react";
+import { Clock, Download, ExternalLink, EyeOff, ListChecks } from "lucide-react";
 import { useTranslation } from "../../../i18n/LocaleProvider";
 import type { CctvJobSummary } from "../../../lib/apiTypes";
 import { verifyCctvFiles, type CctvVerifyResult } from "../../../services/cctv";
@@ -164,6 +164,16 @@ function ResultWarnings({ warnings }: { warnings: string[] }) {
   );
 }
 
+function RedactedNotice() {
+  const { t } = useTranslation();
+  return (
+    <p role="note" className="flex items-start gap-2 rounded-sm border border-warn px-3 py-2 text-xs text-text">
+      <EyeOff aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
+      {t("cctv.redact.resultNotice")}
+    </p>
+  );
+}
+
 function RetentionNotice({ hours }: { hours: number | null }) {
   const { t } = useTranslation();
   if (hours === null) {
@@ -186,6 +196,7 @@ export function CctvResult({ jobId, summary, retentionHours }: CctvResultProps) 
         {t("cctv.result.title")}
       </h3>
       {summary.lane === "ai" && <AiLaneBanner />}
+      {summary.task === "redact" && <RedactedNotice />}
       <SourceHash sha256={summary.sourceSha256} />
       {summary.roi && <RoiFusionResult roi={summary.roi} artifacts={artifacts} />}
       <div className="flex flex-wrap items-start gap-3">

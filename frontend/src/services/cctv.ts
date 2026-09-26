@@ -5,7 +5,8 @@ import type { VideoJobResponse } from "../lib/apiTypes";
 import type { UploadOptions } from "../lib/uploadRequest";
 
 export type CctvLane = "classic" | "ai";
-export type CctvTask = "clarify" | "enhance" | "roi_fusion";
+export type CctvTask = "clarify" | "enhance" | "roi_fusion" | "redact";
+export type CctvRedactionStyle = "pixelate" | "blur";
 export type CctvParamValue = number | string;
 export type CctvParams = Readonly<Record<string, CctvParamValue>>;
 export type CctvBox = readonly [number, number, number, number];
@@ -229,6 +230,22 @@ export interface CctvRoiRequest {
   method: CctvRoiMethod;
 }
 
+export interface CctvRedactionKeyframeRequest {
+  frame: number;
+  box: [number, number, number, number];
+}
+
+export interface CctvRedactionTrackRequest {
+  firstFrame: number;
+  lastFrame: number;
+  keyframes: CctvRedactionKeyframeRequest[];
+}
+
+export interface CctvRedactionRequest {
+  style: CctvRedactionStyle;
+  tracks: CctvRedactionTrackRequest[];
+}
+
 export interface CctvJobRequest extends CctvCaseRequest {
   token: string;
   task: CctvTask;
@@ -239,6 +256,7 @@ export interface CctvJobRequest extends CctvCaseRequest {
   noOsd: boolean;
   trim: [number, number] | null;
   roi?: CctvRoiRequest;
+  redaction?: CctvRedactionRequest;
   modelId?: string;
   scale?: number;
 }
