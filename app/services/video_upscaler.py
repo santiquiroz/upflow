@@ -85,7 +85,11 @@ from app.services.engines.frame_workers import derive_readback_ring_capacity, lo
 from app.services.engines.gmfss_engine import GmfssEngine
 from app.services.engines.onnx_upscaler import OnnxUpscaler
 from app.services.engines.onnx_video_upscaler import OnnxVideoUpscaler
-from app.services.engines.realesrgan_ncnn import RealEsrganNcnnEngine, gpu_index_for_device
+from app.services.engines.realesrgan_ncnn import (
+    RealEsrganNcnnEngine,
+    gpu_index_for_device,
+    raise_on_vulkan_failure,
+)
 from app.services.engines.rife_ncnn import RifeNcnnEngine
 from app.services.frame_pipeline import (
     FramePipeline,
@@ -117,6 +121,7 @@ from app.services.progress import (
     resolve_frames_total,
 )
 from app.services.restorer_registry import AudioRestorer
+from app.services.scale_fit import native_scale_for_engine_model
 from app.services.scene_cuts import (
     DEFAULT_THRESHOLD as SCENE_CUT_THRESHOLD,
     build_scene_detect_command,
@@ -132,6 +137,12 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 FRAME_POLL_INTERVAL_SECONDS = 1.0
+
+# Escala a la que el motor dejó los frames cuando no es la pedida (ncnn corre a la nativa).
+ENGINE_SCALE_KEY = "upscaleEngineScale"
+NCNN_VIDEO_VRAM_HINT = (
+    "usually the frames do not fit in VRAM. Close other apps using the GPU or retry with the ONNX backend."
+)
 
 # Cuántos renglones con señal de error se conservan al resumir un fallo de
 # subproceso (ffmpeg reparte el diagnóstico en 2-3 líneas consecutivas).
@@ -810,7 +821,7 @@ class VideoUpscaler:
         en resolucion de fuente, y este filtro es el que escala.
         """
         classic = is_classic_upscaler(job.model_id)
-        if job.target_height is None and not classic:
+        if job.target_height is None and not classic and self._engine_output_scale(job) == job.scale:
             return []
         source_width = job.metadata.get("sourceWidth")
         source_height = job.metadata.get("sourceHeight")
@@ -824,11 +835,8 @@ class VideoUpscaler:
 
         # Lo que ya se logro antes del encode. En el camino clasico no corrio nada, asi
         # que los frames siguen midiendo lo que la fuente.
-        reached = (
-            (source_width, source_height)
-            if classic
-            else (source_width * job.scale, source_height * job.scale)
-        )
+        engine_scale = 1 if classic else self._engine_output_scale(job)
+        reached = (source_width * engine_scale, source_height * engine_scale)
         if reached == (plan.output_width, plan.output_height):
             # Ya esta en la medida pedida: una pasada de ffmpeg al vicio.
             return []
@@ -899,27 +907,41 @@ class VideoUpscaler:
         return entry is not None and entry.kind == ModelKind.onnx
 
     async def _upscale_frames_ncnn(self, job: VideoUpscaleJob, frames_in: Path, frames_out: Path) -> None:
-        await self._run_process(
-            [
-                str(self.settings.engine_binary_path),
-                "-i",
-                str(frames_in),
-                "-o",
-                str(frames_out),
-                "-n",
-                job.model_name,
-                "-s",
-                str(job.scale),
-                "-m",
-                str(self.settings.engine_models_path),
-                "-f",
-                "png",
-                "-g",
-                gpu_index_for_device(job.device),
-                "-j",
-                self.settings.ncnn_upscale_threads,
-            ]
-        )
+        # El binario no reescala a una escala que no es la del modelo (scale_fit.py): corre a la
+        # nativa y el encode reduce con Lanczos a la pedida.
+        native_scale = native_scale_for_engine_model(job.model_name)
+        job.metadata[ENGINE_SCALE_KEY] = native_scale
+        command = self._build_ncnn_upscale_command(job, frames_in, frames_out, native_scale)
+        stderr = await self._run_process(command)
+        # El binario sale con 0 aunque Vulkan falle y deja frames planos: el aviso solo está en stderr.
+        raise_on_vulkan_failure(stderr or b"", NCNN_VIDEO_VRAM_HINT)
+
+    def _build_ncnn_upscale_command(
+        self, job: VideoUpscaleJob, frames_in: Path, frames_out: Path, native_scale: int
+    ) -> list[str]:
+        return [
+            str(self.settings.engine_binary_path),
+            "-i",
+            str(frames_in),
+            "-o",
+            str(frames_out),
+            "-n",
+            job.model_name,
+            "-s",
+            str(native_scale),
+            "-m",
+            str(self.settings.engine_models_path),
+            "-f",
+            "png",
+            "-g",
+            gpu_index_for_device(job.device),
+            "-j",
+            self.settings.ncnn_upscale_threads,
+        ]
+
+    @staticmethod
+    def _engine_output_scale(job: VideoUpscaleJob) -> int:
+        return job.metadata.get(ENGINE_SCALE_KEY, job.scale)
 
     async def _upscale_frames_onnx(self, job: VideoUpscaleJob, frames_in: Path, frames_out: Path) -> None:
         if self.onnx_engine is None:
@@ -2215,10 +2237,11 @@ class VideoUpscaler:
                 stage_task.cancel()
                 return
 
-    async def _run_process(self, command: list[str]) -> None:
+    async def _run_process(self, command: list[str]) -> bytes:
         stdout, stderr, returncode = await run_guarded_process(command, self.settings.subprocess_timeout)
         if returncode != 0:
             raise RuntimeError(self._summarize_process_error(stderr, stdout))
+        return stderr
 
     def _summarize_process_error(self, stderr: bytes, stdout: bytes) -> str:
         text = (stderr or stdout).decode("utf-8", errors="ignore")

@@ -24,6 +24,9 @@ _NCNN_FORMAT_ALIASES = {"jpeg": "jpg"}
 # imagen plana. Medido 2026-09-02 con -t 1024 en una RX 7800 XT. Solo llamadas
 # vk*: "decode image X failed" es otra cosa (entrada invalida, sin archivo de salida).
 _VULKAN_FAILURE = re.compile(rb"\bvk\w+ failed\b", re.IGNORECASE)
+NCNN_TILE_HINT = (
+    "usually the tile does not fit in VRAM. Retry with a smaller tile_size (or leave it unset for auto)."
+)
 
 
 def gpu_index_for_device(device: str | None) -> str:
@@ -73,12 +76,13 @@ def vulkan_failure_line(stderr: bytes) -> str | None:
 def raise_on_ncnn_failure(returncode: int, stderr: bytes) -> None:
     if returncode != 0:
         raise RuntimeError(stderr.decode("utf-8", errors="ignore") or "Upscaling process failed")
+    raise_on_vulkan_failure(stderr)
+
+
+def raise_on_vulkan_failure(stderr: bytes, hint: str = NCNN_TILE_HINT) -> None:
     failure = vulkan_failure_line(stderr)
     if failure is not None:
-        raise RuntimeError(
-            f"Real-ESRGAN NCNN reported a Vulkan failure ({failure}); usually the tile does not fit "
-            "in VRAM. Retry with a smaller tile_size (or leave it unset for auto)."
-        )
+        raise RuntimeError(f"Real-ESRGAN NCNN reported a Vulkan failure ({failure}); {hint}")
 
 
 def image_size(path: Path) -> tuple[int, int]:

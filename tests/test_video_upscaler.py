@@ -1847,3 +1847,181 @@ async def test_cctv_ai_upscale_with_a_generative_model_is_labeled_generative_eve
     assert upscale.engine.model_sha256 == hashlib.sha256(b"fake x2 export").hexdigest()
     assert "realesr-animevideov3-x2-uint8.onnx" in upscale.engine.model_name
     assert "cctv.limitation.generativeUpscale" in {limitation.key for limitation in report.limitations}
+
+
+# ---------------------------------------------------------------------------
+# ncnn en video: escala nativa del modelo y stderr revisado (MNT-01)
+# ---------------------------------------------------------------------------
+
+
+class FakeNcnnProcess:
+    """run_guarded_process del binario ncnn: escribe un frame en -o y responde con el
+    stderr y el código dados (el binario real sale con 0 aunque falle Vulkan)."""
+
+    def __init__(self, stderr: bytes = b"", returncode: int = 0) -> None:
+        self.stderr = stderr
+        self.returncode = returncode
+        self.commands: list[list[str]] = []
+
+    async def __call__(self, command: list[str], timeout: float | None) -> tuple[bytes, bytes, int]:
+        self.commands.append(command)
+        frames_out = Path(command[command.index("-o") + 1])
+        frames_out.mkdir(parents=True, exist_ok=True)
+        (frames_out / "00000001.png").write_bytes(b"png")
+        return b"", self.stderr, self.returncode
+
+
+def install_ncnn_process(monkeypatch: pytest.MonkeyPatch, process: FakeNcnnProcess) -> FakeNcnnProcess:
+    monkeypatch.setattr("app.services.video_upscaler.run_guarded_process", process)
+    return process
+
+
+def make_ncnn_job(tmp_path: Path, **overrides: object) -> VideoUpscaleJob:
+    fields: dict[str, object] = dict(model_name="custom-model-x4", scale=2, device="dml:0", backend="ncnn")
+    fields.update(overrides)
+    return make_stream_job(tmp_path, **fields)
+
+
+class NcnnPassthroughUpscaler(RecordingRunProcessUpscaler):
+    """Registra y fakea ffmpeg como RecordingRunProcessUpscaler, pero deja que el comando
+    ncnn pase por el _run_process real (y así por run_guarded_process parcheado)."""
+
+    async def _run_process(self, command: list[str]) -> bytes:
+        if command[0] == str(self.settings.engine_binary_path):
+            return await VideoUpscaler._run_process(self, command)
+        await super()._run_process(command)
+        return b""
+
+
+def make_ncnn_passthrough_upscaler(tmp_path: Path) -> NcnnPassthroughUpscaler:
+    settings = make_stream_settings(tmp_path)
+    return NcnnPassthroughUpscaler(
+        settings,
+        FakeNcnnEngine(),  # type: ignore[arg-type]
+        FakeMediaTools(),  # type: ignore[arg-type]
+        gmfss_engine=object(),  # type: ignore[arg-type]
+        onnx_video_engine=FakeOnnxVideoEngine(),  # type: ignore[arg-type]
+        model_registry=ModelRegistry(settings),
+        devices=FakeDevicesService(),  # type: ignore[arg-type]
+    )
+
+
+def make_frames_dir(tmp_path: Path) -> Path:
+    frames_in = tmp_path / "frames-in"
+    frames_in.mkdir(parents=True, exist_ok=True)
+    (frames_in / "00000001.png").write_bytes(b"png")
+    return frames_in
+
+
+async def test_ncnn_video_runs_the_model_at_its_native_scale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    process = install_ncnn_process(monkeypatch, FakeNcnnProcess())
+    upscaler = make_stream_upscaler(tmp_path)
+
+    await upscaler._upscale_frames_ncnn(make_ncnn_job(tmp_path), make_frames_dir(tmp_path), tmp_path / "frames-out")
+
+    (command,) = process.commands
+    assert command[command.index("-s") + 1] == "4"
+
+
+async def test_ncnn_video_above_the_requested_scale_is_reduced_with_lanczos_in_the_encode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    install_ncnn_process(monkeypatch, FakeNcnnProcess())
+    upscaler = make_stream_upscaler(tmp_path)
+    job = make_ncnn_job(tmp_path)
+
+    await upscaler._upscale_frames_ncnn(job, make_frames_dir(tmp_path), tmp_path / "frames-out")
+
+    assert upscaler._resize_filter_args(job) == ["-vf", "scale=2560:1440:flags=lanczos"]
+
+
+async def test_ncnn_video_at_the_native_scale_needs_no_resize(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    process = install_ncnn_process(monkeypatch, FakeNcnnProcess())
+    upscaler = make_stream_upscaler(tmp_path)
+    job = make_ncnn_job(tmp_path, model_name="realesr-animevideov3-x4", scale=4)
+
+    await upscaler._upscale_frames_ncnn(job, make_frames_dir(tmp_path), tmp_path / "frames-out")
+
+    (command,) = process.commands
+    assert command[command.index("-s") + 1] == "4"
+    assert upscaler._resize_filter_args(job) == []
+
+
+async def test_ncnn_video_vulkan_failure_with_exit_zero_fails_the_upscale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    install_ncnn_process(monkeypatch, FakeNcnnProcess(stderr=b"0.00%\nvkAllocateMemory failed -2\n"))
+    upscaler = make_stream_upscaler(tmp_path)
+
+    with pytest.raises(RuntimeError, match="Vulkan failure.*vkAllocateMemory failed -2"):
+        await upscaler._upscale_frames_ncnn(
+            make_ncnn_job(tmp_path), make_frames_dir(tmp_path), tmp_path / "frames-out"
+        )
+
+
+async def test_ncnn_video_vulkan_failure_names_no_tile_setting_video_does_not_have(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    install_ncnn_process(monkeypatch, FakeNcnnProcess(stderr=b"vkQueueSubmit failed -4\n"))
+    upscaler = make_stream_upscaler(tmp_path)
+
+    with pytest.raises(RuntimeError) as raised:
+        await upscaler._upscale_frames_ncnn(
+            make_ncnn_job(tmp_path), make_frames_dir(tmp_path), tmp_path / "frames-out"
+        )
+
+    assert "tile_size" not in str(raised.value)
+    assert "ONNX" in str(raised.value)
+
+
+async def test_ncnn_video_nonzero_exit_fails_with_its_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    install_ncnn_process(monkeypatch, FakeNcnnProcess(stderr=b"invalid gpu device", returncode=255))
+    upscaler = make_stream_upscaler(tmp_path)
+
+    with pytest.raises(RuntimeError, match="invalid gpu device"):
+        await upscaler._upscale_frames_ncnn(
+            make_ncnn_job(tmp_path), make_frames_dir(tmp_path), tmp_path / "frames-out"
+        )
+
+
+async def test_ncnn_video_job_with_a_vulkan_failure_fails_instead_of_encoding_flat_frames(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    install_ncnn_process(monkeypatch, FakeNcnnProcess(stderr=b"vkAllocateMemory failed -2\n"))
+    upscaler = make_ncnn_passthrough_upscaler(tmp_path)
+    source_path = upscaler.settings.uploads_path / "clip.mp4"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_bytes(b"fake-video-bytes")
+    job = make_ncnn_job(tmp_path, source_path=source_path)
+
+    with pytest.raises(RuntimeError, match="Vulkan failure"):
+        await upscaler.run(job)
+
+    assert job.metadata["upscaleBackend"] == "ncnn"
+    assert all("-framerate" not in command for command in upscaler.commands), "encodeó frames planos"
+
+
+async def test_ncnn_video_job_encodes_the_native_frames_down_to_the_requested_size(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    process = install_ncnn_process(monkeypatch, FakeNcnnProcess())
+    upscaler = make_ncnn_passthrough_upscaler(tmp_path)
+    source_path = upscaler.settings.uploads_path / "clip.mp4"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_bytes(b"fake-video-bytes")
+    job = make_ncnn_job(tmp_path, source_path=source_path)
+
+    output = await upscaler.run(job)
+
+    assert output.exists()
+    (ncnn,) = process.commands
+    assert ncnn[ncnn.index("-s") + 1] == "4"
+    (encode,) = [command for command in upscaler.commands if "-framerate" in command]
+    assert encode[encode.index("-vf") + 1] == "scale=2560:1440:flags=lanczos"
+    assert (job.metadata["outputWidth"], job.metadata["outputHeight"]) == (2560, 1440)
