@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { AI_STEPS, ANALYSIS, CLASSIC_STEPS, DAY_PRESET, NIGHT_PRESET } from "./cctvFixtures";
+import { AI_STEPS, ANALYSIS, CLASSIC_STEPS, DAY_PRESET, LENS, NIGHT_PRESET } from "./cctvFixtures";
 import {
   choicesFromPreset,
   defaultChoice,
   hasChosenAiSteps,
   incompleteStepIds,
+  matchingPreset,
   missingParams,
   paramValue,
   presetContextOf,
@@ -15,6 +16,7 @@ import {
   withStepEnabled,
   withStepFilter,
   withStepParam,
+  withStepParams,
   type StepChoices,
 } from "./cctvSteps";
 
@@ -198,5 +200,32 @@ describe("stepWarningKey", () => {
 
   it("warns that stabilization moves every frame and is missing from the single-frame preview", () => {
     expect(stepWarningKey("stabilize", { filter: "vidstab", params: {} })).toBe("cctv.stabilize.moved");
+  });
+
+  it("warns that lens correction moves pixels", () => {
+    expect(stepWarningKey("lens", { filter: "lenscorrection", params: {} })).toBe("cctv.lens.moved");
+  });
+});
+
+describe("lens presets", () => {
+  const lenscorrection = LENS.filters[0];
+
+  it("replaces every parameter of the step with the preset's", () => {
+    const choices: StepChoices = { lens: { filter: "lenscorrection", params: { k1: 0.3 } }, gray: { filter: "gray", params: {} } };
+
+    const next = withStepParams(choices, "lens", { k1: -0.22, k2: -0.02 });
+
+    expect(next.lens).toEqual({ filter: "lenscorrection", params: { k1: -0.22, k2: -0.02 } });
+    expect(next.gray).toBe(choices.gray);
+    expect(withStepParams(choices, "crop", { w: 2 })).toBe(choices);
+  });
+
+  it("recognises the preset the current values came from", () => {
+    expect(matchingPreset(lenscorrection, { filter: "lenscorrection", params: { k1: -0.22, k2: -0.02 } })?.name).toBe("very_wide");
+  });
+
+  it("calls hand-tuned values custom", () => {
+    expect(matchingPreset(lenscorrection, { filter: "lenscorrection", params: { k1: -0.2, k2: -0.02 } })).toBeNull();
+    expect(matchingPreset(LENS.filters[1], { filter: "v360", params: {} })).toBeNull();
   });
 });

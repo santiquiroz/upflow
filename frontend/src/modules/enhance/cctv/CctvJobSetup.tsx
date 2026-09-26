@@ -35,7 +35,7 @@ import { isTrimValid } from "./cctvFrames";
 import { aiLaneState, LANE_TASKS, needsAiConfirmation, startBlocker, usesFilters, type AiLaneState } from "./cctvLanes";
 import { redactionBlockerKey } from "./cctvRedaction";
 import { roiBlockerKey } from "./cctvRoi";
-import { incompleteStepIds, visibleSteps, withStepEnabled, withStepFilter, withStepParam } from "./cctvSteps";
+import { incompleteStepIds, visibleSteps, withStepEnabled, withStepFilter, withStepParam, withStepParams } from "./cctvSteps";
 
 interface JobSetupProps {
   analysis: CctvAnalysis;
@@ -94,6 +94,7 @@ function StepList({
             onToggle={(enabled) => onChange(withStepEnabled(current, step, enabled))}
             onFilterChange={(filter) => onChange(withStepFilter(current, step.id, filter))}
             onParamChange={(name, value: CctvParamValue | null) => onChange(withStepParam(current, step.id, name, value))}
+            onParamsReplace={(params) => onChange(withStepParams(current, step.id, params))}
           />
         ))}
       </ol>

@@ -92,6 +92,18 @@ const SCALE = step("scale", "Enlarge", [
 const AI_UPSCALE = step("ai_upscale", "AI upscale", [filter("onnx_upscale")], "ai");
 const SHARPEN = step("sharpen", "Sharpen", [filter("cas", [{ name: "strength", type: "float", min: 0, max: 1, default: 0.5 }])]);
 const OSD_PROTECT = step("osd_protect", "Protect on-screen text", [filter("osd_restore")]);
+const K_PARAM = { type: "float", min: -1, max: 1, default: 0 } as const;
+const LENSCORRECTION: CctvFilterSchema = {
+  ...filter("lenscorrection", [
+    { name: "k1", ...K_PARAM },
+    { name: "k2", ...K_PARAM },
+  ]),
+  presets: [
+    { name: "wide", labelKey: "cctv.filter.lenscorrection.preset.wide", label: "Wide angle (about 4 mm)", params: { k1: -0.12, k2: -0.01 } },
+    { name: "very_wide", labelKey: "cctv.filter.lenscorrection.preset.very_wide", label: "Very wide angle (2.8 mm)", params: { k1: -0.22, k2: -0.02 } },
+  ],
+};
+export const LENS = step("lens", "Lens correction", [LENSCORRECTION, filter("v360")]);
 const AI_LABEL = step("ai_label", "AI label", [filter("label_band")], "label");
 
 export const CLASSIC_STEPS: CctvStepSchema[] = [

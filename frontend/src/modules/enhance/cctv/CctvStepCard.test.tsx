@@ -2,17 +2,17 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { en } from "../../../i18n/en";
 import { CctvStepCard } from "./CctvStepCard";
-import { CLASSIC_STEPS } from "./cctvFixtures";
+import { CLASSIC_STEPS, LENS } from "./cctvFixtures";
 import type { StepChoice } from "./cctvSteps";
 
 function stepById(id: string) {
-  const found = CLASSIC_STEPS.find((step) => step.id === id);
+  const found = [...CLASSIC_STEPS, LENS].find((step) => step.id === id);
   if (!found) throw new Error(id);
   return found;
 }
 
 function renderCard(id: string, choice: StepChoice | null) {
-  const handlers = { onToggle: vi.fn(), onFilterChange: vi.fn(), onParamChange: vi.fn() };
+  const handlers = { onToggle: vi.fn(), onFilterChange: vi.fn(), onParamChange: vi.fn(), onParamsReplace: vi.fn() };
   render(
     <ol>
       <CctvStepCard step={stepById(id)} choice={choice} {...handlers} />
@@ -63,6 +63,32 @@ describe("CctvStepCard", () => {
     renderCard("crop", { filter: "crop", params: { w: 640 } });
 
     expect(screen.getByText("Fill in h to use this step.")).toBeInTheDocument();
+  });
+
+  it("offers lens presets outside the advanced settings and applies all their values at once", () => {
+    const handlers = renderCard("lens", { filter: "lenscorrection", params: {} });
+
+    const preset = screen.getByLabelText(en["cctv.step.preset"]);
+    expect(preset).toHaveValue("");
+    expect(preset).toHaveAccessibleDescription(en["cctv.step.presetHint"]);
+    fireEvent.change(preset, { target: { value: "very_wide" } });
+
+    expect(handlers.onParamsReplace).toHaveBeenCalledWith({ k1: -0.22, k2: -0.02 });
+    expect(handlers.onParamChange).not.toHaveBeenCalled();
+  });
+
+  it("shows the preset the current values came from, in the viewer's language", () => {
+    renderCard("lens", { filter: "lenscorrection", params: { k1: -0.12, k2: -0.01 } });
+
+    expect(screen.getByLabelText(en["cctv.step.preset"])).toHaveValue("wide");
+    expect(screen.getByRole("option", { name: en["cctv.filter.lenscorrection.preset.wide"] })).toBeInTheDocument();
+    expect(screen.getByText(en["cctv.lens.moved"])).toBeInTheDocument();
+  });
+
+  it("has no preset picker for filters without presets", () => {
+    renderCard("lens", { filter: "v360", params: {} });
+
+    expect(screen.queryByLabelText(en["cctv.step.preset"])).not.toBeInTheDocument();
   });
 
   it("warns that sharpening can create halos", () => {

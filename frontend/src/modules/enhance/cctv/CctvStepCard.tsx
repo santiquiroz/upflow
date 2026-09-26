@@ -5,13 +5,16 @@ import type {
   CctvNumberParamSchema,
   CctvParamSchema,
   CctvParamValue,
+  CctvParams,
   CctvStepSchema,
 } from "../../../services/cctv";
-import { findFilter, missingParams, paramValue, stepWarningKey, type StepChoice } from "./cctvSteps";
+import { findFilter, matchingPreset, missingParams, paramValue, stepWarningKey, type StepChoice } from "./cctvSteps";
 import { translateOr, type Translate } from "./cctvText";
 
-const FIELD_CLASS =
-  "font-mono-tabular rounded-sm border border-border bg-surface px-2 py-1 text-sm text-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent";
+const CONTROL_CLASS =
+  "rounded-sm border border-border bg-surface px-2 py-1 text-sm text-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent";
+const FIELD_CLASS = `font-mono-tabular ${CONTROL_CLASS}`;
+const CUSTOM_PRESET = "";
 
 interface StepCardProps {
   step: CctvStepSchema;
@@ -19,6 +22,7 @@ interface StepCardProps {
   onToggle: (enabled: boolean) => void;
   onFilterChange: (filter: string) => void;
   onParamChange: (name: string, value: CctvParamValue | null) => void;
+  onParamsReplace: (params: CctvParams) => void;
 }
 
 function unavailableText(t: Translate, step: CctvStepSchema): string {
@@ -120,6 +124,56 @@ function FilterDescription({ filter }: { filter: CctvFilterSchema }) {
   );
 }
 
+function PresetSelect({
+  stepId,
+  filter,
+  choice,
+  onApply,
+}: {
+  stepId: string;
+  filter: CctvFilterSchema;
+  choice: StepChoice;
+  onApply: (params: CctvParams) => void;
+}) {
+  const { t } = useTranslation();
+  const presets = filter.presets ?? [];
+  if (presets.length === 0) {
+    return null;
+  }
+  const id = `cctv-${stepId}-preset`;
+  const hintId = `${id}-hint`;
+  const apply = (name: string) => {
+    const preset = presets.find((candidate) => candidate.name === name);
+    if (preset) onApply(preset.params);
+  };
+  return (
+    <div className="flex flex-col gap-1">
+      <label htmlFor={id} className="text-xs text-text-dim">
+        {t("cctv.step.preset")}
+      </label>
+      <select
+        id={id}
+        value={matchingPreset(filter, choice)?.name ?? CUSTOM_PRESET}
+        aria-describedby={hintId}
+        onChange={(event) => apply(event.target.value)}
+        className={`${CONTROL_CLASS} max-w-full`}
+      >
+        <option value={CUSTOM_PRESET} disabled>
+          {t("cctv.step.presetCustom")}
+        </option>
+        {presets.map((preset) => (
+          <option key={preset.name} value={preset.name}>
+            {translateOr(t, preset.labelKey, preset.label)}
+          </option>
+        ))}
+      </select>
+      <p id={hintId} className="text-xs text-text-faint">
+        {t("cctv.step.presetHint")}
+      </p>
+    </div>
+  );
+}
+
 function StepNotes({ step, choice }: { step: CctvStepSchema; choice: StepChoice }) {
   const { t } = useTranslation();
   const warningKey = stepWarningKey(step.id, choice);
@@ -132,13 +186,20 @@ function StepNotes({ step, choice }: { step: CctvStepSchema; choice: StepChoice 
   );
 }
 
-function StepSettings({ step, choice, onFilterChange, onParamChange }: Omit<StepCardProps, "onToggle"> & { choice: StepChoice }) {
+function StepSettings({
+  step,
+  choice,
+  onFilterChange,
+  onParamChange,
+  onParamsReplace,
+}: Omit<StepCardProps, "onToggle"> & { choice: StepChoice }) {
   const { t } = useTranslation();
   const filter = findFilter(step, choice.filter);
   return (
     <>
       {filter && <FilterDescription filter={filter} />}
       <StepNotes step={step} choice={choice} />
+      {filter && <PresetSelect stepId={step.id} filter={filter} choice={choice} onApply={onParamsReplace} />}
       <details className="text-sm">
         <summary className="cursor-pointer text-xs text-text-dim">{t("cctv.step.advanced")}</summary>
         <div className="mt-2 flex flex-wrap gap-3">
@@ -152,7 +213,7 @@ function StepSettings({ step, choice, onFilterChange, onParamChange }: Omit<Step
   );
 }
 
-export function CctvStepCard({ step, choice, onToggle, onFilterChange, onParamChange }: StepCardProps) {
+export function CctvStepCard({ step, choice, onToggle, onFilterChange, onParamChange, onParamsReplace }: StepCardProps) {
   const { t } = useTranslation();
   const checkboxId = `cctv-step-${step.id}`;
   return (
@@ -170,7 +231,13 @@ export function CctvStepCard({ step, choice, onToggle, onFilterChange, onParamCh
       </label>
       {!step.available && <p className="text-xs text-warn">{unavailableText(t, step)}</p>}
       {choice && (
-        <StepSettings step={step} choice={choice} onFilterChange={onFilterChange} onParamChange={onParamChange} />
+        <StepSettings
+          step={step}
+          choice={choice}
+          onFilterChange={onFilterChange}
+          onParamChange={onParamChange}
+          onParamsReplace={onParamsReplace}
+        />
       )}
     </li>
   );

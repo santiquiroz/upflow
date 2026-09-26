@@ -33,6 +33,13 @@ export interface CctvNumberParamSchema {
 
 export type CctvParamSchema = CctvEnumParamSchema | CctvNumberParamSchema;
 
+export interface CctvFilterPreset {
+  name: string;
+  labelKey: string;
+  label: string;
+  params: CctvParams;
+}
+
 export interface CctvFilterSchema {
   name: string;
   descriptionKey: string;
@@ -40,6 +47,7 @@ export interface CctvFilterSchema {
   docUrl: string | null;
   ffmpegFilters: string[];
   params: CctvParamSchema[];
+  presets?: CctvFilterPreset[];
   available: boolean;
   unavailableReasonKey: string | null;
   unavailableReason: string | null;

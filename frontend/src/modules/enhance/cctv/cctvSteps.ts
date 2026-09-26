@@ -1,5 +1,6 @@
 import type {
   CctvAnalysis,
+  CctvFilterPreset,
   CctvFilterSchema,
   CctvLane,
   CctvParamSchema,
@@ -27,6 +28,11 @@ export interface PresetContext {
 const MANAGED_STEP_IDS: ReadonlySet<string> = new Set(["trim", "osd_protect", "ai_upscale", "ai_label"]);
 const FILTER_PARAM = "filter";
 const INTERPOLATED_SCALE_FLAGS: ReadonlySet<CctvParamValue> = new Set(["bicubic", "lanczos"]);
+const STEP_WARNING_KEYS: Readonly<Record<string, string>> = {
+  sharpen: "cctv.sharpen.halos",
+  stabilize: "cctv.stabilize.moved",
+  lens: "cctv.lens.moved",
+};
 
 function isShownInLane(step: CctvStepSchema, lane: CctvLane): boolean {
   return lane === "ai" || step.category === "classic";
@@ -140,8 +146,21 @@ export function withStepParam(
   return { ...choices, [stepId]: { ...current, params } };
 }
 
+export function withStepParams(choices: StepChoices, stepId: string, params: CctvParams): StepChoices {
+  const current = choices[stepId];
+  return current ? { ...choices, [stepId]: { ...current, params: { ...params } } } : choices;
+}
+
 export function paramValue(param: CctvParamSchema, choice: StepChoice): CctvParamValue | null {
   return choice.params[param.name] ?? param.default;
+}
+
+function presetMatches(filter: CctvFilterSchema, preset: CctvFilterPreset, choice: StepChoice): boolean {
+  return filter.params.every((param) => (preset.params[param.name] ?? param.default) === paramValue(param, choice));
+}
+
+export function matchingPreset(filter: CctvFilterSchema, choice: StepChoice): CctvFilterPreset | null {
+  return (filter.presets ?? []).find((preset) => presetMatches(filter, preset, choice)) ?? null;
 }
 
 export function missingParams(step: CctvStepSchema, choice: StepChoice): string[] {
@@ -162,16 +181,10 @@ export function stepRequests(choices: StepChoices, catalog: readonly CctvStepSch
 }
 
 export function stepWarningKey(stepId: string, choice: StepChoice): string | null {
-  if (stepId === "sharpen") {
-    return "cctv.sharpen.halos";
-  }
-  if (stepId === "stabilize") {
-    return "cctv.stabilize.moved";
-  }
   if (stepId === "scale" && INTERPOLATED_SCALE_FLAGS.has(choice.params.flags)) {
     return "cctv.scale.newPixels";
   }
-  return null;
+  return STEP_WARNING_KEYS[stepId] ?? null;
 }
 
 function isClassicStep(step: CctvStepSchema): boolean {
