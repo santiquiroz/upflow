@@ -167,3 +167,107 @@ export function drawStrokes(ctx: StrokeContext, strokes: BrushStroke[], paintCol
   }
   ctx.globalCompositeOperation = "source-over";
 }
+
+// Máscara binaria por píxel (1 = marcado), fila por fila. Es la versión en
+// memoria de lo que se sube: sin canvas, así se compone y se mide en los tests.
+export interface BinaryMask {
+  width: number;
+  height: number;
+  data: Uint8Array;
+}
+
+interface PixelBounds {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+}
+
+function strokeValue(stroke: BrushStroke): number {
+  return stroke.mode === "erase" ? 0 : 1;
+}
+
+function clippedBounds(points: BrushPoint[], margin: number, width: number, height: number): PixelBounds {
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
+  return {
+    minX: Math.max(0, Math.floor(Math.min(...xs) - margin)),
+    maxX: Math.min(width - 1, Math.ceil(Math.max(...xs) + margin)),
+    minY: Math.max(0, Math.floor(Math.min(...ys) - margin)),
+    maxY: Math.min(height - 1, Math.ceil(Math.max(...ys) + margin)),
+  };
+}
+
+function distanceToSegment(px: number, py: number, a: BrushPoint, b: BrushPoint): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const lengthSquared = dx * dx + dy * dy;
+  const along = lengthSquared === 0 ? 0 : ((px - a.x) * dx + (py - a.y) * dy) / lengthSquared;
+  const t = Math.min(1, Math.max(0, along));
+  return Math.hypot(px - (a.x + t * dx), py - (a.y + t * dy));
+}
+
+function fillPixels(
+  mask: BinaryMask,
+  bounds: PixelBounds,
+  value: number,
+  covers: (x: number, y: number) => boolean,
+): void {
+  for (let y = bounds.minY; y <= bounds.maxY; y += 1) {
+    for (let x = bounds.minX; x <= bounds.maxX; x += 1) {
+      // Centro del píxel, igual que el muestreo del canvas.
+      if (covers(x + 0.5, y + 0.5)) {
+        mask.data[y * mask.width + x] = value;
+      }
+    }
+  }
+}
+
+function stampSegment(mask: BinaryMask, a: BrushPoint, b: BrushPoint, radius: number, value: number): void {
+  const bounds = clippedBounds([a, b], radius, mask.width, mask.height);
+  fillPixels(mask, bounds, value, (x, y) => distanceToSegment(x, y, a, b) <= radius);
+}
+
+function isInsidePolygon(x: number, y: number, polygon: BrushPoint[]): boolean {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i, i += 1) {
+    const a = polygon[i];
+    const b = polygon[j];
+    const crosses = a.y > y !== b.y > y && x < ((b.x - a.x) * (y - a.y)) / (b.y - a.y) + a.x;
+    inside = crosses ? !inside : inside;
+  }
+  return inside;
+}
+
+function stampLasso(mask: BinaryMask, stroke: BrushStroke): void {
+  if (stroke.points.length < MIN_LASSO_POINTS) {
+    return;
+  }
+  const bounds = clippedBounds(stroke.points, 0, mask.width, mask.height);
+  fillPixels(mask, bounds, 1, (x, y) => isInsidePolygon(x, y, stroke.points));
+}
+
+function stampBrush(mask: BinaryMask, stroke: BrushStroke): void {
+  const value = strokeValue(stroke);
+  const [first, ...rest] = stroke.points;
+  let previous = first;
+  for (const point of rest.length === 0 ? [first] : rest) {
+    stampSegment(mask, previous, point, stroke.radius, value);
+    previous = point;
+  }
+}
+
+export function rasterizeStrokes(base: BinaryMask, strokes: readonly BrushStroke[]): BinaryMask {
+  const mask = { ...base, data: base.data.slice() };
+  for (const stroke of strokes) {
+    if (stroke.points.length === 0) {
+      continue;
+    }
+    if (stroke.mode === "lasso") {
+      stampLasso(mask, stroke);
+    } else {
+      stampBrush(mask, stroke);
+    }
+  }
+  return mask;
+}

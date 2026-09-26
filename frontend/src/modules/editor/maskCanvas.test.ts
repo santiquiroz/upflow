@@ -5,11 +5,13 @@ import {
   fitGenerationSize,
   hasEditableArea,
   isCommittableStroke,
+  rasterizeStrokes,
   rectanglePoints,
   startStroke,
   strokeAddsEditableArea,
   toImagePoint,
   undoLastStroke,
+  type BinaryMask,
   type BrushStroke,
 } from "./maskCanvas";
 
@@ -149,5 +151,63 @@ describe("lasso commit rules", () => {
       { x: 10, y: 8 },
       { x: 2, y: 8 },
     ]);
+  });
+});
+
+describe("rasterizeStrokes", () => {
+  const blank = (width: number, height: number): BinaryMask => ({ width, height, data: new Uint8Array(width * height) });
+  const marked = (mask: BinaryMask) => Array.from(mask.data).reduce((total, value) => total + value, 0);
+  const at = (mask: BinaryMask, x: number, y: number) => mask.data[y * mask.width + x];
+
+  it("marks the pixels whose centers fall inside a painted stroke", () => {
+    const stroke: BrushStroke = { mode: "paint", radius: 1, points: [{ x: 2, y: 5.5 }, { x: 8, y: 5.5 }] };
+
+    const result = rasterizeStrokes(blank(10, 10), [stroke]);
+
+    expect(at(result, 2, 5)).toBe(1);
+    expect(at(result, 7, 5)).toBe(1);
+    expect(at(result, 5, 4)).toBe(1);
+    expect(at(result, 5, 7)).toBe(0);
+    expect(at(result, 0, 5)).toBe(0);
+  });
+
+  it("stamps a round dot for a single click", () => {
+    const dot = startStroke("paint", 2, { x: 5, y: 5 });
+
+    const result = rasterizeStrokes(blank(10, 10), [dot]);
+
+    expect(at(result, 4, 4)).toBe(1);
+    expect(at(result, 5, 5)).toBe(1);
+    expect(at(result, 3, 3)).toBe(0);
+    expect(marked(result)).toBe(4 + 8);
+  });
+
+  it("erases what earlier strokes or the base marked, in order", () => {
+    const base = { width: 6, height: 6, data: new Uint8Array(36).fill(1) };
+    const erase = startStroke("erase", 1, { x: 3, y: 3 });
+
+    const result = rasterizeStrokes(base, [erase]);
+
+    expect(at(result, 2, 2)).toBe(0);
+    expect(at(result, 0, 0)).toBe(1);
+    expect(base.data.every((value) => value === 1)).toBe(true);
+  });
+
+  it("fills the inside of a closed lasso", () => {
+    const lasso: BrushStroke = { mode: "lasso", radius: 0, points: rectanglePoints({ x: 1, y: 1 }, { x: 4, y: 4 }) };
+
+    const result = rasterizeStrokes(blank(6, 6), [lasso]);
+
+    expect(marked(result)).toBe(9);
+    expect(at(result, 1, 1)).toBe(1);
+    expect(at(result, 4, 4)).toBe(0);
+  });
+
+  it("clips strokes that run past the edges", () => {
+    const stroke: BrushStroke = { mode: "paint", radius: 3, points: [{ x: -5, y: 0 }, { x: 20, y: 0 }] };
+
+    const result = rasterizeStrokes(blank(4, 4), [stroke]);
+
+    expect(marked(result)).toBe(12);
   });
 });

@@ -7,6 +7,8 @@ import { getEngineInfo } from "../../../lib/api";
 import type { RestoreAnalysis, RestoreCapabilities, RestoreFace } from "../../../lib/restoreApiTypes";
 import { getRestoreCapabilities } from "../../../services/restore";
 import { exceedsUploadLimit, formatMegabytes } from "../uploadLimit";
+import { maskSettingsFrom, withMaskChoice } from "./damageMask";
+import { DamageMaskSection } from "./DamageMaskSection";
 import { FaceGrid } from "./FaceGrid";
 import { stepBlendOf, withFaceChoices } from "./faceSelection";
 import { GeometryTools } from "./GeometryTools";
@@ -16,6 +18,7 @@ import { RestoreSummary } from "./RestoreSummary";
 import type { FacePatch, RestoreSessionState } from "./restoreSessionState";
 import { versionedUrl } from "./restoreUrls";
 import { useRestoreJob, type RestoreJobRequest, type UseRestoreJobResult } from "./useRestoreJob";
+import { useDamageMask, type DamageMaskState } from "./useDamageMask";
 import { useRestoreSelection, type RestoreSelection } from "./useRestoreSelection";
 import { useRestoreSession } from "./useRestoreSession";
 
@@ -24,6 +27,7 @@ const PHOTO_FORMATS = "PNG, JPG, WEBP, BMP, TIFF";
 const RESTORE_CAPABILITIES_KEY = ["restore", "capabilities"];
 const RESTORE_OUTPUT_FORMAT = "png";
 const FACES_STEP = "faces";
+const REPAIR_STEP = "repair";
 
 function useStatusText(session: RestoreSessionState): string | null {
   const { t } = useTranslation();
@@ -52,17 +56,24 @@ function isJobActive(phase: UseRestoreJobResult["phase"]): boolean {
   return phase === "queued" || phase === "running";
 }
 
+interface MaskChoice {
+  useUserMask: boolean;
+  hasSavedMask: boolean;
+}
+
 // Sin reescalado todavia (llega con el selector de escala): la cadena corre a 1x.
 function restoreJobRequest(
   analysis: RestoreAnalysis,
   selection: RestoreSelection,
   faces: RestoreFace[],
+  mask: MaskChoice,
 ): RestoreJobRequest {
+  const withFaces = withFaceChoices(selection.requestOptions, faces, analysis.faces);
   return {
     params: {
       source: { token: analysis.token },
       steps: selection.enabledIds,
-      options: withFaceChoices(selection.requestOptions, faces, analysis.faces),
+      options: withMaskChoice(withFaces, mask.useUserMask, mask.hasSavedMask),
       scale: 1,
       modelId: null,
       device: null,
@@ -78,8 +89,18 @@ interface RestoreControlsProps {
   imageRevision: number;
   capabilities: RestoreCapabilities;
   canRestore: boolean;
+  hasSavedMask: boolean;
   onFaceChange: (index: number, patch: FacePatch) => void;
+  onSaveMask: (mask: Blob) => Promise<boolean>;
   onRestore: (request: RestoreJobRequest) => void;
+}
+
+async function encodeMask(damage: DamageMaskState): Promise<Blob | null> {
+  try {
+    return await damage.maskBlob();
+  } catch {
+    return null;
+  }
 }
 
 // La grilla queda fuera del panel plegado: no se restaura una cara que no se vea.
@@ -89,20 +110,76 @@ function RestoreControls({
   imageRevision,
   capabilities,
   canRestore,
+  hasSavedMask,
   onFaceChange,
+  onSaveMask,
   onRestore,
 }: RestoreControlsProps) {
+  const { t } = useTranslation();
   const selection = useRestoreSelection(analysis, capabilities);
   const showFaces = selection.isEnabled(FACES_STEP) && faces.length > 0;
+  const repairOn = selection.isEnabled(REPAIR_STEP);
+  const repairOptions = selection.optionsOf(REPAIR_STEP);
+  const settings = maskSettingsFrom(repairOptions);
+  const damage = useDamageMask({ analysis, revision: imageRevision, settings, active: repairOn });
+  const [maskOpen, setMaskOpen] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [maskEncodeFailed, setMaskEncodeFailed] = useState(false);
+
+  // La mascara pintada se sube justo antes de crear el job, con los valores de ese momento.
+  async function saveEditedMask(): Promise<boolean> {
+    const mask = await encodeMask(damage);
+    setMaskEncodeFailed(mask === null);
+    return mask !== null && (await onSaveMask(mask));
+  }
+
+  async function handleRestore() {
+    if (damage.needsReview && !damage.reviewed) {
+      setMaskOpen(true);
+      return;
+    }
+    const useUserMask = repairOn && damage.edited;
+    setSending(true);
+    const saved = !useUserMask || (await saveEditedMask());
+    setSending(false);
+    if (saved) {
+      onRestore(restoreJobRequest(analysis, selection, faces, { useUserMask, hasSavedMask }));
+    }
+  }
+
   return (
     <>
       <RestoreSummary
         analysis={analysis}
         capabilities={capabilities}
         selection={selection}
-        canRestore={canRestore}
-        onRestore={() => onRestore(restoreJobRequest(analysis, selection, faces))}
+        canRestore={canRestore && !sending}
+        onRestore={() => void handleRestore()}
       />
+      {maskEncodeFailed && (
+        <p role="alert" className="text-xs text-danger">
+          {t("restore.mask.encodeFailed")}
+        </p>
+      )}
+      {repairOn && (
+        <DamageMaskSection
+          open={maskOpen}
+          onToggle={() => setMaskOpen((open) => !open)}
+          previewUrl={versionedUrl(analysis.previewUrl, imageRevision)}
+          alt={t("restore.preview.alt", { name: analysis.originalName })}
+          size={{ width: analysis.width, height: analysis.height }}
+          damage={damage}
+          settings={settings}
+          leaveLargeHoles={repairOptions.leave_large_holes === true}
+          leaveFaces={repairOptions.leave_faces === true}
+          damageOverFaces={analysis.damageOverFaces}
+          onOptionChange={(option, value) => selection.setOption(REPAIR_STEP, option, value)}
+          onConfirm={() => {
+            damage.markReviewed();
+            setMaskOpen(false);
+          }}
+        />
+      )}
       {showFaces && (
         <FaceGrid
           faces={faces}
@@ -201,7 +278,9 @@ export function PhotoRestorePanel() {
               imageRevision={session.revision}
               capabilities={capabilitiesQuery.data}
               canRestore={session.phase === "ready" && !isJobActive(restoreJob.phase)}
+              hasSavedMask={session.maskCoverage !== null}
               onFaceChange={session.updateFace}
+              onSaveMask={session.saveMask}
               onRestore={restoreJob.submit}
             />
           ) : (
