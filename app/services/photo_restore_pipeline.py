@@ -84,6 +84,7 @@ class RestoreHints:
     pattern_period: float | None = None
     peaks: PeriodicPeaks | None = None
     damage_probability: np.ndarray | None = None
+    damage_detector: ModelUse | None = None
     user_mask: np.ndarray | None = None
 
 

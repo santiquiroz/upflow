@@ -138,7 +138,8 @@ def repair_mask(deps: RunnerDeps, image: np.ndarray, call: StepCall) -> RepairMa
     if call.params.get("leave_faces", False):
         mask = mask_without_boxes(mask, face_boxes(call.request.faces))
     coverage = None if detected is None else float(detected.mean())
-    return RepairMask(mask, coverage, painted is not None, detector)
+    # Con mascara pintada el detector no decidio ningun pixel: no se declara.
+    return RepairMask(mask, coverage, painted is not None, detector if painted is None else ())
 
 
 def painted_mask(call: StepCall) -> np.ndarray | None:
@@ -154,12 +155,17 @@ def detected_damage(
     probability = call.request.hints.damage_probability
     if probability is None and not needed:
         return None, ()
-    detector: tuple[ModelUse, ...] = ()
+    detector = (call.request.hints.damage_detector or scratch_detector_use(),)
     if probability is None:
         probability = scratch_detector(deps.engine)(image)
-        detector = (ModelUse(SCRATCH_MODEL_ID, DETECTOR_DEVICE, DETECTOR_PRECISION),)
+        detector = (scratch_detector_use(),)
     sensitivity = float(call.params.get("sensitivity", REPAIR_SENSITIVITY_MEDIUM))
     return damage_mask(probability, sensitivity, int(call.params.get("grow_px", 0))), detector
+
+
+def scratch_detector_use() -> ModelUse:
+    # El mapa de una sesion vieja sin el dato tambien salio de BOPBTL: es el unico detector de daños.
+    return ModelUse(SCRATCH_MODEL_ID, DETECTOR_DEVICE, DETECTOR_PRECISION)
 
 
 def mask_without_boxes(mask: np.ndarray, boxes: Sequence[tuple[float, float, float, float]]) -> np.ndarray:

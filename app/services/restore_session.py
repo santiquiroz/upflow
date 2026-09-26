@@ -28,8 +28,8 @@ from app.services.photo_diagnosis import (
     diagnose_photo,
 )
 from app.services.photo_geometry import Geometry
-from app.services.photo_restore_pipeline import FaceSelection, PixelLimits, check_pixel_limits
-from app.services.photo_restore_runners import detected_selections
+from app.services.photo_restore_pipeline import FaceSelection, ModelUse, PixelLimits, check_pixel_limits
+from app.services.photo_restore_runners import detected_selections, scratch_detector_use
 from app.services.restore_outputs import fit_long_side, to_uint8
 from app.services.restore_provenance import encode_jpeg, sha256_file
 
@@ -68,6 +68,7 @@ class InvalidMask(ValueError):
 class AnalysisDetectors:
     damage: DamageDetector | None = None
     faces: LandmarkDetector | None = None
+    damage_model: ModelUse | None = None
 
 
 DetectorsFactory = Callable[[], AnalysisDetectors]
@@ -87,6 +88,7 @@ class SessionRecord:
     height: int
     geometry: Geometry = field(default_factory=Geometry)
     owner_id: str | None = None
+    damage_detector: ModelUse | None = None
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -103,6 +105,7 @@ class SessionRecord:
             "height": self.height,
             "geometry": self.geometry.to_dict(),
             "ownerId": self.owner_id,
+            "damageDetector": None if self.damage_detector is None else self.damage_detector.to_metadata(),
         }
 
     @classmethod
@@ -120,7 +123,14 @@ class SessionRecord:
             height=int(raw["height"]),
             geometry=Geometry.from_mapping(raw.get("geometry")),
             owner_id=raw.get("ownerId"),
+            damage_detector=model_use_from_json(raw.get("damageDetector")),
         )
+
+
+def model_use_from_json(raw: Any) -> ModelUse | None:
+    if not isinstance(raw, dict):
+        return None
+    return ModelUse(str(raw["id"]), str(raw["device"]), str(raw["precision"]))
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,6 +156,7 @@ class SessionInputs:
     damage_probability: np.ndarray | None
     user_mask: np.ndarray | None
     faces: tuple[FaceSelection, ...]
+    damage_detector: ModelUse | None = None
 
 
 def is_valid_token(token: str) -> bool:
@@ -162,9 +173,11 @@ def default_detectors(settings: Settings, engine: PhotoRestoreEngine) -> Detecto
     # Los packs se pueden bajar con la app andando: se miran en cada analisis. Ambos detectores
     # corren siempre en CPU (§3.4.2, §3.4.7), asi el analisis nunca compite por la GPU.
     def build() -> AnalysisDetectors:
+        core = settings.restore_core_installed
         return AnalysisDetectors(
-            damage=scratch_detector(engine) if settings.restore_core_installed else None,
+            damage=scratch_detector(engine) if core else None,
             faces=landmarked_face_detector(engine) if settings.restore_faces_installed else None,
+            damage_model=scratch_detector_use() if core else None,
         )
 
     return build
@@ -393,6 +406,7 @@ class RestoreSessionStore:
             damage_probability=_read_probability(directory / DAMAGE_PROB_NAME),
             user_mask=_read_mask(directory / DAMAGE_MASK_NAME),
             faces=faces,
+            damage_detector=record.damage_detector,
         )
 
     def _open(
@@ -421,13 +435,15 @@ class RestoreSessionStore:
         directory = session_dir(self._root, record.token)
         loaded = self._load_checked(directory / record.original_file)
         working = record.geometry.apply(loaded.rgb)
-        analysis = analyze_working_copy(working, self._detectors(), jpeg_origin=record.jpeg_origin)
+        detectors = self._detectors()
+        analysis = analyze_working_copy(working, detectors, jpeg_origin=record.jpeg_origin)
         updated = replace(
             record,
             bit_depth=loaded.bit_depth,
             has_icc=loaded.icc is not None,
             width=working.shape[1],
             height=working.shape[0],
+            damage_detector=None if analysis.probability is None else detectors.damage_model,
         )
         self._write_analysis(directory, updated, working, loaded.icc, analysis)
         return SessionAnalysis(

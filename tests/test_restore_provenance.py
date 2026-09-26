@@ -307,6 +307,27 @@ def sidecar_inputs(tmp_path: Path) -> tuple[PreResult, PostResult, SidecarContex
     return pre, post, context, catalog
 
 
+def test_a_classic_fill_on_a_mask_from_the_ai_detector_counts_as_ai_applied(tmp_path: Path) -> None:
+    pre, post, context, catalog = sidecar_inputs(tmp_path)
+    detector = ModelUse("bopbtl-scratch", "cpu", "fp32")
+    telea = StepRecord("repair", "dsp", {}, 0.5, False, aux_models=(detector,), details={"finalCoverage": 0.01})
+    pre = PreResult(pre.image, (telea,), pre.request)
+    post = PostResult(post.image, (), 1.0)
+
+    sidecar = build_sidecar(pre, post, context, catalog)
+
+    assert sidecar["aiApplied"] is True
+    assert sidecar["steps"][0]["auxiliaryModels"][0]["id"] == "bopbtl-scratch"
+
+
+def test_a_dsp_only_restoration_is_not_ai_applied(tmp_path: Path) -> None:
+    pre, post, context, catalog = sidecar_inputs(tmp_path)
+    pre = PreResult(pre.image, (record("tone"),), pre.request)
+    post = PostResult(post.image, (), 1.0)
+
+    assert build_sidecar(pre, post, context, catalog)["aiApplied"] is False
+
+
 def test_the_sidecar_records_hashes_licenses_and_the_digital_source_type(tmp_path: Path) -> None:
     pre, post, context, catalog = sidecar_inputs(tmp_path)
 

@@ -172,7 +172,12 @@ def with_session_hints(
     for layer in (inputs.damage_probability, inputs.user_mask):
         if layer is not None and layer.shape[:2] != shape:
             raise ValueError("The analysis session no longer matches the photo; analyze it again")
-    hints = replace(analysis.hints, damage_probability=inputs.damage_probability, user_mask=inputs.user_mask)
+    hints = replace(
+        analysis.hints,
+        damage_probability=inputs.damage_probability,
+        damage_detector=inputs.damage_detector,
+        user_mask=inputs.user_mask,
+    )
     return replace(analysis, hints=hints, faces=inputs.faces)
 
 

@@ -252,7 +252,7 @@ def build_sidecar(
         "colorize": summary["colorize"],
         "outputs": outputs_metadata(context.outputs),
         "effectiveBits": effective_bits(context.output_bit_depth, records),
-        "aiApplied": any(record.strategy == "model" for record in records) or context.upscale.mode == "ai",
+        "aiApplied": any(used_a_model(record) for record in records) or context.upscale.mode == "ai",
         "inventsDetail": any(record.invents_detail for record in records) or facts.generative_upscale,
         "digitalSourceType": digital_source_type(facts),
         "compositeReasons": list(composite_reasons(facts)),
@@ -261,6 +261,11 @@ def build_sidecar(
         "calibration": summary["calibration"],
         "warnings": summary["warnings"],
     }
+
+
+def used_a_model(record: StepRecord) -> bool:
+    # Un detector (p. ej. BOPBTL) que decide que pixeles se rellenan tambien es IA, aunque el relleno sea Telea.
+    return record.model is not None or bool(record.aux_models)
 
 
 def recomposed_sidecar(

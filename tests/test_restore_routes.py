@@ -29,7 +29,7 @@ from app.services.face_geometry import TEMPLATE_FFHQ_512, align_face, align_matr
 from app.services.job_manager import JobManager
 from app.services.photo_restore_chain import RESTORE_CHAIN, step_ids
 from app.services.photo_restore_job import PhotoRestoreJobRunner
-from app.services.photo_restore_pipeline import StepCall, StepOutcome
+from app.services.photo_restore_pipeline import ModelUse, StepCall, StepOutcome
 from app.services.photo_restore_presets import PHOTO_PRESETS
 from app.services.restore_session import AnalysisDetectors, RestoreSessionStore, default_detectors
 from app.services.storage import StorageService
@@ -208,6 +208,24 @@ def test_analyze_opens_a_session_with_preview_diagnosis_damage_and_faces(harness
     assert body["eta"]["cpuSeconds"] >= body["eta"]["gpuSeconds"] >= 0
     for url in (body["previewUrl"], body["damage"]["probUrl"], body["faces"][0]["thumbnailUrl"]):
         assert harness.client.get(url).status_code == 200
+
+
+def test_the_session_remembers_which_detector_made_the_damage_map(harness_factory) -> None:
+    detector = ModelUse("bopbtl-scratch-detector", "cpu", "fp32")
+    harness = harness_factory(detectors=AnalysisDetectors(damage=line_damage, damage_model=detector))
+
+    token = harness.analyze()["token"]
+
+    assert harness.sessions.job_inputs(token).damage_detector == detector
+
+
+def test_a_session_without_a_damage_map_names_no_detector(harness_factory) -> None:
+    detector = ModelUse("bopbtl-scratch-detector", "cpu", "fp32")
+    harness = harness_factory(detectors=AnalysisDetectors(damage=None, damage_model=detector))
+
+    token = harness.analyze()["token"]
+
+    assert harness.sessions.job_inputs(token).damage_detector is None
 
 
 def test_analyze_resolves_every_preset_for_this_photo(harness_factory) -> None:

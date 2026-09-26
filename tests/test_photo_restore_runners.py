@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import cv2
@@ -15,8 +16,10 @@ from app.services.engines.photo_restore_engine import Fp16Rejection
 from app.services.engines.scratch_detect import SCRATCH_MODEL_ID
 from app.services.face_geometry import TEMPLATE_FFHQ_512
 from app.services.photo_dsp import ToneSettings, apply_tone
+from app.services.photo_geometry import Geometry
 from app.services.photo_restore_chain import RESTORE_CHAIN, restore_step
-from app.services.photo_restore_pipeline import FaceSelection, RestoreHints, RestoreRequest, StepCall
+from app.services.photo_restore_job import RestoreAnalysis, with_session_hints
+from app.services.photo_restore_pipeline import FaceSelection, ModelUse, RestoreHints, RestoreRequest, StepCall
 from app.services.photo_restore_runners import (
     RunnerDeps,
     build_step_runners,
@@ -34,6 +37,7 @@ from app.services.photo_restore_runners import (
     run_tone,
     tone_settings,
 )
+from app.services.restore_session import SessionInputs
 
 
 def photo(height: int = 64, width: int = 80) -> np.ndarray:
@@ -139,6 +143,32 @@ def test_repair_without_a_saved_probability_runs_the_detector(monkeypatch: pytes
     assert outcome.details["engine"] == "classic"
     assert outcome.details["userEdited"] is False
     assert outcome.details["finalCoverage"] == pytest.approx(probability.astype(bool).mean())
+
+
+def session_probability(image: np.ndarray) -> np.ndarray:
+    probability = np.zeros(image.shape[:2], dtype=np.float32)
+    probability[30:32, 5:70] = 0.95
+    return probability
+
+
+def test_repair_from_a_session_map_declares_the_detector_that_made_it() -> None:
+    image = photo()
+    detector = ModelUse(SCRATCH_MODEL_ID, "cpu", "fp32")
+    hints = RestoreHints(damage_probability=session_probability(image), damage_detector=detector)
+
+    outcome = run_repair(fake_deps(), image, call_for("repair", image, params={"engine": "classic"}, hints=hints))
+
+    assert outcome.model is None
+    assert outcome.aux_models == (detector,)
+
+
+def test_repair_from_an_older_session_map_still_declares_the_scratch_detector() -> None:
+    image = photo()
+    hints = RestoreHints(damage_probability=session_probability(image))
+
+    outcome = run_repair(fake_deps(), image, call_for("repair", image, params={"engine": "classic"}, hints=hints))
+
+    assert [model.model_id for model in outcome.aux_models] == [SCRATCH_MODEL_ID]
 
 
 def test_repair_can_leave_the_faces_unrepaired() -> None:
@@ -315,3 +345,13 @@ def test_a_painted_mask_without_a_saved_probability_skips_the_detector(monkeypat
     assert outcome.details["userEdited"] is True
     assert outcome.details["detectedCoverage"] is None
     assert outcome.aux_models == ()
+
+
+def test_session_hints_carry_the_damage_detector_to_the_repair_step() -> None:
+    image = photo()
+    detector = ModelUse(SCRATCH_MODEL_ID, "cpu", "fp32")
+    inputs = SessionInputs(Path("o.png"), Geometry(), session_probability(image), None, (), detector)
+
+    analysis = with_session_hints(RestoreAnalysis(tone_kind="mono", hints=RestoreHints()), inputs, image.shape[:2])
+
+    assert analysis.hints.damage_detector == detector
