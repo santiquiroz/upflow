@@ -1090,3 +1090,9 @@ class TestSondasDeLaMaquina:
                 return False
 
         assert host_probes_for(Removida()).dml_gpu(make_settings(tmp_path)) is False
+
+    def test_sin_el_servicio_de_la_app_la_sonda_de_gpu_falla_en_vez_de_adivinar(self, tmp_path: Path) -> None:
+        from app.services.capabilities import DEFAULT_HOST_PROBES, HostProbesNotInjected
+
+        with pytest.raises(HostProbesNotInjected):
+            DEFAULT_HOST_PROBES.dml_gpu(make_settings(tmp_path))

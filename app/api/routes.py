@@ -3522,6 +3522,7 @@ async def preflight_generation_model(
 async def capability_tree(
     settings: Settings = Depends(get_settings),
     registry: ModelRegistry = Depends(get_model_registry),
+    devices: DevicesService = Depends(get_devices_service),
 ) -> CapabilityTreeResponse:
     """El arbol de lo que la app puede hacer, resuelto contra esta maquina.
 
@@ -3529,7 +3530,8 @@ async def capability_tree(
     de mirar el disco y el registro, no de un flag persistido.
     """
     # El modo CCTV sondea la build de ffmpeg y la GPU: fuera del event loop.
-    grouped = group_by_domain(await asyncio.to_thread(resolve_capabilities, settings, registry))
+    probes = host_probes_for(devices)
+    grouped = group_by_domain(await asyncio.to_thread(resolve_capabilities, settings, registry, probes))
     return CapabilityTreeResponse(
         domains=[
             CapabilityDomainResponse(
@@ -3558,9 +3560,11 @@ def _capability_to_response(item: ResolvedCapability) -> CapabilityResponse:
         activatable_settings=list(item.activatable_settings),
     )
 
-def _resolved_by_id(settings: Settings, registry: ModelRegistry, capability_id: str) -> ResolvedCapability:
+def _resolved_by_id(
+    settings: Settings, registry: ModelRegistry, capability_id: str, devices: DevicesService
+) -> ResolvedCapability:
     try:
-        return resolve_one(capability_id, settings, registry)
+        return resolve_one(capability_id, settings, registry, host_probes_for(devices))
     except KeyError:
         raise HTTPException(
             status_code=404, detail=f"Capacidad desconocida: {capability_id!r}"
@@ -3605,8 +3609,9 @@ async def provision_capability(
     request: Request,
     settings: Settings = Depends(get_settings),
     registry: ModelRegistry = Depends(get_model_registry),
+    devices: DevicesService = Depends(get_devices_service),
 ) -> ProvisionJobResponse:
-    item = _resolved_by_id(settings, registry, capability_id)
+    item = await asyncio.to_thread(_resolved_by_id, settings, registry, capability_id, devices)
     pack = _pack_to_provision(item)
     provisioner: PackProvisioner = request.app.state.pack_provisioner
     try:

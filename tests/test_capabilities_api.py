@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from app.api.routes import capability_tree
+from app.api.routes import _resolved_by_id, capability_tree
 from app.config import Settings
 from app.services.capabilities import CATALOG, DOMAIN_ORDER
 from app.services.model_registry import ModelEntry, ModelKind, ModelStatus
@@ -454,3 +454,50 @@ def test_the_tree_serializes_activatable_settings_in_camel_case():
     cards = [item for group in payload["domains"] for item in group["capabilities"]]
     assert cards
     assert all(isinstance(card["activatableSettings"], list) for card in cards)
+
+
+class OneDmlGpu:
+    def __init__(self) -> None:
+        self.unhealthy: set[str] = set()
+
+    def list_devices(self) -> list[dict]:
+        return [{"id": "cpu", "backend": "cpu"}, {"id": "dml:0", "backend": "directml"}]
+
+    def is_healthy(self, device_id: str) -> bool:
+        return device_id not in self.unhealthy
+
+    def mark_unhealthy(self, device_id: str) -> None:
+        self.unhealthy.add(device_id)
+
+
+def cctv_ai_ready(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
+    import app.services.capabilities as cap_mod
+    import app.services.ffmpeg_capabilities as ffmpeg_caps
+
+    monkeypatch.setattr(cap_mod, "_path_exists", lambda _settings, _requirement: True)
+    monkeypatch.setattr(ffmpeg_caps, "cached_capabilities", lambda _binary: object())
+    monkeypatch.setattr(ffmpeg_caps, "cctv_mode_available", lambda _caps: True)
+    return make_settings(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_the_tree_sees_a_gpu_the_app_marked_as_removed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    settings = cctv_ai_ready(tmp_path, monkeypatch)
+    devices = OneDmlGpu()
+    before = flat(await capability_tree(settings, FakeRegistry(), devices))["video.cctvAi"]
+
+    devices.mark_unhealthy("dml:0")
+    after = flat(await capability_tree(settings, FakeRegistry(), devices))["video.cctvAi"]
+
+    assert before.status == "available"
+    assert (after.status, after.setup_reason_key) == ("needs_setup", "capability.setup.needsGpu")
+
+
+def test_resolving_one_capability_uses_the_app_devices_too(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    settings = cctv_ai_ready(tmp_path, monkeypatch)
+    devices = OneDmlGpu()
+    devices.mark_unhealthy("dml:0")
+
+    item = _resolved_by_id(settings, FakeRegistry(), "video.cctvAi", devices)
+
+    assert item.setup_reason_key == "capability.setup.needsGpu"

@@ -112,10 +112,13 @@ def has_healthy_dml_device(devices: DeviceLister) -> bool:
     )
 
 
-def dml_gpu_present(settings: Settings) -> bool:
-    from app.services.devices_service import DevicesService
+class HostProbesNotInjected(RuntimeError):
+    pass
 
-    return has_healthy_dml_device(DevicesService(settings))
+
+def dml_gpu_not_injected(settings: Settings) -> bool:
+    # Un DevicesService nuevo no sabe que GPU marco sin salud el de la app: sin inyectarlo, error.
+    raise HostProbesNotInjected("GPU health needs the app's DevicesService: pass host_probes_for(devices)")
 
 
 def ffmpeg_build_supports_cctv(settings: Settings) -> bool:
@@ -137,7 +140,7 @@ HostProbe = Callable[[Settings], bool]
 @dataclass(frozen=True, slots=True)
 class HostProbes:
     ffmpeg_cctv_build: HostProbe = ffmpeg_build_supports_cctv
-    dml_gpu: HostProbe = dml_gpu_present
+    dml_gpu: HostProbe = dml_gpu_not_injected
 
     def passes(self, check: HostCheck, settings: Settings) -> bool:
         return getattr(self, check)(settings)
