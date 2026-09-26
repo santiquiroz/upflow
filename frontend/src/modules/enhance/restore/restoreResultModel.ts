@@ -1,5 +1,6 @@
 import type { JobResponse } from "../../../lib/apiTypes";
 import { restoreArtifactUrl } from "../../../services/restore";
+import { readRestoredFaces, type RestoredFace } from "./faceResultModel";
 
 // Lectura de job.metadata.restore (restore_outputs.restore_summary). Llega como
 // JSON sin tipar, asi que cada campo se valida antes de usarlo.
@@ -16,6 +17,8 @@ export interface RestoreResultSummary {
   downloadNames: RestoreDownloadNames;
   viewFullResolution: boolean;
   compositeReasons: string[];
+  faces: RestoredFace[];
+  recomposeAvailable: boolean;
 }
 
 export interface EditorSource {
@@ -75,6 +78,20 @@ export function readRestoreSummary(job: JobResponse): RestoreResultSummary | nul
     downloadNames,
     viewFullResolution: restore.viewFullResolution === true,
     compositeReasons: stringList(restore.compositeReasons),
+    faces: readRestoredFaces(restore.faces),
+    recomposeAvailable: restore.recomposeAvailable === true,
+  };
+}
+
+// Recomponer puede apagar todas las caras: la tarjeta y la grilla siguen al sidecar nuevo.
+export function withRecomposedSidecar(
+  summary: RestoreResultSummary,
+  sidecar: Record<string, unknown>,
+): RestoreResultSummary {
+  return {
+    ...summary,
+    faces: readRestoredFaces(sidecar.faces),
+    compositeReasons: stringList(sidecar.compositeReasons),
   };
 }
 

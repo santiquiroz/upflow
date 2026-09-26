@@ -4,6 +4,7 @@ import {
   hasUncolored,
   readRestoreSummary,
   showsInfoCard,
+  withRecomposedSidecar,
   type RestoreResultSummary,
 } from "./restoreResultModel";
 import { makeCompletedRestoreJob, makeRestoreMetadata } from "./restoreTestFixtures";
@@ -28,7 +29,21 @@ describe("readRestoreSummary", () => {
       },
       viewFullResolution: true,
       compositeReasons: [],
+      faces: [],
+      recomposeAvailable: false,
     });
+  });
+
+  it("reads the restored faces and whether they can be recomposed", () => {
+    const summary = summaryOf({
+      recomposeAvailable: true,
+      faces: [
+        { index: 0, enabled: true, restored: true, blend: 0.6 },
+        { index: 1, enabled: false, restored: false, blend: 0.4 },
+      ],
+    });
+    expect(summary.faces).toEqual([{ index: 0, enabled: true, blend: 0.6 }]);
+    expect(summary.recomposeAvailable).toBe(true);
   });
 
   it("ignores jobs that have not finished", () => {
@@ -90,5 +105,25 @@ describe("editorSource", () => {
       url: "/api/v1/jobs/job-1/artifacts/view",
       fileName: "grandma_restored.jpg",
     });
+  });
+});
+
+describe("withRecomposedSidecar", () => {
+  it("takes the faces and composite reasons of the recomposed result", () => {
+    const summary = summaryOf({
+      compositeReasons: ["faces"],
+      faces: [{ index: 0, enabled: true, restored: true, blend: 0.6 }],
+    });
+    const sidecar = {
+      faces: [{ index: 0, enabled: false, restored: true, blend: 0.6, recomposedAt: "2026-09-25T10:05:00Z" }],
+      compositeReasons: [],
+    };
+
+    const updated = withRecomposedSidecar(summary, sidecar);
+
+    expect(updated.faces).toEqual([{ index: 0, enabled: false, blend: 0.6 }]);
+    expect(showsInfoCard(updated)).toBe(false);
+    expect(updated.downloadNames).toBe(summary.downloadNames);
+    expect(summary.faces).toEqual([{ index: 0, enabled: true, blend: 0.6 }]);
   });
 });

@@ -6,11 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "../../../lib/api";
 import type { EngineInfoResponse, JobResponse } from "../../../lib/apiTypes";
 import * as restoreService from "../../../services/restore";
-import { PhotoRestorePanel, versionedUrl } from "./PhotoRestorePanel";
+import { PhotoRestorePanel } from "./PhotoRestorePanel";
 import {
   makeAnalysis,
   makeCapabilities,
   makeCompletedRestoreJob,
+  makeFace,
   makeRestoreMetadata,
 } from "./restoreTestFixtures";
 
@@ -166,6 +167,45 @@ describe("PhotoRestorePanel: summary and Restore", () => {
     expect(screen.getByRole("button", { name: "Restore" })).toBeDisabled();
   });
 
+  it("shows the faces to restore and sends only the ones left checked", async () => {
+    const portrait = { steps: ["faces"], options: { faces: { model: "gfpgan-v1.4", blend: 0.6 } } };
+    const faces = [
+      makeFace({ index: 0, eyePx: 48, sharpness: 0.02, enabled: true, blend: 0.6 }),
+      makeFace({ index: 1, eyePx: 36, sharpness: 0.02, enabled: true, blend: 0.6, thumbnailUrl: null }),
+    ];
+    vi.mocked(restoreService.analyzePhoto).mockResolvedValue(
+      makeAnalysis({
+        proposedPreset: "portrait",
+        proposedSteps: portrait.steps,
+        proposedOptions: portrait.options,
+        presetSelections: { portrait },
+        faces,
+      }),
+    );
+    vi.mocked(restoreService.createRestoreJob).mockResolvedValue(QUEUED);
+    vi.mocked(api.getJob).mockResolvedValue({ ...QUEUED, status: "running" } as JobResponse);
+    renderPanel();
+    dropPhoto();
+
+    fireEvent.click(await screen.findByRole("checkbox", { name: "Restore face 2" }));
+    fireEvent.click(screen.getByRole("button", { name: "Restore" }));
+
+    await waitFor(() => expect(restoreService.createRestoreJob).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(restoreService.createRestoreJob).mock.calls[0][0].options).toEqual({
+      preset: "portrait",
+      faces: { model: "gfpgan-v1.4", blend: 0.6, selected: [0], per_face: { "0": 0.6 } },
+    });
+  });
+
+  it("has no face grid when face restoration is off", async () => {
+    vi.mocked(restoreService.analyzePhoto).mockResolvedValue(makeAnalysis());
+    renderPanel();
+    dropPhoto();
+
+    await screen.findByRole("button", { name: "Restore" });
+    expect(screen.queryByRole("heading", { name: "Faces" })).not.toBeInTheDocument();
+  });
+
   it("shows the comparison and downloads once the restoration finishes", async () => {
     const completed = makeCompletedRestoreJob(makeRestoreMetadata());
     vi.mocked(restoreService.analyzePhoto).mockResolvedValue(makeAnalysis());
@@ -193,12 +233,5 @@ describe("PhotoRestorePanel: summary and Restore", () => {
 
     expect(await screen.findByText("Couldn't load the restore options.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Restore" })).not.toBeInTheDocument();
-  });
-});
-
-describe("versionedUrl", () => {
-  it("adds the revision as a query parameter", () => {
-    expect(versionedUrl("/a/preview.jpg", 3)).toBe("/a/preview.jpg?v=3");
-    expect(versionedUrl("/a/preview.jpg?x=1", 3)).toBe("/a/preview.jpg?x=1&v=3");
   });
 });

@@ -1,6 +1,6 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createEditorHandoffStore } from "../../../lib/editorHandoffStore";
 import { RestoreResult } from "./RestoreResult";
 import { readRestoreSummary } from "./restoreResultModel";
@@ -18,7 +18,13 @@ const WITH_COLOR = {
   compositeReasons: ["colorize"],
 };
 
-function renderResult(overrides: Record<string, unknown> = {}) {
+const WITH_FACES = {
+  compositeReasons: ["faces"],
+  recomposeAvailable: true,
+  faces: [{ index: 0, enabled: true, restored: true, blend: 0.6 }],
+};
+
+function renderResult(overrides: Record<string, unknown> = {}, recompose = vi.fn()) {
   const job = makeCompletedRestoreJob(makeRestoreMetadata(overrides));
   const summary = readRestoreSummary(job);
   if (summary === null) {
@@ -30,7 +36,15 @@ function renderResult(overrides: Record<string, unknown> = {}) {
       <Routes>
         <Route
           path="/enhance/restore"
-          element={<RestoreResult job={job} summary={summary} beforeUrl={BEFORE_URL} handoffStore={handoffStore} />}
+          element={
+            <RestoreResult
+              job={job}
+              summary={summary}
+              beforeUrl={BEFORE_URL}
+              handoffStore={handoffStore}
+              recompose={recompose}
+            />
+          }
         />
         <Route path="/editor" element={<p>Editor page</p>} />
       </Routes>
@@ -113,5 +127,30 @@ describe("RestoreResult", () => {
   it("says the photo never left the computer", () => {
     renderResult();
     expect(screen.getByText("Runs on your computer. Your photos are not uploaded anywhere.")).toBeInTheDocument();
+  });
+
+  it("has no face controls when no face was restored", () => {
+    renderResult();
+    expect(screen.queryByRole("heading", { name: "Faces, one by one" })).not.toBeInTheDocument();
+  });
+
+  it("recomposes the faces and shows the rebuilt photo and downloads", async () => {
+    const recompose = vi.fn().mockResolvedValue({
+      sidecar: { faces: [{ index: 0, enabled: false, restored: true, blend: 0.6 }], compositeReasons: [] },
+    });
+    renderResult(WITH_FACES, recompose);
+    expect(screen.getByRole("note")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Show original face" }));
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+    await waitFor(() =>
+      expect(screen.getByAltText("After: grandma.jpg")).toHaveAttribute("src", "/api/v1/jobs/job-1/artifacts/view?v=1"),
+    );
+    expect(recompose).toHaveBeenCalledWith("job-1", { 0: { enabled: false, blend: 0.6 } });
+    expect(link("Download restored")).toHaveAttribute("href", "/api/v1/jobs/job-1/download?v=1");
+    expect(link("Download before/after")).toHaveAttribute("href", "/api/v1/jobs/job-1/artifacts/beforeafter?v=1");
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
+    expect(screen.getByText("Faces updated.")).toBeInTheDocument();
   });
 });

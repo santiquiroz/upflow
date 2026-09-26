@@ -4,14 +4,17 @@ import { FileDropzone } from "../../../components/FileDropzone";
 import { JobCard } from "../../../components/JobCard";
 import { useTranslation } from "../../../i18n/LocaleProvider";
 import { getEngineInfo } from "../../../lib/api";
-import type { RestoreAnalysis, RestoreCapabilities } from "../../../lib/restoreApiTypes";
+import type { RestoreAnalysis, RestoreCapabilities, RestoreFace } from "../../../lib/restoreApiTypes";
 import { getRestoreCapabilities } from "../../../services/restore";
 import { exceedsUploadLimit, formatMegabytes } from "../uploadLimit";
+import { FaceGrid } from "./FaceGrid";
+import { stepBlendOf, withFaceChoices } from "./faceSelection";
 import { GeometryTools } from "./GeometryTools";
 import { RestoreResult } from "./RestoreResult";
 import { readRestoreSummary } from "./restoreResultModel";
 import { RestoreSummary } from "./RestoreSummary";
-import type { RestoreSessionState } from "./restoreSessionState";
+import type { FacePatch, RestoreSessionState } from "./restoreSessionState";
+import { versionedUrl } from "./restoreUrls";
 import { useRestoreJob, type RestoreJobRequest, type UseRestoreJobResult } from "./useRestoreJob";
 import { useRestoreSelection, type RestoreSelection } from "./useRestoreSelection";
 import { useRestoreSession } from "./useRestoreSession";
@@ -20,11 +23,7 @@ const PHOTO_ACCEPT = ".png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff,image/png,image/jpeg
 const PHOTO_FORMATS = "PNG, JPG, WEBP, BMP, TIFF";
 const RESTORE_CAPABILITIES_KEY = ["restore", "capabilities"];
 const RESTORE_OUTPUT_FORMAT = "png";
-
-export function versionedUrl(url: string, revision: number): string {
-  const separator = url.includes("?") ? "&" : "?";
-  return `${url}${separator}v=${revision}`;
-}
+const FACES_STEP = "faces";
 
 function useStatusText(session: RestoreSessionState): string | null {
   const { t } = useTranslation();
@@ -54,12 +53,16 @@ function isJobActive(phase: UseRestoreJobResult["phase"]): boolean {
 }
 
 // Sin reescalado todavia (llega con el selector de escala): la cadena corre a 1x.
-function restoreJobRequest(analysis: RestoreAnalysis, selection: RestoreSelection): RestoreJobRequest {
+function restoreJobRequest(
+  analysis: RestoreAnalysis,
+  selection: RestoreSelection,
+  faces: RestoreFace[],
+): RestoreJobRequest {
   return {
     params: {
       source: { token: analysis.token },
       steps: selection.enabledIds,
-      options: selection.requestOptions,
+      options: withFaceChoices(selection.requestOptions, faces, analysis.faces),
       scale: 1,
       modelId: null,
       device: null,
@@ -71,21 +74,45 @@ function restoreJobRequest(analysis: RestoreAnalysis, selection: RestoreSelectio
 
 interface RestoreControlsProps {
   analysis: RestoreAnalysis;
+  faces: RestoreFace[];
+  imageRevision: number;
   capabilities: RestoreCapabilities;
   canRestore: boolean;
+  onFaceChange: (index: number, patch: FacePatch) => void;
   onRestore: (request: RestoreJobRequest) => void;
 }
 
-function RestoreControls({ analysis, capabilities, canRestore, onRestore }: RestoreControlsProps) {
+// La grilla queda fuera del panel plegado: no se restaura una cara que no se vea.
+function RestoreControls({
+  analysis,
+  faces,
+  imageRevision,
+  capabilities,
+  canRestore,
+  onFaceChange,
+  onRestore,
+}: RestoreControlsProps) {
   const selection = useRestoreSelection(analysis, capabilities);
+  const showFaces = selection.isEnabled(FACES_STEP) && faces.length > 0;
   return (
-    <RestoreSummary
-      analysis={analysis}
-      capabilities={capabilities}
-      selection={selection}
-      canRestore={canRestore}
-      onRestore={() => onRestore(restoreJobRequest(analysis, selection))}
-    />
+    <>
+      <RestoreSummary
+        analysis={analysis}
+        capabilities={capabilities}
+        selection={selection}
+        canRestore={canRestore}
+        onRestore={() => onRestore(restoreJobRequest(analysis, selection, faces))}
+      />
+      {showFaces && (
+        <FaceGrid
+          faces={faces}
+          proposed={analysis.faces}
+          stepBlend={stepBlendOf(selection.optionsOf(FACES_STEP))}
+          imageRevision={imageRevision}
+          onChange={onFaceChange}
+        />
+      )}
+    </>
   );
 }
 
@@ -170,8 +197,11 @@ export function PhotoRestorePanel() {
           {capabilitiesQuery.data ? (
             <RestoreControls
               analysis={analysis}
+              faces={session.faces}
+              imageRevision={session.revision}
               capabilities={capabilitiesQuery.data}
               canRestore={session.phase === "ready" && !isJobActive(restoreJob.phase)}
+              onFaceChange={session.updateFace}
               onRestore={restoreJob.submit}
             />
           ) : (
@@ -190,6 +220,7 @@ export function PhotoRestorePanel() {
       )}
       {analysis && restoreJob.job && resultSummary ? (
         <RestoreResult
+          key={restoreJob.job.jobId}
           job={restoreJob.job}
           summary={resultSummary}
           beforeUrl={versionedUrl(analysis.previewUrl, session.revision)}

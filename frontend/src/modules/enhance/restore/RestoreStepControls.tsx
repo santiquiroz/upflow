@@ -20,7 +20,11 @@ function sliderText(control: SliderControl, value: number, t: Translate): string
   return t("restore.control.percent", { value: Math.round(value * PERCENT) });
 }
 
-export function SliderField({ control, value, onChange }: FieldProps<SliderControl>) {
+interface SliderFieldProps extends FieldProps<SliderControl> {
+  disabled?: boolean;
+}
+
+export function SliderField({ control, value, onChange, disabled = false }: SliderFieldProps) {
   const { t } = useTranslation();
   const sliderId = useId();
   const numeric = Number(value);
@@ -40,8 +44,9 @@ export function SliderField({ control, value, onChange }: FieldProps<SliderContr
         max={control.max}
         step={control.step}
         value={numeric}
+        disabled={disabled}
         onChange={(event) => onChange(Number(event.target.value))}
-        className="h-1.5 w-full cursor-pointer accent-accent"
+        className="h-1.5 w-full accent-accent enabled:cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
       />
     </div>
   );

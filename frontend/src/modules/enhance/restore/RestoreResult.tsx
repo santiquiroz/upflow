@@ -5,19 +5,24 @@ import { CompareSlider } from "../../../components/CompareSlider";
 import { useTranslation } from "../../../i18n/LocaleProvider";
 import type { JobResponse } from "../../../lib/apiTypes";
 import { editorHandoffStore, type EditorHandoffStore } from "../../../lib/editorHandoffStore";
-import { restoreArtifactUrl } from "../../../services/restore";
+import type { RecomposeFaceChoice, RecomposeResponse } from "../../../lib/restoreApiTypes";
+import { recomposeFaces, restoreArtifactUrl } from "../../../services/restore";
+import { FaceResultGrid } from "./FaceResultGrid";
 import {
   editorSource,
   hasUncolored,
   showsInfoCard,
+  withRecomposedSidecar,
   type RestoreResultSummary,
 } from "./restoreResultModel";
+import { revisedUrl } from "./restoreUrls";
 
 export interface RestoreResultProps {
   job: JobResponse;
   summary: RestoreResultSummary;
   beforeUrl: string;
   handoffStore?: EditorHandoffStore;
+  recompose?: (jobId: string, faces: Record<number, RecomposeFaceChoice>) => Promise<RecomposeResponse>;
 }
 
 const EDITOR_PATH = "/editor";
@@ -35,26 +40,34 @@ function DownloadLink({ href, fileName, icon, children }: { href: string; fileNa
 
 const DOWNLOAD_ICON = <Download aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.75} />;
 
-function RestoreDownloads({ job, summary }: { job: JobResponse; summary: RestoreResultSummary }) {
+interface RestoreDownloadsProps {
+  job: JobResponse;
+  summary: RestoreResultSummary;
+  revision: number;
+}
+
+function RestoreDownloads({ job, summary, revision }: RestoreDownloadsProps) {
   const { t } = useTranslation();
   const names = summary.downloadNames;
+  const artifactUrl = (name: "uncolored" | "beforeafter" | "sidecar") =>
+    revisedUrl(restoreArtifactUrl(job.jobId, name), revision);
   return (
     <div className="flex flex-wrap gap-2">
       {job.downloadUrl && (
-        <DownloadLink href={job.downloadUrl} fileName={names.restored} icon={DOWNLOAD_ICON}>
+        <DownloadLink href={revisedUrl(job.downloadUrl, revision)} fileName={names.restored} icon={DOWNLOAD_ICON}>
           {t("restore.result.download.restored")}
         </DownloadLink>
       )}
       {hasUncolored(summary) && (
-        <DownloadLink href={restoreArtifactUrl(job.jobId, "uncolored")} fileName={names.uncolored} icon={DOWNLOAD_ICON}>
+        <DownloadLink href={artifactUrl("uncolored")} fileName={names.uncolored} icon={DOWNLOAD_ICON}>
           {t("restore.result.download.uncolored")}
         </DownloadLink>
       )}
-      <DownloadLink href={restoreArtifactUrl(job.jobId, "beforeafter")} fileName={names.beforeAfter} icon={DOWNLOAD_ICON}>
+      <DownloadLink href={artifactUrl("beforeafter")} fileName={names.beforeAfter} icon={DOWNLOAD_ICON}>
         {t("restore.result.download.beforeAfter")}
       </DownloadLink>
       <DownloadLink
-        href={restoreArtifactUrl(job.jobId, "sidecar")}
+        href={artifactUrl("sidecar")}
         fileName={names.sidecar}
         icon={<FileJson aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.75} />}
       >
@@ -106,16 +119,30 @@ function UncoloredToggle({ checked, onChange }: { checked: boolean; onChange: (c
   );
 }
 
-export function RestoreResult({ job, summary, beforeUrl, handoffStore = editorHandoffStore }: RestoreResultProps) {
+export function RestoreResult({
+  job,
+  summary: initialSummary,
+  beforeUrl,
+  handoffStore = editorHandoffStore,
+  recompose = recomposeFaces,
+}: RestoreResultProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [showUncolored, setShowUncolored] = useState(false);
+  const [summary, setSummary] = useState(initialSummary);
+  const [revision, setRevision] = useState(0);
   const uncoloredAvailable = hasUncolored(summary);
   const afterArtifact = uncoloredAvailable && showUncolored ? "uncolored" : "view";
 
   function openInEditor() {
-    handoffStore.offer(editorSource(job, summary));
+    const source = editorSource(job, summary);
+    handoffStore.offer({ ...source, url: revisedUrl(source.url, revision) });
     navigate(EDITOR_PATH);
+  }
+
+  function handleRecomposed(sidecar: Record<string, unknown>) {
+    setSummary((current) => withRecomposedSidecar(current, sidecar));
+    setRevision((current) => current + 1);
   }
 
   return (
@@ -125,14 +152,23 @@ export function RestoreResult({ job, summary, beforeUrl, handoffStore = editorHa
       </h3>
       <CompareSlider
         beforeSrc={beforeUrl}
-        afterSrc={restoreArtifactUrl(job.jobId, afterArtifact)}
+        afterSrc={revisedUrl(restoreArtifactUrl(job.jobId, afterArtifact), revision)}
         beforeAlt={t("restore.result.beforeAlt", { name: job.originalFilename })}
         afterAlt={t("restore.result.afterAlt", { name: job.originalFilename })}
         fullResolution={summary.viewFullResolution}
       />
       {uncoloredAvailable && <UncoloredToggle checked={showUncolored} onChange={setShowUncolored} />}
+      {summary.faces.length > 0 && (
+        <FaceResultGrid
+          jobId={job.jobId}
+          faces={summary.faces}
+          recomposeAvailable={summary.recomposeAvailable}
+          onRecomposed={handleRecomposed}
+          recompose={recompose}
+        />
+      )}
       {showsInfoCard(summary) && <InfoCard />}
-      <RestoreDownloads job={job} summary={summary} />
+      <RestoreDownloads job={job} summary={summary} revision={revision} />
       <OpenInEditorButton onOpen={openInEditor} />
       <p className="text-xs text-text-faint">{t("restore.local")}</p>
     </section>
