@@ -1109,9 +1109,6 @@ class LockCheckingBinding:
         if held_by_another_thread(self._lock):
             self._seen.append(step)
 
-    def bind_ortvalue_input(self, name: str, value: Any) -> None:
-        self._check("bind_input")
-
     def bind_cpu_input(self, name: str, value: Any) -> None:
         self._check("bind_cpu_input")
 
@@ -1134,20 +1131,9 @@ class LockCheckingSession:
         self.binding._check("run")
 
 
-def locked_upload(lock: Any, seen: list[str]) -> Callable[..., str]:
-    def upload(*args: Any) -> str:
-        if held_by_another_thread(lock):
-            seen.append("upload")
-        return "on-device"
-
-    return upload
-
-
 def test_run_lock_covers_upload_run_and_readback_of_the_video_upscaler(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    import onnxruntime as ort
-
     from app.services.devices_service import DevicesService
     from app.services.engines.onnx_video_upscaler import OnnxVideoUpscaler
     from app.services.gpu_session_coordinator import GpuSessionCoordinator
@@ -1155,14 +1141,13 @@ def test_run_lock_covers_upload_run_and_readback_of_the_video_upscaler(
 
     seen: list[str] = []
     lock = ep_registry.device_run_lock("dml:0")
-    monkeypatch.setattr(ort.OrtValue, "ortvalue_from_numpy", staticmethod(locked_upload(lock, seen)))
     settings = make_settings(tmp_path)
     engine = OnnxVideoUpscaler(settings, ModelRegistry(settings), DevicesService(settings), GpuSessionCoordinator())
 
     result = engine._infer_iobinding(LockCheckingSession(lock, seen), object(), "input", "output", "dml:0")
 
     assert result == "frame"
-    assert seen == ["upload", "bind_input", "bind_output", "run", "readback"]
+    assert seen == ["bind_cpu_input", "bind_output", "run", "readback"]
 
 
 def test_run_lock_covers_upload_run_and_readback_of_the_frame_model_runner() -> None:
@@ -1171,29 +1156,26 @@ def test_run_lock_covers_upload_run_and_readback_of_the_frame_model_runner() -> 
     seen: list[str] = []
     lock = ep_registry.adapter_run_lock(0)
 
-    result = iobinding_run(LockCheckingSession(lock, seen), object(), 0.4, 0, locked_upload(lock, seen))
+    result = iobinding_run(LockCheckingSession(lock, seen), object(), 0.4, 0)
 
     assert result == "frame"
-    assert seen == ["upload", "bind_input", "bind_cpu_input", "bind_output", "run", "readback"]
+    assert seen == ["bind_cpu_input", "bind_cpu_input", "bind_output", "run", "readback"]
 
 
 def test_run_lock_covers_upload_run_and_readback_of_apollo(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    import onnxruntime as ort
-
     from app.services.engines.apollo_restore import ApolloRestorer
     from app.services.gpu_session_coordinator import GpuSessionCoordinator
 
     seen: list[str] = []
     lock = ep_registry.device_run_lock("dml:0")
-    monkeypatch.setattr(ort.OrtValue, "ortvalue_from_numpy", staticmethod(locked_upload(lock, seen)))
     restorer = ApolloRestorer(make_settings(tmp_path), GpuSessionCoordinator())
 
     result = restorer._infer_iobinding(LockCheckingSession(lock, seen), object(), "input", "output", "dml:0")
 
     assert result == "frame"
-    assert seen == ["upload", "bind_input", "bind_output", "run", "readback"]
+    assert seen == ["bind_cpu_input", "bind_output", "run", "readback"]
 
 
 class RingLockCheckingBinding(LockCheckingBinding):
@@ -1216,8 +1198,6 @@ def test_run_lock_covers_upload_and_run_of_the_readback_ring_bind(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     import numpy as np
-    import onnxruntime as ort
-
     from app.services.devices_service import DevicesService
     from app.services.engines.onnx_video_upscaler import OnnxVideoUpscaler
     from app.services.gpu_session_coordinator import GpuSessionCoordinator
@@ -1225,7 +1205,6 @@ def test_run_lock_covers_upload_and_run_of_the_readback_ring_bind(
 
     seen: list[str] = []
     lock = ep_registry.device_run_lock("dml:0")
-    monkeypatch.setattr(ort.OrtValue, "ortvalue_from_numpy", staticmethod(locked_upload(lock, seen)))
     settings = make_settings(tmp_path)
     engine = OnnxVideoUpscaler(settings, ModelRegistry(settings), DevicesService(settings), GpuSessionCoordinator())
     buffer = np.zeros((1, 4, 4, 3), dtype=np.uint8)
@@ -1233,4 +1212,4 @@ def test_run_lock_covers_upload_and_run_of_the_readback_ring_bind(
     bound = engine._bind_output_to_buffer(RingLockCheckingSession(lock, seen), object(), "dml:0", buffer)
 
     assert bound is True
-    assert seen == ["upload", "bind_input", "bind_output", "run"]
+    assert seen == ["bind_cpu_input", "bind_output", "run"]

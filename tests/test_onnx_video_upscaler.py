@@ -600,26 +600,11 @@ def _write_to_address(address: int, array: np.ndarray) -> None:
     target[:] = np.ascontiguousarray(array).reshape(-1).view(np.uint8)
 
 
-class _FakeOrtValue:
-    def __init__(self, array: np.ndarray) -> None:
-        self.array = array
-
-
-class _FakeOrtModule:
-    class OrtValue:
-        @staticmethod
-        def ortvalue_from_numpy(array: np.ndarray, device: str, device_id: int) -> _FakeOrtValue:
-            return _FakeOrtValue(array)
-
-
 class _RecordingIoBinding:
     def __init__(self, session: "IoBindingDouble2xSession") -> None:
         self._session = session
         self.input: np.ndarray | None = None
         self.output_buffer_ptr: int | None = None
-
-    def bind_ortvalue_input(self, name: str, value: _FakeOrtValue) -> None:
-        self.input = value.array
 
     def bind_cpu_input(self, name: str, array: np.ndarray) -> None:
         self.input = array
@@ -708,7 +693,6 @@ def test_readback_ring_next_buffer_rotates_without_copying() -> None:
 def test_upscale_one_binds_the_dml_output_into_the_ring_buffer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setitem(sys.modules, "onnxruntime", _FakeOrtModule)
     engine = make_engine(tmp_path)
     session = IoBindingDouble2xSession()
     ring = FrameReadbackRing(2)
@@ -747,7 +731,6 @@ def test_upscale_one_ring_bind_on_a_real_cpu_session_is_bit_exact_and_rotates(tm
 def test_upscale_one_ring_bind_failure_falls_back_to_the_dml_copy_path_and_logs_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    monkeypatch.setitem(sys.modules, "onnxruntime", _FakeOrtModule)
     engine = make_engine(tmp_path)
     session = IoBindingDouble2xSession(fail_cpu_output_bind=True)
     ring = FrameReadbackRing(2)
@@ -770,7 +753,6 @@ def test_upscale_one_ring_bind_failure_falls_back_to_the_dml_copy_path_and_logs_
 def test_upscale_one_ring_bind_rejected_at_run_time_is_not_retried_on_later_frames(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    monkeypatch.setitem(sys.modules, "onnxruntime", _FakeOrtModule)
     engine = make_engine(tmp_path)
     session = IoBindingDouble2xSession(fail_cpu_output_run=True)
     ring = FrameReadbackRing(2)
@@ -792,7 +774,6 @@ def test_upscale_one_ring_bind_rejected_at_run_time_is_not_retried_on_later_fram
 def test_ring_bind_disabled_for_one_session_still_binds_for_another(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setitem(sys.modules, "onnxruntime", _FakeOrtModule)
     engine = make_engine(tmp_path)
     rejecting = IoBindingDouble2xSession(fail_cpu_output_run=True)
     accepting = IoBindingDouble2xSession()
@@ -1258,3 +1239,64 @@ def test_existing_callers_still_see_the_union_of_both_groups() -> None:
     assert set(ovu._OOM_SIGNATURES) == set(ovu.DEVICE_REMOVED_SIGNATURES) | set(ovu.OOM_SIGNATURES)
     assert ovu._is_oom_error(RuntimeError("887A0005 device removed"))
     assert ovu._is_oom_error(RuntimeError("failed to allocate"))
+
+
+def test_bind_input_on_adapter_one_uses_cpu_binding() -> None:
+    frame = np.zeros((1, 4, 6, 3), dtype=np.uint8)
+    calls = []
+
+    class Binding:
+        def bind_cpu_input(self, name, array):
+            calls.append((name, array))
+
+        def bind_ortvalue_input(self, *args):
+            pytest.fail("DirectML inputs must be uploaded by the session")
+
+    ovu.bind_input_on_device(Binding(), "input", frame, "dml:1")
+
+    assert len(calls) == 1
+    assert calls[0][0] == "input"
+    assert calls[0][1] is frame
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="DirectML requires Windows")
+def test_real_dml_adapters_bind_cpu_input_with_the_session_allocator() -> None:
+    ort = pytest.importorskip("onnxruntime")
+    if "DmlExecutionProvider" not in ort.get_available_providers():
+        pytest.skip("DirectML execution provider is unavailable")
+    onnx = pytest.importorskip("onnx")
+    helper = onnx.helper
+    shape = [1, 3, 64, 64]
+    graph = helper.make_graph(
+        [helper.make_node("Div", ["input", "divisor"], ["output"])],
+        "divide-by-two",
+        [helper.make_tensor_value_info("input", onnx.TensorProto.FLOAT, shape)],
+        [helper.make_tensor_value_info("output", onnx.TensorProto.FLOAT, shape)],
+        initializer=[helper.make_tensor("divisor", onnx.TensorProto.FLOAT, [], [2.0])],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)], ir_version=9)
+    source = np.random.default_rng(42).random(shape, dtype=np.float32)
+    completed = []
+    for device_id in range(4):
+        options = ort.SessionOptions()
+        options.enable_mem_pattern = False
+        options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+        try:
+            session = ort.InferenceSession(
+                model.SerializeToString(), options,
+                providers=[("DmlExecutionProvider", {"device_id": device_id})],
+            )
+        except Exception:
+            continue
+        if "DmlExecutionProvider" not in session.get_providers():
+            del session
+            continue
+        binding = session.io_binding()
+        ovu.bind_input_on_device(binding, "input", source, f"dml:{device_id}")
+        binding.bind_output("output", "dml")
+        session.run_with_iobinding(binding)
+        np.testing.assert_array_equal(binding.copy_outputs_to_cpu()[0], source / 2)
+        completed.append(device_id)
+        del binding, session
+    if not completed:
+        pytest.skip("No usable DirectML adapter in device IDs 0 through 3")

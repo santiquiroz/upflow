@@ -17,7 +17,7 @@ from app.config import Settings
 from app.services import ep_registry
 from app.services.backend_registry import get_builtin_onnx_model
 from app.services.devices_service import DevicesService
-from app.services.dml_device import DML_DEVICE_PREFIX, parse_dml_device_id
+from app.services.dml_device import DML_DEVICE_PREFIX
 from app.services.engines.frame_workers import (
     QUEUE_POLL_SECONDS,
     THREAD_JOIN_TIMEOUT_SECONDS,
@@ -55,7 +55,7 @@ logger = logging.getLogger(__name__)
 #   2. Whole-frame inference (NO tiling) when the frame fits VRAM -- tiling on
 #      DirectML was catastrophic (1.26 fps). Tiling is only a fallback for
 #      huge frames (heuristic on input pixels).
-#   3. IO binding: input/output OrtValue bound on the device (dml).
+#   3. IO binding: CPU inputs uploaded by ORT and outputs allocated on DML.
 #   4. A threaded load(N+1)/infer(N)/save(N-1) pipeline with OpenCV PNG I/O
 #      (cv2 is ~50x faster than PIL for large frames), sustaining ~2x NCNN.
 #      The queue/worker plumbing is shared via engines/frame_workers.py.
@@ -167,13 +167,8 @@ def device_io_lock(device: str) -> Any:
 
 
 def bind_input_on_device(io_binding: Any, input_name: str, frame_nhwc: np.ndarray, device: str) -> None:
-    if not device.startswith(DML_DEVICE_PREFIX):
-        io_binding.bind_cpu_input(input_name, frame_nhwc)
-        return
-    import onnxruntime as ort
-
-    input_value = ort.OrtValue.ortvalue_from_numpy(frame_nhwc, "dml", parse_dml_device_id(device))
-    io_binding.bind_ortvalue_input(input_name, input_value)
+    # DML OrtValue uses another D3D12 device off adapter 0, causing 887A0005.
+    io_binding.bind_cpu_input(input_name, frame_nhwc)
 
 
 class OnnxVideoUpscaler:
@@ -783,8 +778,8 @@ class OnnxVideoUpscaler:
     def _infer_iobinding(
         self, session: Any, frame_nhwc: np.ndarray, input_name: str, output_name: str, device: str
     ) -> np.ndarray | None:
-        # Best-effort: bind input/output on the DirectML device to skip the
-        # host<->device copies. Any failure (older ort, EP quirk) returns None
+        # Best-effort: ORT uploads CPU inputs and allocates outputs on DirectML.
+        # Any failure (older ort, EP quirk) returns None
         # so the caller falls back to a plain run rather than failing the job.
         try:
             with device_io_lock(device):

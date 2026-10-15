@@ -670,7 +670,6 @@ def video_harness(backend: VideoBackend, **kwargs):
         vram_usage_mb=lambda: None,
         clock=backend.clock,
         catalog={},
-        ortvalue_factory=lambda array, device_type, device_id: pytest.fail("no IO binding in these fakes"),
         **kwargs,
     )
 

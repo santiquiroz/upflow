@@ -11,11 +11,15 @@ from app.config import Settings
 from app.services.devices_service import DevicesService
 from app.services.engines.drunet_restore import deblock_level
 from app.services.engines.frame_model_runner import (
+    DML_DEVICE_TYPE,
+    FRAME_INPUT,
+    FRAME_OUTPUT,
     VIDEO_DEBLOCK_MODEL_ID,
     TdrBudget,
     TdrBudgetExceeded,
     build_frame_model_runner,
     canary_crop,
+    iobinding_run,
     level_for_strength,
     oom_tile_ladder,
     pad_frame,
@@ -85,28 +89,17 @@ def raising_above(pixels: int, message: str = OOM_TEXT):
     return transform
 
 
-class FakeOrtValue:
-    def __init__(self, array: np.ndarray, device_type: str, device_id: int) -> None:
-        self.array = array
-        self.device_type = device_type
-        self.device_id = device_id
-
-
 class FakeBinding:
     def __init__(self) -> None:
-        self.inputs: dict[str, object] = {}
         self.cpu_inputs: dict[str, np.ndarray] = {}
         self.outputs: list[tuple] = []
         self.result: np.ndarray | None = None
 
-    def bind_ortvalue_input(self, name: str, value: FakeOrtValue) -> None:
-        self.inputs[name] = value
-
     def bind_cpu_input(self, name: str, array: np.ndarray) -> None:
         self.cpu_inputs[name] = array
 
-    def bind_output(self, name: str, device_type: str = "cpu", device_id: int = 0) -> None:
-        self.outputs.append((name, device_type, device_id))
+    def bind_output(self, *args) -> None:
+        self.outputs.append(args)
 
     def copy_outputs_to_cpu(self) -> list[np.ndarray]:
         return [self.result]
@@ -138,11 +131,11 @@ class U8Session:
     def run_with_iobinding(self, binding: FakeBinding) -> None:
         if self.binding_error is not None:
             raise RuntimeError(self.binding_error)
-        frame = binding.inputs["input"].array
+        frame = binding.cpu_inputs["input"]
         binding.result = self.transform(frame, float(binding.cpu_inputs["strength"]))
 
     def shapes(self) -> list[tuple[int, ...]]:
-        bound = [binding.inputs["input"].array.shape for binding in self.bindings if "input" in binding.inputs]
+        bound = [binding.cpu_inputs["input"].shape for binding in self.bindings if "input" in binding.cpu_inputs]
         return [feeds["input"].shape for feeds in self.runs] + bound
 
 
@@ -212,7 +205,7 @@ def build(engine, device=CPU, sample=None, level=0.4, **kwargs):
     # La calibracion TDR hace sus propias llamadas: se prueba aparte para no contar sus corridas aca.
     kwargs.setdefault("start_tile_for", whole_frame)
     return build_frame_model_runner(
-        engine, device, frame() if sample is None else sample, level, ortvalue_factory=FakeOrtValue, **kwargs
+        engine, device, frame() if sample is None else sample, level, **kwargs
     )
 
 
@@ -234,7 +227,7 @@ def build_with_tdr(tmp_path, ms_per_pixel: float, sample):
     factory = U8SessionFactory({FP32_FILE: clock.transform})
     engine = make_engine(tmp_path, factory, video_spec())
     runner = build_frame_model_runner(
-        engine, GPU, sample, 0.4, ortvalue_factory=FakeOrtValue, tdr_budget=TdrBudget(1200.0, clock)
+        engine, GPU, sample, 0.4, tdr_budget=TdrBudget(1200.0, clock)
     )
     return runner, factory.session_for(FP32_FILE, GPU)
 
@@ -404,7 +397,7 @@ def test_the_report_says_whole_frame_precision_and_device(tmp_path) -> None:
 # ---------------------------------------------------------------- IOBinding
 
 
-def test_iobinding_on_dml_binds_the_frame_on_the_device_and_the_strength_on_the_host(tmp_path) -> None:
+def test_iobinding_on_dml_binds_the_frame_and_strength_on_the_host(tmp_path) -> None:
     factory = U8SessionFactory({FP32_FILE: plus_level})
     source = np.full((1, 16, 24, 3), 50, dtype=np.uint8)
     runner = build(make_engine(tmp_path, factory, video_spec()), device=GPU, sample=source, level=0.1)
@@ -413,11 +406,9 @@ def test_iobinding_on_dml_binds_the_frame_on_the_device_and_the_strength_on_the_
 
     session = factory.session_for(FP32_FILE, GPU)
     binding = session.bindings[-1]
-    value = binding.inputs["input"]
-    assert (value.device_type, value.device_id) == ("dml", 0)
-    assert value.array.shape == (1, 16, 24, 3)
+    assert binding.cpu_inputs["input"].shape == (1, 16, 24, 3)
     assert float(binding.cpu_inputs["strength"]) == pytest.approx(0.1)
-    assert binding.outputs == [("output", "dml", 0)]
+    assert binding.outputs == [("output", "dml")]
     assert session.runs == []
     np.testing.assert_array_equal(output, np.full_like(source, 60))
     assert runner.report().io_binding is True
@@ -756,6 +747,18 @@ def test_a_device_removed_during_the_tdr_calibration_is_classified(tmp_path) -> 
     engine = make_engine(tmp_path, factory, video_spec(), coordinator=coordinator)
 
     with pytest.raises(DeviceRemovedError):
-        build_frame_model_runner(engine, GPU, frame(), 0.4, ortvalue_factory=FakeOrtValue)
+        build_frame_model_runner(engine, GPU, frame(), 0.4)
 
     assert coordinator.invalidated == [GPU]
+
+
+def test_iobinding_run_on_adapter_one_uses_cpu_input_and_the_session_dml_allocator() -> None:
+    source = frame(16, 24)
+    session = U8Session(identity)
+
+    result = iobinding_run(session, source, 0.4, device_id=1)
+
+    binding = session.bindings[-1]
+    assert binding.cpu_inputs[FRAME_INPUT] is source
+    assert binding.outputs == [(FRAME_OUTPUT, DML_DEVICE_TYPE)]
+    np.testing.assert_array_equal(result, source)

@@ -46,12 +46,6 @@ ONNX_INPUT_NAME = "audio"
 ONNX_OUTPUT_NAME = "restored"
 
 
-def _import_onnxruntime() -> Any:
-    import onnxruntime as ort
-
-    return ort
-
-
 class ApolloRestorer(OnnxAudioRestorer):
     sample_rate = APOLLO_SAMPLE_RATE
     session_cache_size = SESSION_CACHE_SIZE
@@ -145,12 +139,10 @@ class ApolloRestorer(OnnxAudioRestorer):
         # persistent failure is logged once (not once per chunk) so it
         # doesn't silently downgrade every chunk to the slower path forever.
         try:
-            ort = _import_onnxruntime()
             device_id = parse_dml_device_id(device)
             with adapter_run_lock(device_id):
                 io_binding = session.io_binding()
-                input_value = ort.OrtValue.ortvalue_from_numpy(batch, "dml", device_id)
-                io_binding.bind_ortvalue_input(input_name, input_value)
+                io_binding.bind_cpu_input(input_name, batch)
                 io_binding.bind_output(output_name, "dml")
                 session.run_with_iobinding(io_binding)
                 return io_binding.copy_outputs_to_cpu()[0]

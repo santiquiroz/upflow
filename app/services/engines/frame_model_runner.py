@@ -47,7 +47,6 @@ DML_DEVICE_TYPE = "dml"
 U8_PEAK = 255.0
 OOM_REASON = "oom"
 
-OrtValueFactory = Callable[[np.ndarray, str, int], Any]
 RemovalGuard = Callable[[], AbstractContextManager[None]]
 Batch = Callable[[np.ndarray], np.ndarray]
 
@@ -77,12 +76,6 @@ def level_for_strength(strength_percent: int) -> float:
     if not 0 <= strength_percent <= STRENGTH_PERCENT_MAX:
         raise ValueError(f"Strength must be within [0, {STRENGTH_PERCENT_MAX}], got {strength_percent}")
     return deblock_level(strength_percent / STRENGTH_PERCENT_MAX)
-
-
-def dml_ortvalue(array: np.ndarray, device_type: str, device_id: int) -> Any:
-    import onnxruntime as ort
-
-    return ort.OrtValue.ortvalue_from_numpy(array, device_type, device_id)
 
 
 def as_frame(frame: np.ndarray) -> np.ndarray:
@@ -134,13 +127,13 @@ def plain_run(session: Any, batch: np.ndarray, level: float) -> np.ndarray:
 
 
 def iobinding_run(
-    session: Any, batch: np.ndarray, level: float, device_id: int, ortvalue_factory: OrtValueFactory
+    session: Any, batch: np.ndarray, level: float, device_id: int
 ) -> np.ndarray:
     with adapter_run_lock(device_id):
         binding = session.io_binding()
-        binding.bind_ortvalue_input(FRAME_INPUT, ortvalue_factory(batch, DML_DEVICE_TYPE, device_id))
+        binding.bind_cpu_input(FRAME_INPUT, batch)
         binding.bind_cpu_input(STRENGTH_INPUT, strength_feed(level))
-        binding.bind_output(FRAME_OUTPUT, DML_DEVICE_TYPE, device_id)
+        binding.bind_output(FRAME_OUTPUT, DML_DEVICE_TYPE)
         session.run_with_iobinding(binding)
         return binding.copy_outputs_to_cpu()[0]
 
@@ -174,11 +167,10 @@ def to_uint8(values: np.ndarray) -> np.ndarray:
 
 
 class FrameInference:
-    def __init__(self, session: Any, level: float, device: str, ortvalue_factory: OrtValueFactory) -> None:
+    def __init__(self, session: Any, level: float, device: str) -> None:
         self._session = session
         self._level = level
         self._device_id = try_parse_dml_device_id(device)
-        self._ortvalue_factory = ortvalue_factory
         self.uses_iobinding = self._device_id is not None and hasattr(session, "io_binding")
 
     def __call__(self, batch: np.ndarray) -> np.ndarray:
@@ -190,7 +182,7 @@ class FrameInference:
 
     def _bound_run(self, batch: np.ndarray) -> np.ndarray | None:
         try:
-            return iobinding_run(self._session, batch, self._level, self._device_id, self._ortvalue_factory)
+            return iobinding_run(self._session, batch, self._level, self._device_id)
         except Exception as exc:
             if is_oom_error(exc) or is_device_removed_error(exc):
                 raise
@@ -333,7 +325,6 @@ def build_frame_model_runner(
     *,
     model_id: str = VIDEO_DEBLOCK_MODEL_ID,
     reference_device: str = CPU_DEVICE,
-    ortvalue_factory: OrtValueFactory = dml_ortvalue,
     cancel_event: threading.Event | None = None,
     tdr_budget: TdrBudget | None = None,
     start_tile_for: StartTileFor = tdr_start_tile,
@@ -353,7 +344,7 @@ def build_frame_model_runner(
     session = engine.session(model_id, device, precision)
     require_video_contract(session)
     padded_shape = pad_frame(image)[0].shape[:2]
-    inference = FrameInference(session, level, device, ortvalue_factory)
+    inference = FrameInference(session, level, device)
     budget = tdr_budget or TdrBudget(float(engine.settings.restore_call_budget_ms))
     with engine.removal_classified(device):
         start_tile = start_tile_for(inference, spec, precision, padded_shape, device, budget)

@@ -13,7 +13,6 @@ import numpy as np
 
 from app.services.engines.frame_model_runner import (
     FrameInference,
-    OrtValueFactory,
     level_for_strength,
     pad_frame,
     to_uint8,
@@ -91,8 +90,8 @@ def u8_canary(canary: np.ndarray) -> np.ndarray:
     return to_uint8(canary[:, :, :RGB] * U8_PEAK)
 
 
-def frame_inference(session: Any, device: str, ortvalue_factory: OrtValueFactory) -> FrameInference:
-    return FrameInference(session, video_level(), device, ortvalue_factory)
+def frame_inference(session: Any, device: str) -> FrameInference:
+    return FrameInference(session, video_level(), device)
 
 
 def canary_output(inference: FrameInference, canary_u8: np.ndarray) -> np.ndarray:

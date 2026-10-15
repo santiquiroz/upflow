@@ -61,7 +61,6 @@ from restore_dml_report import (  # noqa: E402, F401
 from app.services import ep_registry  # noqa: E402
 from app.services.dml_device import try_parse_dml_device_id  # noqa: E402
 from app.services.engines.onnx_video_upscaler import is_device_removed_error  # noqa: E402
-from app.services.engines.frame_model_runner import OrtValueFactory, dml_ortvalue  # noqa: E402
 from app.services.engines.restore_canary import (  # noqa: E402
     DELTA_E,
     CanaryRule,
@@ -176,7 +175,6 @@ class Harness:
     tile_min: int = DEFAULT_TILE_MIN
     tile_candidates: tuple[int, ...] = DEFAULT_TILE_CANDIDATES
     catalog: Mapping[str, RestoreModelSpec] = field(default_factory=lambda: RESTORE_MODELS)
-    ortvalue_factory: OrtValueFactory = dml_ortvalue
 
 
 @dataclass(frozen=True, slots=True)
@@ -314,7 +312,7 @@ def _prepare_reference(
 def _video_reference(harness: Harness, model_id: str, session: Any) -> VideoReference:
     spec = calibration_spec_for(harness, model_id, GraphContract(channels=3, fixed_side=None))
     canary = probes.u8_canary(canary_tile(spec.tile_min, 3))
-    inference = probes.frame_inference(session, CPU_DEVICE, harness.ortvalue_factory)
+    inference = probes.frame_inference(session, CPU_DEVICE)
     return VideoReference(spec, canary, probes.canary_output(inference, canary))
 
 
@@ -427,7 +425,7 @@ def measure_video_precision(
     before = harness.vram_usage_mb()
     session = open_on_device(harness, model_file.path, mode)
     providers = tuple(session.get_providers())
-    inference = probes.frame_inference(session, harness.device, harness.ortvalue_factory)
+    inference = probes.frame_inference(session, harness.device)
     planned_binding = inference.uses_iobinding
     calibration = probes.calibrate_video(inference, spec, model_file.precision, harness.budget_ms, harness.clock)
     median = probes.median_tile_ms(inference, calibration.tile, harness.clock)
