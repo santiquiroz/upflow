@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import sys
 
 import pytest
@@ -14,6 +15,8 @@ from app.services.devices_service import (
     DevicesService,
     OnnxRuntimeProbe,
 )
+
+_real_high_performance_dml_device_id = devices_service.high_performance_dml_device_id
 
 # ---------------------------------------------------------------------------
 # SP1 Task 1 - devices_service + API /devices + settings.
@@ -271,16 +274,90 @@ def test_resolve_default_reuses_provided_snapshot_without_reenumerating(
 # ---------------------------------------------------------------------------
 
 
-def test_settings_default_device_defaults_to_dml0() -> None:
+def test_settings_default_device_resolves_windows_high_performance_gpu(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DEFAULT_DEVICE", raising=False)
+    monkeypatch.setattr(
+        devices_service, "high_performance_dml_device_id", lambda: "dml:3"
+    )
+
+    settings = Settings(_env_file=None)
+
+    assert Settings.model_fields["default_device"].default == "gpu"
+    assert settings.default_device == "dml:3"
+
+
+def test_settings_default_device_falls_back_when_detection_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DEFAULT_DEVICE", raising=False)
+
     settings = Settings(_env_file=None)
 
     assert settings.default_device == "dml:0"
 
 
-def test_settings_default_device_override() -> None:
-    settings = Settings(_env_file=None, DEFAULT_DEVICE="cpu")
+def test_settings_explicit_gpu_device_resolves_windows_preference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        devices_service, "high_performance_dml_device_id", lambda: "dml:3"
+    )
 
-    assert settings.default_device == "cpu"
+    settings = Settings(_env_file=None, DEFAULT_DEVICE="gpu")
+
+    assert settings.default_device == "dml:3"
+
+
+@pytest.mark.parametrize("device", ["cpu", "dml:0", "custom:2"])
+def test_settings_explicit_default_device_does_not_call_detector(
+    monkeypatch: pytest.MonkeyPatch, device: str,
+) -> None:
+    calls: list[bool] = []
+
+    def recording_detector() -> str:
+        calls.append(True)
+        return "dml:3"
+
+    monkeypatch.setattr(
+        devices_service, "high_performance_dml_device_id", recording_detector
+    )
+    monkeypatch.setenv("DEFAULT_DEVICE", device)
+
+    settings = Settings(_env_file=None)
+
+    assert settings.default_device == device
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    ("adapters", "high_perf_luid", "expected"),
+    [
+        ([(0, 100, "Integrated"), (1, 200, "Discrete")], 200, "dml:1"),
+        (
+            [(0, 100, "Integrated"), (1, 200, "Discrete"), (2, 300, "Discrete")],
+            300,
+            "dml:1",
+        ),
+        ([(0, 100, "Integrated"), (1, 200, "Discrete")], 999, None),
+        ([], 200, None),
+    ],
+    ids=["direct-adapter", "duplicate-name", "unknown-luid", "no-adapters"],
+)
+def test_pick_dml_device_id_matches_luid_and_keeps_lowest_named_index(
+    adapters: list[tuple[int, int, str]], high_perf_luid: int, expected: str | None,
+) -> None:
+    result = devices_service.pick_dml_device_id(adapters, high_perf_luid)
+
+    assert result == expected
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Requiere DXGI en Windows")
+def test_high_performance_dml_device_id_real_call_never_raises() -> None:
+    result = _real_high_performance_dml_device_id()
+
+    assert result is None or (isinstance(result, str) and re.fullmatch(r"dml:\d+", result))
 
 
 # ---------------------------------------------------------------------------

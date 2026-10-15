@@ -415,7 +415,7 @@ Endpoints: `GET /api/v1/generation/models/search?q=` (vacío = browse por descar
 
 Es normal que una misma GPU física aparezca más de una vez (ej. `dml:0` y `dml:2` apuntando ambos a la misma dGPU) en máquinas con configuraciones de gráficos híbridos: Windows/DXGI expone LUIDs de adaptador distintos para el mismo silicio. Cada índice sigue siendo un `device_id` válido y funcional para DirectML — no es un bug, es comportamiento real de DXGI.
 
-El dispositivo por defecto se controla con `DEFAULT_DEVICE` en `.env` (default `dml:0`); si el dispositivo configurado no está disponible, cae automáticamente a `cpu`.
+El dispositivo por defecto se controla con `DEFAULT_DEVICE` en `.env` (default `gpu`): Windows elige la GPU de alto rendimiento según Configuración > Sistema > Pantalla > Gráficos y Upflow resuelve su índice `dml:N`. Si la detección no está disponible, usa `dml:0`; si el dispositivo configurado no está disponible, cae automáticamente a `cpu`. Los valores explícitos `dml:N` y `cpu` conservan la selección indicada.
 
 **Selección de GPU en máquinas multi-adaptador — alcance de la garantía:** para modelos ONNX/HF (`kind=onnx`), `dml:N` se pasa directo como `device_id` a `DmlExecutionProvider`, que lo resuelve contra la misma lista ordenada por DXGI — el mapeo es exacto (verificado empíricamente, ver `.superpowers/sdd/sp1-task-8-smoke-report.md`). Para los modelos builtin (`kind=builtin-ncnn`), en cambio, `dml:N` se traduce a `-g N` (índice de dispositivo físico Vulkan del binario `realesrgan-ncnn-vulkan.exe`) — DXGI y Vulkan **no garantizan el mismo orden de enumeración** en una máquina con más de un adaptador. Solo el default de un único dGPU (`dml:0` → `-g 0`) está verificado end-to-end; en hardware multi-GPU, la selección de un `dml:N` con `N > 0` para un modelo builtin es best-effort, no exacta.
 
@@ -633,7 +633,7 @@ Todas las variables leen de `.env` (ver [`.env.example`](.env.example) con los d
 | `DEEPFILTER_BINARY` | `vendor/deepfilternet/deep-filter.exe` | Ruta al binario CLI de DeepFilterNet |
 | `RNNOISE_MODEL` | `vendor/deepfilternet/models/sh.rnnn` | Ruta al modelo `.rnnn` usado por el filtro `arnndn` de FFmpeg |
 | `ENABLE_AUDIO_ENHANCE` | `false` | Habilita la mejora de audio (`audio_enhance=deepfilter\|rnnoise`); requiere haber corrido `download-deepfilternet.ps1` |
-| `DEFAULT_DEVICE` | `dml:0` | Dispositivo preferido (`cpu`/`dml:N`) para el motor ONNX/DirectML; cae a `cpu` si no está disponible (ver sección Dispositivos) |
+| `DEFAULT_DEVICE` | `gpu` | GPU de alto rendimiento elegida por Windows para ONNX/DirectML (`dml:0` si no se puede detectar); acepta `cpu`/`dml:N` explícitos y cae a `cpu` si el dispositivo no está disponible (ver sección Dispositivos) |
 | `MODELS_DIR` | `models` | Carpeta donde se guardan los modelos ONNX instalados desde Hugging Face (relativa a la raíz del proyecto) |
 | `HF_TOKEN` | *(vacío)* | Token de Hugging Face opcional, para buscar/descargar modelos privados o evitar rate limiting anónimo |
 | `MAX_MODEL_DOWNLOAD_MB` | `2048` | Tamaño máximo permitido para un archivo de modelo descargado desde HF (MB) |

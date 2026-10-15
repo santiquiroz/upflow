@@ -514,7 +514,7 @@ class Settings(BaseSettings):
     enable_gmfss: bool = Field(default=False, alias="ENABLE_GMFSS")
     gmfss_model_dir: str = Field(default="vendor/gmfss", alias="GMFSS_MODEL_DIR")
 
-    default_device: str = Field(default="dml:0", alias="DEFAULT_DEVICE")
+    default_device: str = Field(default="gpu", alias="DEFAULT_DEVICE")
     # When on and a job request doesn't pin a device, routes.py hands the job
     # the "auto" sentinel instead of DEFAULT_DEVICE -- see
     # app/services/device_router.py for the actual routing decision. Off by
@@ -805,6 +805,16 @@ class Settings(BaseSettings):
         if value not in AUTH_MODES:
             raise ValueError(f"AUTH_MODE must be one of {sorted(AUTH_MODES)}")
         return value
+
+    @field_validator("default_device")
+    @classmethod
+    def _resolve_default_device(cls, value: str) -> str:
+        if value != "gpu":
+            return value
+        # Import diferido porque devices_service también importa Settings.
+        from app.services.devices_service import high_performance_dml_device_id
+
+        return high_performance_dml_device_id() or "dml:0"
 
     @model_validator(mode="after")
     def _apply_default_allowed_origins(self) -> "Settings":

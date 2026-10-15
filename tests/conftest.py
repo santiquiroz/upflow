@@ -15,6 +15,13 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
 
 
 @pytest.fixture(autouse=True)
+def deterministic_default_device(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "app.services.devices_service.high_performance_dml_device_id", lambda: None
+    )
+
+
+@pytest.fixture(autouse=True)
 def isolated_runtime_dir(tmp_path, monkeypatch: pytest.MonkeyPatch):
     """Points RUNTIME_DIR at a per-test tmp directory so no test can ever
     read from or write into the repo's real runtime/ folder.

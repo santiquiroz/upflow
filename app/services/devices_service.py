@@ -252,6 +252,108 @@ class _DxgiQueryVideoMemoryInfo(ctypes.Structure):
 _QueryInterfaceProto = ctypes.WINFUNCTYPE(
     ctypes.c_long, ctypes.c_void_p, ctypes.POINTER(_Guid), ctypes.POINTER(ctypes.c_void_p)
 )
+
+_IID_IDXGI_FACTORY6 = _Guid(
+    0xC1B6694F, 0xFF09, 0x44A9, (ctypes.c_ubyte * 8)(0xB0, 0x3C, 0x77, 0x90, 0x0A, 0x0A, 0x1D, 0x17)
+)
+_IID_IDXGI_ADAPTER1 = _Guid(
+    0x29038F61, 0x3839, 0x4626, (ctypes.c_ubyte * 8)(0x91, 0xFD, 0x08, 0x68, 0x79, 0x01, 0x1A, 0x05)
+)
+_IDXGIFACTORY6_VTABLE_SIZE = 30
+_ENUM_ADAPTER_BY_GPU_PREFERENCE_VTABLE_INDEX = 29
+_DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE = 2
+_EnumAdapterByGpuPreferenceProto = ctypes.WINFUNCTYPE(
+    ctypes.c_long, ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32,
+    ctypes.POINTER(_Guid), ctypes.POINTER(ctypes.c_void_p),
+)
+
+
+def pick_dml_device_id(adapters: list[tuple[int, int, str]], high_perf_luid: int) -> str | None:
+    name = next((name for _, luid, name in adapters if luid == high_perf_luid), None)
+    if name is None:
+        return None
+    index = min(index for index, _, adapter_name in adapters if adapter_name == name)
+    return f"dml:{index}"
+
+
+def _hardware_adapter_description(adapter_ptr: ctypes.c_void_p) -> _DxgiAdapterDesc1 | None:
+    vtable = _com_vtable(adapter_ptr.value, _IDXGIADAPTER1_VTABLE_SIZE)
+    desc = _DxgiAdapterDesc1()
+    if _GetDesc1Proto(vtable[_GET_DESC1_VTABLE_INDEX])(adapter_ptr, byref(desc)) != 0:
+        return None
+    if desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE:
+        return None
+    return desc
+
+
+def _high_performance_adapter_luid(factory6_ptr: ctypes.c_void_p) -> int | None:
+    vtable = _com_vtable(factory6_ptr.value, _IDXGIFACTORY6_VTABLE_SIZE)
+    enum_adapter = _EnumAdapterByGpuPreferenceProto(
+        vtable[_ENUM_ADAPTER_BY_GPU_PREFERENCE_VTABLE_INDEX]
+    )
+    adapter_ptr = ctypes.c_void_p()
+    try:
+        result = enum_adapter(
+            factory6_ptr, 0, _DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE,
+            byref(_IID_IDXGI_ADAPTER1), byref(adapter_ptr),
+        )
+        if result != 0 or not adapter_ptr.value:
+            return None
+        desc = _hardware_adapter_description(adapter_ptr)
+        return None if desc is None else int(desc.AdapterLuid)
+    finally:
+        if adapter_ptr.value:
+            _release_com(adapter_ptr, _IDXGIADAPTER1_VTABLE_SIZE)
+
+
+def _iter_hardware_adapter_luids(factory_ptr: ctypes.c_void_p) -> list[tuple[int, int, str]]:
+    vtable = _com_vtable(factory_ptr.value, _IDXGIFACTORY1_VTABLE_SIZE)
+    enum_adapters1 = _EnumAdapters1Proto(vtable[_ENUM_ADAPTERS1_VTABLE_INDEX])
+    adapters: list[tuple[int, int, str]] = []
+    index = 0
+    while True:
+        adapter_ptr = _next_adapter(factory_ptr, enum_adapters1, index)
+        if adapter_ptr is None:
+            return adapters
+        index += 1
+        try:
+            desc = _hardware_adapter_description(adapter_ptr)
+            if desc is not None:
+                adapters.append((len(adapters), int(desc.AdapterLuid), desc.Description))
+        finally:
+            _release_com(adapter_ptr, _IDXGIADAPTER1_VTABLE_SIZE)
+
+
+def _high_performance_device_from_factory(factory_ptr: ctypes.c_void_p) -> str | None:
+    vtable = _com_vtable(factory_ptr.value, _IDXGIFACTORY1_VTABLE_SIZE)
+    query_interface = _QueryInterfaceProto(vtable[_QUERY_INTERFACE_VTABLE_INDEX])
+    factory6_ptr = ctypes.c_void_p()
+    try:
+        result = query_interface(factory_ptr, byref(_IID_IDXGI_FACTORY6), byref(factory6_ptr))
+        if result != 0 or not factory6_ptr.value:
+            return None
+        luid = _high_performance_adapter_luid(factory6_ptr)
+        if luid is None:
+            return None
+        return pick_dml_device_id(_iter_hardware_adapter_luids(factory_ptr), luid)
+    finally:
+        if factory6_ptr.value:
+            _release_com(factory6_ptr, _IDXGIFACTORY6_VTABLE_SIZE)
+
+
+def high_performance_dml_device_id() -> str | None:
+    if sys.platform != "win32":
+        return None
+    try:
+        factory_ptr = _create_dxgi_factory1()
+        try:
+            return _high_performance_device_from_factory(factory_ptr)
+        finally:
+            _release_com(factory_ptr, _IDXGIFACTORY1_VTABLE_SIZE)
+    except Exception:
+        return None
+
+
 _QueryVideoMemoryInfoProto = ctypes.WINFUNCTYPE(
     ctypes.c_long, ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32,
     ctypes.POINTER(_DxgiQueryVideoMemoryInfo),
