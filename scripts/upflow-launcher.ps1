@@ -526,6 +526,34 @@ function New-EnvFileWithFeaturesEnabled {
     Set-Content -Path $envPath -Value $lines -Encoding utf8
 }
 
+function Update-LegacyDefaultDevice {
+    if (-not (Test-Path $envPath)) {
+        return
+    }
+
+    $legacyPattern = '^DEFAULT_DEVICE=dml:0\s+# id preferido \(cpu\|dml:N\); si no hay GPU DirectML disponible, cae automaticamente a cpu\s*$'
+    $lines = @(Get-Content -Path $envPath -Encoding utf8)
+    if (-not ($lines -cmatch $legacyPattern)) {
+        return
+    }
+
+    $defaultDeviceLine = Get-Content -Path $envExamplePath -Encoding utf8 |
+        Where-Object { $_ -cmatch '^DEFAULT_DEVICE=' } | Select-Object -First 1
+    if (-not $defaultDeviceLine) {
+        return
+    }
+
+    $lines = foreach ($line in $lines) {
+        if ($line -cmatch $legacyPattern) {
+            $defaultDeviceLine
+        } else {
+            $line
+        }
+    }
+    Set-Content -Path $envPath -Value $lines -Encoding utf8
+    Write-Host 'Dispositivo predeterminado migrado a gpu en .env.'
+}
+
 function Get-EnvValue {
     param(
         [string]$Key,
@@ -652,6 +680,7 @@ function Main {
     Install-PythonEnvironment
     Install-MissingBinaries
     New-EnvFileWithFeaturesEnabled
+    Update-LegacyDefaultDevice
     Start-Upflow
 }
 
