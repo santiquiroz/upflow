@@ -598,11 +598,17 @@ function Wait-BeforeClosing {
     try { [void](Read-Host) } catch { Start-Sleep -Seconds 30 }
 }
 
-function Start-Upflow {
+function Get-UpflowUrl {
     $appHost = Get-EnvValue -Key 'APP_HOST' -Default '127.0.0.1'
     $appPort = Get-EnvValue -Key 'APP_PORT' -Default '8090'
     $browserHost = if ($appHost -eq '0.0.0.0') { '127.0.0.1' } else { $appHost }
-    $url = "http://${browserHost}:${appPort}"
+    return "http://${browserHost}:${appPort}"
+}
+
+function Start-Upflow {
+    $appHost = Get-EnvValue -Key 'APP_HOST' -Default '127.0.0.1'
+    $appPort = Get-EnvValue -Key 'APP_PORT' -Default '8090'
+    $url = Get-UpflowUrl
     $healthUrl = "$url/api/v1/health"
 
     if (Test-PortInUse -Port ([int]$appPort)) {
@@ -662,6 +668,32 @@ function Start-Upflow {
     }
 }
 
+function Test-AnotherLauncherRunning {
+    # Instalador (postinstall) + acceso directo abrian dos ventanas que corrian
+    # pip --force-reinstall a la vez sobre el mismo site-packages: una renombraba
+    # yt-dlp mientras la otra lo leia y fallaba con WinError 2 (2026-10-28).
+    # El mutex se suelta solo cuando este proceso termina.
+    $script:LauncherMutex = New-Object System.Threading.Mutex($false, 'Local\UpflowLauncher')
+    try {
+        return -not $script:LauncherMutex.WaitOne(0)
+    } catch [System.Threading.AbandonedMutexException] {
+        # La ventana anterior murio sin soltarlo: ahora es de esta.
+        return $false
+    }
+}
+
+function Show-OtherLauncherNotice {
+    $appPort = Get-EnvValue -Key 'APP_PORT' -Default '8090'
+    $url = Get-UpflowUrl
+    if (Test-PortInUse -Port ([int]$appPort)) {
+        Write-Host 'Upflow ya esta abierto en otra ventana: se abre el navegador.'
+        Start-Process $url
+    } else {
+        Write-Host 'Upflow ya se esta instalando o abriendo en otra ventana. El navegador se abre solo cuando termine.' -ForegroundColor Yellow
+    }
+    if (-not $env:UPFLOW_NO_PAUSE) { Start-Sleep -Seconds 5 }
+}
+
 function Main {
     Write-Host '=== Upflow ===' -ForegroundColor Green
 
@@ -669,6 +701,8 @@ function Main {
     # proceso: si el .bat se lanza desde otra carpeta (Start-Process, acceso
     # directo sin "Iniciar en"), el server serviria OTRO codigo/config.
     Set-Location $root
+
+    if (Test-AnotherLauncherRunning) { Show-OtherLauncherNotice; return }
 
     Write-Step 'Verificando Python...'
     if ($usingBundledPython) {
