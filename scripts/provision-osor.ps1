@@ -1,6 +1,7 @@
 param(
-    # Carpeta de modelos de la app (runtime\models por defecto). Tests y la corrida manual la apuntan a otro lado.
-    [string]$ModelsDir = ''
+    # Carpeta completa del paquete, la que lee Settings.osor_model_path. La app la
+    # pasa siempre; sin ella, la corrida manual usa runtime\models\eraser-osor.
+    [string]$PackDir = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -11,13 +12,13 @@ $ErrorActionPreference = 'Stop'
 # Licencia CreativeML Open RAIL++-M: la app exige aceptarla antes de llegar aca.
 
 $root = Split-Path -Parent $PSScriptRoot
-if (-not $ModelsDir) { $ModelsDir = Join-Path $root 'runtime\models' }
+if (-not $PackDir) { $PackDir = Join-Path $root 'runtime\models\eraser-osor' }
 $venv = Join-Path $root '.venv\Scripts\python.exe'
 if (-not (Test-Path $venv)) { $venv = 'python' }
 
-$destino = Join-Path $ModelsDir 'eraser-osor'
+$destino = $PackDir
 $parcial = "$destino.partial"
-$trabajo = Join-Path $ModelsDir '.osor-work'
+$trabajo = "$destino.work"
 $base = Join-Path $trabajo 'base'
 $pesos = Join-Path $trabajo 'weights\osor-sdxlinpainting\weights\sdxlinpainting_phase2.pth'
 

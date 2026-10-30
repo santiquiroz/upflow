@@ -9,14 +9,17 @@ from app.config import Settings
 from app.services.pack_provisioner import (
     PACK_FIXED_ARGUMENTS,
     PACK_SCRIPTS,
+    PACK_TIMEOUTS,
     PROVISION_TIMEOUT_SECONDS,
     PackProvisioner,
+    ProvisionJob,
     ProvisionStatus,
     UnknownPackError,
     build_command,
     packs_required_by_catalog,
     provisioning_supported,
     script_for,
+    timeout_for,
 )
 from app.services.license_gate import (
     LICENSE_REQUIRED_KEY,
@@ -354,6 +357,51 @@ class TestLosPacksDeRestauracion:
 
         assert provisioner.status(job_id).status is ProvisionStatus.done
         assert script.commands[0][-2:] == ["-Bundle", "faces"]
+
+
+class TestElPackOsor:
+    def osor_job(self, settings: Settings) -> list[str]:
+        provisioner = PackProvisioner(settings)
+        return provisioner.command_for(ProvisionJob(id="osor-1", pack="osor"))
+
+    def test_con_models_dir_el_paquete_va_a_esa_carpeta(self, tmp_path: Path):
+        # OSOR_MODEL_DIR="" aísla el caso: conftest.py la fija para todos los tests.
+        settings = Settings(
+            RUNTIME_DIR=str(tmp_path), MODELS_DIR="otros-modelos", OSOR_MODEL_DIR="", _env_file=None
+        )
+
+        comando = self.osor_job(settings)
+
+        esperado = str(tmp_path / "otros-modelos" / "eraser-osor")
+        assert comando[-2:] == ["-PackDir", esperado]
+
+    def test_con_osor_model_dir_se_usa_esa_ruta_exacta(self, tmp_path: Path):
+        destino = tmp_path / "en-otro-lado" / "osor"
+        settings = Settings(RUNTIME_DIR=str(tmp_path), OSOR_MODEL_DIR=str(destino), _env_file=None)
+
+        assert self.osor_job(settings)[-2:] == ["-PackDir", str(destino)]
+
+    @pytest.mark.parametrize("pack", ["rife", "restore-core", "translation"])
+    def test_los_demas_packs_no_cambian(self, tmp_path: Path, pack: str):
+        provisioner = PackProvisioner(make_settings(tmp_path))
+
+        assert provisioner.command_for(ProvisionJob(id="x", pack=pack)) == build_command(pack)
+
+    def test_osor_tiene_su_propio_techo_de_tiempo(self):
+        assert PACK_TIMEOUTS["osor"] == 3 * 3600
+        assert timeout_for("osor") == 3 * 3600
+
+    def test_los_demas_packs_usan_el_techo_por_defecto(self):
+        assert timeout_for("rife") == PROVISION_TIMEOUT_SECONDS
+
+    async def test_el_job_de_osor_corre_con_su_carpeta_y_su_techo(self, tmp_path: Path, script: FakeScript):
+        settings = make_settings(tmp_path)
+        provisioner = PackProvisioner(settings, gated_packs=frozenset())
+        await provisioner.provision("osor")
+        await provisioner._process_next()
+
+        assert script.timeouts == [3 * 3600]
+        assert script.commands[0][-2:] == ["-PackDir", str(settings.osor_model_path)]
 
 
 class TestLicenseGate:

@@ -4,7 +4,7 @@ import logging
 import os
 import re
 import sys
-from collections.abc import Set
+from collections.abc import Callable, Sequence, Set
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -113,6 +113,15 @@ VARIANT_CATALOGS: dict[str, frozenset[str]] = {
 # limite de seguridad contra un proceso colgado, no una expectativa de duracion.
 PROVISION_TIMEOUT_SECONDS = 45 * 60
 
+# OSOR baja unos 9 GB y despues arma el paquete: 45 minutos no alcanzan.
+PACK_TIMEOUTS: dict[str, int] = {"osor": 3 * 3600}
+
+# Argumentos que salen de Settings: el script tiene que escribir donde la app
+# lee, y eso depende de RUNTIME_DIR, MODELS_DIR y OSOR_MODEL_DIR.
+PACK_SETTINGS_ARGUMENTS: dict[str, Callable[[Settings], list[str]]] = {
+    "osor": lambda settings: ["-PackDir", str(settings.osor_model_path)],
+}
+
 SCRIPTS_DIRNAME = "scripts"
 
 
@@ -205,7 +214,18 @@ def default_variant(pack: str, default_device: str) -> str | None:
     return "fp32" if default_device.strip().lower().startswith("cpu") else "fp16"
 
 
-def build_command(pack: str, variant: str | None = None) -> list[str]:
+def timeout_for(pack: str) -> int:
+    return PACK_TIMEOUTS.get(pack, PROVISION_TIMEOUT_SECONDS)
+
+
+def settings_arguments(pack: str, settings: Settings) -> list[str]:
+    builder = PACK_SETTINGS_ARGUMENTS.get(pack)
+    return builder(settings) if builder else []
+
+
+def build_command(
+    pack: str, variant: str | None = None, extra_arguments: Sequence[str] = ()
+) -> list[str]:
     comando = [
         "powershell",
         "-NoProfile",
@@ -214,6 +234,7 @@ def build_command(pack: str, variant: str | None = None) -> list[str]:
         "-File",
         str(script_path(pack)),
         *PACK_FIXED_ARGUMENTS.get(pack, ()),
+        *extra_arguments,
     ]
     if variant is None:
         return comando
@@ -279,6 +300,9 @@ class PackProvisioner(SingleWorkerJobQueue[ProvisionJob]):
             logger.info("license accepted before provisioning", extra={"pack": pack})
         return await self._enqueue(ProvisionJob(id=uuid4().hex, pack=pack, variant=variant))
 
+    def command_for(self, job: ProvisionJob) -> list[str]:
+        return build_command(job.pack, job.variant, settings_arguments(job.pack, self._settings))
+
     async def _run(self, job: ProvisionJob) -> None:
         # Un paquete a la vez: dos descargas del mismo destino se pisarian los
         # archivos a medio escribir.
@@ -302,8 +326,8 @@ class PackProvisioner(SingleWorkerJobQueue[ProvisionJob]):
 
         job.status = ProvisionStatus.running
         _stdout, stderr, returncode = await run_guarded_process(
-            build_command(job.pack, job.variant),
-            timeout=PROVISION_TIMEOUT_SECONDS,
+            self.command_for(job),
+            timeout=timeout_for(job.pack),
             env=_powershell_safe_env(),
         )
         if returncode != 0:

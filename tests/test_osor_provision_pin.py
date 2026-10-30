@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import sys
 import types
@@ -15,6 +16,7 @@ from app.services.restore_models import LICENSE_GATED_PACKS
 
 ROOT = Path(__file__).resolve().parents[1]
 FETCH_SCRIPT = ROOT / "scripts" / "fetch_osor_sources.py"
+BASE_REPO = "diffusers/stable-diffusion-xl-1.0-inpainting-0.1"
 BASE_REVISION = "115134f363124c53c7d878647567d04daf26e41e"
 WEIGHTS_REVISION = "9288156766b1df44e5f50fb697876a6f2fd8c062"
 PINNED_FILES = {
@@ -93,6 +95,110 @@ def test_hash_mismatch_removes_downloaded_file_and_fails(tmp_path, monkeypatch):
     assert caught.value.code != 0
     assert downloaded
     assert not downloaded[0].exists()
+
+
+def writing_download(downloaded: list[Path], content: bytes = b"abc"):
+    def fake_download(repo_id, filename, *, revision, local_dir):
+        destination = Path(local_dir) / filename
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(content)
+        downloaded.append(destination)
+        return str(destination)
+
+    return fake_download
+
+
+def with_plenty_of_space(module, monkeypatch):
+    monkeypatch.setattr(
+        module.shutil,
+        "disk_usage",
+        lambda path: types.SimpleNamespace(total=20 * 1024**3, used=0, free=20 * 1024**3),
+    )
+
+
+def test_small_base_files_keeps_only_configs_scheduler_and_tokenizers(monkeypatch):
+    repo_files = [
+        ".gitattributes",
+        "README.md",
+        "model_index.json",
+        "unet/config.json",
+        "unet/diffusion_pytorch_model.fp16.safetensors",
+        "unet/diffusion_pytorch_model.safetensors",
+        "vae/config.json",
+        "vae/diffusion_pytorch_model.fp16.safetensors",
+        "text_encoder/config.json",
+        "text_encoder/model.fp16.safetensors",
+        "text_encoder_2/config.json",
+        "text_encoder_2/model.fp16.safetensors",
+        "scheduler/scheduler_config.json",
+        "tokenizer/merges.txt",
+        "tokenizer/special_tokens_map.json",
+        "tokenizer/tokenizer_config.json",
+        "tokenizer/vocab.json",
+        "tokenizer_2/merges.txt",
+        "tokenizer_2/vocab.json",
+        "tokenizers/vocab.json",
+        "inpaint.png",
+    ]
+    calls = []
+
+    def fake_list(repo_id, revision):
+        calls.append((repo_id, revision))
+        return repo_files
+
+    module = load_fetch_module(monkeypatch, lambda *args, **kwargs: None, fake_list)
+
+    assert module.small_base_files() == sorted(
+        [
+            "unet/config.json",
+            "vae/config.json",
+            "text_encoder/config.json",
+            "text_encoder_2/config.json",
+            "scheduler/scheduler_config.json",
+            "tokenizer/merges.txt",
+            "tokenizer/special_tokens_map.json",
+            "tokenizer/tokenizer_config.json",
+            "tokenizer/vocab.json",
+            "tokenizer_2/merges.txt",
+            "tokenizer_2/vocab.json",
+        ]
+    )
+    assert calls == [(BASE_REPO, BASE_REVISION)]
+
+
+def test_size_mismatch_removes_downloaded_file_and_fails(tmp_path, monkeypatch):
+    downloaded = []
+    module = load_fetch_module(monkeypatch, writing_download(downloaded))
+    with_plenty_of_space(module, monkeypatch)
+    relative = next(iter(module.PINNED_BASE_FILES))
+    module.PINNED_BASE_FILES[relative] = (4, hashlib.sha256(b"abc").hexdigest())
+
+    with pytest.raises(SystemExit) as caught:
+        module.main(["--dest", str(tmp_path / "sources")])
+
+    assert caught.value.code != 0
+    assert "bytes" in str(caught.value.code)
+    assert len(downloaded) == 1
+    assert not downloaded[0].exists()
+
+
+def test_weights_hash_mismatch_removes_the_weights_file_and_fails(tmp_path, monkeypatch):
+    downloaded = []
+    module = load_fetch_module(monkeypatch, writing_download(downloaded))
+    with_plenty_of_space(module, monkeypatch)
+    good = (3, hashlib.sha256(b"abc").hexdigest())
+    for relative in module.PINNED_BASE_FILES:
+        module.PINNED_BASE_FILES[relative] = good
+    module.PINNED_WEIGHTS_FILES[module.WEIGHTS_FILE] = (3, "0" * 64)
+
+    with pytest.raises(SystemExit) as caught:
+        module.main(["--dest", str(tmp_path / "sources")])
+
+    assert caught.value.code != 0
+    weights = tmp_path / "sources" / module.WEIGHTS_SUBDIR / module.WEIGHTS_FILE
+    assert downloaded[-1] == weights
+    assert not weights.exists()
+    assert all(path.exists() for path in downloaded[:-1])
 
 
 def test_insufficient_disk_space_fails_before_download(tmp_path, monkeypatch):
