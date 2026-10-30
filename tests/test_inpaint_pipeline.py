@@ -530,6 +530,80 @@ def test_two_touching_marks_are_edited_in_a_single_call() -> None:
     assert len(model.calls) == 1
 
 
+def test_two_hundred_separated_dots_are_edited_in_a_single_call() -> None:
+    photo = base_photo((2000, 2000))
+    marked = np.zeros((2000, 2000), dtype=np.uint8)
+    for row in range(10):
+        for column in range(20):
+            top, left = 50 + row * 190, 50 + column * 95
+            marked[top:top + 3, left:left + 3] = 255
+    model = RecordingModel()
+
+    result = run_masked_edit(
+        photo, Image.fromarray(marked, mode="L"), model,
+        MaskedEditSettings(None, None, 48, 512, grain=False),
+    )
+
+    assert len(model.calls) == 1
+    assert result.size == photo.size
+
+
+def test_three_distant_hundred_pixel_marks_keep_three_model_calls() -> None:
+    photo = base_photo((2000, 2000))
+    marked = np.zeros((2000, 2000), dtype=np.uint8)
+    for top, left in ((100, 100), (900, 900), (1800, 1800)):
+        marked[top:top + 100, left:left + 100] = 255
+    model = RecordingModel()
+
+    run_masked_edit(
+        photo, Image.fromarray(marked, mode="L"), model,
+        MaskedEditSettings(None, None, 48, 512, grain=False),
+    )
+
+    assert len(model.calls) == 3
+
+
+@pytest.mark.parametrize("component_count, expected_calls", [(12, 12), (13, 1)])
+def test_edit_group_limit_applies_after_separate_crops_are_merged(
+    component_count: int, expected_calls: int
+) -> None:
+    photo = base_photo((800, 800))
+    marked = np.zeros((800, 800), dtype=np.uint8)
+    for index in range(component_count):
+        top, left = 50 + index // 4 * 200, 50 + index % 4 * 200
+        marked[top:top + 20, left:left + 20] = 255
+    model = RecordingModel()
+
+    run_masked_edit(
+        photo, Image.fromarray(marked, mode="L"), model,
+        MaskedEditSettings(0, 0, 0, 512, grain=False),
+    )
+
+    assert len(model.calls) == expected_calls
+
+
+def test_more_than_sixty_four_components_skip_the_crop_merge_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    photo = base_photo((800, 800))
+    marked = np.zeros((800, 800), dtype=np.uint8)
+    for index in range(65):
+        top, left = 10 + index // 9 * 90, 10 + index % 9 * 90
+        marked[top:top + 3, left:left + 3] = 255
+    model = RecordingModel()
+    monkeypatch.setattr(
+        "app.services.inpaint_pipeline._fusionar_solapadas",
+        lambda *_args: pytest.fail("No debe fusionar los componentes de una máscara ruidosa"),
+    )
+
+    run_masked_edit(
+        photo, Image.fromarray(marked, mode="L"), model,
+        MaskedEditSettings(0, 0, 0, 512, grain=False),
+    )
+
+    assert len(model.calls) == 1
+
+
 # --- grano del sensor -------------------------------------------------------
 
 

@@ -25,6 +25,7 @@ import numpy as np
 # ---------------------------------------------------------------------------
 
 MASK_THRESHOLD = 127
+MAX_COMPONENTS = 64
 
 # Dilatación y feather proporcionales al tamaño de lo marcado: 8 px fijos no
 # alcanzan para tapar el halo de una persona de 2700 px (medido 2026-10).
@@ -127,6 +128,11 @@ def grow_per_component(
     count, labels, stats, _ = cv2.connectedComponentsWithStats(
         (mask > MASK_THRESHOLD).astype(np.uint8), connectivity=8
     )
+    if count - 1 > MAX_COMPONENTS:
+        bbox = mask_bbox(mask)
+        dilation = dilate_px if dilate_px is not None else dilation_for(bbox)
+        feather = feather_px if feather_px is not None else feather_for(bbox)
+        return feather_mask(dilate_mask(mask, dilation), feather)
     grown = mask.copy()
     for label in range(1, count):
         left, top, width, height, _ = (int(value) for value in stats[label])

@@ -7,6 +7,7 @@ import numpy as np
 
 from app.services.inpaint_grain import match_grain
 from app.services.inpaint_mask import (
+    MAX_COMPONENTS,
     compute_crop_box,
     context_padding_for,
     grow_per_component,
@@ -39,6 +40,7 @@ from app.services.inpaint_mask import (
 # del 64/8 que piden los latentes de Stable Diffusion, solo que junta mas shapes
 # en el mismo balde.
 SIZE_MULTIPLE = 128
+MAX_EDIT_GROUPS = 12
 
 
 def resolve_padding(explicito: int | None, bbox: tuple[int, int, int, int]) -> int:
@@ -183,6 +185,21 @@ def _fusionar_solapadas(
     return grupos
 
 
+def _grupo_unico(
+    blended_mask: np.ndarray, image_size: tuple[int, int], settings: MaskedEditSettings
+) -> list[tuple[tuple[int, int, int, int], np.ndarray]]:
+    bbox = mask_bbox((blended_mask > 0).astype(np.uint8) * 255)
+    if bbox is None:
+        return []
+    crop_box = compute_crop_box(
+        bbox,
+        resolve_padding(settings.padding_px, bbox),
+        image_size,
+        max_side=_bucket_up(settings.target_side),
+    )
+    return [(crop_box, blended_mask)]
+
+
 def _grupos_de_edicion(
     blended_mask: np.ndarray, image_size: tuple[int, int], settings: MaskedEditSettings
 ) -> list[tuple[tuple[int, int, int, int], np.ndarray]]:
@@ -198,6 +215,8 @@ def _grupos_de_edicion(
     cantidad, etiquetas, stats, _ = cv2.connectedComponentsWithStats(
         (blended_mask > 0).astype(np.uint8), connectivity=8
     )
+    if cantidad - 1 > MAX_COMPONENTS:
+        return _grupo_unico(blended_mask, image_size, settings)
     cajas: dict[int, tuple[int, int, int, int]] = {}
     for etiqueta in range(1, cantidad):
         left, top, width, height, _ = stats[etiqueta]
@@ -212,12 +231,15 @@ def _grupos_de_edicion(
             # blanda que lo que la rodea.
             max_side=_bucket_up(settings.target_side),
         )
+    grupos = _fusionar_solapadas(cajas)
+    if len(grupos) > MAX_EDIT_GROUPS:
+        return _grupo_unico(blended_mask, image_size, settings)
     return [
         (
             _union_cajas([cajas[e] for e in miembros]),
             np.where(np.isin(etiquetas, miembros), blended_mask, 0),
         )
-        for miembros in _fusionar_solapadas(cajas)
+        for miembros in grupos
     ]
 
 

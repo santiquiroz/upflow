@@ -251,3 +251,27 @@ def test_component_growth_respects_explicit_radii_and_mask_values(
 
     np.testing.assert_allclose(grown, expected, atol=1, rtol=0)
     assert grown[60, 60] == 180
+
+
+@pytest.mark.parametrize("dilation, feather", [(None, None), (3, 2), (None, 0), (0, None)])
+def test_many_components_use_whole_mask_growth_without_component_windows(
+    monkeypatch: pytest.MonkeyPatch, dilation: int | None, feather: int | None
+) -> None:
+    mask = np.zeros((2000, 2000), dtype=np.uint8)
+    for row in range(10):
+        for column in range(20):
+            top, left = 50 + row * 190, 50 + column * 95
+            mask[top:top + 3, left:left + 3] = 255
+    whole_bbox = mask_bbox(mask)
+    assert whole_bbox is not None
+    resolved_dilation = dilation if dilation is not None else dilation_for(whole_bbox)
+    resolved_feather = feather if feather is not None else feather_for(whole_bbox)
+    expected = feather_mask(dilate_mask(mask, resolved_dilation), resolved_feather)
+    monkeypatch.setattr(
+        "app.services.inpaint_mask._grow_component_window",
+        lambda *_args: pytest.fail("No debe recorrer los componentes de una máscara ruidosa"),
+    )
+
+    grown = grow_per_component(mask, dilation, feather)
+
+    np.testing.assert_array_equal(grown, expected)
