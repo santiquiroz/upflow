@@ -9,7 +9,7 @@ from PIL import Image
 
 from app.config import Settings
 from app.services.engines.lama_eraser import ERASER_LAMA_MODEL_ID, LamaEraser, _unknown_hole
-from app.services.inpaint_mask import grow_per_component, grow_small_hulls
+from app.services.inpaint_mask import clean_protect_mask, grow_per_component, grow_small_hulls
 
 
 def make_settings(tmp_path: Path, installed: bool = True) -> Settings:
@@ -187,6 +187,69 @@ async def test_protected_pixels_are_preserved_even_inside_the_edit(tmp_path, mon
     protected = np.asarray(protect) > 0
     np.testing.assert_array_equal(np.asarray(result)[protected], np.asarray(base)[protected])
     assert np.asarray(result)[110, 120, 0] > 150
+
+
+@pytest.mark.asyncio
+async def test_protect_islands_are_written_but_the_expanded_subject_is_preserved(tmp_path, monkeypatch):
+    eraser, module = make_eraser(tmp_path, monkeypatch)
+    base = photo((400, 300))
+    mask = mask_box(base.size, (130, 100, 280, 180))
+    protect = np.asarray(mask_box(base.size, (220, 60, 330, 200))).copy()
+    protect[135:138, 170:173] = 255
+    cleaned = clean_protect_mask(protect > 127)
+
+    result = await eraser.erase(base, mask, "cpu", protect_image=Image.fromarray(protect))
+
+    before, after = np.asarray(base), np.asarray(result)
+    np.testing.assert_array_equal(after[cleaned], before[cleaned])
+    np.testing.assert_array_equal(after[120:160, 214:220], before[120:160, 214:220])
+    assert np.all(after[135:138, 170:173, 0] > before[135:138, 170:173, 0] + 50)
+    assert module.calls
+
+
+@pytest.mark.asyncio
+async def test_cleaned_protect_is_excluded_before_growth_and_grouping(tmp_path, monkeypatch):
+    from app.services.engines import lama_eraser
+
+    eraser, _ = make_eraser(tmp_path, monkeypatch)
+    base = photo()
+    mask = mask_box(base.size, (100, 80, 180, 160))
+    protect = mask_box(base.size, (150, 50, 210, 180))
+    cleaned = clean_protect_mask(np.asarray(protect) > 127)
+    growth_inputs = []
+    grouping_inputs = []
+    group_masks = lama_eraser.edit_groups
+
+    def record_growth(source):
+        growth_inputs.append(source.copy())
+        return grow_small_hulls(source)
+
+    def record_grouping(source, *args):
+        grouping_inputs.append(source.copy())
+        return group_masks(source, *args)
+
+    monkeypatch.setattr(lama_eraser, "grow_small_hulls", record_growth)
+    monkeypatch.setattr(lama_eraser, "edit_groups", record_grouping)
+
+    await eraser.erase(base, mask, "cpu", protect_image=protect)
+
+    assert len(growth_inputs) == len(grouping_inputs) == 1
+    assert not growth_inputs[0][cleaned].any()
+    assert not grouping_inputs[0][cleaned].any()
+    assert grouping_inputs[0][110, 120] == 255
+
+
+@pytest.mark.asyncio
+async def test_edit_entirely_inside_protection_preserves_image_without_inference(tmp_path, monkeypatch):
+    eraser, module = make_eraser(tmp_path, monkeypatch)
+    base = photo()
+    mask = mask_box(base.size, (140, 90, 170, 120))
+    protect = mask_box(base.size, (100, 50, 210, 180))
+
+    result = await eraser.erase(base, mask, "cpu", protect_image=protect)
+
+    np.testing.assert_array_equal(result, base)
+    assert module.calls == []
 
 
 @pytest.mark.asyncio

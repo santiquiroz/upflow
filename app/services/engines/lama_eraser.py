@@ -9,6 +9,7 @@ import numpy as np
 from app.config import Settings
 from app.services.inpaint_grain import match_grain
 from app.services.inpaint_mask import (
+    clean_protect_mask,
     grow_per_component,
     grow_small_hulls,
     mask_bbox,
@@ -157,10 +158,14 @@ class LamaEraser:
         mask = _mask_array(mask_image, base_rgb.size)
         if mask_bbox(mask) is None:
             return base_rgb
-        blended = grow_per_component(grow_small_hulls(mask), None, None)
         protect = np.zeros(mask.shape, dtype=bool)
         if protect_image is not None:
-            protect = _mask_array(protect_image, base_rgb.size) > 127
+            protect = clean_protect_mask(_mask_array(protect_image, base_rgb.size) > 127)
+        mask = np.where(protect, 0, mask)
+        if mask_bbox(mask) is None:
+            return base_rgb
+        blended = grow_per_component(grow_small_hulls(mask), None, None)
+        blended[protect] = 0
         settings = MaskedEditSettings(None, None, None, MAX_WORK_SIDE)
         groups = edit_groups(blended, base_rgb.size, settings)
         module = self._get_module()

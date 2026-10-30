@@ -35,6 +35,27 @@ MIN_DILATE_PX = 8
 MIN_FEATHER_PX = 8
 
 
+def clean_protect_mask(
+    protect: np.ndarray, island_fraction: float = 0.02, grow_ratio: float = 0.003
+) -> np.ndarray:
+    if not protect.any():
+        return protect
+    import cv2
+
+    _, labels, stats, _ = cv2.connectedComponentsWithStats(
+        protect.astype(np.uint8), connectivity=8
+    )
+    areas = stats[1:, cv2.CC_STAT_AREA]
+    keep = np.zeros(len(stats), dtype=bool)
+    keep[1:] = areas >= island_fraction * areas.max()
+    cleaned = keep[labels].astype(np.uint8)
+    radius = max(6, round(grow_ratio * max(protect.shape)))
+    kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (2 * radius + 1, 2 * radius + 1)
+    )
+    return cv2.dilate(cleaned, kernel) > 0
+
+
 def _lado_mayor(bbox: tuple[int, int, int, int]) -> int:
     left, top, right, bottom = bbox
     return max(right - left, bottom - top)

@@ -5,6 +5,7 @@ import pytest
 
 from app.services.inpaint_mask import (
     MAX_COMPONENTS,
+    clean_protect_mask,
     compute_crop_box,
     dilate_mask,
     dilation_for,
@@ -333,3 +334,70 @@ def test_hull_growth_preserves_an_empty_mask() -> None:
 
     np.testing.assert_array_equal(grown, mask)
     assert grown.dtype == np.uint8
+
+
+def test_clean_protect_removes_small_islands_and_keeps_large_subjects() -> None:
+    protect = np.zeros((400, 500), dtype=bool)
+    protect[30:130, 30:130] = True
+    protect[180:230, 180:230] = True
+    protect[300:310, 300:310] = True
+    original = protect.copy()
+
+    cleaned = clean_protect_mask(protect)
+
+    assert cleaned[80, 80]
+    assert cleaned[200, 200]
+    assert not cleaned[300:310, 300:310].any()
+    assert cleaned.dtype == np.bool_
+    assert cleaned.shape == protect.shape
+    np.testing.assert_array_equal(protect, original)
+
+
+def test_clean_protect_keeps_components_exactly_at_the_area_threshold() -> None:
+    protect = np.zeros((400, 500), dtype=bool)
+    protect[30:130, 30:130] = True
+    protect[200:210, 200:220] = True
+    protect[300, 200:399] = True
+
+    cleaned = clean_protect_mask(protect)
+
+    assert cleaned[205, 210]
+    assert not cleaned[300, 200:399].any()
+
+
+@pytest.mark.parametrize("shape,radius", [((200, 300), 6), ((100, 3000), 9), ((3000, 100), 9)])
+def test_clean_protect_grows_with_an_ellipse_scaled_to_the_long_side(shape, radius) -> None:
+    protect = np.zeros(shape, dtype=bool)
+    top, left = shape[0] // 2, shape[1] // 2
+    protect[top, left] = True
+
+    cleaned = clean_protect_mask(protect)
+
+    assert cleaned[top - radius, left]
+    assert cleaned[top + radius, left]
+    assert cleaned[top, left - radius]
+    assert cleaned[top, left + radius]
+    assert not cleaned[top - radius - 1, left]
+    assert not cleaned[top, left + radius + 1]
+    assert not cleaned[top - radius, left - radius]
+
+
+def test_clean_protect_respects_custom_area_and_growth_ratios() -> None:
+    protect = np.zeros((400, 500), dtype=bool)
+    protect[30:130, 30:130] = True
+    protect[250:270, 250:270] = True
+
+    cleaned = clean_protect_mask(protect, island_fraction=0.05, grow_ratio=0.02)
+
+    assert not cleaned[260, 260]
+    assert cleaned[80, 20]
+    assert not cleaned[80, 19]
+
+
+def test_clean_protect_preserves_an_empty_mask() -> None:
+    protect = np.zeros((32, 48), dtype=bool)
+
+    cleaned = clean_protect_mask(protect)
+
+    np.testing.assert_array_equal(cleaned, protect)
+    assert cleaned.dtype == np.bool_
