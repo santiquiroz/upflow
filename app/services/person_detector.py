@@ -54,6 +54,46 @@ def decode_yolox(raw: np.ndarray, side: int = 640) -> np.ndarray:
     return decoded
 
 
+def _corner_boxes_in_original(decoded_boxes: np.ndarray, ratio: float) -> np.ndarray:
+    centers_x, centers_y, widths, heights = decoded_boxes.T
+    return np.column_stack(
+        (
+            (centers_x - widths / 2) / ratio,
+            (centers_y - heights / 2) / ratio,
+            (centers_x + widths / 2) / ratio,
+            (centers_y + heights / 2) / ratio,
+        )
+    )
+
+
+def _nms_indices(
+    boxes: np.ndarray, scores: list[float], threshold: float, iou: float
+) -> list[int]:
+    rectangles = [
+        [
+            float(box[0]),
+            float(box[1]),
+            float(box[2] - box[0]),
+            float(box[3] - box[1]),
+        ]
+        for box in boxes
+    ]
+    kept = cv2.dnn.NMSBoxes(rectangles, scores, threshold, iou)
+    if kept is None or len(kept) == 0:
+        return []
+    return [int(index) for index in np.asarray(kept).reshape(-1)]
+
+
+def _clip_box(
+    box: np.ndarray, width: int, height: int
+) -> tuple[int, int, int, int]:
+    x1, y1, x2, y2 = (
+        int(np.rint(np.clip(value, 0, limit)))
+        for value, limit in zip(box, (width, height, width, height))
+    )
+    return x1, y1, x2, y2
+
+
 def select_people(
     decoded: np.ndarray,
     ratio: float,
@@ -66,42 +106,19 @@ def select_people(
     if candidate_indices.size == 0:
         return []
 
-    boxes = decoded[candidate_indices, :4]
-    centers_x, centers_y, widths, heights = boxes.T
-    scaled_boxes = np.column_stack(
-        (
-            (centers_x - widths / 2) / ratio,
-            (centers_y - heights / 2) / ratio,
-            (centers_x + widths / 2) / ratio,
-            (centers_y + heights / 2) / ratio,
-        )
-    )
-    rectangles = [
-        [
-            float(box[0]),
-            float(box[1]),
-            float(box[2] - box[0]),
-            float(box[3] - box[1]),
-        ]
-        for box in scaled_boxes
-    ]
+    scaled_boxes = _corner_boxes_in_original(decoded[candidate_indices, :4], ratio)
     candidate_scores = scores[candidate_indices].tolist()
-    kept = cv2.dnn.NMSBoxes(rectangles, candidate_scores, threshold, iou)
-    if len(kept) == 0:
+    kept_indices = _nms_indices(scaled_boxes, candidate_scores, threshold, iou)
+    if not kept_indices:
         return []
 
     width, height = image_size
     people = []
-    for selected in np.asarray(kept).reshape(-1):
-        box = scaled_boxes[int(selected)]
-        x1 = int(np.rint(np.clip(box[0], 0, width)))
-        y1 = int(np.rint(np.clip(box[1], 0, height)))
-        x2 = int(np.rint(np.clip(box[2], 0, width)))
-        y2 = int(np.rint(np.clip(box[3], 0, height)))
+    for selected in kept_indices:
         people.append(
             PersonBox(
-                box=(x1, y1, x2, y2),
-                score=float(candidate_scores[int(selected)]),
+                box=_clip_box(scaled_boxes[selected], width, height),
+                score=float(candidate_scores[selected]),
             )
         )
     return sorted(people, key=lambda person: person.box[0])

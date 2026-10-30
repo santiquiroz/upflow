@@ -3,6 +3,7 @@ import pytest
 
 from app.config import Settings
 from app.services.person_detector import (
+    PersonBox,
     PersonDetector,
     PersonDetectorUnavailableError,
     decode_yolox,
@@ -35,6 +36,13 @@ def test_letterbox_pads_with_114_and_keeps_ratio():
     assert tensor[0, :, 600, 0].tolist() == [114.0, 114.0, 114.0]
 
 
+def test_letterbox_converts_rgb_to_bgr():
+    rgb = np.zeros((1, 1, 3), np.uint8)
+    rgb[0, 0] = [255, 0, 0]
+    tensor, _ = letterbox(rgb, side=1)
+    assert tensor[0, :, 0, 0].tolist() == [0.0, 0.0, 255.0]
+
+
 def test_decode_places_first_cell_at_stride_8():
     raw = np.zeros((1, 8400, 85), np.float32)
     decoded = decode_yolox(raw)
@@ -55,6 +63,33 @@ def test_select_people_scales_back_clips_and_sorts():
     ]
 
 
+def test_select_people_clips_right_and_bottom_edges():
+    decoded = np.zeros((1, 85), np.float32)
+    decoded[0, :6] = [100, 100, 80, 100, 0.9, 0.9]
+    people = select_people(decoded, ratio=1, image_size=(100, 100))
+    assert [person.box for person in people] == [(60, 50, 100, 100)]
+
+
+def test_select_people_restores_vertical_image_coordinates():
+    decoded = np.zeros((1, 85), np.float32)
+    decoded[0, :6] = [320, 320, 64, 128, 0.9, 0.9]
+    ratio = 640 / 6000
+    people = select_people(decoded, ratio=ratio, image_size=(4000, 6000))
+    assert [person.box for person in people] == [(2700, 2400, 3300, 3600)]
+
+
+def test_select_people_restores_coordinates_for_small_image():
+    decoded = np.zeros((1, 85), np.float32)
+    decoded[0, :6] = [320, 320, 200, 200, 0.9, 0.9]
+    people = select_people(decoded, ratio=2, image_size=(320, 200))
+    assert [person.box for person in people] == [(110, 110, 210, 200)]
+
+
+def test_select_people_returns_empty_without_person_detections():
+    decoded = np.zeros((3, 85), np.float32)
+    assert select_people(decoded, ratio=1, image_size=(100, 100)) == []
+
+
 def test_detect_runs_session_once_per_device_and_reports_missing_pack(tmp_path):
     class FakeSession:
         def __init__(self):
@@ -64,7 +99,7 @@ def test_detect_runs_session_once_per_device_and_reports_missing_pack(tmp_path):
             self.calls += 1
             assert inputs["images"].shape == (1, 3, 640, 640)
             raw = np.zeros((1, 8400, 85), np.float32)
-            raw[0, 0, :6] = [0, 0, np.log(10), np.log(10), 0.9, 0.9]
+            raw[0, 0, :6] = [0, 0, np.log(4), np.log(4), 0.9, 0.9]
             return [raw]
 
     model = tmp_path / "model.onnx"
@@ -72,18 +107,24 @@ def test_detect_runs_session_once_per_device_and_reports_missing_pack(tmp_path):
     detector = PersonDetector(
         Settings(_env_file=None, PERSON_DETECTOR_MODEL=str(model))
     )
-    session = FakeSession()
+    sessions = {}
     create_calls = []
 
     def create_session(device):
         create_calls.append(device)
-        return session
+        sessions[device] = FakeSession()
+        return sessions[device]
 
     detector._create_session = create_session
     rgb = np.zeros((100, 100, 3), np.uint8)
-    assert detector.detect(rgb) == detector.detect(rgb)
-    assert create_calls == ["cpu"]
-    assert session.calls == 2
+    expected = [PersonBox(box=(0, 0, 2, 2), score=pytest.approx(0.81))]
+    assert detector.detect(rgb) == expected
+    assert detector.detect(rgb) == expected
+    assert detector.detect(rgb, device="gpu") == expected
+    assert detector.detect(rgb, device="gpu") == expected
+    assert create_calls == ["cpu", "gpu"]
+    assert sessions["cpu"].calls == 2
+    assert sessions["gpu"].calls == 2
 
     settings = Settings(_env_file=None, PERSON_DETECTOR_MODEL=str(tmp_path / "no.onnx"))
     with pytest.raises(PersonDetectorUnavailableError, match="encuentra personas"):
