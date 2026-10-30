@@ -314,9 +314,14 @@ RESTORE_MODELS: dict[str, RestoreModelSpec] = {}
 
 RESTORE_BUNDLES: dict[str, RestoreBundle] = {name: RestoreBundle(name, ()) for name in BUNDLE_NAMES}
 
-# Declarado a mano y no derivado: el test lo compara con gated_packs(RESTORE_MODELS),
-# asi un modelo no comercial nuevo no puede colarse sin pasar por la compuerta.
-LICENSE_GATED_PACKS: frozenset[str] = frozenset()
+# Packs con licencia que no son restore-*: el catalogo no los conoce, asi que se
+# declaran aca. OSOR usa RAIL++-M (pesos y base SDXL-inpainting).
+NON_RESTORE_GATED_PACKS: frozenset[str] = frozenset({"osor"})
+
+# Declarado a mano y no derivado: el test lo compara con gated_packs(RESTORE_MODELS)
+# mas NON_RESTORE_GATED_PACKS, asi un modelo no comercial nuevo no puede colarse
+# sin pasar por la compuerta.
+LICENSE_GATED_PACKS: frozenset[str] = NON_RESTORE_GATED_PACKS
 
 
 @dataclass(frozen=True, slots=True)

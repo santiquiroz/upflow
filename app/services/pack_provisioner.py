@@ -67,6 +67,9 @@ PACK_SCRIPTS: dict[str, str] = {
     "kokoro": "download-kokoro-tts.ps1",
     "voice-conversion": "download-voice-conversion.ps1",
     "translation": "download-translation.ps1",
+    # Borrador con IA (OSOR). Baja la base SDXL-inpainting y los pesos OSOR en
+    # revisiones fijas, y arma el paquete con build_osor_pack.py. Licencia RAIL++-M.
+    "osor": "provision-osor.ps1",
     # Restauracion de fotos: un pack por bundle y un solo script, que recibe
     # cual bajar por PACK_FIXED_ARGUMENTS.
     **{pack_id(bundle): "download-restore.ps1" for bundle in BUNDLE_NAMES},

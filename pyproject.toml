@@ -110,6 +110,11 @@ dev = [
 gpu-splat = [
   "pyopencl==2026.1.2"
 ]
+# OSOR eraser pack: scripts/build_osor_pack.py imports peft. Not installed by
+# default; provision-osor.ps1 checks for it and tells the user what to install.
+osor = [
+  "peft>=0.14"
+]
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]

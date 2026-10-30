@@ -11,6 +11,7 @@ from app.services.restore_models import (
     BUNDLE_NAMES,
     LICENSE_FIELDS,
     LICENSE_GATED_PACKS,
+    NON_RESTORE_GATED_PACKS,
     RESTORE_BUNDLES,
     RESTORE_MODELS,
     RestoreArtifact,
@@ -299,7 +300,7 @@ def test_the_shipped_catalog_is_consistent() -> None:
 
 
 def test_license_gated_packs_are_exactly_the_non_commercial_ones() -> None:
-    assert LICENSE_GATED_PACKS == gated_packs(RESTORE_MODELS)
+    assert LICENSE_GATED_PACKS == gated_packs(RESTORE_MODELS) | NON_RESTORE_GATED_PACKS
 
 
 def test_gated_packs_only_counts_commercial_use_no() -> None:

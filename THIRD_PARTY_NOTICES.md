@@ -198,6 +198,20 @@ Fonts bundled under `app/assets/fonts/` get one entry each here, with their
 - Source: https://github.com/Megvii-BaseDetection/YOLOX
 - Weights: https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/yolox_s.onnx
 
+### OSOR eraser code
+
+- License: MIT
+- Copyright: OSOR authors (Zhouqm-Git)
+- Source: https://github.com/Zhouqm-Git/osor
+
+### OSOR eraser weights and SDXL inpainting base
+
+- Component: `runtime/models/eraser-osor/` (UNet with the OSOR LoRA merged, VAE, prompt embeddings)
+- License: CreativeML Open RAIL++-M
+- Copyright: Copyright (c) 2023 Stability AI (SDXL inpainting base and license text); OSOR weights by QinmingZhou
+- Source: https://huggingface.co/QinmingZhou/OSOR (weights) and https://huggingface.co/diffusers/stable-diffusion-xl-1.0-inpainting-0.1 (base)
+- Notes: downloaded by the OSOR pack, which requires accepting the RAIL++-M license; the full text is in `app/licenses/gated/osor.txt`.
+
 ## Photo restoration models
 
 The photo restoration models are downloaded as `restore-*` packs; none of them is
