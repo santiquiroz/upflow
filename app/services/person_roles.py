@@ -10,10 +10,12 @@ from app.services.person_detector import PersonBox
 
 Role = Literal["subject", "background"]
 
-HEIGHT_WEIGHT = 0.5
-SHARPNESS_WEIGHT = 0.3
+# Calibrados contra 816 clics de 59 fotos de grado (2026-10-30): rol 90.6 %, 1 foto con un
+# sujeto grande propuesto como fondo; con relativo 0.65-0.75 se mantiene en ≤ 2 fotos.
+HEIGHT_WEIGHT = 0.7
+SHARPNESS_WEIGHT = 0.1
 CENTER_WEIGHT = 0.2
-SUBJECT_RELATIVE = 0.6
+SUBJECT_RELATIVE = 0.7
 SUBJECT_MIN = 0.35
 
 
