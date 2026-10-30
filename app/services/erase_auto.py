@@ -85,7 +85,8 @@ def auto_erase(
     prepared[core] = 0
     settings = MaskedEditSettings(0, 0, None, 1600)
     choices = []
-    for _, group_mask in edit_groups(prepared, current.size, settings):
+    groups = edit_groups(prepared, current.size, settings)
+    for index, (box, group_mask) in enumerate(groups):
         left, top, right, bottom = mask_bbox((group_mask > 0).astype(np.uint8) * 255)
         if max(right - left, bottom - top) <= small_side:
             filled = lama_fill(np.array(current, copy=True), group_mask, core)
@@ -106,5 +107,7 @@ def auto_erase(
                 original, alpha,
             )
         current = _composite_subject(current, original, alpha)
+        choice["index"] = index
+        choice["box"] = [int(coordinate) for coordinate in box]
         choices.append(choice)
     return current, choices

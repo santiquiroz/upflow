@@ -260,7 +260,7 @@ async def test_auto_erase_request_carries_protect_and_records_engine_choices(tmp
         ),
         generation_jobs=manager, settings=settings,
     )
-    choices = [{"engine": "lama"}]
+    choices = [{"engine": "lama", "index": 0, "box": [0, 0, 128, 128]}]
     original_run = engine.run
 
     async def run_with_choices(**kwargs):

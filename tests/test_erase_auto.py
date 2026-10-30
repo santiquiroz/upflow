@@ -43,7 +43,9 @@ def test_small_group_calls_only_lama_with_the_prepared_mask() -> None:
     expected_mask = grow_per_component(grow_small_hulls(mask), None, None)
     np.testing.assert_array_equal(lama.call_args.args[1], expected_mask)
     assert not lama.call_args.args[2].any()
-    assert choices == [{"engine": "lama"}]
+    assert choices[0]["engine"] == "lama"
+    assert choices[0]["index"] == 0
+    assert len(choices[0]["box"]) == 4
     assert np.asarray(result)[160, 160].tolist() == [90, 90, 90]
 
 
@@ -155,7 +157,9 @@ def test_separate_groups_are_applied_sequentially_to_the_current_image() -> None
 
     result, choices = auto_erase(image, mask, None, lama, Mock())
 
-    assert choices == [{"engine": "lama"}, {"engine": "lama"}]
+    assert [choice["engine"] for choice in choices] == ["lama", "lama"]
+    assert [choice["index"] for choice in choices] == [0, 1]
+    assert all(len(choice["box"]) == 4 for choice in choices)
     assert len(canvases) == 2
     assert canvases[0][150, 130].tolist() == [180, 180, 180]
     assert canvases[1][150, 130].tolist() == [90, 90, 90]
@@ -175,7 +179,7 @@ def test_large_group_uses_osor_without_calling_sdxl() -> None:
 
     osor.assert_called_once()
     sdxl.assert_not_called()
-    assert choices == [{"engine": "osor"}]
+    assert choices[0]["engine"] == "osor"
     assert np.asarray(result)[160, 160].tolist() == [120, 120, 120]
 
 
@@ -204,8 +208,28 @@ def test_large_group_face_guard_runs_lama_before_osor_again() -> None:
     assert len(osor_inputs) == 2
     np.testing.assert_array_equal(osor_inputs[1], lama_outputs[0])
     assert osor_inputs[1][160, 160].tolist() == [90, 90, 90]
-    assert choices == [{"engine": "lama+osor", "face_guard": True}]
+    assert choices[0]["engine"] == "lama+osor"
+    assert choices[0]["face_guard"] is True
     assert np.asarray(result)[160, 160].tolist() == [120, 120, 120]
+
+
+def test_choices_carry_group_index_and_json_serializable_crop_box() -> None:
+    image = Image.new("RGB", (2400, 320), (180, 180, 180))
+    mask = np.zeros((320, 2400), dtype=np.uint8)
+    mask[120:180, 100:160] = 255
+    mask[120:180, 2200:2260] = 255
+    lama = Mock(side_effect=lambda canvas, group, protect: fill_with(canvas, group, 90))
+
+    _, choices = auto_erase(image, mask, None, lama, Mock())
+
+    assert [choice["index"] for choice in choices] == [0, 1]
+    for choice in choices:
+        box = choice["box"]
+        assert isinstance(box, list)
+        assert len(box) == 4
+        assert all(type(coordinate) is int for coordinate in box)
+        assert box[0] < box[2]
+        assert box[1] < box[3]
 
 
 def test_large_group_without_osor_keeps_existing_candidate_scoring() -> None:
