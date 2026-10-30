@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -556,5 +556,46 @@ describe("EditorPanel: la vista sobrevive a un cambio de tamaño", () => {
       delete (HTMLDivElement.prototype as never as Record<string, unknown>).clientWidth;
       delete (HTMLDivElement.prototype as never as Record<string, unknown>).clientHeight;
     }
+  });
+});
+
+describe("EditorPanel: diseño de tres columnas", () => {
+  it("marca la herramienta activa sin usar el relleno ámbar", async () => {
+    renderPanel();
+    await loadBaseImage();
+
+    const activeTool = screen.getByRole("radio", { name: en["editor.tool.brush"] });
+    expect(activeTool).toHaveAttribute("aria-checked", "true");
+    expect(activeTool.className).not.toContain("bg-accent");
+    expect(activeTool).toHaveStyle({ boxShadow: "inset 3px 0 0 var(--accent)" });
+  });
+
+  it("muestra la acción dentro del panel complementario", async () => {
+    renderPanel();
+    await loadBaseImage();
+
+    const sidePanel = screen.getByRole("complementary");
+    expect(
+      within(sidePanel).getByRole("button", { name: en["editor.submit.erase"] }),
+    ).toBeInTheDocument();
+  });
+
+  it("cambia el tamaño del pincel con los atajos y respeta los límites", async () => {
+    renderPanel();
+    await loadBaseImage();
+
+    const brushSize = screen.getByLabelText(en["editor.brushSize"]);
+    fireEvent.keyDown(window, { key: "]" });
+    expect(brushSize).toHaveValue("36");
+
+    for (let step = 0; step < 30; step += 1) {
+      fireEvent.keyDown(window, { key: "]" });
+    }
+    expect(brushSize).toHaveValue("128");
+
+    for (let step = 0; step < 40; step += 1) {
+      fireEvent.keyDown(window, { key: "[" });
+    }
+    expect(brushSize).toHaveValue("8");
   });
 });

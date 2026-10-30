@@ -525,7 +525,7 @@ export function InsertObjectPanel({ targetInfo }: { targetInfo: InitImageRespons
           type="button"
           disabled={!canInsert}
           onClick={() => void handleInsert()}
-          className="self-start rounded bg-accent px-5 py-2 text-sm font-medium text-surface disabled:cursor-not-allowed disabled:opacity-40"
+          className="min-h-10 self-start rounded border border-border px-5 py-2 text-sm text-text hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {busy === "inserting" ? t("editor.insert.working") : t("editor.insert.insert")}
         </button>

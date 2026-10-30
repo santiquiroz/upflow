@@ -1,20 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import {
-  BoxSelect,
-  Brush,
-  Eraser,
-  Hand,
-  ImageUp,
-  Lasso,
-  Maximize,
-  MousePointerClick,
-  RotateCcw,
-  Shield,
-  Trash2,
-  X,
-  ZoomIn,
-  ZoomOut,
-} from "lucide-react";
+import { ImageUp } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AccordionSection } from "../../components/AccordionSection";
 import { DevicePicker } from "../../components/DevicePicker";
@@ -25,6 +10,8 @@ import type { DeviceInfoResponse, GenerationModelSummary, InitImageResponse } fr
 import { fetchEditorCapabilities, segmentEditorObject } from "../../services/editor";
 import { uploadGenerationInitImage, type CreateGenerationJobParams } from "../../services/generation";
 import { buildEditorJobParams, shouldUseAutoErase } from "./eraseJobParams";
+import { EditorSidePanel } from "./EditorSidePanel";
+import { BRUSH_SIZE_MAX, BRUSH_SIZE_MIN, EditorToolRail, type Tool } from "./EditorToolRail";
 import {
   canvasHasPixels, createMaskCanvas, exportMaskBlob, exportProtectMaskBlob, hasProtection, maskHasContent,
   pngBlobToAlphaCanvas, renderMaskOverlays, replayMasks, type HistoryEntry,
@@ -51,6 +38,7 @@ import {
   zoomPercent,
   type Viewport,
 } from "./viewport";
+import { useEditorShortcuts } from "./useEditorShortcuts";
 
 // Prompts fijos del modo "Eliminar": el modelo rellena con entorno coherente.
 // En inglés porque los checkpoints SD responden mejor a prompts en inglés.
@@ -62,8 +50,7 @@ const REPLACE_NEGATIVE_PROMPT =
   "deformed, distorted anatomy, extra limbs, extra fingers, missing fingers, disconnected limbs, blurry, watermark, text";
 const DEFAULT_STEPS = 30;
 const DEFAULT_GUIDANCE = 7.0;
-
-type Tool = "brush" | "eraser" | "lasso" | "rect" | "tap" | "protect" | "pan";
+const BRUSH_SIZE_STEP = 4;
 type EditMode = "erase" | "replace";
 
 function InpaintModelSelect({
@@ -174,6 +161,22 @@ export function EditorPanel() {
   const autoErase = shouldUseAutoErase(mode, modelId, models);
   const tapAvailable = editorCapabilities.data?.tapSelect ?? false;
   const busy = baseUploading || preparingJob || phase === "uploading" || phase === "queued" || phase === "running";
+  const handleUndo = useCallback(() => {
+    setHistory((previous) => previous.slice(0, -1));
+  }, []);
+  const handleBrushSmaller = useCallback(() => {
+    setBrushSize((current) => Math.max(BRUSH_SIZE_MIN, current - BRUSH_SIZE_STEP));
+  }, []);
+  const handleBrushBigger = useCallback(() => {
+    setBrushSize((current) => Math.min(BRUSH_SIZE_MAX, current + BRUSH_SIZE_STEP));
+  }, []);
+
+  useEditorShortcuts({
+    onUndo: handleUndo,
+    onBrushSmaller: handleBrushSmaller,
+    onBrushBigger: handleBrushBigger,
+    enabled: Boolean(baseInfo),
+  });
 
   function redrawMasks() {
     const canvas = canvasRef.current;
@@ -515,27 +518,13 @@ export function EditorPanel() {
     (isEraseOnlyModel || (mode === "erase" ? erasePromptText.trim().length > 0 : prompt.trim().length > 0)) &&
     !busy &&
     !segmenting;
-
-  const toolButton = (value: Tool, icon: React.ReactNode, label: string, disabled = false, title?: string) => (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={tool === value}
-      aria-label={label}
-      title={title ?? label}
-      disabled={disabled}
-      onClick={() => setTool(value)}
-      className={`flex items-center gap-1.5 rounded px-3 py-1.5 text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
-        tool === value ? "bg-accent font-medium text-surface" : "text-text-dim hover:bg-surface hover:text-text"
-      }`}
-    >
-      {icon}
-      {label}
-    </button>
-  );
+  const panelView = job?.status === "completed" ? "review" : "action";
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className={baseInfo
+      ? "grid min-h-0 grid-cols-[148px_minmax(0,1fr)_340px] items-start gap-3"
+      : "flex flex-col gap-4"}
+    >
       {!baseInfo && (
         <div className="flex flex-col items-center gap-3 rounded border border-dashed border-border bg-surface p-10 text-center">
           <ImageUp aria-hidden="true" className="h-8 w-8 text-text-dim" strokeWidth={1.5} />
@@ -565,359 +554,294 @@ export function EditorPanel() {
 
       {baseInfo && (
         <>
-          <div
-            className="flex flex-wrap items-center gap-2 rounded border border-border bg-surface p-2"
-            role="radiogroup"
-            aria-label={t("editor.tools.label")}
-          >
-            {toolButton("brush", <Brush aria-hidden="true" className="h-4 w-4" />, t("editor.tool.brush"))}
-            {toolButton("eraser", <Eraser aria-hidden="true" className="h-4 w-4" />, t("editor.tool.eraser"))}
-            {toolButton("lasso", <Lasso aria-hidden="true" className="h-4 w-4" />, t("editor.tool.lasso"))}
-            {toolButton("rect", <BoxSelect aria-hidden="true" className="h-4 w-4" />, t("editor.tool.rect"))}
-            {toolButton(
-              "tap",
-              <MousePointerClick aria-hidden="true" className="h-4 w-4" />,
-              t("editor.tool.tap"),
-              !tapAvailable,
-              tapAvailable ? undefined : t("editor.tool.tapUnavailable"),
+          <EditorToolRail
+            tool={tool}
+            onToolChange={setTool}
+            disabledTools={{
+              tap: tapAvailable ? undefined : t("editor.tool.tapUnavailable"),
+              protect: tapAvailable ? undefined : t("editor.tool.tapUnavailable"),
+            }}
+            toolTitles={{ protect: t("editor.protect.hint") }}
+            brushSize={brushSize}
+            onBrushSizeChange={setBrushSize}
+            zoomLabel={`${zoomPercent(viewport)}%`}
+            onZoomIn={() => handleZoomStep(1)}
+            onZoomOut={() => handleZoomStep(-1)}
+            onZoomReset={() => setViewport(IDENTITY_VIEWPORT)}
+            canResetZoom={isZoomed(viewport)}
+            onUndo={handleUndo}
+            canUndo={history.length > 0}
+            onClear={() => setHistory((previous) =>
+              previous.filter((entry) => entry.kind === "protect" || entry.kind === "clearProtection")
             )}
-            {toolButton(
-              "protect",
-              <Shield aria-hidden="true" className="h-4 w-4" />,
-              t("editor.tool.protect"),
-              !tapAvailable,
-              tapAvailable ? t("editor.protect.hint") : t("editor.tool.tapUnavailable"),
-            )}
-            {toolButton("pan", <Hand aria-hidden="true" className="h-4 w-4" />, t("editor.tool.pan"))}
-            <label className="ml-2 flex items-center gap-2 text-xs text-text-dim">
-              {t("editor.brushSize")}
-              <input
-                type="range"
-                min={8}
-                max={128}
-                value={brushSize}
-                onChange={(event) => setBrushSize(Number(event.target.value))}
-              />
-            </label>
-            <div className="ml-auto flex items-center gap-1">
-              <button
-                type="button"
-                aria-label={t("editor.zoom.out")}
-                title={t("editor.zoom.out")}
-                onClick={() => handleZoomStep(-1)}
-                className="rounded p-2 text-text-dim hover:bg-surface-2 hover:text-text"
-              >
-                <ZoomOut aria-hidden="true" className="h-4 w-4" />
-              </button>
-              <span className="min-w-[3.5rem] text-center font-mono-tabular text-xs text-text-dim">
-                {zoomPercent(viewport)}%
-              </span>
-              <button
-                type="button"
-                aria-label={t("editor.zoom.in")}
-                title={t("editor.zoom.in")}
-                onClick={() => handleZoomStep(1)}
-                className="rounded p-2 text-text-dim hover:bg-surface-2 hover:text-text"
-              >
-                <ZoomIn aria-hidden="true" className="h-4 w-4" />
-              </button>
-              <button
-                type="button"
-                aria-label={t("editor.zoom.reset")}
-                title={t("editor.zoom.reset")}
-                disabled={!isZoomed(viewport)}
-                onClick={() => setViewport(IDENTITY_VIEWPORT)}
-                className="rounded p-2 text-text-dim hover:bg-surface-2 hover:text-text disabled:opacity-40"
-              >
-                <Maximize aria-hidden="true" className="h-4 w-4" />
-              </button>
-              <span aria-hidden="true" className="mx-1 h-5 w-px bg-border" />
-              <button
-                type="button"
-                aria-label={t("editor.undo")}
-                title={t("editor.undo")}
-                disabled={history.length === 0}
-                onClick={() => setHistory((previous) => previous.slice(0, -1))}
-                className="rounded p-2 text-text-dim hover:bg-surface-2 hover:text-text disabled:opacity-40"
-              >
-                <RotateCcw aria-hidden="true" className="h-4 w-4" />
-              </button>
-              <button
-                type="button"
-                aria-label={t("editor.clear")}
-                title={t("editor.clear")}
-                disabled={!maskHasContent(history)}
-                onClick={() => setHistory((previous) => previous.filter((entry) => entry.kind === "protect" || entry.kind === "clearProtection"))}
-                className="rounded p-2 text-text-dim hover:bg-surface-2 hover:text-text disabled:opacity-40"
-              >
-                <Trash2 aria-hidden="true" className="h-4 w-4" />
-              </button>
-              <button
-                type="button"
-                aria-label={t("editor.protect.clear")}
-                title={t("editor.protect.clear")}
-                disabled={!hasProtection(history)}
-                onClick={() => setHistory((previous) => [...previous, { kind: "clearProtection" }])}
-                className="rounded px-2 py-1 text-xs text-text-dim hover:bg-surface-2 disabled:opacity-40"
-              >
-                {t("editor.protect.clear")}
-              </button>
-              <span aria-hidden="true" className="mx-1 h-5 w-px bg-border" />
-              <button
-                type="button"
-                aria-label={t("editor.newImage")}
-                title={t("editor.newImage")}
-                disabled={busy}
-                onClick={handleCloseImage}
-                className="rounded p-2 text-text-dim hover:bg-surface-2 hover:text-text disabled:opacity-40"
-              >
-                <X aria-hidden="true" className="h-4 w-4" />
-              </button>
-            </div>
-          </div>
-
-          <div
-            ref={stageRef}
-            data-testid="editor-stage"
-            className="relative w-fit max-w-full touch-none self-center overflow-hidden rounded border border-border"
-          >
-            {/* El zoom es un transform CSS sobre imagen+canvas juntos: el
-                rectángulo que devuelve el canvas ya viene transformado, así que
-                el mapeo click->píxel y el radio del pincel siguen valiendo. */}
-            <div style={{ transform: transformStyle(viewport), transformOrigin: "0 0" }}>
-              {baseUrl && <img src={baseUrl} alt={baseInfo.originalFilename} className="block max-w-full" />}
-              <canvas
-                ref={canvasRef}
-                width={baseInfo.width}
-                height={baseInfo.height}
-                data-testid="editor-mask-canvas"
-                className={`absolute inset-0 h-full w-full opacity-60 ${
-                  tool === "pan"
-                    ? "cursor-grab active:cursor-grabbing"
-                    : tool === "tap" || tool === "protect"
-                      ? "cursor-pointer"
-                      : "cursor-crosshair"
-                } ${baseUrl ? "" : "relative bg-surface-2"}`}
-                onPointerDown={handlePointerDown}
-                onPointerMove={handlePointerMove}
-                onPointerUp={handlePointerUp}
-                onPointerLeave={handlePointerUp}
-                onPointerCancel={handlePointerUp}
-                onClick={(event) => void handleCanvasClick(event)}
-              />
-              <canvas
-                ref={protectionOverlayRef}
-                width={baseInfo.width}
-                height={baseInfo.height}
-                data-testid="editor-protect-canvas"
-                className="pointer-events-none absolute inset-0 h-full w-full opacity-50"
-              />
-            </div>
-            {segmenting && (
-              <p className="absolute bottom-2 left-2 rounded bg-surface px-2 py-1 text-xs text-text-dim">
-                {t("editor.segmenting")}
-              </p>
-            )}
-          </div>
-          <p className="text-center text-xs text-text-faint">{t("editor.maskHint")}</p>
-          <p className="text-center text-xs text-text-faint">{t("editor.protect.hint")}</p>
-          <p className="text-center text-xs text-text-faint">{t("editor.zoomHint")}</p>
-          {segmentError && <p className="text-center text-xs text-danger">{segmentError}</p>}
-
-          <div
-            className="flex gap-1 self-center rounded border border-border bg-surface-2 p-1"
-            role="radiogroup"
-            aria-label={t("editor.mode.label")}
-          >
-            {(["erase", "replace"] as const).map((value) => (
-              <button
-                key={value}
-                type="button"
-                role="radio"
-                aria-checked={mode === value}
-                onClick={() => setMode(value)}
-                className={`rounded px-4 py-1.5 text-sm transition-colors ${
-                  mode === value ? "bg-accent font-medium text-surface" : "text-text-dim hover:text-text"
-                }`}
-              >
-                {t(`editor.mode.${value}`)}
-              </button>
-            ))}
-          </div>
-
-          {mode === "replace" && (
-            <label className="flex flex-col gap-1 text-sm text-text">
-              {t("editor.prompt.label")}
-              <textarea
-                value={prompt}
-                onChange={(event) => setPrompt(event.target.value)}
-                placeholder={t("editor.prompt.placeholder")}
-                rows={2}
-                className="rounded border border-border bg-surface-2 px-2 py-1.5 text-sm text-text"
-              />
-            </label>
-          )}
-
-          <div className="grid grid-cols-2 gap-3 max-[700px]:grid-cols-1">
-            <InpaintModelSelect
-              models={models}
-              value={modelId}
-              onChange={setModelId}
-              label={t("editor.model.label")}
-              mode={mode}
-              hint={autoErase ? t("editor.erase.autoHint") : undefined}
-            />
-            <DevicePicker
-              value={device}
-              onChange={(selected: DeviceInfoResponse) => setDevice(selected.id)}
-              requiresGpu={false}
-              allowAuto={false}
-            />
-          </div>
-
-          {!isEraseOnlyModel && (
-          <AccordionSection
-            title={t("editor.advanced.title")}
-            summary={t("editor.advanced.summary", { steps: String(steps), guidance: String(guidance) })}
-            tooltip={t("editor.advanced.tooltip")}
-          >
-            <div className="flex flex-col gap-3">
-              {mode === "erase" && (
-                <label className="flex flex-col gap-1 text-sm text-text">
-                  {t("editor.advanced.fillPrompt")}
-                  <textarea
-                    value={erasePromptText}
-                    onChange={(event) => setErasePromptText(event.target.value)}
-                    rows={2}
-                    className="rounded border border-border bg-surface-2 px-2 py-1.5 text-sm text-text"
-                  />
-                </label>
-              )}
-              <label className="flex flex-col gap-1 text-sm text-text">
-                {t("editor.advanced.negativePrompt")}
-                <textarea
-                  value={mode === "erase" ? eraseNegative : replaceNegative}
-                  onChange={(event) =>
-                    mode === "erase"
-                      ? setEraseNegative(event.target.value)
-                      : setReplaceNegative(event.target.value)
-                  }
-                  rows={2}
-                  className="rounded border border-border bg-surface-2 px-2 py-1.5 text-sm text-text"
-                />
-              </label>
-              <div className="grid grid-cols-3 gap-3 max-[700px]:grid-cols-1">
-                <label className="flex flex-col gap-1 text-sm text-text">
-                  {t("editor.advanced.steps")}
-                  <input
-                    type="number"
-                    min={1}
-                    max={100}
-                    value={steps}
-                    onChange={(event) =>
-                      setSteps(Math.min(100, Math.max(1, Number(event.target.value) || 1)))
-                    }
-                    className="rounded border border-border bg-surface-2 px-2 py-1.5 text-sm text-text"
-                  />
-                </label>
-                <label className="flex flex-col gap-1 text-sm text-text">
-                  {t("editor.advanced.guidance")}
-                  <input
-                    type="number"
-                    min={0}
-                    max={30}
-                    step={0.5}
-                    value={guidance}
-                    onChange={(event) =>
-                      setGuidance(Math.min(30, Math.max(0, Number(event.target.value) || 0)))
-                    }
-                    className="rounded border border-border bg-surface-2 px-2 py-1.5 text-sm text-text"
-                  />
-                </label>
-                <label className="flex flex-col gap-1 text-sm text-text">
-                  {t("editor.advanced.seed")}
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    value={seedText}
-                    onChange={(event) => setSeedText(event.target.value.replace(/[^0-9]/g, ""))}
-                    placeholder={t("editor.advanced.seedPlaceholder")}
-                    className="rounded border border-border bg-surface-2 px-2 py-1.5 text-sm text-text"
-                  />
-                </label>
-              </div>
-              <label className="flex flex-col gap-1 text-sm text-text">
-                <span>
-                  {t("editor.advanced.strength")}{" "}
-                  <span className="font-mono-tabular text-text-dim">{strength.toFixed(2)}</span>
-                </span>
-                <input
-                  type="range"
-                  min={0.05}
-                  max={1}
-                  step={0.05}
-                  value={strength}
-                  onChange={(event) => setStrength(Number(event.target.value))}
-                />
-                <span className="text-xs text-text-faint">{t("editor.advanced.strengthHint")}</span>
-              </label>
-            </div>
-          </AccordionSection>
-          )}
-          {isEraseOnlyModel && (
-            <p className="text-xs text-text-faint">{t("editor.eraser.hint")}</p>
-          )}
-
-          <InsertObjectPanel targetInfo={baseInfo} />
-
-          {uploadError && <p className="text-sm text-danger">{uploadError}</p>}
-
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              disabled={!canSubmit}
-              onClick={() => void handleGenerate()}
-              className="rounded bg-accent px-5 py-2 text-sm font-medium text-surface disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              {mode === "erase" ? t("editor.submit.erase") : t("editor.submit.replace")}
-            </button>
-            <label
-              htmlFor="editor-base-image-change"
-              className="cursor-pointer text-sm text-text-dim underline hover:text-text"
-            >
-              {t("editor.changeImage")}
-            </label>
-            <input
-              id="editor-base-image-change"
-              type="file"
-              accept="image/*"
-              className="sr-only"
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (file) {
-                  void handleBaseSelected(file);
-                }
-                event.target.value = "";
-              }}
-            />
-          </div>
-
-          <JobCard
-            phase={phase}
-            job={job}
-            fileName={baseInfo.originalFilename}
-            errorMessage={errorMessage}
-            onCancel={cancel}
+            canClear={maskHasContent(history)}
+            onClearProtection={() =>
+              setHistory((previous) => [...previous, { kind: "clearProtection" }])
+            }
+            canClearProtection={hasProtection(history)}
+            onNewImage={handleCloseImage}
+            busy={busy}
           />
-          {job?.status === "completed" && job.downloadUrl && (
-            <button
-              type="button"
-              onClick={() => void handleUseResultAsBase()}
-              className="self-start rounded border border-border px-4 py-2 text-sm text-text hover:bg-surface-2"
+
+          <main className="flex min-w-0 flex-col items-center gap-3 overflow-auto">
+            <div
+              ref={stageRef}
+              data-testid="editor-stage"
+              className="relative w-fit max-w-full touch-none self-center overflow-hidden rounded border border-border"
             >
-              {t("editor.useAsBase")}
-            </button>
-          )}
+              {/* El zoom es un transform CSS sobre imagen+canvas juntos: el
+                  rectángulo que devuelve el canvas ya viene transformado, así que
+                  el mapeo click->píxel y el radio del pincel siguen valiendo. */}
+              <div style={{ transform: transformStyle(viewport), transformOrigin: "0 0" }}>
+                {baseUrl && <img src={baseUrl} alt={baseInfo.originalFilename} className="block max-w-full" />}
+                <canvas
+                  ref={canvasRef}
+                  width={baseInfo.width}
+                  height={baseInfo.height}
+                  data-testid="editor-mask-canvas"
+                  className={`absolute inset-0 h-full w-full opacity-60 ${
+                    tool === "pan"
+                      ? "cursor-grab active:cursor-grabbing"
+                      : tool === "tap" || tool === "protect"
+                        ? "cursor-pointer"
+                        : "cursor-crosshair"
+                  } ${baseUrl ? "" : "relative bg-surface-2"}`}
+                  onPointerDown={handlePointerDown}
+                  onPointerMove={handlePointerMove}
+                  onPointerUp={handlePointerUp}
+                  onPointerLeave={handlePointerUp}
+                  onPointerCancel={handlePointerUp}
+                  onClick={(event) => void handleCanvasClick(event)}
+                />
+                <canvas
+                  ref={protectionOverlayRef}
+                  width={baseInfo.width}
+                  height={baseInfo.height}
+                  data-testid="editor-protect-canvas"
+                  className="pointer-events-none absolute inset-0 h-full w-full opacity-50"
+                />
+              </div>
+              {segmenting && (
+                <p className="absolute bottom-2 left-2 rounded bg-surface px-2 py-1 text-xs text-text-dim">
+                  {t("editor.segmenting")}
+                </p>
+              )}
+            </div>
+            <p className="text-center text-xs text-text-faint">{t("editor.maskHint")}</p>
+            <p className="text-center text-xs text-text-faint">{t("editor.protect.hint")}</p>
+            <p className="text-center text-xs text-text-faint">{t("editor.zoomHint")}</p>
+            {segmentError && <p className="text-center text-xs text-danger">{segmentError}</p>}
+          </main>
+
+          <EditorSidePanel view={panelView}>
+            {uploadError && <p className="mb-3 text-sm text-danger">{uploadError}</p>}
+            {panelView === "review" && (
+              <div className="mb-3">
+                <JobCard
+                  phase={phase}
+                  job={job}
+                  fileName={baseInfo.originalFilename}
+                  errorMessage={errorMessage}
+                  onCancel={cancel}
+                />
+                {job?.status === "completed" && job.downloadUrl && (
+                  <button
+                    type="button"
+                    onClick={() => void handleUseResultAsBase()}
+                    className="mt-3 min-h-9 rounded border border-border px-4 py-2 text-sm text-text hover:bg-surface-2"
+                  >
+                    {t("editor.useAsBase")}
+                  </button>
+                )}
+              </div>
+            )}
+            <>
+                <div
+                  className="flex gap-1 rounded border border-border bg-bg p-1"
+                  role="radiogroup"
+                  aria-label={t("editor.mode.label")}
+                >
+                  {(["erase", "replace"] as const).map((value) => (
+                    <button
+                      key={value}
+                      type="button"
+                      role="radio"
+                      aria-checked={mode === value}
+                      onClick={() => setMode(value)}
+                      className={`min-h-9 flex-1 rounded px-3 py-1.5 text-sm transition-colors ${
+                        mode === value ? "bg-surface-2 font-medium text-text" : "text-text-dim hover:text-text"
+                      }`}
+                    >
+                      {t(`editor.mode.${value}`)}
+                    </button>
+                  ))}
+                </div>
+
+                {mode === "replace" && (
+                  <label className="mt-3 flex flex-col gap-1 text-sm text-text">
+                    {t("editor.prompt.label")}
+                    <textarea
+                      value={prompt}
+                      onChange={(event) => setPrompt(event.target.value)}
+                      placeholder={t("editor.prompt.placeholder")}
+                      rows={2}
+                      className="rounded border border-border bg-surface-2 px-2 py-1.5 text-sm text-text"
+                    />
+                  </label>
+                )}
+
+                <div className="mt-3 flex flex-col gap-3">
+                  <InpaintModelSelect
+                    models={models}
+                    value={modelId}
+                    onChange={setModelId}
+                    label={t("editor.model.label")}
+                    mode={mode}
+                    hint={autoErase ? t("editor.erase.autoHint") : undefined}
+                  />
+                  <DevicePicker
+                    value={device}
+                    onChange={(selected: DeviceInfoResponse) => setDevice(selected.id)}
+                    requiresGpu={false}
+                    allowAuto={false}
+                  />
+                </div>
+
+                {!isEraseOnlyModel && (
+                  <AccordionSection
+                    title={t("editor.advanced.title")}
+                    summary={t("editor.advanced.summary", { steps: String(steps), guidance: String(guidance) })}
+                    tooltip={t("editor.advanced.tooltip")}
+                  >
+                    <div className="flex flex-col gap-3">
+                      {mode === "erase" && (
+                        <label className="flex flex-col gap-1 text-sm text-text">
+                          {t("editor.advanced.fillPrompt")}
+                          <textarea
+                            value={erasePromptText}
+                            onChange={(event) => setErasePromptText(event.target.value)}
+                            rows={2}
+                            className="rounded border border-border bg-surface-2 px-2 py-1.5 text-sm text-text"
+                          />
+                        </label>
+                      )}
+                      <label className="flex flex-col gap-1 text-sm text-text">
+                        {t("editor.advanced.negativePrompt")}
+                        <textarea
+                          value={mode === "erase" ? eraseNegative : replaceNegative}
+                          onChange={(event) =>
+                            mode === "erase"
+                              ? setEraseNegative(event.target.value)
+                              : setReplaceNegative(event.target.value)
+                          }
+                          rows={2}
+                          className="rounded border border-border bg-surface-2 px-2 py-1.5 text-sm text-text"
+                        />
+                      </label>
+                      <div className="grid grid-cols-3 gap-3 max-[700px]:grid-cols-1">
+                        <label className="flex flex-col gap-1 text-sm text-text">
+                          {t("editor.advanced.steps")}
+                          <input
+                            type="number"
+                            min={1}
+                            max={100}
+                            value={steps}
+                            onChange={(event) =>
+                              setSteps(Math.min(100, Math.max(1, Number(event.target.value) || 1)))
+                            }
+                            className="rounded border border-border bg-surface-2 px-2 py-1.5 text-sm text-text"
+                          />
+                        </label>
+                        <label className="flex flex-col gap-1 text-sm text-text">
+                          {t("editor.advanced.guidance")}
+                          <input
+                            type="number"
+                            min={0}
+                            max={30}
+                            step={0.5}
+                            value={guidance}
+                            onChange={(event) =>
+                              setGuidance(Math.min(30, Math.max(0, Number(event.target.value) || 0)))
+                            }
+                            className="rounded border border-border bg-surface-2 px-2 py-1.5 text-sm text-text"
+                          />
+                        </label>
+                        <label className="flex flex-col gap-1 text-sm text-text">
+                          {t("editor.advanced.seed")}
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            value={seedText}
+                            onChange={(event) => setSeedText(event.target.value.replace(/[^0-9]/g, ""))}
+                            placeholder={t("editor.advanced.seedPlaceholder")}
+                            className="rounded border border-border bg-surface-2 px-2 py-1.5 text-sm text-text"
+                          />
+                        </label>
+                      </div>
+                      <label className="flex flex-col gap-1 text-sm text-text">
+                        <span>
+                          {t("editor.advanced.strength")}{" "}
+                          <span className="font-mono-tabular text-text-dim">{strength.toFixed(2)}</span>
+                        </span>
+                        <input
+                          type="range"
+                          min={0.05}
+                          max={1}
+                          step={0.05}
+                          value={strength}
+                          onChange={(event) => setStrength(Number(event.target.value))}
+                        />
+                        <span className="text-xs text-text-faint">{t("editor.advanced.strengthHint")}</span>
+                      </label>
+                    </div>
+                  </AccordionSection>
+                )}
+                {isEraseOnlyModel && (
+                  <p className="mt-3 text-xs text-text-faint">{t("editor.eraser.hint")}</p>
+                )}
+
+                <div className="mt-3">
+                  <InsertObjectPanel targetInfo={baseInfo} />
+                </div>
+
+                <button
+                  type="button"
+                  disabled={!canSubmit}
+                  onClick={() => void handleGenerate()}
+                  className="mt-3 min-h-10 w-full rounded bg-accent px-5 py-2 text-sm font-medium text-surface disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {mode === "erase" ? t("editor.submit.erase") : t("editor.submit.replace")}
+                </button>
+                <label
+                  htmlFor="editor-base-image-change"
+                  className="mt-3 block min-h-9 cursor-pointer py-1.5 text-sm text-text-dim underline hover:text-text"
+                >
+                  {t("editor.changeImage")}
+                </label>
+                <input
+                  id="editor-base-image-change"
+                  type="file"
+                  accept="image/*"
+                  className="sr-only"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (file) {
+                      void handleBaseSelected(file);
+                    }
+                    event.target.value = "";
+                  }}
+                />
+            </>
+            {panelView === "action" && (
+                <JobCard
+                  phase={phase}
+                  job={job}
+                  fileName={baseInfo.originalFilename}
+                  errorMessage={errorMessage}
+                  onCancel={cancel}
+                />
+            )}
+          </EditorSidePanel>
         </>
       )}
     </div>
