@@ -190,6 +190,14 @@ Fonts bundled under `app/assets/fonts/` get one entry each here, with their
 - Source: https://github.com/advimman/lama
 - Weights: https://github.com/Sanster/models/releases/download/add_big_lama/big-lama.pt
 
+### YOLOX person detector
+
+- Component: `vendor/yolox/yolox_s.onnx` (weights: YOLOX-S)
+- License: Apache-2.0
+- Copyright: Copyright (c) 2021 Megvii, Inc.
+- Source: https://github.com/Megvii-BaseDetection/YOLOX
+- Weights: https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/yolox_s.onnx
+
 ## Photo restoration models
 
 The photo restoration models are downloaded as `restore-*` packs; none of them is

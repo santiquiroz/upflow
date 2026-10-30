@@ -101,6 +101,10 @@ def test_shap_e_img2img_is_a_catalog_pack_with_its_script():
     assert PACK_SCRIPTS["shap-e-img2img"] == "download-shap-e-img2img.ps1"
 
 
+def test_person_detector_has_a_download_script():
+    assert PACK_SCRIPTS["person-detector"] == "download-yolox.ps1"
+
+
 def test_an_unknown_pack_is_rejected():
     with pytest.raises(UnknownPackError):
         script_for("no-existe")
