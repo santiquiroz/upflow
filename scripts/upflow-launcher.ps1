@@ -359,6 +359,11 @@ $script:OptionalPacks = @(
         Size    = '~28 MB'
     },
     @{
+        Key     = 'lama'
+        Feature = 'Borrar objetos y personas con buena calidad, sin la IA generativa'
+        Size    = '~206 MB'
+    },
+    @{
         Key     = 'sdcpp'
         Feature = 'Generar imagenes con el motor Vulkan: instala modelos en minutos en vez de 40'
         Size    = '~2 GB'
