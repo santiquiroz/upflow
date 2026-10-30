@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from app.config import Settings
+from app.erase_engines import EraseEngine
 from app.models import GenerationJob, UpscaleJob
 from app.services.auth.identity import AuthenticatedUser
 from app.services.auth.quotas import QuotaService
@@ -136,7 +137,7 @@ class GenerationJobManager(QueuedJobManager[GenerationJob]):
         mask_image_path: Path | None = None,
         protect_mask_path: Path | None = None,
         erase_strategy: Literal["auto"] | None = None,
-        erase_engine: Literal["lama", "osor", "lama+osor", "sdxl"] | None = None,
+        erase_engine: EraseEngine | None = None,
         mask_dilate_px: int | None = None,
         mask_feather_px: int | None = None,
         auto_upscale: bool = False,

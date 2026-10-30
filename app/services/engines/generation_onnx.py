@@ -9,9 +9,10 @@ from collections import OrderedDict
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any, Callable, Literal, NoReturn
 
 from app.config import Settings
+from app.erase_engines import EraseEngine
 from app.services.dml_device import try_parse_dml_device_id
 from app.services.generation_pipeline_modes import load_img2img_class
 from app.services.engines.gmfss_engine import _tune_session_options_for_device
@@ -68,6 +69,16 @@ _KNOWN_ORT_CLASS_NAMES = frozenset(PIPELINE_CLASS_NAMES.values())
 # Duplicado deliberado de generation_installer.MODEL_INDEX_FILENAME: ese módulo
 # ya importa de este; importarlo acá sería un import circular.
 _MODEL_INDEX_FILENAME = "model_index.json"
+
+
+def _raise_missing_lama_pack() -> NoReturn:
+    from app.services.missing_pack import missing_pack_message
+
+    raise ValueError(missing_pack_message("lama"))
+
+
+def _missing_lama_fill(*_args: Any) -> NoReturn:
+    _raise_missing_lama_pack()
 
 
 class GenerationCancelled(Exception):
@@ -377,7 +388,7 @@ class GenerationRequest:
     # diffusers): no toca el grafo ONNX y vale para cualquier EP.
     scheduler: str | None = None
     erase_strategy: Literal["auto"] | None = None
-    erase_engine: Literal["lama", "osor", "lama+osor", "sdxl"] | None = None
+    erase_engine: EraseEngine | None = None
     protect_mask_path: Path | None = None
     erase_auto: list[dict] | None = None
 
@@ -643,9 +654,7 @@ class GenerationEngine:
             logger.warning("erase auto: LaMa no disponible, sigo con el inpainting actual")
             return run_masked_edit(base_image, mask_image, run_model, settings)
         if request.erase_engine in {"lama", "lama+osor"} and not lama_available:
-            from app.services.missing_pack import missing_pack_message
-
-            raise ValueError(missing_pack_message("lama"))
+            _raise_missing_lama_pack()
         protect = None
         if request.protect_mask_path is not None:
             protect = np.asarray(_load_mask_image(request.protect_mask_path, *base_image.size)) > 127
@@ -662,10 +671,7 @@ class GenerationEngine:
         if self.lama_eraser is not None:
             lama_fill = self.lama_eraser.fill_group
         else:
-            def lama_fill(canvas, group_mask, core):
-                from app.services.missing_pack import missing_pack_message
-
-                raise ValueError(missing_pack_message("lama"))
+            lama_fill = _missing_lama_fill
 
         edited, request.erase_auto = auto_erase(
             base_image,

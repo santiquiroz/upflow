@@ -5,6 +5,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.erase_engines import EraseEngine
 from app.models import JobStatus
 from app.schemas_cctv import CctvSummary
 from app.services.capability_probe import LeverStatus
@@ -1342,7 +1343,7 @@ class CreateGenerationJobRequest(BaseModel):
     mask_image_token: str | None = Field(default=None, alias="maskImageToken")
     protect_mask_token: str | None = Field(default=None, alias="protectMaskToken")
     erase_strategy: Literal["auto"] | None = Field(default=None, alias="eraseStrategy")
-    erase_engine: Literal["lama", "osor", "lama+osor", "sdxl"] | None = Field(
+    erase_engine: EraseEngine | None = Field(
         default=None, alias="eraseEngine"
     )
     # None = default por modo: 1.0 con máscara (inpainting), 0.6 sin (img2img).

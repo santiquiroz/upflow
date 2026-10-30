@@ -340,6 +340,33 @@ def test_forced_engine_never_switches_but_flags_residual() -> None:
     assert choices[0]["residualPerson"] is True
 
 
+def test_forced_engine_composites_protected_subject_before_detection() -> None:
+    image, mask = scene((100, 100, 220, 220))
+    protect = np.zeros(mask.shape, dtype=bool)
+    protect[140:180, 140:180] = True
+    detected_images = []
+
+    def detect(rgb, _mask):
+        detected_images.append(rgb.copy())
+        return []
+
+    lama = Mock(side_effect=lambda canvas, group, core: np.full_like(canvas, 90))
+    result, _ = auto_erase(
+        image, mask, protect, lama, Mock(), find_faces=detect,
+        find_people=detect, engine="lama",
+    )
+
+    original = np.asarray(image)
+    output = np.asarray(result)
+    cleaned = clean_protect_mask(protect)
+    core = matte_core(cleaned, matte_radius(mask.shape))
+    np.testing.assert_array_equal(output[core], original[core])
+    assert len(detected_images) == 2
+    for detected in detected_images:
+        np.testing.assert_array_equal(detected, output)
+        np.testing.assert_array_equal(detected[core], original[core])
+
+
 def test_forced_osor_applies_to_small_groups() -> None:
     image, mask = scene()
     osor = Mock(side_effect=lambda canvas, group, protect: fill_with(canvas, group, 120))

@@ -141,7 +141,9 @@ def subject_matte(
         original_rgb[window], core[window], outer[window], band[window], radius
     )
     alpha[window][valid] = values
-    return np.clip(cv2.GaussianBlur(alpha, (0, 0), sigmaX=1.0), 0, 1)
+    matte = np.clip(cv2.GaussianBlur(alpha, (0, 0), sigmaX=1.0), 0, 1)
+    matte[core] = 1.0
+    return matte
 
 
 def clean_protect_mask(

@@ -5,6 +5,7 @@ from collections.abc import Callable
 import numpy as np
 from PIL import Image
 
+from app.erase_engines import ERASE_ENGINES, EraseEngine
 from app.services.fill_faces import faces_inside
 from app.services.fill_people import PeopleFinder
 from app.services.inpaint_mask import (
@@ -91,6 +92,95 @@ def _choose_large_fill(
     return chosen, {"engine": engine, "scores": scores}
 
 
+def _required_osor_fill(osor_fill: LamaFill | None) -> LamaFill:
+    if osor_fill is None:
+        raise ValueError("El motor de borrado OSOR no está disponible.")
+    return osor_fill
+
+
+def _fill_forced(
+    engine: EraseEngine,
+    current: Image.Image,
+    group_mask: np.ndarray,
+    core: np.ndarray,
+    lama_fill: LamaFill,
+    osor_fill: LamaFill | None,
+    sdxl_edit: SdxlEdit,
+) -> Image.Image:
+    canvas = np.array(current, copy=True)
+    fillers: dict[EraseEngine, Callable[[], Image.Image]] = {
+        "lama": lambda: Image.fromarray(lama_fill(canvas, group_mask, core)),
+        "osor": lambda: Image.fromarray(
+            _required_osor_fill(osor_fill)(canvas, group_mask, core)
+        ),
+        "lama+osor": lambda: Image.fromarray(
+            _required_osor_fill(osor_fill)(
+                lama_fill(canvas, group_mask, core), group_mask, core
+            )
+        ),
+        "sdxl": lambda: sdxl_edit(current.copy(), group_mask, 1.0),
+    }
+    return fillers[engine]()
+
+
+def _forced_group(
+    engine: EraseEngine,
+    current: Image.Image,
+    group_mask: np.ndarray,
+    core: np.ndarray,
+    lama_fill: LamaFill,
+    osor_fill: LamaFill | None,
+    sdxl_edit: SdxlEdit,
+    original: np.ndarray,
+    alpha: np.ndarray,
+    find_faces: FaceFinder,
+    find_people: PeopleFinder | None,
+) -> tuple[Image.Image, dict]:
+    filled = _fill_forced(
+        engine, current, group_mask, core, lama_fill, osor_fill, sdxl_edit
+    )
+    current = _composite_subject(filled, original, alpha)
+    rgb = np.asarray(current)
+    residual_person = bool(find_faces(rgb, group_mask))
+    residual_person = residual_person or _has_people(find_people, rgb, group_mask)
+    return current, {
+        "engine": engine,
+        "guard": None,
+        "residualPerson": residual_person,
+    }
+
+
+def _auto_group(
+    current: Image.Image,
+    group_mask: np.ndarray,
+    core: np.ndarray,
+    lama_fill: LamaFill,
+    sdxl_edit: SdxlEdit,
+    small_side: int,
+    hybrid_strength: float,
+    osor_fill: LamaFill | None,
+    find_faces: FaceFinder,
+    find_people: PeopleFinder | None,
+    original: np.ndarray,
+    alpha: np.ndarray,
+) -> tuple[Image.Image, dict]:
+    left, top, right, bottom = mask_bbox((group_mask > 0).astype(np.uint8) * 255)
+    if max(right - left, bottom - top) <= small_side:
+        filled = lama_fill(np.array(current, copy=True), group_mask, core)
+        current, choice = Image.fromarray(filled), {"engine": "lama"}
+    elif osor_fill is not None:
+        filled, choice = _fill_large_with_osor(
+            current, group_mask, core, lama_fill, osor_fill, find_faces, find_people
+        )
+        current = Image.fromarray(filled)
+    else:
+        return _choose_large_fill(
+            current, group_mask, core, lama_fill, sdxl_edit, hybrid_strength,
+            original, alpha,
+        )
+    return _composite_subject(current, original, alpha), choice
+
+
 def auto_erase(
     base_rgb: Image.Image,
     mask: np.ndarray,
@@ -102,9 +192,9 @@ def auto_erase(
     osor_fill: LamaFill | None = None,
     find_faces: FaceFinder = faces_inside,
     find_people: PeopleFinder | None = None,
-    engine: str | None = None,
+    engine: EraseEngine | None = None,
 ) -> tuple[Image.Image, list[dict]]:
-    if engine not in {None, "lama", "osor", "lama+osor", "sdxl"}:
+    if engine is not None and engine not in ERASE_ENGINES:
         raise ValueError(f"Motor de borrado desconocido: {engine}")
     if engine in {"osor", "lama+osor"} and osor_fill is None:
         raise ValueError("El motor de borrado OSOR no está disponible.")
@@ -126,42 +216,17 @@ def auto_erase(
     choices = []
     groups = edit_groups(prepared, current.size, settings)
     for index, (box, group_mask) in enumerate(groups):
-        left, top, right, bottom = mask_bbox((group_mask > 0).astype(np.uint8) * 255)
-        if engine is not None:
-            if engine == "lama":
-                current = Image.fromarray(lama_fill(np.array(current, copy=True), group_mask, core))
-            elif engine == "osor":
-                current = Image.fromarray(
-                    osor_fill(np.array(current, copy=True), group_mask, core)
-                )
-            elif engine == "lama+osor":
-                prefilled = lama_fill(np.array(current, copy=True), group_mask, core)
-                current = Image.fromarray(osor_fill(prefilled, group_mask, core))
-            else:
-                current = sdxl_edit(current.copy(), group_mask, 1.0)
-            current = _composite_subject(current, original, alpha)
-            residual_person = bool(find_faces(np.asarray(current), group_mask))
-            residual_person = residual_person or _has_people(find_people, np.asarray(current), group_mask)
-            choice = {
-                "engine": engine,
-                "guard": None,
-                "residualPerson": residual_person,
-            }
-        elif max(right - left, bottom - top) <= small_side:
-            filled = lama_fill(np.array(current, copy=True), group_mask, core)
-            current, choice = Image.fromarray(filled), {"engine": "lama"}
-        elif osor_fill is not None:
-            filled, choice = _fill_large_with_osor(
-                current, group_mask, core, lama_fill, osor_fill, find_faces, find_people
+        current, choice = (
+            _forced_group(
+                engine, current, group_mask, core, lama_fill, osor_fill,
+                sdxl_edit, original, alpha, find_faces, find_people,
             )
-            current = Image.fromarray(filled)
-        else:
-            current, choice = _choose_large_fill(
-                current, group_mask, core, lama_fill, sdxl_edit, hybrid_strength,
-                original, alpha,
+            if engine
+            else _auto_group(
+                current, group_mask, core, lama_fill, sdxl_edit, small_side,
+                hybrid_strength, osor_fill, find_faces, find_people, original, alpha,
             )
-        if engine is None:
-            current = _composite_subject(current, original, alpha)
+        )
         choice["index"] = index
         choice["box"] = [int(coordinate) for coordinate in box]
         choices.append(choice)
