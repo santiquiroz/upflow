@@ -180,6 +180,8 @@ def test_large_group_uses_osor_without_calling_sdxl() -> None:
     osor.assert_called_once()
     sdxl.assert_not_called()
     assert choices[0]["engine"] == "osor"
+    assert choices[0]["guard"] is None
+    assert choices[0]["residualPerson"] is False
     assert np.asarray(result)[160, 160].tolist() == [120, 120, 120]
 
 
@@ -202,6 +204,7 @@ def test_large_group_face_guard_runs_lama_before_osor_again() -> None:
     result, choices = auto_erase(
         image, mask, None, lama, Mock(), small_side=100, osor_fill=osor,
         find_faces=lambda _rgb, _mask: [(1, 1, 10, 10)],
+        find_people=lambda _rgb, _mask: [],
     )
 
     lama.assert_called_once()
@@ -209,8 +212,65 @@ def test_large_group_face_guard_runs_lama_before_osor_again() -> None:
     np.testing.assert_array_equal(osor_inputs[1], lama_outputs[0])
     assert osor_inputs[1][160, 160].tolist() == [90, 90, 90]
     assert choices[0]["engine"] == "lama+osor"
-    assert choices[0]["face_guard"] is True
+    assert choices[0]["guard"] == "face"
+    assert choices[0]["residualPerson"] is True
     assert np.asarray(result)[160, 160].tolist() == [120, 120, 120]
+
+
+def test_large_group_person_guard_retries_with_lama_and_flags_residual() -> None:
+    image, mask = scene((100, 100, 220, 220))
+    lama = Mock(side_effect=lambda canvas, group, protect: fill_with(canvas, group, 90))
+    osor = Mock(side_effect=lambda canvas, group, protect: fill_with(canvas, group, 120))
+    find_people = Mock(return_value=[(110, 110, 200, 200)])
+
+    _, choices = auto_erase(
+        image, mask, None, lama, Mock(), small_side=100, osor_fill=osor,
+        find_faces=lambda _rgb, _mask: [], find_people=find_people,
+    )
+
+    assert lama.call_count == 1
+    assert osor.call_count == 2
+    assert find_people.call_count == 2
+    assert choices[0]["engine"] == "lama+osor"
+    assert choices[0]["guard"] == "person"
+    assert choices[0]["residualPerson"] is True
+
+
+def test_large_group_without_face_or_person_keeps_osor_without_residual() -> None:
+    image, mask = scene((100, 100, 220, 220))
+    lama = Mock()
+    osor = Mock(side_effect=lambda canvas, group, protect: fill_with(canvas, group, 120))
+
+    _, choices = auto_erase(
+        image, mask, None, lama, Mock(), small_side=100, osor_fill=osor,
+        find_faces=lambda _rgb, _mask: [],
+        find_people=lambda _rgb, _mask: [],
+    )
+
+    lama.assert_not_called()
+    osor.assert_called_once()
+    assert choices[0]["engine"] == "osor"
+    assert choices[0]["guard"] is None
+    assert choices[0]["residualPerson"] is False
+
+
+def test_face_guard_takes_precedence_when_faces_and_people_are_found() -> None:
+    image, mask = scene((100, 100, 220, 220))
+    faces = Mock(return_value=[(110, 110, 20, 20)])
+    people = Mock(return_value=[(110, 110, 100, 100)])
+    osor = Mock(side_effect=lambda canvas, group, protect: fill_with(canvas, group, 120))
+
+    _, choices = auto_erase(
+        image, mask, None, Mock(side_effect=lambda canvas, group, protect: fill_with(
+            canvas, group, 90
+        )), Mock(), small_side=100, osor_fill=osor,
+        find_faces=faces, find_people=people,
+    )
+
+    assert choices[0]["guard"] == "face"
+    assert choices[0]["residualPerson"] is True
+    assert faces.call_count == 2
+    assert people.call_count == 2
 
 
 def test_choices_carry_group_index_and_json_serializable_crop_box() -> None:

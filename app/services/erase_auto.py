@@ -6,6 +6,7 @@ import numpy as np
 from PIL import Image
 
 from app.services.fill_faces import faces_inside
+from app.services.fill_people import PeopleFinder
 from app.services.inpaint_mask import (
     clean_protect_mask,
     grow_per_component,
@@ -21,6 +22,36 @@ from app.services.inpaint_score import fill_score
 LamaFill = Callable[[np.ndarray, np.ndarray, np.ndarray], np.ndarray]
 SdxlEdit = Callable[[Image.Image, np.ndarray, float], Image.Image]
 FaceFinder = Callable[[np.ndarray, np.ndarray], list[tuple[int, int, int, int]]]
+
+
+def _fill_large_with_osor(
+    current: Image.Image,
+    group_mask: np.ndarray,
+    core: np.ndarray,
+    lama_fill: LamaFill,
+    osor_fill: LamaFill,
+    find_faces: FaceFinder,
+    find_people: PeopleFinder | None,
+) -> tuple[np.ndarray, dict]:
+    filled = osor_fill(np.array(current, copy=True), group_mask, core)
+    has_face = bool(find_faces(filled, group_mask))
+    has_person = (
+        bool(find_people(filled, group_mask)) if find_people is not None else False
+    )
+    if not has_face and not has_person:
+        return filled, {"engine": "osor", "guard": None, "residualPerson": False}
+
+    prefilled = lama_fill(np.array(current, copy=True), group_mask, core)
+    retried = osor_fill(prefilled, group_mask, core)
+    residual_face = bool(find_faces(retried, group_mask))
+    residual_person = (
+        bool(find_people(retried, group_mask)) if find_people is not None else False
+    )
+    return retried, {
+        "engine": "lama+osor",
+        "guard": "face" if has_face else "person",
+        "residualPerson": residual_face or residual_person,
+    }
 
 
 def _composite_subject(
@@ -68,6 +99,7 @@ def auto_erase(
     hybrid_strength: float = 0.5,
     osor_fill: LamaFill | None = None,
     find_faces: FaceFinder = faces_inside,
+    find_people: PeopleFinder | None = None,
 ) -> tuple[Image.Image, list[dict]]:
     current = base_rgb.convert("RGB")
     original = np.array(current, copy=True)
@@ -92,15 +124,10 @@ def auto_erase(
             filled = lama_fill(np.array(current, copy=True), group_mask, core)
             current, choice = Image.fromarray(filled), {"engine": "lama"}
         elif osor_fill is not None:
-            filled = osor_fill(np.array(current, copy=True), group_mask, core)
-            if find_faces(filled, group_mask):
-                prefilled = lama_fill(np.array(current, copy=True), group_mask, core)
-                filled = osor_fill(prefilled, group_mask, core)
-                current = Image.fromarray(filled)
-                choice = {"engine": "lama+osor", "face_guard": True}
-            else:
-                current = Image.fromarray(filled)
-                choice = {"engine": "osor"}
+            filled, choice = _fill_large_with_osor(
+                current, group_mask, core, lama_fill, osor_fill, find_faces, find_people
+            )
+            current = Image.fromarray(filled)
         else:
             current, choice = _choose_large_fill(
                 current, group_mask, core, lama_fill, sdxl_edit, hybrid_strength,
