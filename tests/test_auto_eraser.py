@@ -12,6 +12,7 @@ from app.services.engines.auto_eraser import (
     ERASER_AUTO_MODEL_ID,
     AutoEraser,
 )
+from app.services.fill_people import make_people_finder
 
 
 def _image_and_mask(size: int = 1000) -> tuple[Image.Image, Image.Image]:
@@ -79,13 +80,41 @@ async def test_auto_eraser_without_osor_or_sdxl_falls_back_to_lama():
 
 
 @pytest.mark.asyncio
-async def test_eraser_auto_job_records_zones_and_reserves_cpu(tmp_path: Path):
+@pytest.mark.parametrize(("engine", "expected"), [(None, "osor"), ("lama", "lama")])
+async def test_auto_eraser_continues_when_person_detector_pack_is_missing(
+    engine: str | None, expected: str
+):
+    base, mask = _image_and_mask()
+    detector = Mock(available=Mock(return_value=False))
+    lama = Mock()
+    lama.fill_group.side_effect = lambda canvas, *_args: canvas
+    osor = Mock()
+    osor.available.return_value = True
+    osor.fill_group.side_effect = lambda canvas, *_args: canvas
+    eraser = AutoEraser(
+        settings=Mock(),
+        lama_eraser=lama,
+        osor_eraser=osor,
+        people_finder_factory=lambda _device: make_people_finder(detector),
+        sdxl_edit_factory=lambda _device: None,
+    )
+
+    _, choices = await eraser.erase(base, mask, "cpu", engine=engine)
+
+    assert choices[0]["engine"] == expected
+
+
+@pytest.mark.asyncio
+async def test_eraser_auto_job_records_zones_and_reserves_cpu(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     from app.config import Settings
     from app.services.device_semaphores import DeviceSemaphores
     from app.services.generation_job_manager import GenerationJobManager
     from app.services.model_registry import ModelRegistry
     from app.services.storage import StorageService
 
+    monkeypatch.setattr(Settings, "lama_available", lambda _settings: True)
     settings = Settings(RUNTIME_DIR=str(tmp_path), _env_file=None)
     StorageService(settings).ensure_directories()
     manager = GenerationJobManager(
@@ -132,11 +161,21 @@ async def test_eraser_auto_job_records_zones_and_reserves_cpu(tmp_path: Path):
 
 
 @pytest.mark.parametrize(
-    ("osor_available", "erase_engine", "expected"),
-    [(False, None, "dml:0"), (True, None, "cpu"), (True, "sdxl", "dml:0")],
+    ("osor_available", "erase_engine", "sdxl_available", "expected"),
+    [
+        (False, None, True, "dml:0"),
+        (False, None, False, "cpu"),
+        (True, None, True, "cpu"),
+        (True, "sdxl", True, "dml:0"),
+        (True, "sdxl", False, "cpu"),
+    ],
 )
 def test_auto_eraser_reserves_device_based_on_osor_and_engine(
-    tmp_path: Path, osor_available: bool, erase_engine: str | None, expected: str
+    tmp_path: Path,
+    osor_available: bool,
+    erase_engine: str | None,
+    sdxl_available: bool,
+    expected: str,
 ):
     from app.config import Settings
     from app.models import GenerationJob
@@ -158,6 +197,7 @@ def test_auto_eraser_reserves_device_based_on_osor_and_engine(
         upscale_engine=None,
         auto_eraser=auto_eraser,
     )
+    manager._has_sdxl_inpaint_model = Mock(return_value=sdxl_available)
     job = GenerationJob(
         prompt="borrar",
         model_id=ERASER_AUTO_MODEL_ID,
@@ -185,7 +225,10 @@ async def test_auto_eraser_growth_expands_mask_before_fill():
 
 def test_sdxl_inpaint_edit_factory_loads_pipeline_lazily(tmp_path, monkeypatch):
     from app.config import Settings
-    from app.services.engines.generation_onnx import GenerationEngine
+    from app.services.engines.generation_onnx import (
+        ERASE_AUTO_NEGATIVE_PROMPT,
+        GenerationEngine,
+    )
     from app.services.model_registry import ModelEntry, ModelKind, ModelRegistry
     from app.services.storage import StorageService
 
@@ -226,3 +269,53 @@ def test_sdxl_inpaint_edit_factory_loads_pipeline_lazily(tmp_path, monkeypatch):
     engine._get_pipeline.assert_not_called()
     edit(Image.new("RGB", (64, 64)), np.full((64, 64), 255, dtype=np.uint8), 0.5)
     engine._get_pipeline.assert_called_once()
+    request = engine._masked_edit_model.call_args.args[1]
+    assert request.negative_prompt == ERASE_AUTO_NEGATIVE_PROMPT
+
+
+@pytest.mark.parametrize(
+    ("declared_class", "model_name", "expected"),
+    [
+        ("StableDiffusionXLPipeline", "SDXL base", None),
+        ("StableDiffusionXLPipeline", "SDXL Turbo", None),
+        ("ORTStableDiffusionXLPipeline", "ORT SDXL base", None),
+        ("StableDiffusionXLImg2ImgPipeline", "SDXL Img2Img", None),
+        ("StableDiffusionXLInpaintPipeline", "SDXL inpaint", "installed"),
+    ],
+)
+def test_sdxl_selector_requires_a_dedicated_inpaint_checkpoint(
+    tmp_path: Path, declared_class: str, model_name: str, expected: str | None
+):
+    from app.config import Settings
+    from app.services.engines.generation_onnx import (
+        select_installed_sdxl_inpaint_model,
+    )
+    from app.services.model_registry import (
+        ModelEntry,
+        ModelKind,
+        ModelRegistry,
+        ModelStatus,
+    )
+
+    settings = Settings(RUNTIME_DIR=str(tmp_path), _env_file=None)
+    registry = ModelRegistry(settings)
+    model_dir = settings.models_path / "generation" / "test-model"
+    model_dir.mkdir(parents=True)
+    (model_dir / "model_index.json").write_text(
+        json.dumps({"_class_name": declared_class}), encoding="utf-8"
+    )
+    registry.register(
+        ModelEntry(
+            id="installed",
+            name=model_name,
+            kind=ModelKind.diffusion_onnx,
+            source="hf:test/sdxl",
+            size_bytes=1,
+            file_path="generation/test-model",
+            status=ModelStatus.installed,
+        )
+    )
+
+    selected = select_installed_sdxl_inpaint_model(registry, settings.models_path)
+
+    assert (selected[0] if selected else None) == expected

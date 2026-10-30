@@ -143,9 +143,15 @@ class PersonDetector:
 
         session = self._get_session(device)
         tensor, ratio = letterbox(rgb)
-        raw = session.run(None, {"images": tensor})[0][0]
+        raw = self._run_locked(device, session, tensor)
         decoded = decode_yolox(raw)
         return select_people(decoded, ratio, (rgb.shape[1], rgb.shape[0]))
+
+    def _run_locked(self, device: str, session: Any, tensor: np.ndarray) -> Any:
+        with self._lock:
+            session_lock = self._session_locks.setdefault(device, threading.Lock())
+        with session_lock:
+            return session.run(None, {"images": tensor})[0][0]
 
     def _get_session(self, device: str) -> Any:
         with self._lock:

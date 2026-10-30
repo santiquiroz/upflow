@@ -14,7 +14,10 @@ from typing import Any, Callable, Literal, NoReturn, TYPE_CHECKING
 from app.config import Settings
 from app.erase_engines import EraseEngine
 from app.services.dml_device import try_parse_dml_device_id
-from app.services.generation_pipeline_modes import load_img2img_class
+from app.services.generation_pipeline_modes import (
+    is_dedicated_inpaint_class,
+    load_img2img_class,
+)
 from app.services.engines.gmfss_engine import _tune_session_options_for_device
 from app.services.engines.onnx_common import build_providers
 from app.services.gpu_session_coordinator import GpuSessionCoordinator
@@ -123,7 +126,6 @@ def select_installed_sdxl_inpaint_model(
 ) -> tuple[str, Path] | None:
     if registry is None:
         return None
-    from app.services.generation_pipeline_modes import supports_inpaint
     from app.services.model_registry import ModelKind, ModelStatus
 
     root = models_path.resolve()
@@ -140,7 +142,7 @@ def select_installed_sdxl_inpaint_model(
             declared = _read_declared_class_name(pipeline_dir)
         except Exception:  # noqa: BLE001 -- un modelo mal formado no invalida otros instalados
             continue
-        if "XL" in declared and supports_inpaint(declared):
+        if "XL" in declared and is_dedicated_inpaint_class(declared):
             return entry.id, pipeline_dir
     return None
 
@@ -499,7 +501,7 @@ class GenerationEngine:
         pipeline = self._get_pipeline(model_id, pipeline_dir, device, "inpaint")
         request = GenerationRequest(
             prompt=SDXL_ERASE_PROMPT,
-            negative_prompt=None,
+            negative_prompt=ERASE_AUTO_NEGATIVE_PROMPT,
             steps=SDXL_ERASE_STEPS,
             guidance=SDXL_ERASE_GUIDANCE,
             width=SDXL_ERASE_SIZE,

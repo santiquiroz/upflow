@@ -6,6 +6,17 @@ from app.services.fill_people import make_people_finder, people_inside
 from app.services.person_detector import PersonBox
 
 
+def test_make_people_finder_returns_none_when_detector_is_unavailable():
+    class Detector:
+        def available(self):
+            return False
+
+        def detect(self, *_args, **_kwargs):
+            raise AssertionError("no debe llamar al detector no disponible")
+
+    assert make_people_finder(Detector()) is None
+
+
 def test_people_inside_keeps_boxes_mostly_in_mask():
     mask = np.zeros((100, 100), bool)
     mask[10:60, 10:60] = True
@@ -22,6 +33,9 @@ def test_people_inside_keeps_boxes_mostly_in_mask():
 
 def test_make_people_finder_detects_in_expanded_mask_crop_and_restores_coordinates():
     class Detector:
+        def available(self):
+            return True
+
         def detect(self, rgb, device):
             assert rgb.shape == (30, 30, 3)
             assert device == "dml:0"
@@ -38,6 +52,9 @@ def test_make_people_finder_detects_in_expanded_mask_crop_and_restores_coordinat
 
 def test_make_people_finder_clips_crop_at_image_edge_and_restores_coordinates():
     class Detector:
+        def available(self):
+            return True
+
         def detect(self, rgb, device):
             assert rgb.shape == (25, 30, 3)
             return [PersonBox((5, 0, 25, 20), 0.8)]
@@ -53,6 +70,9 @@ def test_make_people_finder_clips_crop_at_image_edge_and_restores_coordinates():
 
 def test_make_people_finder_does_not_detect_for_empty_mask():
     class Detector:
+        def available(self):
+            return True
+
         def detect(self, _rgb, _device):
             raise AssertionError("no debe detectar una máscara vacía")
 

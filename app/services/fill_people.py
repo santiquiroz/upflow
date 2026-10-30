@@ -65,7 +65,10 @@ def make_people_finder(
     device: str = "cpu",
     min_score: float = PERSON_MIN_SCORE,
     inside_ratio: float = PERSON_INSIDE_RATIO,
-) -> PeopleFinder:
+) -> PeopleFinder | None:
+    if not detector.available():
+        return None
+
     def find_people(rgb: np.ndarray, mask: np.ndarray) -> list[tuple[int, int, int, int]]:
         if not np.any(mask):
             return []

@@ -1030,6 +1030,21 @@ async def _stage_init_image(file_path: str) -> str:
     return payload["initImageToken"]
 
 
+def _erase_body_fields(
+    protect_token: str, erase_engine: str, mask_grow_px: int, mask_feather_px: int
+) -> dict[str, Any]:
+    fields: dict[str, Any] = {}
+    if protect_token:
+        fields["protectMaskToken"] = protect_token
+    if erase_engine:
+        fields["eraseEngine"] = erase_engine
+    if mask_grow_px:
+        fields["maskGrowPx"] = mask_grow_px
+    if mask_feather_px:
+        fields["maskFeatherPx"] = mask_feather_px
+    return fields
+
+
 @mcp.tool(name="upflow_generate_image", annotations={"title": "Generar imagen/video (difusión)", **CREATES_JOB})
 async def upflow_generate_image(
     prompt: str,
@@ -1097,14 +1112,14 @@ async def upflow_generate_image(
             body["init_image_token"] = await _stage_init_image(init_image_path)
         if mask_image_path:
             body["mask_image_token"] = await _stage_init_image(mask_image_path)
-        if protect_mask_path:
-            body["protectMaskToken"] = await _stage_init_image(protect_mask_path)
-        if erase_engine:
-            body["eraseEngine"] = erase_engine
-        if mask_grow_px:
-            body["maskGrowPx"] = mask_grow_px
-        if mask_feather_px:
-            body["maskFeatherPx"] = mask_feather_px
+        protect_token = (
+            await _stage_init_image(protect_mask_path) if protect_mask_path else ""
+        )
+        body.update(
+            _erase_body_fields(
+                protect_token, erase_engine, mask_grow_px, mask_feather_px
+            )
+        )
         created = await client.api_post("/api/v1/generation/jobs", json_body=body)
         return _dump(normalize_job(FAMILIES["generation"], created))
     except Exception as exc:

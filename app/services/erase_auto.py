@@ -26,6 +26,7 @@ SdxlEdit = Callable[[Image.Image, np.ndarray, float], Image.Image]
 FaceFinder = Callable[[np.ndarray, np.ndarray], list[tuple[int, int, int, int]]]
 
 logger = logging.getLogger(__name__)
+SMALL_ZONE_SIDE = 700
 
 
 def _has_people(
@@ -203,7 +204,7 @@ def auto_erase(
     protect: np.ndarray | None,
     lama_fill: LamaFill,
     sdxl_edit: SdxlEdit | None,
-    small_side: int = 700,
+    small_side: int = SMALL_ZONE_SIDE,
     hybrid_strength: float = 0.5,
     osor_fill: LamaFill | None = None,
     find_faces: FaceFinder = faces_inside,
@@ -249,7 +250,11 @@ def auto_erase(
                 original, alpha, index,
             )
         )
-        choice["index"] = index
-        choice["box"] = [int(coordinate) for coordinate in box]
-        choices.append(choice)
+        choices.append(
+            {
+                **choice,
+                "index": index,
+                "box": [int(coordinate) for coordinate in box],
+            }
+        )
     return current, choices

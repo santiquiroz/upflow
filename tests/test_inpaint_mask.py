@@ -106,6 +106,48 @@ def test_adjust_mask_feathers_the_grown_edge_and_keeps_uint8() -> None:
     assert 0 < adjusted[20, 17] < 255
 
 
+def test_adjust_mask_growth_uses_round_distance():
+    mask = np.zeros((32, 32), dtype=np.uint8)
+    mask[16, 16] = 255
+
+    grown = adjust_mask(mask, 10, 0)
+
+    assert grown[16, 26] == 255
+    assert grown[24, 24] == 0
+
+
+def test_adjust_mask_shrink_uses_round_distance():
+    mask = np.zeros((40, 40), dtype=np.uint8)
+    mask[10:31, 10:31] = 255
+
+    shrunk = adjust_mask(mask, -5, 0)
+
+    assert shrunk[15, 15] == 255
+    assert shrunk[14, 14] == 0
+
+
+def test_adjust_mask_feather_keeps_interior_full_and_decreases_outward():
+    mask = np.zeros((32, 32), dtype=np.uint8)
+    mask[10:20, 10:20] = 255
+
+    feathered = adjust_mask(mask, 0, 6)
+    values = feathered[15, 19:26]
+
+    assert values[0] == 255
+    assert np.all(np.diff(values.astype(np.int16)) < 0)
+
+
+def test_adjust_mask_large_image_finishes_quickly():
+    mask = np.zeros((4000, 6000), dtype=np.uint8)
+    mask[1500:2500, 2500:3500] = 255
+
+    start = perf_counter()
+    adjusted = adjust_mask(mask, 200, 100)
+
+    assert perf_counter() - start < 5
+    assert adjusted.shape == mask.shape
+
+
 def test_crop_box_adds_padding_and_stays_inside_the_image() -> None:
     box = compute_crop_box((20, 20, 40, 40), padding=32, image_size=(64, 64))
 

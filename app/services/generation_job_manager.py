@@ -34,7 +34,7 @@ from app.services.generation_speed import anchored_params, speed_class
 from app.services.job_manager import select_upscale_engine
 from app.services.job_manager_base import QueuedJobManager
 from app.services.missing_pack import missing_pack_message
-from app.services.model_registry import ModelKind, ModelRegistry, ModelStatus
+from app.services.model_registry import ModelKind, ModelRegistry
 from app.services.progress import (
     advance_generation_stage,
     apply_generation_step_progress,
@@ -167,6 +167,8 @@ class GenerationJobManager(QueuedJobManager[GenerationJob]):
             raise ValueError("eraseStrategy necesita una máscara")
         if erase_engine is not None and mask_image_path is None:
             raise ValueError("eraseEngine necesita una máscara")
+        if erase_engine in {"lama", "lama+osor"} and not self.settings.lama_available():
+            raise ValueError(missing_pack_message("lama"))
         if erase_engine in {"osor", "lama+osor"} and not self.settings.osor_available():
             raise ValueError(missing_pack_message("osor"))
         if erase_engine == "sdxl" and not self._has_sdxl_inpaint_model():
@@ -408,7 +410,7 @@ class GenerationJobManager(QueuedJobManager[GenerationJob]):
         return job.device or self.settings.default_device
 
     def _auto_eraser_needs_gpu(self, job: GenerationJob) -> bool:
-        return not (
+        return self._has_sdxl_inpaint_model() and not (
             self.auto_eraser is not None
             and self.auto_eraser.osor_available()
             and job.erase_engine != "sdxl"

@@ -219,20 +219,43 @@ def feather_mask(mask: np.ndarray, pixels: int) -> np.ndarray:
     return np.maximum(mask, ramp)
 
 
+def _grow_round(mask: np.ndarray, pixels: int) -> np.ndarray:
+    import cv2
+
+    marked = mask > 0
+    dist_outside = cv2.distanceTransform(
+        (~marked).astype(np.uint8), cv2.DIST_L2, 5
+    )
+    return np.where(marked | (dist_outside <= pixels), 255, 0).astype(np.uint8)
+
+
+def _shrink_round(mask: np.ndarray, pixels: int) -> np.ndarray:
+    import cv2
+
+    marked = mask > 0
+    dist_inside = cv2.distanceTransform(marked.astype(np.uint8), cv2.DIST_L2, 5)
+    return np.where(marked & (dist_inside > pixels), 255, 0).astype(np.uint8)
+
+
+def _feather_outward(mask: np.ndarray, pixels: int) -> np.ndarray:
+    import cv2
+
+    marked = mask > 0
+    dist_outside = cv2.distanceTransform(
+        (~marked).astype(np.uint8), cv2.DIST_L2, 5
+    )
+    ramp = 255 * np.clip(1 - dist_outside / pixels, 0, 1)
+    return np.where(marked, 255, np.rint(ramp)).astype(np.uint8)
+
+
 def adjust_mask(mask: np.ndarray, grow_px: int, feather_px: int) -> np.ndarray:
     adjusted = np.asarray(mask, dtype=np.uint8)
     if grow_px > 0:
-        adjusted = dilate_mask(adjusted, grow_px)
+        adjusted = _grow_round(adjusted, grow_px)
     elif grow_px < 0:
-        import cv2
-
-        radius = abs(grow_px)
-        kernel = cv2.getStructuringElement(
-            cv2.MORPH_ELLIPSE, (2 * radius + 1, 2 * radius + 1)
-        )
-        adjusted = cv2.erode(adjusted, kernel)
+        adjusted = _shrink_round(adjusted, abs(grow_px))
     if feather_px > 0:
-        adjusted = feather_mask(adjusted, feather_px)
+        adjusted = _feather_outward(adjusted, feather_px)
     return np.asarray(adjusted, dtype=np.uint8)
 
 

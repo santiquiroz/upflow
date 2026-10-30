@@ -666,6 +666,10 @@ def audio_job_to_response(job: AudioJob) -> AudioJobResponse:
     )
 
 
+def _guard_from_zone(zone: dict) -> str | None:
+    return zone.get("guard") or ("face" if zone.get("face_guard") is True else None)
+
+
 def erase_zones_from_metadata(raw: list[dict] | None) -> list[EraseZone] | None:
     if raw is None:
         return None
@@ -674,7 +678,7 @@ def erase_zones_from_metadata(raw: list[dict] | None) -> list[EraseZone] | None:
             index=zone.get("index", position),
             box=zone.get("box"),
             engine=zone["engine"],
-            guard=zone.get("guard") or ("face" if zone.get("face_guard") is True else None),
+            guard=_guard_from_zone(zone),
             residual_person=zone.get("residualPerson", False),
         )
         for position, zone in enumerate(raw)

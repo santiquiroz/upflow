@@ -315,7 +315,10 @@ def test_erase_mask_adjustments_validate_ranges(payload):
 
 
 @pytest.mark.asyncio
-async def test_forced_erase_engine_is_carried_to_generation_request(tmp_path: Path):
+async def test_forced_erase_engine_is_carried_to_generation_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(Settings, "lama_available", lambda _settings: True)
     manager, settings, engine = make_manager(tmp_path)
     init_token = await upload_token(settings, png_bytes((128, 128)))
     mask_token = await upload_token(settings, png_bytes((128, 128)), "mask.png")
@@ -364,6 +367,32 @@ async def test_forced_osor_without_pack_is_400(tmp_path: Path, monkeypatch):
 
     assert error.value.status_code == 400
     assert "OSOR" in error.value.detail
+    assert manager.jobs == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("erase_engine", ["lama", "lama+osor"])
+async def test_forced_lama_without_pack_is_400(
+    tmp_path: Path, monkeypatch, erase_engine: str
+):
+    manager, settings, _ = make_manager(tmp_path)
+    monkeypatch.setattr(Settings, "lama_available", lambda _settings: False)
+    monkeypatch.setattr(Settings, "osor_available", lambda _settings: True)
+    init_token = await upload_token(settings, png_bytes((128, 128)))
+    mask_token = await upload_token(settings, png_bytes((128, 128)), "mask.png")
+
+    with pytest.raises(HTTPException) as error:
+        await create_generation_job(
+            make_payload(
+                initImageToken=init_token,
+                maskImageToken=mask_token,
+                eraseEngine=erase_engine,
+            ),
+            generation_jobs=manager, settings=settings,
+        )
+
+    assert error.value.status_code == 400
+    assert "LaMa" in error.value.detail
     assert manager.jobs == {}
 
 

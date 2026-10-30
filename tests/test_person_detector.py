@@ -177,3 +177,37 @@ def test_session_creation_is_per_device_and_not_serialized(tmp_path):
     assert sessions[0] is sessions[1]
     assert sessions[2] is sessions[3]
     assert max_active == 2
+
+
+def test_session_run_is_serialized_per_device(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    import time
+
+    model = tmp_path / "model.onnx"
+    model.write_bytes(b"fake")
+    detector = PersonDetector(
+        Settings(_env_file=None, PERSON_DETECTOR_MODEL=str(model))
+    )
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
+
+    class FakeSession:
+        def run(self, _outputs, _inputs):
+            nonlocal active, max_active
+            with lock:
+                active += 1
+                max_active = max(max_active, active)
+            time.sleep(0.05)
+            with lock:
+                active -= 1
+            return [np.zeros((1, 8400, 85), np.float32)]
+
+    detector._create_session = lambda _device: FakeSession()
+    rgb = np.zeros((32, 32, 3), np.uint8)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _index: detector.detect(rgb), range(2)))
+
+    assert results == [[], []]
+    assert max_active == 1

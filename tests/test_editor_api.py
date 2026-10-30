@@ -593,9 +593,9 @@ async def test_heal_returns_new_token_with_filled_region() -> None:
     from app.api.routes import _resolve_init_image
     from app.schemas import EditorHealRequest
 
-    image = Image.new("RGB", (16, 12), (1, 2, 3))
-    mask = Image.new("L", (16, 12), 0)
-    mask.paste(255, (4, 3, 8, 7))
+    image = Image.new("RGB", (128, 128), (1, 2, 3))
+    mask = Image.new("L", (128, 128), 0)
+    mask.paste(255, (60, 60, 64, 64))
     image_token = await _upload_png(image, "base.photo.png")
     mask_token = await _upload_png(mask, "brush.png")
     lama = FakeLama()
@@ -614,11 +614,12 @@ async def test_heal_returns_new_token_with_filled_region() -> None:
     with Image.open(output_path) as output:
         result = output.convert("RGB")
     assert result.size == image.size
-    assert result.getpixel((5, 4)) == (240, 20, 30)
-    assert result.getpixel((1, 1)) == (1, 2, 3)
+    assert result.getpixel((61, 61)) == (240, 20, 30)
+    assert result.getpixel((10, 10)) == (1, 2, 3)
     assert lama.fill_thread_ids[0] != test_thread_id
     group_mask, protect = lama.calls[0]
     assert group_mask.dtype == np.uint8
+    assert np.count_nonzero(group_mask) > 16
     assert protect.dtype == np.bool_
     assert not protect.any()
 

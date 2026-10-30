@@ -273,6 +273,38 @@ def test_face_guard_takes_precedence_when_faces_and_people_are_found() -> None:
     assert people.call_count == 2
 
 
+def test_auto_erase_copies_zone_choices_instead_of_mutating_helper_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.services.erase_auto as erase_auto_module
+
+    image = Image.new("RGB", (8, 8), (20, 30, 40))
+    mask = np.full((8, 8), 255, dtype=np.uint8)
+    shared_choice = {"engine": "osor"}
+    boxes = iter(((0, 0, 4, 4), (2, 2, 8, 8)))
+    monkeypatch.setattr(
+        erase_auto_module,
+        "edit_groups",
+        lambda *_args: [(next(boxes), mask)],
+    )
+    monkeypatch.setattr(
+        erase_auto_module,
+        "_auto_group",
+        lambda current, *_args: (current, shared_choice),
+    )
+
+    first_image, first_choices = erase_auto_module.auto_erase(
+        image, mask, None, lambda canvas, *_args: canvas, None
+    )
+    _, second_choices = erase_auto_module.auto_erase(
+        first_image, mask, None, lambda canvas, *_args: canvas, None
+    )
+
+    assert shared_choice == {"engine": "osor"}
+    assert first_choices[0]["box"] == [0, 0, 4, 4]
+    assert second_choices[0]["box"] == [2, 2, 8, 8]
+
+
 def test_choices_carry_group_index_and_json_serializable_crop_box() -> None:
     image = Image.new("RGB", (2400, 320), (180, 180, 180))
     mask = np.zeros((320, 2400), dtype=np.uint8)

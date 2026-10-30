@@ -16,6 +16,7 @@ from app.schemas import (
     InsertObjectResponse,
 )
 from app.services.auth.permissions import Permission
+from app.services.erase_auto import SMALL_ZONE_SIDE
 from app.services.engines.lama_eraser import LamaEraser
 from app.services.editor_people import EditorPeople
 from app.services.editor_segmenter import EditorSegmenter, SegmenterUnavailableError
@@ -26,7 +27,6 @@ from app.services.engines.onnx_common import readable_error_text
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/editor", tags=["editor"])
-HEAL_MAX_SIDE = 700
 
 
 def get_editor_segmenter(request: Request) -> EditorSegmenter:
@@ -45,7 +45,7 @@ def _ensure_heal_mask_is_valid(mask) -> None:
         raise HTTPException(status_code=400, detail="La máscara está vacía.")
     left, top = int(xs.min()), int(ys.min())
     right, bottom = int(xs.max()) + 1, int(ys.max()) + 1
-    if max(right - left, bottom - top) > HEAL_MAX_SIDE:
+    if max(right - left, bottom - top) > SMALL_ZONE_SIDE:
         raise HTTPException(status_code=400, detail="La zona es grande: usá Quitar.")
 
 
@@ -85,11 +85,14 @@ def _heal_blocking(
     import numpy as np
     from PIL import Image
 
+    from app.services.inpaint_mask import grow_per_component, grow_small_hulls
+
     canvas, group_mask = _prepare_heal_arrays(image_path, mask_path)
+    group_mask = grow_per_component(grow_small_hulls(group_mask), None, None)
     healed = lama.fill_group(
         canvas, group_mask, np.zeros(group_mask.shape, dtype=bool)
     )
-    Image.fromarray(healed).save(destination, format="PNG")
+    Image.fromarray(healed).save(destination, format="PNG", compress_level=1)
     return int(healed.shape[1]), int(healed.shape[0])
 
 

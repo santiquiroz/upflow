@@ -51,7 +51,7 @@ def install_mock(monkeypatch: pytest.MonkeyPatch, handler) -> None:
 async def test_detect_people_tool_posts_token(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.mcp.server import upflow_detect_people
 
-    people = [{"id": "p1", "box": [1, 2, 30, 40], "score": 0.9, "role": "person", "face": None, "anchor": None}]
+    people = [{"id": "p1", "box": [1, 2, 30, 40], "score": 0.9, "role": "subject", "face": None, "anchor": None}]
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "POST"
@@ -84,8 +84,8 @@ async def test_generate_with_protect_mask_uploads_and_sends_token(
         body = json.loads(content)
         assert body["protectMaskToken"] == "protect-token"
         assert body["eraseEngine"] == "lama+osor"
-        assert body["maskGrowPx"] == 8
-        assert "maskFeatherPx" not in body
+        assert body["maskGrowPx"] == -5
+        assert body["maskFeatherPx"] == 8
         return httpx.Response(202, json={"id": "g1", "status": "queued"})
 
     install_mock(monkeypatch, handler)
@@ -96,7 +96,8 @@ async def test_generate_with_protect_mask_uploads_and_sends_token(
             "model",
             protect_mask_path=str(mask),
             erase_engine="lama+osor",
-            mask_grow_px=8,
+            mask_grow_px=-5,
+            mask_feather_px=8,
         )
     )
 
