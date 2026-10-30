@@ -26,6 +26,8 @@ detectaste".
    protege las que se conservan; después se refina con las herramientas de siempre.
 3. **Revisar**: el resultado muestra, por zona, qué motor la llenó y si quedó una persona; cada
    zona se puede rehacer sola con otro motor o describiendo el fondo.
+3b. **Retocar a mano** lo que ningún motor resuelve: Restaurar, Clonar, Corrector puntual y Ajustar
+   borde (pedido del dueño el mismo día, en la misma tanda).
 4. Cerrar los dos límites de la sesión: (a) fantasmas de multitud sin cara frontal que el detector
    de caras no ve (2272, 2222, 2077); (b) la API no devuelve qué motor usó cada zona.
 5. Que todo esto llegue al Upflow instalado: paquetes de modelos descargables por el instalador.
@@ -55,7 +57,8 @@ detectaste".
   propuse yo.
 - **El Editor entero pasa a tres columnas** (maqueta `editor-tres-columnas.html`):
   izquierda un riel vertical con todas las herramientas (Personas, Tocar objeto, Proteger, Pincel,
-  Goma, Lazo, Rectángulo, Mover vista y abajo zoom −/+, Ajustar, Deshacer, Limpiar); centro la foto;
+  Goma, Lazo, Rectángulo, Restaurar, Clonar, Corrector puntual, Mover vista y abajo zoom −/+,
+  Ajustar, Deshacer, Limpiar), agrupadas en "Seleccionar" y "Retocar"; centro la foto;
   derecha un panel contextual que muestra **Personas** (la lista) cuando esa herramienta está activa,
   **Acción** el resto del tiempo (Quitar / Reemplazar, Motor, Dispositivo, Opciones avanzadas e
   Insertar objeto plegados, botón "Quitar selección" / "Reemplazar selección"), y **Revisar zonas**
@@ -123,6 +126,35 @@ la misma carpeta). Quedan fuera del repo porque usan una foto real de personas.
   texto; usa SDXL con ese texto como prompt). Rehacer corre un trabajo nuevo con el resultado actual
   como base y solo esa zona como máscara; al terminar reemplaza el resultado y actualiza la fila.
 
+### Herramientas de retoque (pedidas el 2026-10-30, misma tanda)
+
+Ideas tomadas de las funciones públicas de Photoshop (vía PhotoCraft, su recreación en sala limpia,
+MIT/Apache-2.0; no se usa código ni recursos de Adobe). Pensadas para lo que quedó en
+`RETOQUE.txt` de las 60 fotos.
+
+Estas herramientas cambian píxeles, no la máscara: trabajan sobre la **imagen base** del Editor (la
+foto abierta o el resultado sobre el que se sigue editando). Cada aplicación produce una base nueva;
+el Editor guarda las bases anteriores para que Ctrl+Z las deshaga (tope razonable de versiones en
+memoria, a elección del builder), y "original de la sesión" es siempre la foto que se abrió.
+
+1. **Restaurar (pincel de historia)**: pinta para devolver el original de la sesión en esa zona, con
+   borde suave y tamaño como el Pincel. Para cuando el relleno se comió algo del sujeto o del fondo
+   (2199: la línea del agua; pelo de un sujeto). Se aplica al soltar el mouse.
+2. **Clonar (tampón)**: Alt+clic marca el origen; al pintar copia los píxeles del origen con el mismo
+   desplazamiento, borde suave. Una mira muestra el origen mientras se pinta. Para retocar a mano lo
+   que ningún motor resolvió (2163: el hombre sentado; 2177 y 2272: manchas lisas).
+3. **Corrector puntual**: se pinta sobre algo chico y, al soltar, LaMa lo rellena al instante sobre
+   un recorte (sin crear un trabajo en la cola). Para brillos, puntos y personas diminutas lejanas
+   (2081: el brillo en el hombro; 2186, 2218, 2220). Si el trazo es grande (lado > el umbral de
+   "chico" de `auto_erase`), avisa que conviene usar Quitar.
+4. **Ajustar borde** (como "Seleccionar y enmascarar"): en el panel Acción, debajo del motor,
+   deslizadores **Expandir / Contraer** y **Suavizar** que modifican la máscara roja antes de quitar,
+   con vista previa en vivo sobre la foto. Los valores viajan con el trabajo y el backend aplica la
+   morfología exacta antes de `auto_erase`; la vista previa del frontend puede ser aproximada.
+
+Las cuatro van en el riel izquierdo (Ajustar borde en el panel) con ícono y texto, atajos de
+teclado propios y su pista sobre la foto como el Pincel.
+
 ## Backend
 
 ### Detector de personas (mi decisión)
@@ -169,6 +201,18 @@ repetir sigue apareciendo, la zona se marca `residualPerson: true` (no hay más 
   caja del recorte del grupo (las cajas de los grupos no se solapan: `edit_groups` las fusiona).
 - Parámetro nuevo del trabajo `eraseEngine: "lama"|"osor"|"lama+osor"|"sdxl"` que fuerza el motor
   en todos los grupos (para Rehacer). Sin él, la estrategia automática de siempre.
+
+### Retoque y agentes
+
+- `POST /api/v1/editor/heal` `{imageToken, maskToken}` → imagen nueva (token) con la zona rellenada
+  por LaMa en un recorte; síncrono, pensado para trazos chicos (corrector puntual).
+- Restaurar y Clonar pueden resolverse del todo en el frontend (composición en canvas) y subir la
+  base nueva como imagen inicial, como ya hace "Seguir editando este resultado". El builder decide si
+  algún paso conviene en el backend por memoria (fotos de 24 MP).
+- Parámetros nuevos del trabajo de borrado: `maskGrowPx` (negativo = contraer) y `maskFeatherPx`.
+- MCP de Upflow: herramienta para detectar personas en una imagen (misma respuesta que
+  `/editor/people`) y que el resultado de un borrado incluya `eraseZones`, para que un agente pueda
+  hacer el mismo flujo que el Editor sin scripts.
 
 ### Borrado automático sin SDXL (decisión del dueño)
 
@@ -243,6 +287,10 @@ Cómo se cuenta (mi decisión; los clics no son cajas y una persona tiene varios
 4. Tiempo: la detección de una foto 6000x4000 tarda < 3 s en esta máquina y no bloquea el Editor.
 5. E2E por la UI (Playwright): abrir 2145, aceptar la propuesta, quitar; las zonas aparecen en
    Revisar con su motor; rehacer una zona con LaMa reemplaza solo esa zona.
+6. Retoque, por la UI sobre fotos reales del lote: el corrector puntual quita el brillo de 2081 en
+   < 3 s; Restaurar devuelve exactamente los píxeles originales donde se pinta (diferencia 0 en el
+   centro del trazo); Clonar copia con el desplazamiento elegido; Ctrl+Z deshace cada aplicación;
+   Ajustar borde con +N px agranda la máscara que llega al backend en N px (medido en la máscara).
 
 ## Decisiones menores (mías, para revisar)
 
