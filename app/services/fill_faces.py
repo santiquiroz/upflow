@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import numpy as np
 
-FACE_SCALE = 0.5
+# A 0.5 se escapan los fantasmas suaves que OSOR deja en un relleno (2145 en Upflow);
+# a 0.25 se escapan otros: medido en 59 fotos, las dos juntas aciertan 6 de 6 sin falsas alarmas.
+FACE_SCALES = (0.5, 0.25)
 _cascade = None
 
 
@@ -17,34 +19,30 @@ def _get_cascade():
     return _cascade
 
 
+def _center_in_mask(box: tuple[int, int, int, int], mask: np.ndarray) -> bool:
+    x, y, width, height = box
+    center_x, center_y = x + width // 2, y + height // 2
+    rows, columns = mask.shape
+    return 0 <= center_x < columns and 0 <= center_y < rows and mask[center_y, center_x] > 0
+
+
+def _faces_at_scale(gray: np.ndarray, scale: float) -> list[tuple[int, int, int, int]]:
+    import cv2
+
+    small = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    boxes = _get_cascade().detectMultiScale(small, 1.1, 5, minSize=(20, 20))
+    return [tuple(round(value / scale) for value in box) for box in boxes]
+
+
 def faces_inside(
     rgb: np.ndarray, mask: np.ndarray
 ) -> list[tuple[int, int, int, int]]:
     import cv2
 
-    gray = cv2.resize(
-        cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY),
-        None,
-        fx=FACE_SCALE,
-        fy=FACE_SCALE,
-        interpolation=cv2.INTER_AREA,
-    )
-    boxes = _get_cascade().detectMultiScale(
-        gray, 1.1, 5, minSize=(20, 20)
-    )
-    faces = []
-    height, width = mask.shape
-    for x, y, box_width, box_height in boxes:
-        center_x = int(round((x + box_width / 2) / FACE_SCALE))
-        center_y = int(round((y + box_height / 2) / FACE_SCALE))
-        if not (0 <= center_x < width and 0 <= center_y < height):
-            continue
-        if mask[center_y, center_x] <= 0:
-            continue
-        faces.append((
-            round(x / FACE_SCALE),
-            round(y / FACE_SCALE),
-            round(box_width / FACE_SCALE),
-            round(box_height / FACE_SCALE),
-        ))
-    return faces
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    return [
+        box
+        for scale in FACE_SCALES
+        for box in _faces_at_scale(gray, scale)
+        if _center_in_mask(box, mask)
+    ]
