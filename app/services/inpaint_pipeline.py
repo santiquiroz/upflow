@@ -243,6 +243,12 @@ def _grupos_de_edicion(
     ]
 
 
+def edit_groups(
+    blended_mask: np.ndarray, image_size: tuple[int, int], settings: MaskedEditSettings
+) -> list[tuple[tuple[int, int, int, int], np.ndarray]]:
+    return _grupos_de_edicion(blended_mask, image_size, settings)
+
+
 def _editar_grupo(
     canvas: Any,
     group_mask: np.ndarray,
@@ -321,6 +327,6 @@ def run_masked_edit(
     blended_mask = grow_per_component(mask_array, settings.dilate_px, settings.feather_px)
 
     result = base_rgb
-    for crop_box, group_mask in _grupos_de_edicion(blended_mask, base_rgb.size, settings):
+    for crop_box, group_mask in edit_groups(blended_mask, base_rgb.size, settings):
         result = _editar_grupo(result, group_mask, crop_box, model, settings, on_prepared)
     return result

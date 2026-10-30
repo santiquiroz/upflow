@@ -512,6 +512,7 @@ class GenerationJob:
     tiled_detail: bool = False
     # Máscara de inpainting (blanco=editar, negro=conservar); requiere init.
     mask_image_path: Path | None = None
+    protect_mask_path: Path | None = None
     # Preparación de la máscara en el motor. None = los defaults del motor. La
     # armonización de objetos manda 0/0 porque su máscara ya viene con su propio
     # perfil continuo: volver a dilatarla empujaría el 255 de la costura hacia

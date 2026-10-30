@@ -91,6 +91,12 @@ def _build_migan_eraser(settings):
     return MiganEraser(settings)
 
 
+def _build_lama_eraser(settings):
+    from app.services.engines.lama_eraser import LamaEraser
+
+    return LamaEraser(settings)
+
+
 def _build_sdcpp_engine(settings):
     # Lane experimental Fase 3: solo se construye si el flag está encendido;
     # apagado no importa ni el módulo.
@@ -159,6 +165,7 @@ async def lifespan(app: FastAPI):
         quota_service=quota_service,
         sdcpp_engine=_build_sdcpp_engine(settings),
         migan_eraser=_build_migan_eraser(settings),
+        lama_eraser=_build_lama_eraser(settings),
         video_engine=_build_video_engine(settings),
     )
     # Shared across both managers (like device_semaphores) so an auto-routed

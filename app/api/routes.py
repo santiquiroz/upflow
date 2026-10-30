@@ -2843,6 +2843,7 @@ async def create_generation_job(
     current_user = current_user_from_request(request)
     init_image_path = _resolve_init_image(settings, payload.init_image_token)
     mask_image_path = _resolve_init_image(settings, payload.mask_image_token)
+    protect_mask_path = _resolve_init_image(settings, payload.protect_mask_token)
     if payload.strength is not None:
         strength = payload.strength
     else:
@@ -2857,6 +2858,7 @@ async def create_generation_job(
             init_image_path=init_image_path, strength=strength,
             tiled_detail=payload.tiled_detail,
             mask_image_path=mask_image_path,
+            protect_mask_path=protect_mask_path,
             auto_upscale=payload.auto_upscale,
             upscale_model_name=payload.upscale_model_name, upscale_scale=payload.upscale_scale,
             upscale_model_id=payload.upscale_model_id, owner=current_user,
@@ -3106,6 +3108,16 @@ async def generation_capabilities(
                 id=model.id, name=f"{model.name} (Vulkan)", supports_inpaint=False
             )
             for model in list_sdcpp_models(settings)
+        )
+    if settings.lama_available():
+        from app.services.engines.lama_eraser import ERASER_LAMA_MODEL_ID, ERASER_LAMA_MODEL_LABEL
+
+        models.insert(
+            0,
+            GenerationModelSummary(
+                id=ERASER_LAMA_MODEL_ID, name=ERASER_LAMA_MODEL_LABEL,
+                supports_inpaint=True, erase_only=True,
+            ),
         )
     if settings.migan_available():
         from app.services.engines.migan_eraser import ERASER_MODEL_ID, ERASER_MODEL_LABEL

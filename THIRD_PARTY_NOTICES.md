@@ -180,6 +180,16 @@ Fonts bundled under `app/assets/fonts/` get one entry each here, with their
 - SHA-256: 74bd80d3e42a08517cd7e1108ba3d86f2da29ac0f3065be95e0357956ab9db37
 - Modifications: none. Used unmodified to draw the frame counters of `comparison.mp4` and the bilingual label of AI-enhanced CCTV outputs.
 
+## Components downloaded on demand
+
+### LaMa erase model
+
+- Component: `vendor/lama/big-lama.pt` (weights: big-lama)
+- License: Apache-2.0
+- Copyright: Copyright [2021] Samsung Research
+- Source: https://github.com/advimman/lama
+- Weights: https://github.com/Sanster/models/releases/download/add_big_lama/big-lama.pt
+
 ## Photo restoration models
 
 The photo restoration models are downloaded as `restore-*` packs; none of them is

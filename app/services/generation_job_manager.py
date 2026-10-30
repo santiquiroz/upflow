@@ -13,6 +13,7 @@ from app.services.auth.quotas import QuotaService
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
 from app.services.engines.generation_onnx import GenerationEngine, GenerationRequest
+from app.services.engines.lama_eraser import ERASER_LAMA_MODEL_ID
 from app.services.engines.migan_eraser import ERASER_MODEL_ID
 from app.services.engines.sdcpp_engine import SDCPP_MODEL_ID
 from app.services.engines.sdcpp_models import SDCPP_MODEL_PREFIX, resolve_sdcpp_model
@@ -97,6 +98,7 @@ class GenerationJobManager(QueuedJobManager[GenerationJob]):
         quota_service: QuotaService | None = None,
         sdcpp_engine: Any | None = None,
         migan_eraser: Any | None = None,
+        lama_eraser: Any | None = None,
         video_engine: SdcppVideoEngine | None = None,
     ) -> None:
         super().__init__(
@@ -112,6 +114,7 @@ class GenerationJobManager(QueuedJobManager[GenerationJob]):
         self.devices = devices
         self.sdcpp_engine = sdcpp_engine
         self.migan_eraser = migan_eraser
+        self.lama_eraser = lama_eraser
         self.video_engine = video_engine
 
     async def create_job(
@@ -131,6 +134,7 @@ class GenerationJobManager(QueuedJobManager[GenerationJob]):
         strength: float = 0.6,
         tiled_detail: bool = False,
         mask_image_path: Path | None = None,
+        protect_mask_path: Path | None = None,
         mask_dilate_px: int | None = None,
         mask_feather_px: int | None = None,
         auto_upscale: bool = False,
@@ -145,6 +149,8 @@ class GenerationJobManager(QueuedJobManager[GenerationJob]):
         self._validate_generation_model(model_id)
         self._validate_params(prompt, steps, width, height, model_id)
         await self._validate_device(device)
+        if model_id == ERASER_LAMA_MODEL_ID and mask_image_path is None:
+            raise ValueError("el borrado LaMa necesita una máscara")
         if mask_image_path is not None:
             self._validate_inpaint(model_id, init_image_path, mask_image_path, strength)
         elif init_image_path is not None:
@@ -161,6 +167,7 @@ class GenerationJobManager(QueuedJobManager[GenerationJob]):
             init_image_path=init_image_path, strength=strength,
             tiled_detail=tiled_detail,
             mask_image_path=mask_image_path,
+            protect_mask_path=protect_mask_path,
             mask_dilate_px=mask_dilate_px, mask_feather_px=mask_feather_px,
             auto_upscale=auto_upscale, upscale_model_name=upscale_model_name,
             upscale_scale=upscale_scale, upscale_model_id=upscale_model_id,
@@ -174,6 +181,10 @@ class GenerationJobManager(QueuedJobManager[GenerationJob]):
         return job
 
     def _validate_generation_model(self, model_id: str) -> None:
+        if model_id == ERASER_LAMA_MODEL_ID:
+            if self.lama_eraser is None or not self.lama_eraser.available():
+                raise ValueError(missing_pack_message("lama"))
+            return
         if model_id == ERASER_MODEL_ID:
             # Motor de borrado: no vive en el registro de modelos, se gatea por
             # su archivo en disco igual que el lane experimental.
@@ -284,7 +295,7 @@ class GenerationJobManager(QueuedJobManager[GenerationJob]):
     ) -> None:
         if model_id.startswith(SDCPP_MODEL_PREFIX):
             raise ValueError("Los modelos Vulkan son solo de texto a imagen por ahora")
-        if model_id == ERASER_MODEL_ID:
+        if model_id in (ERASER_MODEL_ID, ERASER_LAMA_MODEL_ID):
             if init_image_path is None or not init_image_path.exists():
                 raise ValueError("el borrado rápido necesita la imagen base")
             if not mask_image_path.exists():
@@ -358,6 +369,8 @@ class GenerationJobManager(QueuedJobManager[GenerationJob]):
         out of bounds for dimension 0 with size N"). Todo job sin device
         reserva la GPU por defecto, que es donde efectivamente corre.
         """
+        if job.model_id == ERASER_LAMA_MODEL_ID:
+            return "cpu"
         return job.device or self.settings.default_device
 
     def _admit(self, job: GenerationJob):
@@ -370,7 +383,7 @@ class GenerationJobManager(QueuedJobManager[GenerationJob]):
         if job.model_id.startswith(SDCPP_MODEL_PREFIX):
             await self._run_sdcpp(job, resolve_sdcpp_model(job.model_id, self.settings))
             return
-        if job.model_id == ERASER_MODEL_ID:
+        if job.model_id in (ERASER_MODEL_ID, ERASER_LAMA_MODEL_ID):
             await self._run_eraser(job)
             return
         if job.model_id == SDCPP_MODEL_ID:
@@ -473,13 +486,29 @@ class GenerationJobManager(QueuedJobManager[GenerationJob]):
         with Image.open(job.mask_image_path) as source_mask:
             mask_image = source_mask.convert("L")
         device = job.device or self.settings.default_device
-        result = await self.migan_eraser.erase(base_image, mask_image, device)
-        self._record_execution_provider(job, device)
+        result = await self._erase_image(job, base_image, mask_image, device)
+        self._record_execution_provider(
+            job, "cpu" if job.model_id == ERASER_LAMA_MODEL_ID else device
+        )
         output_path = self.settings.outputs_path / f"{job.id}.png"
         output_path.parent.mkdir(parents=True, exist_ok=True)
         result.save(output_path)
         job.output_path = output_path
         complete_generation_stages(job, False)
+
+    async def _erase_image(self, job: GenerationJob, base_image, mask_image, device: str):
+        if job.model_id != ERASER_LAMA_MODEL_ID:
+            # Los otros motores ignoran la máscara de protección por ahora.
+            return await self.migan_eraser.erase(base_image, mask_image, device)
+        from PIL import Image
+
+        protect_image = None
+        if job.protect_mask_path is not None:
+            with Image.open(job.protect_mask_path) as source_protect:
+                protect_image = source_protect.convert("L")
+        return await self.lama_eraser.erase(
+            base_image, mask_image, device, protect_image=protect_image
+        )
 
     async def _run_sdcpp(self, job: GenerationJob, checkpoint: Path | None = None) -> None:
         # Lane experimental: subprocess sd.cpp Vulkan, sin progreso por paso ni

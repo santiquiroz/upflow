@@ -124,6 +124,54 @@ async def test_happy_path_creates_an_inpaint_job_with_default_strength(tmp_path:
 
 
 @pytest.mark.asyncio
+async def test_uploaded_protect_token_is_stored_on_the_generation_job(tmp_path: Path):
+    manager, settings, _ = make_manager(tmp_path)
+    init_token = await upload_token(settings, png_bytes((128, 128)))
+    mask_token = await upload_token(settings, png_bytes((128, 128)), "mask.png")
+    protect_token = await upload_token(
+        settings, png_bytes((128, 128), color=(255, 255, 255)), "protect.png"
+    )
+
+    response = await create_generation_job(
+        make_payload(
+            initImageToken=init_token, maskImageToken=mask_token, protectMaskToken=protect_token
+        ),
+        generation_jobs=manager,
+        settings=settings,
+    )
+
+    job = manager.get_job(response.id)
+    assert job.protect_mask_path is not None
+    assert job.protect_mask_path.is_file()
+    assert job.protect_mask_path != job.mask_image_path
+    from PIL import Image
+
+    with Image.open(job.protect_mask_path) as protect:
+        assert protect.size == (128, 128)
+        assert protect.convert("L").getpixel((64, 64)) == 255
+
+
+@pytest.mark.asyncio
+async def test_unknown_protect_token_is_rejected_before_enqueue(tmp_path: Path):
+    manager, settings, _ = make_manager(tmp_path)
+    init_token = await upload_token(settings, png_bytes((128, 128)))
+    mask_token = await upload_token(settings, png_bytes((128, 128)), "mask.png")
+
+    with pytest.raises(HTTPException) as error:
+        await create_generation_job(
+            make_payload(
+                initImageToken=init_token, maskImageToken=mask_token,
+                protectMaskToken="deadbeef",
+            ),
+            generation_jobs=manager,
+            settings=settings,
+        )
+
+    assert error.value.status_code == 400
+    assert manager.jobs == {}
+
+
+@pytest.mark.asyncio
 async def test_explicit_strength_wins_over_the_inpaint_default(tmp_path: Path):
     manager, settings, _ = make_manager(tmp_path)
     init_token = await upload_token(settings, png_bytes((128, 128)))

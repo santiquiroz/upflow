@@ -630,6 +630,7 @@ class Settings(BaseSettings):
     # prompts). Es una opción MÁS en el selector, no reemplaza a los modelos de
     # difusión: para poner algo concreto en el hueco sigue estando difusión.
     migan_model: str = Field(default="vendor/migan/migan_pipeline_v2.onnx", alias="MIGAN_MODEL")
+    lama_model: str = Field(default="vendor/lama/big-lama.pt", alias="LAMA_MODEL")
     editor_segmenter_encoder: str = Field(
         default="vendor/mobilesam/mobile_sam_image_encoder.onnx", alias="EDITOR_SEGMENTER_ENCODER"
     )
@@ -1298,6 +1299,13 @@ class Settings(BaseSettings):
 
     def migan_available(self) -> bool:
         return self.migan_model_path.exists()
+
+    @property
+    def lama_model_path(self) -> Path:
+        return resolve_against_project_root(self.lama_model)
+
+    def lama_available(self) -> bool:
+        return self.lama_model_path.exists()
 
     def editor_segmenter_available(self) -> bool:
         return self.editor_segmenter_encoder_path.exists() and self.editor_segmenter_decoder_path.exists()

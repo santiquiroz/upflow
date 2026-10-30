@@ -51,11 +51,11 @@ MODEL_ID = "gen--amd--sd15"
 
 
 def make_settings(tmp_path: Path, **overrides) -> Settings:
-    # MIGAN_MODEL apunta a un archivo inexistente a proposito: por defecto el
-    # motor de borrado se resuelve contra vendor/ del REPO, asi que en una
-    # maquina de desarrollo con el pack bajado estos tests veian un modelo extra
-    # y pasaban o fallaban segun que tuviera instalado quien los corre.
-    defaults = {"MIGAN_MODEL": str(tmp_path / "sin-migan.onnx")}
+    # Los packs locales del desarrollador no deben cambiar el catálogo esperado.
+    defaults = {
+        "MIGAN_MODEL": str(tmp_path / "sin-migan.onnx"),
+        "LAMA_MODEL": str(tmp_path / "sin-lama.pt"),
+    }
     defaults.update(overrides)
     return Settings(RUNTIME_DIR=str(tmp_path), _env_file=None, **defaults)
 
