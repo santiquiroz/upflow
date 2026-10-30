@@ -26,6 +26,7 @@ PACK_LABELS: dict[str, str] = {
     "audiosr": "los modelos de restauracion AudioSR",
     "ffmpeg": "las herramientas de video FFmpeg",
     "mobilesam": "el modelo de seleccion por toque",
+    "person-detector": "el modelo que encuentra personas",
     "migan": "el modelo de borrado rapido",
     "lama": "el modelo de borrado LaMa",
     "osor": "el modelo de borrado OSOR",

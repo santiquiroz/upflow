@@ -641,6 +641,9 @@ class Settings(BaseSettings):
     editor_segmenter_decoder: str = Field(
         default="vendor/mobilesam/sam_mask_decoder_single.onnx", alias="EDITOR_SEGMENTER_DECODER"
     )
+    person_detector_model: str = Field(
+        default="vendor/yolox/yolox_s.onnx", alias="PERSON_DETECTOR_MODEL"
+    )
 
     # Log a archivo, opt-in para diagnosticar reportes de otras maquinas. En uso
     # normal es ruido y disco, asi que arranca apagado; se enciende desde
@@ -1303,6 +1306,13 @@ class Settings(BaseSettings):
 
     def migan_available(self) -> bool:
         return self.migan_model_path.exists()
+
+    @property
+    def person_detector_model_path(self) -> Path:
+        return resolve_against_project_root(self.person_detector_model)
+
+    def person_detector_available(self) -> bool:
+        return self.person_detector_model_path.exists()
 
     @property
     def lama_model_path(self) -> Path:
