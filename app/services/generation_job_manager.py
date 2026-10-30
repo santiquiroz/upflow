@@ -138,6 +138,8 @@ class GenerationJobManager(QueuedJobManager[GenerationJob]):
         protect_mask_path: Path | None = None,
         erase_strategy: Literal["auto"] | None = None,
         erase_engine: EraseEngine | None = None,
+        erase_grow_px: int = 0,
+        erase_feather_px: int = 0,
         mask_dilate_px: int | None = None,
         mask_feather_px: int | None = None,
         auto_upscale: bool = False,
@@ -181,6 +183,7 @@ class GenerationJobManager(QueuedJobManager[GenerationJob]):
             protect_mask_path=protect_mask_path,
             erase_strategy=erase_strategy,
             erase_engine=erase_engine,
+            erase_grow_px=erase_grow_px, erase_feather_px=erase_feather_px,
             mask_dilate_px=mask_dilate_px, mask_feather_px=mask_feather_px,
             auto_upscale=auto_upscale, upscale_model_name=upscale_model_name,
             upscale_scale=upscale_scale, upscale_model_id=upscale_model_id,
@@ -442,6 +445,7 @@ class GenerationJobManager(QueuedJobManager[GenerationJob]):
             mask_image_path=job.mask_image_path, scheduler=job.scheduler,
             protect_mask_path=job.protect_mask_path, erase_strategy=job.erase_strategy,
             erase_engine=job.erase_engine,
+            erase_grow_px=job.erase_grow_px, erase_feather_px=job.erase_feather_px,
             **mask_preparation_overrides(job),
         )
 

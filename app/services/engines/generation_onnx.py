@@ -380,6 +380,8 @@ class GenerationRequest:
     # en None = proporcional al tamaño de lo marcado; 0 = máscara tal cual.
     mask_dilate_px: int | None = None
     mask_feather_px: int | None = None
+    erase_grow_px: int = 0
+    erase_feather_px: int = 0
     # `None` = se calcula a partir del tamaño de lo marcado. Era 48 fijo, y eso
     # dejaba al modelo sin ver la cara cuando la marca era grande.
     mask_padding_px: int | None = None
@@ -645,6 +647,7 @@ class GenerationEngine:
         from PIL import Image
 
         from app.services.erase_auto import auto_erase
+        from app.services.inpaint_mask import adjust_mask
         from app.services.inpaint_pipeline import run_masked_edit
 
         if request.erase_strategy != "auto" and request.erase_engine is None:
@@ -667,6 +670,7 @@ class GenerationEngine:
             )
 
         mask = np.asarray(mask_image.resize(base_image.size, Image.Resampling.NEAREST))
+        mask = adjust_mask(mask, request.erase_grow_px, request.erase_feather_px)
 
         if self.lama_eraser is not None:
             lama_fill = self.lama_eraser.fill_group

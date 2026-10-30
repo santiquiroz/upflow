@@ -7,6 +7,7 @@ import pytest
 
 from app.services.inpaint_mask import (
     MAX_COMPONENTS,
+    adjust_mask,
     clean_protect_mask,
     compute_crop_box,
     dilate_mask,
@@ -85,6 +86,24 @@ def test_mask_bbox_finds_the_marked_region() -> None:
 
 def test_mask_bbox_returns_none_for_an_empty_mask() -> None:
     assert mask_bbox(np.zeros((32, 32), dtype=np.uint8)) is None
+
+
+def test_adjust_mask_grow_moves_bbox_by_n() -> None:
+    mask = np.zeros((200, 200), dtype=np.uint8)
+    mask[50:150, 50:150] = 255
+
+    assert mask_bbox(adjust_mask(mask, 10, 0)) == (40, 40, 160, 160)
+    assert mask_bbox(adjust_mask(mask, -10, 0)) == (60, 60, 140, 140)
+
+
+def test_adjust_mask_feathers_the_grown_edge_and_keeps_uint8() -> None:
+    mask = square_mask()
+
+    adjusted = adjust_mask(mask, 0, 6)
+
+    assert adjusted.dtype == np.uint8
+    assert adjusted[30, 30] == 255
+    assert 0 < adjusted[20, 17] < 255
 
 
 def test_crop_box_adds_padding_and_stays_inside_the_image() -> None:

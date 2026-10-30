@@ -248,6 +248,25 @@ async def test_auto_erase_with_a_mask_is_carried_to_the_job(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_erase_mask_adjustments_are_carried_to_the_job(tmp_path: Path):
+    manager, settings, _ = make_manager(tmp_path)
+    init_token = await upload_token(settings, png_bytes((128, 128)))
+    mask_token = await upload_token(settings, png_bytes((128, 128)), "mask.png")
+
+    response = await create_generation_job(
+        make_payload(
+            initImageToken=init_token, maskImageToken=mask_token,
+            eraseStrategy="auto", maskGrowPx=-12, maskFeatherPx=9,
+        ),
+        generation_jobs=manager, settings=settings,
+    )
+
+    job = manager.get_job(response.id)
+    assert job.erase_grow_px == -12
+    assert job.erase_feather_px == 9
+
+
+@pytest.mark.asyncio
 async def test_auto_erase_request_carries_protect_and_records_engine_choices(tmp_path: Path):
     manager, settings, engine = make_manager(tmp_path)
     init_token = await upload_token(settings, png_bytes((128, 128)))
@@ -277,6 +296,22 @@ async def test_auto_erase_request_carries_protect_and_records_engine_choices(tmp
     assert request.protect_mask_path == job.protect_mask_path
     assert request.mask_image_path == job.mask_image_path
     assert job.metadata["eraseAuto"] == choices
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"maskGrowPx": -201},
+        {"maskGrowPx": 201},
+        {"maskFeatherPx": -1},
+        {"maskFeatherPx": 101},
+    ],
+)
+def test_erase_mask_adjustments_validate_ranges(payload):
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        make_payload(**payload)
 
 
 @pytest.mark.asyncio

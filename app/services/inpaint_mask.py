@@ -219,6 +219,23 @@ def feather_mask(mask: np.ndarray, pixels: int) -> np.ndarray:
     return np.maximum(mask, ramp)
 
 
+def adjust_mask(mask: np.ndarray, grow_px: int, feather_px: int) -> np.ndarray:
+    adjusted = np.asarray(mask, dtype=np.uint8)
+    if grow_px > 0:
+        adjusted = dilate_mask(adjusted, grow_px)
+    elif grow_px < 0:
+        import cv2
+
+        radius = abs(grow_px)
+        kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (2 * radius + 1, 2 * radius + 1)
+        )
+        adjusted = cv2.erode(adjusted, kernel)
+    if feather_px > 0:
+        adjusted = feather_mask(adjusted, feather_px)
+    return np.asarray(adjusted, dtype=np.uint8)
+
+
 def mask_bbox(mask: np.ndarray) -> tuple[int, int, int, int] | None:
     """(left, top, right, bottom) del área marcada, o None si no hay nada."""
     marked = mask > MASK_THRESHOLD

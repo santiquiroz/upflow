@@ -210,6 +210,30 @@ def test_auto_edit_injects_available_osor_fill(auto_edit_context, monkeypatch) -
     assert captured["osor_fill"] == osor.fill_group
 
 
+def test_auto_erase_job_receives_grown_mask(auto_edit_context, monkeypatch) -> None:
+    from app.services import erase_auto
+    from app.services.inpaint_mask import mask_bbox
+    from app.services.inpaint_pipeline import MaskedEditSettings
+
+    engine, request, _ = auto_edit_context
+    request.erase_grow_px = 5
+    captured = {}
+
+    def orchestrate(base, mask, *_args, **_kwargs):
+        captured["mask"] = mask.copy()
+        return base, []
+
+    monkeypatch.setattr(erase_auto, "auto_erase", orchestrate)
+    mask = np.zeros((64, 64), dtype=np.uint8)
+    mask[20:40, 20:40] = 255
+    engine._edit_masked_image(
+        Image.new("RGB", (64, 64)), Image.fromarray(mask), Mock(),
+        MaskedEditSettings(0, 0, None, 1600), request,
+    )
+
+    assert mask_bbox(captured["mask"]) == (15, 15, 45, 45)
+
+
 @pytest.mark.parametrize("availability", [None, False])
 def test_auto_edit_falls_back_when_lama_is_missing_or_unavailable(
     auto_edit_context, monkeypatch, caplog, availability

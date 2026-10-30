@@ -523,6 +523,8 @@ class GenerationJob:
     # adentro y se comería el centro que la máscara viene a preservar.
     mask_dilate_px: int | None = None
     mask_feather_px: int | None = None
+    erase_grow_px: int = 0
+    erase_feather_px: int = 0
     auto_upscale: bool = False
     upscale_model_name: str | None = None
     upscale_scale: int | None = None

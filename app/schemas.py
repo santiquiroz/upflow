@@ -1346,6 +1346,8 @@ class CreateGenerationJobRequest(BaseModel):
     erase_engine: EraseEngine | None = Field(
         default=None, alias="eraseEngine"
     )
+    erase_grow_px: int = Field(default=0, ge=-200, le=200, alias="maskGrowPx")
+    erase_feather_px: int = Field(default=0, ge=0, le=100, alias="maskFeatherPx")
     # None = default por modo: 1.0 con máscara (inpainting), 0.6 sin (img2img).
     strength: float | None = Field(default=None, gt=0, le=1)
     # Recorrer la imagen a su tamaño real por tiles en vez de reducirla: agrega
