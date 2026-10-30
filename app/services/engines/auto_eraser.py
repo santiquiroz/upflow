@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from functools import cache
 
 import numpy as np
 from PIL import Image
@@ -15,7 +16,6 @@ from app.services.inpaint_mask import adjust_mask
 
 ERASER_AUTO_MODEL_ID = "eraser-auto"
 ERASER_AUTO_MODEL_LABEL = "Borrado automático (LaMa + OSOR)"
-SdxlEditFactory = Callable[[], SdxlEdit]
 
 
 class AutoEraser:
@@ -25,7 +25,7 @@ class AutoEraser:
         lama_eraser: LamaEraser,
         osor_eraser: OsorEraser,
         people_finder_factory: Callable[[str], PeopleFinder | None],
-        sdxl_edit_factory: Callable[[], SdxlEditFactory | None],
+        sdxl_edit_factory: Callable[[str], SdxlEdit | None],
     ) -> None:
         self.settings = settings
         self.lama_eraser = lama_eraser
@@ -35,6 +35,9 @@ class AutoEraser:
 
     def available(self) -> bool:
         return self.lama_eraser is not None and self.lama_eraser.available()
+
+    def osor_available(self) -> bool:
+        return self.osor_eraser is not None and self.osor_eraser.available()
 
     async def erase(
         self,
@@ -81,20 +84,14 @@ class AutoEraser:
                 )
             ) > 127
 
-        sdxl_edit: SdxlEditFactory | None = None
-        factory_resolved = False
-
+        @cache
         def resolve_sdxl_edit() -> SdxlEdit | None:
-            nonlocal sdxl_edit, factory_resolved
-            if not factory_resolved:
-                sdxl_edit = self.sdxl_edit_factory()
-                factory_resolved = True
-            return sdxl_edit
+            return self.sdxl_edit_factory(device)
 
         lama_fill = self.lama_eraser.fill_group
         osor_fill = (
             self.osor_eraser.fill_group
-            if self.osor_eraser is not None and self.osor_eraser.available()
+            if self.osor_available()
             else None
         )
         return auto_erase(

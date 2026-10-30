@@ -386,6 +386,21 @@ def test_forced_osor_without_fill_raises() -> None:
         auto_erase(image, mask, None, Mock(), Mock(), engine="osor")
 
 
+def test_forced_sdxl_without_installed_edit_raises() -> None:
+    image, mask = scene((100, 100, 220, 220))
+
+    with pytest.raises(ValueError, match="SDXL"):
+        auto_erase(
+            image,
+            mask,
+            None,
+            Mock(),
+            None,
+            engine="sdxl",
+            sdxl_edit_factory=lambda: None,
+        )
+
+
 def test_forced_lama_osor_runs_both_and_sdxl_uses_full_strength() -> None:
     image, mask = scene()
     lama = Mock(side_effect=lambda canvas, group, protect: fill_with(canvas, group, 90))

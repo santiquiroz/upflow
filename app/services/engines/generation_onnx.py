@@ -48,6 +48,11 @@ CPU_ONLY_WARNING = (
 ERASE_AUTO_NEGATIVE_PROMPT = (
     "sign, signage, letters, typography, symbol, logo, sculpture, statue, tiles, mosaic, pattern"
 )
+SDXL_ERASE_PROMPT = "continue the surrounding background naturally"
+SDXL_ERASE_STEPS = 30
+SDXL_ERASE_GUIDANCE = 7.5
+SDXL_ERASE_SIZE = 1024
+SDXL_ERASE_SEED = 0
 
 _MEMORY_TOKENS = ("memory", "alloc", "oom")
 _CUDA_TOKENS = ("cudaexecutionprovider", "cuda", "tensorrt")
@@ -111,6 +116,33 @@ def _read_declared_class_name(pipeline_dir: Path) -> str:
             "no se puede elegir la clase de carga."
         )
     return declared
+
+
+def select_installed_sdxl_inpaint_model(
+    registry: Any | None, models_path: Path
+) -> tuple[str, Path] | None:
+    if registry is None:
+        return None
+    from app.services.generation_pipeline_modes import supports_inpaint
+    from app.services.model_registry import ModelKind, ModelStatus
+
+    root = models_path.resolve()
+    for entry in registry.list():
+        if (
+            entry.kind != ModelKind.diffusion_onnx
+            or entry.status != ModelStatus.installed
+        ):
+            continue
+        pipeline_dir = (models_path / (entry.file_path or "")).resolve()
+        if not pipeline_dir.is_relative_to(root) or not pipeline_dir.is_dir():
+            continue
+        try:
+            declared = _read_declared_class_name(pipeline_dir)
+        except Exception:  # noqa: BLE001 -- un modelo mal formado no invalida otros instalados
+            continue
+        if "XL" in declared and supports_inpaint(declared):
+            return entry.id, pipeline_dir
+    return None
 
 
 def _pipeline_mode(request: "GenerationRequest") -> str:
@@ -441,67 +473,57 @@ class GenerationEngine:
         return _pipeline_precision(pipeline) if pipeline is not None else None
 
     def sdxl_edit_for_installed_inpaint(self, device: str) -> SdxlEdit | None:
-        if self.registry is None:
-            return None
-        from app.services.generation_pipeline_modes import supports_inpaint
-        from app.services.model_registry import ModelKind, ModelStatus
-
-        selected = None
-        for entry in self.registry.list():
-            if (
-                entry.kind != ModelKind.diffusion_onnx
-                or entry.status != ModelStatus.installed
-            ):
-                continue
-            pipeline_dir = self.settings.models_path / (entry.file_path or "")
-            try:
-                declared = _read_declared_class_name(pipeline_dir)
-            except Exception:  # noqa: BLE001 -- un modelo mal formado no invalida otros instalados
-                continue
-            if "XL" in declared and supports_inpaint(declared):
-                selected = (entry.id, pipeline_dir)
-                break
+        selected = select_installed_sdxl_inpaint_model(
+            self.registry, self.settings.models_path
+        )
         if selected is None:
             return None
 
         model_id, pipeline_dir = selected
 
-        def edit(base_image, group_mask, strength):
-            from PIL import Image
+        return partial(self._sdxl_inpaint_edit, model_id, pipeline_dir, device)
 
-            from app.services.inpaint_pipeline import MaskedEditSettings, run_masked_edit
+    def _sdxl_inpaint_edit(
+        self,
+        model_id: str,
+        pipeline_dir: Path,
+        device: str,
+        base_image: Any,
+        group_mask: Any,
+        strength: float,
+    ) -> Any:
+        from PIL import Image
 
-            pipeline = self._get_pipeline(model_id, pipeline_dir, device, "inpaint")
-            request = GenerationRequest(
-                prompt="continue the surrounding background naturally",
-                negative_prompt=None,
-                steps=30,
-                guidance=7.5,
-                width=1024,
-                height=1024,
-                seed=0,
-                strength=strength,
-            )
-            run_model = self._masked_edit_model(
-                pipeline, request, lambda *_args: None,
-                self._pipeline_run_lock((model_id, device, "inpaint")),
-            )
-            settings = MaskedEditSettings(
-                dilate_px=0,
-                feather_px=0,
-                padding_px=None,
-                target_side=1024,
-                native_side=_native_side_for(pipeline),
-                seed=0,
-            )
-            return run_masked_edit(
-                base_image,
-                Image.fromarray(group_mask),
-                run_model,
-                settings,
-            )
+        from app.services.inpaint_pipeline import MaskedEditSettings, run_masked_edit
 
-        return edit
+        pipeline = self._get_pipeline(model_id, pipeline_dir, device, "inpaint")
+        request = GenerationRequest(
+            prompt=SDXL_ERASE_PROMPT,
+            negative_prompt=None,
+            steps=SDXL_ERASE_STEPS,
+            guidance=SDXL_ERASE_GUIDANCE,
+            width=SDXL_ERASE_SIZE,
+            height=SDXL_ERASE_SIZE,
+            seed=SDXL_ERASE_SEED,
+            strength=strength,
+        )
+        run_model = self._masked_edit_model(
+            pipeline,
+            request,
+            lambda *_args: None,
+            self._pipeline_run_lock((model_id, device, "inpaint")),
+        )
+        settings = MaskedEditSettings(
+            dilate_px=0,
+            feather_px=0,
+            padding_px=None,
+            target_side=SDXL_ERASE_SIZE,
+            native_side=_native_side_for(pipeline),
+            seed=SDXL_ERASE_SEED,
+        )
+        return run_masked_edit(
+            base_image, Image.fromarray(group_mask), run_model, settings
+        )
 
     async def run(
         self,

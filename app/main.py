@@ -180,8 +180,8 @@ async def lifespan(app: FastAPI):
         people_finder_factory=lambda device: make_people_finder(
             person_detector, device=device
         ),
-        sdxl_edit_factory=lambda: generation_engine.sdxl_edit_for_installed_inpaint(
-            settings.default_device
+        sdxl_edit_factory=lambda device: generation_engine.sdxl_edit_for_installed_inpaint(
+            device
         ),
     )
     generation_job_manager = GenerationJobManager(

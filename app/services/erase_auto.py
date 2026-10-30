@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 
 import numpy as np
@@ -23,6 +24,8 @@ from app.services.inpaint_score import fill_score
 LamaFill = Callable[[np.ndarray, np.ndarray, np.ndarray], np.ndarray]
 SdxlEdit = Callable[[Image.Image, np.ndarray, float], Image.Image]
 FaceFinder = Callable[[np.ndarray, np.ndarray], list[tuple[int, int, int, int]]]
+
+logger = logging.getLogger(__name__)
 
 
 def _has_people(
@@ -164,6 +167,7 @@ def _auto_group(
     find_people: PeopleFinder | None,
     original: np.ndarray,
     alpha: np.ndarray,
+    zone_index: int,
 ) -> tuple[Image.Image, dict]:
     left, top, right, bottom = mask_bbox((group_mask > 0).astype(np.uint8) * 255)
     if max(right - left, bottom - top) <= small_side:
@@ -178,6 +182,11 @@ def _auto_group(
         if sdxl_edit is None and sdxl_edit_factory is not None:
             sdxl_edit = sdxl_edit_factory()
         if sdxl_edit is None:
+            logger.warning(
+                "La zona %s quería usar SDXL, pero no hay un modelo de "
+                "inpainting instalado; se usará LaMa.",
+                zone_index,
+            )
             filled = lama_fill(np.array(current, copy=True), group_mask, core)
             current = Image.fromarray(filled)
             return _composite_subject(current, original, alpha), {"engine": "lama"}
@@ -237,7 +246,7 @@ def auto_erase(
             else _auto_group(
                 current, group_mask, core, lama_fill, sdxl_edit, sdxl_edit_factory,
                 small_side, hybrid_strength, osor_fill, find_faces, find_people,
-                original, alpha,
+                original, alpha, index,
             )
         )
         choice["index"] = index

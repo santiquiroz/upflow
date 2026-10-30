@@ -14,7 +14,11 @@ from app.services.auth.quotas import QuotaService
 from app.services.device_semaphores import DeviceSemaphores
 from app.services.devices_service import AUTO_DEVICE_ID, DevicesService
 from app.services.engines.auto_eraser import ERASER_AUTO_MODEL_ID
-from app.services.engines.generation_onnx import GenerationEngine, GenerationRequest
+from app.services.engines.generation_onnx import (
+    GenerationEngine,
+    GenerationRequest,
+    select_installed_sdxl_inpaint_model,
+)
 from app.services.engines.lama_eraser import ERASER_LAMA_MODEL_ID
 from app.services.engines.migan_eraser import ERASER_MODEL_ID
 from app.services.engines.sdcpp_engine import SDCPP_MODEL_ID
@@ -363,16 +367,9 @@ class GenerationJobManager(QueuedJobManager[GenerationJob]):
             return None
 
     def _has_sdxl_inpaint_model(self) -> bool:
-        for entry in self.registry.list():
-            if (
-                entry.kind != ModelKind.diffusion_onnx
-                or entry.status != ModelStatus.installed
-            ):
-                continue
-            declared = self._declared_pipeline_class(entry)
-            if declared is not None and "XL" in declared and supports_inpaint(declared):
-                return True
-        return False
+        return select_installed_sdxl_inpaint_model(
+            self.registry, self.settings.models_path
+        ) is not None
 
     async def _validate_device(self, device: str | None) -> None:
         if device is None:
@@ -404,9 +401,18 @@ class GenerationJobManager(QueuedJobManager[GenerationJob]):
         out of bounds for dimension 0 with size N"). Todo job sin device
         reserva la GPU por defecto, que es donde efectivamente corre.
         """
-        if job.model_id in (ERASER_LAMA_MODEL_ID, ERASER_AUTO_MODEL_ID):
+        if job.model_id == ERASER_LAMA_MODEL_ID:
+            return "cpu"
+        if job.model_id == ERASER_AUTO_MODEL_ID and not self._auto_eraser_needs_gpu(job):
             return "cpu"
         return job.device or self.settings.default_device
+
+    def _auto_eraser_needs_gpu(self, job: GenerationJob) -> bool:
+        return not (
+            self.auto_eraser is not None
+            and self.auto_eraser.osor_available()
+            and job.erase_engine != "sdxl"
+        )
 
     def _admit(self, job: GenerationJob):
         return self.device_semaphores.acquire(self._reservation_device(job))
@@ -527,12 +533,7 @@ class GenerationJobManager(QueuedJobManager[GenerationJob]):
             mask_image = source_mask.convert("L")
         device = job.device or self.settings.default_device
         result = await self._erase_image(job, base_image, mask_image, device)
-        self._record_execution_provider(
-            job,
-            "cpu"
-            if job.model_id in (ERASER_LAMA_MODEL_ID, ERASER_AUTO_MODEL_ID)
-            else device,
-        )
+        self._record_execution_provider(job, self._reservation_device(job))
         output_path = self.settings.outputs_path / f"{job.id}.png"
         output_path.parent.mkdir(parents=True, exist_ok=True)
         result.save(output_path)
@@ -550,7 +551,7 @@ class GenerationJobManager(QueuedJobManager[GenerationJob]):
             result, choices = await self.auto_eraser.erase(
                 base_image,
                 mask_image,
-                device,
+                self._reservation_device(job),
                 protect_image=protect_image,
                 engine=job.erase_engine,
                 grow_px=job.erase_grow_px,

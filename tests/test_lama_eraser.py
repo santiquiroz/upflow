@@ -390,6 +390,35 @@ async def test_capabilities_offer_lama_only_when_installed(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_capabilities_list_eraser_auto_first_when_lama_installed(tmp_path):
+    from app.api.routes import generation_capabilities
+    from app.services.engines.auto_eraser import ERASER_AUTO_MODEL_ID
+    from app.services.model_registry import ModelRegistry
+
+    class FakeDevices:
+        def list_devices(self):
+            return [{"id": "cpu", "kind": "cpu", "name": "CPU", "backend": "cpu"}]
+
+    installed = make_settings(tmp_path / "installed-auto")
+    missing = make_settings(tmp_path / "missing-auto", installed=False)
+    offered = await generation_capabilities(
+        registry=ModelRegistry(installed),
+        devices_service=FakeDevices(),
+        settings=installed,
+    )
+    absent = await generation_capabilities(
+        registry=ModelRegistry(missing),
+        devices_service=FakeDevices(),
+        settings=missing,
+    )
+
+    assert offered.models[0].id == ERASER_AUTO_MODEL_ID
+    assert offered.models[0].erase_only is True
+    assert offered.models[0].supports_inpaint is True
+    assert not any(model.id == ERASER_AUTO_MODEL_ID for model in absent.models)
+
+
+@pytest.mark.asyncio
 async def test_job_manager_dispatches_lama_with_protect_mask(tmp_path):
     from app.services.device_semaphores import DeviceSemaphores
     from app.services.generation_job_manager import GenerationJobManager
