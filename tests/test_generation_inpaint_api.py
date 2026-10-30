@@ -280,6 +280,80 @@ async def test_auto_erase_request_carries_protect_and_records_engine_choices(tmp
 
 
 @pytest.mark.asyncio
+async def test_forced_erase_engine_is_carried_to_generation_request(tmp_path: Path):
+    manager, settings, engine = make_manager(tmp_path)
+    init_token = await upload_token(settings, png_bytes((128, 128)))
+    mask_token = await upload_token(settings, png_bytes((128, 128)), "mask.png")
+
+    response = await create_generation_job(
+        make_payload(
+            initImageToken=init_token, maskImageToken=mask_token,
+            eraseEngine="lama", device="cpu",
+        ),
+        generation_jobs=manager, settings=settings,
+    )
+    job = manager.get_job(response.id)
+    await manager._run_engine(job)
+
+    assert engine.requests[0].erase_engine == "lama"
+
+
+@pytest.mark.asyncio
+async def test_forced_erase_engine_without_mask_is_400(tmp_path: Path):
+    manager, settings, _ = make_manager(tmp_path)
+
+    with pytest.raises(HTTPException) as error:
+        await create_generation_job(
+            make_payload(eraseEngine="lama"),
+            generation_jobs=manager, settings=settings,
+        )
+
+    assert error.value.status_code == 400
+    assert manager.jobs == {}
+
+
+@pytest.mark.asyncio
+async def test_forced_osor_without_pack_is_400(tmp_path: Path, monkeypatch):
+    manager, settings, _ = make_manager(tmp_path)
+    monkeypatch.setattr(Settings, "osor_available", lambda _settings: False)
+    init_token = await upload_token(settings, png_bytes((128, 128)))
+    mask_token = await upload_token(settings, png_bytes((128, 128)), "mask.png")
+
+    with pytest.raises(HTTPException) as error:
+        await create_generation_job(
+            make_payload(
+                initImageToken=init_token, maskImageToken=mask_token, eraseEngine="osor",
+            ),
+            generation_jobs=manager, settings=settings,
+        )
+
+    assert error.value.status_code == 400
+    assert "OSOR" in error.value.detail
+    assert manager.jobs == {}
+
+
+@pytest.mark.asyncio
+async def test_forced_sdxl_without_inpaint_model_is_400(tmp_path: Path):
+    manager, settings, _ = make_manager(
+        tmp_path, declared_class="StableDiffusion3Pipeline"
+    )
+    init_token = await upload_token(settings, png_bytes((128, 128)))
+    mask_token = await upload_token(settings, png_bytes((128, 128)), "mask.png")
+
+    with pytest.raises(HTTPException) as error:
+        await create_generation_job(
+            make_payload(
+                initImageToken=init_token, maskImageToken=mask_token, eraseEngine="sdxl",
+            ),
+            generation_jobs=manager, settings=settings,
+        )
+
+    assert error.value.status_code == 400
+    assert "SDXL" in error.value.detail
+    assert manager.jobs == {}
+
+
+@pytest.mark.asyncio
 async def test_a_model_without_inpaint_support_is_a_400(tmp_path: Path):
     manager, settings, _ = make_manager(tmp_path, declared_class="LatentConsistencyModelPipeline")
     init_token = await upload_token(settings, png_bytes((128, 128)))

@@ -102,7 +102,12 @@ def auto_erase(
     osor_fill: LamaFill | None = None,
     find_faces: FaceFinder = faces_inside,
     find_people: PeopleFinder | None = None,
+    engine: str | None = None,
 ) -> tuple[Image.Image, list[dict]]:
+    if engine not in {None, "lama", "osor", "lama+osor", "sdxl"}:
+        raise ValueError(f"Motor de borrado desconocido: {engine}")
+    if engine in {"osor", "lama+osor"} and osor_fill is None:
+        raise ValueError("El motor de borrado OSOR no está disponible.")
     current = base_rgb.convert("RGB")
     original = np.array(current, copy=True)
     protect = (
@@ -122,7 +127,27 @@ def auto_erase(
     groups = edit_groups(prepared, current.size, settings)
     for index, (box, group_mask) in enumerate(groups):
         left, top, right, bottom = mask_bbox((group_mask > 0).astype(np.uint8) * 255)
-        if max(right - left, bottom - top) <= small_side:
+        if engine is not None:
+            if engine == "lama":
+                current = Image.fromarray(lama_fill(np.array(current, copy=True), group_mask, core))
+            elif engine == "osor":
+                current = Image.fromarray(
+                    osor_fill(np.array(current, copy=True), group_mask, core)
+                )
+            elif engine == "lama+osor":
+                prefilled = lama_fill(np.array(current, copy=True), group_mask, core)
+                current = Image.fromarray(osor_fill(prefilled, group_mask, core))
+            else:
+                current = sdxl_edit(current.copy(), group_mask, 1.0)
+            current = _composite_subject(current, original, alpha)
+            residual_person = bool(find_faces(np.asarray(current), group_mask))
+            residual_person = residual_person or _has_people(find_people, np.asarray(current), group_mask)
+            choice = {
+                "engine": engine,
+                "guard": None,
+                "residualPerson": residual_person,
+            }
+        elif max(right - left, bottom - top) <= small_side:
             filled = lama_fill(np.array(current, copy=True), group_mask, core)
             current, choice = Image.fromarray(filled), {"engine": "lama"}
         elif osor_fill is not None:
@@ -135,7 +160,8 @@ def auto_erase(
                 current, group_mask, core, lama_fill, sdxl_edit, hybrid_strength,
                 original, alpha,
             )
-        current = _composite_subject(current, original, alpha)
+        if engine is None:
+            current = _composite_subject(current, original, alpha)
         choice["index"] = index
         choice["box"] = [int(coordinate) for coordinate in box]
         choices.append(choice)

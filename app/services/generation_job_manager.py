@@ -28,7 +28,7 @@ from app.services.generation_speed import anchored_params, speed_class
 from app.services.job_manager import select_upscale_engine
 from app.services.job_manager_base import QueuedJobManager
 from app.services.missing_pack import missing_pack_message
-from app.services.model_registry import ModelKind, ModelRegistry
+from app.services.model_registry import ModelKind, ModelRegistry, ModelStatus
 from app.services.progress import (
     advance_generation_stage,
     apply_generation_step_progress,
@@ -136,6 +136,7 @@ class GenerationJobManager(QueuedJobManager[GenerationJob]):
         mask_image_path: Path | None = None,
         protect_mask_path: Path | None = None,
         erase_strategy: Literal["auto"] | None = None,
+        erase_engine: Literal["lama", "osor", "lama+osor", "sdxl"] | None = None,
         mask_dilate_px: int | None = None,
         mask_feather_px: int | None = None,
         auto_upscale: bool = False,
@@ -154,6 +155,12 @@ class GenerationJobManager(QueuedJobManager[GenerationJob]):
             raise ValueError("el borrado LaMa necesita una máscara")
         if erase_strategy is not None and mask_image_path is None:
             raise ValueError("eraseStrategy necesita una máscara")
+        if erase_engine is not None and mask_image_path is None:
+            raise ValueError("eraseEngine necesita una máscara")
+        if erase_engine in {"osor", "lama+osor"} and not self.settings.osor_available():
+            raise ValueError(missing_pack_message("osor"))
+        if erase_engine == "sdxl" and not self._has_sdxl_inpaint_model():
+            raise ValueError("No hay ningún modelo SDXL de inpainting instalado.")
         if mask_image_path is not None:
             self._validate_inpaint(model_id, init_image_path, mask_image_path, strength)
         elif init_image_path is not None:
@@ -172,6 +179,7 @@ class GenerationJobManager(QueuedJobManager[GenerationJob]):
             mask_image_path=mask_image_path,
             protect_mask_path=protect_mask_path,
             erase_strategy=erase_strategy,
+            erase_engine=erase_engine,
             mask_dilate_px=mask_dilate_px, mask_feather_px=mask_feather_px,
             auto_upscale=auto_upscale, upscale_model_name=upscale_model_name,
             upscale_scale=upscale_scale, upscale_model_id=upscale_model_id,
@@ -343,6 +351,18 @@ class GenerationJobManager(QueuedJobManager[GenerationJob]):
         except Exception:  # noqa: BLE001 - una lectura fallida no es un veredicto
             return None
 
+    def _has_sdxl_inpaint_model(self) -> bool:
+        for entry in self.registry.list():
+            if (
+                entry.kind != ModelKind.diffusion_onnx
+                or entry.status != ModelStatus.installed
+            ):
+                continue
+            declared = self._declared_pipeline_class(entry)
+            if declared is not None and "XL" in declared and supports_inpaint(declared):
+                return True
+        return False
+
     async def _validate_device(self, device: str | None) -> None:
         if device is None:
             return
@@ -420,6 +440,7 @@ class GenerationJobManager(QueuedJobManager[GenerationJob]):
             tiled_detail=job.tiled_detail,
             mask_image_path=job.mask_image_path, scheduler=job.scheduler,
             protect_mask_path=job.protect_mask_path, erase_strategy=job.erase_strategy,
+            erase_engine=job.erase_engine,
             **mask_preparation_overrides(job),
         )
 

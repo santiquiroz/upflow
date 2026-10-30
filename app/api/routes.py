@@ -2860,6 +2860,7 @@ async def create_generation_job(
             mask_image_path=mask_image_path,
             protect_mask_path=protect_mask_path,
             erase_strategy=payload.erase_strategy,
+            erase_engine=payload.erase_engine,
             auto_upscale=payload.auto_upscale,
             upscale_model_name=payload.upscale_model_name, upscale_scale=payload.upscale_scale,
             upscale_model_id=payload.upscale_model_id, owner=current_user,

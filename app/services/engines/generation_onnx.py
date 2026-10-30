@@ -377,6 +377,7 @@ class GenerationRequest:
     # diffusers): no toca el grafo ONNX y vale para cualquier EP.
     scheduler: str | None = None
     erase_strategy: Literal["auto"] | None = None
+    erase_engine: Literal["lama", "osor", "lama+osor", "sdxl"] | None = None
     protect_mask_path: Path | None = None
     erase_auto: list[dict] | None = None
 
@@ -611,7 +612,7 @@ class GenerationEngine:
                 "callback": chain_step_callbacks(soft_callback, on_step), "callback_steps": 1,
             }
             negative = request.negative_prompt or ""
-            if request.erase_strategy == "auto":
+            if request.erase_strategy == "auto" or request.erase_engine is not None:
                 negative = ", ".join(filter(None, (negative, ERASE_AUTO_NEGATIVE_PROMPT)))
             if negative:
                 call_kwargs["negative_prompt"] = negative
@@ -635,11 +636,16 @@ class GenerationEngine:
         from app.services.erase_auto import auto_erase
         from app.services.inpaint_pipeline import run_masked_edit
 
-        if request.erase_strategy != "auto":
+        if request.erase_strategy != "auto" and request.erase_engine is None:
             return run_masked_edit(base_image, mask_image, run_model, settings)
-        if self.lama_eraser is None or not self.lama_eraser.available():
+        lama_available = self.lama_eraser is not None and self.lama_eraser.available()
+        if request.erase_engine is None and not lama_available:
             logger.warning("erase auto: LaMa no disponible, sigo con el inpainting actual")
             return run_masked_edit(base_image, mask_image, run_model, settings)
+        if request.erase_engine in {"lama", "lama+osor"} and not lama_available:
+            from app.services.missing_pack import missing_pack_message
+
+            raise ValueError(missing_pack_message("lama"))
         protect = None
         if request.protect_mask_path is not None:
             protect = np.asarray(_load_mask_image(request.protect_mask_path, *base_image.size)) > 127
@@ -652,17 +658,27 @@ class GenerationEngine:
             )
 
         mask = np.asarray(mask_image.resize(base_image.size, Image.Resampling.NEAREST))
+
+        if self.lama_eraser is not None:
+            lama_fill = self.lama_eraser.fill_group
+        else:
+            def lama_fill(canvas, group_mask, core):
+                from app.services.missing_pack import missing_pack_message
+
+                raise ValueError(missing_pack_message("lama"))
+
         edited, request.erase_auto = auto_erase(
             base_image,
             mask,
             protect,
-            self.lama_eraser.fill_group,
+            lama_fill,
             sdxl_edit,
             osor_fill=(
                 self.osor_eraser.fill_group
                 if self.osor_eraser is not None and self.osor_eraser.available()
                 else None
             ),
+            engine=request.erase_engine,
         )
         return edited
 

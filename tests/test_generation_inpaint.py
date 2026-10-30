@@ -159,14 +159,16 @@ def test_auto_edit_injects_providers_and_preserves_strength_clamping(
     pipeline.unet.config.in_channels = channels
     recorded_settings = []
     choices = [{"engine": "sdxl", "scores": {"sdxl": {"score": 0.0}}}]
+    generation_engine = engine
 
     def masked_edit(base, mask, model, settings):
         recorded_settings.append(settings)
         return model(base, mask, *base.size)
 
-    def orchestrate(base, mask, protect, lama_fill, sdxl_edit, *, osor_fill):
-        assert lama_fill == engine.lama_eraser.fill_group
+    def orchestrate(base, mask, protect, lama_fill, sdxl_edit, *, osor_fill, engine=None):
+        assert lama_fill == generation_engine.lama_eraser.fill_group
         assert osor_fill is None
+        assert engine is None
         assert protect[30, 30] and not protect[0, 0]
         assert protect.dtype == bool
         sdxl_edit(base, mask, 0.5)

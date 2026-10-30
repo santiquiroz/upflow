@@ -304,3 +304,77 @@ def test_large_group_without_osor_keeps_existing_candidate_scoring() -> None:
     assert choices[0]["engine"] in {"hibrido", "sdxl"}
     assert "scores" in choices[0]
     assert sdxl.call_count == 2
+
+
+def test_forced_lama_applies_to_large_groups() -> None:
+    image, mask = scene((100, 100, 220, 220))
+    lama = Mock(side_effect=lambda canvas, group, protect: fill_with(canvas, group, 90))
+    osor = Mock(side_effect=AssertionError("lama forzado no debe llamar a OSOR"))
+    sdxl = Mock(side_effect=AssertionError("lama forzado no debe llamar a SDXL"))
+
+    result, choices = auto_erase(
+        image, mask, None, lama, sdxl, small_side=100, osor_fill=osor, engine="lama"
+    )
+
+    lama.assert_called_once()
+    osor.assert_not_called()
+    sdxl.assert_not_called()
+    assert choices[0]["engine"] == "lama"
+    assert np.asarray(result)[160, 160].tolist() == [90, 90, 90]
+
+
+def test_forced_engine_never_switches_but_flags_residual() -> None:
+    image, mask = scene((100, 100, 220, 220))
+    osor = Mock(side_effect=lambda canvas, group, protect: fill_with(canvas, group, 120))
+
+    _, choices = auto_erase(
+        image, mask, None, Mock(), Mock(), small_side=100, osor_fill=osor,
+        find_faces=lambda _rgb, _mask: [(110, 110, 20, 20)],
+        find_people=lambda _rgb, _mask: [(110, 110, 100, 100)],
+        engine="osor",
+    )
+
+    osor.assert_called_once()
+    assert choices[0]["engine"] == "osor"
+    assert choices[0]["guard"] is None
+    assert choices[0]["residualPerson"] is True
+
+
+def test_forced_osor_applies_to_small_groups() -> None:
+    image, mask = scene()
+    osor = Mock(side_effect=lambda canvas, group, protect: fill_with(canvas, group, 120))
+
+    _, choices = auto_erase(
+        image, mask, None, Mock(), Mock(), osor_fill=osor, engine="osor"
+    )
+
+    osor.assert_called_once()
+    assert choices[0]["engine"] == "osor"
+
+
+def test_forced_osor_without_fill_raises() -> None:
+    image, mask = scene()
+
+    with pytest.raises(ValueError, match="OSOR"):
+        auto_erase(image, mask, None, Mock(), Mock(), engine="osor")
+
+
+def test_forced_lama_osor_runs_both_and_sdxl_uses_full_strength() -> None:
+    image, mask = scene()
+    lama = Mock(side_effect=lambda canvas, group, protect: fill_with(canvas, group, 90))
+    osor = Mock(side_effect=lambda canvas, group, protect: fill_with(canvas, group, 120))
+
+    _, choices = auto_erase(
+        image, mask, None, lama, Mock(), osor_fill=osor, engine="lama+osor"
+    )
+
+    lama.assert_called_once()
+    osor.assert_called_once()
+    assert choices[0]["engine"] == "lama+osor"
+
+    sdxl = Mock(return_value=Image.new("RGB", image.size, (150, 150, 150)))
+    _, choices = auto_erase(image, mask, None, Mock(), sdxl, engine="sdxl")
+
+    sdxl.assert_called_once()
+    assert sdxl.call_args.args[2] == 1.0
+    assert choices[0]["engine"] == "sdxl"
