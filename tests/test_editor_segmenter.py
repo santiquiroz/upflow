@@ -153,6 +153,20 @@ async def test_segment_box_clips_box_to_image(tmp_path: Path, monkeypatch: pytes
 
 
 @pytest.mark.asyncio
+async def test_segment_box_outside_image_returns_empty_mask_without_decoder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    segmenter, _, decoder, image_path = make_segmenter(tmp_path, monkeypatch)
+
+    png = await segmenter.segment_box(image_path, (70.0, 5.0, 80.0, 10.0), "dml:0")
+
+    decoded = Image.open(io.BytesIO(png))
+    assert decoded.size == (64, 32)
+    assert np.asarray(decoded).max() == 0
+    assert decoder.inputs == []
+
+
+@pytest.mark.asyncio
 async def test_embeddings_are_cached_per_image(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     segmenter, encoder, _, image_path = make_segmenter(tmp_path, monkeypatch)
 

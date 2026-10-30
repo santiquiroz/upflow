@@ -57,14 +57,12 @@ def prepare_encoder_input(rgb: np.ndarray) -> tuple[np.ndarray, float]:
 def build_decoder_inputs(
     embeddings: np.ndarray, x: float, y: float, scale: float, orig_h: int, orig_w: int
 ) -> dict[str, np.ndarray]:
-    return {
-        "image_embeddings": embeddings,
-        "point_coords": np.array([[[x * scale, y * scale], [0.0, 0.0]]], dtype=np.float32),
-        "point_labels": np.array([[1.0, -1.0]], dtype=np.float32),
-        "mask_input": np.zeros((1, 1, 256, 256), dtype=np.float32),
-        "has_mask_input": np.zeros((1,), dtype=np.float32),
-        "orig_im_size": np.array([orig_h, orig_w], dtype=np.float32),
-    }
+    inputs = _base_decoder_inputs(embeddings, orig_h, orig_w)
+    inputs.update(
+        point_coords=np.array([[[x * scale, y * scale], [0.0, 0.0]]], dtype=np.float32),
+        point_labels=np.array([[1.0, -1.0]], dtype=np.float32),
+    )
+    return inputs
 
 
 def build_box_decoder_inputs(
@@ -75,16 +73,41 @@ def build_box_decoder_inputs(
     orig_w: int,
 ) -> dict[str, np.ndarray]:
     x0, y0, x1, y1 = box
-    return {
-        "image_embeddings": embeddings,
-        "point_coords": np.array(
+    inputs = _base_decoder_inputs(embeddings, orig_h, orig_w)
+    inputs.update(
+        point_coords=np.array(
             [[[x0 * scale, y0 * scale], [x1 * scale, y1 * scale]]], dtype=np.float32
         ),
-        "point_labels": np.array([[2.0, 3.0]], dtype=np.float32),
+        point_labels=np.array([[2.0, 3.0]], dtype=np.float32),
+    )
+    return inputs
+
+
+def _base_decoder_inputs(
+    embeddings: np.ndarray, orig_h: int, orig_w: int
+) -> dict[str, np.ndarray]:
+    return {
+        "image_embeddings": embeddings,
         "mask_input": np.zeros((1, 1, 256, 256), dtype=np.float32),
         "has_mask_input": np.zeros((1,), dtype=np.float32),
         "orig_im_size": np.array([orig_h, orig_w], dtype=np.float32),
     }
+
+
+def _clamp(value: float, upper: int) -> float:
+    return min(max(value, 0.0), float(upper))
+
+
+def _clip_box(
+    box: tuple[float, float, float, float], width: int, height: int
+) -> tuple[float, float, float, float]:
+    x0, y0, x1, y1 = box
+    return (
+        _clamp(x0, width - 1),
+        _clamp(y0, height - 1),
+        _clamp(x1, width - 1),
+        _clamp(y1, height - 1),
+    )
 
 
 def mask_to_png_bytes(mask: np.ndarray) -> bytes:
@@ -132,27 +155,29 @@ class EditorSegmenter:
         return await asyncio.to_thread(self._segment_box_blocking, image_path, box, device)
 
     def _segment_blocking(self, image_path: Path, x: float, y: float, device: str) -> bytes:
-        embeddings, scale, orig_h, orig_w = self._embeddings_for(image_path, device)
-        decoder = self._get_session("decoder", self.settings.editor_segmenter_decoder_path, device)
-        clamped_x = min(max(x, 0.0), float(orig_w - 1))
-        clamped_y = min(max(y, 0.0), float(orig_h - 1))
+        embeddings, scale, orig_h, orig_w, decoder = self._prepare(image_path, device)
+        clamped_x = _clamp(x, orig_w - 1)
+        clamped_y = _clamp(y, orig_h - 1)
         inputs = build_decoder_inputs(embeddings, clamped_x, clamped_y, scale, orig_h, orig_w)
         return self._run_decoder(decoder, inputs)
 
     def _segment_box_blocking(
         self, image_path: Path, box: tuple[float, float, float, float], device: str
     ) -> bytes:
-        embeddings, scale, orig_h, orig_w = self._embeddings_for(image_path, device)
-        decoder = self._get_session("decoder", self.settings.editor_segmenter_decoder_path, device)
-        x0, y0, x1, y1 = box
-        clamped_box = (
-            min(max(x0, 0.0), float(orig_w - 1)),
-            min(max(y0, 0.0), float(orig_h - 1)),
-            min(max(x1, 0.0), float(orig_w - 1)),
-            min(max(y1, 0.0), float(orig_h - 1)),
-        )
+        embeddings, scale, orig_h, orig_w, decoder = self._prepare(image_path, device)
+        clamped_box = _clip_box(box, orig_w, orig_h)
+        x0, y0, x1, y1 = clamped_box
+        if x0 >= x1 or y0 >= y1:
+            return mask_to_png_bytes(np.zeros((orig_h, orig_w), dtype=bool))
         inputs = build_box_decoder_inputs(embeddings, clamped_box, scale, orig_h, orig_w)
         return self._run_decoder(decoder, inputs)
+
+    def _prepare(
+        self, image_path: Path, device: str
+    ) -> tuple[np.ndarray, float, int, int, Any]:
+        embeddings, scale, orig_h, orig_w = self._embeddings_for(image_path, device)
+        decoder = self._get_session("decoder", self.settings.editor_segmenter_decoder_path, device)
+        return embeddings, scale, orig_h, orig_w, decoder
 
     @staticmethod
     def _run_decoder(decoder: Any, inputs: dict[str, np.ndarray]) -> bytes:
