@@ -195,8 +195,9 @@ describe("replayMasks", () => {
 
     expect(protect.context.clearRect).toHaveBeenCalledTimes(1);
     expect(protect.context.clearRect).toHaveBeenCalledWith(0, 0, 2, 1);
-    expect(protect.context.drawImage).toHaveBeenCalledTimes(1);
-    expect(protect.context.drawImage).toHaveBeenCalledWith(protectedSegment, 0, 0);
+    expect(protect.context.drawImage).toHaveBeenCalledTimes(2);
+    expect(protect.context.drawImage).toHaveBeenNthCalledWith(1, protectedSegment, 0, 0);
+    expect(protect.context.drawImage).toHaveBeenNthCalledWith(2, edit.canvas, 0, 0);
     expect(protect.context.clearRect.mock.invocationCallOrder[0]).toBeLessThan(
       protect.context.drawImage.mock.invocationCallOrder[0],
     );
@@ -207,6 +208,42 @@ describe("replayMasks", () => {
 
     expect(protect.context.drawImage).not.toHaveBeenCalled();
     expect(hasProtection(history.slice(0, -2))).toBe(false);
+  });
+
+  it("lets the erase win over a protection whose own tap falls outside the erase area", () => {
+    const edit = maskCanvas(new Uint8ClampedArray([255, 255, 255, 0, 255, 255, 255, 0]));
+    const protect = maskCanvas();
+    const greedyProtection = maskCanvas().canvas;
+    const operations: string[] = [];
+    protect.context.drawImage.mockImplementation(() => operations.push(protect.context.globalCompositeOperation));
+
+    replayMasks(edit.canvas, protect.canvas, [
+      { kind: "segment", mask: maskCanvas().canvas, point: { x: 1, y: 0 } },
+      { kind: "protect", mask: greedyProtection, point: { x: 0, y: 0 } },
+    ], null);
+
+    expect(edit.context.drawImage.mock.calls.some(([source]) => source === greedyProtection)).toBe(false);
+    expect(protect.context.drawImage.mock.lastCall?.[0]).toBe(edit.canvas);
+    expect(operations).toEqual(["source-over", "destination-out"]);
+    expect(protect.context.globalCompositeOperation).toBe("source-over");
+  });
+
+  it("gives a subject back when the erase area covers that subject's own protection tap", () => {
+    const edit = maskCanvas(new Uint8ClampedArray([255, 255, 255, 255, 255, 255, 255, 255]));
+    const protect = maskCanvas();
+    const subject = maskCanvas().canvas;
+    const operations: string[] = [];
+    edit.context.drawImage.mockImplementation(() => operations.push(edit.context.globalCompositeOperation));
+
+    replayMasks(edit.canvas, protect.canvas, [
+      { kind: "segment", mask: maskCanvas().canvas, point: { x: 1, y: 0 } },
+      { kind: "protect", mask: subject, point: { x: 0.6, y: 0.2 } },
+    ], null);
+
+    expect(edit.context.getImageData).toHaveBeenCalledWith(0, 0, 1, 1);
+    expect(edit.context.drawImage.mock.lastCall?.[0]).toBe(subject);
+    expect(operations).toEqual(["source-over", "destination-out"]);
+    expect(edit.context.globalCompositeOperation).toBe("source-over");
   });
 });
 

@@ -5,6 +5,7 @@ export interface HistoryEntry {
   kind: "stroke" | "segment" | "protect" | "clearProtection";
   stroke?: BrushStroke;
   mask?: HTMLCanvasElement;
+  point?: { x: number; y: number };
 }
 
 export function createMaskCanvas(width: number, height: number): HTMLCanvasElement {
@@ -73,7 +74,40 @@ export function replayMasks(
     }
     if (entry.stroke) drawStrokes(editCtx, [entry.stroke], "#ffffff");
   }
+  resolveOverlap(edit, editCtx, protectCtx, activeProtections(history));
   if (live) drawStrokes(editCtx, [live], "#ffffff");
+}
+
+function activeProtections(history: HistoryEntry[]): HistoryEntry[] {
+  const lastClear = history.map((entry) => entry.kind).lastIndexOf("clearProtection");
+  return history.slice(lastClear + 1).filter((entry) => entry.kind === "protect" && entry.mask);
+}
+
+function coversPoint(ctx: CanvasRenderingContext2D, point: { x: number; y: number } | undefined): boolean {
+  if (!point) return false;
+  return ctx.getImageData(Math.floor(point.x), Math.floor(point.y), 1, 1).data[3] > 0;
+}
+
+function eraseWith(ctx: CanvasRenderingContext2D, mask: HTMLCanvasElement): void {
+  ctx.globalCompositeOperation = "destination-out";
+  ctx.drawImage(mask, 0, 0);
+  ctx.globalCompositeOperation = "source-over";
+}
+
+// Medido en 59 fotos de grado: un segmento que contiene el toque de una protección se tragó a ese
+// sujeto (se le devuelve); en el resto gana el borrado, porque una protección que se pasa de largo
+// se traga a alguien del fondo y con "la protección siempre gana" esa persona no se podía borrar.
+function resolveOverlap(
+  edit: HTMLCanvasElement,
+  editCtx: CanvasRenderingContext2D,
+  protectCtx: CanvasRenderingContext2D,
+  protections: HistoryEntry[],
+): void {
+  if (protections.length === 0) return;
+  protections
+    .filter((entry) => coversPoint(editCtx, entry.point))
+    .forEach((entry) => eraseWith(editCtx, entry.mask!));
+  eraseWith(protectCtx, edit);
 }
 
 export function maskHasContent(history: HistoryEntry[]): boolean {

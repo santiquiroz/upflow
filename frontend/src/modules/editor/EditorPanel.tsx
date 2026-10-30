@@ -425,7 +425,7 @@ export function EditorPanel() {
       const blob = await segmentEditorObject(baseInfo.initImageToken, point.x, point.y);
       const mask = await pngBlobToAlphaCanvas(blob, baseInfo.width, baseInfo.height);
       if (sequence !== segmentSequence.current) return;
-      setHistory((previous) => [...previous, { kind, mask }]);
+      setHistory((previous) => [...previous, { kind, mask, point }]);
     } catch (error) {
       if (sequence === segmentSequence.current) {
         setSegmentError(error instanceof Error ? error.message : String(error));
