@@ -669,6 +669,64 @@ describe("EditorPanel review zones", () => {
     expect(within(row).getByText("LaMa")).toBeInTheDocument();
     expect(screen.getByAltText("Erase result")).toHaveAttribute("src", "/redo.png");
   });
+
+  function redoWith(row: HTMLElement, engine: string) {
+    fireEvent.click(within(row).getByRole("button", { name: "Redo" }));
+    fireEvent.click(within(row).getByRole("menuitem", { name: engine }));
+  }
+
+  it("bases a second redo of another zone on the first redo's result", async () => {
+    const twoZones = completedJob("erase-job", "/erase.png", {});
+    const jobs: Record<string, unknown> = {
+      "erase-job": { ...twoZones, eraseZones: [...twoZones.eraseZones, { ...twoZones.eraseZones[0], index: 1, box: [200, 200, 300, 300] }] },
+      "redo-job": completedJob("redo-job", "/redo.png", { engine: "lama" }),
+      "redo-job-2": completedJob("redo-job-2", "/redo-2.png", { engine: "osor" }),
+    };
+    vi.mocked(generationService.getGenerationJob).mockImplementation(async (id: string) => jobs[id] as never);
+    vi.mocked(generationService.createGenerationJob).mockResolvedValueOnce({ id: "redo-job-2", status: "queued" } as never);
+    const first = await eraseAndReview();
+
+    redoWith(first, "LaMa");
+    await waitFor(() => expect(screen.getByAltText("Erase result")).toHaveAttribute("src", "/redo.png"));
+    redoWith(screen.getByRole("listitem", { name: "Zone 2" }), "OSOR");
+
+    await waitFor(() => expect(generationService.createGenerationJob).toHaveBeenCalledTimes(3));
+    expect(fetch).toHaveBeenLastCalledWith("/redo.png");
+    await waitFor(() => expect(screen.getByAltText("Erase result")).toHaveAttribute("src", "/redo-2.png"));
+    expect(within(first).getByText("LaMa")).toBeInTheDocument();
+    expect(within(screen.getByRole("listitem", { name: "Zone 2" })).getByText("OSOR")).toBeInTheDocument();
+  });
+
+  it("keeps the previous result and shows the error on the row when a redo fails", async () => {
+    vi.mocked(generationService.createGenerationJob)
+      .mockReset()
+      .mockResolvedValueOnce({ id: "erase-job", status: "queued" } as never)
+      .mockRejectedValueOnce(new Error("redo failed"));
+    const row = await eraseAndReview();
+
+    redoWith(row, "LaMa");
+
+    await waitFor(() => expect(within(row).getByRole("alert")).toHaveTextContent("redo failed"));
+    expect(screen.getByAltText("Erase result")).toHaveAttribute("src", "/erase.png");
+    expect(within(row).getByText("Someone is still visible")).toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: "Redo" })).toBeEnabled();
+  });
+
+  it("describes the background with the Replace model, the typed prompt and no eraser engine", async () => {
+    const row = await eraseAndReview();
+
+    redoWith(row, "Describe the background…");
+    fireEvent.change(within(row).getByLabelText("What should be there"), { target: { value: "a brick wall" } });
+    fireEvent.click(within(row).getByRole("button", { name: "Redo with this description" }));
+
+    await waitFor(() => expect(generationService.createGenerationJob).toHaveBeenCalledTimes(2));
+    const params = vi.mocked(generationService.createGenerationJob).mock.calls[1][0];
+    expect(params).toEqual(expect.objectContaining({
+      modelId: "gen--sdxl", prompt: "a brick wall", initImageToken: "redo-base", maskImageToken: "redo-mask",
+    }));
+    expect(params).not.toHaveProperty("eraseEngine");
+    expect(params).not.toHaveProperty("eraseStrategy");
+  });
 });
 
 describe("EditorPanel vista avanzada", () => {

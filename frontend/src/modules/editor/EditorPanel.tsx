@@ -1,14 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
-import { ImageUp } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { JobCard } from "../../components/JobCard";
 import { useGenerationCapabilities, useGenerationJob } from "../../hooks/useGenerationJob";
 import { useTranslation } from "../../i18n/LocaleProvider";
 import type { InitImageResponse } from "../../lib/apiTypes";
 import { fetchEditorCapabilities, segmentEditorObject } from "../../services/editor";
-import { uploadGenerationInitImage, type CreateGenerationJobParams } from "../../services/generation";
+import { uploadGenerationInitImage } from "../../services/generation";
 import {
-  buildEditorJobParams,
   canReplace,
   defaultEraseModel,
   effectiveMode,
@@ -16,19 +13,17 @@ import {
   modelForMode,
   shouldUseAutoErase,
 } from "./eraseJobParams";
-import { EditorActionControls } from "./EditorActionControls";
+import { EditorDropzone } from "./EditorDropzone";
+import { EditorSideContent } from "./EditorSideContent";
 import { EditorSidePanel } from "./EditorSidePanel";
 import { BRUSH_SIZE_MAX, BRUSH_SIZE_MIN, EditorToolRail, type Tool } from "./EditorToolRail";
 import { PeopleOverlay } from "./PeopleOverlay";
-import { PeoplePanel } from "./PeoplePanel";
 import {
-  canvasHasPixels, createMaskCanvas, exportMaskBlob, exportProtectMaskBlob, hasProtection, maskHasContent,
-  pngBlobToAlphaCanvas, readMaskImageData, renderMaskOverlays, replayMasks, withoutEdits, type HistoryEntry,
+  createMaskCanvas, hasProtection, maskHasContent, pngBlobToAlphaCanvas, renderMaskOverlays, replayMasks,
+  withoutEdits, type HistoryEntry,
 } from "./editorMaskCanvas";
-import { PeopleSummary } from "./PeopleSummary";
-import { personNumbers } from "./peopleState";
 import { ReviewOverlay } from "./ReviewOverlay";
-import { ReviewPanel } from "./ReviewPanel";
+import { useEditorSubmit } from "./useEditorSubmit";
 import { useReviewSession } from "./useReviewSession";
 import { useZoneRedo } from "./useZoneRedo";
 import { lastPeopleBatch } from "./silhouettes";
@@ -37,24 +32,14 @@ import type { EditMode } from "./InpaintModelSelect";
 import { useEditorHandoff } from "./useEditorHandoff";
 import {
   appendPoint,
-  fitGenerationSize,
   isCommittableStroke,
   rectanglePoints,
   startStroke,
   toImagePoint,
   type BrushStroke,
 } from "./maskCanvas";
-import {
-  IDENTITY_VIEWPORT,
-  clampPan,
-  isZoomed,
-  panBy,
-  transformStyle,
-  zoomAtPoint,
-  zoomByStep,
-  zoomPercent,
-  type Viewport,
-} from "./viewport";
+import { IDENTITY_VIEWPORT, isZoomed, panBy, transformStyle, zoomByStep, zoomPercent, type Viewport } from "./viewport";
+import { useStageViewport } from "./useStageViewport";
 import { useEditorShortcuts } from "./useEditorShortcuts";
 import { usePeopleSelection } from "./usePeopleSelection";
 
@@ -97,7 +82,6 @@ export function EditorPanel() {
   const [seedText, setSeedText] = useState("");
   const [strength, setStrength] = useState(1);
   const [segmenting, setSegmenting] = useState(false);
-  const [preparingJob, setPreparingJob] = useState(false);
   const [segmentError, setSegmentError] = useState<string | null>(null);
 
   const [viewport, setViewport] = useState<Viewport>(IDENTITY_VIEWPORT);
@@ -108,7 +92,6 @@ export function EditorPanel() {
   const protectMaskRef = useRef<HTMLCanvasElement | null>(null);
   const segmentSequence = useRef(0);
   const segmentPendingRef = useRef(false);
-  const preparingJobRef = useRef(false);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const liveStrokeRef = useRef<BrushStroke | null>(null);
   const panOriginRef = useRef<{ x: number; y: number } | null>(null);
@@ -164,7 +147,16 @@ export function EditorPanel() {
   const isEraseOnlyModel = selectedModel?.eraseOnly === true;
   const autoErase = shouldUseAutoErase(mode, modelId, models);
   const tapAvailable = editorCapabilities.data?.tapSelect ?? false;
-  const busy = baseUploading || preparingJob || phase === "uploading" || phase === "queued" || phase === "running";
+  const jobBusy = baseUploading || phase === "uploading" || phase === "queued" || phase === "running";
+  const editorSubmit = useEditorSubmit({
+    baseInfo, models, editMaskRef, protectMaskRef, uploadSequence, segmentPendingRef, review, submit,
+    blocked: jobBusy,
+    form: {
+      mode, modelId, prompt, erasePromptText, eraseNegative, replaceNegative, steps, guidance, seedText, strength, device,
+    },
+    onError: setUploadError,
+  });
+  const busy = jobBusy || editorSubmit.preparingJob;
   const handleUndo = useCallback(() => {
     setHistory((previous) => previous.slice(0, -1));
   }, []);
@@ -213,47 +205,7 @@ export function EditorPanel() {
     }
   }, [baseUrl]);
 
-  // La rueda se escucha a mano con passive:false — React registra onWheel como
-  // pasivo y preventDefault ahí no frena el scroll de la página.
-  useEffect(() => {
-    const stage = stageRef.current;
-    if (!stage) {
-      return;
-    }
-    function handleWheel(event: WheelEvent) {
-      event.preventDefault();
-      const rect = stage!.getBoundingClientRect();
-      // El origen del transform es la caja interior: descontar el borde o el
-      // punto anclado se corre un píxel por paso y el error se acumula.
-      const focus = {
-        x: event.clientX - rect.left - stage!.clientLeft,
-        y: event.clientY - rect.top - stage!.clientTop,
-      };
-      const container = { width: stage!.clientWidth, height: stage!.clientHeight };
-      setViewport((current) =>
-        zoomAtPoint(current, current.zoom * (event.deltaY < 0 ? 1.15 : 1 / 1.15), focus, container),
-      );
-    }
-    stage.addEventListener("wheel", handleWheel, { passive: false });
-    return () => stage.removeEventListener("wheel", handleWheel);
-  }, [baseInfo]);
-
-  // Al achicar la ventana el lienzo encoge y un desplazamiento que era legal
-  // deja la foto entera fuera de la vista: el usuario ve un recuadro vacío sin
-  // ninguna pista. Se vuelve a acotar cada vez que cambia el tamaño.
-  useEffect(() => {
-    const stage = stageRef.current;
-    if (!stage || typeof ResizeObserver === "undefined") {
-      return;
-    }
-    const observer = new ResizeObserver(() => {
-      setViewport((current) =>
-        clampPan(current, { width: stage.clientWidth, height: stage.clientHeight }),
-      );
-    });
-    observer.observe(stage);
-    return () => observer.disconnect();
-  }, [baseInfo]);
+  useStageViewport(stageRef, setViewport, baseInfo);
 
   const handleBaseSelected = useCallback(
     async (file: File) => {
@@ -458,66 +410,6 @@ export function EditorPanel() {
     setTool("people");
   }
 
-  async function handleGenerate() {
-    const canvas = editMaskRef.current;
-    if (!canvas || !baseInfo || !modelId || busy || preparingJobRef.current || segmentPendingRef.current) {
-      return;
-    }
-    const sequence = uploadSequence.current;
-    preparingJobRef.current = true;
-    setPreparingJob(true);
-    setUploadError(null);
-    const eraseMask = mode === "erase" ? readMaskImageData(canvas) : null;
-    try {
-      const protection = protectMaskRef.current;
-      const protectBlobPromise = protection && canvasHasPixels(protection)
-        ? exportProtectMaskBlob(protection)
-        : Promise.resolve(null);
-      const [maskBlob, protectBlob] = await Promise.all([exportMaskBlob(canvas), protectBlobPromise]);
-      const maskFile = new File([maskBlob], "mask.png", { type: "image/png" });
-      const maskResponse = await uploadGenerationInitImage(maskFile);
-      if (sequence !== uploadSequence.current) return;
-      let protectMaskToken: string | undefined;
-      if (protectBlob) {
-        const protectFile = new File([protectBlob], "protect-mask.png", { type: "image/png" });
-        protectMaskToken = (await uploadGenerationInitImage(protectFile)).initImageToken;
-      }
-      if (sequence !== uploadSequence.current) return;
-      const size = fitGenerationSize(baseInfo.width, baseInfo.height);
-      const seed = seedText.trim() === "" ? null : Number.parseInt(seedText, 10);
-      const negative = mode === "erase" ? eraseNegative : replaceNegative;
-      const params: CreateGenerationJobParams = {
-        prompt: mode === "erase" ? erasePromptText : prompt,
-        negativePrompt: negative.trim() === "" ? null : negative,
-        modelId,
-        steps,
-        guidance,
-        width: size.width,
-        height: size.height,
-        seed: seed !== null && Number.isFinite(seed) ? seed : null,
-        device,
-        autoUpscale: false,
-        upscaleModelName: null,
-        upscaleScale: null,
-        upscaleModelId: null,
-        initImageToken: baseInfo.initImageToken,
-        maskImageToken: maskResponse.initImageToken,
-        strength,
-        ...(protectMaskToken ? { protectMaskToken } : {}),
-      };
-      if (eraseMask) review.start(eraseMask, protectMaskToken);
-      else review.clear();
-      submit(buildEditorJobParams(params, mode, models));
-    } catch (error) {
-      if (sequence === uploadSequence.current) {
-        setUploadError(error instanceof Error ? error.message : String(error));
-      }
-    } finally {
-      preparingJobRef.current = false;
-      setPreparingJob(false);
-    }
-  }
-
   async function handleUseResultAsBase() {
     if (!shownJob?.downloadUrl) {
       return;
@@ -539,37 +431,13 @@ export function EditorPanel() {
     !busy &&
     !segmenting;
   const panelView = tool === "people" ? "people" : job?.status === "completed" ? "review" : "action";
+  const showingResult = panelView === "review" && Boolean(review.zones && resultUrl);
 
   return (
     <div className={baseInfo
       ? "grid min-h-0 grid-cols-1 items-start gap-3 lg:grid-cols-[148px_minmax(0,1fr)_340px]"
       : "flex flex-col gap-4"}>
-      {!baseInfo && (
-        <div className="flex flex-col items-center gap-3 rounded border border-dashed border-border bg-surface p-10 text-center">
-          <ImageUp aria-hidden="true" className="h-8 w-8 text-text-dim" strokeWidth={1.5} />
-          <p className="text-sm text-text-dim">{t("editor.dropzone.hint")}</p>
-          <label
-            htmlFor="editor-base-image-input"
-            className="cursor-pointer rounded bg-accent px-4 py-2 text-sm font-medium text-surface"
-          >
-            {t("editor.dropzone.label")}
-          </label>
-          <input
-            id="editor-base-image-input"
-            type="file"
-            accept="image/*"
-            className="sr-only"
-            aria-label={t("editor.dropzone.inputLabel")}
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file) {
-                void handleBaseSelected(file);
-              }
-              event.target.value = "";
-            }}
-          />
-        </div>
-      )}
+      {!baseInfo && <EditorDropzone onFile={(file) => void handleBaseSelected(file)} />}
 
       {baseInfo && (
         <>
@@ -611,13 +479,15 @@ export function EditorPanel() {
                   rectángulo que devuelve el canvas ya viene transformado, así que
                   el mapeo click->píxel y el radio del pincel siguen valiendo. */}
               <div style={{ transform: transformStyle(viewport), transformOrigin: "0 0" }}>
-                {baseUrl && <img src={baseUrl} alt={baseInfo.originalFilename} className="block max-w-full" />}
+                {showingResult
+                  ? <img src={resultUrl!} alt={t("editor.review.result")} className="block max-w-full" />
+                  : baseUrl && <img src={baseUrl} alt={baseInfo.originalFilename} className="block max-w-full" />}
                 <canvas
                   ref={canvasRef}
                   width={baseInfo.width}
                   height={baseInfo.height}
                   data-testid="editor-mask-canvas"
-                  className={`absolute inset-0 h-full w-full opacity-60 ${
+                  className={`absolute inset-0 h-full w-full ${showingResult ? "opacity-0" : "opacity-60"} ${
                     tool === "pan"
                       ? "cursor-grab active:cursor-grabbing"
                       : tool === "tap" || tool === "protect" || tool === "people"
@@ -636,7 +506,7 @@ export function EditorPanel() {
                   width={baseInfo.width}
                   height={baseInfo.height}
                   data-testid="editor-protect-canvas"
-                  className="pointer-events-none absolute inset-0 h-full w-full opacity-50"
+                  className={`pointer-events-none absolute inset-0 h-full w-full ${showingResult ? "opacity-0" : "opacity-50"}`}
                 />
                 {tool === "people" && peopleSelection.status === "ready" && (
                   <PeopleOverlay
@@ -652,7 +522,6 @@ export function EditorPanel() {
                 {panelView === "review" && review.zones && (
                   <ReviewOverlay
                     zones={review.zones}
-                    resultUrl={resultUrl}
                     hoveredZone={review.hoveredZone}
                     onHoverZone={review.setHoveredZone}
                     imageWidth={baseInfo.width}
@@ -673,116 +542,46 @@ export function EditorPanel() {
           </div>
 
           <EditorSidePanel view={panelView}>
-            {uploadError && <p className="mb-3 text-sm text-danger">{uploadError}</p>}
-            {panelView === "action" && (
-              <PeopleSummary
-                personIds={peopleBatch?.personIds ?? []}
-                numbers={personNumbers(peopleSelection.people)}
-                failed={silhouetteBatch.failed}
-                onBack={handleBackToChoosing}
-              />
-            )}
-            {panelView === "people" && (
-              <PeoplePanel
-                people={peopleSelection.people}
-                choices={peopleSelection.choices}
-                hoveredId={peopleSelection.hoveredId}
-                onHover={peopleSelection.setHoveredId}
-                onToggle={peopleSelection.toggle}
-                onGroup={peopleSelection.setGroupChoice}
-                protectKept={peopleSelection.protectKept}
-                onProtectKeptChange={peopleSelection.setProtectKept}
-                onAccept={() => void silhouetteBatch.accept()}
-                progress={silhouetteBatch.progress}
-                onRetry={() => void peopleSelection.refetch()}
-                status={peopleSelection.status}
-                imageUrl={baseUrl ?? ""}
-                imageWidth={baseInfo.width}
-                imageHeight={baseInfo.height}
-                unavailableReason={peopleSelection.error ?? t("editor.tool.peopleUnavailable")}
-                error={peopleSelection.error}
-              />
-            )}
-            {panelView === "review" && review.zones && (
-              <ReviewPanel
-                zones={review.zones}
-                people={peopleSelection.people}
-                choices={peopleSelection.choices}
-                hoveredZone={review.hoveredZone}
-                onHoverZone={review.setHoveredZone}
-                onRedo={(zone, engine, text) => void zoneRedo.redo(zone, engine, text)}
-                sdxlAvailable={canReplace(models)}
-                eraserAvailable={hasEraserAuto(models)}
-                redoingIndex={zoneRedo.redoingIndex}
-                errors={zoneRedo.errors}
-                beforeUrl={baseUrl}
-                afterUrl={resultUrl}
-                imageSize={baseInfo}
-              />
-            )}
-            {panelView === "review" && (
-              <div className="mb-3">
-                <JobCard
-                  phase={phase}
-                  job={shownJob}
-                  fileName={baseInfo.originalFilename}
-                  errorMessage={errorMessage}
-                  onCancel={cancel}
-                />
-                {shownJob?.status === "completed" && shownJob.downloadUrl && (
-                  <button
-                    type="button"
-                    onClick={() => void handleUseResultAsBase()}
-                    className="mt-3 min-h-9 rounded border border-border px-4 py-2 text-sm text-text hover:bg-surface-2"
-                  >
-                    {t("editor.useAsBase")}
-                  </button>
-                )}
-              </div>
-            )}
-            {panelView !== "people" && (
-              <EditorActionControls
-                baseInfo={baseInfo}
-                models={models}
-                capabilitiesLoaded={capabilitiesLoaded}
-                mode={mode}
-                setMode={handleModeChange}
-                prompt={prompt}
-                setPrompt={setPrompt}
-                modelId={modelId}
-                setModelId={setModelId}
-                device={device}
-                setDevice={setDevice}
-                erasePromptText={erasePromptText}
-                setErasePromptText={setErasePromptText}
-                eraseNegative={eraseNegative}
-                setEraseNegative={setEraseNegative}
-                replaceNegative={replaceNegative}
-                setReplaceNegative={setReplaceNegative}
-                steps={steps}
-                setSteps={setSteps}
-                guidance={guidance}
-                setGuidance={setGuidance}
-                seedText={seedText}
-                setSeedText={setSeedText}
-                strength={strength}
-                setStrength={setStrength}
-                isEraseOnlyModel={isEraseOnlyModel}
-                autoErase={autoErase}
-                canSubmit={canSubmit}
-                onGenerate={() => void handleGenerate()}
-                onBaseSelected={(file) => void handleBaseSelected(file)}
-              />
-            )}
-            {panelView !== "people" && (
-                <JobCard
-                  phase={phase}
-                  job={shownJob}
-                  fileName={baseInfo.originalFilename}
-                  errorMessage={errorMessage}
-                  onCancel={cancel}
-                />
-            )}
+            <EditorSideContent
+              view={panelView}
+              baseInfo={baseInfo}
+              baseUrl={baseUrl}
+              uploadError={uploadError}
+              people={{
+                selection: peopleSelection,
+                batch: silhouetteBatch,
+                personIds: peopleBatch?.personIds ?? [],
+                onBack: handleBackToChoosing,
+              }}
+              review={{
+                zones: review.zones,
+                hoveredZone: review.hoveredZone,
+                onHoverZone: review.setHoveredZone,
+                onRedo: (zone, engine, text) => void zoneRedo.redo(zone, engine, text),
+                sdxlAvailable: canReplace(models),
+                eraserAvailable: hasEraserAuto(models),
+                redoingIndex: zoneRedo.redoingIndex,
+                redoProgress: zoneRedo.progressPct,
+                errors: zoneRedo.errors,
+                resultUrl,
+              }}
+              job={{
+                phase,
+                job: shownJob,
+                errorMessage,
+                onCancel: cancel,
+                onUseAsBase: () => void handleUseResultAsBase(),
+              }}
+              actionControls={{
+                baseInfo, models, capabilitiesLoaded, mode, setMode: handleModeChange, prompt, setPrompt,
+                modelId, setModelId, device, setDevice, erasePromptText, setErasePromptText,
+                eraseNegative, setEraseNegative, replaceNegative, setReplaceNegative, steps, setSteps,
+                guidance, setGuidance, seedText, setSeedText, strength, setStrength, isEraseOnlyModel, autoErase,
+                canSubmit,
+                onGenerate: () => void editorSubmit.handleGenerate(),
+                onBaseSelected: (file) => void handleBaseSelected(file),
+              }}
+            />
           </EditorSidePanel>
         </>
       )}

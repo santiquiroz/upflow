@@ -43,7 +43,7 @@ export function zonePeople(
   zone: EraseZone,
   people: EditorPerson[],
   choices: Record<number, Choice>,
-  format: (number: number) => string = (number) => `Persona ${number}`,
+  format: (number: number) => string,
 ): string[] {
   const box = zone.box;
   if (!box) return [];

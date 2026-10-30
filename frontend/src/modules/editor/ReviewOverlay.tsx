@@ -4,7 +4,6 @@ import { peopleOverlayLabelSize } from "./PeopleOverlay";
 
 interface ReviewOverlayProps {
   zones: EraseZone[];
-  resultUrl: string | null;
   hoveredZone: number | null;
   onHoverZone: (index: number | null) => void;
   imageWidth: number;
@@ -46,30 +45,25 @@ function ZoneMarker({ zone, hovered, onHoverZone, fontSize }: {
   );
 }
 
-export function ReviewOverlay({ zones, resultUrl, hoveredZone, onHoverZone, imageWidth, imageHeight }: ReviewOverlayProps) {
+export function ReviewOverlay({ zones, hoveredZone, onHoverZone, imageWidth, imageHeight }: ReviewOverlayProps) {
   const { t } = useTranslation();
   const { fontSize } = peopleOverlayLabelSize(imageWidth);
   return (
-    <>
-      {resultUrl && (
-        <img src={resultUrl} alt={t("editor.review.result")} className="pointer-events-none absolute inset-0 h-full w-full" />
-      )}
-      <svg
-        aria-label={t("editor.review.numbers")}
-        className="pointer-events-none absolute inset-0 h-full w-full overflow-visible"
-        viewBox={`0 0 ${imageWidth} ${imageHeight}`}
-        preserveAspectRatio="none"
-      >
-        {zones.filter((zone) => zone.box).map((zone) => (
-          <ZoneMarker
-            key={zone.index}
-            zone={zone}
-            hovered={hoveredZone === zone.index}
-            onHoverZone={onHoverZone}
-            fontSize={fontSize}
-          />
-        ))}
-      </svg>
-    </>
+    <svg
+      aria-label={t("editor.review.numbers")}
+      className="pointer-events-none absolute inset-0 h-full w-full overflow-visible"
+      viewBox={`0 0 ${imageWidth} ${imageHeight}`}
+      preserveAspectRatio="none"
+    >
+      {zones.filter((zone) => zone.box).map((zone) => (
+        <ZoneMarker
+          key={zone.index}
+          zone={zone}
+          hovered={hoveredZone === zone.index}
+          onHoverZone={onHoverZone}
+          fontSize={fontSize}
+        />
+      ))}
+    </svg>
   );
 }

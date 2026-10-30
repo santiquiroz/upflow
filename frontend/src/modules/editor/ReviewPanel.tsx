@@ -19,9 +19,10 @@ interface ReviewPanelProps {
   onHoverZone: (index: number | null) => void;
   onRedo: (zone: EraseZone, engine: RedoEngine, prompt?: string) => void;
   sdxlAvailable: boolean;
-  eraserAvailable?: boolean;
-  redoingIndex?: number | null;
-  errors?: Record<number, string>;
+  eraserAvailable: boolean;
+  redoingIndex: number | null;
+  redoProgress: number | null;
+  errors: Record<number, string>;
   beforeUrl?: string | null;
   afterUrl?: string | null;
   imageSize?: ImageSize;
@@ -124,7 +125,12 @@ function RedoOptions({ sdxlAvailable, eraserAvailable, onPick }: {
   );
 }
 
-function RedoControl({ zone, onRedo, sdxlAvailable, eraserAvailable = true, redoingIndex = null }: RowProps) {
+function RedoProgress({ percent }: { percent: number | null }) {
+  if (percent === null) return null;
+  return <span className="font-mono-tabular text-text-dim">{Math.round(percent)}%</span>;
+}
+
+function RedoControl({ zone, onRedo, sdxlAvailable, eraserAvailable, redoingIndex, redoProgress }: RowProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [describing, setDescribing] = useState(false);
@@ -153,6 +159,7 @@ function RedoControl({ zone, onRedo, sdxlAvailable, eraserAvailable = true, redo
           ? <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" />
           : <RotateCcw aria-hidden="true" className="h-3.5 w-3.5" />}
         {redoing ? t("editor.review.redoing") : t("editor.review.redo")}
+        {redoing && <RedoProgress percent={redoProgress} />}
         {!redoing && <ChevronDown aria-hidden="true" className="h-3.5 w-3.5" />}
       </button>
       {!zone.box && <p className="mt-1 text-[11px] text-text-dim">{t("editor.review.noBox")}</p>}
@@ -167,7 +174,7 @@ function ZoneRow(props: RowProps) {
   const { zone, people, choices, hovered, onHoverZone, errors } = props;
   const number = zone.index + 1;
   const names = zonePeople(zone, people, choices, (value) => t("editor.people.person", { number: value }));
-  const error = errors?.[zone.index];
+  const error = errors[zone.index];
   return (
     <li
       aria-label={t("editor.review.zone", { number })}

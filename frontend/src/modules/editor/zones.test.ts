@@ -80,18 +80,20 @@ describe("zonePeople", () => {
     person(4, [20, 20, 50, 50]),
   ];
 
+  const format = (number: number) => `Person ${number}`;
+
   it("lists the people to remove that fall at least half inside the zone, by person number", () => {
     const choices = { 1: "keep", 2: "remove", 3: "remove", 4: "remove" } as const;
-    expect(zonePeople(zone(), people, choices)).toEqual(["Persona 2", "Persona 4"]);
+    expect(zonePeople(zone(), people, choices, format)).toEqual(["Person 2", "Person 4"]);
   });
 
-  it("uses the given formatter", () => {
+  it("formats each name with the given formatter", () => {
     const choices = { 2: "remove" } as const;
-    expect(zonePeople(zone(), people, choices, (number) => `Person ${number}`)).toEqual(["Person 2"]);
+    expect(zonePeople(zone(), people, choices, (number) => `Persona ${number}`)).toEqual(["Persona 2"]);
   });
 
   it("returns nobody for a zone without a box", () => {
-    expect(zonePeople(zone({ box: null }), people, { 2: "remove" })).toEqual([]);
+    expect(zonePeople(zone({ box: null }), people, { 2: "remove" }, format)).toEqual([]);
   });
 });
 

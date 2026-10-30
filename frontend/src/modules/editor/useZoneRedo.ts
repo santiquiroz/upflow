@@ -74,10 +74,19 @@ function messageOf(error: unknown): string {
 export function useZoneRedo({ session, baseInfo, models, defaults, onDone }: ZoneRedoOptions) {
   const { t } = useTranslation();
   const { job, errorMessage, submit, reset } = useGenerationJob();
-  const [pending, setPending] = useState<PendingRedo | null>(null);
+  const [pending, setPendingState] = useState<PendingRedo | null>(null);
   const [errors, setErrors] = useState<Record<number, string>>({});
   const maskRef = useRef<ImageData | null>(null);
+  const pendingRef = useRef<PendingRedo | null>(null);
+  const onDoneRef = useRef(onDone);
+  onDoneRef.current = onDone;
   const eraseMask = session?.eraseMask ?? null;
+  const cancelledMessage = t("job.failed");
+
+  function setPending(next: PendingRedo | null): void {
+    pendingRef.current = next;
+    setPendingState(next);
+  }
 
   useEffect(() => {
     maskRef.current = eraseMask;
@@ -91,19 +100,20 @@ export function useZoneRedo({ session, baseInfo, models, defaults, onDone }: Zon
   }
 
   useEffect(() => {
-    if (!pending) return;
+    const current = pendingRef.current;
+    if (!current) return;
     if (job?.status === "completed") {
-      onDone(redoneZone(pending.zone, pending.engine, job), job.downloadUrl);
       setPending(null);
+      onDoneRef.current(redoneZone(current.zone, current.engine, job), job.downloadUrl);
       return;
     }
-    const failure = errorMessage ?? (job?.status === "cancelled" ? t("job.failed") : null);
-    if (failure) fail(pending.zone.index, failure);
-  }, [job, errorMessage, pending]);
+    const failure = errorMessage ?? (job?.status === "cancelled" ? cancelledMessage : null);
+    if (failure) fail(current.zone.index, failure);
+  }, [job, errorMessage, cancelledMessage]);
 
   async function redo(zone: EraseZone, engine: RedoEngine, prompt?: string): Promise<void> {
     const box = zone.box;
-    if (!session?.resultUrl || !box || !baseInfo || pending) return;
+    if (!session?.resultUrl || !box || !baseInfo || pendingRef.current) return;
     const mask = session.eraseMask;
     reset();
     setPending({ zone, engine });
@@ -119,5 +129,6 @@ export function useZoneRedo({ session, baseInfo, models, defaults, onDone }: Zon
     }
   }
 
-  return { redo, redoingIndex: pending?.zone.index ?? null, errors };
+  const progressPct = pending ? job?.progressPct ?? null : null;
+  return { redo, redoingIndex: pending?.zone.index ?? null, progressPct, errors };
 }

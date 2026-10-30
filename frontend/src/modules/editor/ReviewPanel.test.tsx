@@ -22,6 +22,10 @@ function renderPanel(zones: EraseZone[], overrides: Partial<Parameters<typeof Re
     onHoverZone: vi.fn(),
     onRedo: vi.fn(),
     sdxlAvailable: true,
+    eraserAvailable: true,
+    redoingIndex: null,
+    redoProgress: null,
+    errors: {},
     ...overrides,
   };
   render(
@@ -112,6 +116,12 @@ describe("ReviewPanel", () => {
     expect(within(first).getByRole("button", { name: "Redo" })).toBeDisabled();
     expect(within(first).getByRole("alert")).toHaveTextContent("boom");
     expect(within(second).getByRole("button", { name: "Redoing…" })).toBeDisabled();
+  });
+
+  it("shows the redo progress next to the redoing label", () => {
+    renderPanel([zone()], { redoingIndex: 0, redoProgress: 42.4 });
+
+    expect(screen.getByRole("button", { name: /^Redoing…\s*42%$/ })).toBeDisabled();
   });
 
   it("reports hover and shows before and after for the hovered zone", () => {
