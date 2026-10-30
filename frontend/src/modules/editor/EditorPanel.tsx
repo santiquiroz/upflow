@@ -1,22 +1,21 @@
 import { useQuery } from "@tanstack/react-query";
 import { ImageUp } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AccordionSection } from "../../components/AccordionSection";
-import { DevicePicker } from "../../components/DevicePicker";
 import { JobCard } from "../../components/JobCard";
 import { useGenerationCapabilities, useGenerationJob } from "../../hooks/useGenerationJob";
 import { useTranslation } from "../../i18n/LocaleProvider";
-import type { DeviceInfoResponse, GenerationModelSummary, InitImageResponse } from "../../lib/apiTypes";
+import type { InitImageResponse } from "../../lib/apiTypes";
 import { fetchEditorCapabilities, segmentEditorObject } from "../../services/editor";
 import { uploadGenerationInitImage, type CreateGenerationJobParams } from "../../services/generation";
 import { buildEditorJobParams, shouldUseAutoErase } from "./eraseJobParams";
+import { EditorActionControls } from "./EditorActionControls";
 import { EditorSidePanel } from "./EditorSidePanel";
 import { BRUSH_SIZE_MAX, BRUSH_SIZE_MIN, EditorToolRail, type Tool } from "./EditorToolRail";
 import {
   canvasHasPixels, createMaskCanvas, exportMaskBlob, exportProtectMaskBlob, hasProtection, maskHasContent,
   pngBlobToAlphaCanvas, renderMaskOverlays, replayMasks, type HistoryEntry,
 } from "./editorMaskCanvas";
-import { InsertObjectPanel } from "./InsertObjectPanel";
+import type { EditMode } from "./InpaintModelSelect";
 import { useEditorHandoff } from "./useEditorHandoff";
 import {
   appendPoint,
@@ -51,54 +50,6 @@ const REPLACE_NEGATIVE_PROMPT =
 const DEFAULT_STEPS = 30;
 const DEFAULT_GUIDANCE = 7.0;
 const BRUSH_SIZE_STEP = 4;
-type EditMode = "erase" | "replace";
-
-function InpaintModelSelect({
-  models,
-  value,
-  onChange,
-  label,
-  mode,
-  hint,
-}: {
-  models: GenerationModelSummary[];
-  value: string | null;
-  onChange: (id: string | null) => void;
-  label: string;
-  mode: EditMode;
-  hint?: string;
-}) {
-  // Los motores de solo-borrado rellenan continuando el entorno: no saben poner
-  // algo concreto, así que en Reemplazar no se ofrecen.
-  const usable = models.filter(
-    (model) =>
-      model.status === "installed" &&
-      model.supportsInpaint !== false &&
-      // Turbo: 512px nativo y sin negative prompt — no sirve para inpaint.
-      model.speed !== "turbo" &&
-      (mode === "erase" || !model.eraseOnly),
-  );
-  return (
-    <label className="flex flex-col gap-1 text-sm text-text">
-      {label}
-      <select
-        className="rounded border border-border bg-surface-2 px-2 py-1.5 text-sm text-text"
-        value={value ?? ""}
-        onChange={(event) => onChange(event.target.value || null)}
-      >
-        <option value="" disabled>
-          —
-        </option>
-        {usable.map((model) => (
-          <option key={model.id} value={model.id}>
-            {model.name}
-          </option>
-        ))}
-      </select>
-      {hint && <span className="text-xs text-text-faint">{hint}</span>}
-    </label>
-  );
-}
 
 export function EditorPanel() {
   const { t } = useTranslation();
@@ -522,9 +473,8 @@ export function EditorPanel() {
 
   return (
     <div className={baseInfo
-      ? "grid min-h-0 grid-cols-[148px_minmax(0,1fr)_340px] items-start gap-3"
-      : "flex flex-col gap-4"}
-    >
+      ? "grid min-h-0 grid-cols-1 items-start gap-3 lg:grid-cols-[148px_minmax(0,1fr)_340px]"
+      : "flex flex-col gap-4"}>
       {!baseInfo && (
         <div className="flex flex-col items-center gap-3 rounded border border-dashed border-border bg-surface p-10 text-center">
           <ImageUp aria-hidden="true" className="h-8 w-8 text-text-dim" strokeWidth={1.5} />
@@ -583,7 +533,7 @@ export function EditorPanel() {
             busy={busy}
           />
 
-          <main className="flex min-w-0 flex-col items-center gap-3 overflow-auto">
+          <div className="flex min-w-0 flex-col items-center gap-3 overflow-auto">
             <div
               ref={stageRef}
               data-testid="editor-stage"
@@ -631,7 +581,7 @@ export function EditorPanel() {
             <p className="text-center text-xs text-text-faint">{t("editor.protect.hint")}</p>
             <p className="text-center text-xs text-text-faint">{t("editor.zoomHint")}</p>
             {segmentError && <p className="text-center text-xs text-danger">{segmentError}</p>}
-          </main>
+          </div>
 
           <EditorSidePanel view={panelView}>
             {uploadError && <p className="mb-3 text-sm text-danger">{uploadError}</p>}
@@ -655,183 +605,37 @@ export function EditorPanel() {
                 )}
               </div>
             )}
-            <>
-                <div
-                  className="flex gap-1 rounded border border-border bg-bg p-1"
-                  role="radiogroup"
-                  aria-label={t("editor.mode.label")}
-                >
-                  {(["erase", "replace"] as const).map((value) => (
-                    <button
-                      key={value}
-                      type="button"
-                      role="radio"
-                      aria-checked={mode === value}
-                      onClick={() => setMode(value)}
-                      className={`min-h-9 flex-1 rounded px-3 py-1.5 text-sm transition-colors ${
-                        mode === value ? "bg-surface-2 font-medium text-text" : "text-text-dim hover:text-text"
-                      }`}
-                    >
-                      {t(`editor.mode.${value}`)}
-                    </button>
-                  ))}
-                </div>
-
-                {mode === "replace" && (
-                  <label className="mt-3 flex flex-col gap-1 text-sm text-text">
-                    {t("editor.prompt.label")}
-                    <textarea
-                      value={prompt}
-                      onChange={(event) => setPrompt(event.target.value)}
-                      placeholder={t("editor.prompt.placeholder")}
-                      rows={2}
-                      className="rounded border border-border bg-surface-2 px-2 py-1.5 text-sm text-text"
-                    />
-                  </label>
-                )}
-
-                <div className="mt-3 flex flex-col gap-3">
-                  <InpaintModelSelect
-                    models={models}
-                    value={modelId}
-                    onChange={setModelId}
-                    label={t("editor.model.label")}
-                    mode={mode}
-                    hint={autoErase ? t("editor.erase.autoHint") : undefined}
-                  />
-                  <DevicePicker
-                    value={device}
-                    onChange={(selected: DeviceInfoResponse) => setDevice(selected.id)}
-                    requiresGpu={false}
-                    allowAuto={false}
-                  />
-                </div>
-
-                {!isEraseOnlyModel && (
-                  <AccordionSection
-                    title={t("editor.advanced.title")}
-                    summary={t("editor.advanced.summary", { steps: String(steps), guidance: String(guidance) })}
-                    tooltip={t("editor.advanced.tooltip")}
-                  >
-                    <div className="flex flex-col gap-3">
-                      {mode === "erase" && (
-                        <label className="flex flex-col gap-1 text-sm text-text">
-                          {t("editor.advanced.fillPrompt")}
-                          <textarea
-                            value={erasePromptText}
-                            onChange={(event) => setErasePromptText(event.target.value)}
-                            rows={2}
-                            className="rounded border border-border bg-surface-2 px-2 py-1.5 text-sm text-text"
-                          />
-                        </label>
-                      )}
-                      <label className="flex flex-col gap-1 text-sm text-text">
-                        {t("editor.advanced.negativePrompt")}
-                        <textarea
-                          value={mode === "erase" ? eraseNegative : replaceNegative}
-                          onChange={(event) =>
-                            mode === "erase"
-                              ? setEraseNegative(event.target.value)
-                              : setReplaceNegative(event.target.value)
-                          }
-                          rows={2}
-                          className="rounded border border-border bg-surface-2 px-2 py-1.5 text-sm text-text"
-                        />
-                      </label>
-                      <div className="grid grid-cols-3 gap-3 max-[700px]:grid-cols-1">
-                        <label className="flex flex-col gap-1 text-sm text-text">
-                          {t("editor.advanced.steps")}
-                          <input
-                            type="number"
-                            min={1}
-                            max={100}
-                            value={steps}
-                            onChange={(event) =>
-                              setSteps(Math.min(100, Math.max(1, Number(event.target.value) || 1)))
-                            }
-                            className="rounded border border-border bg-surface-2 px-2 py-1.5 text-sm text-text"
-                          />
-                        </label>
-                        <label className="flex flex-col gap-1 text-sm text-text">
-                          {t("editor.advanced.guidance")}
-                          <input
-                            type="number"
-                            min={0}
-                            max={30}
-                            step={0.5}
-                            value={guidance}
-                            onChange={(event) =>
-                              setGuidance(Math.min(30, Math.max(0, Number(event.target.value) || 0)))
-                            }
-                            className="rounded border border-border bg-surface-2 px-2 py-1.5 text-sm text-text"
-                          />
-                        </label>
-                        <label className="flex flex-col gap-1 text-sm text-text">
-                          {t("editor.advanced.seed")}
-                          <input
-                            type="text"
-                            inputMode="numeric"
-                            value={seedText}
-                            onChange={(event) => setSeedText(event.target.value.replace(/[^0-9]/g, ""))}
-                            placeholder={t("editor.advanced.seedPlaceholder")}
-                            className="rounded border border-border bg-surface-2 px-2 py-1.5 text-sm text-text"
-                          />
-                        </label>
-                      </div>
-                      <label className="flex flex-col gap-1 text-sm text-text">
-                        <span>
-                          {t("editor.advanced.strength")}{" "}
-                          <span className="font-mono-tabular text-text-dim">{strength.toFixed(2)}</span>
-                        </span>
-                        <input
-                          type="range"
-                          min={0.05}
-                          max={1}
-                          step={0.05}
-                          value={strength}
-                          onChange={(event) => setStrength(Number(event.target.value))}
-                        />
-                        <span className="text-xs text-text-faint">{t("editor.advanced.strengthHint")}</span>
-                      </label>
-                    </div>
-                  </AccordionSection>
-                )}
-                {isEraseOnlyModel && (
-                  <p className="mt-3 text-xs text-text-faint">{t("editor.eraser.hint")}</p>
-                )}
-
-                <div className="mt-3">
-                  <InsertObjectPanel targetInfo={baseInfo} />
-                </div>
-
-                <button
-                  type="button"
-                  disabled={!canSubmit}
-                  onClick={() => void handleGenerate()}
-                  className="mt-3 min-h-10 w-full rounded bg-accent px-5 py-2 text-sm font-medium text-surface disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  {mode === "erase" ? t("editor.submit.erase") : t("editor.submit.replace")}
-                </button>
-                <label
-                  htmlFor="editor-base-image-change"
-                  className="mt-3 block min-h-9 cursor-pointer py-1.5 text-sm text-text-dim underline hover:text-text"
-                >
-                  {t("editor.changeImage")}
-                </label>
-                <input
-                  id="editor-base-image-change"
-                  type="file"
-                  accept="image/*"
-                  className="sr-only"
-                  onChange={(event) => {
-                    const file = event.target.files?.[0];
-                    if (file) {
-                      void handleBaseSelected(file);
-                    }
-                    event.target.value = "";
-                  }}
-                />
-            </>
+            <EditorActionControls
+              baseInfo={baseInfo}
+              models={models}
+              mode={mode}
+              setMode={setMode}
+              prompt={prompt}
+              setPrompt={setPrompt}
+              modelId={modelId}
+              setModelId={setModelId}
+              device={device}
+              setDevice={setDevice}
+              erasePromptText={erasePromptText}
+              setErasePromptText={setErasePromptText}
+              eraseNegative={eraseNegative}
+              setEraseNegative={setEraseNegative}
+              replaceNegative={replaceNegative}
+              setReplaceNegative={setReplaceNegative}
+              steps={steps}
+              setSteps={setSteps}
+              guidance={guidance}
+              setGuidance={setGuidance}
+              seedText={seedText}
+              setSeedText={setSeedText}
+              strength={strength}
+              setStrength={setStrength}
+              isEraseOnlyModel={isEraseOnlyModel}
+              autoErase={autoErase}
+              canSubmit={canSubmit}
+              onGenerate={() => void handleGenerate()}
+              onBaseSelected={(file) => void handleBaseSelected(file)}
+            />
             {panelView === "action" && (
                 <JobCard
                   phase={phase}

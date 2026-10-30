@@ -7,8 +7,19 @@ interface UseEditorShortcutsOptions {
   enabled: boolean;
 }
 
-function isTextEntryTarget(target: EventTarget | null): boolean {
-  return target instanceof Element && target.closest("input, textarea, [contenteditable]") !== null;
+const TEXT_INPUT_TYPES = new Set(["text", "search", "email", "url", "tel", "password", "number"]);
+
+export function isTextEntry(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  if (target.closest("textarea")) return true;
+
+  const editable = target.closest("[contenteditable]");
+  if (editable) return editable.getAttribute("contenteditable")?.toLowerCase() !== "false";
+
+  const input = target.closest("input");
+  if (!input) return false;
+  const type = input.getAttribute("type");
+  return type === null || TEXT_INPUT_TYPES.has(type.toLowerCase());
 }
 
 export function useEditorShortcuts({
@@ -21,7 +32,7 @@ export function useEditorShortcuts({
     if (!enabled) return;
 
     function handleKeyDown(event: KeyboardEvent) {
-      if (isTextEntryTarget(event.target)) return;
+      if (isTextEntry(event.target)) return;
 
       if (
         event.key.toLowerCase() === "z" &&

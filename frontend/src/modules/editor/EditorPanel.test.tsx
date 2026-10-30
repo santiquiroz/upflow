@@ -475,7 +475,7 @@ describe("EditorPanel zoom y desplazamiento", () => {
   it("the hand tool drags the view instead of painting", async () => {
     renderPanel();
     await loadBaseImage();
-    fireEvent.click(screen.getByRole("radio", { name: en["editor.tool.pan"] }));
+    fireEvent.click(screen.getByRole("button", { name: en["editor.tool.pan"] }));
 
     const canvas = screen.getByTestId("editor-mask-canvas");
     fireEvent.pointerDown(canvas, { clientX: 100, clientY: 100, pointerId: 1, button: 0 });
@@ -568,6 +568,18 @@ describe("EditorPanel: diseño de tres columnas", () => {
     expect(activeTool).toHaveAttribute("aria-checked", "true");
     expect(activeTool.className).not.toContain("bg-accent");
     expect(activeTool).toHaveStyle({ boxShadow: "inset 3px 0 0 var(--accent)" });
+  });
+
+  it("mueve el foco y selecciona herramientas con las flechas del radiogroup", async () => {
+    renderPanel();
+    await loadBaseImage();
+
+    const brush = screen.getByRole("radio", { name: en["editor.tool.brush"] });
+    fireEvent.keyDown(brush, { key: "ArrowDown" });
+
+    const eraser = screen.getByRole("radio", { name: en["editor.tool.eraser"] });
+    expect(eraser).toHaveAttribute("aria-checked", "true");
+    expect(eraser).toHaveFocus();
   });
 
   it("muestra la acción dentro del panel complementario", async () => {
