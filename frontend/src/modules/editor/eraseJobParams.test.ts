@@ -6,6 +6,9 @@ import {
   buildEditorJobParams,
   canReplace,
   defaultEraseModel,
+  effectiveMode,
+  isReplaceModel,
+  modelForMode,
   shouldUseAutoErase,
 } from "./eraseJobParams";
 
@@ -60,6 +63,30 @@ describe("automatic erase eligibility", () => {
     expect(canReplace([{ ...inpaint, status: "converting" }])).toBe(false);
     expect(canReplace([{ ...inpaint, speed: "turbo" }])).toBe(false);
     expect(canReplace([{ ...inpaint, supportsInpaint: false }])).toBe(false);
+  });
+
+  it.each([
+    [inpaint, true],
+    [lama, false],
+    [{ ...inpaint, speed: "turbo" }, false],
+    [{ ...inpaint, status: "not_installed" }, false],
+  ] as const)("identifies replacement model eligibility for %j", (model, expected) => {
+    expect(isReplaceModel(model)).toBe(expected);
+  });
+
+  it("falls back to erase only after capabilities load without a fill model", () => {
+    expect(effectiveMode("replace", [autoEraser], false)).toBe("replace");
+    expect(effectiveMode("replace", [autoEraser], true)).toBe("erase");
+    expect(effectiveMode("replace", [inpaint], true)).toBe("replace");
+    expect(effectiveMode("erase", [autoEraser], true)).toBe("erase");
+  });
+
+  it("selects a model compatible with the next mode", () => {
+    expect(modelForMode("replace", autoEraser.id, [autoEraser, inpaint])).toBeNull();
+    expect(modelForMode("replace", inpaint.id, [autoEraser, inpaint])).toBe(inpaint.id);
+    expect(modelForMode("erase", null, [autoEraser, inpaint])).toBe(autoEraser.id);
+    expect(modelForMode("erase", "missing", [autoEraser, inpaint])).toBe(autoEraser.id);
+    expect(modelForMode("erase", inpaint.id, [autoEraser, inpaint])).toBe(inpaint.id);
   });
 
   it("uses the installed inpaint model and LaMa only in erase mode", () => {

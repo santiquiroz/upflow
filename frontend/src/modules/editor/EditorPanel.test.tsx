@@ -184,8 +184,19 @@ describe("EditorPanel", () => {
     await loadBaseImage();
 
     expect(screen.getByLabelText(en["editor.model.label"])).toHaveValue("eraser-auto");
-    expect(screen.getByRole("radio", { name: en["editor.mode.replace"] })).toBeDisabled();
+    const replaceRadio = screen.getByRole("radio", { name: en["editor.mode.replace"] });
+    expect(replaceRadio).toBeDisabled();
+    expect(replaceRadio).toHaveAccessibleDescription("Needs a fill model (SDXL)");
     expect(screen.getByText(en["editor.replace.needsSdxl"])).toBeVisible();
+  });
+
+  it("does not show replacement as unavailable while capabilities are loading", async () => {
+    vi.mocked(generationService.fetchGenerationCapabilities).mockReturnValue(new Promise(() => {}));
+    renderPanel();
+    await loadBaseImage();
+
+    expect(screen.getByRole("radio", { name: en["editor.mode.replace"] })).toBeEnabled();
+    expect(screen.queryByText(en["editor.replace.needsSdxl"])).not.toBeInTheDocument();
   });
 
   it("only offers installed models with real inpaint support", async () => {

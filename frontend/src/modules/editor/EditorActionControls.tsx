@@ -9,6 +9,7 @@ import { InpaintModelSelect, type EditMode } from "./InpaintModelSelect";
 export function EditorActionControls({
   baseInfo,
   models,
+  capabilitiesLoaded,
   mode,
   setMode,
   prompt,
@@ -39,6 +40,7 @@ export function EditorActionControls({
 }: {
   baseInfo: InitImageResponse;
   models: GenerationModelSummary[];
+  capabilitiesLoaded: boolean;
   mode: EditMode;
   setMode: (mode: EditMode) => void;
   prompt: string;
@@ -68,7 +70,7 @@ export function EditorActionControls({
   onBaseSelected: (file: File) => void;
 }) {
   const { t } = useTranslation();
-  const replaceAvailable = canReplace(models);
+  const replaceUnavailable = capabilitiesLoaded && !canReplace(models);
   return (
     <>
       <div className="flex gap-1 rounded border border-border bg-bg p-1" role="radiogroup" aria-label={t("editor.mode.label")}>
@@ -78,21 +80,22 @@ export function EditorActionControls({
             type="button"
             role="radio"
             aria-checked={mode === value}
-            disabled={value === "replace" && !replaceAvailable}
+            aria-describedby={value === "replace" && replaceUnavailable ? "editor-replace-reason" : undefined}
+            disabled={value === "replace" && replaceUnavailable}
             onClick={() => setMode(value)}
             className={`min-h-9 flex-1 rounded px-3 py-1.5 text-sm transition-colors ${
               mode === value ? "bg-surface-2 font-medium text-text" : "text-text-dim hover:text-text"
             } disabled:cursor-not-allowed disabled:opacity-50`}
           >
             {t(`editor.mode.${value}`)}
-            {value === "replace" && !replaceAvailable && (
-              <span aria-hidden="true" className="ml-1 text-xs">
-                {t("editor.replace.needsSdxl")}
-              </span>
-            )}
           </button>
         ))}
       </div>
+      {replaceUnavailable && (
+        <p id="editor-replace-reason" className="mt-1 text-xs text-text-faint">
+          {t("editor.replace.needsSdxl")}
+        </p>
+      )}
 
       {mode === "replace" && (
         <label className="mt-3 flex flex-col gap-1 text-sm text-text">
