@@ -6,6 +6,7 @@ import {
   countRemove,
   groupPeople,
   initialChoices,
+  personNumbers,
   setGroup,
   toggleChoice,
   type Choice,
@@ -62,6 +63,12 @@ describe("groupPeople", () => {
       front: [PERSONS[1]],
       back: [PERSONS[0], PERSONS[2]],
     });
+  });
+});
+
+describe("personNumbers", () => {
+  it("numbers people by id in display order, front group first", () => {
+    expect(personNumbers(PERSONS)).toEqual({ 2: 1, 1: 2, 3: 3 });
   });
 });
 

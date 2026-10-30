@@ -3,6 +3,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import type { PropsWithChildren } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { InitImageResponse } from "../../lib/apiTypes";
+import { ApiError } from "../../lib/api";
 import * as editorService from "../../services/editor";
 import type { EditorPerson } from "../../services/editor";
 import { usePeopleSelection } from "./usePeopleSelection";
@@ -32,6 +33,23 @@ afterEach(() => {
 });
 
 describe("usePeopleSelection", () => {
+  it("maps HTTP 503 detection errors to unavailable and exposes the detail as the reason", async () => {
+    vi.spyOn(editorService, "detectPeople").mockRejectedValue(
+      new ApiError(503, "The people detection package is not installed."),
+    );
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }: PropsWithChildren) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+    const { result } = renderHook(
+      () => usePeopleSelection(FIRST_IMAGE, true),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(result.current.status).toBe("unavailable"));
+    expect(result.current.error).toBe("The people detection package is not installed.");
+  });
+
   it("initializes choices from detection and resets them when the image changes", async () => {
     const detectSpy = vi.spyOn(editorService, "detectPeople").mockResolvedValue([PERSON]);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });

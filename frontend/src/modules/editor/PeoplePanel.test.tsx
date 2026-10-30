@@ -3,8 +3,8 @@ import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "../../i18n/LocaleProvider";
 import type { EditorPerson } from "../../services/editor";
-import { initialChoices } from "./peopleState";
-import { PeopleOverlay } from "./PeopleOverlay";
+import { initialChoices, personNumbers } from "./peopleState";
+import { PeopleOverlay, peopleOverlayLabelSize } from "./PeopleOverlay";
 import { PeoplePanel, thumbnailStyle } from "./PeoplePanel";
 
 const PEOPLE: EditorPerson[] = Array.from({ length: 10 }, (_, index) => {
@@ -126,6 +126,17 @@ describe("PeoplePanel", () => {
     expect(first).toHaveAttribute("tabindex", "-1");
   });
 
+  it("highlights a keyboard-focused row and clears the highlight on blur", () => {
+    renderPeople();
+    const row = screen.getByRole("listitem", { name: `Person ${personNumbers(PEOPLE)[4]}` });
+
+    fireEvent.focus(row);
+    expect(document.querySelector('g[data-person-id="4"]')).toHaveAttribute("data-hovered", "true");
+
+    fireEvent.blur(row);
+    expect(document.querySelector('g[data-person-id="4"]')).toHaveAttribute("data-hovered", "false");
+  });
+
   it("shows empty and unavailable states", () => {
     const props = {
       people: [],
@@ -192,15 +203,40 @@ describe("PeoplePanel", () => {
     expect(onRetry).toHaveBeenCalledOnce();
   });
 
-  it("computes a face thumbnail crop and falls back to the top quarter of the person box", () => {
+  it("computes exact face and upper-quarter thumbnail crops", () => {
     expect(thumbnailStyle(PEOPLE[0], 640, 480, 36)).toEqual({
-      backgroundPosition: expect.any(String),
+      backgroundPosition: "0px -21.375px",
       backgroundSize: "720px 540px",
     });
     const noFace = { ...PEOPLE[0], face: null };
     expect(thumbnailStyle(noFace, 640, 480, 36)).toEqual({
-      backgroundPosition: expect.any(String),
+      backgroundPosition: "0px -18px",
       backgroundSize: "576px 432px",
+    });
+  });
+
+  it("clamps the thumbnail crop when its face box touches the image edge", () => {
+    const atEdge: EditorPerson = { ...PEOPLE[0], face: [630, 460, 640, 480] };
+    expect(thumbnailStyle(atEdge, 640, 480, 36)).toEqual({
+      backgroundPosition: "-684px -504px",
+      backgroundSize: "720px 540px",
+    });
+  });
+
+  it("scales the overlay label dimensions with the image width", () => {
+    expect(peopleOverlayLabelSize(640)).toEqual({
+      fontSize: 10,
+      width: 74,
+      height: 17,
+      padding: 6,
+      radius: 8,
+    });
+    expect(peopleOverlayLabelSize(4000)).toEqual({
+      fontSize: 50,
+      width: 370,
+      height: 85,
+      padding: 30,
+      radius: 40,
     });
   });
 });

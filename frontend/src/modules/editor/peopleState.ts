@@ -38,6 +38,11 @@ export function groupPeople(people: EditorPerson[]): { front: EditorPerson[]; ba
   };
 }
 
+export function personNumbers(people: EditorPerson[]): Record<number, number> {
+  const { front, back } = groupPeople(people);
+  return Object.fromEntries([...front, ...back].map((person, index) => [person.id, index + 1]));
+}
+
 export function anchorPoint(person: EditorPerson): { x: number; y: number } {
   const [x, y] = person.anchor;
   return { x, y };

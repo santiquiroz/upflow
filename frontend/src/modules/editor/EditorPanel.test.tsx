@@ -287,6 +287,51 @@ describe("EditorPanel", () => {
     expect(generationService.uploadGenerationInitImage).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps the remove-selection controls visible after a job completes", async () => {
+    enableMaskPixels();
+    vi.mocked(generationService.uploadGenerationInitImage)
+      .mockResolvedValueOnce(BASE_IMAGE)
+      .mockResolvedValueOnce({ ...BASE_IMAGE, initImageToken: "mask-token" });
+    vi.mocked(generationService.createGenerationJob).mockResolvedValue({
+      id: "job-review",
+      status: "queued",
+    } as never);
+    vi.mocked(generationService.getGenerationJob).mockResolvedValue({
+      id: "job-review",
+      status: "completed",
+      prompt: "background",
+      negativePrompt: null,
+      modelId: "gen--sdxl",
+      steps: 30,
+      guidance: 7,
+      width: 640,
+      height: 480,
+      seed: null,
+      device: "dml:0",
+      autoUpscale: false,
+      createdAt: "2026-10-30T00:00:00Z",
+      startedAt: "2026-10-30T00:00:01Z",
+      finishedAt: "2026-10-30T00:00:02Z",
+      progressPct: 100,
+      stages: [],
+      error: null,
+      ownerId: null,
+      downloadUrl: "/api/v1/generation/jobs/job-review/download",
+    });
+    renderPanel();
+    await loadBaseImage();
+    fireEvent.change(screen.getByLabelText(en["editor.model.label"]), {
+      target: { value: "gen--sdxl" },
+    });
+    paintOnCanvas();
+
+    fireEvent.click(screen.getByRole("button", { name: en["editor.submit.erase"] }));
+
+    await waitFor(() => expect(generationService.getGenerationJob).toHaveBeenCalledWith("job-review"));
+    expect(await screen.findByRole("button", { name: en["editor.useAsBase"] })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Remove selection" })).toBeInTheDocument();
+  });
+
   it("replace mode requires a prompt before submitting", async () => {
     renderPanel();
     await loadBaseImage();

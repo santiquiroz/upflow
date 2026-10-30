@@ -1,6 +1,6 @@
 import type { EditorPerson } from "../../services/editor";
 import { useTranslation } from "../../i18n/LocaleProvider";
-import { groupPeople, type Choice } from "./peopleState";
+import { groupPeople, personNumbers, type Choice } from "./peopleState";
 
 interface PeopleOverlayProps {
   people: EditorPerson[];
@@ -10,6 +10,17 @@ interface PeopleOverlayProps {
   onToggle: (id: number) => void;
   imageWidth: number;
   imageHeight: number;
+}
+
+export function peopleOverlayLabelSize(imageWidth: number) {
+  const fontSize = Math.max(10, imageWidth / 80);
+  return {
+    fontSize,
+    width: fontSize * 7.4,
+    height: fontSize * 1.7,
+    padding: fontSize * 0.6,
+    radius: fontSize * 0.8,
+  };
 }
 
 export function PeopleOverlay({
@@ -24,6 +35,7 @@ export function PeopleOverlay({
   const { t } = useTranslation();
   const { front, back } = groupPeople(people);
   const rows = [...front, ...back];
+  const numbers = personNumbers(people);
   return (
     <svg
       aria-label={t("editor.people.overlay")}
@@ -31,10 +43,12 @@ export function PeopleOverlay({
       viewBox={`0 0 ${imageWidth} ${imageHeight}`}
       preserveAspectRatio="none"
     >
-      {rows.map((person, index) => {
+      {rows.map((person) => {
         const hovered = hoveredId === person.id;
         const color = hovered ? "#f5a524" : choices[person.id] === "keep" ? "#22c55e" : "#ef4444";
         const [x1, y1, x2, y2] = person.box;
+        const labelSize = peopleOverlayLabelSize(imageWidth);
+        const labelY = Math.max(0, y1 - labelSize.height - labelSize.fontSize * 0.3);
         return (
           <g
             key={person.id}
@@ -43,10 +57,7 @@ export function PeopleOverlay({
             className="pointer-events-auto cursor-pointer"
             onMouseEnter={() => onHover(person.id)}
             onMouseLeave={() => onHover(null)}
-            onClick={(event) => {
-              event.stopPropagation();
-              onToggle(person.id);
-            }}
+            onClick={() => onToggle(person.id)}
           >
             <rect
               data-testid={`person-outline-${person.id}`}
@@ -64,9 +75,22 @@ export function PeopleOverlay({
             />
             {hovered && (
               <g>
-                <rect x={x1} y={Math.max(0, y1 - 20)} width={74} height={17} rx={8} fill="#f5a524" />
-                <text x={x1 + 6} y={Math.max(12, y1 - 8)} fill="#111" fontSize={10} fontWeight={600}>
-                  Person {index + 1}
+                <rect
+                  x={x1}
+                  y={labelY}
+                  width={labelSize.width}
+                  height={labelSize.height}
+                  rx={labelSize.radius}
+                  fill="#f5a524"
+                />
+                <text
+                  x={x1 + labelSize.padding}
+                  y={labelY + labelSize.fontSize * 1.2}
+                  fill="#111"
+                  fontSize={labelSize.fontSize}
+                  fontWeight={600}
+                >
+                  {t("editor.people.person", { number: numbers[person.id] })}
                 </text>
               </g>
             )}

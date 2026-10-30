@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { ApiError } from "../../lib/api";
 import type { InitImageResponse } from "../../lib/apiTypes";
 import type { EditorPerson } from "../../services/editor";
 import { initialChoices, setGroup, toggleChoice, type Choice } from "./peopleState";
@@ -32,7 +33,9 @@ export function usePeopleSelection(baseInfo: InitImageResponse | null, enabled: 
     : query.isPending
       ? "loading"
       : query.isError
-        ? "error"
+        ? query.error instanceof ApiError && query.error.status === 503
+          ? "unavailable"
+          : "error"
         : people.length === 0
           ? "empty"
           : "ready";

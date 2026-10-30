@@ -1,8 +1,16 @@
 import { Check, X } from "lucide-react";
-import { useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent,
+  type MutableRefObject,
+} from "react";
 import { useTranslation } from "../../i18n/LocaleProvider";
 import type { EditorPerson } from "../../services/editor";
-import { countRemove, groupPeople, type Choice } from "./peopleState";
+import { countRemove, groupPeople, personNumbers, type Choice } from "./peopleState";
 
 type PeopleStatus = "loading" | "ready" | "empty" | "error" | "unavailable";
 
@@ -98,6 +106,7 @@ function ChoiceSelector({
 function PersonRow({
   person,
   index,
+  number,
   choices,
   imageUrl,
   imageWidth,
@@ -112,6 +121,7 @@ function PersonRow({
 }: {
   person: EditorPerson;
   index: number;
+  number: number;
   choices: Record<number, Choice>;
   imageUrl: string;
   imageWidth: number;
@@ -125,14 +135,18 @@ function PersonRow({
   onKeyDown: (event: KeyboardEvent<HTMLDivElement>, index: number) => void;
 }) {
   const { t } = useTranslation();
-  const label = t("editor.people.person", { number: index + 1 });
+  const label = t("editor.people.person", { number });
   return (
     <div
       ref={rowRef}
       role="listitem"
       aria-label={label}
       tabIndex={tabIndex}
-      onFocus={() => onFocus(index)}
+      onFocus={() => {
+        onFocus(index);
+        onHover(person.id);
+      }}
+      onBlur={() => onHover(null)}
       onMouseEnter={() => onHover(person.id)}
       onMouseLeave={() => onHover(null)}
       onKeyDown={(event) => onKeyDown(event, index)}
@@ -154,17 +168,110 @@ function PersonRow({
   );
 }
 
+function PersonGroup({
+  role,
+  group,
+  title,
+  indexOffset,
+  numbers,
+  choices,
+  imageUrl,
+  imageWidth,
+  imageHeight,
+  hoveredId,
+  focusedIndex,
+  rowRefs,
+  onHover,
+  onToggle,
+  onGroup,
+  onFocus,
+  onKeyDown,
+}: {
+  role: EditorPerson["role"];
+  group: EditorPerson[];
+  title: string;
+  indexOffset: number;
+  numbers: Record<number, number>;
+  choices: Record<number, Choice>;
+  imageUrl: string;
+  imageWidth: number;
+  imageHeight: number;
+  hoveredId: number | null;
+  focusedIndex: number;
+  rowRefs: MutableRefObject<Array<HTMLDivElement | null>>;
+  onHover: (id: number | null) => void;
+  onToggle: (id: number) => void;
+  onGroup: (role: EditorPerson["role"], choice: Choice) => void;
+  onFocus: (index: number) => void;
+  onKeyDown: (event: KeyboardEvent<HTMLDivElement>, index: number) => void;
+}) {
+  const { t } = useTranslation();
+  if (!group.length) return null;
+  const choice = group.every((person) => choices[person.id] === "keep") ? "remove" : "keep";
+  const key = choice === "keep" ? "keepAll" : "removeAll";
+  const label = t(`editor.people.${key}`);
+
+  return (
+    <section aria-label={title} className="mt-3">
+      <div className="flex min-h-9 items-center gap-2">
+        <h3 className="flex-1 text-[11px] font-semibold uppercase tracking-wide text-text-faint">
+          {title} · {group.length}
+        </h3>
+        <button
+          type="button"
+          onClick={() => onGroup(role, choice)}
+          className="min-h-9 rounded px-1.5 text-[11px] text-accent hover:bg-surface-2"
+          aria-label={t(`editor.people.${key}Group`, {
+            group: role === "subject" ? t("editor.people.frontLower") : t("editor.people.backLower"),
+          })}
+        >
+          {label}
+        </button>
+      </div>
+      <div role="list" className="flex flex-col gap-1">
+        {group.map((person, groupIndex) => {
+          const index = indexOffset + groupIndex;
+          return (
+            <PersonRow
+              key={person.id}
+              person={person}
+              index={index}
+              number={numbers[person.id]}
+              choices={choices}
+              imageUrl={imageUrl}
+              imageWidth={imageWidth}
+              imageHeight={imageHeight}
+              hoveredId={hoveredId}
+              onHover={onHover}
+              onToggle={onToggle}
+              onFocus={onFocus}
+              tabIndex={focusedIndex === index ? 0 : -1}
+              rowRef={(element) => { rowRefs.current[index] = element; }}
+              onKeyDown={onKeyDown}
+            />
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 export function PeoplePanel(props: PeoplePanelProps) {
   const {
     people, choices, hoveredId, onHover, onToggle, onGroup, protectKept,
     onProtectKeptChange, onAccept, onRetry, status, imageUrl, unavailableReason, error,
   } = props;
   const { t } = useTranslation();
-  const { front, back } = groupPeople(people);
-  const rows = [...front, ...back];
+  const { front, back } = useMemo(() => groupPeople(people), [people]);
+  const rows = useMemo(() => [...front, ...back], [back, front]);
+  const numbers = useMemo(() => personNumbers(people), [people]);
   const rowRefs = useRef<Array<HTMLDivElement | null>>([]);
   const [focusedIndex, setFocusedIndex] = useState(0);
   const removeCount = countRemove(choices);
+
+  useEffect(() => {
+    setFocusedIndex((current) => rows.length === 0 ? 0 : Math.min(current, rows.length - 1));
+  }, [rows]);
 
   function handleRowKeyDown(event: KeyboardEvent<HTMLDivElement>, index: number) {
     if (event.target !== event.currentTarget) return;
@@ -178,55 +285,6 @@ export function PeoplePanel(props: PeoplePanelProps) {
     const nextIndex = Math.max(0, Math.min(rows.length - 1, index + (event.key === "ArrowDown" ? 1 : -1)));
     setFocusedIndex(nextIndex);
     rowRefs.current[nextIndex]?.focus();
-  }
-
-  function renderGroup(role: EditorPerson["role"], group: EditorPerson[], title: string) {
-    if (!group.length) return null;
-    const choice = group.every((person) => choices[person.id] === "keep") ? "remove" : "keep";
-    const key = choice === "keep" ? "keepAll" : "removeAll";
-    const label = t(`editor.people.${key}`);
-    return (
-      <section aria-label={title} className="mt-3">
-        <div className="flex min-h-9 items-center gap-2">
-          <h3 className="flex-1 text-[11px] font-semibold uppercase tracking-wide text-text-faint">
-            {title} · {group.length}
-          </h3>
-          <button
-            type="button"
-            onClick={() => onGroup(role, choice)}
-            className="min-h-9 rounded px-1.5 text-[11px] text-accent hover:bg-surface-2"
-            aria-label={t(`editor.people.${key}Group`, {
-              group: role === "subject" ? t("editor.people.frontLower") : t("editor.people.backLower"),
-            })}
-          >
-            {label}
-          </button>
-        </div>
-        <div role="list" className="flex flex-col gap-1">
-          {group.map((person) => {
-            const index = rows.indexOf(person);
-            return (
-              <PersonRow
-                key={person.id}
-                person={person}
-                index={index}
-                choices={choices}
-                imageUrl={imageUrl}
-                imageWidth={props.imageWidth}
-                imageHeight={props.imageHeight}
-                hoveredId={hoveredId}
-                onHover={onHover}
-                onToggle={onToggle}
-                onFocus={setFocusedIndex}
-                tabIndex={focusedIndex === index ? 0 : -1}
-                rowRef={(element) => { rowRefs.current[index] = element; }}
-                onKeyDown={handleRowKeyDown}
-              />
-            );
-          })}
-        </div>
-      </section>
-    );
   }
 
   return (
@@ -261,8 +319,44 @@ export function PeoplePanel(props: PeoplePanelProps) {
       {status === "ready" && (
         <>
           <div className="min-h-0 max-h-[calc(100dvh-26rem)] overflow-y-auto">
-            {renderGroup("subject", front, t("editor.people.front"))}
-            {renderGroup("background", back, t("editor.people.back"))}
+            <PersonGroup
+              role="subject"
+              group={front}
+              title={t("editor.people.front")}
+              indexOffset={0}
+              numbers={numbers}
+              choices={choices}
+              imageUrl={imageUrl}
+              imageWidth={props.imageWidth}
+              imageHeight={props.imageHeight}
+              hoveredId={hoveredId}
+              focusedIndex={focusedIndex}
+              rowRefs={rowRefs}
+              onHover={onHover}
+              onToggle={onToggle}
+              onGroup={onGroup}
+              onFocus={setFocusedIndex}
+              onKeyDown={handleRowKeyDown}
+            />
+            <PersonGroup
+              role="background"
+              group={back}
+              title={t("editor.people.back")}
+              indexOffset={front.length}
+              numbers={numbers}
+              choices={choices}
+              imageUrl={imageUrl}
+              imageWidth={props.imageWidth}
+              imageHeight={props.imageHeight}
+              hoveredId={hoveredId}
+              focusedIndex={focusedIndex}
+              rowRefs={rowRefs}
+              onHover={onHover}
+              onToggle={onToggle}
+              onGroup={onGroup}
+              onFocus={setFocusedIndex}
+              onKeyDown={handleRowKeyDown}
+            />
           </div>
           <label className="mt-3 flex min-h-9 items-center gap-2 border-t border-border pt-3 text-xs text-text">
             <input

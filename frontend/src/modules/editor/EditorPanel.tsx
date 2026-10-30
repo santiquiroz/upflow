@@ -639,7 +639,7 @@ export function EditorPanel() {
                 imageUrl={baseUrl ?? ""}
                 imageWidth={baseInfo.width}
                 imageHeight={baseInfo.height}
-                unavailableReason={t("editor.tool.peopleUnavailable")}
+                unavailableReason={peopleSelection.error ?? t("editor.tool.peopleUnavailable")}
                 error={peopleSelection.error}
               />
             )}
@@ -663,7 +663,7 @@ export function EditorPanel() {
                 )}
               </div>
             )}
-            {panelView === "action" && (
+            {panelView !== "people" && (
               <EditorActionControls
                 baseInfo={baseInfo}
                 models={models}
@@ -697,7 +697,7 @@ export function EditorPanel() {
                 onBaseSelected={(file) => void handleBaseSelected(file)}
               />
             )}
-            {panelView === "action" && (
+            {panelView !== "people" && (
                 <JobCard
                   phase={phase}
                   job={job}
