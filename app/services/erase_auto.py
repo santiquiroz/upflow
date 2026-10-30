@@ -24,6 +24,12 @@ SdxlEdit = Callable[[Image.Image, np.ndarray, float], Image.Image]
 FaceFinder = Callable[[np.ndarray, np.ndarray], list[tuple[int, int, int, int]]]
 
 
+def _has_people(
+    find_people: PeopleFinder | None, rgb: np.ndarray, mask: np.ndarray
+) -> bool:
+    return bool(find_people(rgb, mask)) if find_people is not None else False
+
+
 def _fill_large_with_osor(
     current: Image.Image,
     group_mask: np.ndarray,
@@ -35,18 +41,14 @@ def _fill_large_with_osor(
 ) -> tuple[np.ndarray, dict]:
     filled = osor_fill(np.array(current, copy=True), group_mask, core)
     has_face = bool(find_faces(filled, group_mask))
-    has_person = (
-        bool(find_people(filled, group_mask)) if find_people is not None else False
-    )
+    has_person = _has_people(find_people, filled, group_mask)
     if not has_face and not has_person:
         return filled, {"engine": "osor", "guard": None, "residualPerson": False}
 
     prefilled = lama_fill(np.array(current, copy=True), group_mask, core)
     retried = osor_fill(prefilled, group_mask, core)
     residual_face = bool(find_faces(retried, group_mask))
-    residual_person = (
-        bool(find_people(retried, group_mask)) if find_people is not None else False
-    )
+    residual_person = _has_people(find_people, retried, group_mask)
     return retried, {
         "engine": "lama+osor",
         "guard": "face" if has_face else "person",

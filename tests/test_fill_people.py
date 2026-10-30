@@ -36,6 +36,21 @@ def test_make_people_finder_detects_in_expanded_mask_crop_and_restores_coordinat
     assert finder(rgb, mask) == [(30, 20, 50, 40)]
 
 
+def test_make_people_finder_clips_crop_at_image_edge_and_restores_coordinates():
+    class Detector:
+        def detect(self, rgb, device):
+            assert rgb.shape == (25, 30, 3)
+            return [PersonBox((5, 0, 25, 20), 0.8)]
+
+    rgb = np.zeros((100, 100, 3), dtype=np.uint8)
+    mask = np.zeros((100, 100), dtype=bool)
+    mask[0:20, 20:40] = True
+
+    finder = make_people_finder(Detector())
+
+    assert finder(rgb, mask) == [(20, 0, 40, 20)]
+
+
 def test_make_people_finder_does_not_detect_for_empty_mask():
     class Detector:
         def detect(self, _rgb, _device):
