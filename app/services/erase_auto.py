@@ -5,6 +5,7 @@ from collections.abc import Callable
 import numpy as np
 from PIL import Image
 
+from app.services.fill_faces import faces_inside
 from app.services.inpaint_mask import (
     clean_protect_mask,
     grow_per_component,
@@ -19,6 +20,7 @@ from app.services.inpaint_score import fill_score
 
 LamaFill = Callable[[np.ndarray, np.ndarray, np.ndarray], np.ndarray]
 SdxlEdit = Callable[[Image.Image, np.ndarray, float], Image.Image]
+FaceFinder = Callable[[np.ndarray, np.ndarray], list[tuple[int, int, int, int]]]
 
 
 def _composite_subject(
@@ -64,6 +66,8 @@ def auto_erase(
     sdxl_edit: SdxlEdit,
     small_side: int = 700,
     hybrid_strength: float = 0.5,
+    osor_fill: LamaFill | None = None,
+    find_faces: FaceFinder = faces_inside,
 ) -> tuple[Image.Image, list[dict]]:
     current = base_rgb.convert("RGB")
     original = np.array(current, copy=True)
@@ -86,6 +90,16 @@ def auto_erase(
         if max(right - left, bottom - top) <= small_side:
             filled = lama_fill(np.array(current, copy=True), group_mask, core)
             current, choice = Image.fromarray(filled), {"engine": "lama"}
+        elif osor_fill is not None:
+            filled = osor_fill(np.array(current, copy=True), group_mask, core)
+            if find_faces(filled, group_mask):
+                prefilled = lama_fill(np.array(current, copy=True), group_mask, core)
+                filled = osor_fill(prefilled, group_mask, core)
+                current = Image.fromarray(filled)
+                choice = {"engine": "lama+osor", "face_guard": True}
+            else:
+                current = Image.fromarray(filled)
+                choice = {"engine": "osor"}
         else:
             current, choice = _choose_large_fill(
                 current, group_mask, core, lama_fill, sdxl_edit, hybrid_strength,

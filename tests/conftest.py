@@ -36,6 +36,7 @@ def isolated_runtime_dir(tmp_path, monkeypatch: pytest.MonkeyPatch):
     # maquina con el pack bajado que en una limpia (paso de verdad con el motor
     # de borrado). Los tests que SI quieren probarlo pasan la ruta explicita.
     monkeypatch.setenv("MIGAN_MODEL", str(tmp_path / "pack-no-instalado.onnx"))
+    monkeypatch.setenv("OSOR_MODEL_DIR", str(tmp_path / "osor-no-instalado"))
     # Mismo motivo para el lane Vulkan: con el pack bajado, las capacidades
     # incluyen los checkpoints reales del disco y los tests de "no hay modelos"
     # fallan solo en la maquina del que lo instalo.

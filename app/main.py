@@ -97,6 +97,12 @@ def _build_lama_eraser(settings):
     return LamaEraser(settings)
 
 
+def _build_osor_eraser(settings):
+    from app.services.engines.osor_eraser import OsorEraser
+
+    return OsorEraser(settings)
+
+
 def _build_sdcpp_engine(settings):
     # Lane experimental Fase 3: solo se construye si el flag está encendido;
     # apagado no importa ni el módulo.
@@ -154,7 +160,10 @@ async def lifespan(app: FastAPI):
     resource_probes = {"gpu": DxgiVramProbe(), "cpu": SystemRamProbe()}
     device_semaphores = DeviceSemaphores(settings, resource_probes=resource_probes)
     lama_eraser = _build_lama_eraser(settings)
-    generation_engine = GenerationEngine(settings, gpu_coordinator, lama_eraser=lama_eraser)
+    osor_eraser = _build_osor_eraser(settings)
+    generation_engine = GenerationEngine(
+        settings, gpu_coordinator, lama_eraser=lama_eraser, osor_eraser=osor_eraser
+    )
     generation_job_manager = GenerationJobManager(
         settings,
         generation_engine,

@@ -28,6 +28,7 @@ PACK_LABELS: dict[str, str] = {
     "mobilesam": "el modelo de seleccion por toque",
     "migan": "el modelo de borrado rapido",
     "lama": "el modelo de borrado LaMa",
+    "osor": "el modelo de borrado OSOR",
     "sdcpp": "el motor de generacion por Vulkan",
     "openscad": "OpenSCAD, que convierte el codigo en la pieza",
     # No se baja con un script: pesa mas que toda la app y quien modela en 3D

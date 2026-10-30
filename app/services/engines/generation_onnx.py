@@ -383,9 +383,14 @@ class GenerationRequest:
 
 class GenerationEngine:
     def __init__(
-        self, settings: Settings, gpu_coordinator: GpuSessionCoordinator, lama_eraser: Any = None
+        self,
+        settings: Settings,
+        gpu_coordinator: GpuSessionCoordinator,
+        lama_eraser: Any = None,
+        osor_eraser: Any = None,
     ) -> None:
         self.lama_eraser = lama_eraser
+        self.osor_eraser = osor_eraser
         self.settings = settings
         self.gpu_coordinator = gpu_coordinator
         self._pipeline_cache: OrderedDict[tuple[str, str, str], Any] = OrderedDict()
@@ -648,7 +653,16 @@ class GenerationEngine:
 
         mask = np.asarray(mask_image.resize(base_image.size, Image.Resampling.NEAREST))
         edited, request.erase_auto = auto_erase(
-            base_image, mask, protect, self.lama_eraser.fill_group, sdxl_edit,
+            base_image,
+            mask,
+            protect,
+            self.lama_eraser.fill_group,
+            sdxl_edit,
+            osor_fill=(
+                self.osor_eraser.fill_group
+                if self.osor_eraser is not None and self.osor_eraser.available()
+                else None
+            ),
         )
         return edited
 

@@ -160,3 +160,63 @@ def test_separate_groups_are_applied_sequentially_to_the_current_image() -> None
     assert canvases[0][150, 130].tolist() == [180, 180, 180]
     assert canvases[1][150, 130].tolist() == [90, 90, 90]
     assert np.asarray(result)[150, 2230].tolist() == [90, 90, 90]
+
+
+def test_large_group_uses_osor_without_calling_sdxl() -> None:
+    image, mask = scene((100, 100, 220, 220))
+    lama = Mock(side_effect=lambda canvas, group, protect: fill_with(canvas, group, 90))
+    osor = Mock(side_effect=lambda canvas, group, protect: fill_with(canvas, group, 120))
+    sdxl = Mock(side_effect=AssertionError("OSOR debe reemplazar SDXL"))
+
+    result, choices = auto_erase(
+        image, mask, None, lama, sdxl, small_side=100, osor_fill=osor,
+        find_faces=lambda _rgb, _mask: [],
+    )
+
+    osor.assert_called_once()
+    sdxl.assert_not_called()
+    assert choices == [{"engine": "osor"}]
+    assert np.asarray(result)[160, 160].tolist() == [120, 120, 120]
+
+
+def test_large_group_face_guard_runs_lama_before_osor_again() -> None:
+    image, mask = scene((100, 100, 220, 220))
+    lama_outputs = []
+
+    def lama_fill(canvas, group, protect):
+        output = fill_with(canvas, group, 90)
+        lama_outputs.append(output)
+        return output
+
+    lama = Mock(side_effect=lama_fill)
+    osor_inputs = []
+
+    def osor(canvas, group, protect):
+        osor_inputs.append(canvas.copy())
+        return fill_with(canvas, group, 120)
+
+    result, choices = auto_erase(
+        image, mask, None, lama, Mock(), small_side=100, osor_fill=osor,
+        find_faces=lambda _rgb, _mask: [(1, 1, 10, 10)],
+    )
+
+    lama.assert_called_once()
+    assert len(osor_inputs) == 2
+    np.testing.assert_array_equal(osor_inputs[1], lama_outputs[0])
+    assert osor_inputs[1][160, 160].tolist() == [90, 90, 90]
+    assert choices == [{"engine": "lama+osor", "face_guard": True}]
+    assert np.asarray(result)[160, 160].tolist() == [120, 120, 120]
+
+
+def test_large_group_without_osor_keeps_existing_candidate_scoring() -> None:
+    image, mask = scene((100, 100, 220, 220))
+    lama = Mock(side_effect=lambda canvas, group, protect: fill_with(canvas, group, 90))
+    sdxl = Mock(side_effect=lambda base, group, strength: Image.fromarray(
+        fill_with(np.asarray(base), group, 150)
+    ))
+
+    _, choices = auto_erase(image, mask, None, lama, sdxl, small_side=100)
+
+    assert choices[0]["engine"] in {"hibrido", "sdxl"}
+    assert "scores" in choices[0]
+    assert sdxl.call_count == 2

@@ -164,8 +164,9 @@ def test_auto_edit_injects_providers_and_preserves_strength_clamping(
         recorded_settings.append(settings)
         return model(base, mask, *base.size)
 
-    def orchestrate(base, mask, protect, lama_fill, sdxl_edit):
+    def orchestrate(base, mask, protect, lama_fill, sdxl_edit, *, osor_fill):
         assert lama_fill == engine.lama_eraser.fill_group
+        assert osor_fill is None
         assert protect[30, 30] and not protect[0, 0]
         assert protect.dtype == bool
         sdxl_edit(base, mask, 0.5)
@@ -181,6 +182,30 @@ def test_auto_edit_injects_providers_and_preserves_strength_clamping(
     assert pipeline.call_args.kwargs["negative_prompt"] == f"blur, {ERASE_AUTO_NEGATIVE_PROMPT}"
     assert request.erase_auto == choices
     engine.gpu_coordinator.acquire.assert_not_called()
+
+
+def test_auto_edit_injects_available_osor_fill(auto_edit_context, monkeypatch) -> None:
+    from app.services import erase_auto
+    from app.services.inpaint_pipeline import MaskedEditSettings
+
+    engine, request, _ = auto_edit_context
+    osor = Mock()
+    osor.available.return_value = True
+    engine.osor_eraser = osor
+    captured = {}
+
+    def orchestrate(*args, **kwargs):
+        captured.update(kwargs)
+        return args[0], []
+
+    monkeypatch.setattr(erase_auto, "auto_erase", orchestrate)
+    base = Image.new("RGB", (64, 64), (180, 180, 180))
+    mask = Image.new("L", (64, 64), 255)
+    engine._edit_masked_image(
+        base, mask, Mock(), MaskedEditSettings(0, 0, None, 1600), request
+    )
+
+    assert captured["osor_fill"] == osor.fill_group
 
 
 @pytest.mark.parametrize("availability", [None, False])

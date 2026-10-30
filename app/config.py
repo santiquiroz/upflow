@@ -634,6 +634,7 @@ class Settings(BaseSettings):
     # difusión: para poner algo concreto en el hueco sigue estando difusión.
     migan_model: str = Field(default="vendor/migan/migan_pipeline_v2.onnx", alias="MIGAN_MODEL")
     lama_model: str = Field(default="vendor/lama/big-lama.pt", alias="LAMA_MODEL")
+    osor_model_dir: str = Field(default="", alias="OSOR_MODEL_DIR")
     editor_segmenter_encoder: str = Field(
         default="vendor/mobilesam/mobile_sam_image_encoder.onnx", alias="EDITOR_SEGMENTER_ENCODER"
     )
@@ -1309,6 +1310,26 @@ class Settings(BaseSettings):
 
     def lama_available(self) -> bool:
         return self.lama_model_path.exists()
+
+    @property
+    def osor_model_path(self) -> Path:
+        if self.osor_model_dir:
+            return resolve_against_project_root(self.osor_model_dir)
+        return self.models_path / "eraser-osor"
+
+    def osor_available(self) -> bool:
+        pack = self.osor_model_path
+        return all(
+            (pack / relative).is_file()
+            for relative in (
+                "unet/config.json",
+                "unet/diffusion_pytorch_model.fp16.safetensors",
+                "vae/config.json",
+                "vae/diffusion_pytorch_model.fp16.safetensors",
+                "scheduler/scheduler_config.json",
+                "prompt_embeds.pt",
+            )
+        )
 
     def editor_segmenter_available(self) -> bool:
         return self.editor_segmenter_encoder_path.exists() and self.editor_segmenter_decoder_path.exists()
