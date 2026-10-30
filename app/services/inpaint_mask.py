@@ -26,6 +26,28 @@ import numpy as np
 
 MASK_THRESHOLD = 127
 
+# Dilatación y feather proporcionales al tamaño de lo marcado: 8 px fijos no
+# alcanzan para tapar el halo de una persona de 2700 px (medido 2026-10).
+DILATE_RATIO = 0.015
+FEATHER_RATIO = 0.005
+MIN_DILATE_PX = 8
+MIN_FEATHER_PX = 8
+
+
+def _lado_mayor(bbox: tuple[int, int, int, int]) -> int:
+    left, top, right, bottom = bbox
+    return max(right - left, bottom - top)
+
+
+def dilation_for(bbox: tuple[int, int, int, int]) -> int:
+    """Cuánto agrandar lo marcado según su tamaño (nunca menos que el mínimo)."""
+    return max(MIN_DILATE_PX, round(DILATE_RATIO * _lado_mayor(bbox)))
+
+
+def feather_for(bbox: tuple[int, int, int, int]) -> int:
+    """Ancho de la transición según el tamaño de lo marcado."""
+    return max(MIN_FEATHER_PX, round(FEATHER_RATIO * _lado_mayor(bbox)))
+
 
 def dilate_mask(mask: np.ndarray, pixels: int) -> np.ndarray:
     """Agranda el área marcada `pixels` hacia afuera."""
@@ -74,6 +96,48 @@ def mask_bbox(mask: np.ndarray) -> tuple[int, int, int, int] | None:
     top, bottom = int(np.argmax(rows)), int(len(rows) - np.argmax(rows[::-1]))
     left, right = int(np.argmax(cols)), int(len(cols) - np.argmax(cols[::-1]))
     return left, top, right, bottom
+
+
+def _grow_component_window(
+    mask: np.ndarray,
+    labels: np.ndarray,
+    label: int,
+    bbox: tuple[int, int, int, int],
+    dilation: int,
+    feather: int,
+) -> tuple[tuple[slice, slice], np.ndarray]:
+    left, top, right, bottom = bbox
+    margin = dilation + 3 * feather + 2
+    height, width = mask.shape
+    window = (
+        slice(max(0, top - margin), min(height, bottom + margin)),
+        slice(max(0, left - margin), min(width, right + margin)),
+    )
+    component = np.where(labels[window] == label, mask[window], 0)
+    return window, feather_mask(dilate_mask(component, dilation), feather)
+
+
+def grow_per_component(
+    mask: np.ndarray, dilate_px: int | None, feather_px: int | None
+) -> np.ndarray:
+    if dilate_px == 0 and feather_px == 0:
+        return mask
+    import cv2
+
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(
+        (mask > MASK_THRESHOLD).astype(np.uint8), connectivity=8
+    )
+    grown = mask.copy()
+    for label in range(1, count):
+        left, top, width, height, _ = (int(value) for value in stats[label])
+        bbox = (left, top, left + width, top + height)
+        dilation = dilate_px if dilate_px is not None else dilation_for(bbox)
+        feather = feather_px if feather_px is not None else feather_for(bbox)
+        window, component = _grow_component_window(
+            mask, labels, label, bbox, dilation, feather
+        )
+        np.maximum(grown[window], component, out=grown[window])
+    return grown
 
 
 def _centered_span(low: int, high: int, length: int, limit: int) -> int:

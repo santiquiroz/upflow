@@ -2846,7 +2846,7 @@ async def create_generation_job(
     if payload.strength is not None:
         strength = payload.strength
     else:
-        strength = 0.85 if mask_image_path is not None else 0.6
+        strength = 1.0 if mask_image_path is not None else 0.6
     steps, guidance = _video_aware_sampling(payload, settings)
     try:
         job = await generation_jobs.create_job(

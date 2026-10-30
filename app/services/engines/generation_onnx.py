@@ -339,9 +339,10 @@ class GenerationRequest:
     mask_image_path: Path | None = None
     # Preparación de la máscara (ver inpaint_mask/inpaint_pipeline): agrandar lo
     # marcado se come el halo del contorno, la transición evita la costura, y el
-    # contexto es lo que le permite al modelo continuar el fondo.
-    mask_dilate_px: int = 8
-    mask_feather_px: int = 8
+    # contexto es lo que le permite al modelo continuar el fondo. dilate/feather
+    # en None = proporcional al tamaño de lo marcado; 0 = máscara tal cual.
+    mask_dilate_px: int | None = None
+    mask_feather_px: int | None = None
     # `None` = se calcula a partir del tamaño de lo marcado. Era 48 fijo, y eso
     # dejaba al modelo sin ver la cara cuando la marca era grande.
     mask_padding_px: int | None = None
@@ -618,6 +619,7 @@ class GenerationEngine:
         settings = MaskedEditSettings(
             dilate_px=request.mask_dilate_px,
             feather_px=request.mask_feather_px,
+            seed=request.seed or 0,
             padding_px=request.mask_padding_px,
             target_side=max(request.width, request.height),
             # Piso de resolución: un parche chico difundido a su propio tamaño

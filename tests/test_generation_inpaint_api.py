@@ -120,7 +120,7 @@ async def test_happy_path_creates_an_inpaint_job_with_default_strength(tmp_path:
     job = manager.get_job(response.id)
     assert job.mask_image_path is not None
     assert job.init_image_path is not None
-    assert job.strength == pytest.approx(0.85)
+    assert job.strength == pytest.approx(1.0)
 
 
 @pytest.mark.asyncio

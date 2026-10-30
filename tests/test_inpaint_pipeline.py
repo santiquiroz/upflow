@@ -433,3 +433,121 @@ def test_the_stitch_is_cut_back_to_the_exact_crop_despite_the_bigger_canvas() ->
     np.testing.assert_array_equal(after[0:80, 0:80], before[0:80, 0:80])
     np.testing.assert_array_equal(after[920:1000, 1320:1400], before[920:1000, 1320:1400])
     assert after[500, 500][0] > 200, "el centro de lo marcado sí cambió"
+
+
+# --- dilatación proporcional en el pipeline ---------------------------------
+
+
+def _replaced_right_edge(after: np.ndarray, before: np.ndarray, row: int) -> int:
+    changed = (after[row] != before[row]).any(axis=1)
+    return int(np.where(changed)[0].max())
+
+
+def test_a_big_mark_grows_by_percent_not_by_8px() -> None:
+    photo = base_photo((2200, 2200))
+    mask = mask_with_box((2200, 2200), (100, 100, 2100, 2100))
+    before = np.asarray(photo)
+
+    after = np.asarray(
+        run_masked_edit(
+            photo, mask, RecordingModel(),
+            MaskedEditSettings(None, 0, 48, 512, grain=False),
+        )
+    )
+
+    # 2000 px de lado → 1.5% = 30 px: el borde reemplazado queda en ~2129,
+    # bien lejos del 2108 que daban los 8 px fijos.
+    assert 2109 < _replaced_right_edge(after, before, 1100) < 2145
+
+
+def test_a_small_mark_with_default_settings_grows_by_the_minimum() -> None:
+    photo = base_photo((512, 512))
+    mask = mask_with_box((512, 512), (200, 200, 300, 300))
+    before = np.asarray(photo)
+
+    after = np.asarray(
+        run_masked_edit(
+            photo, mask, RecordingModel(),
+            MaskedEditSettings(None, 0, 48, 512, grain=False),
+        )
+    )
+
+    assert 300 < _replaced_right_edge(after, before, 250) < 316
+
+
+def test_an_explicit_zero_dilation_does_not_grow_the_mark() -> None:
+    photo = base_photo((512, 512))
+    mask = mask_with_box((512, 512), (200, 200, 240, 240))
+    before = np.asarray(photo)
+
+    after = np.asarray(
+        run_masked_edit(
+            photo, mask, RecordingModel(),
+            MaskedEditSettings(0, 0, 48, 512, grain=False),
+        )
+    )
+
+    assert 237 <= _replaced_right_edge(after, before, 220) <= 241
+
+
+# --- un recorte por región --------------------------------------------------
+
+
+def test_two_opposite_marks_are_edited_as_two_small_crops() -> None:
+    photo = base_photo((3000, 3000))
+    marked = np.zeros((3000, 3000), dtype=np.uint8)
+    marked[100:200, 100:200] = 255
+    marked[2800:2900, 2800:2900] = 255
+    before = np.asarray(photo)
+    model = RecordingModel()
+
+    after = np.asarray(
+        run_masked_edit(
+            photo, Image.fromarray(marked, mode="L"), model,
+            MaskedEditSettings(8, 8, 48, 1024, grain=False),
+        )
+    )
+
+    assert len(model.calls) == 2
+    for call in model.calls:
+        assert call["width"] <= 1024 and call["height"] <= 1024
+    assert after[150, 150, 0] > 200 and after[2850, 2850, 0] > 200
+    np.testing.assert_array_equal(after[1400:1600, 1400:1600], before[1400:1600, 1400:1600])
+
+
+def test_two_touching_marks_are_edited_in_a_single_call() -> None:
+    photo = base_photo((512, 512))
+    marked = np.zeros((512, 512), dtype=np.uint8)
+    marked[100:200, 100:200] = 255
+    marked[100:200, 205:305] = 255
+    model = RecordingModel()
+
+    run_masked_edit(
+        photo, Image.fromarray(marked, mode="L"), model,
+        MaskedEditSettings(8, 8, 48, 512, grain=False),
+    )
+
+    assert len(model.calls) == 1
+
+
+# --- grano del sensor -------------------------------------------------------
+
+
+def test_grain_matching_is_on_by_default() -> None:
+    photo = base_photo((512, 512))
+    mask = mask_with_box((512, 512), (200, 200, 240, 240))
+
+    flat = np.asarray(
+        run_masked_edit(
+            photo, mask, RecordingModel(),
+            MaskedEditSettings(8, 8, 48, 512, grain=False),
+        )
+    )
+    grained = np.asarray(
+        run_masked_edit(
+            photo, mask, RecordingModel(), MaskedEditSettings(8, 8, 48, 512)
+        )
+    )
+
+    assert (flat[210:230, 210:230] == (255, 0, 0)).all()
+    assert not (grained[210:230, 210:230] == (255, 0, 0)).all()

@@ -6,7 +6,10 @@ import pytest
 from app.services.inpaint_mask import (
     compute_crop_box,
     dilate_mask,
+    dilation_for,
+    feather_for,
     feather_mask,
+    grow_per_component,
     mask_bbox,
     soft_composite,
 )
@@ -166,3 +169,85 @@ def test_soft_composite_rejects_a_mismatched_mask() -> None:
             np.zeros((4, 4, 3), dtype=np.uint8),
             np.zeros((5, 5), dtype=np.uint8),
         )
+
+
+# --- dilatación y feather proporcionales ------------------------------------
+# 8 px fijos no tapan el halo de una marca grande (medido 2026-10: persona de
+# 1600x2700 con halo, limpia agrandando ~1.5% del lado mayor).
+
+
+def test_dilation_scales_with_the_marked_size() -> None:
+    assert dilation_for((0, 0, 2000, 2000)) == 30
+
+
+def test_dilation_never_goes_below_the_minimum() -> None:
+    assert dilation_for((0, 0, 100, 100)) == 8
+
+
+def test_feather_scales_with_the_marked_size() -> None:
+    assert feather_for((0, 0, 2000, 2000)) == 10
+
+
+def test_feather_never_goes_below_the_minimum() -> None:
+    assert feather_for((0, 0, 100, 100)) == 8
+
+
+def test_distant_small_components_keep_their_own_growth_scale() -> None:
+    mask = np.zeros((3000, 3000), dtype=np.uint8)
+    mask[100:200, 100:200] = 255
+    mask[2800:2900, 2800:2900] = 255
+
+    grown = grow_per_component(mask, None, None)
+
+    assert grown.dtype == np.uint8
+    assert grown.shape == mask.shape
+    for start in (100, 2800):
+        region = grown[start - 60:start + 160, start - 60:start + 160]
+        assert np.count_nonzero(region > 127) <= (100 + 2 * 8 + 2 * 8) ** 2
+        assert grown[start + 50, start - 8] == 255
+        assert grown[start + 50, start - 45] == 0
+    assert np.all(grown >= mask)
+
+
+def test_large_component_keeps_proportional_thirty_pixel_dilation() -> None:
+    mask = square_mask(size=2200, box=(100, 100, 2100, 2100))
+
+    grown = grow_per_component(mask, None, None)
+
+    assert grown[1100, 70] == 255
+    assert grown[1100, 69] < 255
+    assert grown[1100, 30] == 0
+
+
+def test_zero_growth_preserves_a_prepared_gradient_mask() -> None:
+    mask = np.tile(np.arange(256, dtype=np.uint8), (256, 1))
+
+    grown = grow_per_component(mask, 0, 0)
+
+    assert np.array_equal(grown, mask)
+
+
+def test_component_growth_preserves_values_below_the_component_threshold() -> None:
+    mask = square_mask()
+    mask[0, 0] = 80
+
+    grown = grow_per_component(mask, 2, 0)
+
+    assert grown[0, 0] == 80
+    assert np.all(grown >= mask)
+
+
+@pytest.mark.parametrize("dilation, feather", [(3, 0), (0, 2), (3, 2), (None, 0), (0, None)])
+def test_component_growth_respects_explicit_radii_and_mask_values(
+    dilation: int | None, feather: int | None
+) -> None:
+    mask = square_mask(size=128, box=(50, 50, 70, 70))
+    mask[50:70, 50:70] = 180
+    resolved_dilation = dilation if dilation is not None else 8
+    resolved_feather = feather if feather is not None else 8
+    expected = feather_mask(dilate_mask(mask, resolved_dilation), resolved_feather)
+
+    grown = grow_per_component(mask, dilation, feather)
+
+    np.testing.assert_allclose(grown, expected, atol=1, rtol=0)
+    assert grown[60, 60] == 180

@@ -1340,7 +1340,7 @@ class CreateGenerationJobRequest(BaseModel):
     # Token de la máscara de inpainting (PNG blanco=editar, negro=conservar),
     # subida con el mismo POST /generation/init-image. Requiere initImageToken.
     mask_image_token: str | None = Field(default=None, alias="maskImageToken")
-    # None = default por modo: 0.85 con máscara (inpainting), 0.6 sin (img2img).
+    # None = default por modo: 1.0 con máscara (inpainting), 0.6 sin (img2img).
     strength: float | None = Field(default=None, gt=0, le=1)
     # Recorrer la imagen a su tamaño real por tiles en vez de reducirla: agrega
     # detalle en vez de reinterpretar. Requiere imagen de partida.
