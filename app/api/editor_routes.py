@@ -44,7 +44,7 @@ async def editor_capabilities(
     response_model=EditorPeopleResponse,
     dependencies=[Depends(require(Permission.jobs_create))],
 )
-async def people(
+async def detect_people(
     payload: EditorPeopleRequest,
     people: EditorPeople = Depends(get_editor_people),
 ) -> EditorPeopleResponse:

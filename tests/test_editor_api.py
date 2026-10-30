@@ -8,7 +8,11 @@ from fastapi import HTTPException
 from PIL import Image
 from starlette.datastructures import UploadFile
 
-from app.api.editor_routes import editor_capabilities, people as editor_people_route, segment_object
+from app.api.editor_routes import (
+    detect_people as editor_people_route,
+    editor_capabilities,
+    segment_object,
+)
 from app.api.routes import upload_init_image
 from app.config import get_settings
 from app.schemas import EditorPeopleRequest, EditorSegmentRequest
@@ -199,6 +203,62 @@ async def test_people_second_call_hits_cache(tmp_path, monkeypatch) -> None:
         )
     ]
     assert detector.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_people_cache_returns_independent_models(tmp_path, monkeypatch) -> None:
+    import app.services.editor_people as editor_people_module
+    from PIL import Image
+
+    image_path = tmp_path / "image.png"
+    Image.new("RGB", (64, 64), (20, 30, 40)).save(image_path)
+
+    class FakeDetector:
+        def detect(self, rgb, device):
+            return [PersonBox((10, 10, 50, 60), 0.9)]
+
+    monkeypatch.setattr(editor_people_module, "classify_roles", lambda rgb, detections: ["subject"])
+    monkeypatch.setattr(editor_people_module, "face_box", lambda rgb, box: None)
+    service = EditorPeople(FakeDetector())
+
+    first = await service.people(image_path, "cpu")
+    first[0].box[0] = 999
+    second = await service.people(image_path, "cpu")
+
+    assert second[0].box == [10, 10, 50, 60]
+
+
+@pytest.mark.asyncio
+async def test_people_without_detections_returns_empty_list() -> None:
+    token = await upload_token()
+
+    response = await editor_people_route(
+        EditorPeopleRequest(imageToken=token), people=FakePeople([])
+    )
+
+    assert response.people == []
+
+
+@pytest.mark.asyncio
+async def test_people_unknown_token_is_400() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        await editor_people_route(
+            EditorPeopleRequest(imageToken="deadbeef"), people=FakePeople([])
+        )
+
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_people_invalid_device_is_400() -> None:
+    token = await upload_token()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await editor_people_route(
+            EditorPeopleRequest(imageToken=token, device="cuda:0"), people=FakePeople([])
+        )
+
+    assert exc_info.value.status_code == 400
 
 
 @pytest.mark.asyncio
