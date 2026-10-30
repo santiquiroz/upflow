@@ -8,7 +8,7 @@ FACE_SCALES = (0.5, 0.25)
 _cascade = None
 
 
-def _get_cascade():
+def get_face_cascade():
     global _cascade
     if _cascade is None:
         import cv2
@@ -24,6 +24,10 @@ def _center_in_mask(box: tuple[int, int, int, int], mask: np.ndarray) -> bool:
     center_x, center_y = x + width // 2, y + height // 2
     rows, columns = mask.shape
     return 0 <= center_x < columns and 0 <= center_y < rows and mask[center_y, center_x] > 0
+
+
+def _get_cascade():
+    return get_face_cascade()
 
 
 def _faces_at_scale(gray: np.ndarray, scale: float) -> list[tuple[int, int, int, int]]:

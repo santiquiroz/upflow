@@ -5,7 +5,7 @@ from typing import Literal
 import cv2
 import numpy as np
 
-from app.services.fill_faces import _get_cascade
+from app.services.fill_faces import get_face_cascade
 from app.services.person_detector import PersonBox
 
 Role = Literal["subject", "background"]
@@ -29,6 +29,34 @@ def _clipped_box(
     )
 
 
+def _height_score(box: tuple[int, int, int, int], image_height: int) -> float:
+    y1 = max(0, min(image_height, box[1]))
+    y2 = max(0, min(image_height, box[3]))
+    return min(max(0, y2 - y1) / image_height, 1.0)
+
+
+def _center_score(box: tuple[int, int, int, int], image_width: int) -> float:
+    x1 = max(0, min(image_width, box[0]))
+    x2 = max(0, min(image_width, box[2]))
+    center_x = (x1 + x2) / 2
+    return max(
+        0.0, 1.0 - abs(center_x - image_width / 2) / (image_width / 2)
+    )
+
+
+def _sharpness_score(
+    laplacian: np.ndarray,
+    box: tuple[int, int, int, int],
+    image_sharpness: float,
+) -> float:
+    height, width = laplacian.shape[:2]
+    x1, y1, x2, y2 = _clipped_box(box, width, height)
+    if x2 <= x1 or y2 <= y1 or image_sharpness <= 0:
+        return 0.0
+    box_sharpness = float(np.var(laplacian[y1:y2, x1:x2]))
+    return min(box_sharpness / image_sharpness, 1.0)
+
+
 def role_scores(rgb: np.ndarray, people: list[PersonBox]) -> list[float]:
     if not people:
         return []
@@ -42,24 +70,11 @@ def role_scores(rgb: np.ndarray, people: list[PersonBox]) -> list[float]:
     image_sharpness = float(np.var(laplacian))
     scores = []
     for person in people:
-        x1, y1, x2, y2 = _clipped_box(
-            person.box, image_width, image_height
-        )
-        box_height = max(0, y2 - y1)
-        height_score = min(box_height / image_height, 1.0)
-        center_x = (x1 + x2) / 2
-        center_score = max(
-            0.0, 1.0 - abs(center_x - image_width / 2) / (image_width / 2)
-        )
-        if x2 > x1 and y2 > y1 and image_sharpness > 0:
-            box_sharpness = float(np.var(laplacian[y1:y2, x1:x2]))
-            sharpness_score = min(box_sharpness / image_sharpness, 1.0)
-        else:
-            sharpness_score = 0.0
         scores.append(
-            HEIGHT_WEIGHT * height_score
-            + SHARPNESS_WEIGHT * sharpness_score
-            + CENTER_WEIGHT * center_score
+            HEIGHT_WEIGHT * _height_score(person.box, image_height)
+            + SHARPNESS_WEIGHT
+            * _sharpness_score(laplacian, person.box, image_sharpness)
+            + CENTER_WEIGHT * _center_score(person.box, image_width)
         )
     return scores
 
@@ -88,14 +103,29 @@ def face_box(
 
     gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
     region = gray[y1:upper_y2, x1:x2]
-    detections = _get_cascade().detectMultiScale(
+    detections = get_face_cascade().detectMultiScale(
         region, 1.1, 5, minSize=(20, 20)
     )
     if len(detections) == 0:
         return None
 
     x, y, width, height = max(detections, key=lambda detected: detected[2] * detected[3])
-    return x1 + x, y1 + y, x1 + x + width, y1 + y + height
+    return (
+        int(x1 + x),
+        int(y1 + y),
+        int(x1 + x + width),
+        int(y1 + y + height),
+    )
+
+
+def _center(box: tuple[int, int, int, int]) -> tuple[int, int]:
+    x1, y1, x2, y2 = box
+    return int((x1 + x2) // 2), int((y1 + y2) // 2)
+
+
+def _upper_quarter_center(box: tuple[int, int, int, int]) -> tuple[int, int]:
+    x1, y1, x2, y2 = box
+    return int((x1 + x2) // 2), int(y1 + (y2 - y1) // 8)
 
 
 def anchor_point(
@@ -103,8 +133,5 @@ def anchor_point(
     face: tuple[int, int, int, int] | None,
 ) -> tuple[int, int]:
     if face is not None:
-        x1, y1, x2, y2 = face
-    else:
-        x1, y1, x2, y2 = box
-        return (x1 + x2) // 2, y1 + (y2 - y1) // 8
-    return (x1 + x2) // 2, (y1 + y2) // 2
+        return _center(face)
+    return _upper_quarter_center(box)

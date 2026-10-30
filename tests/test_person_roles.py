@@ -44,9 +44,34 @@ def test_all_similar_people_are_all_subjects():
 
 
 def test_anchor_point_uses_face_center_or_upper_quarter():
-    assert anchor_point((0, 0, 100, 400), (20, 10, 60, 50)) == (40, 30)
-    assert anchor_point((0, 0, 100, 400), None) == (50, 50)
+    face_anchor = anchor_point((0, 0, 100, 400), (20, 10, 60, 50))
+    box_anchor = anchor_point((0, 0, 100, 400), None)
+    assert face_anchor == (40, 30)
+    assert box_anchor == (50, 50)
+    assert all(type(value) is int for value in face_anchor)
+    assert all(type(value) is int for value in box_anchor)
 
 
 def test_face_box_none_on_blank():
     assert face_box(np.zeros((400, 300, 3), np.uint8), (0, 0, 300, 400)) is None
+
+
+def test_face_box_selects_largest_face_in_upper_half_and_returns_python_ints(
+    monkeypatch,
+):
+    class FakeCascade:
+        region_shape = None
+
+        def detectMultiScale(self, region, *_args, **_kwargs):
+            self.region_shape = region.shape
+            return np.array([[5, 10, 20, 20], [40, 15, 30, 40]])
+
+    cascade = FakeCascade()
+    monkeypatch.setattr("app.services.person_roles.get_face_cascade", lambda: cascade)
+    rgb = np.zeros((200, 200, 3), dtype=np.uint8)
+
+    result = face_box(rgb, (30, 20, 150, 180))
+
+    assert result == (70, 35, 100, 75)
+    assert cascade.region_shape == (80, 120)
+    assert all(type(value) is int for value in result)
