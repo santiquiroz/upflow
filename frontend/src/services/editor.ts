@@ -5,6 +5,16 @@ const API_BASE = "/api/v1";
 
 export interface EditorCapabilities {
   tapSelect: boolean;
+  people?: boolean;
+}
+
+export interface EditorPerson {
+  id: number;
+  box: [number, number, number, number];
+  score: number;
+  role: "subject" | "background";
+  face: [number, number, number, number] | null;
+  anchor: [number, number];
 }
 
 export async function fetchEditorCapabilities(): Promise<EditorCapabilities> {
@@ -15,17 +25,21 @@ export async function fetchEditorCapabilities(): Promise<EditorCapabilities> {
   return (await response.json()) as EditorCapabilities;
 }
 
-// Devuelve la máscara del objeto tocado como Blob PNG (blanco=objeto). Va con
-// fetch crudo porque la respuesta es binaria, no JSON.
-export async function segmentEditorObject(
-  imageToken: string,
-  x: number,
-  y: number,
-): Promise<Blob> {
+export async function detectPeople(imageToken: string): Promise<EditorPerson[]> {
+  const response = await apiPostJson<{ people: EditorPerson[] }>("/editor/people", { imageToken });
+  return response.people;
+}
+
+async function fetchEditorSegment(body: {
+  imageToken: string;
+  x?: number;
+  y?: number;
+  box?: [number, number, number, number];
+}): Promise<Blob> {
   const response = await fetch(`${API_BASE}/editor/segment`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ imageToken, x, y }),
+    body: JSON.stringify(body),
   });
   if (!response.ok) {
     let detail = "Segmentation failed";
@@ -37,6 +51,23 @@ export async function segmentEditorObject(
     throw new ApiError(response.status, detail);
   }
   return response.blob();
+}
+
+// Devuelve la máscara del objeto tocado como Blob PNG (blanco=objeto). Va con
+// fetch crudo porque la respuesta es binaria, no JSON.
+export async function segmentEditorObject(
+  imageToken: string,
+  x: number,
+  y: number,
+): Promise<Blob> {
+  return fetchEditorSegment({ imageToken, x, y });
+}
+
+export async function segmentEditorBox(
+  imageToken: string,
+  box: [number, number, number, number],
+): Promise<Blob> {
+  return fetchEditorSegment({ imageToken, box });
 }
 
 export interface InsertObjectParams {
