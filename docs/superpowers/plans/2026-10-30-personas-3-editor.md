@@ -80,10 +80,10 @@
 **Interfaces:**
 - Produces:
   - `EditorCapabilities` suma `people: boolean`.
-  - `type EditorPerson = { id: number; box: [number, number, number, number]; score: number; role: "subject" | "background"; face: [number, number, number, number] | null }`.
+  - `type EditorPerson = { id: number; box: [number, number, number, number]; score: number; role: "subject" | "background"; face: [number, number, number, number] | null; anchor: [number, number] }` (el backend calcula `anchor`: centro de la cara o del cuarto superior de la caja).
   - `detectPeople(imageToken: string): Promise<EditorPerson[]>`; `segmentEditorBox(imageToken: string, box: [number, number, number, number]): Promise<Blob>` (mismo manejo de errores que `segmentEditorObject`).
   - `usePeople(baseInfo: InitImageResponse | null, enabled: boolean)` — `useQuery(["editorPeople", token])`, en segundo plano al cargar la imagen.
-  - `peopleState.ts` (puro): `type Choice = "keep" | "remove"`; `initialChoices(people): Record<number, Choice>` (subject → keep, background → remove); `toggleChoice(choices, id)`; `setGroup(choices, people, role, choice)`; `countRemove(choices): number`; `groupPeople(people): { front: EditorPerson[]; back: EditorPerson[] }`; `anchorPoint(person): {x, y}` (centro de la cara o del cuarto superior de la caja, como el backend).
+  - `peopleState.ts` (puro): `type Choice = "keep" | "remove"`; `initialChoices(people): Record<number, Choice>` (subject → keep, background → remove); `toggleChoice(choices, id)`; `setGroup(choices, people, role, choice)`; `countRemove(choices): number`; `groupPeople(people): { front: EditorPerson[]; back: EditorPerson[] }`; `anchorPoint(person): {x, y}` lee `person.anchor` (no recalcula la regla).
 
 - [ ] **Step 1: Write the failing tests** para cada función pura y para `detectPeople` (fetch mockeado: POST con `imageToken`, error → `ApiError`).
 - [ ] **Step 2: Run** → FAIL. **Step 3: Implement.** **Step 4: Run** → PASS.
