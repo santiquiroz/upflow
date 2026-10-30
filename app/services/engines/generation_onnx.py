@@ -197,7 +197,8 @@ def _inpaint_strength(pipeline: Any, requested: float) -> float:
     return requested
 
 
-_PIPELINE_SESSION_ATTRS = ("unet", "vae_decoder", "vae_encoder", "text_encoder", "text_encoder_2")
+_TEXT_ENCODER_COMPONENTS = ("text_encoder", "text_encoder_2", "text_encoder_3")
+_PIPELINE_SESSION_ATTRS = ("unet", "vae_decoder", "vae_encoder", *_TEXT_ENCODER_COMPONENTS)
 
 _ORIGINAL_SCHEDULER_ATTR = "_upflow_original_scheduler"
 
@@ -266,13 +267,33 @@ def _apply_scheduler(pipeline: Any, name: str | None) -> None:
     pipeline.scheduler = _build_scheduler(name, original.config)
 
 
-def _record_pipeline_providers(pipeline: Any, device: str) -> None:
+def _cpu_text_encoder_sessions(
+    pipeline_dir: Path, device: str, settings: Settings
+) -> dict[str, Any]:
+    if device == "cpu" or not settings.generation_text_encoders_on_cpu:
+        return {}
+    sessions = {}
+    for name in _TEXT_ENCODER_COMPONENTS:
+        model_path = pipeline_dir / name / "model.onnx"
+        if model_path.is_file():
+            sessions[f"{name}_session"] = ep_registry.create_session(
+                str(model_path), "cpu", settings
+            )
+    return sessions
+
+
+def _record_pipeline_providers(
+    pipeline: Any, device: str, *, text_encoder_device: str | None = None
+) -> None:
     # optimum no expone los providers del pipeline: hay que preguntarle a la
     # sesión de cada componente, que es donde ORT pudo caer a CPU en silencio.
     for name in _PIPELINE_SESSION_ATTRS:
         session = getattr(getattr(pipeline, name, None), "session", None)
         if session is not None:
-            ep_registry.record_session_providers(device, session, context=f"generación/{name}")
+            component_device = device
+            if name in _TEXT_ENCODER_COMPONENTS and text_encoder_device is not None:
+                component_device = text_encoder_device
+            ep_registry.record_session_providers(component_device, session, context=f"generación/{name}")
 
 
 def _looks_like_memory_error(exc: Exception) -> bool:
@@ -709,6 +730,11 @@ class GenerationEngine:
                 device, self.settings, sess_options_factory=build_sess_options
             ),
         }
+        # Las sesiones inyectadas evitan retener en VRAM encoders que solo se usan al inicio.
+        cpu_sessions = _cpu_text_encoder_sessions(pipeline_dir, device, self.settings)
+        from_pretrained_kwargs.update(cpu_sessions)
         pipeline = pipeline_cls.from_pretrained(str(pipeline_dir), **from_pretrained_kwargs)
-        _record_pipeline_providers(pipeline, device)
+        _record_pipeline_providers(
+            pipeline, device, text_encoder_device="cpu" if cpu_sessions else None
+        )
         return pipeline

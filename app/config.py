@@ -311,6 +311,9 @@ class Settings(BaseSettings):
     app_name: str = Field(default="Upflow", alias="APP_NAME")
     app_host: str = Field(default="127.0.0.1", alias="APP_HOST")
     app_port: int = Field(default=8090, alias="APP_PORT")
+    generation_text_encoders_on_cpu: bool = Field(
+        default=True, alias="GENERATION_TEXT_ENCODERS_ON_CPU"
+    )
 
     max_upload_mb: int = Field(default=50, alias="MAX_UPLOAD_MB")
     # Servidor de modelo que escribe el OpenSCAD. Vacio = el carril CAD apagado.
