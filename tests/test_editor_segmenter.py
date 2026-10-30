@@ -13,6 +13,7 @@ from app.services.editor_segmenter import (
     SAM_MEAN_PIXEL,
     EditorSegmenter,
     SegmenterUnavailableError,
+    build_box_decoder_inputs,
     build_decoder_inputs,
     mask_to_png_bytes,
     prepare_encoder_input,
@@ -60,6 +61,15 @@ def test_build_decoder_inputs_scales_click_and_pads_point() -> None:
     np.testing.assert_allclose(inputs["orig_im_size"], [512.0, 256.0])
     assert inputs["mask_input"].shape == (1, 1, 256, 256)
     assert float(inputs["has_mask_input"][0]) == 0.0
+
+
+def test_build_box_decoder_inputs_uses_corner_labels() -> None:
+    inputs = build_box_decoder_inputs(
+        np.zeros((1, 256, 64, 64), np.float32), (10, 20, 110, 220), 0.5, 400, 300
+    )
+
+    assert inputs["point_coords"].tolist() == [[[5.0, 10.0], [55.0, 110.0]]]
+    assert inputs["point_labels"].tolist() == [[2.0, 3.0]]
 
 
 def test_mask_to_png_is_grayscale_white_object() -> None:
@@ -125,6 +135,21 @@ async def test_segment_returns_png_mask(tmp_path: Path, monkeypatch: pytest.Monk
     assert np.asarray(decoded)[20, 40] == 0
     coords = decoder.inputs[0]["point_coords"][0, 0]
     assert coords[0] == pytest.approx(5.0 * (SAM_INPUT_SIDE / 64))
+
+
+@pytest.mark.asyncio
+async def test_segment_box_clips_box_to_image(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    segmenter, _, decoder, image_path = make_segmenter(tmp_path, monkeypatch)
+
+    png = await segmenter.segment_box(image_path, (-10.0, 5.0, 80.0, 40.0), "dml:0")
+
+    assert Image.open(io.BytesIO(png)).size == (64, 32)
+    scale = SAM_INPUT_SIDE / 64
+    np.testing.assert_allclose(
+        decoder.inputs[0]["point_coords"][0],
+        [[0.0, 5.0 * scale], [63.0 * scale, 31.0 * scale]],
+    )
+    np.testing.assert_allclose(decoder.inputs[0]["point_labels"][0], [2.0, 3.0])
 
 
 @pytest.mark.asyncio

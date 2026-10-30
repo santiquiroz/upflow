@@ -96,7 +96,12 @@ async def segment_object(
     if device != "cpu" and not device.startswith("dml:"):
         raise HTTPException(status_code=400, detail=f"Unsupported device: {device!r}")
     try:
-        png = await segmenter.segment(image_path, payload.x, payload.y, device)
+        if payload.box is not None:
+            png = await segmenter.segment_box(image_path, tuple(payload.box), device)
+        else:
+            if payload.x is None or payload.y is None:
+                raise HTTPException(status_code=422, detail="Point coordinates require both x and y")
+            png = await segmenter.segment(image_path, payload.x, payload.y, device)
     except SegmenterUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except HTTPException:

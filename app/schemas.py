@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.models import JobStatus
 from app.schemas_cctv import CctvSummary
@@ -1471,12 +1471,28 @@ class VulkanInstallStatusResponse(BaseModel):
 class EditorSegmentRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    # Token de una imagen subida con POST /generation/init-image; coords del
-    # click en píxeles de la imagen ORIGINAL.
+    # Token de una imagen subida con POST /generation/init-image; coords en
+    # píxeles de la imagen ORIGINAL.
     image_token: str = Field(alias="imageToken")
-    x: float = Field(ge=0)
-    y: float = Field(ge=0)
+    x: float | None = Field(default=None, ge=0)
+    y: float | None = Field(default=None, ge=0)
+    box: list[float] | None = None
     device: str | None = None
+
+    @model_validator(mode="after")
+    def validate_prompt(self) -> EditorSegmentRequest:
+        has_point = self.x is not None and self.y is not None
+        if has_point == (self.box is not None):
+            raise ValueError("Provide either point coordinates or a box")
+        if (self.x is None) != (self.y is None):
+            raise ValueError("Point coordinates require both x and y")
+        if self.box is not None:
+            if len(self.box) != 4:
+                raise ValueError("Box must contain four coordinates")
+            x0, y0, x1, y1 = self.box
+            if not (x0 < x1 and y0 < y1):
+                raise ValueError("Box coordinates must have x0 < x1 and y0 < y1")
+        return self
 
 
 class EditorPeopleRequest(BaseModel):

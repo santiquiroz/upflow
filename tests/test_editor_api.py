@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 from fastapi import HTTPException
 from PIL import Image
+from pydantic import ValidationError
 from starlette.datastructures import UploadFile
 
 from app.api.editor_routes import (
@@ -26,6 +27,7 @@ class FakeSegmenter:
     def __init__(self, available: bool = True) -> None:
         self._available = available
         self.calls: list[tuple] = []
+        self.box_calls: list[tuple] = []
 
     def available(self) -> bool:
         return self._available
@@ -34,6 +36,16 @@ class FakeSegmenter:
         if not self._available:
             raise SegmenterUnavailableError("corré scripts/download-mobilesam.ps1")
         self.calls.append((image_path, x, y, device))
+        mask = np.zeros((8, 8), dtype=np.uint8)
+        mask[2:4, 2:4] = 255
+        buffer = io.BytesIO()
+        Image.fromarray(mask, mode="L").save(buffer, format="PNG")
+        return buffer.getvalue()
+
+    async def segment_box(self, image_path, box, device):
+        if not self._available:
+            raise SegmenterUnavailableError("corré scripts/download-mobilesam.ps1")
+        self.box_calls.append((image_path, box, device))
         mask = np.zeros((8, 8), dtype=np.uint8)
         mask[2:4, 2:4] = 255
         buffer = io.BytesIO()
@@ -82,6 +94,28 @@ async def test_segment_happy_path_returns_png() -> None:
     assert response.media_type == "image/png"
     assert Image.open(io.BytesIO(response.body)).mode == "L"
     assert segmenter.calls[0][3] == "cpu"
+
+
+def test_segment_request_requires_point_or_box() -> None:
+    with pytest.raises(ValidationError):
+        EditorSegmentRequest(imageToken="ab", x=1, y=1, box=[0, 0, 5, 5])
+    with pytest.raises(ValidationError):
+        EditorSegmentRequest(imageToken="ab")
+    with pytest.raises(ValidationError):
+        EditorSegmentRequest(imageToken="ab", box=[5, 0, 1, 5])
+
+
+@pytest.mark.asyncio
+async def test_segment_route_with_box_calls_segment_box() -> None:
+    token = await upload_token()
+    segmenter = FakeSegmenter()
+
+    response = await segment_object(
+        EditorSegmentRequest(imageToken=token, box=[1, 2, 6, 7]), segmenter=segmenter
+    )
+
+    assert response.media_type == "image/png"
+    assert segmenter.box_calls[0][1:] == ((1.0, 2.0, 6.0, 7.0), "cpu")
 
 
 @pytest.mark.asyncio

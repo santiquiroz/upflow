@@ -67,6 +67,26 @@ def build_decoder_inputs(
     }
 
 
+def build_box_decoder_inputs(
+    embeddings: np.ndarray,
+    box: tuple[float, float, float, float],
+    scale: float,
+    orig_h: int,
+    orig_w: int,
+) -> dict[str, np.ndarray]:
+    x0, y0, x1, y1 = box
+    return {
+        "image_embeddings": embeddings,
+        "point_coords": np.array(
+            [[[x0 * scale, y0 * scale], [x1 * scale, y1 * scale]]], dtype=np.float32
+        ),
+        "point_labels": np.array([[2.0, 3.0]], dtype=np.float32),
+        "mask_input": np.zeros((1, 1, 256, 256), dtype=np.float32),
+        "has_mask_input": np.zeros((1,), dtype=np.float32),
+        "orig_im_size": np.array([orig_h, orig_w], dtype=np.float32),
+    }
+
+
 def mask_to_png_bytes(mask: np.ndarray) -> bytes:
     from PIL import Image
 
@@ -104,12 +124,38 @@ class EditorSegmenter:
             raise SegmenterUnavailableError(missing_pack_message("mobilesam"))
         return await asyncio.to_thread(self._segment_blocking, image_path, x, y, device)
 
+    async def segment_box(
+        self, image_path: Path, box: tuple[float, float, float, float], device: str
+    ) -> bytes:
+        if not self.available():
+            raise SegmenterUnavailableError(missing_pack_message("mobilesam"))
+        return await asyncio.to_thread(self._segment_box_blocking, image_path, box, device)
+
     def _segment_blocking(self, image_path: Path, x: float, y: float, device: str) -> bytes:
         embeddings, scale, orig_h, orig_w = self._embeddings_for(image_path, device)
         decoder = self._get_session("decoder", self.settings.editor_segmenter_decoder_path, device)
         clamped_x = min(max(x, 0.0), float(orig_w - 1))
         clamped_y = min(max(y, 0.0), float(orig_h - 1))
         inputs = build_decoder_inputs(embeddings, clamped_x, clamped_y, scale, orig_h, orig_w)
+        return self._run_decoder(decoder, inputs)
+
+    def _segment_box_blocking(
+        self, image_path: Path, box: tuple[float, float, float, float], device: str
+    ) -> bytes:
+        embeddings, scale, orig_h, orig_w = self._embeddings_for(image_path, device)
+        decoder = self._get_session("decoder", self.settings.editor_segmenter_decoder_path, device)
+        x0, y0, x1, y1 = box
+        clamped_box = (
+            min(max(x0, 0.0), float(orig_w - 1)),
+            min(max(y0, 0.0), float(orig_h - 1)),
+            min(max(x1, 0.0), float(orig_w - 1)),
+            min(max(y1, 0.0), float(orig_h - 1)),
+        )
+        inputs = build_box_decoder_inputs(embeddings, clamped_box, scale, orig_h, orig_w)
+        return self._run_decoder(decoder, inputs)
+
+    @staticmethod
+    def _run_decoder(decoder: Any, inputs: dict[str, np.ndarray]) -> bytes:
         masks = decoder.run(None, inputs)[0]
         return mask_to_png_bytes(masks[0, 0] > 0.0)
 
