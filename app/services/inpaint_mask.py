@@ -33,6 +33,115 @@ DILATE_RATIO = 0.015
 FEATHER_RATIO = 0.005
 MIN_DILATE_PX = 8
 MIN_FEATHER_PX = 8
+MATTE_RATIO = 0.006
+MATTE_SHARPEN = 3.0
+MATTE_OUTWARD_FRACTION = 4
+MATTE_SMOOTH_FRACTION = 0.33
+
+
+def matte_radius(shape: tuple[int, ...]) -> int:
+    return max(12, round(MATTE_RATIO * max(shape[:2])))
+
+
+def matte_core(protect: np.ndarray, radius: int) -> np.ndarray:
+    import cv2
+
+    kernel = np.ones((2 * radius + 1, 2 * radius + 1), dtype=np.uint8)
+    return cv2.erode(protect.astype(np.uint8), kernel) > 0
+
+
+def _matte_outer(protect: np.ndarray, radius: int) -> np.ndarray:
+    import cv2
+
+    outward = max(2, radius // MATTE_OUTWARD_FRACTION)
+    kernel = np.ones((2 * outward + 1, 2 * outward + 1), dtype=np.uint8)
+    return cv2.dilate(protect.astype(np.uint8), kernel) == 0
+
+
+def _matte_window(band: np.ndarray, radius: int) -> tuple[slice, slice]:
+    rows = np.flatnonzero(band.any(axis=1))
+    columns = np.flatnonzero(band.any(axis=0))
+    margin = 3 * radius
+    return (
+        slice(max(0, rows[0] - margin), min(band.shape[0], rows[-1] + margin + 1)),
+        slice(max(0, columns[0] - margin), min(band.shape[1], columns[-1] + margin + 1)),
+    )
+
+
+def _matte_local_mean(
+    image: np.ndarray, samples: np.ndarray, radius: int, factor: int
+) -> tuple[np.ndarray, np.ndarray]:
+    import cv2
+
+    weights = samples.astype(np.float32)
+    if factor > 1:
+        weights = cv2.resize(weights, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_AREA)
+    sigma = radius / factor
+    density = cv2.GaussianBlur(weights, (0, 0), sigmaX=sigma)
+    weighted = cv2.GaussianBlur(image * weights[:, :, None], (0, 0), sigmaX=sigma)
+    mean = weighted / np.maximum(density[:, :, None], 1e-6)
+    size = (samples.shape[1], samples.shape[0])
+    if factor > 1:
+        mean = cv2.resize(mean, size, interpolation=cv2.INTER_LINEAR)
+        density = cv2.resize(density, size, interpolation=cv2.INTER_LINEAR)
+    return mean, density
+
+
+def _matte_band_alpha(
+    original: np.ndarray, core: np.ndarray, outer: np.ndarray, band: np.ndarray, radius: int
+) -> tuple[np.ndarray, np.ndarray]:
+    import cv2
+
+    factor = max(1, radius // 6)
+    image = original.astype(np.float32)
+    if factor > 1:
+        size = (max(1, original.shape[1] // factor), max(1, original.shape[0] // factor))
+        image = cv2.resize(image, size, interpolation=cv2.INTER_AREA)
+    subject, subject_weight = _matte_local_mean(image, core, radius, factor)
+    outside, outside_weight = _matte_local_mean(image, outer, radius, factor)
+    valid = band & (subject_weight > 1e-3) & (outside_weight > 1e-3)
+    pixels = original[valid].astype(np.float32)
+    subject_distance = np.linalg.norm(pixels - subject[valid], axis=1)
+    outside_distance = np.linalg.norm(pixels - outside[valid], axis=1)
+    ratio = outside_distance / np.maximum(subject_distance + outside_distance, 1e-6)
+    smooth = _smooth_matte_score(ratio, valid, radius)
+    return valid, np.clip((smooth - 0.5) * MATTE_SHARPEN + 0.5, 0, 1)
+
+
+def _smooth_matte_score(
+    scores: np.ndarray, valid: np.ndarray, radius: int
+) -> np.ndarray:
+    import cv2
+
+    weights = valid.astype(np.float32)
+    weighted = np.zeros(valid.shape, dtype=np.float32)
+    weighted[valid] = scores
+    sigma = radius * MATTE_SMOOTH_FRACTION
+    numerator = cv2.GaussianBlur(weighted, (0, 0), sigmaX=sigma)
+    denominator = cv2.GaussianBlur(weights, (0, 0), sigmaX=sigma)
+    return numerator[valid] / np.maximum(denominator[valid], 1e-6)
+
+
+def subject_matte(
+    original_rgb: np.ndarray, protect: np.ndarray, radius: int | None = None
+) -> np.ndarray:
+    import cv2
+
+    alpha = protect.astype(np.float32)
+    if not protect.any():
+        return alpha
+    radius = matte_radius(protect.shape) if radius is None else radius
+    core = matte_core(protect, radius)
+    outer = _matte_outer(protect, radius)
+    band = ~core & ~outer
+    if not band.any():
+        return np.clip(cv2.GaussianBlur(alpha, (0, 0), sigmaX=1.0), 0, 1)
+    window = _matte_window(band, radius)
+    valid, values = _matte_band_alpha(
+        original_rgb[window], core[window], outer[window], band[window], radius
+    )
+    alpha[window][valid] = values
+    return np.clip(cv2.GaussianBlur(alpha, (0, 0), sigmaX=1.0), 0, 1)
 
 
 def clean_protect_mask(

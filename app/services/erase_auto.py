@@ -10,6 +10,9 @@ from app.services.inpaint_mask import (
     grow_per_component,
     grow_small_hulls,
     mask_bbox,
+    matte_core,
+    matte_radius,
+    subject_matte,
 )
 from app.services.inpaint_pipeline import MaskedEditSettings, edit_groups
 from app.services.inpaint_score import fill_score
@@ -18,33 +21,35 @@ LamaFill = Callable[[np.ndarray, np.ndarray, np.ndarray], np.ndarray]
 SdxlEdit = Callable[[Image.Image, np.ndarray, float], Image.Image]
 
 
-def _restore_protected(
-    image: Image.Image, original: np.ndarray, protect: np.ndarray
+def _composite_subject(
+    image: Image.Image, original: np.ndarray, alpha: np.ndarray
 ) -> Image.Image:
-    restored = np.array(image.convert("RGB"), copy=True)
-    restored[protect] = original[protect]
-    return Image.fromarray(restored)
+    generated = np.asarray(image.convert("RGB"), dtype=np.float32)
+    weight = alpha[:, :, None]
+    blended = weight * original + (1.0 - weight) * generated
+    return Image.fromarray(np.clip(np.rint(blended), 0, 255).astype(np.uint8))
 
 
 def _choose_large_fill(
     current: Image.Image,
     group_mask: np.ndarray,
-    protect: np.ndarray,
+    core: np.ndarray,
     lama_fill: LamaFill,
     sdxl_edit: SdxlEdit,
     hybrid_strength: float,
+    original: np.ndarray,
+    alpha: np.ndarray,
 ) -> tuple[Image.Image, dict]:
-    original = np.array(current, copy=True)
-    prefilled = Image.fromarray(lama_fill(original.copy(), group_mask, protect))
-    prefilled = _restore_protected(prefilled, original, protect)
+    prefilled = Image.fromarray(lama_fill(np.array(current, copy=True), group_mask, core))
+    prefilled = _composite_subject(prefilled, original, alpha)
     hybrid = sdxl_edit(prefilled, group_mask, hybrid_strength)
-    hybrid = _restore_protected(hybrid, original, protect)
+    hybrid = _composite_subject(hybrid, original, alpha)
     direct = sdxl_edit(current.copy(), group_mask, 1.0)
-    direct = _restore_protected(direct, original, protect)
+    direct = _composite_subject(direct, original, alpha)
     hard_mask = group_mask > 0
     scores = {
-        "hibrido": fill_score(np.asarray(hybrid), hard_mask, protect),
-        "sdxl": fill_score(np.asarray(direct), hard_mask, protect),
+        "hibrido": fill_score(np.asarray(hybrid), hard_mask, core),
+        "sdxl": fill_score(np.asarray(direct), hard_mask, core),
     }
     engine = min(scores, key=lambda name: scores[name]["score"])
     chosen = hybrid if engine == "hibrido" else direct
@@ -66,22 +71,26 @@ def auto_erase(
         np.zeros(mask.shape, dtype=bool)
         if protect is None else clean_protect_mask(protect.astype(bool))
     )
-    mask = np.where(protect, 0, mask).astype(np.uint8)
+    radius = matte_radius(protect.shape)
+    alpha = subject_matte(original, protect, radius)
+    core = matte_core(protect, radius)
+    mask = np.where(core, 0, mask).astype(np.uint8)
     if mask_bbox(mask) is None:
         return current, []
     prepared = grow_per_component(grow_small_hulls(mask), None, None)
-    prepared[protect] = 0
+    prepared[core] = 0
     settings = MaskedEditSettings(0, 0, None, 1600)
     choices = []
     for _, group_mask in edit_groups(prepared, current.size, settings):
         left, top, right, bottom = mask_bbox((group_mask > 0).astype(np.uint8) * 255)
         if max(right - left, bottom - top) <= small_side:
-            filled = lama_fill(np.array(current, copy=True), group_mask, protect)
+            filled = lama_fill(np.array(current, copy=True), group_mask, core)
             current, choice = Image.fromarray(filled), {"engine": "lama"}
         else:
             current, choice = _choose_large_fill(
-                current, group_mask, protect, lama_fill, sdxl_edit, hybrid_strength
+                current, group_mask, core, lama_fill, sdxl_edit, hybrid_strength,
+                original, alpha,
             )
-        current = _restore_protected(current, original, protect)
+        current = _composite_subject(current, original, alpha)
         choices.append(choice)
     return current, choices

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from time import perf_counter
+
 import numpy as np
 import pytest
 
@@ -15,6 +17,7 @@ from app.services.inpaint_mask import (
     grow_small_hulls,
     mask_bbox,
     soft_composite,
+    subject_matte,
 )
 
 
@@ -401,3 +404,65 @@ def test_clean_protect_preserves_an_empty_mask() -> None:
 
     np.testing.assert_array_equal(cleaned, protect)
     assert cleaned.dtype == np.bool_
+
+
+@pytest.mark.parametrize("protect_columns,subject_column,minimum_alpha", [(29, 30, 0.9), (38, 20, 0.99)])
+def test_subject_matte_follows_the_color_edge_when_protect_misses_it(
+    protect_columns, subject_column, minimum_alpha
+) -> None:
+    original = np.full((64, 64, 3), 220, dtype=np.uint8)
+    original[:, :32] = 30
+    protect = np.zeros((64, 64), dtype=bool)
+    protect[:, :protect_columns] = True
+
+    alpha = subject_matte(original, protect, radius=12)
+
+    assert alpha.shape == protect.shape
+    assert alpha.dtype == np.float32
+    assert np.all((alpha >= 0) & (alpha <= 1))
+    assert alpha[32, subject_column] > minimum_alpha
+    assert alpha[32, 35] < 0.1
+
+
+def test_subject_matte_preserves_an_empty_protect_mask() -> None:
+    original = np.full((64, 64, 3), 180, dtype=np.uint8)
+    protect = np.zeros((64, 64), dtype=bool)
+
+    alpha = subject_matte(original, protect)
+
+    np.testing.assert_array_equal(alpha, np.zeros(protect.shape, dtype=np.float32))
+    assert alpha.dtype == np.float32
+
+
+def test_subject_matte_keeps_an_isolated_background_colored_pixel_on_the_subject() -> None:
+    original = np.full((64, 64, 3), 220, dtype=np.uint8)
+    original[:, :32] = 30
+    original[32, 26] = 220
+    protect = np.zeros((64, 64), dtype=bool)
+    protect[:, :32] = True
+
+    alpha = subject_matte(original, protect, radius=12)
+
+    assert alpha[32, 26] > 0.99
+    assert alpha[32, 38] < 0.01
+
+
+def test_subject_matte_processes_a_twenty_four_megapixel_photo_under_five_seconds() -> None:
+    import cv2
+
+    original = np.full((4000, 6000, 3), 220, dtype=np.uint8)
+    protect = np.zeros(original.shape[:2], dtype=np.uint8)
+    cv2.ellipse(protect, (3000, 2000), (1500, 1273), 0, 0, 360, 1, -1)
+    protect = protect.astype(bool)
+    original[protect] = 30
+
+    started = perf_counter()
+    alpha = subject_matte(original, protect)
+    elapsed = perf_counter() - started
+
+    print(f"subject_matte 6000x4000: {elapsed:.3f} s")
+    assert elapsed < 5.0, f"subject_matte took {elapsed:.3f} s"
+    assert alpha.shape == protect.shape
+    assert alpha.dtype == np.float32
+    assert alpha[2000, 3000] == 1.0
+    assert alpha[0, 0] == 0.0

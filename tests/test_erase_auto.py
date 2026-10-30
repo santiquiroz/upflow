@@ -7,7 +7,14 @@ import pytest
 from PIL import Image
 
 from app.services.erase_auto import auto_erase
-from app.services.inpaint_mask import clean_protect_mask, grow_per_component, grow_small_hulls
+from app.services.inpaint_mask import (
+    clean_protect_mask,
+    grow_per_component,
+    grow_small_hulls,
+    matte_core,
+    matte_radius,
+    subject_matte,
+)
 
 
 def scene(box=(120, 120, 200, 200)):
@@ -75,6 +82,8 @@ def test_protected_pixels_survive_even_when_a_provider_overwrites_them(small_sid
     protect = np.zeros(mask.shape, dtype=bool)
     protect[130:190, 130:190] = True
     cleaned = clean_protect_mask(protect)
+    core = matte_core(cleaned, matte_radius(mask.shape))
+    alpha = subject_matte(np.asarray(image), cleaned)
     calls = []
 
     def lama(canvas, group, guarded):
@@ -82,15 +91,42 @@ def test_protected_pixels_survive_even_when_a_provider_overwrites_them(small_sid
         return np.full_like(canvas, 90)
 
     def sdxl(base, group, strength):
-        assert not group[cleaned].any()
+        assert not group[core].any()
         return Image.new("RGB", base.size, (90, 90, 90))
 
     result, _ = auto_erase(image, mask, protect, lama, sdxl, small_side=small_side)
 
     assert len(calls) == 1
-    assert not calls[0][0][cleaned].any()
-    np.testing.assert_array_equal(calls[0][1], cleaned)
-    np.testing.assert_array_equal(np.asarray(result)[cleaned], np.asarray(image)[cleaned])
+    assert not calls[0][0][core].any()
+    np.testing.assert_array_equal(calls[0][1], core)
+    assert (alpha == 1.0).any()
+    np.testing.assert_array_equal(np.asarray(result)[alpha == 1.0], np.asarray(image)[alpha == 1.0])
+
+
+@pytest.mark.parametrize("small_side", [700, 30])
+def test_overlong_protect_border_is_replaced_by_the_fill(small_side) -> None:
+    original = np.full((320, 320, 3), 220, dtype=np.uint8)
+    original[:, :160] = 30
+    protect = np.zeros((320, 320), dtype=bool)
+    protect[:, :157] = True
+    cleaned = clean_protect_mask(protect)
+    mask = np.zeros(protect.shape, dtype=np.uint8)
+    mask[100:220, 140:210] = 255
+    lama = Mock(side_effect=lambda canvas, group, guarded: fill_with(canvas, group, 90))
+    sdxl = Mock(side_effect=lambda base, group, strength: Image.fromarray(
+        fill_with(np.asarray(base), group, 90)
+    ))
+
+    result, _ = auto_erase(Image.fromarray(original), mask, protect, lama, sdxl, small_side=small_side)
+
+    assert cleaned[160, 160:163].all()
+    assert not cleaned[160, 163]
+    assert np.all(lama.call_args.args[1][160, 160:163] > 0)
+    border = np.asarray(result)[160, 160:163].astype(np.int16)
+    assert np.all(border < original[160, 160:163])
+    assert np.all(border >= 90)
+    assert np.all(np.abs(border[-1] - 90) < np.abs(border[-1] - 220))
+    np.testing.assert_array_equal(np.asarray(result)[160, 140], original[160, 140])
 
 
 def test_empty_mask_returns_the_image_without_calling_providers() -> None:
