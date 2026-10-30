@@ -1048,6 +1048,10 @@ async def upflow_generate_image(
     auto_upscale: bool = False,
     frames: int = 0,
     fps: int = 0,
+    protect_mask_path: str = "",
+    erase_engine: str = "",
+    mask_grow_px: int = 0,
+    mask_feather_px: int = 0,
 ) -> str:
     """Genera una imagen (txt2img/img2img/inpaint) o video corto con un modelo
     de difusión instalado. Devuelve jobId (upflow_wait_job + upflow_download_result).
@@ -1057,6 +1061,10 @@ async def upflow_generate_image(
     strength 0-1 (cuánto cambia la imagen base). width/height 64-1024 múltiplos
     de 32. seed -1 = aleatorio. frames/fps solo para modelos de video
     (upflow_capabilities(generation_video)). steps/guidance 0 = default del modelo.
+    Borrado (model_id eraser-auto o inpaint): protect_mask_path = máscara de lo que
+    no se toca; erase_engine lama|osor|lama+osor|sdxl fuerza el motor; mask_grow_px
+    (-200..200) agranda o achica la máscara y mask_feather_px (0..100) suaviza su borde.
+    El trabajo terminado trae eraseZones (motor y guarda por zona).
     """
     try:
         body: dict[str, Any] = {
@@ -1089,6 +1097,14 @@ async def upflow_generate_image(
             body["init_image_token"] = await _stage_init_image(init_image_path)
         if mask_image_path:
             body["mask_image_token"] = await _stage_init_image(mask_image_path)
+        if protect_mask_path:
+            body["protectMaskToken"] = await _stage_init_image(protect_mask_path)
+        if erase_engine:
+            body["eraseEngine"] = erase_engine
+        if mask_grow_px:
+            body["maskGrowPx"] = mask_grow_px
+        if mask_feather_px:
+            body["maskFeatherPx"] = mask_feather_px
         created = await client.api_post("/api/v1/generation/jobs", json_body=body)
         return _dump(normalize_job(FAMILIES["generation"], created))
     except Exception as exc:
@@ -1510,6 +1526,22 @@ async def upflow_reference_scene(
 #
 # Todo lo que parte de una imagen empieza por upflow_init_image: el token que
 # devuelve es la moneda comun de estas tools.
+
+
+@mcp.tool(name="upflow_detect_people", annotations={"title": "Detectar personas", **READ_ONLY})
+async def upflow_detect_people(image_token: str, device: str = "") -> str:
+    """Detecta personas en una imagen subida (image_token de upflow_init_image).
+    Devuelve people: id, box [x1,y1,x2,y2], score, role (subject|background), face y anchor
+    (punto para upflow_segment_object).
+    """
+    try:
+        cuerpo: dict[str, Any] = {"imageToken": image_token}
+        if device:
+            cuerpo["device"] = device
+        payload = await client.api_post("/api/v1/editor/people", json_body=cuerpo)
+        return _dump(payload)
+    except Exception as exc:
+        return format_tool_error(exc)
 
 
 @mcp.tool(name="upflow_segment_object", annotations={"title": "Seleccionar objeto por clic", "readOnlyHint": False, "destructiveHint": False, "openWorldHint": False})

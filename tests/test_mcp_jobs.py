@@ -55,6 +55,15 @@ def test_normalize_job_audio_uses_id_field():
     assert job["family"] == "audio"
 
 
+def test_generation_job_normalized_keeps_erase_zones():
+    zones = [{"index": 0, "box": [1, 2, 30, 40], "engine": "lama", "guard": None, "residualPerson": False}]
+    job = normalize_job(
+        FAMILIES["generation"],
+        {"id": "g1", "status": "completed", "eraseZones": zones},
+    )
+    assert job["eraseZones"] == zones
+
+
 def test_normalize_job_video_extracts_stage():
     payload = {"jobId": "v1", "status": "running", "metadata": {"stage": "encode"}}
     job = normalize_job(FAMILIES["video"], payload)

@@ -70,6 +70,8 @@ def normalize_job(family: JobFamily, payload: dict[str, Any]) -> dict[str, Any]:
     if family.name == "download":
         extras["outputFiles"] = payload.get("outputFiles")
         extras["mediaTitle"] = payload.get("mediaTitle")
+    if family.name == "generation":
+        extras["eraseZones"] = payload.get("eraseZones")
     if family.name == "shape3d":
         extras["canPrint"] = payload.get("canPrint")
         extras["sizeMm"] = payload.get("sizeMm")

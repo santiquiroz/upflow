@@ -23,6 +23,7 @@ from app.mcp.server import (
     upflow_cctv_probe,
     upflow_cctv_roi_fuse,
     upflow_download_result,
+    upflow_generate_image,
     upflow_job_status,
     upflow_list_jobs,
     upflow_restore_analyze,
@@ -45,6 +46,65 @@ def install_mock(monkeypatch: pytest.MonkeyPatch, handler) -> None:
     transport = httpx.MockTransport(handler)
     mock = httpx.AsyncClient(transport=transport, base_url="http://testserver")
     monkeypatch.setattr(mcp_client, "_get_client", lambda: mock)
+
+
+async def test_detect_people_tool_posts_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.mcp.server import upflow_detect_people
+
+    people = [{"id": "p1", "box": [1, 2, 30, 40], "score": 0.9, "role": "person", "face": None, "anchor": None}]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path == "/api/v1/editor/people"
+        assert json.loads(request.read()) == {"imageToken": "img-token", "device": "dml:0"}
+        return httpx.Response(200, json={"people": people})
+
+    install_mock(monkeypatch, handler)
+
+    result = json.loads(await upflow_detect_people("img-token", device="dml:0"))
+
+    assert result == {"people": people}
+
+
+async def test_generate_with_protect_mask_uploads_and_sends_token(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    mask = tmp_path / "protect.png"
+    mask.write_bytes(b"mask-png")
+    requests: list[tuple[str, bytes]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        content = request.read()
+        requests.append((request.url.path, content))
+        if request.url.path == "/api/v1/generation/init-image":
+            assert b"protect.png" in content
+            assert b"mask-png" in content
+            return httpx.Response(200, json={"initImageToken": "protect-token"})
+        assert request.url.path == "/api/v1/generation/jobs"
+        body = json.loads(content)
+        assert body["protectMaskToken"] == "protect-token"
+        assert body["eraseEngine"] == "lama+osor"
+        assert body["maskGrowPx"] == 8
+        assert "maskFeatherPx" not in body
+        return httpx.Response(202, json={"id": "g1", "status": "queued"})
+
+    install_mock(monkeypatch, handler)
+
+    result = json.loads(
+        await upflow_generate_image(
+            "prompt",
+            "model",
+            protect_mask_path=str(mask),
+            erase_engine="lama+osor",
+            mask_grow_px=8,
+        )
+    )
+
+    assert result["jobId"] == "g1"
+    assert [path for path, _ in requests] == [
+        "/api/v1/generation/init-image",
+        "/api/v1/generation/jobs",
+    ]
 
 
 async def test_status_aggregates_four_endpoints(monkeypatch: pytest.MonkeyPatch) -> None:
