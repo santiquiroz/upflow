@@ -213,6 +213,73 @@ async def test_a_mask_without_base_image_is_a_400(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_auto_erase_without_a_mask_is_a_400(tmp_path: Path):
+    manager, settings, _ = make_manager(tmp_path)
+    init_token = await upload_token(settings, png_bytes((128, 128)))
+
+    with pytest.raises(HTTPException) as error:
+        await create_generation_job(
+            make_payload(initImageToken=init_token, eraseStrategy="auto"),
+            generation_jobs=manager,
+            settings=settings,
+        )
+
+    assert error.value.status_code == 400
+    assert manager.jobs == {}
+
+
+@pytest.mark.asyncio
+async def test_auto_erase_with_a_mask_is_carried_to_the_job(tmp_path: Path):
+    manager, settings, _ = make_manager(tmp_path)
+    init_token = await upload_token(settings, png_bytes((128, 128)))
+    mask_token = await upload_token(settings, png_bytes((128, 128)), "mask.png")
+
+    response = await create_generation_job(
+        make_payload(
+            initImageToken=init_token, maskImageToken=mask_token, eraseStrategy="auto"
+        ),
+        generation_jobs=manager,
+        settings=settings,
+    )
+
+    job = manager.get_job(response.id)
+    assert job.erase_strategy == "auto"
+    assert job.mask_image_path is not None
+
+
+@pytest.mark.asyncio
+async def test_auto_erase_request_carries_protect_and_records_engine_choices(tmp_path: Path):
+    manager, settings, engine = make_manager(tmp_path)
+    init_token = await upload_token(settings, png_bytes((128, 128)))
+    mask_token = await upload_token(settings, png_bytes((128, 128)), "mask.png")
+    protect_token = await upload_token(settings, png_bytes((128, 128)), "protect.png")
+    response = await create_generation_job(
+        make_payload(
+            initImageToken=init_token, maskImageToken=mask_token,
+            protectMaskToken=protect_token, eraseStrategy="auto", device="cpu",
+        ),
+        generation_jobs=manager, settings=settings,
+    )
+    choices = [{"engine": "lama"}]
+    original_run = engine.run
+
+    async def run_with_choices(**kwargs):
+        kwargs["request"].erase_auto = choices
+        return await original_run(**kwargs)
+
+    engine.run = run_with_choices
+    job = manager.get_job(response.id)
+
+    await manager._run_engine(job)
+
+    request = engine.requests[0]
+    assert request.erase_strategy == "auto"
+    assert request.protect_mask_path == job.protect_mask_path
+    assert request.mask_image_path == job.mask_image_path
+    assert job.metadata["eraseAuto"] == choices
+
+
+@pytest.mark.asyncio
 async def test_a_model_without_inpaint_support_is_a_400(tmp_path: Path):
     manager, settings, _ = make_manager(tmp_path, declared_class="LatentConsistencyModelPipeline")
     init_token = await upload_token(settings, png_bytes((128, 128)))

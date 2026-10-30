@@ -6,9 +6,10 @@ import json
 import logging
 import threading
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from functools import partial
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 from app.config import Settings
 from app.services.dml_device import try_parse_dml_device_id
@@ -38,6 +39,10 @@ VRAM_MESSAGE = (
 CPU_ONLY_WARNING = (
     "No se detectó GPU compatible (DirectX 12). Generar en CPU tarda varios minutos por imagen. "
     "¿Continuar igual?"
+)
+
+ERASE_AUTO_NEGATIVE_PROMPT = (
+    "sign, signage, letters, typography, symbol, logo, sculpture, statue, tiles, mosaic, pattern"
 )
 
 _MEMORY_TOKENS = ("memory", "alloc", "oom")
@@ -371,10 +376,16 @@ class GenerationRequest:
     # None = el que declara el repo del modelo. El swap es CPU-side (componente
     # diffusers): no toca el grafo ONNX y vale para cualquier EP.
     scheduler: str | None = None
+    erase_strategy: Literal["auto"] | None = None
+    protect_mask_path: Path | None = None
+    erase_auto: list[dict] | None = None
 
 
 class GenerationEngine:
-    def __init__(self, settings: Settings, gpu_coordinator: GpuSessionCoordinator) -> None:
+    def __init__(
+        self, settings: Settings, gpu_coordinator: GpuSessionCoordinator, lama_eraser: Any = None
+    ) -> None:
+        self.lama_eraser = lama_eraser
         self.settings = settings
         self.gpu_coordinator = gpu_coordinator
         self._pipeline_cache: OrderedDict[tuple[str, str, str], Any] = OrderedDict()
@@ -574,58 +585,31 @@ class GenerationEngine:
         Image.fromarray(salida).save(output_path)
         return output_path
 
-    def _run_masked_edit_blocking(
-        self,
-        pipeline: Any,
-        request: GenerationRequest,
-        output_path: Path,
-        on_step: Callable[[int, Any, Any], None],
-        run_lock: threading.Lock,
-    ) -> Path:
-        """Edición con máscara por el camino 'solo el área marcada'.
-
-        La foto sale con su resolución original: el modelo solo ve el recorte
-        de la zona marcada, así que ni la reduce ni la vuelve a comprimir.
-        """
-        from PIL import Image
-
-        from app.services.inpaint_pipeline import MaskedEditSettings, run_masked_edit
-
-        with Image.open(request.init_image_path) as source:
-            base_image = source.convert("RGB")
-        with Image.open(request.mask_image_path) as source_mask:
-            mask_image = source_mask.convert("L")
-
-        strength = _inpaint_strength(pipeline, request.strength)
-
-        def run_model(image: Any, mask: Any, width: int, height: int) -> Any:
+    def _masked_edit_model(self, pipeline, request, on_step, run_lock):
+        def run_model(image, mask, width, height, *, strength=None):
             from app.services.generation_soft_inpaint import (
-                build_soft_inpaint_callback,
-                chain_step_callbacks,
+                build_soft_inpaint_callback, chain_step_callbacks,
             )
 
             soft_callback = None
             try:
                 soft_callback = build_soft_inpaint_callback(pipeline, image, mask, request.seed)
             except Exception:  # noqa: BLE001 -- calidad extra jamás tumba el job
-                logger.warning(
-                    "soft inpainting no disponible para este pipeline, sigo sin él",
-                    exc_info=True,
-                )
-            call_kwargs: dict[str, Any] = {
-                "prompt": request.prompt,
-                "image": image,
-                "mask_image": mask,
-                "num_inference_steps": request.steps,
-                "guidance_scale": request.guidance,
-                "strength": strength,
-                "width": width,
-                "height": height,
-                "callback": chain_step_callbacks(soft_callback, on_step),
-                "callback_steps": 1,
+                logger.warning("soft inpainting no disponible para este pipeline", exc_info=True)
+            call_kwargs = {
+                "prompt": request.prompt, "image": image, "mask_image": mask,
+                "num_inference_steps": request.steps, "guidance_scale": request.guidance,
+                "strength": _inpaint_strength(
+                    pipeline, request.strength if strength is None else strength
+                ),
+                "width": width, "height": height,
+                "callback": chain_step_callbacks(soft_callback, on_step), "callback_steps": 1,
             }
-            if request.negative_prompt:
-                call_kwargs["negative_prompt"] = request.negative_prompt
+            negative = request.negative_prompt or ""
+            if request.erase_strategy == "auto":
+                negative = ", ".join(filter(None, (negative, ERASE_AUTO_NEGATIVE_PROMPT)))
+            if negative:
+                call_kwargs["negative_prompt"] = negative
             if request.seed is not None:
                 call_kwargs["generator"] = _build_seed_generator(request.seed)
             try:
@@ -637,17 +621,64 @@ class GenerationEngine:
             except Exception as exc:
                 raise _wrap_generation_error(exc) from exc
 
+        return run_model
+
+    def _edit_masked_image(self, base_image, mask_image, run_model, settings, request):
+        import numpy as np
+        from PIL import Image
+
+        from app.services.erase_auto import auto_erase
+        from app.services.inpaint_pipeline import run_masked_edit
+
+        if request.erase_strategy != "auto":
+            return run_masked_edit(base_image, mask_image, run_model, settings)
+        if self.lama_eraser is None or not self.lama_eraser.available():
+            logger.warning("erase auto: LaMa no disponible, sigo con el inpainting actual")
+            return run_masked_edit(base_image, mask_image, run_model, settings)
+        protect = None
+        if request.protect_mask_path is not None:
+            protect = np.asarray(_load_mask_image(request.protect_mask_path, *base_image.size)) > 127
+        prepared_settings = replace(settings, dilate_px=0, feather_px=0)
+
+        def sdxl_edit(image, group_mask, strength):
+            return run_masked_edit(
+                image, Image.fromarray(group_mask), partial(run_model, strength=strength),
+                prepared_settings,
+            )
+
+        mask = np.asarray(mask_image.resize(base_image.size, Image.Resampling.NEAREST))
+        edited, request.erase_auto = auto_erase(
+            base_image, mask, protect, self.lama_eraser.fill_group, sdxl_edit,
+        )
+        return edited
+
+    def _run_masked_edit_blocking(
+        self, pipeline: Any, request: GenerationRequest, output_path: Path,
+        on_step: Callable[[int, Any, Any], None], run_lock: threading.Lock,
+    ) -> Path:
+        """Edición con máscara por el camino 'solo el área marcada'.
+
+        La foto sale con su resolución original: el modelo solo ve el recorte
+        de la zona marcada, así que ni la reduce ni la vuelve a comprimir.
+        """
+        from PIL import Image
+
+        from app.services.inpaint_pipeline import MaskedEditSettings
+
+        with Image.open(request.init_image_path) as source:
+            base_image = source.convert("RGB")
+        with Image.open(request.mask_image_path) as source_mask:
+            mask_image = source_mask.convert("L")
+        run_model = self._masked_edit_model(pipeline, request, on_step, run_lock)
         settings = MaskedEditSettings(
-            dilate_px=request.mask_dilate_px,
-            feather_px=request.mask_feather_px,
-            seed=request.seed or 0,
-            padding_px=request.mask_padding_px,
+            dilate_px=request.mask_dilate_px, feather_px=request.mask_feather_px,
+            seed=request.seed or 0, padding_px=request.mask_padding_px,
             target_side=max(request.width, request.height),
             # Piso de resolución: un parche chico difundido a su propio tamaño
             # produce anatomía blanda — el modelo rinde a su resolución nativa.
             native_side=_native_side_for(pipeline),
         )
-        edited = run_masked_edit(base_image, mask_image, run_model, settings)
+        edited = self._edit_masked_image(base_image, mask_image, run_model, settings, request)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         edited.save(output_path)
         return output_path

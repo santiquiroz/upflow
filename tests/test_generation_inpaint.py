@@ -1,6 +1,12 @@
 from __future__ import annotations
 
+import threading
+from types import SimpleNamespace
+from unittest.mock import Mock
+
+import numpy as np
 import pytest
+from PIL import Image
 
 from app.services.generation_pipeline_modes import (
     INPAINT_CLASS_NAMES,
@@ -114,3 +120,91 @@ def test_dedicated_inpaint_classes_are_detected() -> None:
     # Un checkpoint base soporta inpaint por RUTEO pero no es dedicado.
     assert is_dedicated_inpaint_class("StableDiffusionXLPipeline") is False
     assert is_dedicated_inpaint_class("ClaseInventada") is False
+
+
+@pytest.fixture
+def auto_edit_context(tmp_path, monkeypatch):
+    from app.config import Settings
+    from app.services.engines.generation_onnx import GenerationEngine, GenerationRequest
+    from app.services import generation_soft_inpaint
+
+    base, mask, protect = [tmp_path / name for name in ("base.png", "mask.png", "protect.png")]
+    Image.new("RGB", (64, 64), (180, 180, 180)).save(base)
+    Image.new("L", (64, 64), 255).save(mask)
+    protected = np.zeros((64, 64), dtype=np.uint8)
+    protected[20:40, 20:40] = 255
+    Image.fromarray(protected).save(protect)
+    request = GenerationRequest(
+        prompt="venue", negative_prompt="blur", steps=2, guidance=1.0,
+        width=64, height=64, seed=None, init_image_path=base,
+        mask_image_path=mask, protect_mask_path=protect, erase_strategy="auto",
+        mask_dilate_px=8, mask_feather_px=8,
+    )
+    lama = Mock()
+    lama.available.return_value = True
+    engine = GenerationEngine(Settings(RUNTIME_DIR=str(tmp_path), _env_file=None), Mock(), lama)
+    monkeypatch.setattr(generation_soft_inpaint, "build_soft_inpaint_callback", lambda *args: None)
+    return engine, request, tmp_path / "result.png"
+
+
+@pytest.mark.parametrize("channels,strengths", [(9, [0.5, 1.0]), (4, [1.0, 1.0])])
+def test_auto_edit_injects_providers_and_preserves_strength_clamping(
+    auto_edit_context, monkeypatch, channels, strengths
+) -> None:
+    from app.services import erase_auto, inpaint_pipeline
+    from app.services.engines.generation_onnx import ERASE_AUTO_NEGATIVE_PROMPT
+
+    engine, request, output = auto_edit_context
+    pipeline = Mock(return_value=SimpleNamespace(images=[Image.new("RGB", (64, 64))]))
+    pipeline.unet.config.in_channels = channels
+    recorded_settings = []
+    choices = [{"engine": "sdxl", "scores": {"sdxl": {"score": 0.0}}}]
+
+    def masked_edit(base, mask, model, settings):
+        recorded_settings.append(settings)
+        return model(base, mask, *base.size)
+
+    def orchestrate(base, mask, protect, lama_fill, sdxl_edit):
+        assert lama_fill == engine.lama_eraser.fill_group
+        assert protect[30, 30] and not protect[0, 0]
+        assert protect.dtype == bool
+        sdxl_edit(base, mask, 0.5)
+        return sdxl_edit(base, mask, 1.0), choices
+
+    monkeypatch.setattr(inpaint_pipeline, "run_masked_edit", masked_edit)
+    monkeypatch.setattr(erase_auto, "auto_erase", orchestrate)
+    result = engine._run_masked_edit_blocking(pipeline, request, output, Mock(), threading.Lock())
+
+    assert result == output and output.is_file()
+    assert [call.kwargs["strength"] for call in pipeline.call_args_list] == strengths
+    assert all(s.dilate_px == s.feather_px == 0 for s in recorded_settings)
+    assert pipeline.call_args.kwargs["negative_prompt"] == f"blur, {ERASE_AUTO_NEGATIVE_PROMPT}"
+    assert request.erase_auto == choices
+    engine.gpu_coordinator.acquire.assert_not_called()
+
+
+@pytest.mark.parametrize("availability", [None, False])
+def test_auto_edit_falls_back_when_lama_is_missing_or_unavailable(
+    auto_edit_context, monkeypatch, caplog, availability
+) -> None:
+    from app.services import erase_auto, inpaint_pipeline
+
+    engine, request, output = auto_edit_context
+    if availability is None:
+        engine.lama_eraser = None
+    else:
+        engine.lama_eraser.available.return_value = availability
+    masked_edit = Mock(side_effect=lambda base, *args: base)
+    auto = Mock(side_effect=AssertionError("LaMa no está disponible"))
+    monkeypatch.setattr(inpaint_pipeline, "run_masked_edit", masked_edit)
+    monkeypatch.setattr(erase_auto, "auto_erase", auto)
+
+    engine._run_masked_edit_blocking(Mock(), request, output, Mock(), threading.Lock())
+
+    masked_edit.assert_called_once()
+    assert masked_edit.call_args.args[3].dilate_px == 8
+    assert masked_edit.call_args.args[3].feather_px == 8
+    auto.assert_not_called()
+    assert "LaMa no disponible" in caplog.text
+    assert request.erase_auto is None
+    engine.gpu_coordinator.acquire.assert_not_called()

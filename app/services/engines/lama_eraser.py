@@ -118,19 +118,6 @@ def _run_model(module: Any, image: np.ndarray, hole: np.ndarray) -> np.ndarray:
     return generated
 
 
-def _erase_group(
-    canvas: np.ndarray, group_mask: np.ndarray, protect: np.ndarray, module: Any
-) -> None:
-    hole = _unknown_hole(group_mask, protect)
-    left, top, right, bottom = _context_crop(hole)
-    window = (slice(top, bottom), slice(left, right))
-    original = canvas[window].copy()
-    blend = np.where(protect[window], 0, group_mask[window]).astype(np.uint8)
-    generated = _run_model(module, original, hole[window])
-    stitched = soft_composite(generated, original, blend)
-    canvas[window] = match_grain(stitched, original, blend)
-
-
 class LamaEraser:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -168,11 +155,32 @@ class LamaEraser:
         blended[protect] = 0
         settings = MaskedEditSettings(None, None, None, MAX_WORK_SIDE)
         groups = edit_groups(blended, base_rgb.size, settings)
-        module = self._get_module()
         canvas = np.array(base_rgb, copy=True)
         for _, group_mask in groups:
-            _erase_group(canvas, group_mask, protect, module)
+            self._erase_group(canvas, group_mask, protect)
         return Image.fromarray(canvas)
+
+    def _erase_group(
+        self, canvas: np.ndarray, group_mask: np.ndarray, protect: np.ndarray
+    ) -> None:
+        canvas[:] = self.fill_group(canvas, group_mask, protect)
+
+    def fill_group(
+        self, canvas: np.ndarray, group_mask: np.ndarray, protect: np.ndarray
+    ) -> np.ndarray:
+        result = canvas.copy()
+        if not np.any(group_mask):
+            return result
+        hole = _unknown_hole(group_mask, protect)
+        left, top, right, bottom = _context_crop(hole)
+        window = (slice(top, bottom), slice(left, right))
+        original = canvas[window].copy()
+        blend = np.where(protect[window], 0, group_mask[window]).astype(np.uint8)
+        generated = _run_model(self._get_module(), original, hole[window])
+        stitched = soft_composite(generated, original, blend)
+        result[window] = match_grain(stitched, original, blend)
+        result[protect] = canvas[protect]
+        return result
 
     def _get_module(self) -> Any:
         with self._lock:

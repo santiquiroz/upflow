@@ -153,7 +153,8 @@ async def lifespan(app: FastAPI):
     # registering a NullProbe, both fail-open.
     resource_probes = {"gpu": DxgiVramProbe(), "cpu": SystemRamProbe()}
     device_semaphores = DeviceSemaphores(settings, resource_probes=resource_probes)
-    generation_engine = GenerationEngine(settings, gpu_coordinator)
+    lama_eraser = _build_lama_eraser(settings)
+    generation_engine = GenerationEngine(settings, gpu_coordinator, lama_eraser=lama_eraser)
     generation_job_manager = GenerationJobManager(
         settings,
         generation_engine,
@@ -165,7 +166,7 @@ async def lifespan(app: FastAPI):
         quota_service=quota_service,
         sdcpp_engine=_build_sdcpp_engine(settings),
         migan_eraser=_build_migan_eraser(settings),
-        lama_eraser=_build_lama_eraser(settings),
+        lama_eraser=lama_eraser,
         video_engine=_build_video_engine(settings),
     )
     # Shared across both managers (like device_semaphores) so an auto-routed

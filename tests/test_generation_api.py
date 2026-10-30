@@ -926,7 +926,8 @@ def test_conversion_status_unknown_id_is_404(client, monkeypatch) -> None:
 @pytest.fixture
 def client_with_model(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
-        main_module, "GenerationEngine", lambda settings, gpu_coordinator: FakeGenerationEngine()
+        main_module, "GenerationEngine",
+        lambda settings, gpu_coordinator, lama_eraser=None: FakeGenerationEngine(),
     )
     with TestClient(app) as test_client:
         registry = app.state.model_registry

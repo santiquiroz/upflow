@@ -1341,6 +1341,7 @@ class CreateGenerationJobRequest(BaseModel):
     # subida con el mismo POST /generation/init-image. Requiere initImageToken.
     mask_image_token: str | None = Field(default=None, alias="maskImageToken")
     protect_mask_token: str | None = Field(default=None, alias="protectMaskToken")
+    erase_strategy: Literal["auto"] | None = Field(default=None, alias="eraseStrategy")
     # None = default por modo: 1.0 con máscara (inpainting), 0.6 sin (img2img).
     strength: float | None = Field(default=None, gt=0, le=1)
     # Recorrer la imagen a su tamaño real por tiles en vez de reducirla: agrega

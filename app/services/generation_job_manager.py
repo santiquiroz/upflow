@@ -4,7 +4,7 @@ import asyncio
 import logging
 import secrets
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from app.config import Settings
 from app.models import GenerationJob, UpscaleJob
@@ -135,6 +135,7 @@ class GenerationJobManager(QueuedJobManager[GenerationJob]):
         tiled_detail: bool = False,
         mask_image_path: Path | None = None,
         protect_mask_path: Path | None = None,
+        erase_strategy: Literal["auto"] | None = None,
         mask_dilate_px: int | None = None,
         mask_feather_px: int | None = None,
         auto_upscale: bool = False,
@@ -151,6 +152,8 @@ class GenerationJobManager(QueuedJobManager[GenerationJob]):
         await self._validate_device(device)
         if model_id == ERASER_LAMA_MODEL_ID and mask_image_path is None:
             raise ValueError("el borrado LaMa necesita una máscara")
+        if erase_strategy is not None and mask_image_path is None:
+            raise ValueError("eraseStrategy necesita una máscara")
         if mask_image_path is not None:
             self._validate_inpaint(model_id, init_image_path, mask_image_path, strength)
         elif init_image_path is not None:
@@ -168,6 +171,7 @@ class GenerationJobManager(QueuedJobManager[GenerationJob]):
             tiled_detail=tiled_detail,
             mask_image_path=mask_image_path,
             protect_mask_path=protect_mask_path,
+            erase_strategy=erase_strategy,
             mask_dilate_px=mask_dilate_px, mask_feather_px=mask_feather_px,
             auto_upscale=auto_upscale, upscale_model_name=upscale_model_name,
             upscale_scale=upscale_scale, upscale_model_id=upscale_model_id,
@@ -415,6 +419,7 @@ class GenerationJobManager(QueuedJobManager[GenerationJob]):
             init_image_path=job.init_image_path, strength=job.strength,
             tiled_detail=job.tiled_detail,
             mask_image_path=job.mask_image_path, scheduler=job.scheduler,
+            protect_mask_path=job.protect_mask_path, erase_strategy=job.erase_strategy,
             **mask_preparation_overrides(job),
         )
 
@@ -427,6 +432,8 @@ class GenerationJobManager(QueuedJobManager[GenerationJob]):
                 device=device, output_path=self.settings.outputs_path / f"{job.id}.png",
                 progress_cb=on_progress,
             )
+            if request.erase_auto is not None:
+                job.metadata["eraseAuto"] = request.erase_auto
         finally:
             # También en fallo: saber si el job corrió en CPU o en fp32 explica
             # la mayoría de los "tarda eternidades" remotos.
