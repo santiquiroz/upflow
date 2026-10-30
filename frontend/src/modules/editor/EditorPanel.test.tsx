@@ -28,6 +28,7 @@ vi.mock("../../services/generation", async (importOriginal) => {
 });
 vi.mock("../../services/editor", () => ({
   fetchEditorCapabilities: vi.fn(),
+  detectPeople: vi.fn(),
   segmentEditorObject: vi.fn(),
 }));
 
@@ -90,6 +91,7 @@ beforeEach(() => {
   vi.mocked(generationService.fetchGenerationCapabilities).mockResolvedValue(CAPABILITIES);
   vi.mocked(generationService.uploadGenerationInitImage).mockResolvedValue(BASE_IMAGE);
   vi.mocked(editorService.fetchEditorCapabilities).mockResolvedValue({ tapSelect: true });
+  vi.mocked(editorService.detectPeople).mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -98,6 +100,7 @@ afterEach(() => {
   vi.mocked(generationService.createGenerationJob).mockReset();
   vi.mocked(generationService.fetchGenerationCapabilities).mockReset();
   vi.mocked(editorService.fetchEditorCapabilities).mockReset();
+  vi.mocked(editorService.detectPeople).mockReset();
   vi.mocked(editorService.segmentEditorObject).mockReset();
 });
 
@@ -167,6 +170,38 @@ async function protectObject() {
 }
 
 describe("EditorPanel", () => {
+  it("detects people in the background and switches from Choose to brush without painting", async () => {
+    vi.mocked(editorService.fetchEditorCapabilities).mockResolvedValue({ tapSelect: true, people: true });
+    vi.mocked(editorService.detectPeople).mockResolvedValue([
+      { id: 1, box: [10, 10, 120, 400], score: 0.9, role: "subject", face: [30, 30, 60, 70], anchor: [60, 200] },
+      { id: 2, box: [200, 30, 300, 420], score: 0.8, role: "background", face: null, anchor: [250, 220] },
+    ]);
+    renderPanel();
+    await loadBaseImage();
+    await waitFor(() => expect(editorService.detectPeople).toHaveBeenCalledWith("aabbcc"));
+
+    fireEvent.click(await screen.findByRole("radio", { name: "People" }));
+    expect(await screen.findByText("People in the photo")).toBeInTheDocument();
+    const row = screen.getByRole("listitem", { name: "Person 2" });
+    expect(within(row).getByRole("radio", { name: /Remove/ })).toHaveAttribute("aria-checked", "true");
+
+    fireEvent.click(screen.getByTestId("person-outline-2"));
+    expect(within(row).getByRole("radio", { name: /Keep/ })).toHaveAttribute("aria-checked", "true");
+    expect(editorService.segmentEditorObject).not.toHaveBeenCalled();
+
+    fireEvent.click(within(row).getByRole("radio", { name: /Remove/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Add 1 silhouettes" }));
+    expect(screen.getByRole("radio", { name: "Brush" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByLabelText("Editor settings")).toHaveAttribute("data-view", "action");
+  });
+
+  it("disables People when detection is unavailable", async () => {
+    renderPanel();
+    await loadBaseImage();
+
+    expect(screen.getByRole("radio", { name: "People" })).toBeDisabled();
+  });
+
   it("defaults to eraser-auto and visibly disables replacement without a fill model", async () => {
     vi.mocked(generationService.fetchGenerationCapabilities).mockResolvedValue({
       ...CAPABILITIES,

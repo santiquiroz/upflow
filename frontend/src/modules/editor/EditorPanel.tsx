@@ -17,6 +17,8 @@ import {
 import { EditorActionControls } from "./EditorActionControls";
 import { EditorSidePanel } from "./EditorSidePanel";
 import { BRUSH_SIZE_MAX, BRUSH_SIZE_MIN, EditorToolRail, type Tool } from "./EditorToolRail";
+import { PeopleOverlay } from "./PeopleOverlay";
+import { PeoplePanel } from "./PeoplePanel";
 import {
   canvasHasPixels, createMaskCanvas, exportMaskBlob, exportProtectMaskBlob, hasProtection, maskHasContent,
   pngBlobToAlphaCanvas, renderMaskOverlays, replayMasks, type HistoryEntry,
@@ -44,6 +46,7 @@ import {
   type Viewport,
 } from "./viewport";
 import { useEditorShortcuts } from "./useEditorShortcuts";
+import { usePeopleSelection } from "./usePeopleSelection";
 
 // Prompts fijos del modo "Eliminar": el modelo rellena con entorno coherente.
 // En inglés porque los checkpoints SD responden mejor a prompts en inglés.
@@ -112,6 +115,8 @@ export function EditorPanel() {
 
   const models = capabilitiesQuery.data?.models ?? [];
   const capabilitiesLoaded = Boolean(capabilitiesQuery.data);
+  const peopleEnabled = editorCapabilities.data?.people === true;
+  const peopleSelection = usePeopleSelection(baseInfo, peopleEnabled);
   useEffect(() => {
     if (!capabilitiesQuery.data) return;
     setModelId((current) => current ?? defaultEraseModel(models));
@@ -292,7 +297,7 @@ export function EditorPanel() {
       panOriginRef.current = { x: event.clientX, y: event.clientY };
       return;
     }
-    if (tool === "tap" || tool === "protect" || busy) {
+    if (tool === "tap" || tool === "protect" || tool === "people" || busy) {
       return;
     }
     const point = imagePointFromEvent(event);
@@ -490,7 +495,7 @@ export function EditorPanel() {
     (isEraseOnlyModel || (mode === "erase" ? erasePromptText.trim().length > 0 : prompt.trim().length > 0)) &&
     !busy &&
     !segmenting;
-  const panelView = job?.status === "completed" ? "review" : "action";
+  const panelView = tool === "people" ? "people" : job?.status === "completed" ? "review" : "action";
 
   return (
     <div className={baseInfo
@@ -529,6 +534,7 @@ export function EditorPanel() {
             tool={tool}
             onToolChange={setTool}
             disabledTools={{
+              people: peopleEnabled ? undefined : t("editor.tool.peopleUnavailable"),
               tap: tapAvailable ? undefined : t("editor.tool.tapUnavailable"),
               protect: tapAvailable ? undefined : t("editor.tool.tapUnavailable"),
             }}
@@ -573,7 +579,7 @@ export function EditorPanel() {
                   className={`absolute inset-0 h-full w-full opacity-60 ${
                     tool === "pan"
                       ? "cursor-grab active:cursor-grabbing"
-                      : tool === "tap" || tool === "protect"
+                      : tool === "tap" || tool === "protect" || tool === "people"
                         ? "cursor-pointer"
                         : "cursor-crosshair"
                   } ${baseUrl ? "" : "relative bg-surface-2"}`}
@@ -591,6 +597,17 @@ export function EditorPanel() {
                   data-testid="editor-protect-canvas"
                   className="pointer-events-none absolute inset-0 h-full w-full opacity-50"
                 />
+                {tool === "people" && peopleSelection.status === "ready" && (
+                  <PeopleOverlay
+                    people={peopleSelection.people}
+                    choices={peopleSelection.choices}
+                    hoveredId={peopleSelection.hoveredId}
+                    onHover={peopleSelection.setHoveredId}
+                    onToggle={peopleSelection.toggle}
+                    imageWidth={baseInfo.width}
+                    imageHeight={baseInfo.height}
+                  />
+                )}
               </div>
               {segmenting && (
                 <p className="absolute bottom-2 left-2 rounded bg-surface px-2 py-1 text-xs text-text-dim">
@@ -606,6 +623,26 @@ export function EditorPanel() {
 
           <EditorSidePanel view={panelView}>
             {uploadError && <p className="mb-3 text-sm text-danger">{uploadError}</p>}
+            {panelView === "people" && (
+              <PeoplePanel
+                people={peopleSelection.people}
+                choices={peopleSelection.choices}
+                hoveredId={peopleSelection.hoveredId}
+                onHover={peopleSelection.setHoveredId}
+                onToggle={peopleSelection.toggle}
+                onGroup={peopleSelection.setGroupChoice}
+                protectKept={peopleSelection.protectKept}
+                onProtectKeptChange={peopleSelection.setProtectKept}
+                onAccept={() => setTool("brush")}
+                onRetry={() => void peopleSelection.refetch()}
+                status={peopleSelection.status}
+                imageUrl={baseUrl ?? ""}
+                imageWidth={baseInfo.width}
+                imageHeight={baseInfo.height}
+                unavailableReason={t("editor.tool.peopleUnavailable")}
+                error={peopleSelection.error}
+              />
+            )}
             {panelView === "review" && (
               <div className="mb-3">
                 <JobCard
@@ -626,38 +663,40 @@ export function EditorPanel() {
                 )}
               </div>
             )}
-            <EditorActionControls
-              baseInfo={baseInfo}
-              models={models}
-              capabilitiesLoaded={capabilitiesLoaded}
-              mode={mode}
-              setMode={handleModeChange}
-              prompt={prompt}
-              setPrompt={setPrompt}
-              modelId={modelId}
-              setModelId={setModelId}
-              device={device}
-              setDevice={setDevice}
-              erasePromptText={erasePromptText}
-              setErasePromptText={setErasePromptText}
-              eraseNegative={eraseNegative}
-              setEraseNegative={setEraseNegative}
-              replaceNegative={replaceNegative}
-              setReplaceNegative={setReplaceNegative}
-              steps={steps}
-              setSteps={setSteps}
-              guidance={guidance}
-              setGuidance={setGuidance}
-              seedText={seedText}
-              setSeedText={setSeedText}
-              strength={strength}
-              setStrength={setStrength}
-              isEraseOnlyModel={isEraseOnlyModel}
-              autoErase={autoErase}
-              canSubmit={canSubmit}
-              onGenerate={() => void handleGenerate()}
-              onBaseSelected={(file) => void handleBaseSelected(file)}
-            />
+            {panelView === "action" && (
+              <EditorActionControls
+                baseInfo={baseInfo}
+                models={models}
+                capabilitiesLoaded={capabilitiesLoaded}
+                mode={mode}
+                setMode={handleModeChange}
+                prompt={prompt}
+                setPrompt={setPrompt}
+                modelId={modelId}
+                setModelId={setModelId}
+                device={device}
+                setDevice={setDevice}
+                erasePromptText={erasePromptText}
+                setErasePromptText={setErasePromptText}
+                eraseNegative={eraseNegative}
+                setEraseNegative={setEraseNegative}
+                replaceNegative={replaceNegative}
+                setReplaceNegative={setReplaceNegative}
+                steps={steps}
+                setSteps={setSteps}
+                guidance={guidance}
+                setGuidance={setGuidance}
+                seedText={seedText}
+                setSeedText={setSeedText}
+                strength={strength}
+                setStrength={setStrength}
+                isEraseOnlyModel={isEraseOnlyModel}
+                autoErase={autoErase}
+                canSubmit={canSubmit}
+                onGenerate={() => void handleGenerate()}
+                onBaseSelected={(file) => void handleBaseSelected(file)}
+              />
+            )}
             {panelView === "action" && (
                 <JobCard
                   phase={phase}

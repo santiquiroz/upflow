@@ -9,6 +9,7 @@ import {
   RotateCcw,
   Shield,
   Trash2,
+  Users,
   X,
   ZoomIn,
   ZoomOut,
@@ -99,6 +100,7 @@ export function EditorToolRail({
 }: EditorToolRailProps) {
   const { t } = useTranslation();
   const tools = [
+    { value: "people", icon: <Users aria-hidden="true" className="h-4 w-4 shrink-0" />, label: t("editor.tool.people") },
     { value: "tap", icon: <MousePointerClick aria-hidden="true" className="h-4 w-4 shrink-0" />, label: t("editor.tool.tap") },
     { value: "protect", icon: <Shield aria-hidden="true" className="h-4 w-4 shrink-0" />, label: t("editor.tool.protect") },
     { value: "brush", icon: <Brush aria-hidden="true" className="h-4 w-4 shrink-0" />, label: t("editor.tool.brush") },
