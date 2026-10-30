@@ -4,10 +4,13 @@ import json
 import os
 from pathlib import Path
 import shutil
+import sys
 import time
 
 os.environ["HF_HUB_OFFLINE"] = "1"
 os.environ["TRANSFORMERS_OFFLINE"] = "1"
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import numpy as np
 import torch
@@ -16,6 +19,8 @@ from diffusers import AutoencoderKL, DDPMScheduler, UNet2DConditionModel
 from peft import LoraConfig
 from peft.tuners.tuners_utils import BaseTunerLayer
 from PIL import Image
+
+from scripts.cache_osor_prompt import encode_fixed_prompt, load_fixed_prompt_components
 
 LORA_MODULES = ["to_k", "to_q", "to_v", "to_out.0", "conv", "conv1", "conv2",
                 "conv_shortcut", "proj_in", "proj_out", "ff.net.2", "ff.net.0.proj"]
@@ -107,14 +112,14 @@ def merge_and_check(unet, embeds):
     return dict(fp32=full, fp16_roundtrip=rounded)
 
 
-def save_pack(unet, args, partial):
+def save_pack(unet, args, partial, embeds):
     unet.half().save_pretrained(partial / "unet", variant="fp16", safe_serialization=True)
     for relative in ("vae/config.json", "vae/diffusion_pytorch_model.fp16.safetensors",
                      "scheduler/scheduler_config.json"):
         destination = partial / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(args.base / relative, destination)
-    shutil.copy2(args.embeds, partial / "prompt_embeds.pt")
+    shutil.copy2(embeds, partial / "prompt_embeds.pt")
     (partial / "NOTICE.txt").write_text(NOTICE, encoding="utf-8")
 
 
@@ -175,12 +180,17 @@ def check_case(pack, case):
     return results
 
 
-def main():
+def build_parser():
     parser = argparse.ArgumentParser()
-    for name in ("base", "weights", "embeds", "out"):
+    for name in ("base", "weights", "out"):
         parser.add_argument(f"--{name}", type=Path, required=True)
+    parser.add_argument("--embeds", type=Path)
     parser.add_argument("--check-case", type=Path)
-    args = parser.parse_args()
+    return parser
+
+
+def main():
+    args = build_parser().parse_args()
     started = time.perf_counter()
     torch.set_num_threads(8)
     partial = args.out.with_name(args.out.name + ".partial")
@@ -188,13 +198,22 @@ def main():
         raise FileExistsError("El destino o su directorio .partial ya existe")
     partial.mkdir(parents=True)
     torch.manual_seed(42)
+    embeds = args.embeds
+    if embeds is None:
+        embeds = partial / "computed_prompt_embeds.pt"
+        components = load_fixed_prompt_components(args.base)
+        torch.save(encode_fixed_prompt(*components), embeds)
+        del components
+        gc.collect()
     unet = UNet2DConditionModel.from_pretrained(args.base / "unet", **LOAD)
     unet.add_adapter(LoraConfig(r=256, lora_alpha=256, init_lora_weights="gaussian", target_modules=LORA_MODULES))
     expand_output(unet)
     report = dict(checkpoint=load_checkpoint(unet, args.weights))
     unet.eval().requires_grad_(False)
-    report["parity1"] = merge_and_check(unet, args.embeds)
-    save_pack(unet, args, partial)
+    report["parity1"] = merge_and_check(unet, embeds)
+    save_pack(unet, args, partial, embeds)
+    if args.embeds is None:
+        embeds.unlink()
     del unet
     gc.collect()
     if args.check_case:
