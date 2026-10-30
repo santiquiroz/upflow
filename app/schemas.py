@@ -1411,6 +1411,14 @@ class InsertObjectResponse(BaseModel):
     job_id: str | None = Field(default=None, serialization_alias="jobId")
 
 
+class EraseZone(BaseModel):
+    index: int
+    box: list[int] | None
+    engine: str
+    guard: Literal["face", "person"] | None = None
+    residual_person: bool = Field(False, serialization_alias="residualPerson")
+
+
 class GenerationJobResponse(BaseModel):
     id: str
     status: JobStatus
@@ -1454,6 +1462,7 @@ class GenerationJobResponse(BaseModel):
     # La URL de descarga no lleva extensión: sin esto la UI no sabe si el
     # resultado es una imagen o un clip que hay que reproducir.
     is_video: bool = Field(default=False, serialization_alias="isVideo")
+    erase_zones: list[EraseZone] | None = Field(default=None, serialization_alias="eraseZones")
 
 
 class InstallVulkanModelRequest(BaseModel):

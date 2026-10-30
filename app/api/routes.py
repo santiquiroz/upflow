@@ -65,6 +65,7 @@ from app.schemas import (
     DevicesResponse,
     EditableSettingStatusResponse,
     EditableSettingsResponse,
+    EraseZone,
     EngineInfoResponse,
     GenerationCapabilitiesResponse,
     GenerationJobResponse,
@@ -665,6 +666,21 @@ def audio_job_to_response(job: AudioJob) -> AudioJobResponse:
     )
 
 
+def erase_zones_from_metadata(raw: list[dict] | None) -> list[EraseZone] | None:
+    if raw is None:
+        return None
+    return [
+        EraseZone(
+            index=zone.get("index", position),
+            box=zone.get("box"),
+            engine=zone["engine"],
+            guard=zone.get("guard") or ("face" if zone.get("face_guard") is True else None),
+            residual_person=zone.get("residualPerson", False),
+        )
+        for position, zone in enumerate(raw)
+    ]
+
+
 def generation_job_to_response(job: GenerationJob) -> GenerationJobResponse:
     download_url = (
         f"/api/v1/generation/jobs/{job.id}/download" if job.status == JobStatus.completed else None
@@ -684,6 +700,7 @@ def generation_job_to_response(job: GenerationJob) -> GenerationJobResponse:
         progress_pct=_progress_pct_from_metadata(job.metadata), stages=job.metadata.get("stages"),
         error=job.error, download_url=download_url, owner_id=job.owner_id,
         upscale_error=job.metadata.get("upscaleError"),
+        erase_zones=erase_zones_from_metadata(job.metadata.get("eraseAuto")),
         # La URL de descarga no lleva extensión, así que sin esta bandera la UI
         # no puede saber si pintar una imagen o un reproductor.
         is_video=job.model_id.startswith(VIDEO_MODEL_PREFIX),

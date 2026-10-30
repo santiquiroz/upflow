@@ -176,6 +176,56 @@ def test_generation_job_response_serializes_camel_case() -> None:
     assert "createdAt" in serialized
 
 
+def test_job_response_serializes_erase_zones_camel_case() -> None:
+    job = make_generation_job()
+    job.metadata["eraseAuto"] = [
+        {
+            "engine": "lama+osor",
+            "guard": "person",
+            "residualPerson": True,
+            "index": 2,
+            "box": [10, 20, 30, 40],
+        }
+    ]
+
+    serialized = generation_job_to_response(job).model_dump(by_alias=True)
+
+    assert serialized["eraseZones"] == [
+        {
+            "index": 2,
+            "box": [10, 20, 30, 40],
+            "engine": "lama+osor",
+            "guard": "person",
+            "residualPerson": True,
+        }
+    ]
+
+
+def test_old_metadata_without_box_still_serializes() -> None:
+    job = make_generation_job()
+    job.metadata["eraseAuto"] = [
+        {"engine": "lama", "face_guard": True},
+    ]
+
+    serialized = generation_job_to_response(job).model_dump(by_alias=True)
+
+    assert serialized["eraseZones"] == [
+        {
+            "index": 0,
+            "box": None,
+            "engine": "lama",
+            "guard": "face",
+            "residualPerson": False,
+        }
+    ]
+
+
+def test_job_without_erase_auto_has_null_zones() -> None:
+    serialized = generation_job_to_response(make_generation_job()).model_dump(by_alias=True)
+
+    assert serialized["eraseZones"] is None
+
+
 # ---------------------------------------------------------------------------
 # POST /generation/jobs
 # ---------------------------------------------------------------------------
@@ -977,9 +1027,19 @@ def test_create_and_poll_generation_job_roundtrip(client_with_model) -> None:
     })
     assert created.status_code in (200, 201)
     job_id = created.json()["id"]
+    app.state.generation_job_manager.jobs[job_id].metadata["eraseAuto"] = [
+        {
+            "engine": "lama",
+            "guard": None,
+            "residualPerson": True,
+            "index": 0,
+            "box": [1, 2, 3, 4],
+        }
+    ]
     polled = client_with_model.get(f"/api/v1/generation/jobs/{job_id}").json()
     assert polled["prompt"] == "a red apple"
     assert polled["status"] in ("queued", "running", "completed")
+    assert polled["eraseZones"][0]["residualPerson"] is True
 
 
 def test_install_endpoint_wired_accepts_camel_case_body() -> None:
