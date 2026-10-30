@@ -10,6 +10,12 @@ import * as api from "../../lib/api";
 import * as editorService from "../../services/editor";
 import * as generationService from "../../services/generation";
 import { EditorPanel } from "./EditorPanel";
+import * as zones from "./zones";
+
+vi.mock("./zones", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./zones")>();
+  return { ...actual, clipMaskToBox: vi.fn(actual.clipMaskToBox) };
+});
 
 vi.mock("../../lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/api")>();
@@ -576,6 +582,92 @@ describe("EditorPanel protection and automatic erase", () => {
     fireEvent.click(screen.getByRole("radio", { name: en["editor.mode.replace"] }));
 
     expect(screen.queryByText(en["editor.erase.autoHint"])).not.toBeInTheDocument();
+  });
+});
+
+describe("EditorPanel review zones", () => {
+  const ZONE_BOX: [number, number, number, number] = [0, 0, 100, 100];
+  const TOKENS: Record<string, string> = {
+    "mask.png": "mask-token",
+    "redo-base.png": "redo-base",
+    "redo-mask.png": "redo-mask",
+  };
+
+  function completedJob(id: string, downloadUrl: string, zone: Partial<EraseZoneFixture>) {
+    return {
+      id, status: "completed", prompt: "background", negativePrompt: null, modelId: "eraser-auto", steps: 30,
+      guidance: 7, width: 640, height: 480, seed: null, device: "dml:0", autoUpscale: false,
+      createdAt: "2026-10-30T00:00:00Z", startedAt: null, finishedAt: null, progressPct: 100, stages: [],
+      error: null, ownerId: null, downloadUrl,
+      eraseZones: [{ index: 0, box: ZONE_BOX, engine: "lama+osor", guard: null, residualPerson: false, ...zone }],
+    } as const;
+  }
+
+  type EraseZoneFixture = { engine: string; guard: "face" | "person" | null; residualPerson: boolean };
+
+  beforeEach(() => {
+    enableMaskPixels();
+    vi.stubGlobal("fetch", vi.fn(async () => ({ blob: async () => new Blob(["result"], { type: "image/png" }) })));
+    vi.mocked(generationService.fetchGenerationCapabilities).mockResolvedValue({
+      ...CAPABILITIES,
+      models: [
+        { id: "eraser-auto", name: "Auto", status: "installed", eraseOnly: true, supportsInpaint: true },
+        { ...CAPABILITIES.models[0], inpaintOnly: true },
+      ],
+    });
+    vi.mocked(generationService.uploadGenerationInitImage).mockImplementation(async (file: File) => ({
+      ...BASE_IMAGE, initImageToken: TOKENS[file.name] ?? BASE_IMAGE.initImageToken,
+    }));
+    vi.mocked(generationService.createGenerationJob)
+      .mockResolvedValueOnce({ id: "erase-job", status: "queued" } as never)
+      .mockResolvedValueOnce({ id: "redo-job", status: "queued" } as never);
+    vi.mocked(generationService.getGenerationJob).mockImplementation(async (id: string) => (id === "erase-job"
+      ? completedJob("erase-job", "/erase.png", { guard: "person", residualPerson: true })
+      : completedJob("redo-job", "/redo.png", { engine: "lama" })) as never);
+  });
+
+  afterEach(() => {
+    vi.mocked(generationService.getGenerationJob).mockReset();
+    vi.mocked(zones.clipMaskToBox).mockClear();
+  });
+
+  async function eraseAndReview() {
+    renderPanel();
+    await loadBaseImage();
+    await waitFor(() => expect(screen.getByLabelText(en["editor.model.label"])).toHaveValue("eraser-auto"));
+    paintOnCanvas();
+    fireEvent.click(await screen.findByRole("button", { name: en["editor.submit.erase"] }));
+    return screen.findByRole("listitem", { name: "Zone 1" });
+  }
+
+  it("shows the zones of the erase over the result", async () => {
+    const row = await eraseAndReview();
+
+    expect(screen.getByText("Review zones")).toBeInTheDocument();
+    expect(within(row).getByText("Someone is still visible")).toBeInTheDocument();
+    expect(within(row).getByText("LaMa + OSOR")).toBeInTheDocument();
+    expect(screen.getByTestId("zone-marker-0")).toHaveTextContent("1");
+    expect(screen.getByAltText("Erase result")).toHaveAttribute("src", "/erase.png");
+  });
+
+  it("redoes one zone with LaMa on the current result and a mask clipped to the zone", async () => {
+    const row = await eraseAndReview();
+
+    fireEvent.click(within(row).getByRole("button", { name: "Redo" }));
+    fireEvent.click(within(row).getByRole("menuitem", { name: "LaMa" }));
+
+    await waitFor(() => expect(generationService.createGenerationJob).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(generationService.createGenerationJob).mock.calls[1][0]).toEqual(expect.objectContaining({
+      modelId: "eraser-auto", eraseEngine: "lama", initImageToken: "redo-base", maskImageToken: "redo-mask",
+    }));
+    expect(fetch).toHaveBeenCalledWith("/erase.png");
+    expect(zones.clipMaskToBox).toHaveBeenCalledWith(expect.anything(), ZONE_BOX);
+    const files = vi.mocked(generationService.uploadGenerationInitImage).mock.calls.map(([file]) => file.name);
+    expect(files).toEqual(expect.arrayContaining(["redo-base.png", "redo-mask.png"]));
+
+    await waitFor(() => expect(within(row).getByText("No people")).toBeInTheDocument());
+    expect(within(row).getByText("LaMa")).toBeInTheDocument();
+    expect(screen.getByAltText("Erase result")).toHaveAttribute("src", "/redo.png");
   });
 });
 

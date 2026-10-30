@@ -48,6 +48,30 @@ export function shouldUseAutoErase(
   return models.some((candidate) => candidate.id === "eraser-lama" && candidate.status === "installed");
 }
 
+export function replaceModelId(models: GenerationModelSummary[]): string | null {
+  const candidates = models.filter(isReplaceModel);
+  return (candidates.find((model) => model.inpaintOnly) ?? candidates[0])?.id ?? null;
+}
+
+export function hasEraserAuto(models: GenerationModelSummary[]): boolean {
+  return defaultEraseModel(models) !== null;
+}
+
+export interface RedoJobInput {
+  engine: "lama" | "osor" | "lama+osor" | "sdxl";
+  prompt?: string;
+  base: CreateGenerationJobParams;
+  models: GenerationModelSummary[];
+}
+
+export function buildRedoJobParams({ engine, prompt, base, models }: RedoJobInput): CreateGenerationJobParams | null {
+  const { eraseStrategy: _strategy, eraseEngine: _engine, ...params } = base;
+  if (engine !== "sdxl") return { ...params, modelId: "eraser-auto", eraseEngine: engine };
+  const modelId = replaceModelId(models);
+  const text = prompt?.trim() ?? "";
+  return modelId && text ? { ...params, modelId, prompt: text } : null;
+}
+
 export function buildEditorJobParams(
   params: CreateGenerationJobParams,
   mode: EditMode,

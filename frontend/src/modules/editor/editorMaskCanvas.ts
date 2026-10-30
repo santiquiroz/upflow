@@ -187,6 +187,18 @@ export function exportProtectMaskBlob(maskCanvas: HTMLCanvasElement): Promise<Bl
   return encodeMaskPng(exportCanvas);
 }
 
+export function readMaskImageData(canvas: HTMLCanvasElement): ImageData | null {
+  return canvas.getContext("2d")?.getImageData(0, 0, canvas.width, canvas.height) ?? null;
+}
+
+export function exportImageDataMaskBlob(mask: ImageData): Promise<Blob> {
+  const canvas = createMaskCanvas(mask.width, mask.height);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return Promise.reject(new Error("canvas 2d context unavailable"));
+  ctx.putImageData(mask, 0, 0);
+  return exportMaskBlob(canvas);
+}
+
 function encodeMaskPng(exportCanvas: HTMLCanvasElement): Promise<Blob> {
   return new Promise((resolve, reject) => {
     exportCanvas.toBlob((blob) => {

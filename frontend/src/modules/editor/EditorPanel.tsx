@@ -9,8 +9,10 @@ import { fetchEditorCapabilities, segmentEditorObject } from "../../services/edi
 import { uploadGenerationInitImage, type CreateGenerationJobParams } from "../../services/generation";
 import {
   buildEditorJobParams,
+  canReplace,
   defaultEraseModel,
   effectiveMode,
+  hasEraserAuto,
   modelForMode,
   shouldUseAutoErase,
 } from "./eraseJobParams";
@@ -21,10 +23,14 @@ import { PeopleOverlay } from "./PeopleOverlay";
 import { PeoplePanel } from "./PeoplePanel";
 import {
   canvasHasPixels, createMaskCanvas, exportMaskBlob, exportProtectMaskBlob, hasProtection, maskHasContent,
-  pngBlobToAlphaCanvas, renderMaskOverlays, replayMasks, withoutEdits, type HistoryEntry,
+  pngBlobToAlphaCanvas, readMaskImageData, renderMaskOverlays, replayMasks, withoutEdits, type HistoryEntry,
 } from "./editorMaskCanvas";
 import { PeopleSummary } from "./PeopleSummary";
 import { personNumbers } from "./peopleState";
+import { ReviewOverlay } from "./ReviewOverlay";
+import { ReviewPanel } from "./ReviewPanel";
+import { useReviewSession } from "./useReviewSession";
+import { useZoneRedo } from "./useZoneRedo";
 import { lastPeopleBatch } from "./silhouettes";
 import { useSilhouetteBatch } from "./useSilhouetteBatch";
 import type { EditMode } from "./InpaintModelSelect";
@@ -128,6 +134,16 @@ export function EditorPanel() {
     onDone: handlePeopleBatch,
   });
   const peopleBatch = lastPeopleBatch(history);
+  const review = useReviewSession(job);
+  const zoneRedo = useZoneRedo({
+    session: review.session,
+    baseInfo,
+    models,
+    onDone: review.updateZone,
+    defaults: { prompt: erasePromptText, negativePrompt: eraseNegative, steps, guidance, device },
+  });
+  const resultUrl = review.session?.resultUrl ?? null;
+  const shownJob = job && resultUrl ? { ...job, downloadUrl: resultUrl } : job;
   useEffect(() => {
     if (!capabilitiesQuery.data) return;
     setModelId((current) => current ?? defaultEraseModel(models));
@@ -253,6 +269,7 @@ export function EditorPanel() {
       setSegmentError(null);
       setViewport(IDENTITY_VIEWPORT);
       reset();
+      review.clear();
       try {
         const response = await uploadGenerationInitImage(file);
         if (sequence !== uploadSequence.current) {
@@ -273,7 +290,7 @@ export function EditorPanel() {
         if (sequence === uploadSequence.current) setBaseUploading(false);
       }
     },
-    [reset],
+    [reset, review.clear],
   );
 
   useEditorHandoff(handleBaseSelected, setUploadError);
@@ -397,6 +414,7 @@ export function EditorPanel() {
     setViewport(IDENTITY_VIEWPORT);
     liveStrokeRef.current = null;
     reset();
+    review.clear();
   }
 
   async function handleCanvasClick(event: React.MouseEvent<HTMLCanvasElement>) {
@@ -449,6 +467,7 @@ export function EditorPanel() {
     preparingJobRef.current = true;
     setPreparingJob(true);
     setUploadError(null);
+    const eraseMask = mode === "erase" ? readMaskImageData(canvas) : null;
     try {
       const protection = protectMaskRef.current;
       const protectBlobPromise = protection && canvasHasPixels(protection)
@@ -486,6 +505,8 @@ export function EditorPanel() {
         strength,
         ...(protectMaskToken ? { protectMaskToken } : {}),
       };
+      if (eraseMask) review.start(eraseMask, protectMaskToken);
+      else review.clear();
       submit(buildEditorJobParams(params, mode, models));
     } catch (error) {
       if (sequence === uploadSequence.current) {
@@ -498,11 +519,11 @@ export function EditorPanel() {
   }
 
   async function handleUseResultAsBase() {
-    if (!job?.downloadUrl) {
+    if (!shownJob?.downloadUrl) {
       return;
     }
     try {
-      const response = await fetch(job.downloadUrl);
+      const response = await fetch(shownJob.downloadUrl);
       const blob = await response.blob();
       await handleBaseSelected(new File([blob], "edited.png", { type: "image/png" }));
     } catch (error) {
@@ -628,6 +649,16 @@ export function EditorPanel() {
                     imageHeight={baseInfo.height}
                   />
                 )}
+                {panelView === "review" && review.zones && (
+                  <ReviewOverlay
+                    zones={review.zones}
+                    resultUrl={resultUrl}
+                    hoveredZone={review.hoveredZone}
+                    onHoverZone={review.setHoveredZone}
+                    imageWidth={baseInfo.width}
+                    imageHeight={baseInfo.height}
+                  />
+                )}
               </div>
               {segmenting && (
                 <p className="absolute bottom-2 left-2 rounded bg-surface px-2 py-1 text-xs text-text-dim">
@@ -672,16 +703,33 @@ export function EditorPanel() {
                 error={peopleSelection.error}
               />
             )}
+            {panelView === "review" && review.zones && (
+              <ReviewPanel
+                zones={review.zones}
+                people={peopleSelection.people}
+                choices={peopleSelection.choices}
+                hoveredZone={review.hoveredZone}
+                onHoverZone={review.setHoveredZone}
+                onRedo={(zone, engine, text) => void zoneRedo.redo(zone, engine, text)}
+                sdxlAvailable={canReplace(models)}
+                eraserAvailable={hasEraserAuto(models)}
+                redoingIndex={zoneRedo.redoingIndex}
+                errors={zoneRedo.errors}
+                beforeUrl={baseUrl}
+                afterUrl={resultUrl}
+                imageSize={baseInfo}
+              />
+            )}
             {panelView === "review" && (
               <div className="mb-3">
                 <JobCard
                   phase={phase}
-                  job={job}
+                  job={shownJob}
                   fileName={baseInfo.originalFilename}
                   errorMessage={errorMessage}
                   onCancel={cancel}
                 />
-                {job?.status === "completed" && job.downloadUrl && (
+                {shownJob?.status === "completed" && shownJob.downloadUrl && (
                   <button
                     type="button"
                     onClick={() => void handleUseResultAsBase()}
@@ -729,7 +777,7 @@ export function EditorPanel() {
             {panelView !== "people" && (
                 <JobCard
                   phase={phase}
-                  job={job}
+                  job={shownJob}
                   fileName={baseInfo.originalFilename}
                   errorMessage={errorMessage}
                   onCancel={cancel}

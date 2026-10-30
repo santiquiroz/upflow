@@ -730,6 +730,14 @@ export interface GenerationEraseParams {
   maskFeatherPx?: number;
 }
 
+export interface EraseZone {
+  index: number;
+  box: [number, number, number, number] | null;
+  engine: string;
+  guard: "face" | "person" | null;
+  residualPerson: boolean;
+}
+
 export interface GenerationJob {
   id: string;
   status: JobStatus;
@@ -763,6 +771,7 @@ export interface GenerationJob {
   /** El job termina COMPLETO aunque el agrandado falle: la imagen generada
    *  sirve igual, pero salio del tamaño generado y no del pedido. */
   upscaleError?: string | null;
+  eraseZones?: EraseZone[] | null;
 }
 
 export interface GenerationModelSummary {

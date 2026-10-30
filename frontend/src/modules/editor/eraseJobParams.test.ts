@@ -9,6 +9,9 @@ import {
   effectiveMode,
   isReplaceModel,
   modelForMode,
+  buildRedoJobParams,
+  hasEraserAuto,
+  replaceModelId,
   shouldUseAutoErase,
 } from "./eraseJobParams";
 
@@ -103,6 +106,40 @@ describe("automatic erase eligibility", () => {
     [lama],
   ])("rejects unavailable models or models without dedicated diffusion inpainting: %j", (...models) => {
     expect(shouldUseAutoErase("erase", inpaint.id, models)).toBe(false);
+  });
+});
+
+describe("redo job params", () => {
+  const plain: GenerationModelSummary = { id: "sd-plain", name: "Plain", status: "installed", supportsInpaint: true };
+
+  it("prefers an inpaint-only replace model", () => {
+    expect(replaceModelId([autoEraser, plain, inpaint])).toBe(inpaint.id);
+    expect(replaceModelId([autoEraser, plain])).toBe(plain.id);
+    expect(replaceModelId([autoEraser])).toBeNull();
+  });
+
+  it("detects the installed automatic eraser", () => {
+    expect(hasEraserAuto([autoEraser])).toBe(true);
+    expect(hasEraserAuto([{ ...autoEraser, status: "converting" }, inpaint])).toBe(false);
+  });
+
+  it("sends eraser-auto with the chosen engine and no strategy", () => {
+    const base = { ...params, eraseStrategy: "auto" as const, protectMaskToken: "protect" };
+    expect(buildRedoJobParams({ engine: "lama", base, models: [autoEraser] })).toEqual({
+      ...params, protectMaskToken: "protect", modelId: "eraser-auto", eraseEngine: "lama",
+    });
+  });
+
+  it("describes the background with the replace model, the user prompt and no erase engine", () => {
+    const base = { ...params, eraseEngine: "osor" as const };
+    expect(buildRedoJobParams({ engine: "sdxl", prompt: " grass ", base, models: [autoEraser, inpaint] })).toEqual({
+      ...params, modelId: inpaint.id, prompt: "grass",
+    });
+  });
+
+  it("refuses to describe the background without a model or text", () => {
+    expect(buildRedoJobParams({ engine: "sdxl", prompt: "grass", base: params, models: [autoEraser] })).toBeNull();
+    expect(buildRedoJobParams({ engine: "sdxl", prompt: "  ", base: params, models: [inpaint] })).toBeNull();
   });
 });
 
