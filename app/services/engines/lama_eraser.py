@@ -35,12 +35,25 @@ def _unknown_hole(mask: np.ndarray, protect: np.ndarray) -> np.ndarray:
     import cv2
 
     hard = (mask > 0).astype(np.uint8)
+    if not protect.any():
+        return hard
+    bbox = mask_bbox(hard * 255)
+    if bbox is None:
+        return hard
+    left, top, right, bottom = bbox
+    radius = PROTECT_KERNEL_SIZE // 2
+    height, width = hard.shape
+    window = (
+        slice(max(0, top - radius), min(height, bottom + radius)),
+        slice(max(0, left - radius), min(width, right + radius)),
+    )
     kernel = cv2.getStructuringElement(
         cv2.MORPH_ELLIPSE, (PROTECT_KERNEL_SIZE, PROTECT_KERNEL_SIZE)
     )
-    near = cv2.dilate(hard, kernel) > 0
+    near = cv2.dilate(hard[window], kernel) > 0
     # El sujeto protegido también es desconocido para que no se copie en el fondo.
-    return hard | (protect & near).astype(np.uint8)
+    hard[window] |= (protect[window] & near).astype(np.uint8)
+    return hard
 
 
 def _context_crop(hole: np.ndarray) -> tuple[int, int, int, int]:

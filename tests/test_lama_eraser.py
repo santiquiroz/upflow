@@ -8,7 +8,7 @@ import torch
 from PIL import Image
 
 from app.config import Settings
-from app.services.engines.lama_eraser import ERASER_LAMA_MODEL_ID, LamaEraser
+from app.services.engines.lama_eraser import ERASER_LAMA_MODEL_ID, LamaEraser, _unknown_hole
 from app.services.inpaint_mask import grow_per_component
 
 
@@ -58,6 +58,94 @@ def make_eraser(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     module = FakeModule()
     monkeypatch.setattr(eraser, "_create_module", lambda: module)
     return eraser, module
+
+
+def test_unknown_hole_without_protect_returns_hard_mask_without_dilation(monkeypatch):
+    import cv2
+
+    mask = np.zeros((400, 500), dtype=np.uint8)
+    mask[180:200, 220:240] = 127
+    protect = np.zeros(mask.shape, dtype=bool)
+
+    def fail_dilation(*args, **kwargs):
+        pytest.fail("An unprotected mask must not be dilated")
+
+    monkeypatch.setattr(cv2, "dilate", fail_dilation)
+
+    result = _unknown_hole(mask, protect)
+
+    np.testing.assert_array_equal(result, (mask > 0).astype(np.uint8))
+    assert result.dtype == np.uint8
+
+
+def test_unknown_hole_leaves_distant_protect_outside_the_hole():
+    mask = np.zeros((500, 600), dtype=np.uint8)
+    mask[200:220, 200:220] = 255
+    protect = np.zeros(mask.shape, dtype=bool)
+    protect[200:220, 400:420] = True
+
+    result = _unknown_hole(mask, protect)
+
+    np.testing.assert_array_equal(result, (mask > 0).astype(np.uint8))
+
+
+def test_unknown_hole_adds_adjacent_protect_within_the_ellipse():
+    import cv2
+
+    mask = np.zeros((500, 600), dtype=np.uint8)
+    mask[220, 220] = 255
+    protect = np.zeros(mask.shape, dtype=bool)
+    protect[220, 221] = True
+    protect[220, 370] = True
+    protect[220, 371] = True
+    protect[370, 370] = True
+    hard = (mask > 0).astype(np.uint8)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (301, 301))
+    expected = hard | (protect & (cv2.dilate(hard, kernel) > 0)).astype(np.uint8)
+
+    result = _unknown_hole(mask, protect)
+
+    np.testing.assert_array_equal(result, expected)
+    assert result[220, 221] == result[220, 370] == 1
+    assert result[220, 371] == result[370, 370] == 0
+
+
+@pytest.mark.parametrize(
+    "box,expected_shape",
+    [((220, 200, 240, 215), (315, 320)), ((0, 0, 20, 15), (165, 170))],
+)
+def test_unknown_hole_dilates_only_the_expanded_clamped_window(monkeypatch, box, expected_shape):
+    import cv2
+
+    mask = np.zeros((500, 650), dtype=np.uint8)
+    left, top, right, bottom = box
+    mask[top:bottom, left:right] = 255
+    protect = np.ones(mask.shape, dtype=bool)
+    hard = (mask > 0).astype(np.uint8)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (301, 301))
+    dilate = cv2.dilate
+    expected = dilate(hard, kernel)
+    input_shapes = []
+
+    def record_dilation(source, *args, **kwargs):
+        input_shapes.append(source.shape)
+        return dilate(source, *args, **kwargs)
+
+    monkeypatch.setattr(cv2, "dilate", record_dilation)
+
+    result = _unknown_hole(mask, protect)
+
+    np.testing.assert_array_equal(result, expected)
+    assert input_shapes == [expected_shape]
+
+
+def test_unknown_hole_with_empty_hard_mask_adds_no_protected_pixels():
+    mask = np.zeros((40, 50), dtype=np.uint8)
+    protect = np.ones(mask.shape, dtype=bool)
+
+    result = _unknown_hole(mask, protect)
+
+    np.testing.assert_array_equal(result, mask)
 
 
 @pytest.mark.asyncio
