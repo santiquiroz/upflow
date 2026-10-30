@@ -5,9 +5,17 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from app.api.auth_deps import require
-from app.schemas import EditorSegmentRequest, InsertObjectRequest, InsertObjectResponse
+from app.schemas import (
+    EditorPeopleRequest,
+    EditorPeopleResponse,
+    EditorSegmentRequest,
+    InsertObjectRequest,
+    InsertObjectResponse,
+)
 from app.services.auth.permissions import Permission
+from app.services.editor_people import EditorPeople
 from app.services.editor_segmenter import EditorSegmenter, SegmenterUnavailableError
+from app.services.person_detector import PersonDetectorUnavailableError
 from app.services.engines.onnx_common import readable_error_text
 
 logger = logging.getLogger(__name__)
@@ -19,11 +27,50 @@ def get_editor_segmenter(request: Request) -> EditorSegmenter:
     return request.app.state.editor_segmenter
 
 
+def get_editor_people(request: Request) -> EditorPeople:
+    return request.app.state.editor_people
+
+
 @router.get("/capabilities")
 async def editor_capabilities(
     segmenter: EditorSegmenter = Depends(get_editor_segmenter),
+    people: EditorPeople = Depends(get_editor_people),
 ) -> dict[str, bool]:
-    return {"tapSelect": segmenter.available()}
+    return {"tapSelect": segmenter.available(), "people": people.available()}
+
+
+@router.post(
+    "/people",
+    response_model=EditorPeopleResponse,
+    dependencies=[Depends(require(Permission.jobs_create))],
+)
+async def people(
+    payload: EditorPeopleRequest,
+    people: EditorPeople = Depends(get_editor_people),
+) -> EditorPeopleResponse:
+    from app.api.routes import _resolve_init_image
+    from app.config import get_settings
+
+    settings = get_settings()
+    image_path = _resolve_init_image(settings, payload.image_token)
+    if image_path is None:
+        raise HTTPException(status_code=400, detail="imageToken is required")
+    device = payload.device or "cpu"
+    if device != "cpu" and not device.startswith("dml:"):
+        raise HTTPException(status_code=400, detail=f"Unsupported device: {device!r}")
+    try:
+        detected_people = await people.people(image_path, device)
+    except PersonDetectorUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        message = readable_error_text(exc)
+        logger.exception("Editor people detection failed: %s", message)
+        raise HTTPException(
+            status_code=500, detail=f"People detection failed: {message}"
+        ) from exc
+    return EditorPeopleResponse(people=detected_people)
 
 
 @router.post(

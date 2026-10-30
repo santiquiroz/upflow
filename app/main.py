@@ -374,6 +374,10 @@ async def lifespan(app: FastAPI):
     await vulkan_installer.start()
     app.state.vulkan_installer = vulkan_installer
     app.state.editor_segmenter = EditorSegmenter(settings)
+    from app.services.editor_people import EditorPeople
+    from app.services.person_detector import PersonDetector
+
+    app.state.editor_people = EditorPeople(PersonDetector(settings))
     app.state.generation_job_manager = generation_job_manager
     app.state.generation_installer = generation_installer
     app.state.generation_converter = generation_converter

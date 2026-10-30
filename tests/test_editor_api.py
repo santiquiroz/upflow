@@ -8,10 +8,12 @@ from fastapi import HTTPException
 from PIL import Image
 from starlette.datastructures import UploadFile
 
-from app.api.editor_routes import segment_object
+from app.api.editor_routes import editor_capabilities, people as editor_people_route, segment_object
 from app.api.routes import upload_init_image
 from app.config import get_settings
-from app.schemas import EditorSegmentRequest
+from app.schemas import EditorPeopleRequest, EditorSegmentRequest
+from app.services.editor_people import EditorPeople
+from app.services.person_detector import PersonBox, PersonDetectorUnavailableError
 from app.services.editor_segmenter import SegmenterUnavailableError
 from app.services.storage import StorageService
 
@@ -33,6 +35,22 @@ class FakeSegmenter:
         buffer = io.BytesIO()
         Image.fromarray(mask, mode="L").save(buffer, format="PNG")
         return buffer.getvalue()
+
+
+class FakePeople:
+    def __init__(self, people: list, available: bool = True) -> None:
+        self._people = people
+        self._available = available
+        self.calls: list[tuple] = []
+
+    def available(self) -> bool:
+        return self._available
+
+    async def people(self, image_path, device):
+        if not self._available:
+            raise PersonDetectorUnavailableError("corré scripts/download-person-detector.ps1")
+        self.calls.append((image_path, device))
+        return self._people
 
 
 async def upload_token() -> str:
@@ -114,6 +132,85 @@ async def test_segment_garbled_onnx_error_returns_readable_detail() -> None:
     assert exc_info.value.status_code == 500
     assert "acci" in exc_info.value.detail
     assert "codec can't decode" not in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_people_returns_roles_and_faces() -> None:
+    from app.schemas import EditorPerson
+
+    token = await upload_token()
+    person = EditorPerson(
+        id=0, box=[10, 20, 110, 220], score=0.9, role="subject", face=[30, 40, 60, 70]
+    )
+
+    response = await editor_people_route(
+        EditorPeopleRequest(imageToken=token), people=FakePeople([person])
+    )
+
+    assert response.people[0].role == "subject"
+    assert response.people[0].box == [10, 20, 110, 220]
+    assert response.people[0].face == [30, 40, 60, 70]
+
+
+@pytest.mark.asyncio
+async def test_people_unavailable_is_503_with_pack_hint() -> None:
+    token = await upload_token()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await editor_people_route(
+            EditorPeopleRequest(imageToken=token), people=FakePeople([], available=False)
+        )
+
+    assert exc_info.value.status_code == 503
+    assert "download-person-detector" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_people_second_call_hits_cache(tmp_path, monkeypatch) -> None:
+    import app.services.editor_people as editor_people_module
+    from app.schemas import EditorPerson
+    from PIL import Image
+
+    image_path = tmp_path / "image.png"
+    Image.new("RGB", (64, 64), (20, 30, 40)).save(image_path)
+
+    class FakeDetector:
+        calls = 0
+
+        def detect(self, rgb, device):
+            self.calls += 1
+            return [PersonBox((10, 10, 50, 60), 0.9)]
+
+    monkeypatch.setattr(editor_people_module, "classify_roles", lambda rgb, detections: ["subject"])
+    monkeypatch.setattr(editor_people_module, "face_box", lambda rgb, box: (20, 15, 35, 30))
+    detector = FakeDetector()
+    service = EditorPeople(detector)
+
+    first = await service.people(image_path, "cpu")
+    second = await service.people(image_path, "cpu")
+
+    assert first == second == [
+        EditorPerson(
+            id=0,
+            box=[10, 10, 50, 60],
+            score=0.9,
+            role="subject",
+            face=[20, 15, 35, 30],
+        )
+    ]
+    assert detector.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_capabilities_reports_people() -> None:
+    from app.schemas import EditorPerson
+
+    capability = await editor_capabilities(
+        segmenter=FakeSegmenter(),
+        people=FakePeople([EditorPerson(id=0, box=[0, 0, 1, 1], score=0.9, role="subject")]),
+    )
+
+    assert capability == {"tapSelect": True, "people": True}
 
 
 async def _upload_png(image: Image.Image, name: str) -> str:

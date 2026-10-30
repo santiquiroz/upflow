@@ -1479,6 +1479,25 @@ class EditorSegmentRequest(BaseModel):
     device: str | None = None
 
 
+class EditorPeopleRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    image_token: str = Field(alias="imageToken")
+    device: str | None = None
+
+
+class EditorPerson(BaseModel):
+    id: int
+    box: list[int]
+    score: float
+    role: Literal["subject", "background"]
+    face: list[int] | None = None
+
+
+class EditorPeopleResponse(BaseModel):
+    people: list[EditorPerson]
+
+
 class GenerationModelSummary(BaseModel):
     id: str
     name: str
