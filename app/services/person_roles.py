@@ -55,7 +55,7 @@ def _sharpness_score(
     x1, y1, x2, y2 = _clipped_box(box, width, height)
     if x2 <= x1 or y2 <= y1 or image_sharpness <= 0:
         return 0.0
-    box_sharpness = float(np.var(laplacian[y1:y2, x1:x2]))
+    box_sharpness = float(np.var(laplacian[y1:y2, x1:x2], dtype=np.float64))
     return min(box_sharpness / image_sharpness, 1.0)
 
 
@@ -68,8 +68,8 @@ def role_scores(rgb: np.ndarray, people: list[PersonBox]) -> list[float]:
         return [0.0] * len(people)
 
     gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
-    laplacian = cv2.Laplacian(gray, cv2.CV_64F)
-    image_sharpness = float(np.var(laplacian))
+    laplacian = cv2.Laplacian(gray, cv2.CV_16S)
+    image_sharpness = float(np.var(laplacian, dtype=np.float64))
     scores = []
     for person in people:
         scores.append(

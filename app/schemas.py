@@ -1508,6 +1508,7 @@ class EditorPerson(BaseModel):
     score: float
     role: Literal["subject", "background"]
     face: list[int] | None = None
+    anchor: list[int]
 
 
 class EditorPeopleResponse(BaseModel):

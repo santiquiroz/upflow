@@ -9,8 +9,13 @@ import numpy as np
 from PIL import Image
 
 from app.schemas import EditorPerson
-from app.services.person_detector import PersonBox, PersonDetector
-from app.services.person_roles import Role, classify_roles, face_box
+from app.services.person_detector import (
+    PersonBox,
+    PersonDetector,
+    PersonDetectorUnavailableError,
+)
+from app.services.person_roles import Role, anchor_point, classify_roles, face_box
+from app.services.missing_pack import missing_pack_message
 
 PEOPLE_CACHE_SIZE = 4
 PeopleCacheKey = tuple[str, str]
@@ -27,6 +32,8 @@ class EditorPeople:
         return self.detector.available()
 
     async def people(self, image_path: Path, device: str) -> list[EditorPerson]:
+        if not self.available():
+            raise PersonDetectorUnavailableError(missing_pack_message("person-detector"))
         return await asyncio.to_thread(self._people_blocking, image_path, device)
 
     def _people_blocking(self, image_path: Path, device: str) -> list[EditorPerson]:
@@ -60,13 +67,7 @@ class EditorPeople:
 
 
 def _copy_person(person: EditorPerson) -> EditorPerson:
-    return EditorPerson(
-        id=person.id,
-        box=list(person.box),
-        score=person.score,
-        role=person.role,
-        face=list(person.face) if person.face is not None else None,
-    )
+    return person.model_copy(deep=True)
 
 
 def _build_people(rgb: np.ndarray, detections: list[PersonBox]) -> list[EditorPerson]:
@@ -81,10 +82,12 @@ def _to_person(
     index: int, detection: PersonBox, role: Role, rgb: np.ndarray
 ) -> EditorPerson:
     face = face_box(rgb, detection.box)
+    anchor = anchor_point(detection.box, face)
     return EditorPerson(
         id=index,
         box=list(detection.box),
         score=detection.score,
         role=role,
         face=list(face) if face is not None else None,
+        anchor=list(anchor),
     )

@@ -178,7 +178,8 @@ async def test_people_returns_roles_and_faces() -> None:
 
     token = await upload_token()
     person = EditorPerson(
-        id=0, box=[10, 20, 110, 220], score=0.9, role="subject", face=[30, 40, 60, 70]
+        id=0, box=[10, 20, 110, 220], score=0.9, role="subject",
+        face=[30, 40, 60, 70], anchor=[45, 55],
     )
 
     response = await editor_people_route(
@@ -188,6 +189,7 @@ async def test_people_returns_roles_and_faces() -> None:
     assert response.people[0].role == "subject"
     assert response.people[0].box == [10, 20, 110, 220]
     assert response.people[0].face == [30, 40, 60, 70]
+    assert response.people[0].anchor == [45, 55]
 
 
 @pytest.mark.asyncio
@@ -215,6 +217,9 @@ async def test_people_second_call_hits_cache(tmp_path, monkeypatch) -> None:
     class FakeDetector:
         calls = 0
 
+        def available(self):
+            return True
+
         def detect(self, rgb, device):
             self.calls += 1
             return [PersonBox((10, 10, 50, 60), 0.9)]
@@ -234,6 +239,7 @@ async def test_people_second_call_hits_cache(tmp_path, monkeypatch) -> None:
             score=0.9,
             role="subject",
             face=[20, 15, 35, 30],
+            anchor=[27, 22],
         )
     ]
     assert detector.calls == 1
@@ -248,6 +254,9 @@ async def test_people_cache_returns_independent_models(tmp_path, monkeypatch) ->
     Image.new("RGB", (64, 64), (20, 30, 40)).save(image_path)
 
     class FakeDetector:
+        def available(self):
+            return True
+
         def detect(self, rgb, device):
             return [PersonBox((10, 10, 50, 60), 0.9)]
 
@@ -260,6 +269,25 @@ async def test_people_cache_returns_independent_models(tmp_path, monkeypatch) ->
     second = await service.people(image_path, "cpu")
 
     assert second[0].box == [10, 10, 50, 60]
+    assert second[0].anchor == [30, 16]
+
+
+@pytest.mark.asyncio
+async def test_people_checks_availability_before_opening_image(monkeypatch, tmp_path) -> None:
+    from app.services.person_detector import PersonDetectorUnavailableError
+
+    class UnavailableDetector:
+        def available(self):
+            return False
+
+    def fail_open(_path):
+        raise AssertionError("image must not be decoded")
+
+    monkeypatch.setattr("PIL.Image.open", fail_open)
+    service = EditorPeople(UnavailableDetector())
+
+    with pytest.raises(PersonDetectorUnavailableError):
+        await service.people(tmp_path / "missing.png", "cpu")
 
 
 @pytest.mark.asyncio
@@ -301,7 +329,9 @@ async def test_capabilities_reports_people() -> None:
 
     capability = await editor_capabilities(
         segmenter=FakeSegmenter(),
-        people=FakePeople([EditorPerson(id=0, box=[0, 0, 1, 1], score=0.9, role="subject")]),
+        people=FakePeople([
+            EditorPerson(id=0, box=[0, 0, 1, 1], score=0.9, role="subject", anchor=[0, 0])
+        ]),
     )
 
     assert capability == {"tapSelect": True, "people": True}

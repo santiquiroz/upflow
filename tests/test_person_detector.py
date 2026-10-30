@@ -90,6 +90,17 @@ def test_select_people_returns_empty_without_person_detections():
     assert select_people(decoded, ratio=1, image_size=(100, 100)) == []
 
 
+def test_select_people_discards_boxes_without_area_after_clipping():
+    decoded = np.zeros((3, 85), np.float32)
+    decoded[0, :6] = [-10, 20, 20, 10, 0.9, 0.9]
+    decoded[1, :6] = [20, -10, 10, 20, 0.9, 0.9]
+    decoded[2, :6] = [50, 50, 20, 20, 0.9, 0.9]
+
+    people = select_people(decoded, ratio=1, image_size=(100, 100))
+
+    assert [person.box for person in people] == [(40, 40, 60, 60)]
+
+
 def test_detect_runs_session_once_per_device_and_reports_missing_pack(tmp_path):
     class FakeSession:
         def __init__(self):
@@ -129,3 +140,40 @@ def test_detect_runs_session_once_per_device_and_reports_missing_pack(tmp_path):
     settings = Settings(_env_file=None, PERSON_DETECTOR_MODEL=str(tmp_path / "no.onnx"))
     with pytest.raises(PersonDetectorUnavailableError, match="encuentra personas"):
         PersonDetector(settings).detect(rgb)
+
+
+def test_session_creation_is_per_device_and_not_serialized(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    import time
+
+    model = tmp_path / "model.onnx"
+    model.write_bytes(b"fake")
+    detector = PersonDetector(
+        Settings(_env_file=None, PERSON_DETECTOR_MODEL=str(model))
+    )
+    active = 0
+    max_active = 0
+    created = {}
+    lock = threading.Lock()
+
+    def create_session(device):
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+            created[device] = created.get(device, 0) + 1
+        time.sleep(0.05)
+        with lock:
+            active -= 1
+        return object()
+
+    detector._create_session = create_session
+    devices = ["cpu", "cpu", "dml:0", "dml:0"]
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        sessions = list(pool.map(detector._get_session, devices))
+
+    assert created == {"cpu": 1, "dml:0": 1}
+    assert sessions[0] is sessions[1]
+    assert sessions[2] is sessions[3]
+    assert max_active == 2

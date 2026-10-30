@@ -1,22 +1,25 @@
 from __future__ import annotations
 
+import threading
+
 import numpy as np
 
 # A 0.5 se escapan los fantasmas suaves que OSOR deja en un relleno (2145 en Upflow);
 # a 0.25 se escapan otros: medido en 59 fotos, las dos juntas aciertan 6 de 6 sin falsas alarmas.
 FACE_SCALES = (0.5, 0.25)
-_cascade = None
+_cascade_local = threading.local()
 
 
 def get_face_cascade():
-    global _cascade
-    if _cascade is None:
+    cascade = getattr(_cascade_local, "cascade", None)
+    if cascade is None:
         import cv2
 
-        _cascade = cv2.CascadeClassifier(
+        cascade = cv2.CascadeClassifier(
             cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
         )
-    return _cascade
+        _cascade_local.cascade = cascade
+    return cascade
 
 
 def _center_in_mask(box: tuple[int, int, int, int], mask: np.ndarray) -> bool:
@@ -26,15 +29,11 @@ def _center_in_mask(box: tuple[int, int, int, int], mask: np.ndarray) -> bool:
     return 0 <= center_x < columns and 0 <= center_y < rows and mask[center_y, center_x] > 0
 
 
-def _get_cascade():
-    return get_face_cascade()
-
-
 def _faces_at_scale(gray: np.ndarray, scale: float) -> list[tuple[int, int, int, int]]:
     import cv2
 
     small = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
-    boxes = _get_cascade().detectMultiScale(small, 1.1, 5, minSize=(20, 20))
+    boxes = get_face_cascade().detectMultiScale(small, 1.1, 5, minSize=(20, 20))
     return [tuple(round(value / scale) for value in box) for box in boxes]
 
 

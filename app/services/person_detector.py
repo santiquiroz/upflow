@@ -115,9 +115,12 @@ def select_people(
     width, height = image_size
     people = []
     for selected in kept_indices:
+        box = _clip_box(scaled_boxes[selected], width, height)
+        if box[2] <= box[0] or box[3] <= box[1]:
+            continue
         people.append(
             PersonBox(
-                box=_clip_box(scaled_boxes[selected], width, height),
+                box=box,
                 score=float(candidate_scores[selected]),
             )
         )
@@ -129,6 +132,7 @@ class PersonDetector:
         self.settings = settings
         self._lock = threading.Lock()
         self._sessions: dict[str, Any] = {}
+        self._session_locks: dict[str, threading.Lock] = {}
 
     def available(self) -> bool:
         return self.settings.person_detector_available()
@@ -137,16 +141,29 @@ class PersonDetector:
         if not self.available():
             raise PersonDetectorUnavailableError(missing_pack_message("person-detector"))
 
-        with self._lock:
-            session = self._sessions.get(device)
-            if session is None:
-                session = self._create_session(device)
-                self._sessions[device] = session
-
+        session = self._get_session(device)
         tensor, ratio = letterbox(rgb)
         raw = session.run(None, {"images": tensor})[0][0]
         decoded = decode_yolox(raw)
         return select_people(decoded, ratio, (rgb.shape[1], rgb.shape[0]))
+
+    def _get_session(self, device: str) -> Any:
+        with self._lock:
+            session = self._sessions.get(device)
+            if session is not None:
+                return session
+            session_lock = self._session_locks.setdefault(device, threading.Lock())
+
+        with session_lock:
+            with self._lock:
+                session = self._sessions.get(device)
+                if session is not None:
+                    return session
+
+            session = self._create_session(device)
+            with self._lock:
+                self._sessions[device] = session
+            return session
 
     def _create_session(self, device: str) -> Any:
         from app.services import ep_registry

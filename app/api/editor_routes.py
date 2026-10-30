@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
@@ -31,6 +32,21 @@ def get_editor_people(request: Request) -> EditorPeople:
     return request.app.state.editor_people
 
 
+def _resolve_editor_image_and_device(
+    image_token: str, requested_device: str | None
+) -> tuple[Path, str]:
+    from app.api.routes import _resolve_init_image
+    from app.config import get_settings
+
+    image_path = _resolve_init_image(get_settings(), image_token)
+    if image_path is None:
+        raise HTTPException(status_code=400, detail="imageToken is required")
+    device = requested_device or "cpu"
+    if device != "cpu" and not device.startswith("dml:"):
+        raise HTTPException(status_code=400, detail=f"Unsupported device: {device!r}")
+    return image_path, device
+
+
 @router.get("/capabilities")
 async def editor_capabilities(
     segmenter: EditorSegmenter = Depends(get_editor_segmenter),
@@ -48,16 +64,9 @@ async def detect_people(
     payload: EditorPeopleRequest,
     people: EditorPeople = Depends(get_editor_people),
 ) -> EditorPeopleResponse:
-    from app.api.routes import _resolve_init_image
-    from app.config import get_settings
-
-    settings = get_settings()
-    image_path = _resolve_init_image(settings, payload.image_token)
-    if image_path is None:
-        raise HTTPException(status_code=400, detail="imageToken is required")
-    device = payload.device or "cpu"
-    if device != "cpu" and not device.startswith("dml:"):
-        raise HTTPException(status_code=400, detail=f"Unsupported device: {device!r}")
+    image_path, device = _resolve_editor_image_and_device(
+        payload.image_token, payload.device
+    )
     try:
         detected_people = await people.people(image_path, device)
     except PersonDetectorUnavailableError as exc:
@@ -84,17 +93,10 @@ async def segment_object(
 ) -> Response:
     """Máscara del objeto tocado (PNG blanco=objeto), coords en píxeles de la
     imagen original subida con POST /generation/init-image."""
-    from app.api.routes import _resolve_init_image
-    from app.config import get_settings
-
-    settings = get_settings()
-    image_path = _resolve_init_image(settings, payload.image_token)
-    if image_path is None:
-        raise HTTPException(status_code=400, detail="imageToken is required")
+    image_path, device = _resolve_editor_image_and_device(
+        payload.image_token, payload.device
+    )
     # MobileSAM es chico y en GPU compite por la VRAM con el job de generación en curso.
-    device = payload.device or "cpu"
-    if device != "cpu" and not device.startswith("dml:"):
-        raise HTTPException(status_code=400, detail=f"Unsupported device: {device!r}")
     try:
         if payload.box is not None:
             png = await segmenter.segment_box(image_path, tuple(payload.box), device)

@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 
 from app.services.person_detector import PersonBox
-from app.services.person_roles import anchor_point, classify_roles, face_box
+from app.services.person_roles import anchor_point, classify_roles, face_box, role_scores
 
 
 def scene_with(
@@ -75,3 +75,20 @@ def test_face_box_selects_largest_face_in_upper_half_and_returns_python_ints(
     assert result == (70, 35, 100, 75)
     assert cascade.region_shape == (80, 120)
     assert all(type(value) is int for value in result)
+
+
+def test_role_scores_uses_compact_laplacian_and_float64_variance(monkeypatch):
+    original_laplacian = cv2.Laplacian
+    dtypes = []
+
+    def laplacian(gray, dtype):
+        dtypes.append(dtype)
+        return original_laplacian(gray, dtype)
+
+    monkeypatch.setattr(cv2, "Laplacian", laplacian)
+    rgb = np.random.default_rng(42).integers(0, 256, (80, 100, 3), dtype=np.uint8)
+
+    scores = role_scores(rgb, [PersonBox((10, 10, 50, 70), 0.9)])
+
+    assert len(scores) == 1
+    assert dtypes == [cv2.CV_16S]
