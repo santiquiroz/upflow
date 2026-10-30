@@ -387,6 +387,7 @@ async def lifespan(app: FastAPI):
     app.state.update_service = update_service
     app.state.hf_client = hf_client
     app.state.model_installer = model_installer
+    app.state.lama_eraser = lama_eraser
     from app.services.editor_segmenter import EditorSegmenter
 
     from app.services.vulkan_installer import VulkanModelInstaller

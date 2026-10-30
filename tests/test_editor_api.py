@@ -561,3 +561,115 @@ async def test_insert_object_replace_mode_rejects_an_empty_target_mask() -> None
             request=None,
         )
     assert excinfo.value.status_code == 400
+
+
+class FakeLama:
+    def __init__(self, available: bool = True) -> None:
+        self._available = available
+        self.calls: list[tuple] = []
+
+    def available(self) -> bool:
+        return self._available
+
+    def fill_group(self, canvas, group_mask, protect):
+        self.calls.append((group_mask.copy(), protect.copy()))
+        result = canvas.copy()
+        result[group_mask > 0] = (240, 20, 30)
+        return result
+
+
+def _heal_request_context(lama) -> object:
+    from types import SimpleNamespace
+
+    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(lama_eraser=lama)))
+
+
+@pytest.mark.asyncio
+async def test_heal_returns_new_token_with_filled_region() -> None:
+    from app.api.editor_routes import heal
+    from app.api.routes import _resolve_init_image
+    from app.schemas import EditorHealRequest
+
+    image = Image.new("RGB", (16, 12), (1, 2, 3))
+    mask = Image.new("L", (16, 12), 0)
+    mask.paste(255, (4, 3, 8, 7))
+    image_token = await _upload_png(image, "base.photo.png")
+    mask_token = await _upload_png(mask, "brush.png")
+    lama = FakeLama()
+
+    response = await heal(
+        EditorHealRequest(imageToken=image_token, maskToken=mask_token),
+        request=_heal_request_context(lama),
+    )
+
+    assert response.init_image_token != image_token
+    assert response.original_filename == "base.photo.png"
+    output_path = _resolve_init_image(get_settings(), response.init_image_token)
+    assert output_path is not None
+    assert output_path.name.endswith("-base.photo.png")
+    with Image.open(output_path) as output:
+        result = output.convert("RGB")
+    assert result.size == image.size
+    assert result.getpixel((5, 4)) == (240, 20, 30)
+    assert result.getpixel((1, 1)) == (1, 2, 3)
+    group_mask, protect = lama.calls[0]
+    assert group_mask.dtype == np.uint8
+    assert protect.dtype == np.bool_
+    assert not protect.any()
+
+
+@pytest.mark.asyncio
+async def test_heal_rejects_large_stroke() -> None:
+    from app.api.editor_routes import heal
+    from app.schemas import EditorHealRequest
+
+    image_token = await _upload_png(Image.new("RGB", (720, 8), (1, 2, 3)), "wide.png")
+    mask = Image.new("L", (720, 8), 0)
+    mask.paste(255, (10, 1, 711, 7))
+    mask_token = await _upload_png(mask, "brush.png")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await heal(
+            EditorHealRequest(imageToken=image_token, maskToken=mask_token),
+            request=_heal_request_context(FakeLama()),
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "La zona es grande: usá Quitar."
+
+
+@pytest.mark.asyncio
+async def test_heal_rejects_empty_mask() -> None:
+    from app.api.editor_routes import heal
+    from app.schemas import EditorHealRequest
+
+    image_token = await _upload_png(Image.new("RGB", (16, 12), (1, 2, 3)), "base.png")
+    mask_token = await _upload_png(Image.new("L", (16, 12), 0), "empty-mask.png")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await heal(
+            EditorHealRequest(imageToken=image_token, maskToken=mask_token),
+            request=_heal_request_context(FakeLama()),
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "La máscara está vacía."
+
+
+@pytest.mark.asyncio
+async def test_heal_without_lama_is_503() -> None:
+    from app.api.editor_routes import heal
+    from app.schemas import EditorHealRequest
+
+    image_token = await _upload_png(Image.new("RGB", (16, 12), (1, 2, 3)), "base.png")
+    mask = Image.new("L", (16, 12), 0)
+    mask.paste(255, (4, 3, 8, 7))
+    mask_token = await _upload_png(mask, "brush.png")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await heal(
+            EditorHealRequest(imageToken=image_token, maskToken=mask_token),
+            request=_heal_request_context(FakeLama(available=False)),
+        )
+
+    assert exc_info.value.status_code == 503

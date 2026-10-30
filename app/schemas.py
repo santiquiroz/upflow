@@ -1510,6 +1510,13 @@ class EditorSegmentRequest(BaseModel):
         return self
 
 
+class EditorHealRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    image_token: str = Field(alias="imageToken")
+    mask_token: str = Field(alias="maskToken")
+
+
 class EditorPeopleRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 

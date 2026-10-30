@@ -7,21 +7,26 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from app.api.auth_deps import require
 from app.schemas import (
+    EditorHealRequest,
     EditorPeopleRequest,
     EditorPeopleResponse,
     EditorSegmentRequest,
+    InitImageResponse,
     InsertObjectRequest,
     InsertObjectResponse,
 )
 from app.services.auth.permissions import Permission
+from app.services.engines.lama_eraser import LamaEraser
 from app.services.editor_people import EditorPeople
 from app.services.editor_segmenter import EditorSegmenter, SegmenterUnavailableError
+from app.services.missing_pack import missing_pack_message
 from app.services.person_detector import PersonDetectorUnavailableError
 from app.services.engines.onnx_common import readable_error_text
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/editor", tags=["editor"])
+HEAL_MAX_SIDE = 700
 
 
 def get_editor_segmenter(request: Request) -> EditorSegmenter:
@@ -30,6 +35,87 @@ def get_editor_segmenter(request: Request) -> EditorSegmenter:
 
 def get_editor_people(request: Request) -> EditorPeople:
     return request.app.state.editor_people
+
+
+def _heal_mask_bbox(mask) -> tuple[int, int, int, int]:
+    import numpy as np
+
+    ys, xs = np.where(mask > 0)
+    if not xs.size:
+        raise HTTPException(status_code=400, detail="La máscara está vacía.")
+    left, top = int(xs.min()), int(ys.min())
+    right, bottom = int(xs.max()) + 1, int(ys.max()) + 1
+    if max(right - left, bottom - top) > HEAL_MAX_SIDE:
+        raise HTTPException(status_code=400, detail="La zona es grande: usá Quitar.")
+    return left, top, right, bottom
+
+
+def _prepare_heal_arrays(image_path: Path, mask_path: Path):
+    import numpy as np
+    from PIL import Image
+
+    with Image.open(image_path) as source:
+        base = source.convert("RGB")
+        canvas = np.asarray(base, dtype=np.uint8).copy()
+    with Image.open(mask_path) as source_mask:
+        gray_mask = source_mask.convert("L")
+        if gray_mask.size != base.size:
+            gray_mask = gray_mask.resize(base.size, Image.Resampling.NEAREST)
+        mask = np.where(np.asarray(gray_mask) > 127, 255, 0).astype(np.uint8)
+    _heal_mask_bbox(mask)
+    return canvas, mask
+
+
+def _base_original_filename(image_path: Path, token: str) -> tuple[str, str]:
+    original_filename = image_path.name.removeprefix(f"{token}-")
+    return original_filename, Path(original_filename).stem
+
+
+@router.post(
+    "/heal",
+    response_model=InitImageResponse,
+    status_code=201,
+    dependencies=[Depends(require(Permission.jobs_create))],
+)
+async def heal(payload: EditorHealRequest, request: Request) -> InitImageResponse:
+    import asyncio
+    from uuid import uuid4
+
+    from PIL import Image
+
+    from app.api.routes import _resolve_init_image
+    from app.config import get_settings
+
+    settings = get_settings()
+    image_path = _resolve_init_image(settings, payload.image_token)
+    mask_path = _resolve_init_image(settings, payload.mask_token)
+    if image_path is None or mask_path is None:
+        raise HTTPException(status_code=400, detail="Faltan tokens de imagen")
+
+    lama: LamaEraser = request.app.state.lama_eraser
+    if not lama.available():
+        raise HTTPException(status_code=503, detail=missing_pack_message("lama"))
+
+    canvas, group_mask = _prepare_heal_arrays(image_path, mask_path)
+    import numpy as np
+
+    healed = await asyncio.to_thread(
+        lama.fill_group,
+        canvas,
+        group_mask,
+        np.zeros(group_mask.shape, dtype=bool),
+    )
+    original_filename, stem = _base_original_filename(image_path, payload.image_token)
+    token = uuid4().hex
+    destination = settings.uploads_path / f"{token}-{stem}.png"
+    Image.fromarray(healed).save(destination, format="PNG")
+
+    return InitImageResponse(
+        init_image_token=token,
+        original_filename=original_filename,
+        width=healed.shape[1],
+        height=healed.shape[0],
+    )
 
 
 def _resolve_editor_image_and_device(
