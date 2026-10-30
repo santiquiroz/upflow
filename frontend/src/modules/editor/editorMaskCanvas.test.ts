@@ -4,9 +4,12 @@ import {
   canvasHasPixels,
   exportMaskBlob,
   exportProtectMaskBlob,
+  flattenHistory,
   hasProtection,
+  maskHasContent,
   renderMaskOverlays,
   replayMasks,
+  withoutEdits,
   type HistoryEntry,
 } from "./editorMaskCanvas";
 
@@ -244,6 +247,73 @@ describe("replayMasks", () => {
     expect(edit.context.drawImage.mock.lastCall?.[0]).toBe(subject);
     expect(operations).toEqual(["source-over", "destination-out"]);
     expect(edit.context.globalCompositeOperation).toBe("source-over");
+  });
+});
+
+describe("batches", () => {
+  it("replays a batch's segments and protects in order", () => {
+    const edit = maskCanvas();
+    const protect = maskCanvas();
+    const first = maskCanvas().canvas;
+    const second = maskCanvas().canvas;
+    const kept = maskCanvas().canvas;
+
+    replayMasks(edit.canvas, protect.canvas, [
+      { kind: "batch", personIds: [1, 2], entries: [
+        { kind: "segment", mask: first, point: { x: 0, y: 0 } },
+        { kind: "protect", mask: kept, point: { x: 1, y: 0 } },
+        { kind: "segment", mask: second, point: { x: 1, y: 0 } },
+      ] },
+    ], null);
+
+    expect(edit.context.drawImage).toHaveBeenNthCalledWith(1, first, 0, 0);
+    expect(edit.context.drawImage).toHaveBeenNthCalledWith(2, second, 0, 0);
+    expect(protect.context.drawImage).toHaveBeenNthCalledWith(1, kept, 0, 0);
+    expect(protect.context.drawImage).toHaveBeenLastCalledWith(edit.canvas, 0, 0);
+  });
+
+  it("sees content and protection inside batches", () => {
+    const batch: HistoryEntry = {
+      kind: "batch",
+      personIds: [3],
+      entries: [{ kind: "segment" }, { kind: "protect" }],
+    };
+
+    expect(maskHasContent([batch])).toBe(true);
+    expect(hasProtection([batch])).toBe(true);
+    expect(maskHasContent([{ kind: "batch", personIds: [], entries: [{ kind: "protect" }] }])).toBe(false);
+  });
+
+  it("lets a clear after a batch clear the batch's protects", () => {
+    const edit = maskCanvas();
+    const protect = maskCanvas();
+    const history: HistoryEntry[] = [
+      { kind: "batch", personIds: [1], entries: [
+        { kind: "segment", mask: maskCanvas().canvas },
+        { kind: "protect", mask: maskCanvas().canvas },
+      ] },
+      { kind: "clearProtection" },
+    ];
+
+    replayMasks(edit.canvas, protect.canvas, history, null);
+
+    expect(hasProtection(history)).toBe(false);
+    expect(protect.context.drawImage).toHaveBeenCalledTimes(1);
+    expect(protect.context.clearRect).toHaveBeenCalledTimes(2);
+  });
+
+  it("flattens nested entries in order", () => {
+    const stroke: HistoryEntry = { kind: "segment" };
+    const kept: HistoryEntry = { kind: "protect" };
+    expect(flattenHistory([stroke, { kind: "batch", personIds: [], entries: [kept] }])).toEqual([stroke, kept]);
+  });
+
+  it("drops a batch's segments but keeps its protects when the erase is cleared", () => {
+    const kept: HistoryEntry = { kind: "protect" };
+    expect(withoutEdits([
+      { kind: "segment" },
+      { kind: "batch", personIds: [1], entries: [{ kind: "segment" }, kept] },
+    ])).toEqual([kept]);
   });
 });
 

@@ -2,10 +2,20 @@ import { drawStrokes, strokeAddsEditableArea, type BrushStroke } from "./maskCan
 import { maskHasPixels, maskToOpaquePixels, subtractProtectedPixels } from "./protectMask";
 
 export interface HistoryEntry {
-  kind: "stroke" | "segment" | "protect" | "clearProtection";
+  kind: "stroke" | "segment" | "protect" | "clearProtection" | "batch";
   stroke?: BrushStroke;
   mask?: HTMLCanvasElement;
   point?: { x: number; y: number };
+  entries?: HistoryEntry[];
+  personIds?: number[];
+}
+
+export function flattenHistory(history: HistoryEntry[]): HistoryEntry[] {
+  return history.flatMap((entry) => entry.kind === "batch" ? flattenHistory(entry.entries ?? []) : [entry]);
+}
+
+export function withoutEdits(history: HistoryEntry[]): HistoryEntry[] {
+  return flattenHistory(history).filter((entry) => entry.kind === "protect" || entry.kind === "clearProtection");
 }
 
 export function createMaskCanvas(width: number, height: number): HTMLCanvasElement {
@@ -59,7 +69,8 @@ export function replayMasks(
     ctx.globalCompositeOperation = "source-over";
     ctx.clearRect(0, 0, edit.width, edit.height);
   }
-  for (const entry of history) {
+  const flat = flattenHistory(history);
+  for (const entry of flat) {
     if (entry.kind === "clearProtection") {
       protectCtx.clearRect(0, 0, protect.width, protect.height);
       continue;
@@ -74,7 +85,7 @@ export function replayMasks(
     }
     if (entry.stroke) drawStrokes(editCtx, [entry.stroke], "#ffffff");
   }
-  resolveOverlap(edit, editCtx, protectCtx, activeProtections(history));
+  resolveOverlap(edit, editCtx, protectCtx, activeProtections(flat));
   if (live) drawStrokes(editCtx, [live], "#ffffff");
 }
 
@@ -111,12 +122,13 @@ function resolveOverlap(
 }
 
 export function maskHasContent(history: HistoryEntry[]): boolean {
-  return history.some((entry) => entry.kind === "segment" || strokeAddsEditableArea(entry.stroke));
+  return flattenHistory(history).some((entry) => entry.kind === "segment" || strokeAddsEditableArea(entry.stroke));
 }
 
 export function hasProtection(history: HistoryEntry[]): boolean {
-  const lastClear = history.map((entry) => entry.kind).lastIndexOf("clearProtection");
-  return history.slice(lastClear + 1).some((entry) => entry.kind === "protect");
+  const flat = flattenHistory(history);
+  const lastClear = flat.map((entry) => entry.kind).lastIndexOf("clearProtection");
+  return flat.slice(lastClear + 1).some((entry) => entry.kind === "protect");
 }
 
 export function canvasHasPixels(canvas: HTMLCanvasElement): boolean {

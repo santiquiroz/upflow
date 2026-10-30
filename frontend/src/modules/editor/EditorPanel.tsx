@@ -21,8 +21,12 @@ import { PeopleOverlay } from "./PeopleOverlay";
 import { PeoplePanel } from "./PeoplePanel";
 import {
   canvasHasPixels, createMaskCanvas, exportMaskBlob, exportProtectMaskBlob, hasProtection, maskHasContent,
-  pngBlobToAlphaCanvas, renderMaskOverlays, replayMasks, type HistoryEntry,
+  pngBlobToAlphaCanvas, renderMaskOverlays, replayMasks, withoutEdits, type HistoryEntry,
 } from "./editorMaskCanvas";
+import { PeopleSummary } from "./PeopleSummary";
+import { personNumbers } from "./peopleState";
+import { lastPeopleBatch } from "./silhouettes";
+import { useSilhouetteBatch } from "./useSilhouetteBatch";
 import type { EditMode } from "./InpaintModelSelect";
 import { useEditorHandoff } from "./useEditorHandoff";
 import {
@@ -117,6 +121,13 @@ export function EditorPanel() {
   const capabilitiesLoaded = Boolean(capabilitiesQuery.data);
   const peopleEnabled = editorCapabilities.data?.people === true;
   const peopleSelection = usePeopleSelection(baseInfo, peopleEnabled);
+  const silhouetteBatch = useSilhouetteBatch({
+    baseInfo,
+    selection: peopleSelection,
+    sequenceRef: uploadSequence,
+    onDone: handlePeopleBatch,
+  });
+  const peopleBatch = lastPeopleBatch(history);
   useEffect(() => {
     if (!capabilitiesQuery.data) return;
     setModelId((current) => current ?? defaultEraseModel(models));
@@ -418,6 +429,17 @@ export function EditorPanel() {
     }
   }
 
+  function handlePeopleBatch(entry: HistoryEntry) {
+    if (entry.entries?.length) setHistory((previous) => [...previous, entry]);
+    setTool("brush");
+  }
+
+  function handleBackToChoosing() {
+    setHistory((previous) => previous.filter((entry) => entry !== peopleBatch));
+    silhouetteBatch.clearFailed();
+    setTool("people");
+  }
+
   async function handleGenerate() {
     const canvas = editMaskRef.current;
     if (!canvas || !baseInfo || !modelId || busy || preparingJobRef.current || segmentPendingRef.current) {
@@ -548,9 +570,7 @@ export function EditorPanel() {
             canResetZoom={isZoomed(viewport)}
             onUndo={handleUndo}
             canUndo={history.length > 0}
-            onClear={() => setHistory((previous) =>
-              previous.filter((entry) => entry.kind === "protect" || entry.kind === "clearProtection")
-            )}
+            onClear={() => setHistory(withoutEdits)}
             canClear={maskHasContent(history)}
             onClearProtection={() =>
               setHistory((previous) => [...previous, { kind: "clearProtection" }])
@@ -623,6 +643,14 @@ export function EditorPanel() {
 
           <EditorSidePanel view={panelView}>
             {uploadError && <p className="mb-3 text-sm text-danger">{uploadError}</p>}
+            {panelView === "action" && (
+              <PeopleSummary
+                personIds={peopleBatch?.personIds ?? []}
+                numbers={personNumbers(peopleSelection.people)}
+                failed={silhouetteBatch.failed}
+                onBack={handleBackToChoosing}
+              />
+            )}
             {panelView === "people" && (
               <PeoplePanel
                 people={peopleSelection.people}
@@ -633,7 +661,8 @@ export function EditorPanel() {
                 onGroup={peopleSelection.setGroupChoice}
                 protectKept={peopleSelection.protectKept}
                 onProtectKeptChange={peopleSelection.setProtectKept}
-                onAccept={() => setTool("brush")}
+                onAccept={() => void silhouetteBatch.accept()}
+                progress={silhouetteBatch.progress}
                 onRetry={() => void peopleSelection.refetch()}
                 status={peopleSelection.status}
                 imageUrl={baseUrl ?? ""}

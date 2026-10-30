@@ -11,6 +11,7 @@ import {
 import { useTranslation } from "../../i18n/LocaleProvider";
 import type { EditorPerson } from "../../services/editor";
 import { countRemove, groupPeople, personNumbers, type Choice } from "./peopleState";
+import type { SilhouetteProgress } from "./useSilhouetteBatch";
 
 type PeopleStatus = "loading" | "ready" | "empty" | "error" | "unavailable";
 
@@ -31,6 +32,7 @@ interface PeoplePanelProps {
   imageHeight: number;
   unavailableReason?: string;
   error?: string;
+  progress?: SilhouetteProgress | null;
 }
 
 export function thumbnailStyle(
@@ -259,7 +261,7 @@ function PersonGroup({
 export function PeoplePanel(props: PeoplePanelProps) {
   const {
     people, choices, hoveredId, onHover, onToggle, onGroup, protectKept,
-    onProtectKeptChange, onAccept, onRetry, status, imageUrl, unavailableReason, error,
+    onProtectKeptChange, onAccept, onRetry, status, imageUrl, unavailableReason, error, progress,
   } = props;
   const { t } = useTranslation();
   const { front, back } = useMemo(() => groupPeople(people), [people]);
@@ -369,11 +371,16 @@ export function PeoplePanel(props: PeoplePanelProps) {
           </label>
           <button
             type="button"
-            disabled={removeCount === 0}
+            disabled={removeCount === 0 || Boolean(progress)}
             onClick={onAccept}
             className="mt-3 min-h-10 rounded-lg bg-accent px-3 text-sm font-semibold text-bg disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {t("editor.people.accept", { count: removeCount })}
+            {progress
+              ? t("editor.people.segmentingProgress", {
+                current: Math.min(progress.done + 1, progress.total),
+                total: progress.total,
+              })
+              : t("editor.people.accept", { count: removeCount })}
           </button>
         </>
       )}

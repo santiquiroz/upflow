@@ -30,6 +30,7 @@ vi.mock("../../services/editor", () => ({
   fetchEditorCapabilities: vi.fn(),
   detectPeople: vi.fn(),
   segmentEditorObject: vi.fn(),
+  segmentEditorBox: vi.fn(),
 }));
 
 const CAPABILITIES: GenerationCapabilities = {
@@ -102,6 +103,7 @@ afterEach(() => {
   vi.mocked(editorService.fetchEditorCapabilities).mockReset();
   vi.mocked(editorService.detectPeople).mockReset();
   vi.mocked(editorService.segmentEditorObject).mockReset();
+  vi.mocked(editorService.segmentEditorBox).mockReset();
 });
 
 function renderPanel() {
@@ -163,6 +165,22 @@ function enableMaskPixels() {
   });
 }
 
+async function openPeopleWithTwoToRemove() {
+  vi.mocked(editorService.fetchEditorCapabilities).mockResolvedValue({ tapSelect: true, people: true });
+  const people: editorService.EditorPerson[] = [
+    { id: 1, box: [10, 10, 120, 400], score: 0.9, role: "subject", face: [30, 30, 60, 70], anchor: [60, 200] },
+    { id: 2, box: [200, 30, 300, 420], score: 0.8, role: "background", face: null, anchor: [250, 220] },
+    { id: 3, box: [320, 30, 400, 420], score: 0.7, role: "background", face: null, anchor: [360, 220] },
+  ];
+  vi.mocked(editorService.detectPeople).mockResolvedValue(people);
+  enableMaskPixels();
+  renderPanel();
+  await loadBaseImage();
+  fireEvent.click(await screen.findByRole("radio", { name: "People" }));
+  await screen.findByRole("button", { name: "Add 2 silhouettes" });
+  return { boxes: people.map((person) => person.box) };
+}
+
 async function protectObject() {
   fireEvent.click(await screen.findByRole("radio", { name: en["editor.tool.protect"] }));
   fireEvent.click(screen.getByTestId("editor-mask-canvas"), { clientX: 5, clientY: 5 });
@@ -190,9 +208,72 @@ describe("EditorPanel", () => {
     expect(editorService.segmentEditorObject).not.toHaveBeenCalled();
 
     fireEvent.click(within(row).getByRole("radio", { name: /Remove/ }));
+    enableMaskPixels();
+    vi.mocked(editorService.segmentEditorBox).mockResolvedValue(new Blob(["png"], { type: "image/png" }));
     fireEvent.click(screen.getByRole("button", { name: "Add 1 silhouettes" }));
-    expect(screen.getByRole("radio", { name: "Brush" })).toHaveAttribute("aria-checked", "true");
+    await waitFor(() => expect(screen.getByRole("radio", { name: "Brush" })).toHaveAttribute("aria-checked", "true"));
     expect(screen.getByLabelText("Editor settings")).toHaveAttribute("data-view", "action");
+  });
+
+  it("adds the chosen people as one batch, switches to Brush and shows the summary", async () => {
+    const choices = await openPeopleWithTwoToRemove();
+    vi.mocked(editorService.segmentEditorBox).mockResolvedValue(new Blob(["png"], { type: "image/png" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Add 2 silhouettes" }));
+
+    expect(await screen.findByText("2 silhouettes in the erase")).toBeInTheDocument();
+    expect(editorService.segmentEditorBox).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(editorService.segmentEditorBox).mock.calls.map(([, box]) => box)).toEqual(choices.boxes);
+    expect(screen.getByRole("radio", { name: "Brush" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByText("Person 2")).toBeInTheDocument();
+    expect(screen.getByText("Person 3")).toBeInTheDocument();
+    expect(screen.getByText(en["editor.people.polishHint"])).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: en["editor.clear"] })).toBeEnabled();
+  });
+
+  it("shows progress while segmenting and a notice for people it could not cut out", async () => {
+    await openPeopleWithTwoToRemove();
+    let finishLast: (blob: Blob) => void = () => undefined;
+    vi.mocked(editorService.segmentEditorBox)
+      .mockResolvedValueOnce(new Blob(["png"], { type: "image/png" }))
+      .mockRejectedValueOnce(new Error("timeout"))
+      .mockReturnValueOnce(new Promise((resolve) => { finishLast = resolve; }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Add 2 silhouettes" }));
+
+    expect(await screen.findByRole("button", { name: "Segmenting 3 of 3…" })).toBeDisabled();
+    finishLast(new Blob(["png"], { type: "image/png" }));
+    expect(await screen.findByText("1 silhouettes in the erase")).toBeInTheDocument();
+    expect(screen.getByText("I couldn't cut out 1 people; mark them with the brush.")).toHaveAttribute("aria-live", "polite");
+  });
+
+  it("undoes the whole batch in one step", async () => {
+    await openPeopleWithTwoToRemove();
+    vi.mocked(editorService.segmentEditorBox).mockResolvedValue(new Blob(["png"], { type: "image/png" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add 2 silhouettes" }));
+    await screen.findByText("2 silhouettes in the erase");
+
+    fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+
+    await waitFor(() => expect(screen.queryByText("2 silhouettes in the erase")).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: en["editor.undo"] })).toBeDisabled();
+    expect(screen.getByRole("button", { name: en["editor.clear"] })).toBeDisabled();
+  });
+
+  it("goes back to choosing without the batch and with the same choices", async () => {
+    await openPeopleWithTwoToRemove();
+    vi.mocked(editorService.segmentEditorBox).mockResolvedValue(new Blob(["png"], { type: "image/png" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add 2 silhouettes" }));
+    await screen.findByText("2 silhouettes in the erase");
+
+    fireEvent.click(screen.getByRole("button", { name: en["editor.people.backToChoosing"] }));
+
+    expect(await screen.findByText("People in the photo")).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "People" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("button", { name: en["editor.undo"] })).toBeDisabled();
+    const row = screen.getByRole("listitem", { name: "Person 1" });
+    expect(within(row).getByRole("radio", { name: /Keep/ })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("button", { name: "Add 2 silhouettes" })).toBeEnabled();
   });
 
   it("disables People when detection is unavailable", async () => {
