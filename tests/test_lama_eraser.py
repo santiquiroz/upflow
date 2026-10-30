@@ -363,6 +363,7 @@ async def test_excess_edit_groups_fall_back_to_one_bounded_inference(tmp_path, m
 @pytest.mark.asyncio
 async def test_capabilities_offer_lama_only_when_installed(tmp_path):
     from app.api.routes import generation_capabilities
+    from app.services.engines.auto_eraser import ERASER_AUTO_MODEL_ID
     from app.services.model_registry import ModelRegistry
 
     class FakeDevices:
@@ -381,6 +382,7 @@ async def test_capabilities_offer_lama_only_when_installed(tmp_path):
 
     entries = [entry for entry in offered.models if entry.id == ERASER_LAMA_MODEL_ID]
     assert len(entries) == 1
+    assert offered.models[0].id == ERASER_AUTO_MODEL_ID
     assert entries[0].supports_inpaint is True
     assert entries[0].erase_only is True
     assert "LaMa" in entries[0].name

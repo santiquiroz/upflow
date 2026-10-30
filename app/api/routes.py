@@ -3134,6 +3134,21 @@ async def generation_capabilities(
                 id=ERASER_MODEL_ID, name=ERASER_MODEL_LABEL, supports_inpaint=True, erase_only=True
             ),
         )
+    if settings.lama_available():
+        from app.services.engines.auto_eraser import (
+            ERASER_AUTO_MODEL_ID,
+            ERASER_AUTO_MODEL_LABEL,
+        )
+
+        models.insert(
+            0,
+            GenerationModelSummary(
+                id=ERASER_AUTO_MODEL_ID,
+                name=ERASER_AUTO_MODEL_LABEL,
+                supports_inpaint=True,
+                erase_only=True,
+            ),
+        )
     device_infos = devices_service.list_devices()
     return GenerationCapabilitiesResponse(
         available=True,

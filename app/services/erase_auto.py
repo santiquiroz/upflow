@@ -155,7 +155,8 @@ def _auto_group(
     group_mask: np.ndarray,
     core: np.ndarray,
     lama_fill: LamaFill,
-    sdxl_edit: SdxlEdit,
+    sdxl_edit: SdxlEdit | None,
+    sdxl_edit_factory: Callable[[], SdxlEdit | None] | None,
     small_side: int,
     hybrid_strength: float,
     osor_fill: LamaFill | None,
@@ -174,6 +175,12 @@ def _auto_group(
         )
         current = Image.fromarray(filled)
     else:
+        if sdxl_edit is None and sdxl_edit_factory is not None:
+            sdxl_edit = sdxl_edit_factory()
+        if sdxl_edit is None:
+            filled = lama_fill(np.array(current, copy=True), group_mask, core)
+            current = Image.fromarray(filled)
+            return _composite_subject(current, original, alpha), {"engine": "lama"}
         return _choose_large_fill(
             current, group_mask, core, lama_fill, sdxl_edit, hybrid_strength,
             original, alpha,
@@ -186,18 +193,23 @@ def auto_erase(
     mask: np.ndarray,
     protect: np.ndarray | None,
     lama_fill: LamaFill,
-    sdxl_edit: SdxlEdit,
+    sdxl_edit: SdxlEdit | None,
     small_side: int = 700,
     hybrid_strength: float = 0.5,
     osor_fill: LamaFill | None = None,
     find_faces: FaceFinder = faces_inside,
     find_people: PeopleFinder | None = None,
     engine: EraseEngine | None = None,
+    sdxl_edit_factory: Callable[[], SdxlEdit | None] | None = None,
 ) -> tuple[Image.Image, list[dict]]:
     if engine is not None and engine not in ERASE_ENGINES:
         raise ValueError(f"Motor de borrado desconocido: {engine}")
     if engine in {"osor", "lama+osor"} and osor_fill is None:
         raise ValueError("El motor de borrado OSOR no está disponible.")
+    if engine == "sdxl" and sdxl_edit is None and sdxl_edit_factory is not None:
+        sdxl_edit = sdxl_edit_factory()
+    if engine == "sdxl" and sdxl_edit is None:
+        raise ValueError("No hay ningún modelo SDXL de inpainting instalado.")
     current = base_rgb.convert("RGB")
     original = np.array(current, copy=True)
     protect = (
@@ -223,8 +235,9 @@ def auto_erase(
             )
             if engine
             else _auto_group(
-                current, group_mask, core, lama_fill, sdxl_edit, small_side,
-                hybrid_strength, osor_fill, find_faces, find_people, original, alpha,
+                current, group_mask, core, lama_fill, sdxl_edit, sdxl_edit_factory,
+                small_side, hybrid_strength, osor_fill, find_faces, find_people,
+                original, alpha,
             )
         )
         choice["index"] = index

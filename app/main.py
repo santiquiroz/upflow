@@ -161,8 +161,28 @@ async def lifespan(app: FastAPI):
     device_semaphores = DeviceSemaphores(settings, resource_probes=resource_probes)
     lama_eraser = _build_lama_eraser(settings)
     osor_eraser = _build_osor_eraser(settings)
+    from app.services.person_detector import PersonDetector
+    from app.services.fill_people import make_people_finder
+    from app.services.engines.auto_eraser import AutoEraser
+
+    person_detector = PersonDetector(settings)
     generation_engine = GenerationEngine(
-        settings, gpu_coordinator, lama_eraser=lama_eraser, osor_eraser=osor_eraser
+        settings,
+        gpu_coordinator,
+        lama_eraser=lama_eraser,
+        osor_eraser=osor_eraser,
+        registry=model_registry,
+    )
+    auto_eraser = AutoEraser(
+        settings,
+        lama_eraser,
+        osor_eraser,
+        people_finder_factory=lambda device: make_people_finder(
+            person_detector, device=device
+        ),
+        sdxl_edit_factory=lambda: generation_engine.sdxl_edit_for_installed_inpaint(
+            settings.default_device
+        ),
     )
     generation_job_manager = GenerationJobManager(
         settings,
@@ -176,6 +196,7 @@ async def lifespan(app: FastAPI):
         sdcpp_engine=_build_sdcpp_engine(settings),
         migan_eraser=_build_migan_eraser(settings),
         lama_eraser=lama_eraser,
+        auto_eraser=auto_eraser,
         video_engine=_build_video_engine(settings),
     )
     # Shared across both managers (like device_semaphores) so an auto-routed
@@ -375,9 +396,8 @@ async def lifespan(app: FastAPI):
     app.state.vulkan_installer = vulkan_installer
     app.state.editor_segmenter = EditorSegmenter(settings)
     from app.services.editor_people import EditorPeople
-    from app.services.person_detector import PersonDetector
 
-    app.state.editor_people = EditorPeople(PersonDetector(settings))
+    app.state.editor_people = EditorPeople(person_detector)
     app.state.generation_job_manager = generation_job_manager
     app.state.generation_installer = generation_installer
     app.state.generation_converter = generation_converter

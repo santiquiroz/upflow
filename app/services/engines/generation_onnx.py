@@ -9,7 +9,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
-from typing import Any, Callable, Literal, NoReturn
+from typing import Any, Callable, Literal, NoReturn, TYPE_CHECKING
 
 from app.config import Settings
 from app.erase_engines import EraseEngine
@@ -21,6 +21,9 @@ from app.services.gpu_session_coordinator import GpuSessionCoordinator
 from app.services import ep_registry
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from app.services.erase_auto import SdxlEdit
 
 GENERATION_IMPORT_ERROR_HINT = (
     "Las dependencias de generación no están instaladas (paquete optimum). "
@@ -402,9 +405,11 @@ class GenerationEngine:
         gpu_coordinator: GpuSessionCoordinator,
         lama_eraser: Any = None,
         osor_eraser: Any = None,
+        registry: Any = None,
     ) -> None:
         self.lama_eraser = lama_eraser
         self.osor_eraser = osor_eraser
+        self.registry = registry
         self.settings = settings
         self.gpu_coordinator = gpu_coordinator
         self._pipeline_cache: OrderedDict[tuple[str, str, str], Any] = OrderedDict()
@@ -434,6 +439,69 @@ class GenerationEngine:
         with self._cache_lock:
             pipeline = self._pipeline_cache.get((model_id, device, mode))
         return _pipeline_precision(pipeline) if pipeline is not None else None
+
+    def sdxl_edit_for_installed_inpaint(self, device: str) -> SdxlEdit | None:
+        if self.registry is None:
+            return None
+        from app.services.generation_pipeline_modes import supports_inpaint
+        from app.services.model_registry import ModelKind, ModelStatus
+
+        selected = None
+        for entry in self.registry.list():
+            if (
+                entry.kind != ModelKind.diffusion_onnx
+                or entry.status != ModelStatus.installed
+            ):
+                continue
+            pipeline_dir = self.settings.models_path / (entry.file_path or "")
+            try:
+                declared = _read_declared_class_name(pipeline_dir)
+            except Exception:  # noqa: BLE001 -- un modelo mal formado no invalida otros instalados
+                continue
+            if "XL" in declared and supports_inpaint(declared):
+                selected = (entry.id, pipeline_dir)
+                break
+        if selected is None:
+            return None
+
+        model_id, pipeline_dir = selected
+
+        def edit(base_image, group_mask, strength):
+            from PIL import Image
+
+            from app.services.inpaint_pipeline import MaskedEditSettings, run_masked_edit
+
+            pipeline = self._get_pipeline(model_id, pipeline_dir, device, "inpaint")
+            request = GenerationRequest(
+                prompt="continue the surrounding background naturally",
+                negative_prompt=None,
+                steps=30,
+                guidance=7.5,
+                width=1024,
+                height=1024,
+                seed=0,
+                strength=strength,
+            )
+            run_model = self._masked_edit_model(
+                pipeline, request, lambda *_args: None,
+                self._pipeline_run_lock((model_id, device, "inpaint")),
+            )
+            settings = MaskedEditSettings(
+                dilate_px=0,
+                feather_px=0,
+                padding_px=None,
+                target_side=1024,
+                native_side=_native_side_for(pipeline),
+                seed=0,
+            )
+            return run_masked_edit(
+                base_image,
+                Image.fromarray(group_mask),
+                run_model,
+                settings,
+            )
+
+        return edit
 
     async def run(
         self,
