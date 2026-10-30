@@ -722,6 +722,11 @@ export interface InitImageResponse {
   height: number;
 }
 
+export interface GenerationEraseParams {
+  eraseStrategy?: "auto";
+  protectMaskToken?: string;
+}
+
 export interface GenerationJob {
   id: string;
   status: JobStatus;

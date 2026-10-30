@@ -1060,6 +1060,10 @@ export const en = {
   "editor.tool.eraser": "Eraser",
   "editor.tool.lasso": "Lasso",
   "editor.tool.rect": "Rectangle",
+  "editor.tool.protect": "Protect",
+  "editor.protect.clear": "Clear protection",
+  "editor.protect.hint": "Tap an object to protect it. Green = preserve; red = edit.",
+  "editor.erase.autoHint": "Automatic: LaMa for small areas, the selected SDXL for quality in large areas.",
   "editor.tool.tap": "Tap object",
   "editor.tool.tapUnavailable":
     "Tap-to-select is not installed yet. Install it from Settings, or use the brush.",

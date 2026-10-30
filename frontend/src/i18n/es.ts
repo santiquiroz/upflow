@@ -1055,6 +1055,10 @@ export const es = {
   "editor.tool.eraser": "Goma",
   "editor.tool.lasso": "Lazo",
   "editor.tool.rect": "Rectángulo",
+  "editor.tool.protect": "Proteger",
+  "editor.protect.clear": "Limpiar protección",
+  "editor.protect.hint": "Tocá un objeto para protegerlo. Verde = conservar; rojo = editar.",
+  "editor.erase.autoHint": "Automático: LaMa para lo chico, SDXL elegido por calidad para lo grande.",
   "editor.tool.tap": "Tocar objeto",
   "editor.tool.tapUnavailable":
     "La selección por toque no está instalada todavía. Instalala desde Ajustes, o usá el pincel.",

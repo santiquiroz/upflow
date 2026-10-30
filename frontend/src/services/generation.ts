@@ -3,6 +3,7 @@ import type {
   ConversionStatusResponse,
   CreateInstallResponse,
   GenerationCapabilities,
+  GenerationEraseParams,
   VideoGenerationCapabilities,
   GenerationJob,
   InitImageResponse,
@@ -12,7 +13,7 @@ import type {
   PreflightResponse,
 } from "../lib/apiTypes";
 
-export interface CreateGenerationJobParams {
+export interface CreateGenerationJobParams extends GenerationEraseParams {
   prompt: string;
   negativePrompt: string | null;
   modelId: string;
@@ -54,6 +55,8 @@ function buildRequestBody(params: CreateGenerationJobParams): Record<string, unk
     // Solo cuando está pedido: el campo ausente significa "el img2img normal".
     if (params.tiledDetail) body.tiledDetail = true;
     if (params.maskImageToken) body.maskImageToken = params.maskImageToken;
+    if (params.eraseStrategy) body.eraseStrategy = params.eraseStrategy;
+    if (params.protectMaskToken) body.protectMaskToken = params.protectMaskToken;
   }
   if (params.frames !== undefined) body.frames = params.frames;
   if (params.fps !== undefined) body.fps = params.fps;

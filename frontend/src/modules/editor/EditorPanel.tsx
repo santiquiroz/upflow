@@ -9,6 +9,7 @@ import {
   Maximize,
   MousePointerClick,
   RotateCcw,
+  Shield,
   Trash2,
   X,
   ZoomIn,
@@ -23,16 +24,19 @@ import { useTranslation } from "../../i18n/LocaleProvider";
 import type { DeviceInfoResponse, GenerationModelSummary, InitImageResponse } from "../../lib/apiTypes";
 import { fetchEditorCapabilities, segmentEditorObject } from "../../services/editor";
 import { uploadGenerationInitImage, type CreateGenerationJobParams } from "../../services/generation";
+import { buildEditorJobParams, shouldUseAutoErase } from "./eraseJobParams";
+import {
+  canvasHasPixels, createMaskCanvas, exportMaskBlob, exportProtectMaskBlob, hasProtection, maskHasContent,
+  pngBlobToAlphaCanvas, renderMaskOverlays, replayMasks, type HistoryEntry,
+} from "./editorMaskCanvas";
 import { InsertObjectPanel } from "./InsertObjectPanel";
 import { useEditorHandoff } from "./useEditorHandoff";
 import {
   appendPoint,
-  drawStrokes,
   fitGenerationSize,
   isCommittableStroke,
   rectanglePoints,
   startStroke,
-  strokeAddsEditableArea,
   toImagePoint,
   type BrushStroke,
 } from "./maskCanvas";
@@ -59,99 +63,8 @@ const REPLACE_NEGATIVE_PROMPT =
 const DEFAULT_STEPS = 30;
 const DEFAULT_GUIDANCE = 7.0;
 
-type Tool = "brush" | "eraser" | "lasso" | "rect" | "tap" | "pan";
+type Tool = "brush" | "eraser" | "lasso" | "rect" | "tap" | "protect" | "pan";
 type EditMode = "erase" | "replace";
-
-interface HistoryEntry {
-  kind: "stroke" | "segment";
-  stroke?: BrushStroke;
-  mask?: HTMLCanvasElement;
-}
-
-function pngBlobToAlphaCanvas(blob: Blob, width: number, height: number): Promise<HTMLCanvasElement> {
-  // La máscara llega como PNG blanco-sobre-negro; para superponerla al canvas
-  // hay que volverla blanco-sobre-transparente (alpha = luminancia).
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(blob);
-    const image = new Image();
-    image.onload = () => {
-      URL.revokeObjectURL(url);
-      const canvas = document.createElement("canvas");
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) {
-        reject(new Error("canvas 2d context unavailable"));
-        return;
-      }
-      ctx.drawImage(image, 0, 0, width, height);
-      const data = ctx.getImageData(0, 0, width, height);
-      for (let i = 0; i < data.data.length; i += 4) {
-        data.data[i + 3] = data.data[i];
-        data.data[i] = 255;
-        data.data[i + 1] = 255;
-        data.data[i + 2] = 255;
-      }
-      ctx.putImageData(data, 0, 0);
-      resolve(canvas);
-    };
-    image.onerror = () => {
-      URL.revokeObjectURL(url);
-      reject(new Error("could not decode mask"));
-    };
-    image.src = url;
-  });
-}
-
-function replayHistory(canvas: HTMLCanvasElement, history: HistoryEntry[], live: BrushStroke | null): void {
-  const ctx = canvas.getContext("2d");
-  if (!ctx) {
-    return;
-  }
-  ctx.globalCompositeOperation = "source-over";
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  for (const entry of history) {
-    if (entry.kind === "segment" && entry.mask) {
-      ctx.globalCompositeOperation = "source-over";
-      ctx.drawImage(entry.mask, 0, 0);
-    } else if (entry.stroke) {
-      drawStrokes(ctx, [entry.stroke], "#ffffff");
-    }
-  }
-  if (live) {
-    drawStrokes(ctx, [live], "#ffffff");
-  }
-}
-
-function maskHasContent(history: HistoryEntry[]): boolean {
-  return history.some(
-    (entry) => entry.kind === "segment" || strokeAddsEditableArea(entry.stroke),
-  );
-}
-
-function exportMaskBlob(maskCanvas: HTMLCanvasElement): Promise<Blob> {
-  // Contrato del backend: escala de grises, blanco=editar, NEGRO=conservar —
-  // el canvas de trabajo es blanco-sobre-transparente, acá se aplasta a negro.
-  const exportCanvas = document.createElement("canvas");
-  exportCanvas.width = maskCanvas.width;
-  exportCanvas.height = maskCanvas.height;
-  const ctx = exportCanvas.getContext("2d");
-  if (!ctx) {
-    return Promise.reject(new Error("canvas 2d context unavailable"));
-  }
-  ctx.fillStyle = "#000000";
-  ctx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
-  ctx.drawImage(maskCanvas, 0, 0);
-  return new Promise((resolve, reject) => {
-    exportCanvas.toBlob((blob) => {
-      if (blob) {
-        resolve(blob);
-      } else {
-        reject(new Error("could not export the mask"));
-      }
-    }, "image/png");
-  });
-}
 
 function InpaintModelSelect({
   models,
@@ -159,12 +72,14 @@ function InpaintModelSelect({
   onChange,
   label,
   mode,
+  hint,
 }: {
   models: GenerationModelSummary[];
   value: string | null;
   onChange: (id: string | null) => void;
   label: string;
   mode: EditMode;
+  hint?: string;
 }) {
   // Los motores de solo-borrado rellenan continuando el entorno: no saben poner
   // algo concreto, así que en Reemplazar no se ofrecen.
@@ -193,6 +108,7 @@ function InpaintModelSelect({
           </option>
         ))}
       </select>
+      {hint && <span className="text-xs text-text-faint">{hint}</span>}
     </label>
   );
 }
@@ -205,6 +121,7 @@ export function EditorPanel() {
 
   const [baseUrl, setBaseUrl] = useState<string | null>(null);
   const [baseInfo, setBaseInfo] = useState<InitImageResponse | null>(null);
+  const [baseUploading, setBaseUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [tool, setTool] = useState<Tool>("brush");
@@ -223,11 +140,18 @@ export function EditorPanel() {
   const [seedText, setSeedText] = useState("");
   const [strength, setStrength] = useState(1);
   const [segmenting, setSegmenting] = useState(false);
+  const [preparingJob, setPreparingJob] = useState(false);
   const [segmentError, setSegmentError] = useState<string | null>(null);
 
   const [viewport, setViewport] = useState<Viewport>(IDENTITY_VIEWPORT);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const protectionOverlayRef = useRef<HTMLCanvasElement | null>(null);
+  const editMaskRef = useRef<HTMLCanvasElement | null>(null);
+  const protectMaskRef = useRef<HTMLCanvasElement | null>(null);
+  const segmentSequence = useRef(0);
+  const segmentPendingRef = useRef(false);
+  const preparingJobRef = useRef(false);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const liveStrokeRef = useRef<BrushStroke | null>(null);
   const panOriginRef = useRef<{ x: number; y: number } | null>(null);
@@ -247,14 +171,27 @@ export function EditorPanel() {
   // Un motor de solo-borrado no sabe poner algo concreto: si el usuario pasa a
   // Reemplazar hay que soltarlo, o el job saldria con un modelo que no aplica.
   const isEraseOnlyModel = selectedModel?.eraseOnly === true;
+  const autoErase = shouldUseAutoErase(mode, modelId, models);
   const tapAvailable = editorCapabilities.data?.tapSelect ?? false;
-  const busy = phase === "uploading" || phase === "queued" || phase === "running";
+  const busy = baseUploading || preparingJob || phase === "uploading" || phase === "queued" || phase === "running";
+
+  function redrawMasks() {
+    const canvas = canvasRef.current;
+    const protectionOverlay = protectionOverlayRef.current;
+    if (!canvas || !protectionOverlay || !baseInfo) return;
+    const { width, height } = baseInfo;
+    if (editMaskRef.current?.width !== width || editMaskRef.current?.height !== height) {
+      editMaskRef.current = createMaskCanvas(width, height);
+      protectMaskRef.current = createMaskCanvas(width, height);
+    }
+    const edit = editMaskRef.current!;
+    const protect = protectMaskRef.current!;
+    replayMasks(edit, protect, history, liveStrokeRef.current);
+    renderMaskOverlays(canvas, protectionOverlay, edit, protect);
+  }
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (canvas) {
-      replayHistory(canvas, history, liveStrokeRef.current);
-    }
+    redrawMasks();
   }, [history, baseInfo]);
 
   useEffect(() => {
@@ -314,6 +251,12 @@ export function EditorPanel() {
   const handleBaseSelected = useCallback(
     async (file: File) => {
       const sequence = ++uploadSequence.current;
+      setBaseUploading(true);
+      segmentSequence.current += 1;
+      segmentPendingRef.current = false;
+      setSegmenting(false);
+      liveStrokeRef.current = null;
+      rectOriginRef.current = null;
       setUploadError(null);
       setHistory([]);
       setSegmentError(null);
@@ -335,6 +278,8 @@ export function EditorPanel() {
         if (sequence === uploadSequence.current) {
           setUploadError(error instanceof Error ? error.message : String(error));
         }
+      } finally {
+        if (sequence === uploadSequence.current) setBaseUploading(false);
       }
     },
     [reset],
@@ -372,7 +317,7 @@ export function EditorPanel() {
       panOriginRef.current = { x: event.clientX, y: event.clientY };
       return;
     }
-    if (tool === "tap" || busy) {
+    if (tool === "tap" || tool === "protect" || busy) {
       return;
     }
     const point = imagePointFromEvent(event);
@@ -390,10 +335,7 @@ export function EditorPanel() {
     } else {
       liveStrokeRef.current = startStroke(tool === "brush" ? "paint" : "erase", scaledBrushRadius(), point);
     }
-    const canvas = canvasRef.current;
-    if (canvas) {
-      replayHistory(canvas, history, liveStrokeRef.current);
-    }
+    redrawMasks();
   }
 
   function handlePointerMove(event: React.PointerEvent<HTMLCanvasElement>) {
@@ -419,10 +361,7 @@ export function EditorPanel() {
     } else {
       liveStrokeRef.current = appendPoint(liveStrokeRef.current, point);
     }
-    const canvas = canvasRef.current;
-    if (canvas) {
-      replayHistory(canvas, history, liveStrokeRef.current);
-    }
+    redrawMasks();
   }
 
   function handlePointerUp() {
@@ -435,10 +374,7 @@ export function EditorPanel() {
     liveStrokeRef.current = null;
     if (!isCommittableStroke(stroke)) {
       // Un lazo de 1-2 puntos no forma polígono: se descarta y se borra su preview.
-      const canvas = canvasRef.current;
-      if (canvas) {
-        replayHistory(canvas, history, null);
-      }
+      redrawMasks();
       return;
     }
     setHistory((previous) => [...previous, { kind: "stroke", stroke }]);
@@ -453,6 +389,10 @@ export function EditorPanel() {
     // Cerrar la imagen actual vuelve al dropzone: antes la única forma de
     // empezar con otra foto era recargar la página o subir encima.
     uploadSequence.current += 1;
+    setBaseUploading(false);
+    segmentSequence.current += 1;
+    segmentPendingRef.current = false;
+    setSegmenting(false);
     setBaseInfo(null);
     setBaseUrl((previous) => {
       if (previous) {
@@ -469,36 +409,59 @@ export function EditorPanel() {
   }
 
   async function handleCanvasClick(event: React.MouseEvent<HTMLCanvasElement>) {
-    if (tool !== "tap" || !baseInfo || segmenting || busy) {
+    if ((tool !== "tap" && tool !== "protect") || !tapAvailable || !baseInfo || segmentPendingRef.current || busy) {
       return;
     }
     const point = imagePointFromEvent(event);
     if (!point) {
       return;
     }
+    const sequence = ++segmentSequence.current;
+    const kind = tool === "protect" ? "protect" : "segment";
+    segmentPendingRef.current = true;
     setSegmenting(true);
     setSegmentError(null);
     try {
       const blob = await segmentEditorObject(baseInfo.initImageToken, point.x, point.y);
       const mask = await pngBlobToAlphaCanvas(blob, baseInfo.width, baseInfo.height);
-      setHistory((previous) => [...previous, { kind: "segment", mask }]);
+      if (sequence !== segmentSequence.current) return;
+      setHistory((previous) => [...previous, { kind, mask }]);
     } catch (error) {
-      setSegmentError(error instanceof Error ? error.message : String(error));
+      if (sequence === segmentSequence.current) {
+        setSegmentError(error instanceof Error ? error.message : String(error));
+      }
     } finally {
-      setSegmenting(false);
+      if (sequence === segmentSequence.current) {
+        segmentPendingRef.current = false;
+        setSegmenting(false);
+      }
     }
   }
 
   async function handleGenerate() {
-    const canvas = canvasRef.current;
-    if (!canvas || !baseInfo || !modelId) {
+    const canvas = editMaskRef.current;
+    if (!canvas || !baseInfo || !modelId || busy || preparingJobRef.current || segmentPendingRef.current) {
       return;
     }
+    const sequence = uploadSequence.current;
+    preparingJobRef.current = true;
+    setPreparingJob(true);
     setUploadError(null);
     try {
-      const maskBlob = await exportMaskBlob(canvas);
+      const protection = protectMaskRef.current;
+      const protectBlobPromise = protection && canvasHasPixels(protection)
+        ? exportProtectMaskBlob(protection)
+        : Promise.resolve(null);
+      const [maskBlob, protectBlob] = await Promise.all([exportMaskBlob(canvas), protectBlobPromise]);
       const maskFile = new File([maskBlob], "mask.png", { type: "image/png" });
       const maskResponse = await uploadGenerationInitImage(maskFile);
+      if (sequence !== uploadSequence.current) return;
+      let protectMaskToken: string | undefined;
+      if (protectBlob) {
+        const protectFile = new File([protectBlob], "protect-mask.png", { type: "image/png" });
+        protectMaskToken = (await uploadGenerationInitImage(protectFile)).initImageToken;
+      }
+      if (sequence !== uploadSequence.current) return;
       const size = fitGenerationSize(baseInfo.width, baseInfo.height);
       const seed = seedText.trim() === "" ? null : Number.parseInt(seedText, 10);
       const negative = mode === "erase" ? eraseNegative : replaceNegative;
@@ -519,10 +482,16 @@ export function EditorPanel() {
         initImageToken: baseInfo.initImageToken,
         maskImageToken: maskResponse.initImageToken,
         strength,
+        ...(protectMaskToken ? { protectMaskToken } : {}),
       };
-      submit(params);
+      submit(buildEditorJobParams(params, mode, models));
     } catch (error) {
-      setUploadError(error instanceof Error ? error.message : String(error));
+      if (sequence === uploadSequence.current) {
+        setUploadError(error instanceof Error ? error.message : String(error));
+      }
+    } finally {
+      preparingJobRef.current = false;
+      setPreparingJob(false);
     }
   }
 
@@ -612,6 +581,13 @@ export function EditorPanel() {
               !tapAvailable,
               tapAvailable ? undefined : t("editor.tool.tapUnavailable"),
             )}
+            {toolButton(
+              "protect",
+              <Shield aria-hidden="true" className="h-4 w-4" />,
+              t("editor.tool.protect"),
+              !tapAvailable,
+              tapAvailable ? t("editor.protect.hint") : t("editor.tool.tapUnavailable"),
+            )}
             {toolButton("pan", <Hand aria-hidden="true" className="h-4 w-4" />, t("editor.tool.pan"))}
             <label className="ml-2 flex items-center gap-2 text-xs text-text-dim">
               {t("editor.brushSize")}
@@ -670,11 +646,21 @@ export function EditorPanel() {
                 type="button"
                 aria-label={t("editor.clear")}
                 title={t("editor.clear")}
-                disabled={history.length === 0}
-                onClick={() => setHistory([])}
+                disabled={!maskHasContent(history)}
+                onClick={() => setHistory((previous) => previous.filter((entry) => entry.kind === "protect" || entry.kind === "clearProtection"))}
                 className="rounded p-2 text-text-dim hover:bg-surface-2 hover:text-text disabled:opacity-40"
               >
                 <Trash2 aria-hidden="true" className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                aria-label={t("editor.protect.clear")}
+                title={t("editor.protect.clear")}
+                disabled={!hasProtection(history)}
+                onClick={() => setHistory((previous) => [...previous, { kind: "clearProtection" }])}
+                className="rounded px-2 py-1 text-xs text-text-dim hover:bg-surface-2 disabled:opacity-40"
+              >
+                {t("editor.protect.clear")}
               </button>
               <span aria-hidden="true" className="mx-1 h-5 w-px bg-border" />
               <button
@@ -708,7 +694,7 @@ export function EditorPanel() {
                 className={`absolute inset-0 h-full w-full opacity-60 ${
                   tool === "pan"
                     ? "cursor-grab active:cursor-grabbing"
-                    : tool === "tap"
+                    : tool === "tap" || tool === "protect"
                       ? "cursor-pointer"
                       : "cursor-crosshair"
                 } ${baseUrl ? "" : "relative bg-surface-2"}`}
@@ -719,6 +705,13 @@ export function EditorPanel() {
                 onPointerCancel={handlePointerUp}
                 onClick={(event) => void handleCanvasClick(event)}
               />
+              <canvas
+                ref={protectionOverlayRef}
+                width={baseInfo.width}
+                height={baseInfo.height}
+                data-testid="editor-protect-canvas"
+                className="pointer-events-none absolute inset-0 h-full w-full opacity-50"
+              />
             </div>
             {segmenting && (
               <p className="absolute bottom-2 left-2 rounded bg-surface px-2 py-1 text-xs text-text-dim">
@@ -727,6 +720,7 @@ export function EditorPanel() {
             )}
           </div>
           <p className="text-center text-xs text-text-faint">{t("editor.maskHint")}</p>
+          <p className="text-center text-xs text-text-faint">{t("editor.protect.hint")}</p>
           <p className="text-center text-xs text-text-faint">{t("editor.zoomHint")}</p>
           {segmentError && <p className="text-center text-xs text-danger">{segmentError}</p>}
 
@@ -771,6 +765,7 @@ export function EditorPanel() {
               onChange={setModelId}
               label={t("editor.model.label")}
               mode={mode}
+              hint={autoErase ? t("editor.erase.autoHint") : undefined}
             />
             <DevicePicker
               value={device}
