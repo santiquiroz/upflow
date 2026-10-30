@@ -8,6 +8,7 @@ from app.api.auth_deps import require
 from app.schemas import EditorSegmentRequest, InsertObjectRequest, InsertObjectResponse
 from app.services.auth.permissions import Permission
 from app.services.editor_segmenter import EditorSegmenter, SegmenterUnavailableError
+from app.services.engines.onnx_common import readable_error_text
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,8 @@ async def segment_object(
     image_path = _resolve_init_image(settings, payload.image_token)
     if image_path is None:
         raise HTTPException(status_code=400, detail="imageToken is required")
-    device = payload.device or settings.default_device
+    # MobileSAM es chico y en GPU compite por la VRAM con el job de generación en curso.
+    device = payload.device or "cpu"
     if device != "cpu" and not device.startswith("dml:"):
         raise HTTPException(status_code=400, detail=f"Unsupported device: {device!r}")
     try:
@@ -53,8 +55,9 @@ async def segment_object(
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
-        logger.exception("Editor segmentation failed")
-        raise HTTPException(status_code=500, detail=f"Segmentation failed: {exc}") from exc
+        message = readable_error_text(exc)
+        logger.exception("Editor segmentation failed: %s", message)
+        raise HTTPException(status_code=500, detail=f"Segmentation failed: {message}") from exc
     return Response(content=png, media_type="image/png")
 
 

@@ -59,7 +59,7 @@ async def test_segment_happy_path_returns_png() -> None:
 
     assert response.media_type == "image/png"
     assert Image.open(io.BytesIO(response.body)).mode == "L"
-    assert segmenter.calls and segmenter.calls[0][3] in ("cpu",) or segmenter.calls[0][3].startswith("dml:")
+    assert segmenter.calls[0][3] == "cpu"
 
 
 @pytest.mark.asyncio
@@ -82,6 +82,38 @@ async def test_segment_unavailable_is_503_with_hint() -> None:
 
     assert exc_info.value.status_code == 503
     assert "download-mobilesam" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_segment_explicit_dml_device_is_respected() -> None:
+    token = await upload_token()
+    segmenter = FakeSegmenter()
+
+    await segment_object(
+        EditorSegmentRequest(imageToken=token, x=3, y=3, device="dml:0"), segmenter=segmenter
+    )
+
+    assert segmenter.calls[0][3] == "dml:0"
+
+
+@pytest.mark.asyncio
+async def test_segment_garbled_onnx_error_returns_readable_detail() -> None:
+    token = await upload_token()
+
+    class FailingSegmenter(FakeSegmenter):
+        async def segment(self, image_path, x, y, device):
+            raise UnicodeDecodeError(
+                "utf-8", "acción".encode("cp1252"), 3, 4, "invalid continuation byte"
+            )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await segment_object(
+            EditorSegmentRequest(imageToken=token, x=1, y=1), segmenter=FailingSegmenter()
+        )
+
+    assert exc_info.value.status_code == 500
+    assert "acci" in exc_info.value.detail
+    assert "codec can't decode" not in exc_info.value.detail
 
 
 async def _upload_png(image: Image.Image, name: str) -> str:
