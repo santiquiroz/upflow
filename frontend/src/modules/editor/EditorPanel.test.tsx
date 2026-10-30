@@ -17,6 +17,12 @@ vi.mock("./zones", async (importOriginal) => {
   return { ...actual, clipMaskToBox: vi.fn(actual.clipMaskToBox) };
 });
 
+// jsdom no decodifica imágenes: el retoque real se prueba en retouch.test.ts.
+vi.mock("./retouchApply", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./retouchApply")>();
+  return { ...actual, applyRetouch: vi.fn(async () => new Blob(["retouched"], { type: "image/png" })) };
+});
+
 vi.mock("../../lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/api")>();
   return { ...actual, getDevices: vi.fn() };
@@ -131,6 +137,16 @@ async function loadBaseImage() {
     target: { files: [new File(["img"], "foto.png", { type: "image/png" })] },
   });
   await screen.findByTestId("editor-mask-canvas");
+}
+
+// jsdom no trae PointerEvent: sin esto fireEvent pierde altKey (Alt+clic de Clonar).
+class TestPointerEvent extends MouseEvent {
+  readonly pointerId: number;
+
+  constructor(type: string, init: PointerEventInit = {}) {
+    super(type, init);
+    this.pointerId = init.pointerId ?? 0;
+  }
 }
 
 function paintOnCanvas() {
@@ -952,5 +968,58 @@ describe("EditorPanel: diseño de tres columnas", () => {
       fireEvent.keyDown(window, { key: "[" });
     }
     expect(brushSize).toHaveValue("8");
+  });
+
+  it("clone without a source shows the Alt+click notice until a source is set", async () => {
+    vi.stubGlobal("PointerEvent", TestPointerEvent);
+    renderPanel();
+    await loadBaseImage();
+    fireEvent.click(screen.getByRole("radio", { name: en["editor.tool.clone"] }));
+    expect(screen.getByText(en["editor.retouch.cloneNoSource"])).toBeInTheDocument();
+
+    const canvas = screen.getByTestId("editor-mask-canvas");
+    fireEvent.pointerDown(canvas, { clientX: 40, clientY: 40, pointerId: 1, altKey: true });
+    fireEvent.pointerUp(canvas, { pointerId: 1 });
+    expect(screen.queryByText(en["editor.retouch.cloneNoSource"])).not.toBeInTheDocument();
+  });
+
+  it("a restore push keeps the mask history and Ctrl+Z undoes the base before the mask", async () => {
+    renderPanel();
+    await loadBaseImage();
+    paintOnCanvas();
+    await waitFor(() => expect(screen.getByRole("button", { name: en["editor.clear"] })).toBeEnabled());
+
+    fireEvent.click(screen.getByRole("radio", { name: en["editor.tool.restore"] }));
+    const canvas = screen.getByTestId("editor-mask-canvas");
+    fireEvent.pointerDown(canvas, { clientX: 10, clientY: 10, pointerId: 2 });
+    fireEvent.pointerMove(canvas, { clientX: 30, clientY: 30, pointerId: 2 });
+    fireEvent.pointerUp(canvas, { pointerId: 2 });
+    await waitFor(() => expect(generationService.uploadGenerationInitImage).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByText(en["editor.retouch.applying"])).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: en["editor.clear"] })).toBeEnabled();
+
+    fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+    expect(screen.getByRole("button", { name: en["editor.clear"] })).toBeEnabled();
+    fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+    expect(screen.getByRole("button", { name: en["editor.clear"] })).toBeDisabled();
+  });
+
+  it("a base push does not refetch people detection", async () => {
+    vi.mocked(editorService.fetchEditorCapabilities).mockResolvedValue({ tapSelect: true, people: true });
+    vi.mocked(editorService.detectPeople).mockResolvedValue([]);
+    vi.mocked(generationService.uploadGenerationInitImage)
+      .mockResolvedValueOnce(BASE_IMAGE)
+      .mockResolvedValueOnce({ ...BASE_IMAGE, initImageToken: "ddeeff" });
+    renderPanel();
+    await loadBaseImage();
+    await waitFor(() => expect(editorService.detectPeople).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("radio", { name: en["editor.tool.restore"] }));
+    const canvas = screen.getByTestId("editor-mask-canvas");
+    fireEvent.pointerDown(canvas, { clientX: 10, clientY: 10, pointerId: 3 });
+    fireEvent.pointerUp(canvas, { pointerId: 3 });
+    await waitFor(() => expect(generationService.uploadGenerationInitImage).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByText(en["editor.retouch.applying"])).not.toBeInTheDocument());
+    expect(editorService.detectPeople).toHaveBeenCalledTimes(1);
+    expect(editorService.detectPeople).toHaveBeenCalledWith("aabbcc");
   });
 });

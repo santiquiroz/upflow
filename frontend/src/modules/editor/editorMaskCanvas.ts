@@ -2,6 +2,7 @@ import { drawStrokes, strokeAddsEditableArea, type BrushStroke } from "./maskCan
 import { maskHasPixels, maskToOpaquePixels, subtractProtectedPixels } from "./protectMask";
 
 export interface HistoryEntry {
+  id?: number;
   kind: "stroke" | "segment" | "protect" | "clearProtection" | "batch";
   stroke?: BrushStroke;
   mask?: HTMLCanvasElement;

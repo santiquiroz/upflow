@@ -8,7 +8,9 @@ import {
   MousePointerClick,
   RotateCcw,
   Shield,
+  Stamp,
   Trash2,
+  Undo2,
   Users,
   X,
   ZoomIn,
@@ -108,15 +110,20 @@ export function EditorToolRail({
     { value: "lasso", icon: <Lasso aria-hidden="true" className="h-4 w-4 shrink-0" />, label: t("editor.tool.lasso") },
     { value: "rect", icon: <BoxSelect aria-hidden="true" className="h-4 w-4 shrink-0" />, label: t("editor.tool.rect") },
   ] as const;
-  const tabStopTool = tools.some((item) => item.value === tool && !disabledTools[item.value])
+  const retouchTools = [
+    { value: "restore", icon: <Undo2 aria-hidden="true" className="h-4 w-4 shrink-0" />, label: t("editor.tool.restore") },
+    { value: "clone", icon: <Stamp aria-hidden="true" className="h-4 w-4 shrink-0" />, label: t("editor.tool.clone") },
+  ] as const;
+  const radioTools = [...tools, ...retouchTools];
+  const tabStopTool = radioTools.some((item) => item.value === tool && !disabledTools[item.value])
     ? tool
-    : tools.find((item) => !disabledTools[item.value])?.value;
+    : radioTools.find((item) => !disabledTools[item.value])?.value;
   const panTool = {
     value: "pan" as const,
     icon: <Hand aria-hidden="true" className="h-4 w-4 shrink-0" />,
     label: t("editor.tool.pan"),
   };
-  const renderedTools = [...tools, panTool] as const;
+  const renderedTools = [...radioTools, panTool] as const;
 
   function renderToolButton(item: (typeof renderedTools)[number], radio = false) {
     const disabledReason = disabledTools[item.value];
@@ -157,6 +164,18 @@ export function EditorToolRail({
           onKeyDown={(event) => moveRadioFocus(event, tools, disabledTools, onToolChange)}
         >
           {tools.map((item) => renderToolButton(item, true))}
+        </div>
+      </div>
+
+      <div>
+        <p className="mb-1 px-2 text-[11px] font-medium text-text-faint">{t("editor.tools.retouch")}</p>
+        <div
+          className="flex flex-col gap-0.5"
+          role="radiogroup"
+          aria-label={t("editor.tools.retouch")}
+          onKeyDown={(event) => moveRadioFocus(event, retouchTools, disabledTools, onToolChange)}
+        >
+          {retouchTools.map((item) => renderToolButton(item, true))}
         </div>
       </div>
 
