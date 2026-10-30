@@ -4,12 +4,14 @@ import numpy as np
 import pytest
 
 from app.services.inpaint_mask import (
+    MAX_COMPONENTS,
     compute_crop_box,
     dilate_mask,
     dilation_for,
     feather_for,
     feather_mask,
     grow_per_component,
+    grow_small_hulls,
     mask_bbox,
     soft_composite,
 )
@@ -275,3 +277,59 @@ def test_many_components_use_whole_mask_growth_without_component_windows(
     grown = grow_per_component(mask, dilation, feather)
 
     np.testing.assert_array_equal(grown, expected)
+
+
+def test_small_l_shape_fills_its_hull_and_grows_by_eight_percent() -> None:
+    import cv2
+
+    mask = np.zeros((300, 300), dtype=np.uint8)
+    mask[50:250, 50:70] = 255
+    mask[230:250, 50:250] = 255
+    mask[0, 0] = 80
+    original = mask.copy()
+    hull = np.zeros_like(mask)
+    vertices = np.array([(50, 50), (69, 50), (249, 230), (249, 249), (50, 249)])
+    cv2.fillConvexPoly(hull, vertices, 255)
+    expected = np.maximum(mask, dilate_mask(hull, 16))
+
+    grown = grow_small_hulls(mask)
+
+    np.testing.assert_array_equal(grown, expected)
+    np.testing.assert_array_equal(mask, original)
+    assert grown.dtype == np.uint8
+    assert mask[150, 100] == 0 and grown[150, 100] == 255
+    assert grown[150, 34] == 255
+    assert grown[150, 33] == 0
+    assert grown[0, 0] == 80
+
+
+def test_hull_growth_preserves_components_larger_than_small_side() -> None:
+    mask = np.zeros((800, 800), dtype=np.uint8)
+    mask[30:731, 30:50] = 255
+    mask[711:731, 30:731] = 255
+    original = mask.copy()
+
+    grown = grow_small_hulls(mask)
+
+    np.testing.assert_array_equal(grown, original)
+    np.testing.assert_array_equal(mask, original)
+
+
+def test_hull_growth_preserves_masks_with_more_than_max_components() -> None:
+    mask = np.zeros((3, 3 * (MAX_COMPONENTS + 1)), dtype=np.uint8)
+    mask[1, 1::3] = 255
+    original = mask.copy()
+
+    grown = grow_small_hulls(mask)
+
+    np.testing.assert_array_equal(grown, original)
+    np.testing.assert_array_equal(mask, original)
+
+
+def test_hull_growth_preserves_an_empty_mask() -> None:
+    mask = np.zeros((32, 32), dtype=np.uint8)
+
+    grown = grow_small_hulls(mask)
+
+    np.testing.assert_array_equal(grown, mask)
+    assert grown.dtype == np.uint8

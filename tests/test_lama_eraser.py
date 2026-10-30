@@ -9,7 +9,7 @@ from PIL import Image
 
 from app.config import Settings
 from app.services.engines.lama_eraser import ERASER_LAMA_MODEL_ID, LamaEraser, _unknown_hole
-from app.services.inpaint_mask import grow_per_component
+from app.services.inpaint_mask import grow_per_component, grow_small_hulls
 
 
 def make_settings(tmp_path: Path, installed: bool = True) -> Settings:
@@ -164,7 +164,7 @@ async def test_only_the_grown_feathered_mask_can_change(tmp_path, monkeypatch):
     eraser, module = make_eraser(tmp_path, monkeypatch)
     base = photo()
     mask = mask_box(base.size, (130, 95, 180, 140))
-    grown = grow_per_component(np.asarray(mask), None, None)
+    grown = grow_per_component(grow_small_hulls(np.asarray(mask)), None, None)
 
     result = await eraser.erase(base, mask, "cpu")
 

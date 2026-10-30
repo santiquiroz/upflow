@@ -146,6 +146,51 @@ def grow_per_component(
     return grown
 
 
+def _grow_hull_window(
+    labels: np.ndarray,
+    label: int,
+    bbox: tuple[int, int, int, int],
+    dilation: int,
+) -> tuple[tuple[slice, slice], np.ndarray]:
+    import cv2
+
+    left, top, right, bottom = bbox
+    height, width = labels.shape
+    window = (
+        slice(max(0, top - dilation), min(height, bottom + dilation)),
+        slice(max(0, left - dilation), min(width, right + dilation)),
+    )
+    rows, columns = np.nonzero(labels[window] == label)
+    points = np.column_stack((columns, rows)).astype(np.int32)
+    hull = cv2.convexHull(points)
+    component = np.zeros(labels[window].shape, dtype=np.uint8)
+    cv2.fillConvexPoly(component, hull, 255)
+    return window, dilate_mask(component, dilation)
+
+
+def grow_small_hulls(
+    mask: np.ndarray, small_side: int = 700, ratio: float = 0.08
+) -> np.ndarray:
+    import cv2
+
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(
+        (mask > MASK_THRESHOLD).astype(np.uint8), connectivity=8
+    )
+    if count - 1 > MAX_COMPONENTS:
+        return mask
+    grown = mask.copy()
+    for label in range(1, count):
+        left, top, width, height, _ = (int(value) for value in stats[label])
+        longer_side = max(width, height)
+        if longer_side > small_side:
+            continue
+        bbox = (left, top, left + width, top + height)
+        dilation = max(MIN_DILATE_PX, round(ratio * longer_side))
+        window, component = _grow_hull_window(labels, label, bbox, dilation)
+        np.maximum(grown[window], component, out=grown[window])
+    return grown
+
+
 def _centered_span(low: int, high: int, length: int, limit: int) -> int:
     start = int(round((low + high) / 2 - length / 2))
     return max(0, min(start, limit - length))
