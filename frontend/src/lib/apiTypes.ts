@@ -725,6 +725,9 @@ export interface InitImageResponse {
 export interface GenerationEraseParams {
   eraseStrategy?: "auto";
   protectMaskToken?: string;
+  eraseEngine?: "lama" | "osor" | "lama+osor" | "sdxl";
+  maskGrowPx?: number;
+  maskFeatherPx?: number;
 }
 
 export interface GenerationJob {

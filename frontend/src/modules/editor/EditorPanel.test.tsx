@@ -167,6 +167,27 @@ async function protectObject() {
 }
 
 describe("EditorPanel", () => {
+  it("defaults to eraser-auto and visibly disables replacement without a fill model", async () => {
+    vi.mocked(generationService.fetchGenerationCapabilities).mockResolvedValue({
+      ...CAPABILITIES,
+      models: [
+        {
+          id: "eraser-auto",
+          name: "Borrado automático (LaMa + OSOR)",
+          status: "installed",
+          eraseOnly: true,
+          supportsInpaint: true,
+        },
+      ],
+    });
+    renderPanel();
+    await loadBaseImage();
+
+    expect(screen.getByLabelText(en["editor.model.label"])).toHaveValue("eraser-auto");
+    expect(screen.getByRole("radio", { name: en["editor.mode.replace"] })).toBeDisabled();
+    expect(screen.getByText(en["editor.replace.needsSdxl"])).toBeVisible();
+  });
+
   it("only offers installed models with real inpaint support", async () => {
     renderPanel();
     await loadBaseImage();

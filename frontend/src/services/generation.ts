@@ -57,6 +57,9 @@ function buildRequestBody(params: CreateGenerationJobParams): Record<string, unk
     if (params.maskImageToken) body.maskImageToken = params.maskImageToken;
     if (params.eraseStrategy) body.eraseStrategy = params.eraseStrategy;
     if (params.protectMaskToken) body.protectMaskToken = params.protectMaskToken;
+    if (params.eraseEngine) body.eraseEngine = params.eraseEngine;
+    if (params.maskGrowPx !== undefined) body.maskGrowPx = params.maskGrowPx;
+    if (params.maskFeatherPx !== undefined) body.maskFeatherPx = params.maskFeatherPx;
   }
   if (params.frames !== undefined) body.frames = params.frames;
   if (params.fps !== undefined) body.fps = params.fps;

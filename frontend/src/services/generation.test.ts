@@ -101,6 +101,50 @@ describe("generation service", () => {
     expect(body.seed).toBe(0);
   });
 
+  it("serializes erase controls only for edits with an init image", async () => {
+    vi.mocked(apiPostJson).mockResolvedValue({ id: "j1" });
+    const params = {
+      prompt: "",
+      negativePrompt: null,
+      modelId: "eraser-auto",
+      steps: 25,
+      guidance: 7.5,
+      width: 512,
+      height: 512,
+      seed: null,
+      device: null,
+      autoUpscale: false,
+      upscaleModelName: null,
+      upscaleScale: null,
+      upscaleModelId: null,
+      initImageToken: "base",
+      eraseEngine: "lama+osor" as const,
+      maskGrowPx: 8,
+      maskFeatherPx: 4,
+      protectMaskToken: "protect-mask",
+    };
+
+    await createGenerationJob(params);
+
+    expect(apiPostJson).toHaveBeenCalledWith(
+      "/generation/jobs",
+      expect.objectContaining({
+        initImageToken: "base",
+        eraseEngine: "lama+osor",
+        maskGrowPx: 8,
+        maskFeatherPx: 4,
+        protectMaskToken: "protect-mask",
+      }),
+    );
+
+    await createGenerationJob({ ...params, initImageToken: undefined });
+    const body = vi.mocked(apiPostJson).mock.calls[1][1] as Record<string, unknown>;
+    expect(body).not.toHaveProperty("eraseEngine");
+    expect(body).not.toHaveProperty("maskGrowPx");
+    expect(body).not.toHaveProperty("maskFeatherPx");
+    expect(body).not.toHaveProperty("protectMaskToken");
+  });
+
   it("gets a job by id", async () => {
     vi.mocked(apiGet).mockResolvedValue({ id: "j1" });
     await getGenerationJob("j1");

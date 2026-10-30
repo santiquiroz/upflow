@@ -7,7 +7,7 @@ import { useTranslation } from "../../i18n/LocaleProvider";
 import type { InitImageResponse } from "../../lib/apiTypes";
 import { fetchEditorCapabilities, segmentEditorObject } from "../../services/editor";
 import { uploadGenerationInitImage, type CreateGenerationJobParams } from "../../services/generation";
-import { buildEditorJobParams, shouldUseAutoErase } from "./eraseJobParams";
+import { buildEditorJobParams, defaultEraseModel, shouldUseAutoErase } from "./eraseJobParams";
 import { EditorActionControls } from "./EditorActionControls";
 import { EditorSidePanel } from "./EditorSidePanel";
 import { BRUSH_SIZE_MAX, BRUSH_SIZE_MIN, EditorToolRail, type Tool } from "./EditorToolRail";
@@ -105,6 +105,10 @@ export function EditorPanel() {
   }
 
   const models = capabilitiesQuery.data?.models ?? [];
+  useEffect(() => {
+    if (!capabilitiesQuery.data) return;
+    setModelId((current) => current ?? defaultEraseModel(models));
+  }, [capabilitiesQuery.data, models]);
   const selectedModel = models.find((model) => model.id === modelId) ?? null;
   // Un motor de solo-borrado no sabe poner algo concreto: si el usuario pasa a
   // Reemplazar hay que soltarlo, o el job saldria con un modelo que no aplica.

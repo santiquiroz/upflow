@@ -1084,6 +1084,7 @@ export const en = {
   "editor.mode.label": "What to do with the selection",
   "editor.mode.erase": "Remove",
   "editor.mode.replace": "Replace",
+  "editor.replace.needsSdxl": "Needs a fill model (SDXL)",
   "editor.prompt.label": "Replace with…",
   "editor.prompt.placeholder": "e.g. a wooden bench, a bouquet of flowers",
   "editor.model.label": "Model",

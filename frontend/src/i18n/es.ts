@@ -1079,6 +1079,7 @@ export const es = {
   "editor.mode.label": "Qué hacer con la selección",
   "editor.mode.erase": "Quitar",
   "editor.mode.replace": "Reemplazar",
+  "editor.replace.needsSdxl": "Necesita un modelo de relleno (SDXL)",
   "editor.prompt.label": "Reemplazar por…",
   "editor.prompt.placeholder": "ej. un banco de madera, un ramo de flores",
   "editor.model.label": "Modelo",

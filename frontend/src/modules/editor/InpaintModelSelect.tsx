@@ -1,4 +1,5 @@
 import type { GenerationModelSummary } from "../../lib/apiTypes";
+import { isReplaceModel } from "./eraseJobParams";
 
 export type EditMode = "erase" | "replace";
 
@@ -19,10 +20,11 @@ export function InpaintModelSelect({
 }) {
   const usable = models.filter(
     (model) =>
-      model.status === "installed" &&
-      model.supportsInpaint !== false &&
-      model.speed !== "turbo" &&
-      (mode === "erase" || !model.eraseOnly),
+      mode === "replace"
+        ? isReplaceModel(model)
+        : model.status === "installed" &&
+          model.supportsInpaint !== false &&
+          model.speed !== "turbo",
   );
   return (
     <label className="flex flex-col gap-1 text-sm text-text">

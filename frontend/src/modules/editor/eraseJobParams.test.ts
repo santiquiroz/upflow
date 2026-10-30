@@ -2,7 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 import type { GenerationModelSummary } from "../../lib/apiTypes";
 import { apiPostJson } from "../../lib/api";
 import { createGenerationJob, type CreateGenerationJobParams } from "../../services/generation";
-import { buildEditorJobParams, shouldUseAutoErase } from "./eraseJobParams";
+import {
+  buildEditorJobParams,
+  canReplace,
+  defaultEraseModel,
+  shouldUseAutoErase,
+} from "./eraseJobParams";
 
 vi.mock("../../lib/api", () => ({ apiPostJson: vi.fn() }));
 
@@ -17,6 +22,13 @@ const lama: GenerationModelSummary = {
   name: "LaMa",
   status: "installed",
   eraseOnly: true,
+};
+const autoEraser: GenerationModelSummary = {
+  id: "eraser-auto",
+  name: "Borrado automático (LaMa + OSOR)",
+  status: "installed",
+  eraseOnly: true,
+  supportsInpaint: true,
 };
 const params: CreateGenerationJobParams = {
   prompt: "",
@@ -37,6 +49,19 @@ const params: CreateGenerationJobParams = {
 };
 
 describe("automatic erase eligibility", () => {
+  it("defaults to eraser-auto when installed and otherwise keeps the current empty selection", () => {
+    expect(defaultEraseModel([autoEraser, inpaint])).toBe("eraser-auto");
+    expect(defaultEraseModel([inpaint])).toBeNull();
+  });
+
+  it("allows replacement only with an installed non-turbo fill model", () => {
+    expect(canReplace([autoEraser, inpaint])).toBe(true);
+    expect(canReplace([autoEraser])).toBe(false);
+    expect(canReplace([{ ...inpaint, status: "converting" }])).toBe(false);
+    expect(canReplace([{ ...inpaint, speed: "turbo" }])).toBe(false);
+    expect(canReplace([{ ...inpaint, supportsInpaint: false }])).toBe(false);
+  });
+
   it("uses the installed inpaint model and LaMa only in erase mode", () => {
     expect(shouldUseAutoErase("erase", inpaint.id, [inpaint, lama])).toBe(true);
     expect(shouldUseAutoErase("replace", inpaint.id, [inpaint, lama])).toBe(false);
@@ -86,5 +111,32 @@ describe("buildEditorJobParams", () => {
       protectMaskToken: "protect-mask",
       maskImageToken: "edit-mask",
     }));
+  });
+
+  it("keeps protection and omits the legacy strategy for eraser-auto", async () => {
+    vi.clearAllMocks();
+    const input = {
+      ...params,
+      modelId: "eraser-auto",
+      protectMaskToken: "protect-mask",
+      eraseStrategy: "auto" as const,
+    };
+    const built = buildEditorJobParams(input, "erase", [autoEraser]);
+
+    expect(built).not.toHaveProperty("eraseStrategy");
+    expect(built.protectMaskToken).toBe("protect-mask");
+    await createGenerationJob(built);
+    expect(apiPostJson).toHaveBeenCalledWith(
+      "/generation/jobs",
+      expect.objectContaining({
+        modelId: "eraser-auto",
+        maskImageToken: "edit-mask",
+        protectMaskToken: "protect-mask",
+      }),
+    );
+    expect(apiPostJson).not.toHaveBeenCalledWith(
+      "/generation/jobs",
+      expect.objectContaining({ eraseStrategy: "auto" }),
+    );
   });
 });
