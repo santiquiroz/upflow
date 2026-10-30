@@ -37,7 +37,7 @@ def get_editor_people(request: Request) -> EditorPeople:
     return request.app.state.editor_people
 
 
-def _heal_mask_bbox(mask) -> tuple[int, int, int, int]:
+def _ensure_heal_mask_is_valid(mask) -> None:
     import numpy as np
 
     ys, xs = np.where(mask > 0)
@@ -47,7 +47,6 @@ def _heal_mask_bbox(mask) -> tuple[int, int, int, int]:
     right, bottom = int(xs.max()) + 1, int(ys.max()) + 1
     if max(right - left, bottom - top) > HEAL_MAX_SIDE:
         raise HTTPException(status_code=400, detail="La zona es grande: usá Quitar.")
-    return left, top, right, bottom
 
 
 def _prepare_heal_arrays(image_path: Path, mask_path: Path):
@@ -62,13 +61,36 @@ def _prepare_heal_arrays(image_path: Path, mask_path: Path):
         if gray_mask.size != base.size:
             gray_mask = gray_mask.resize(base.size, Image.Resampling.NEAREST)
         mask = np.where(np.asarray(gray_mask) > 127, 255, 0).astype(np.uint8)
-    _heal_mask_bbox(mask)
+    _ensure_heal_mask_is_valid(mask)
     return canvas, mask
 
 
 def _base_original_filename(image_path: Path, token: str) -> tuple[str, str]:
     original_filename = image_path.name.removeprefix(f"{token}-")
     return original_filename, Path(original_filename).stem
+
+
+def _heal_destination(settings, image_path: Path, image_token: str) -> tuple[str, Path, str]:
+    from uuid import uuid4
+
+    original_filename, stem = _base_original_filename(image_path, image_token)
+    token = uuid4().hex
+    destination = settings.uploads_path / f"{token}-{stem}.png"
+    return token, destination, original_filename
+
+
+def _heal_blocking(
+    image_path: Path, mask_path: Path, lama: LamaEraser, destination: Path
+) -> tuple[int, int]:
+    import numpy as np
+    from PIL import Image
+
+    canvas, group_mask = _prepare_heal_arrays(image_path, mask_path)
+    healed = lama.fill_group(
+        canvas, group_mask, np.zeros(group_mask.shape, dtype=bool)
+    )
+    Image.fromarray(healed).save(destination, format="PNG")
+    return int(healed.shape[1]), int(healed.shape[0])
 
 
 @router.post(
@@ -79,9 +101,6 @@ def _base_original_filename(image_path: Path, token: str) -> tuple[str, str]:
 )
 async def heal(payload: EditorHealRequest, request: Request) -> InitImageResponse:
     import asyncio
-    from uuid import uuid4
-
-    from PIL import Image
 
     from app.api.routes import _resolve_init_image
     from app.config import get_settings
@@ -96,25 +115,18 @@ async def heal(payload: EditorHealRequest, request: Request) -> InitImageRespons
     if not lama.available():
         raise HTTPException(status_code=503, detail=missing_pack_message("lama"))
 
-    canvas, group_mask = _prepare_heal_arrays(image_path, mask_path)
-    import numpy as np
-
-    healed = await asyncio.to_thread(
-        lama.fill_group,
-        canvas,
-        group_mask,
-        np.zeros(group_mask.shape, dtype=bool),
+    token, destination, original_filename = _heal_destination(
+        settings, image_path, payload.image_token
     )
-    original_filename, stem = _base_original_filename(image_path, payload.image_token)
-    token = uuid4().hex
-    destination = settings.uploads_path / f"{token}-{stem}.png"
-    Image.fromarray(healed).save(destination, format="PNG")
+    width, height = await asyncio.to_thread(
+        _heal_blocking, image_path, mask_path, lama, destination
+    )
 
     return InitImageResponse(
         init_image_token=token,
         original_filename=original_filename,
-        width=healed.shape[1],
-        height=healed.shape[0],
+        width=width,
+        height=height,
     )
 
 

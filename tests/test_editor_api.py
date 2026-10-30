@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import threading
 
 import numpy as np
 import pytest
@@ -567,11 +568,13 @@ class FakeLama:
     def __init__(self, available: bool = True) -> None:
         self._available = available
         self.calls: list[tuple] = []
+        self.fill_thread_ids: list[int] = []
 
     def available(self) -> bool:
         return self._available
 
     def fill_group(self, canvas, group_mask, protect):
+        self.fill_thread_ids.append(threading.get_ident())
         self.calls.append((group_mask.copy(), protect.copy()))
         result = canvas.copy()
         result[group_mask > 0] = (240, 20, 30)
@@ -596,6 +599,7 @@ async def test_heal_returns_new_token_with_filled_region() -> None:
     image_token = await _upload_png(image, "base.photo.png")
     mask_token = await _upload_png(mask, "brush.png")
     lama = FakeLama()
+    test_thread_id = threading.get_ident()
 
     response = await heal(
         EditorHealRequest(imageToken=image_token, maskToken=mask_token),
@@ -612,6 +616,7 @@ async def test_heal_returns_new_token_with_filled_region() -> None:
     assert result.size == image.size
     assert result.getpixel((5, 4)) == (240, 20, 30)
     assert result.getpixel((1, 1)) == (1, 2, 3)
+    assert lama.fill_thread_ids[0] != test_thread_id
     group_mask, protect = lama.calls[0]
     assert group_mask.dtype == np.uint8
     assert protect.dtype == np.bool_
