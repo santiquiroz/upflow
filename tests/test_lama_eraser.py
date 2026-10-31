@@ -8,7 +8,12 @@ import torch
 from PIL import Image
 
 from app.config import Settings
-from app.services.engines.lama_eraser import ERASER_LAMA_MODEL_ID, LamaEraser, _unknown_hole
+from app.services.engines.lama_eraser import (
+    ERASER_LAMA_MODEL_ID,
+    LamaEraser,
+    _context_crop,
+    _unknown_hole,
+)
 from app.services.inpaint_mask import clean_protect_mask, grow_per_component, grow_small_hulls
 
 
@@ -146,6 +151,15 @@ def test_unknown_hole_with_empty_hard_mask_adds_no_protected_pixels():
     result = _unknown_hole(mask, protect)
 
     np.testing.assert_array_equal(result, mask)
+
+
+def test_context_crop_with_quarter_margin_halves_the_context_around_the_hole():
+    hole = np.zeros((200, 200), dtype=np.uint8)
+    hole[80:100, 90:130] = 1
+
+    assert _context_crop(hole) == (70, 60, 150, 120)
+    assert _context_crop(hole, 0.5) == (70, 60, 150, 120)
+    assert _context_crop(hole, 0.25) == (80, 70, 140, 110)
 
 
 @pytest.mark.asyncio

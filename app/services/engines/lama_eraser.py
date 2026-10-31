@@ -22,6 +22,7 @@ ERASER_LAMA_MODEL_ID = "eraser-lama"
 ERASER_LAMA_MODEL_LABEL = "Borrado LaMa (continúa el fondo, sin IA generativa)"
 MAX_WORK_SIDE = 1600
 PROTECT_KERNEL_SIZE = 301
+CONTEXT_MARGIN = 0.5
 
 
 class LamaUnavailableError(RuntimeError):
@@ -62,15 +63,17 @@ def _unknown_hole(mask: np.ndarray, protect: np.ndarray) -> np.ndarray:
     return hard
 
 
-def _context_crop(hole: np.ndarray) -> tuple[int, int, int, int]:
+def _context_crop(
+    hole: np.ndarray, margin: float = CONTEXT_MARGIN
+) -> tuple[int, int, int, int]:
     left, top, right, bottom = mask_bbox(hole * 255)
-    margin = round(0.5 * max(right - left, bottom - top))
+    pad = round(margin * max(right - left, bottom - top))
     height, width = hole.shape
     return (
-        max(0, left - margin),
-        max(0, top - margin),
-        min(width, right + margin),
-        min(height, bottom + margin),
+        max(0, left - pad),
+        max(0, top - pad),
+        min(width, right + pad),
+        min(height, bottom + pad),
     )
 
 
@@ -166,13 +169,17 @@ class LamaEraser:
         canvas[:] = self.fill_group(canvas, group_mask, protect)
 
     def fill_group(
-        self, canvas: np.ndarray, group_mask: np.ndarray, protect: np.ndarray
+        self,
+        canvas: np.ndarray,
+        group_mask: np.ndarray,
+        protect: np.ndarray,
+        context_margin: float = CONTEXT_MARGIN,
     ) -> np.ndarray:
         result = canvas.copy()
         if not np.any(group_mask):
             return result
         hole = _unknown_hole(group_mask, protect)
-        left, top, right, bottom = _context_crop(hole)
+        left, top, right, bottom = _context_crop(hole, context_margin)
         window = (slice(top, bottom), slice(left, right))
         original = canvas[window].copy()
         blend = np.where(protect[window], 0, group_mask[window]).astype(np.uint8)

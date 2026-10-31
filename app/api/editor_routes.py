@@ -28,6 +28,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/editor", tags=["editor"])
 
+# El parche puntual rellena huecos chicos: con menos contexto LaMa alcanza y tarda menos.
+HEAL_CONTEXT_MARGIN = 0.25
+
 
 def get_editor_segmenter(request: Request) -> EditorSegmenter:
     return request.app.state.editor_segmenter
@@ -90,7 +93,10 @@ def _heal_blocking(
     canvas, group_mask = _prepare_heal_arrays(image_path, mask_path)
     group_mask = grow_per_component(grow_small_hulls(group_mask), None, None)
     healed = lama.fill_group(
-        canvas, group_mask, np.zeros(group_mask.shape, dtype=bool)
+        canvas,
+        group_mask,
+        np.zeros(group_mask.shape, dtype=bool),
+        context_margin=HEAL_CONTEXT_MARGIN,
     )
     Image.fromarray(healed).save(destination, format="PNG", compress_level=1)
     return int(healed.shape[1]), int(healed.shape[0])

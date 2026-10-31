@@ -587,13 +587,15 @@ class FakeLama:
         self._available = available
         self.calls: list[tuple] = []
         self.fill_thread_ids: list[int] = []
+        self.fill_kwargs: list[dict] = []
 
     def available(self) -> bool:
         return self._available
 
-    def fill_group(self, canvas, group_mask, protect):
+    def fill_group(self, canvas, group_mask, protect, context_margin=0.5):
         self.fill_thread_ids.append(threading.get_ident())
         self.calls.append((group_mask.copy(), protect.copy()))
+        self.fill_kwargs.append({"context_margin": context_margin})
         result = canvas.copy()
         result[group_mask > 0] = (240, 20, 30)
         return result
@@ -704,6 +706,26 @@ async def test_heal_returns_new_token_with_filled_region() -> None:
     assert np.count_nonzero(group_mask) > 16
     assert protect.dtype == np.bool_
     assert not protect.any()
+
+
+@pytest.mark.asyncio
+async def test_heal_uses_the_narrow_heal_context_margin() -> None:
+    from app.api.editor_routes import heal
+    from app.schemas import EditorHealRequest
+
+    image = Image.new("RGB", (64, 64), (1, 2, 3))
+    mask = Image.new("L", (64, 64), 0)
+    mask.paste(255, (30, 30, 34, 34))
+    image_token = await _upload_png(image, "base.png")
+    mask_token = await _upload_png(mask, "brush.png")
+    lama = FakeLama()
+
+    await heal(
+        EditorHealRequest(imageToken=image_token, maskToken=mask_token),
+        request=_heal_request_context(lama),
+    )
+
+    assert lama.fill_kwargs == [{"context_margin": 0.25}]
 
 
 @pytest.mark.asyncio
