@@ -46,6 +46,13 @@ export function useBaseVersions() {
     return evicted;
   }, [commit]);
 
+  // Versión ya subida por otro camino (p.ej. el corrector): no sube de nuevo. Devuelve true si el tope descartó una.
+  const adopt = useCallback((info: InitImageResponse, blob: Blob): boolean => {
+    const evicted = versionsRef.current.length >= MAX_BASE_VERSIONS;
+    commit(appendVersion(versionsRef.current, { blob, info }));
+    return evicted;
+  }, [commit]);
+
   const undo = useCallback((): boolean => {
     const current = versionsRef.current;
     if (current.length <= 1) return false;
@@ -65,6 +72,7 @@ export function useBaseVersions() {
     current: latest?.info ?? null,
     currentBlob: latest?.blob ?? null,
     push,
+    adopt,
     undo,
     reset,
     clear,

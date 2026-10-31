@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "../lib/api";
-import { detectPeople, segmentEditorBox, segmentEditorObject } from "./editor";
+import { detectPeople, fetchInitImage, healEditorImage, segmentEditorBox, segmentEditorObject } from "./editor";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -74,6 +74,47 @@ describe("editor segmentation", () => {
     await expect(segmentEditorObject("bad-token", 0, 0)).rejects.toMatchObject({
       status: 400,
       message: "Invalid image token",
+    });
+  });
+});
+
+describe("editor heal", () => {
+  it("posts the image and mask tokens and returns the new staged image", async () => {
+    const healed = { initImageToken: "healed", originalFilename: "foto.png", width: 8, height: 6 };
+    mockFetch(new Response(JSON.stringify(healed), { status: 201 }));
+
+    await expect(healEditorImage("image-token", "mask-token")).resolves.toEqual(healed);
+
+    expect(fetch).toHaveBeenCalledWith("/api/v1/editor/heal", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ imageToken: "image-token", maskToken: "mask-token" }),
+    });
+  });
+
+  it("throws an ApiError with the backend detail when the heal fails", async () => {
+    mockFetch(new Response(JSON.stringify({ detail: "La zona es grande: usá Quitar." }), { status: 400 }));
+
+    await expect(healEditorImage("image-token", "mask-token")).rejects.toMatchObject({
+      status: 400,
+      message: "La zona es grande: usá Quitar.",
+    });
+  });
+
+  it("downloads a staged init image as a blob", async () => {
+    mockFetch(new Response(new Blob(["png-bytes"], { type: "image/png" }), { status: 200 }));
+
+    await expect(fetchInitImage("healed")).resolves.toBeInstanceOf(Blob);
+
+    expect(fetch).toHaveBeenCalledWith("/api/v1/generation/init-image/healed");
+  });
+
+  it("uses the backend error detail when the staged image is missing", async () => {
+    mockFetch(new Response(JSON.stringify({ detail: "init_image_token desconocido o expirado" }), { status: 400 }));
+
+    await expect(fetchInitImage("gone")).rejects.toMatchObject({
+      status: 400,
+      message: "init_image_token desconocido o expirado",
     });
   });
 });

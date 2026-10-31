@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import mimetypes
 import re
 import subprocess
 from dataclasses import asdict
@@ -2830,6 +2831,16 @@ async def upload_init_image(
         width=width,
         height=height,
     )
+
+
+@router.get(
+    "/generation/init-image/{token}",
+    dependencies=[Depends(require(Permission.jobs_create))],
+)
+def download_init_image(token: str, settings: Settings = Depends(get_settings)) -> FileResponse:
+    path = _resolve_init_image(settings, token)
+    media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    return FileResponse(path, media_type=media_type)
 
 
 def _video_aware_sampling(payload, settings: Settings) -> tuple[int, float]:

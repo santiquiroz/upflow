@@ -1,4 +1,5 @@
 import {
+  Bandage,
   BoxSelect,
   Brush,
   Eraser,
@@ -113,6 +114,7 @@ export function EditorToolRail({
   const retouchTools = [
     { value: "restore", icon: <Undo2 aria-hidden="true" className="h-4 w-4 shrink-0" />, label: t("editor.tool.restore") },
     { value: "clone", icon: <Stamp aria-hidden="true" className="h-4 w-4 shrink-0" />, label: t("editor.tool.clone") },
+    { value: "heal", icon: <Bandage aria-hidden="true" className="h-4 w-4 shrink-0" />, label: t("editor.tool.heal") },
   ] as const;
   const radioTools = [...tools, ...retouchTools];
   const tabStopTool = radioTools.some((item) => item.value === tool && !disabledTools[item.value])

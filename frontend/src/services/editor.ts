@@ -1,5 +1,5 @@
 import { ApiError, apiPostJson } from "../lib/api";
-import type { InsertObjectResponse } from "../lib/apiTypes";
+import type { InitImageResponse, InsertObjectResponse } from "../lib/apiTypes";
 
 const API_BASE = "/api/v1";
 
@@ -30,6 +30,16 @@ export async function detectPeople(imageToken: string): Promise<EditorPerson[]> 
   return response.people;
 }
 
+async function failureOf(response: Response, fallback: string): Promise<ApiError> {
+  let detail = fallback;
+  try {
+    detail = ((await response.json()) as { detail?: string }).detail ?? fallback;
+  } catch {
+    // cuerpo no-JSON: se queda el mensaje genérico
+  }
+  return new ApiError(response.status, detail);
+}
+
 async function fetchEditorSegment(body: {
   imageToken: string;
   x?: number;
@@ -42,13 +52,7 @@ async function fetchEditorSegment(body: {
     body: JSON.stringify(body),
   });
   if (!response.ok) {
-    let detail = "Segmentation failed";
-    try {
-      detail = ((await response.json()) as { detail?: string }).detail ?? detail;
-    } catch {
-      // cuerpo no-JSON: se queda el mensaje genérico
-    }
-    throw new ApiError(response.status, detail);
+    throw await failureOf(response, "Segmentation failed");
   }
   return response.blob();
 }
@@ -96,4 +100,19 @@ export interface InsertObjectParams {
 // vuelve inline en base64; con harmonize el jobId entra a la cola normal.
 export function insertObject(params: InsertObjectParams): Promise<InsertObjectResponse> {
   return apiPostJson<InsertObjectResponse>("/editor/insert-object", params);
+}
+
+// Corrige la zona de la máscara con LaMa y devuelve la imagen nueva como staging
+// propio (no pasa por la cola de trabajos).
+export function healEditorImage(imageToken: string, maskToken: string): Promise<InitImageResponse> {
+  return apiPostJson<InitImageResponse>("/editor/heal", { imageToken, maskToken });
+}
+
+// Baja una imagen de partida en staging. Va con fetch crudo porque la respuesta es binaria.
+export async function fetchInitImage(token: string): Promise<Blob> {
+  const response = await fetch(`${API_BASE}/generation/init-image/${token}`);
+  if (!response.ok) {
+    throw await failureOf(response, "Could not load the image");
+  }
+  return response.blob();
 }

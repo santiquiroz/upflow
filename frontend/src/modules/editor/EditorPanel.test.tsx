@@ -45,6 +45,8 @@ vi.mock("../../services/editor", () => ({
   detectPeople: vi.fn(),
   segmentEditorObject: vi.fn(),
   segmentEditorBox: vi.fn(),
+  healEditorImage: vi.fn(),
+  fetchInitImage: vi.fn(),
 }));
 
 const CAPABILITIES: GenerationCapabilities = {
@@ -118,6 +120,8 @@ afterEach(() => {
   vi.mocked(editorService.detectPeople).mockReset();
   vi.mocked(editorService.segmentEditorObject).mockReset();
   vi.mocked(editorService.segmentEditorBox).mockReset();
+  vi.mocked(editorService.healEditorImage).mockReset();
+  vi.mocked(editorService.fetchInitImage).mockReset();
 });
 
 function renderPanel() {
@@ -1132,5 +1136,106 @@ describe("EditorPanel: retoque y deshacer", () => {
     expect(screen.getByText("no se pudo aplicar")).toBeInTheDocument();
     expect(generationService.uploadGenerationInitImage).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("button", { name: en["editor.undo"] })).toBeDisabled();
+  });
+});
+
+describe("EditorPanel: corrector puntual", () => {
+  const HEALED: InitImageResponse = { initImageToken: "healed1", originalFilename: "foto.png", width: 640, height: 480 };
+  const healing = () => screen.queryByText(en["editor.heal.healing"]);
+
+  beforeEach(() => {
+    vi.stubGlobal("PointerEvent", TestPointerEvent);
+    vi.mocked(editorService.healEditorImage).mockResolvedValue(HEALED);
+    vi.mocked(editorService.fetchInitImage).mockResolvedValue(new Blob(["healed"], { type: "image/png" }));
+  });
+
+  function healStroke(pointerId: number, to = { x: 30, y: 30 }) {
+    const canvas = screen.getByTestId("editor-mask-canvas");
+    fireEvent.pointerDown(canvas, { clientX: 10, clientY: 10, pointerId });
+    fireEvent.pointerMove(canvas, { clientX: to.x, clientY: to.y, pointerId });
+    fireEvent.pointerUp(canvas, { pointerId });
+  }
+
+  async function openHeal() {
+    renderPanel();
+    await loadBaseImage();
+    fireEvent.click(screen.getByRole("radio", { name: en["editor.tool.heal"] }));
+  }
+
+  it("a small stroke heals the base and the next heal starts from the new image", async () => {
+    await openHeal();
+    vi.mocked(generationService.uploadGenerationInitImage).mockResolvedValueOnce({ ...BASE_IMAGE, initImageToken: "mask01" });
+
+    healStroke(1);
+
+    await waitFor(() => expect(editorService.healEditorImage).toHaveBeenCalledWith("aabbcc", "mask01"));
+    await waitFor(() => expect(healing()).not.toBeInTheDocument());
+    expect(editorService.fetchInitImage).toHaveBeenCalledWith("healed1");
+    healStroke(2);
+    await waitFor(() => expect(editorService.healEditorImage).toHaveBeenCalledTimes(2));
+    expect(editorService.healEditorImage).toHaveBeenLastCalledWith("healed1", "aabbcc");
+  });
+
+  it("the heal stroke stays out of the mask history", async () => {
+    await openHeal();
+
+    healStroke(1);
+
+    await waitFor(() => expect(healing()).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: en["editor.clear"] })).toBeDisabled();
+  });
+
+  it("shows healing on the stage and ignores further strokes while it runs", async () => {
+    let finish!: (value: InitImageResponse) => void;
+    vi.mocked(editorService.healEditorImage).mockImplementationOnce(
+      () => new Promise((resolve) => { finish = resolve; }),
+    );
+    await openHeal();
+
+    healStroke(1);
+    await screen.findByText(en["editor.heal.healing"]);
+    await waitFor(() => expect(editorService.healEditorImage).toHaveBeenCalledTimes(1));
+    healStroke(2);
+    await act(async () => finish(HEALED));
+
+    await waitFor(() => expect(healing()).not.toBeInTheDocument());
+    expect(editorService.healEditorImage).toHaveBeenCalledTimes(1);
+    expect(generationService.uploadGenerationInitImage).toHaveBeenCalledTimes(2);
+  });
+
+  it("a large stroke shows the notice and does not call the service", async () => {
+    vi.mocked(generationService.uploadGenerationInitImage).mockResolvedValueOnce({ ...BASE_IMAGE, width: 1200, height: 900 });
+    const rect = { left: 0, top: 0, width: 1200, height: 900 } as DOMRect;
+    const spy = vi.spyOn(HTMLCanvasElement.prototype, "getBoundingClientRect").mockReturnValue(rect);
+    await openHeal();
+
+    healStroke(1, { x: 800, y: 10 });
+
+    expect(await screen.findByText(en["editor.heal.tooLarge"])).toBeInTheDocument();
+    expect(editorService.healEditorImage).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("an endpoint error is shown and the base stays the same", async () => {
+    vi.mocked(editorService.healEditorImage).mockRejectedValueOnce(new api.ApiError(503, "Falta el pack LaMa"));
+    await openHeal();
+
+    healStroke(1);
+
+    expect(await screen.findByText("Falta el pack LaMa")).toBeInTheDocument();
+    expect(editorService.fetchInitImage).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: en["editor.undo"] })).toBeDisabled();
+  });
+
+  it("undo after a heal restores the previous base", async () => {
+    await openHeal();
+    healStroke(1);
+    await waitFor(() => expect(healing()).not.toBeInTheDocument());
+
+    fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+    healStroke(2);
+
+    await waitFor(() => expect(editorService.healEditorImage).toHaveBeenCalledTimes(2));
+    expect(editorService.healEditorImage).toHaveBeenLastCalledWith("aabbcc", "aabbcc");
   });
 });

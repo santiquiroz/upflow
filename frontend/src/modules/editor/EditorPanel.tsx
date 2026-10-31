@@ -18,7 +18,7 @@ import { BRUSH_SIZE_MAX, BRUSH_SIZE_MIN, EditorToolRail, type Tool } from "./Edi
 import { PeopleOverlay } from "./PeopleOverlay";
 import {
   createMaskCanvas, hasProtection, maskHasContent, pngBlobToAlphaCanvas, renderMaskOverlays, replayMasks,
-  withoutEdits, type HistoryEntry,
+  type HistoryEntry,
 } from "./editorMaskCanvas";
 import { ReviewOverlay } from "./ReviewOverlay";
 import { useEditorSubmit } from "./useEditorSubmit";
@@ -41,7 +41,8 @@ import { useStageViewport } from "./useStageViewport";
 import { useEditorShortcuts } from "./useEditorShortcuts";
 import { usePeopleSelection } from "./usePeopleSelection";
 import { useBaseVersions, useObjectUrl } from "./useBaseVersions";
-import { useUndoLog } from "./useUndoLog";
+import { useEditorUndo } from "./useEditorUndo";
+import { useHealTool } from "./useHealTool";
 import { isRetouchTool, useRetouchTool } from "./useRetouchTool";
 import { applyRetouch, type RetouchKind, type RetouchOffset } from "./retouchApply";
 import { RetouchCrosshair } from "./RetouchCrosshair";
@@ -67,7 +68,6 @@ export function EditorPanel() {
   const baseVersions = useBaseVersions();
   const baseInfo = baseVersions.current;
   const baseUrl = useObjectUrl(baseVersions.currentBlob);
-  const undoLog = useUndoLog();
   const retouch = useRetouchTool(handleRetouchCommit);
   const [baseUploading, setBaseUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -165,39 +165,14 @@ export function EditorPanel() {
     onError: setUploadError,
   });
   const busy = jobBusy || editorSubmit.preparingJob;
-  const {
-    actions: undoActions, last: lastUndo, record: recordUndo, remove: removeUndo, removeOldest: removeOldestUndo,
-    keepMasks, clear: clearUndo,
-  } = undoLog;
-  const { undo: undoBase } = baseVersions;
-  // Una base que ya no tiene versión que deshacer se descarta del registro y se sigue con la anterior.
-  const handleUndo = useCallback(() => {
-    if (retouch.applying) return;
-    for (let index = undoActions.length - 1; index >= 0; index -= 1) {
-      const action = undoActions[index];
-      if (action.kind === "mask") {
-        removeUndo(action.id);
-        setHistory((previous) => previous.filter((entry) => entry.id !== action.id));
-        return;
-      }
-      removeUndo(action.id);
-      if (undoBase()) return;
-    }
-  }, [undoActions, removeUndo, undoBase, retouch.applying]);
-  // Toda entrada de máscara pasa por aquí: el registro de Deshacer y el historial nacen juntos.
-  function appendHistory(entry: HistoryEntry) {
-    const id = recordUndo("mask");
-    setHistory((previous) => [...previous, { ...entry, id }]);
-  }
-  function dropHistoryEntry(id: number) {
-    removeUndo(id);
-    setHistory((previous) => previous.filter((entry) => entry.id !== id));
-  }
-  function handleClearSelection() {
-    const kept = withoutEdits(history).flatMap((entry) => (entry.id === undefined ? [] : [entry.id]));
-    setHistory(withoutEdits);
-    keepMasks(new Set(kept));
-  }
+  const { undoLog, appendHistory, dropHistoryEntry, recordBase, handleUndo, clearSelection } = useEditorUndo({
+    history, setHistory, undoBase: baseVersions.undo, applying: retouch.applying,
+  });
+  const { last: lastUndo, clear: clearUndo } = undoLog;
+  const heal = useHealTool({
+    baseInfo, sequenceRef: uploadSequence, onError: setUploadError,
+    onAdopt: (info, blob) => recordBase(baseVersions.adopt(info, blob)),
+  });
   const handleBrushSmaller = useCallback(() => {
     setBrushSize((current) => Math.max(BRUSH_SIZE_MIN, current - BRUSH_SIZE_STEP));
   }, []);
@@ -275,8 +250,7 @@ export function EditorPanel() {
     const sequence = uploadSequence.current;
     const evicted = await baseVersions.push(blob);
     if (sequence !== uploadSequence.current) return;
-    recordUndo("base");
-    if (evicted) removeOldestUndo("base");
+    recordBase(evicted);
   }
 
   async function handleRetouchCommit(kind: RetouchKind, stroke: BrushStroke, offset: RetouchOffset) {
@@ -325,7 +299,7 @@ export function EditorPanel() {
       panOriginRef.current = { x: event.clientX, y: event.clientY };
       return;
     }
-    if (tool === "tap" || tool === "protect" || tool === "people" || busy) {
+    if (tool === "tap" || tool === "protect" || tool === "people" || busy || (tool === "heal" && heal.healing)) {
       return;
     }
     const point = imagePointFromEvent(event);
@@ -345,7 +319,7 @@ export function EditorPanel() {
     } else if (tool === "lasso") {
       liveStrokeRef.current = startStroke("lasso", 0, point);
     } else {
-      liveStrokeRef.current = startStroke(tool === "brush" ? "paint" : "erase", scaledBrushRadius(), point);
+      liveStrokeRef.current = startStroke(tool === "eraser" ? "erase" : "paint", scaledBrushRadius(), point);
     }
     redrawMasks();
   }
@@ -398,6 +372,8 @@ export function EditorPanel() {
       redrawMasks();
       return;
     }
+    // El corrector no entra al historial de máscaras: el trazo va al servicio.
+    if (tool === "heal") { redrawMasks(); void heal.commit(stroke); return; }
     appendHistory({ kind: "stroke", stroke });
   }
 
@@ -512,6 +488,7 @@ export function EditorPanel() {
               protect: t("editor.protect.hint"),
               restore: t("editor.tool.restoreHint"),
               clone: t("editor.tool.cloneHint"),
+              heal: t("editor.tool.healHint"),
             }}
             brushSize={brushSize}
             onBrushSizeChange={setBrushSize}
@@ -522,7 +499,7 @@ export function EditorPanel() {
             canResetZoom={isZoomed(viewport)}
             onUndo={handleUndo}
             canUndo={lastUndo !== null}
-            onClear={handleClearSelection}
+            onClear={clearSelection}
             canClear={maskHasContent(history)}
             onClearProtection={() => appendHistory({ kind: "clearProtection" })}
             canClearProtection={hasProtection(history)}
@@ -605,6 +582,11 @@ export function EditorPanel() {
               {retouch.applying && (
                 <p className="absolute bottom-2 left-2 rounded bg-surface px-2 py-1 text-xs text-text-dim">
                   {t("editor.retouch.applying")}
+                </p>
+              )}
+              {heal.healing && (
+                <p className="absolute bottom-2 left-2 rounded bg-surface px-2 py-1 text-xs text-text-dim">
+                  {t("editor.heal.healing")}
                 </p>
               )}
             </div>

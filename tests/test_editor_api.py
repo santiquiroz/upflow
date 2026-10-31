@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import threading
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -15,7 +16,7 @@ from app.api.editor_routes import (
     editor_capabilities,
     segment_object,
 )
-from app.api.routes import upload_init_image
+from app.api.routes import download_init_image, upload_init_image
 from app.config import get_settings
 from app.schemas import EditorPeopleRequest, EditorSegmentRequest
 from app.services.editor_people import EditorPeople
@@ -579,6 +580,35 @@ class FakeLama:
         result = canvas.copy()
         result[group_mask > 0] = (240, 20, 30)
         return result
+
+
+@pytest.mark.asyncio
+async def test_init_image_download_returns_the_uploaded_bytes() -> None:
+    buffer = io.BytesIO()
+    Image.new("RGB", (8, 8), (9, 8, 7)).save(buffer, format="PNG")
+    settings = get_settings()
+    StorageService(settings).ensure_directories()
+    uploaded = await upload_init_image(
+        file=UploadFile(filename="photo.png", file=io.BytesIO(buffer.getvalue())),
+        storage=StorageService(settings),
+        settings=settings,
+    )
+
+    response = download_init_image(uploaded.init_image_token, settings=settings)
+
+    assert Path(response.path).read_bytes() == buffer.getvalue()
+    assert response.media_type == "image/png"
+
+
+def test_init_image_download_rejects_bad_and_unknown_tokens() -> None:
+    settings = get_settings()
+    with pytest.raises(HTTPException) as bad:
+        download_init_image("../etc", settings=settings)
+    with pytest.raises(HTTPException) as unknown:
+        download_init_image("ab" * 16, settings=settings)
+
+    assert bad.value.status_code == 400
+    assert unknown.value.status_code == 400
 
 
 def _heal_request_context(lama) -> object:
