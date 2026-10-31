@@ -48,6 +48,14 @@ export function shouldUseAutoErase(
   return models.some((candidate) => candidate.id === "eraser-lama" && candidate.status === "installed");
 }
 
+export function supportsEdgeAdjust(
+  mode: EditMode,
+  modelId: string | null,
+  models: GenerationModelSummary[],
+): boolean {
+  return mode === "erase" && (modelId === "eraser-auto" || shouldUseAutoErase(mode, modelId, models));
+}
+
 export function replaceModelId(models: GenerationModelSummary[]): string | null {
   const candidates = models.filter(isReplaceModel);
   return (candidates.find((model) => model.inpaintOnly) ?? candidates[0])?.id ?? null;

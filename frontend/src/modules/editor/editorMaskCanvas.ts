@@ -19,6 +19,17 @@ export function withoutEdits(history: HistoryEntry[]): HistoryEntry[] {
   return flattenHistory(history).filter((entry) => entry.kind === "protect" || entry.kind === "clearProtection");
 }
 
+export interface EdgeAdjust {
+  growPx: number;
+  featherPx: number;
+}
+
+export const NO_EDGE: EdgeAdjust = { growPx: 0, featherPx: 0 };
+
+const OVERLAY_RED = [239, 68, 68];
+const GROW_ALPHA = 56;
+const SHRINK_ALPHA = 200;
+
 export function createMaskCanvas(width: number, height: number): HTMLCanvasElement {
   const canvas = document.createElement("canvas");
   canvas.width = width;
@@ -146,11 +157,54 @@ function tintMask(canvas: HTMLCanvasElement, color: string): void {
   ctx.globalCompositeOperation = "source-over";
 }
 
+function copyCanvas(source: HTMLCanvasElement, width: number, height: number): HTMLCanvasElement {
+  const copy = createMaskCanvas(width, height);
+  copy.getContext("2d")?.drawImage(source, 0, 0, width, height);
+  return copy;
+}
+
+function blurCanvas(source: HTMLCanvasElement, radiusPx: number): HTMLCanvasElement {
+  const blurred = createMaskCanvas(source.width, source.height);
+  const ctx = blurred.getContext("2d");
+  if (ctx) {
+    ctx.filter = `blur(${radiusPx}px)`;
+    ctx.drawImage(source, 0, 0);
+  }
+  return blurred;
+}
+
+function thresholdAlpha(source: HTMLCanvasElement, minAlpha: number): HTMLCanvasElement {
+  const out = createMaskCanvas(source.width, source.height);
+  const outCtx = out.getContext("2d");
+  const pixels = source.getContext("2d")?.getImageData(0, 0, source.width, source.height);
+  if (!outCtx || !pixels) return out;
+  for (let i = 0; i < pixels.data.length; i += 4) {
+    pixels.data.set(OVERLAY_RED, i);
+    pixels.data[i + 3] = pixels.data[i + 3] >= minAlpha ? 255 : 0;
+  }
+  outCtx.putImageData(pixels, 0, 0);
+  return out;
+}
+
+export function previewAdjust(canvas: HTMLCanvasElement, growPx: number, featherPx: number, scale: number): void {
+  if (growPx === 0 && featherPx === 0) return;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  let shape = copyCanvas(canvas, Math.round(canvas.width * scale), Math.round(canvas.height * scale));
+  if (growPx !== 0) {
+    shape = thresholdAlpha(blurCanvas(shape, Math.abs(growPx) * scale), growPx > 0 ? GROW_ALPHA : SHRINK_ALPHA);
+  }
+  if (featherPx !== 0) shape = blurCanvas(shape, featherPx * scale);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(shape, 0, 0, canvas.width, canvas.height);
+}
+
 export function renderMaskOverlays(
   overlay: HTMLCanvasElement,
   protectionOverlay: HTMLCanvasElement,
   edit: HTMLCanvasElement,
   protect: HTMLCanvasElement,
+  edge: EdgeAdjust | null = null,
 ): void {
   const ctx = overlay.getContext("2d");
   const protectCtx = protect.getContext("2d");
@@ -162,6 +216,7 @@ export function renderMaskOverlays(
   pixels.data.set(subtractProtectedPixels(pixels.data, protectedPixels.data));
   ctx.putImageData(pixels, 0, 0);
   tintMask(overlay, "#ef4444");
+  if (edge) previewAdjust(overlay, edge.growPx, edge.featherPx, overlay.getBoundingClientRect().width / edit.width);
   greenCtx.clearRect(0, 0, protect.width, protect.height);
   greenCtx.drawImage(protect, 0, 0);
   tintMask(protectionOverlay, "#22c55e");

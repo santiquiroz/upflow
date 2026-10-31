@@ -7,6 +7,7 @@ import {
   flattenHistory,
   hasProtection,
   maskHasContent,
+  previewAdjust,
   renderMaskOverlays,
   replayMasks,
   withoutEdits,
@@ -165,6 +166,39 @@ describe("renderMaskOverlays", () => {
     expect(green.context.globalCompositeOperation).toBe("source-over");
     expect(editPixels[3]).toBe(200);
     expect(protectionPixels[3]).toBe(1);
+  });
+
+  it("previews the edge adjustment on the red overlay and leaves the protection overlay alone", () => {
+    const edit = maskCanvas(new Uint8ClampedArray([255, 255, 255, 255, 255, 255, 255, 0]));
+    const protect = maskCanvas();
+    const red = maskCanvas();
+    const green = maskCanvas();
+
+    renderMaskOverlays(red.canvas, green.canvas, edit.canvas, protect.canvas, { growPx: 12, featherPx: 0 });
+
+    expect(red.context.clearRect).toHaveBeenCalledWith(0, 0, 2, 1);
+    expect(green.context.clearRect).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("previewAdjust", () => {
+  it("leaves the overlay untouched when both values are 0", () => {
+    const overlay = maskCanvas(new Uint8ClampedArray([239, 68, 68, 255, 239, 68, 68, 0]));
+
+    previewAdjust(overlay.canvas, 0, 0, 1);
+
+    expect(overlay.context.clearRect).not.toHaveBeenCalled();
+    expect(overlay.context.drawImage).not.toHaveBeenCalled();
+    expect(overlay.context.putImageData).not.toHaveBeenCalled();
+  });
+
+  it("redraws the overlay with the approximate grow when a value is set", () => {
+    const overlay = maskCanvas(new Uint8ClampedArray([239, 68, 68, 255, 239, 68, 68, 0]));
+
+    previewAdjust(overlay.canvas, 12, 0, 1);
+
+    expect(overlay.context.clearRect).toHaveBeenCalledWith(0, 0, 2, 1);
+    expect(overlay.context.drawImage).toHaveBeenCalledWith(expect.any(HTMLCanvasElement), 0, 0, 2, 1);
   });
 });
 

@@ -45,6 +45,14 @@ describe("useReviewSession", () => {
     }));
   });
 
+  it("stores the grow and feather used on submit so a redo reuses them", () => {
+    const hook = renderHook(() => useReviewSession(undefined));
+
+    act(() => hook.result.current.start(mask(), "protect", { growPx: 12, featherPx: 5 }));
+
+    expect(hook.result.current.session).toEqual(expect.objectContaining({ maskGrowPx: 12, maskFeatherPx: 5 }));
+  });
+
   it("a new erase submit restarts the session", () => {
     const { result, rerender } = startedSession();
     const nextMask = mask();

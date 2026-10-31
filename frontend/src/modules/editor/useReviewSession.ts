@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import type { EraseZone, GenerationJob } from "../../lib/apiTypes";
+import { NO_EDGE, type EdgeAdjust } from "./editorMaskCanvas";
 import { replaceZone } from "./zones";
 
 export interface ReviewSession {
@@ -25,8 +26,10 @@ export function useReviewSession(job: GenerationJob | undefined) {
     setSession((current) => adoptJob(current, job));
   }, [job]);
 
-  const start = useCallback((eraseMask: ImageData, protectMaskToken?: string) => {
-    setSession({ eraseMask, protectMaskToken, maskGrowPx: 0, maskFeatherPx: 0, zones: null, resultUrl: null });
+  const start = useCallback((eraseMask: ImageData, protectMaskToken?: string, edge: EdgeAdjust = NO_EDGE) => {
+    setSession({
+      eraseMask, protectMaskToken, maskGrowPx: edge.growPx, maskFeatherPx: edge.featherPx, zones: null, resultUrl: null,
+    });
     setHoveredZone(null);
   }, []);
 

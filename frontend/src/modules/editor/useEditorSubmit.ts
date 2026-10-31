@@ -1,8 +1,10 @@
 import { useRef, useState, type MutableRefObject } from "react";
 import type { GenerationModelSummary, InitImageResponse } from "../../lib/apiTypes";
 import { uploadGenerationInitImage, type CreateGenerationJobParams } from "../../services/generation";
-import { canvasHasPixels, exportMaskBlob, exportProtectMaskBlob, readMaskImageData } from "./editorMaskCanvas";
-import { buildEditorJobParams } from "./eraseJobParams";
+import {
+  canvasHasPixels, exportMaskBlob, exportProtectMaskBlob, NO_EDGE, readMaskImageData, type EdgeAdjust,
+} from "./editorMaskCanvas";
+import { buildEditorJobParams, supportsEdgeAdjust } from "./eraseJobParams";
 import type { EditMode } from "./InpaintModelSelect";
 import { fitGenerationSize } from "./maskCanvas";
 
@@ -18,6 +20,7 @@ export interface EditorSubmitForm {
   seedText: string;
   strength: number;
   device: string | null;
+  edge: EdgeAdjust;
 }
 
 interface EditorSubmitOptions {
@@ -29,7 +32,7 @@ interface EditorSubmitOptions {
   uploadSequence: MutableRefObject<number>;
   segmentPendingRef: MutableRefObject<boolean>;
   blocked: boolean;
-  review: { start: (eraseMask: ImageData, protectMaskToken?: string) => void; clear: () => void };
+  review: { start: (eraseMask: ImageData, protectMaskToken?: string, edge?: EdgeAdjust) => void; clear: () => void };
   submit: (params: CreateGenerationJobParams) => void;
   onError: (message: string | null) => void;
 }
@@ -52,6 +55,7 @@ function buildParams(
   baseInfo: InitImageResponse,
   maskImageToken: string,
   protectMaskToken: string | undefined,
+  edge: EdgeAdjust | null,
 ): CreateGenerationJobParams {
   const size = fitGenerationSize(baseInfo.width, baseInfo.height);
   const erasing = form.mode === "erase";
@@ -74,6 +78,7 @@ function buildParams(
     maskImageToken,
     strength: form.strength,
     ...(protectMaskToken ? { protectMaskToken } : {}),
+    ...(edge ? { maskGrowPx: edge.growPx, maskFeatherPx: edge.featherPx } : {}),
   };
 }
 
@@ -105,8 +110,9 @@ export function useEditorSubmit(options: EditorSubmitOptions) {
     if (sequence !== uploadSequence.current) return;
     const protectMaskToken = protectBlob ? await uploadPng(protectBlob, "protect-mask.png") : undefined;
     if (sequence !== uploadSequence.current) return;
-    const params = buildParams(form, baseInfo!, maskToken, protectMaskToken);
-    if (eraseMask) review.start(eraseMask, protectMaskToken);
+    const edge = supportsEdgeAdjust(form.mode, form.modelId, models) ? form.edge : null;
+    const params = buildParams(form, baseInfo!, maskToken, protectMaskToken, edge);
+    if (eraseMask) review.start(eraseMask, protectMaskToken, edge ?? NO_EDGE);
     else review.clear();
     submit(buildEditorJobParams(params, form.mode, models));
   }

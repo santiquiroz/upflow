@@ -42,6 +42,7 @@ import { useEditorShortcuts } from "./useEditorShortcuts";
 import { usePeopleSelection } from "./usePeopleSelection";
 import { useBaseVersions, useObjectUrl } from "./useBaseVersions";
 import { useEditorUndo } from "./useEditorUndo";
+import { useEdgeAdjust } from "./useEdgeAdjust";
 import { editsBase, useHealTool } from "./useHealTool";
 import { isRetouchTool, useRetouchTool } from "./useRetouchTool";
 import { applyRetouch, type RetouchKind, type RetouchOffset } from "./retouchApply";
@@ -154,13 +155,14 @@ export function EditorPanel() {
   // Reemplazar hay que soltarlo, o el job saldria con un modelo que no aplica.
   const isEraseOnlyModel = selectedModel?.eraseOnly === true;
   const autoErase = shouldUseAutoErase(mode, modelId, models);
+  const edgeAdjust = useEdgeAdjust({ mode, modelId, models, photo: baseVersions.original });
   const tapAvailable = editorCapabilities.data?.tapSelect ?? false;
   const jobBusy = baseUploading || phase === "uploading" || phase === "queued" || phase === "running";
   const editorSubmit = useEditorSubmit({
     baseInfo, models, editMaskRef, protectMaskRef, uploadSequence, segmentPendingRef, review, submit,
     blocked: jobBusy,
     form: {
-      mode, modelId, prompt, erasePromptText, eraseNegative, replaceNegative, steps, guidance, seedText, strength, device,
+      mode, modelId, prompt, erasePromptText, eraseNegative, replaceNegative, steps, guidance, seedText, strength, device, edge: edgeAdjust.edge,
     },
     onError: setUploadError,
   });
@@ -199,12 +201,12 @@ export function EditorPanel() {
     const edit = editMaskRef.current!;
     const protect = protectMaskRef.current!;
     replayMasks(edit, protect, history, liveStrokeRef.current);
-    renderMaskOverlays(canvas, protectionOverlay, edit, protect);
+    renderMaskOverlays(canvas, protectionOverlay, edit, protect, edgeAdjust.preview);
   }
 
   useEffect(() => {
     redrawMasks();
-  }, [history, baseInfo]);
+  }, [history, baseInfo, edgeAdjust.preview]);
 
   useEffect(() => {
     if (mode === "replace" && isEraseOnlyModel) {
@@ -634,7 +636,7 @@ export function EditorPanel() {
                 baseInfo, models, capabilitiesLoaded, mode, setMode: handleModeChange, prompt, setPrompt,
                 modelId, setModelId, device, setDevice, erasePromptText, setErasePromptText,
                 eraseNegative, setEraseNegative, replaceNegative, setReplaceNegative, steps, setSteps,
-                guidance, setGuidance, seedText, setSeedText, strength, setStrength, isEraseOnlyModel, autoErase,
+                guidance, setGuidance, seedText, setSeedText, strength, setStrength, isEraseOnlyModel, autoErase, edge: edgeAdjust.edge, setEdge: edgeAdjust.setEdge, edgeActive: edgeAdjust.active,
                 canSubmit,
                 onGenerate: () => void editorSubmit.handleGenerate(),
                 onBaseSelected: (file) => void handleBaseSelected(file),

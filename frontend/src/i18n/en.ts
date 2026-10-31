@@ -1165,6 +1165,9 @@ export const en = {
   "editor.advanced.strength": "Strength",
   "editor.advanced.strengthHint":
     "With standard models the edit always runs at 1.0; lower values only take effect with dedicated inpainting checkpoints.",
+  "editor.edge.expand": "Expand / Contract",
+  "editor.edge.soften": "Soften",
+  "editor.edge.hint": "The preview is approximate; removing applies the exact edge.",
   "editor.insert.title": "Insert object",
   "editor.insert.summary": "Bring an object over from another photo",
   "editor.insert.tooltip":

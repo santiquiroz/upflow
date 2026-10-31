@@ -2,6 +2,8 @@ import { AccordionSection } from "../../components/AccordionSection";
 import { DevicePicker } from "../../components/DevicePicker";
 import { useTranslation } from "../../i18n/LocaleProvider";
 import type { DeviceInfoResponse, GenerationModelSummary, InitImageResponse } from "../../lib/apiTypes";
+import { EdgeAdjustControls } from "./EdgeAdjustControls";
+import type { EdgeAdjust } from "./editorMaskCanvas";
 import { canReplace } from "./eraseJobParams";
 import { InsertObjectPanel } from "./InsertObjectPanel";
 import { InpaintModelSelect, type EditMode } from "./InpaintModelSelect";
@@ -34,6 +36,9 @@ export function EditorActionControls({
   setStrength,
   isEraseOnlyModel,
   autoErase,
+  edge,
+  setEdge,
+  edgeActive,
   canSubmit,
   onGenerate,
   onBaseSelected,
@@ -65,6 +70,9 @@ export function EditorActionControls({
   setStrength: (strength: number) => void;
   isEraseOnlyModel: boolean;
   autoErase: boolean;
+  edge: EdgeAdjust;
+  setEdge: (edge: EdgeAdjust) => void;
+  edgeActive: boolean;
   canSubmit: boolean;
   onGenerate: () => void;
   onBaseSelected: (file: File) => void;
@@ -126,6 +134,7 @@ export function EditorActionControls({
           allowAuto={false}
         />
       </div>
+      {edgeActive && <EdgeAdjustControls value={edge} onChange={setEdge} />}
 
       {!isEraseOnlyModel && (
         <AccordionSection

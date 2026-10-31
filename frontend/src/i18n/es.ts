@@ -1160,6 +1160,9 @@ export const es = {
   "editor.advanced.strength": "Fuerza",
   "editor.advanced.strengthHint":
     "Con modelos estándar la edición corre siempre a 1.0; valores menores solo aplican con checkpoints de inpainting dedicados.",
+  "editor.edge.expand": "Expandir / Contraer",
+  "editor.edge.soften": "Suavizar",
+  "editor.edge.hint": "La vista previa es aproximada; al quitar se aplica el borde exacto.",
   "editor.insert.title": "Insertar objeto",
   "editor.insert.summary": "Traé un objeto desde otra foto",
   "editor.insert.tooltip":
