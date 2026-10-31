@@ -1,6 +1,4 @@
-// Retoque sobre la imagen base, puro y sobre ImageData. Las entradas nunca se
-// mutan: cada función devuelve una copia. El alfa de la máscara es el peso de
-// la mezcla (255 = todo el píxel, 0 = no toca nada).
+// El alfa de la máscara es el peso de la mezcla: 255 mezcla todo el píxel, 0 no toca nada.
 
 function copyImage(source: ImageData): ImageData {
   return { width: source.width, height: source.height, data: new Uint8ClampedArray(source.data) } as ImageData;

@@ -68,6 +68,17 @@ describe("useBaseVersions", () => {
     expect(result.current.current?.initImageToken).toBe("tok-1");
   });
 
+  it("push reports when the cap dropped an old version", async () => {
+    const { result } = await setup();
+    const evictions: boolean[] = [];
+    for (let index = 0; index < MAX_BASE_VERSIONS; index += 1) {
+      await act(async () => {
+        evictions.push(await result.current.push(photo(`edit-${index}.png`)));
+      });
+    }
+    expect(evictions).toEqual([...Array(MAX_BASE_VERSIONS - 1).fill(false), true]);
+  });
+
   it("reset starts a new session with the new photo as the original", async () => {
     const { result } = await setup();
     await act(async () => {
@@ -97,7 +108,7 @@ describe("useBaseVersions", () => {
     vi.mocked(uploadGenerationInitImage).mockImplementationOnce(
       () => new Promise<InitImageResponse>((resolve) => { finishUpload = resolve; }),
     );
-    let pending: Promise<void> = Promise.resolve();
+    let pending: Promise<boolean> = Promise.resolve(false);
     act(() => {
       pending = result.current.push(photo("late.png"));
     });

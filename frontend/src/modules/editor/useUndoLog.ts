@@ -7,8 +7,7 @@ export interface UndoAction {
   kind: UndoKind;
 }
 
-// Registro único de lo que Ctrl+Z puede deshacer, en orden. Cada acción de
-// máscara lleva el id de su entrada en el historial, así se quita por id y no por posición.
+// El id de cada acción la identifica aunque haya otras de su mismo tipo.
 export function useUndoLog() {
   const [actions, setActions] = useState<UndoAction[]>([]);
   const lastIdRef = useRef(0);
@@ -24,6 +23,13 @@ export function useUndoLog() {
     setActions((previous) => previous.filter((action) => action.id !== id));
   }, []);
 
+  const removeOldest = useCallback((kind: UndoKind) => {
+    setActions((previous) => {
+      const oldest = previous.find((action) => action.kind === kind);
+      return previous.filter((action) => action !== oldest);
+    });
+  }, []);
+
   const keepMasks = useCallback((keepIds: ReadonlySet<number>) => {
     setActions((previous) =>
       previous.filter((action) => action.kind === "base" || keepIds.has(action.id)),
@@ -33,9 +39,11 @@ export function useUndoLog() {
   const clear = useCallback(() => setActions([]), []);
 
   return {
+    actions,
     last: actions[actions.length - 1] ?? null,
     record,
     remove,
+    removeOldest,
     keepMasks,
     clear,
   };

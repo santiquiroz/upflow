@@ -10,7 +10,9 @@ import * as api from "../../lib/api";
 import * as editorService from "../../services/editor";
 import * as generationService from "../../services/generation";
 import { EditorPanel } from "./EditorPanel";
+import * as retouchApply from "./retouchApply";
 import * as zones from "./zones";
+import { MAX_BASE_VERSIONS } from "./useBaseVersions";
 
 vi.mock("./zones", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./zones")>();
@@ -1021,5 +1023,114 @@ describe("EditorPanel: diseño de tres columnas", () => {
     await waitFor(() => expect(screen.queryByText(en["editor.retouch.applying"])).not.toBeInTheDocument());
     expect(editorService.detectPeople).toHaveBeenCalledTimes(1);
     expect(editorService.detectPeople).toHaveBeenCalledWith("aabbcc");
+  });
+});
+
+describe("EditorPanel: retoque y deshacer", () => {
+  const applying = () => screen.queryByText(en["editor.retouch.applying"]);
+
+  beforeEach(() => {
+    vi.stubGlobal("PointerEvent", TestPointerEvent);
+    vi.mocked(retouchApply.applyRetouch).mockClear();
+  });
+
+  async function restoreStroke(pointerId: number) {
+    const canvas = screen.getByTestId("editor-mask-canvas");
+    fireEvent.pointerDown(canvas, { clientX: 10, clientY: 10, pointerId });
+    fireEvent.pointerMove(canvas, { clientX: 30, clientY: 30, pointerId });
+    fireEvent.pointerUp(canvas, { pointerId });
+  }
+
+  async function restoreAndWait(pointerId: number) {
+    await restoreStroke(pointerId);
+    await waitFor(() => expect(applying()).not.toBeInTheDocument());
+  }
+
+  function pressUndo() {
+    fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+  }
+
+  it("twelve base pushes keep the log in step with the versions, so a mask under them is still undone", async () => {
+    renderPanel();
+    await loadBaseImage();
+    paintOnCanvas();
+    await waitFor(() => expect(screen.getByRole("button", { name: en["editor.clear"] })).toBeEnabled());
+    fireEvent.click(screen.getByRole("radio", { name: en["editor.tool.restore"] }));
+
+    for (let push = 0; push < MAX_BASE_VERSIONS + 2; push += 1) {
+      await restoreAndWait(10 + push);
+    }
+    expect(generationService.uploadGenerationInitImage).toHaveBeenCalledTimes(MAX_BASE_VERSIONS + 3);
+
+    for (let undo = 0; undo < MAX_BASE_VERSIONS - 1; undo += 1) {
+      pressUndo();
+    }
+    expect(screen.getByRole("button", { name: en["editor.clear"] })).toBeEnabled();
+    pressUndo();
+    expect(screen.getByRole("button", { name: en["editor.clear"] })).toBeDisabled();
+  });
+
+  it("clone shows the crosshair at the source right after Alt+click", async () => {
+    renderPanel();
+    await loadBaseImage();
+    fireEvent.click(screen.getByRole("radio", { name: en["editor.tool.clone"] }));
+    const canvas = screen.getByTestId("editor-mask-canvas");
+    fireEvent.pointerDown(canvas, { clientX: 40, clientY: 40, pointerId: 1, altKey: true });
+    fireEvent.pointerUp(canvas, { pointerId: 1 });
+    expect(screen.getByTestId("retouch-crosshair")).toBeInTheDocument();
+  });
+
+  it("strokes are ignored while an apply is in flight", async () => {
+    let finish: (blob: Blob) => void = () => {};
+    vi.mocked(retouchApply.applyRetouch).mockImplementationOnce(
+      () => new Promise<Blob>((resolve) => { finish = resolve; }),
+    );
+    renderPanel();
+    await loadBaseImage();
+    fireEvent.click(screen.getByRole("radio", { name: en["editor.tool.restore"] }));
+    await restoreStroke(1);
+    expect(applying()).toBeInTheDocument();
+
+    await restoreStroke(2);
+    expect(retouchApply.applyRetouch).toHaveBeenCalledTimes(1);
+
+    await act(async () => finish(new Blob(["retouched"], { type: "image/png" })));
+    await waitFor(() => expect(applying()).not.toBeInTheDocument());
+    expect(generationService.uploadGenerationInitImage).toHaveBeenCalledTimes(2);
+  });
+
+  it("Ctrl+Z waits for an apply in flight, then undoes the base before the mask", async () => {
+    let finish: (blob: Blob) => void = () => {};
+    renderPanel();
+    await loadBaseImage();
+    paintOnCanvas();
+    await waitFor(() => expect(screen.getByRole("button", { name: en["editor.clear"] })).toBeEnabled());
+    fireEvent.click(screen.getByRole("radio", { name: en["editor.tool.restore"] }));
+    vi.mocked(retouchApply.applyRetouch).mockImplementationOnce(
+      () => new Promise<Blob>((resolve) => { finish = resolve; }),
+    );
+    await restoreStroke(2);
+
+    pressUndo();
+    expect(screen.getByRole("button", { name: en["editor.clear"] })).toBeEnabled();
+
+    await act(async () => finish(new Blob(["retouched"], { type: "image/png" })));
+    await waitFor(() => expect(applying()).not.toBeInTheDocument());
+    pressUndo();
+    expect(screen.getByRole("button", { name: en["editor.clear"] })).toBeEnabled();
+    pressUndo();
+    expect(screen.getByRole("button", { name: en["editor.clear"] })).toBeDisabled();
+  });
+
+  it("an apply error keeps the previous base and shows the error", async () => {
+    vi.mocked(retouchApply.applyRetouch).mockRejectedValueOnce(new Error("no se pudo aplicar"));
+    renderPanel();
+    await loadBaseImage();
+    fireEvent.click(screen.getByRole("radio", { name: en["editor.tool.restore"] }));
+    await restoreAndWait(1);
+
+    expect(screen.getByText("no se pudo aplicar")).toBeInTheDocument();
+    expect(generationService.uploadGenerationInitImage).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: en["editor.undo"] })).toBeDisabled();
   });
 });

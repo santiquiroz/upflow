@@ -36,11 +36,14 @@ export function useBaseVersions() {
     commit([{ blob: file, info }]);
   }, [commit]);
 
-  const push = useCallback(async (blob: Blob) => {
+  // Devuelve true si el tope descartó una versión vieja.
+  const push = useCallback(async (blob: Blob): Promise<boolean> => {
     const session = sessionRef.current;
     const info = await uploadGenerationInitImage(new File([blob], "edited.png", { type: "image/png" }));
-    if (session !== sessionRef.current) return;
+    if (session !== sessionRef.current) return false;
+    const evicted = versionsRef.current.length >= MAX_BASE_VERSIONS;
     commit(appendVersion(versionsRef.current, { blob, info }));
+    return evicted;
   }, [commit]);
 
   const undo = useCallback((): boolean => {

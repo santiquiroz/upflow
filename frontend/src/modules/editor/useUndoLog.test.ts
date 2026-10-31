@@ -44,6 +44,22 @@ describe("useUndoLog", () => {
     expect(result.current.last?.kind).toBe("base");
   });
 
+  it("removeOldest drops the oldest action of a kind and keeps the rest in order", () => {
+    const { result } = renderHook(() => useUndoLog());
+    let mask = 0;
+    let newestBase = 0;
+    act(() => {
+      result.current.record("base");
+      mask = result.current.record("mask");
+      newestBase = result.current.record("base");
+    });
+    act(() => result.current.removeOldest("base"));
+    expect(result.current.actions).toEqual([
+      { id: mask, kind: "mask" },
+      { id: newestBase, kind: "base" },
+    ]);
+  });
+
   it("clear empties the log", () => {
     const { result } = renderHook(() => useUndoLog());
     act(() => {

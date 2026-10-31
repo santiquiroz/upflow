@@ -16,9 +16,14 @@ export function isRetouchTool(tool: string): tool is RetouchKind {
   return tool === "restore" || tool === "clone";
 }
 
+function sampleAt(point: BrushPoint, offset: RetouchOffset): BrushPoint {
+  return { x: point.x + offset.dx, y: point.y + offset.dy };
+}
+
 // Un trazo se aplica al soltar: mientras una aplicación está en vuelo, los trazos nuevos se ignoran.
 export function useRetouchTool(onCommit: RetouchCommit) {
   const [source, setSource] = useState<BrushPoint | null>(null);
+  const [samplePoint, setSamplePoint] = useState<BrushPoint | null>(null);
   const [painting, setPainting] = useState(false);
   const [applying, setApplying] = useState(false);
   const activeRef = useRef<ActiveStroke | null>(null);
@@ -35,18 +40,22 @@ export function useRetouchTool(onCommit: RetouchCommit) {
       ? { dx: source.x - point.x, dy: source.y - point.y }
       : NO_OFFSET;
     activeRef.current = { kind, stroke: startStroke("paint", radius, point), offset };
+    setSamplePoint(sampleAt(point, offset));
     setPainting(true);
   }
 
   function move(point: BrushPoint) {
     const active = activeRef.current;
-    if (active) active.stroke = appendPoint(active.stroke, point);
+    if (!active) return;
+    active.stroke = appendPoint(active.stroke, point);
+    setSamplePoint(sampleAt(point, active.offset));
   }
 
   async function end() {
     const active = activeRef.current;
     activeRef.current = null;
     setPainting(false);
+    setSamplePoint(null);
     if (!active) return;
     applyingRef.current = true;
     setApplying(true);
@@ -62,5 +71,5 @@ export function useRetouchTool(onCommit: RetouchCommit) {
     setSource(null);
   }
 
-  return { source, painting, applying, start, move, end, reset };
+  return { source, samplePoint, painting, applying, start, move, end, reset };
 }

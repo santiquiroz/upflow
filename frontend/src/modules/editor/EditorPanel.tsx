@@ -165,14 +165,25 @@ export function EditorPanel() {
     onError: setUploadError,
   });
   const busy = jobBusy || editorSubmit.preparingJob;
-  const { last: lastUndo, record: recordUndo, remove: removeUndo, keepMasks, clear: clearUndo } = undoLog;
+  const {
+    actions: undoActions, last: lastUndo, record: recordUndo, remove: removeUndo, removeOldest: removeOldestUndo,
+    keepMasks, clear: clearUndo,
+  } = undoLog;
   const { undo: undoBase } = baseVersions;
+  // Una base que ya no tiene versión que deshacer se descarta del registro y se sigue con la anterior.
   const handleUndo = useCallback(() => {
-    if (!lastUndo) return;
-    removeUndo(lastUndo.id);
-    if (lastUndo.kind === "base") undoBase();
-    else setHistory((previous) => previous.filter((entry) => entry.id !== lastUndo.id));
-  }, [lastUndo, removeUndo, undoBase]);
+    if (retouch.applying) return;
+    for (let index = undoActions.length - 1; index >= 0; index -= 1) {
+      const action = undoActions[index];
+      if (action.kind === "mask") {
+        removeUndo(action.id);
+        setHistory((previous) => previous.filter((entry) => entry.id !== action.id));
+        return;
+      }
+      removeUndo(action.id);
+      if (undoBase()) return;
+    }
+  }, [undoActions, removeUndo, undoBase, retouch.applying]);
   // Toda entrada de máscara pasa por aquí: el registro de Deshacer y el historial nacen juntos.
   function appendHistory(entry: HistoryEntry) {
     const id = recordUndo("mask");
@@ -262,8 +273,10 @@ export function EditorPanel() {
   // Un retoque sube una versión nueva de la base: no toca el historial de máscaras.
   async function pushBase(blob: Blob) {
     const sequence = uploadSequence.current;
-    await baseVersions.push(blob);
-    if (sequence === uploadSequence.current) recordUndo("base");
+    const evicted = await baseVersions.push(blob);
+    if (sequence !== uploadSequence.current) return;
+    recordUndo("base");
+    if (evicted) removeOldestUndo("base");
   }
 
   async function handleRetouchCommit(kind: RetouchKind, stroke: BrushStroke, offset: RetouchOffset) {
@@ -567,8 +580,12 @@ export function EditorPanel() {
                     imageHeight={baseInfo.height}
                   />
                 )}
-                {tool === "clone" && retouch.painting && retouch.source && (
-                  <RetouchCrosshair point={retouch.source} imageWidth={baseInfo.width} imageHeight={baseInfo.height} />
+                {tool === "clone" && retouch.source && (
+                  <RetouchCrosshair
+                    point={retouch.samplePoint ?? retouch.source}
+                    imageWidth={baseInfo.width}
+                    imageHeight={baseInfo.height}
+                  />
                 )}
                 {panelView === "review" && review.zones && (
                   <ReviewOverlay
