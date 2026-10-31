@@ -59,6 +59,12 @@ describe("cloneWithMask", () => {
     expect(pixel(out, 0, 0)).toEqual([20, 0, 0, 255]);
   });
 
+  it("rounds a fractional offset instead of reading an empty source", () => {
+    const current = image(4, 1, (x) => [x * 10, 0, 0, 255]);
+    const out = cloneWithMask(current, maskAt(4, 1, [[0, 0]]), 1.6, 0.2);
+    expect(pixel(out, 0, 0)).toEqual([20, 0, 0, 255]);
+  });
+
   it("leaves pixels whose source falls outside the image unchanged", () => {
     const current = image(3, 1, (x) => [x * 10, 0, 0, 255]);
     const out = cloneWithMask(current, maskAt(3, 1, [[2, 0]]), 5, 0);

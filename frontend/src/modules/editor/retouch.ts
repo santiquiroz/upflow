@@ -35,7 +35,10 @@ function sourceIndex(width: number, height: number, x: number, y: number): numbe
   return (y * width + x) * 4;
 }
 
-export function cloneWithMask(current: ImageData, mask: ImageData, dx: number, dy: number): ImageData {
+export function cloneWithMask(current: ImageData, mask: ImageData, rawDx: number, rawDy: number): ImageData {
+  // El desplazamiento llega en píxeles de foto con decimales; un índice fraccionario lee undefined.
+  const dx = Math.round(rawDx);
+  const dy = Math.round(rawDy);
   const out = copyImage(current);
   for (let y = 0; y < out.height; y += 1) {
     for (let x = 0; x < out.width; x += 1) {
