@@ -1,7 +1,10 @@
 // El alfa de la máscara es el peso de la mezcla: 255 mezcla todo el píxel, 0 no toca nada.
 
 function copyImage(source: ImageData): ImageData {
-  return { width: source.width, height: source.height, data: new Uint8ClampedArray(source.data) } as ImageData;
+  const data = new Uint8ClampedArray(source.data);
+  // putImageData del navegador rechaza objetos planos; jsdom no trae ImageData.
+  if (typeof ImageData === "function") return new ImageData(data, source.width, source.height);
+  return { width: source.width, height: source.height, data } as ImageData;
 }
 
 function mix(from: number, to: number, weight: number): number {
