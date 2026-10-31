@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import replace
 from typing import Literal
 
 import cv2
@@ -9,6 +11,8 @@ from app.services.fill_faces import get_face_cascade
 from app.services.person_detector import PersonBox
 
 Role = Literal["subject", "background"]
+FaceBox = tuple[int, int, int, int]
+FaceFinder = Callable[[np.ndarray, FaceBox], list[FaceBox]]
 
 # Calibrados contra 816 clics de 59 fotos de grado (2026-10-30): rol 90.6 %, 1 foto con un
 # sujeto grande propuesto como fondo; con relativo 0.65-0.75 se mantiene en ≤ 2 fotos.
@@ -17,6 +21,18 @@ SHARPNESS_WEIGHT = 0.1
 CENTER_WEIGHT = 0.2
 SUBJECT_RELATIVE = 0.7
 SUBJECT_MIN = 0.35
+
+# Una cara solo es de una persona si su centro cae en la mitad central de la caja
+# (|cx - box_cx| <= 0.3 * box_w) y el punto esperado de la cabeza sale del 15 % superior.
+FACE_WINDOW_HALF_WIDTH = 0.3
+FACE_HEAD_Y = 0.15
+FACE_DUPLICATE_IOU = 0.5
+
+# Dos cajas son la misma persona si la pequeña cabe dentro de la grande, con la misma
+# cabeza y el mismo centro horizontal (un hombre detectado dos veces).
+DUPLICATE_CONTAINMENT = 0.8
+DUPLICATE_TOP_TOLERANCE = 0.05
+DUPLICATE_CENTER_TOLERANCE = 0.15
 
 
 def _clipped_box(
@@ -94,30 +110,155 @@ def classify_roles(rgb: np.ndarray, people: list[PersonBox]) -> list[Role]:
     ]
 
 
-def face_box(
-    rgb: np.ndarray, box: tuple[int, int, int, int]
-) -> tuple[int, int, int, int] | None:
+def _haar_faces(rgb: np.ndarray, box: FaceBox) -> list[FaceBox]:
     image_height, image_width = rgb.shape[:2]
     x1, y1, x2, y2 = _clipped_box(box, image_width, image_height)
     upper_y2 = y1 + (y2 - y1) // 2
     if x2 <= x1 or upper_y2 <= y1:
-        return None
+        return []
 
     gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
     region = gray[y1:upper_y2, x1:x2]
     detections = get_face_cascade().detectMultiScale(
         region, 1.1, 5, minSize=(20, 20)
     )
-    if len(detections) == 0:
-        return None
+    return [
+        (int(x1 + x), int(y1 + y), int(x1 + x + width), int(y1 + y + height))
+        for x, y, width, height in detections
+    ]
 
-    x, y, width, height = max(detections, key=lambda detected: detected[2] * detected[3])
-    return (
-        int(x1 + x),
-        int(y1 + y),
-        int(x1 + x + width),
-        int(y1 + y + height),
+
+def face_box(
+    rgb: np.ndarray, box: tuple[int, int, int, int]
+) -> tuple[int, int, int, int] | None:
+    faces = _haar_faces(rgb, box)
+    if not faces:
+        return None
+    return max(faces, key=_area)
+
+
+def assign_faces(
+    rgb: np.ndarray,
+    boxes: list[FaceBox],
+    find_faces: FaceFinder = _haar_faces,
+) -> list[FaceBox | None]:
+    pool = _unique_faces([face for box in boxes for face in find_faces(rgb, box)])
+    assigned: list[FaceBox | None] = [None] * len(boxes)
+    taken: set[FaceBox] = set()
+    for index in sorted(range(len(boxes)), key=lambda item: _area(boxes[item])):
+        face = _pick_face(boxes[index], pool, taken)
+        assigned[index] = face
+        if face is not None:
+            taken.add(face)
+    return assigned
+
+
+def _unique_faces(faces: list[FaceBox]) -> list[FaceBox]:
+    unique: list[FaceBox] = []
+    for face in faces:
+        if all(_iou(face, kept) <= FACE_DUPLICATE_IOU for kept in unique):
+            unique.append(face)
+    return unique
+
+
+def _pick_face(
+    box: FaceBox, pool: list[FaceBox], taken: set[FaceBox]
+) -> FaceBox | None:
+    candidates = [
+        face for face in pool if face not in taken and _face_belongs_to(face, box)
+    ]
+    if not candidates:
+        return None
+    head_x, head_y = _box_center_x(box), _head_y(box)
+    return min(
+        candidates,
+        key=lambda face: _distance(_face_center(face), (head_x, head_y)),
     )
+
+
+def _face_belongs_to(face: FaceBox, box: FaceBox) -> bool:
+    face_x, face_y = _face_center(face)
+    x1, y1, x2, y2 = box
+    upper_y2 = y1 + (y2 - y1) // 2
+    return (
+        y1 <= face_y < upper_y2
+        and abs(face_x - _box_center_x(box)) <= FACE_WINDOW_HALF_WIDTH * (x2 - x1)
+    )
+
+
+def _head_y(box: FaceBox) -> float:
+    return box[1] + FACE_HEAD_Y * (box[3] - box[1])
+
+
+def _face_center(face: FaceBox) -> tuple[float, float]:
+    return (face[0] + face[2]) / 2, (face[1] + face[3]) / 2
+
+
+def _distance(first: tuple[float, float], second: tuple[float, float]) -> float:
+    return float(np.hypot(first[0] - second[0], first[1] - second[1]))
+
+
+def merge_duplicates(people: list[PersonBox]) -> list[PersonBox]:
+    order = sorted(range(len(people)), key=lambda index: -_area(people[index].box))
+    scores = [person.score for person in people]
+    kept: list[int] = []
+    for index in order:
+        owner = next(
+            (
+                candidate
+                for candidate in kept
+                if _is_same_person(people[candidate].box, people[index].box)
+            ),
+            None,
+        )
+        if owner is None:
+            kept.append(index)
+        else:
+            scores[owner] = max(scores[owner], scores[index])
+    return [
+        replace(people[index], score=scores[index]) for index in sorted(kept)
+    ]
+
+
+def _is_same_person(owner: FaceBox, duplicate: FaceBox) -> bool:
+    duplicate_area = _area(duplicate)
+    if duplicate_area == 0:
+        return False
+    containment = _intersection_area(owner, duplicate) / duplicate_area
+    return (
+        containment >= DUPLICATE_CONTAINMENT
+        and abs(owner[1] - duplicate[1]) <= DUPLICATE_TOP_TOLERANCE * _height(owner)
+        and abs(_box_center_x(owner) - _box_center_x(duplicate))
+        <= DUPLICATE_CENTER_TOLERANCE * _width(owner)
+    )
+
+
+def _area(box: FaceBox) -> int:
+    return max(0, box[2] - box[0]) * max(0, box[3] - box[1])
+
+
+def _width(box: FaceBox) -> int:
+    return max(0, box[2] - box[0])
+
+
+def _height(box: FaceBox) -> int:
+    return max(0, box[3] - box[1])
+
+
+def _box_center_x(box: FaceBox) -> float:
+    return (box[0] + box[2]) / 2
+
+
+def _intersection_area(first: FaceBox, second: FaceBox) -> int:
+    width = min(first[2], second[2]) - max(first[0], second[0])
+    height = min(first[3], second[3]) - max(first[1], second[1])
+    return max(0, width) * max(0, height)
+
+
+def _iou(first: FaceBox, second: FaceBox) -> float:
+    intersection = _intersection_area(first, second)
+    union = _area(first) + _area(second) - intersection
+    return intersection / union if union > 0 else 0.0
 
 
 def _center(box: tuple[int, int, int, int]) -> tuple[int, int]:

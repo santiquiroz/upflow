@@ -14,7 +14,13 @@ from app.services.person_detector import (
     PersonDetector,
     PersonDetectorUnavailableError,
 )
-from app.services.person_roles import Role, anchor_point, classify_roles, face_box
+from app.services.person_roles import (
+    Role,
+    anchor_point,
+    assign_faces,
+    classify_roles,
+    merge_duplicates,
+)
 from app.services.missing_pack import missing_pack_message
 
 PEOPLE_CACHE_SIZE = 4
@@ -71,17 +77,18 @@ def _copy_person(person: EditorPerson) -> EditorPerson:
 
 
 def _build_people(rgb: np.ndarray, detections: list[PersonBox]) -> list[EditorPerson]:
-    roles = classify_roles(rgb, detections)
+    people = merge_duplicates(detections)
+    roles = classify_roles(rgb, people)
+    faces = assign_faces(rgb, [person.box for person in people])
     return [
-        _to_person(index, detection, roles[index], rgb)
-        for index, detection in enumerate(detections)
+        _to_person(index, person, roles[index], faces[index])
+        for index, person in enumerate(people)
     ]
 
 
 def _to_person(
-    index: int, detection: PersonBox, role: Role, rgb: np.ndarray
+    index: int, detection: PersonBox, role: Role, face: tuple[int, int, int, int] | None
 ) -> EditorPerson:
-    face = face_box(rgb, detection.box)
     anchor = anchor_point(detection.box, face)
     return EditorPerson(
         id=index,

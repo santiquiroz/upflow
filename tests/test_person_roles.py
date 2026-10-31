@@ -2,7 +2,14 @@ import cv2
 import numpy as np
 
 from app.services.person_detector import PersonBox
-from app.services.person_roles import anchor_point, classify_roles, face_box, role_scores
+from app.services.person_roles import (
+    anchor_point,
+    assign_faces,
+    classify_roles,
+    face_box,
+    merge_duplicates,
+    role_scores,
+)
 
 
 def scene_with(
@@ -75,6 +82,61 @@ def test_face_box_selects_largest_face_in_upper_half_and_returns_python_ints(
     assert result == (70, 35, 100, 75)
     assert cascade.region_shape == (80, 120)
     assert all(type(value) is int for value in result)
+
+
+def _fixed_faces(faces):
+    return lambda rgb, box: list(faces)
+
+
+def test_face_at_left_edge_of_big_box_goes_to_the_small_box_centred_on_it():
+    rgb = np.zeros((400, 500, 3), np.uint8)
+    big = (80, 0, 480, 400)
+    small = (60, 100, 140, 300)
+    face = (80, 110, 120, 150)
+
+    faces = assign_faces(rgb, [big, small], find_faces=_fixed_faces([face]))
+
+    assert faces == [None, face]
+
+
+def test_two_people_never_share_a_face():
+    rgb = np.zeros((400, 500, 3), np.uint8)
+    first = (60, 0, 160, 400)
+    second = (40, 0, 200, 400)
+    face = (95, 50, 125, 90)
+
+    faces = assign_faces(rgb, [first, second], find_faces=_fixed_faces([face]))
+
+    assert faces.count(face) == 1
+    assert faces == [face, None]
+
+
+def test_assign_faces_drops_near_duplicate_detections_of_one_face():
+    rgb = np.zeros((400, 500, 3), np.uint8)
+    box = (60, 0, 160, 400)
+    faces = [(90, 50, 130, 90), (92, 52, 132, 92)]
+
+    assigned = assign_faces(rgb, [box], find_faces=_fixed_faces(faces))
+
+    assert assigned == [(90, 50, 130, 90)]
+
+
+def test_merge_duplicates_drops_the_contained_same_head_box_and_keeps_max_score():
+    subject = PersonBox((3324, 1187, 4205, 3917), 0.7)
+    duplicate = PersonBox((3546, 1190, 4068, 2077), 0.9)
+
+    merged = merge_duplicates([duplicate, subject])
+
+    assert merged == [PersonBox((3324, 1187, 4205, 3917), 0.9)]
+
+
+def test_merge_duplicates_keeps_a_short_person_standing_behind():
+    subject = PersonBox((3847, 978, 5988, 3988), 0.8)
+    behind = PersonBox((3980, 1304, 4172, 1914), 0.85)
+
+    merged = merge_duplicates([subject, behind])
+
+    assert merged == [subject, behind]
 
 
 def test_role_scores_uses_compact_laplacian_and_float64_variance(monkeypatch):
