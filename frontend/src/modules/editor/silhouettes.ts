@@ -80,20 +80,15 @@ export function mergeCrops(crops: CropMask[]): CropMask | null {
   return { mask, origin: { x: left, y: top } };
 }
 
+// Cada protección queda aparte con su propio toque: la regla de devolver se midió por persona.
+function protectEntry({ crop, target }: PersonCrop): HistoryEntry {
+  return { kind: "protect", mask: crop.mask, origin: crop.origin, point: anchorPoint(target.person) };
+}
+
 function batchEntries(segments: CropMask[], protections: PersonCrop[]): HistoryEntry[] {
   const segment = mergeCrops(segments);
-  const protect = mergeCrops(protections.map((item) => item.crop));
-  const entries: HistoryEntry[] = [];
-  if (segment) entries.push({ kind: "segment", mask: segment.mask, origin: segment.origin });
-  if (protect) {
-    entries.push({
-      kind: "protect",
-      mask: protect.mask,
-      origin: protect.origin,
-      points: protections.map((item) => anchorPoint(item.target.person)),
-    });
-  }
-  return entries;
+  const entries: HistoryEntry[] = segment ? [{ kind: "segment", mask: segment.mask, origin: segment.origin }] : [];
+  return [...entries, ...protections.map(protectEntry)];
 }
 
 export async function silhouettesFor(

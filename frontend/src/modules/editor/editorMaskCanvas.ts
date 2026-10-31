@@ -8,7 +8,6 @@ export interface HistoryEntry {
   mask?: HTMLCanvasElement;
   origin?: BrushPoint;
   point?: BrushPoint;
-  points?: BrushPoint[];
   entries?: HistoryEntry[];
   personIds?: number[];
   failed?: number;
@@ -154,8 +153,8 @@ function activeProtections(history: HistoryEntry[]): HistoryEntry[] {
 }
 
 function touchesEntry(ctx: CanvasRenderingContext2D, entry: HistoryEntry): boolean {
-  const points = entry.points ?? (entry.point ? [entry.point] : []);
-  return points.some((point) => ctx.getImageData(Math.floor(point.x), Math.floor(point.y), 1, 1).data[3] > 0);
+  const point = entry.point;
+  return Boolean(point && ctx.getImageData(Math.floor(point.x), Math.floor(point.y), 1, 1).data[3] > 0);
 }
 
 // Medido en 59 fotos de grado: un segmento que contiene el toque de una protección se tragó a ese

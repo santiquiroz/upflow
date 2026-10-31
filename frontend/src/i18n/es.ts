@@ -1102,6 +1102,7 @@ export const es = {
   "editor.people.failed.one": "No pude recortar a 1 persona; marcala con el pincel.",
   "editor.review.title": "Revisar zonas",
   "editor.review.hoverHint": "Pasá el mouse por una zona para comparar antes y después",
+  "editor.review.retouchHint": "Para retocar el resultado, tocá «Seguir editando este resultado»",
   "editor.review.zone": "Zona {{number}}",
   "editor.review.engine.hybrid": "Híbrido",
   "editor.review.status.clean": "Sin personas",

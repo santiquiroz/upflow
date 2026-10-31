@@ -1107,6 +1107,7 @@ export const en = {
   "editor.people.failed.one": "I couldn't cut out 1 person; mark it with the brush.",
   "editor.review.title": "Review zones",
   "editor.review.hoverHint": "Hover a zone to compare before and after",
+  "editor.review.retouchHint": "To retouch the result, click “Keep editing this result”",
   "editor.review.zone": "Zone {{number}}",
   "editor.review.engine.hybrid": "Hybrid",
   "editor.review.status.clean": "No people",

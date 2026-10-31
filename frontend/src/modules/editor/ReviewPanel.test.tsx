@@ -49,6 +49,14 @@ describe("ReviewPanel", () => {
     expect(within(second).getByText("LaMa + OSOR")).toBeInTheDocument();
   });
 
+  it("says at the top how to retouch the result", () => {
+    renderPanel([zone()]);
+
+    const hint = screen.getByText("To retouch the result, click “Keep editing this result”");
+    expect(hint).toBeVisible();
+    expect(hint.compareDocumentPosition(screen.getByRole("heading"))).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
   it("explains a zone the guard redid on its own", () => {
     renderPanel([zone({ guard: "person", residualPerson: false })]);
 

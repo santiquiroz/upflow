@@ -204,6 +204,7 @@ export function ReviewPanel({ zones, hoveredZone, ...rest }: ReviewPanelProps) {
   const { t } = useTranslation();
   return (
     <section className="mb-3">
+      <p className="mb-2 text-xs text-text">{t("editor.review.retouchHint")}</p>
       <h2 className="text-sm font-semibold text-text">{t("editor.review.title")}</h2>
       <p className="mt-1 text-xs text-text-dim">{t("editor.review.hoverHint")}</p>
       <ul aria-label={t("editor.review.title")} className="mt-2 flex max-h-[50vh] flex-col gap-2 overflow-y-auto">

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as editorService from "../../services/editor";
 import type { EditorPerson } from "../../services/editor";
-import type { CropMask } from "./editorMaskCanvas";
+import { replayMasks, type CropMask } from "./editorMaskCanvas";
 import { lastPeopleBatch, silhouettesFor } from "./silhouettes";
 
 vi.mock("../../services/editor", () => ({ segmentEditorBox: vi.fn() }));
@@ -49,7 +49,21 @@ describe("silhouettesFor", () => {
     expect(entry.entries?.map((item) => item.kind)).toEqual(["segment", "protect"]);
     const [segment, protect] = entry.entries ?? [];
     expect(segment.mask).toBeInstanceOf(HTMLCanvasElement);
-    expect(protect.points).toEqual([{ x: 6, y: 25 }]);
+    expect(protect.point).toEqual({ x: 6, y: 25 });
+  });
+
+  it("keeps one protection per kept person, each cropped to its own box with its own tap", async () => {
+    vi.mocked(editorService.segmentEditorBox).mockResolvedValue(new Blob(["png"]));
+
+    const { entry } = await silhouettesFor(
+      "tok", [person(1, "subject"), person(20), person(40)], { 1: "keep", 20: "keep", 40: "remove" }, true,
+      { toMask: fakeMask },
+    );
+
+    const protects = entry.entries?.filter((item) => item.kind === "protect") ?? [];
+    expect(protects.map((item) => item.point)).toEqual([{ x: 6, y: 25 }, { x: 25, y: 25 }]);
+    expect(protects.map((item) => item.origin)).toEqual([{ x: 1, y: 0 }, { x: 20, y: 0 }]);
+    expect(protects.map((item) => item.mask?.width)).toEqual([10, 10]);
   });
 
   it("merges the removed people into one canvas sized to their boxes", async () => {
@@ -108,6 +122,50 @@ describe("silhouettesFor", () => {
     expect(failed).toBe(2);
     expect(entry.entries).toEqual([]);
     expect(entry.personIds).toEqual([]);
+  });
+});
+
+interface RecordedDraw {
+  source: CanvasImageSource;
+  operation: string;
+}
+
+// Registra cada dibujo con su modo de composición; solo hay píxeles en las columnas [coveredFrom, coveredTo).
+function recordingContext(coveredFrom: number, coveredTo: number) {
+  const draws: RecordedDraw[] = [];
+  const state = { globalCompositeOperation: "source-over" };
+  const record = (source: CanvasImageSource): void => {
+    draws.push({ source, operation: state.globalCompositeOperation });
+  };
+  const ctx = Object.assign(state, {
+    clearRect: vi.fn(),
+    drawImage: vi.fn(record),
+    getImageData: vi.fn((x: number) => ({ data: [0, 0, 0, x >= coveredFrom && x < coveredTo ? 255 : 0] })),
+  });
+  return { ctx, draws };
+}
+
+describe("per-person protection inside a batch", () => {
+  it("gives back only the kept person whose own tap the erase covers", async () => {
+    vi.mocked(editorService.segmentEditorBox).mockResolvedValue(new Blob(["png"]));
+    const a: EditorPerson = { id: 1, box: [0, 0, 10, 50], score: 0.9, role: "subject", face: null, anchor: [5, 25] };
+    const b: EditorPerson = { id: 2, box: [12, 0, 30, 50], score: 0.9, role: "subject", face: null, anchor: [25, 25] };
+    const c: EditorPerson = { id: 3, box: [3, 0, 18, 50], score: 0.9, role: "background", face: null, anchor: [10, 25] };
+    const { entry } = await silhouettesFor("tok", [a, b, c], { 1: "keep", 2: "keep", 3: "remove" }, true, { toMask: fakeMask });
+    const [, protectA, protectB] = entry.entries ?? [];
+    const edit = document.createElement("canvas");
+    const protect = document.createElement("canvas");
+    const editRecord = recordingContext(3, 18);
+    const protectRecord = recordingContext(0, 0);
+    vi.spyOn(edit, "getContext").mockReturnValue(editRecord.ctx as never);
+    vi.spyOn(protect, "getContext").mockReturnValue(protectRecord.ctx as never);
+
+    replayMasks(edit, protect, [entry]);
+
+    const givenBack = editRecord.draws.filter((draw) => draw.operation === "destination-out").map((draw) => draw.source);
+    expect(givenBack).toEqual([protectA.mask]);
+    expect(givenBack).not.toContain(protectB.mask);
+    expect(protectRecord.draws[protectRecord.draws.length - 1]).toEqual({ source: edit, operation: "destination-out" });
   });
 });
 
