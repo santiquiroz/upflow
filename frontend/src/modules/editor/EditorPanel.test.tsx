@@ -792,6 +792,15 @@ describe("EditorPanel: ajustar borde", () => {
     expect(await submitErase()).toEqual(expect.objectContaining({ maskFeatherPx: 5 }));
   });
 
+  it("announces each slider value with its unit", async () => {
+    await openEraseWithAuto();
+    fireEvent.change(screen.getByLabelText(en["editor.edge.expand"]), { target: { value: "12" } });
+    fireEvent.change(screen.getByLabelText(en["editor.edge.soften"]), { target: { value: "5" } });
+
+    expect(screen.getByLabelText(en["editor.edge.expand"])).toHaveAttribute("aria-valuetext", "12 px");
+    expect(screen.getByLabelText(en["editor.edge.soften"])).toHaveAttribute("aria-valuetext", "5 px");
+  });
+
   it("resets Expand and Soften to 0 when another image is loaded", async () => {
     vi.mocked(generationService.uploadGenerationInitImage)
       .mockResolvedValueOnce(BASE_IMAGE)

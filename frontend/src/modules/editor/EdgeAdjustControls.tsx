@@ -50,6 +50,7 @@ function EdgeSlider({ label, min, max, value, onChange }: {
         max={max}
         step={1}
         value={value}
+        aria-valuetext={`${value} px`}
         onChange={(event) => onChange(Number(event.target.value))}
       />
     </div>

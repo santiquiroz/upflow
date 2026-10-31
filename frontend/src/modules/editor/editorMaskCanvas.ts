@@ -186,11 +186,24 @@ function thresholdAlpha(source: HTMLCanvasElement, minAlpha: number): HTMLCanvas
   return out;
 }
 
-export function previewAdjust(canvas: HTMLCanvasElement, growPx: number, featherPx: number, scale: number): void {
+function usableScale(scale: number): number | null {
+  return Number.isFinite(scale) && scale > 0 ? Math.min(scale, 1) : null;
+}
+
+export function overlayScale(overlay: HTMLElement, photoWidth: number): number {
+  return (overlay.offsetWidth || overlay.clientWidth) / photoWidth;
+}
+
+export function previewAdjust(canvas: HTMLCanvasElement, growPx: number, featherPx: number, rawScale: number): void {
   if (growPx === 0 && featherPx === 0) return;
+  const scale = usableScale(rawScale);
+  if (scale === null) return;
+  const width = Math.round(canvas.width * scale);
+  const height = Math.round(canvas.height * scale);
+  if (width <= 0 || height <= 0) return;
   const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-  let shape = copyCanvas(canvas, Math.round(canvas.width * scale), Math.round(canvas.height * scale));
+  if (!ctx || !("filter" in ctx)) return;
+  let shape = copyCanvas(canvas, width, height);
   if (growPx !== 0) {
     shape = thresholdAlpha(blurCanvas(shape, Math.abs(growPx) * scale), growPx > 0 ? GROW_ALPHA : SHRINK_ALPHA);
   }
@@ -216,7 +229,7 @@ export function renderMaskOverlays(
   pixels.data.set(subtractProtectedPixels(pixels.data, protectedPixels.data));
   ctx.putImageData(pixels, 0, 0);
   tintMask(overlay, "#ef4444");
-  if (edge) previewAdjust(overlay, edge.growPx, edge.featherPx, overlay.getBoundingClientRect().width / edit.width);
+  if (edge) previewAdjust(overlay, edge.growPx, edge.featherPx, overlayScale(overlay, edit.width));
   greenCtx.clearRect(0, 0, protect.width, protect.height);
   greenCtx.drawImage(protect, 0, 0);
   tintMask(protectionOverlay, "#22c55e");

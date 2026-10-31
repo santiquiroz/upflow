@@ -1,8 +1,11 @@
 import { useState } from "react";
+import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import type { GenerationModelSummary } from "../../lib/apiTypes";
 import { NO_EDGE, type EdgeAdjust } from "./editorMaskCanvas";
 import { supportsEdgeAdjust } from "./eraseJobParams";
 import type { EditMode } from "./InpaintModelSelect";
+
+export const EDGE_PREVIEW_DEBOUNCE_MS = 120;
 
 interface EdgeAdjustInput {
   mode: EditMode;
@@ -18,6 +21,7 @@ export function useEdgeAdjust({ mode, modelId, models, photo }: EdgeAdjustInput)
     setSeenPhoto(photo);
     setEdge(NO_EDGE);
   }
-  const active = supportsEdgeAdjust(mode, modelId, models);
-  return { edge, setEdge, active, preview: active ? edge : null };
+  const shownEdge = useDebouncedValue(edge, EDGE_PREVIEW_DEBOUNCE_MS);
+  const edgeActive = supportsEdgeAdjust(mode, modelId, models);
+  return { edge, setEdge, edgeActive, preview: edgeActive ? shownEdge : null };
 }

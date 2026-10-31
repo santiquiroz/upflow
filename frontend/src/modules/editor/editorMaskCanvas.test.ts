@@ -23,17 +23,21 @@ function fakeContext(pixels: Uint8ClampedArray = new Uint8ClampedArray(8)) {
     fillRect: vi.fn(),
     globalCompositeOperation: "source-over",
     fillStyle: "",
+    filter: "none",
   };
 }
 
 type FakeContext = ReturnType<typeof fakeContext>;
 let contexts: WeakMap<HTMLCanvasElement, FakeContext>;
+let created: FakeContext[];
+let newCanvasPixels: Uint8ClampedArray | undefined;
 
 function contextFor(canvas: HTMLCanvasElement): FakeContext {
   let context = contexts.get(canvas);
   if (!context) {
-    context = fakeContext();
+    context = fakeContext(newCanvasPixels);
     contexts.set(canvas, context);
+    created.push(context);
   }
   return context;
 }
@@ -49,6 +53,8 @@ function maskCanvas(pixels?: Uint8ClampedArray) {
 
 beforeEach(() => {
   contexts = new WeakMap();
+  created = [];
+  newCanvasPixels = undefined;
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(function (this: HTMLCanvasElement) {
     return contextFor(this) as unknown as CanvasRenderingContext2D;
   });
@@ -173,11 +179,127 @@ describe("renderMaskOverlays", () => {
     const protect = maskCanvas();
     const red = maskCanvas();
     const green = maskCanvas();
+    Object.defineProperty(red.canvas, "offsetWidth", { value: 2 });
 
     renderMaskOverlays(red.canvas, green.canvas, edit.canvas, protect.canvas, { growPx: 12, featherPx: 0 });
 
     expect(red.context.clearRect).toHaveBeenCalledWith(0, 0, 2, 1);
     expect(green.context.clearRect).toHaveBeenCalledTimes(1);
+  });
+
+  it("measures the overlay by its layout width so the zoom transform does not change the preview", () => {
+    const red = maskCanvas();
+    Object.defineProperty(red.canvas, "offsetWidth", { value: 1 });
+    vi.spyOn(red.canvas, "getBoundingClientRect").mockReturnValue({ width: 16 } as DOMRect);
+
+    renderMaskOverlays(red.canvas, maskCanvas().canvas, maskCanvas().canvas, maskCanvas().canvas, { growPx: 2, featherPx: 0 });
+
+    const work = red.context.drawImage.mock.lastCall?.[0] as HTMLCanvasElement;
+    expect([work.width, work.height]).toEqual([1, 1]);
+    expect(created.map((context) => context.filter)).toContain("blur(1px)");
+  });
+
+  it("skips the preview while the overlay has no layout", () => {
+    const red = maskCanvas();
+
+    renderMaskOverlays(red.canvas, maskCanvas().canvas, maskCanvas().canvas, maskCanvas().canvas, { growPx: 12, featherPx: 3 });
+
+    expect(red.context.clearRect).not.toHaveBeenCalled();
+    expect(red.context.drawImage).not.toHaveBeenCalled();
+  });
+});
+
+function overlayCanvas(width: number, height: number) {
+  const overlay = maskCanvas();
+  overlay.canvas.width = width;
+  overlay.canvas.height = height;
+  return overlay;
+}
+
+function workCanvas(overlay: { context: FakeContext }): HTMLCanvasElement {
+  return overlay.context.drawImage.mock.lastCall?.[0] as HTMLCanvasElement;
+}
+
+function thresholdedAlpha(overlay: { context: FakeContext }): number[] {
+  const data = contextFor(workCanvas(overlay)).putImageData.mock.calls[0][0].data as Uint8ClampedArray;
+  return [data[3], data[7]];
+}
+
+function blurFilters(): string[] {
+  return created.map((context) => context.filter).filter((filter) => filter !== "none");
+}
+
+describe("previewAdjust guards", () => {
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])("does not touch the canvas when the scale is %s", (scale) => {
+    const overlay = overlayCanvas(2, 1);
+
+    expect(() => previewAdjust(overlay.canvas, 12, 4, scale)).not.toThrow();
+
+    expect(overlay.context.clearRect).not.toHaveBeenCalled();
+    expect(overlay.context.drawImage).not.toHaveBeenCalled();
+    expect(created).toHaveLength(0);
+  });
+
+  it("does not touch the canvas when the work canvas would be 0x0", () => {
+    const overlay = overlayCanvas(2, 1);
+
+    previewAdjust(overlay.canvas, 12, 0, 0.1);
+
+    expect(overlay.context.clearRect).not.toHaveBeenCalled();
+    expect(overlay.context.drawImage).not.toHaveBeenCalled();
+  });
+
+  it("skips the preview when the context has no filter support", () => {
+    const overlay = overlayCanvas(2, 1);
+    delete (overlay.context as Partial<FakeContext>).filter;
+
+    previewAdjust(overlay.canvas, 12, 4, 1);
+
+    expect(overlay.context.clearRect).not.toHaveBeenCalled();
+    expect(overlay.context.drawImage).not.toHaveBeenCalled();
+  });
+
+  it("never grows the work canvas beyond the photo size at a large zoom", () => {
+    const overlay = overlayCanvas(4, 2);
+
+    previewAdjust(overlay.canvas, 2, 0, 8);
+
+    expect([workCanvas(overlay).width, workCanvas(overlay).height]).toEqual([4, 2]);
+    expect(blurFilters()).toEqual(["blur(2px)"]);
+  });
+});
+
+describe("previewAdjust thresholds", () => {
+  beforeEach(() => {
+    newCanvasPixels = new Uint8ClampedArray([0, 0, 0, 210, 0, 0, 0, 100]);
+  });
+
+  it("grows by keeping every pixel the blur reached above the low alpha", () => {
+    const overlay = overlayCanvas(2, 1);
+
+    previewAdjust(overlay.canvas, 12, 0, 1);
+
+    expect(thresholdedAlpha(overlay)).toEqual([255, 255]);
+    expect(blurFilters()).toEqual(["blur(12px)"]);
+  });
+
+  it("shrinks by keeping only the pixels that stay above the high alpha after the blur", () => {
+    const overlay = overlayCanvas(2, 1);
+
+    previewAdjust(overlay.canvas, -12, 0, 1);
+
+    expect(thresholdedAlpha(overlay)).toEqual([255, 0]);
+    expect(blurFilters()).toEqual(["blur(12px)"]);
+  });
+
+  it("scales the work canvas and the blur radius to display pixels", () => {
+    const overlay = overlayCanvas(4, 2);
+
+    previewAdjust(overlay.canvas, 12, 4, 0.5);
+
+    expect([workCanvas(overlay).width, workCanvas(overlay).height]).toEqual([2, 1]);
+    expect(overlay.context.drawImage).toHaveBeenLastCalledWith(expect.any(HTMLCanvasElement), 0, 0, 4, 2);
+    expect(blurFilters()).toEqual(["blur(6px)", "blur(2px)"]);
   });
 });
 
