@@ -16,6 +16,7 @@ from app.services.restore_models import LICENSE_GATED_PACKS
 
 ROOT = Path(__file__).resolve().parents[1]
 FETCH_SCRIPT = ROOT / "scripts" / "fetch_osor_sources.py"
+PROVISION_SCRIPT = ROOT / "scripts" / "provision-osor.ps1"
 BASE_REPO = "diffusers/stable-diffusion-xl-1.0-inpainting-0.1"
 BASE_REVISION = "115134f363124c53c7d878647567d04daf26e41e"
 WEIGHTS_REVISION = "9288156766b1df44e5f50fb697876a6f2fd8c062"
@@ -199,6 +200,62 @@ def test_weights_hash_mismatch_removes_the_weights_file_and_fails(tmp_path, monk
     assert downloaded[-1] == weights
     assert not weights.exists()
     assert all(path.exists() for path in downloaded[:-1])
+
+
+def test_provision_script_resolves_installed_python_before_venv():
+    source = PROVISION_SCRIPT.read_text(encoding="utf-8")
+
+    assert "python\\python.exe" in source
+    assert source.index("python\\python.exe") < source.index(".venv\\Scripts\\python.exe")
+
+
+def test_provision_script_installs_peft_with_the_resolved_python():
+    source = PROVISION_SCRIPT.read_text(encoding="utf-8")
+
+    assert '& $python -m pip install "peft>=0.14"' in source
+
+
+@pytest.mark.parametrize(
+    "partial_location",
+    [
+        lambda local_dir, relative: local_dir / f"{relative}.incomplete",
+        lambda local_dir, relative: local_dir / ".cache" / "huggingface" / "download" / f"{relative}.incomplete",
+    ],
+    ids=["sibling-incomplete", "hf-cache-incomplete"],
+)
+def test_free_space_check_discounts_partials_already_on_disk(tmp_path, monkeypatch, partial_location):
+    module = load_fetch_module(monkeypatch, lambda *args, **kwargs: None)
+    dest = tmp_path / "sources"
+    local_dir = dest / module.BASE_SUBDIR
+    relative = "unet/diffusion_pytorch_model.fp16.safetensors"
+    partial = partial_location(local_dir, relative)
+    partial.parent.mkdir(parents=True, exist_ok=True)
+    partial.write_bytes(b"x" * 1000)
+    monkeypatch.setattr(
+        module.shutil,
+        "disk_usage",
+        lambda path: types.SimpleNamespace(total=20 * 1024**3, used=0, free=module.REQUIRED_FREE_BYTES - 500),
+    )
+
+    module.ensure_free_space(dest)
+
+
+def test_free_space_check_still_fails_when_partials_do_not_cover_the_gap(tmp_path, monkeypatch):
+    module = load_fetch_module(monkeypatch, lambda *args, **kwargs: None)
+    dest = tmp_path / "sources"
+    partial = dest / module.BASE_SUBDIR / "unet" / "diffusion_pytorch_model.fp16.safetensors.incomplete"
+    partial.parent.mkdir(parents=True, exist_ok=True)
+    partial.write_bytes(b"x" * 100)
+    monkeypatch.setattr(
+        module.shutil,
+        "disk_usage",
+        lambda path: types.SimpleNamespace(total=20 * 1024**3, used=0, free=module.REQUIRED_FREE_BYTES - 500),
+    )
+
+    with pytest.raises(SystemExit) as caught:
+        module.ensure_free_space(dest)
+
+    assert "libres" in str(caught.value.code)
 
 
 def test_insufficient_disk_space_fails_before_download(tmp_path, monkeypatch):

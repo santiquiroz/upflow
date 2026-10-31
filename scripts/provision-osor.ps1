@@ -13,8 +13,6 @@ $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $PSScriptRoot
 if (-not $PackDir) { $PackDir = Join-Path $root 'runtime\models\eraser-osor' }
-$venv = Join-Path $root '.venv\Scripts\python.exe'
-if (-not (Test-Path $venv)) { $venv = 'python' }
 
 $destino = $PackDir
 $parcial = "$destino.partial"
@@ -37,15 +35,32 @@ function Test-OsorInstalado {
     return $faltantes.Count -eq 0
 }
 
+function Resolve-AppPython {
+    $instalado = Join-Path $root 'python\python.exe'
+    if (Test-Path $instalado) { return $instalado }
+    $venvPython = Join-Path $root '.venv\Scripts\python.exe'
+    if (Test-Path $venvPython) { return $venvPython }
+    if (Get-Command python -ErrorAction SilentlyContinue) { return 'python' }
+    throw "No se encontro el Python de Upflow (ni python\python.exe, ni .venv, ni python en el PATH)."
+}
+
 function Test-Peft {
     # El exit code basta: un import que falla escribe en stderr y con Stop eso cortaria el script.
     $previo = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        & $venv -c 'import peft' 2>$null
+        & $python -c 'import peft' 2>$null
         return ($LASTEXITCODE -eq 0)
     } finally {
         $ErrorActionPreference = $previo
+    }
+}
+
+function Install-Peft {
+    Write-Host "Falta 'peft' (>=0.14) en el Python de Upflow. Instalandolo con pip..."
+    & $python -m pip install "peft>=0.14"
+    if ($LASTEXITCODE -ne 0) {
+        throw "No se pudo instalar 'peft>=0.14' con $python (codigo $LASTEXITCODE). Revisa la conexion a internet y vuelve a correr el script."
     }
 }
 
@@ -54,9 +69,12 @@ if (Test-OsorInstalado) {
     exit 0
 }
 
+$python = Resolve-AppPython
 if (-not (Test-Peft)) {
-    throw ("Falta la dependencia 'peft' (>=0.14) que necesita el paquete OSOR. " +
-        "Instalala en el entorno de Upflow con: '" + $venv + "' -m pip install 'peft>=0.14'")
+    Install-Peft
+    if (-not (Test-Peft)) {
+        throw "'peft' sigue sin importarse con $python tras instalarlo."
+    }
 }
 
 # build_osor_pack.py se niega a arrancar si existe el .partial de una corrida que murio a mitad.
@@ -64,13 +82,13 @@ if (Test-Path -LiteralPath $parcial) { Remove-Item -Recurse -Force -LiteralPath 
 New-Item -ItemType Directory -Force -Path $trabajo | Out-Null
 
 Write-Host 'Bajando la base SDXL-inpainting y los pesos OSOR (revisiones fijas, unos 9 GB)...'
-& $venv (Join-Path $root 'scripts\fetch_osor_sources.py') '--dest' $trabajo
+& $python (Join-Path $root 'scripts\fetch_osor_sources.py') '--dest' $trabajo
 if ($LASTEXITCODE -ne 0) {
     throw "La descarga de OSOR fallo (codigo $LASTEXITCODE). Vuelve a correrla: retoma lo que quedo en $trabajo."
 }
 
 Write-Host 'Armando el paquete OSOR (embeddings del prompt, LoRA fusionada y verificacion de paridad)...'
-& $venv (Join-Path $root 'scripts\build_osor_pack.py') '--base' $base '--weights' $pesos '--out' $destino
+& $python (Join-Path $root 'scripts\build_osor_pack.py') '--base' $base '--weights' $pesos '--out' $destino
 if ($LASTEXITCODE -ne 0) {
     throw "El armado del paquete OSOR fallo (codigo $LASTEXITCODE). La carpeta de trabajo queda en $trabajo para revisar."
 }

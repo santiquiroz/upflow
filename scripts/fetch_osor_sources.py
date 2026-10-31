@@ -60,12 +60,39 @@ def gib_text(size: int) -> str:
     return f"{size / GIB:.1f} GB"
 
 
+def pinned_local_files(dest: Path) -> list[tuple[Path, str]]:
+    base = dest / BASE_SUBDIR
+    weights = dest / WEIGHTS_SUBDIR
+    return [(base, relative) for relative in PINNED_BASE_FILES] + [
+        (weights, relative) for relative in PINNED_WEIGHTS_FILES
+    ]
+
+
+def partial_paths(local_dir: Path, relative: str) -> tuple[Path, ...]:
+    final = local_dir / relative
+    cache_partial = local_dir / ".cache" / "huggingface" / "download" / f"{relative}.incomplete"
+    return (final, final.with_name(final.name + ".incomplete"), cache_partial)
+
+
+def bytes_present(local_dir: Path, relative: str) -> int:
+    return sum(path.stat().st_size for path in partial_paths(local_dir, relative) if path.is_file())
+
+
+def already_downloaded_bytes(dest: Path) -> int:
+    return sum(bytes_present(local_dir, relative) for local_dir, relative in pinned_local_files(dest))
+
+
+def required_free_bytes(dest: Path) -> int:
+    return max(0, REQUIRED_FREE_BYTES - already_downloaded_bytes(dest))
+
+
 def ensure_free_space(dest: Path) -> None:
     dest.mkdir(parents=True, exist_ok=True)
     free = shutil.disk_usage(dest).free
-    if free < REQUIRED_FREE_BYTES:
+    required = required_free_bytes(dest)
+    if free < required:
         raise SystemExit(
-            f"Hacen falta {gib_text(REQUIRED_FREE_BYTES)} libres en {dest} para bajar OSOR; "
+            f"Hacen falta {gib_text(required)} libres en {dest} para bajar OSOR; "
             f"hay {gib_text(free)} libres."
         )
 

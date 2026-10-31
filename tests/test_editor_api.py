@@ -654,6 +654,23 @@ async def test_init_image_download_sends_nosniff() -> None:
     assert response.headers["x-content-type-options"] == "nosniff"
 
 
+@pytest.mark.asyncio
+async def test_init_image_download_sends_attachment_disposition() -> None:
+    buffer = io.BytesIO()
+    Image.new("RGB", (8, 8), (9, 8, 7)).save(buffer, format="PNG")
+    settings = get_settings()
+    StorageService(settings).ensure_directories()
+    uploaded = await upload_init_image(
+        file=UploadFile(filename="photo.png", file=io.BytesIO(buffer.getvalue())),
+        storage=StorageService(settings),
+        settings=settings,
+    )
+
+    response = download_init_image(uploaded.init_image_token, settings=settings)
+
+    assert response.headers["content-disposition"] == "attachment"
+
+
 def test_init_image_download_rejects_bad_and_unknown_tokens() -> None:
     settings = get_settings()
     with pytest.raises(HTTPException) as bad:
