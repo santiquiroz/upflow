@@ -72,7 +72,7 @@ function PeopleView({ people, baseInfo, baseUrl }: Pick<EditorSideContentProps, 
       imageUrl={baseUrl ?? ""}
       imageWidth={baseInfo.width}
       imageHeight={baseInfo.height}
-      unavailableReason={selection.error ?? t("editor.tool.peopleUnavailable")}
+      unavailableReason={selection.error ?? t("editor.people.missingDetector")}
       error={selection.error}
     />
   );

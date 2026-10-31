@@ -227,7 +227,9 @@ async def test_people_second_call_hits_cache(tmp_path, monkeypatch) -> None:
             return [PersonBox((10, 10, 50, 60), 0.9)]
 
     monkeypatch.setattr(editor_people_module, "classify_roles", lambda rgb, detections: ["subject"])
-    monkeypatch.setattr(editor_people_module, "face_box", lambda rgb, box: (20, 15, 35, 30))
+    monkeypatch.setattr(
+        editor_people_module, "assign_faces", lambda rgb, boxes: [(20, 15, 35, 30)]
+    )
     detector = FakeDetector()
     service = EditorPeople(detector)
 
@@ -263,7 +265,7 @@ async def test_people_cache_returns_independent_models(tmp_path, monkeypatch) ->
             return [PersonBox((10, 10, 50, 60), 0.9)]
 
     monkeypatch.setattr(editor_people_module, "classify_roles", lambda rgb, detections: ["subject"])
-    monkeypatch.setattr(editor_people_module, "face_box", lambda rgb, box: None)
+    monkeypatch.setattr(editor_people_module, "assign_faces", lambda rgb, boxes: [None])
     service = EditorPeople(FakeDetector())
 
     first = await service.people(image_path, "cpu")
@@ -336,7 +338,22 @@ async def test_capabilities_reports_people() -> None:
         ]),
     )
 
-    assert capability == {"tapSelect": True, "people": True}
+    assert capability == {"tapSelect": True, "people": True, "osor": get_settings().osor_available()}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("osor", [True, False])
+async def test_capabilities_reports_osor(monkeypatch, osor: bool) -> None:
+    from app.config import Settings
+
+    monkeypatch.setattr(Settings, "osor_available", lambda _settings: osor)
+
+    capability = await editor_capabilities(
+        segmenter=FakeSegmenter(),
+        people=FakePeople([]),
+    )
+
+    assert capability["osor"] is osor
 
 
 async def _upload_png(image: Image.Image, name: str) -> str:

@@ -1,11 +1,19 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "../../i18n/LocaleProvider";
+import * as packService from "../../services/capabilities";
 import type { EditorPerson } from "../../services/editor";
 import { initialChoices, personNumbers } from "./peopleState";
 import { PeopleOverlay, peopleOverlayLabelSize } from "./PeopleOverlay";
 import { PeoplePanel, thumbnailStyle } from "./PeoplePanel";
+
+vi.mock("../../services/capabilities", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../services/capabilities")>()),
+  provisionPack: vi.fn(),
+  getProvisionStatus: vi.fn(),
+}));
 
 const PEOPLE: EditorPerson[] = Array.from({ length: 10 }, (_, index) => {
   const id = index + 1;
@@ -71,9 +79,11 @@ function renderPeople() {
   }
 
   return render(
-    <LocaleProvider initialLocale="en">
-      <ControlledPeople />
-    </LocaleProvider>,
+    <QueryClientProvider client={new QueryClient()}>
+      <LocaleProvider initialLocale="en">
+        <ControlledPeople />
+      </LocaleProvider>
+    </QueryClientProvider>,
   );
 }
 
@@ -154,19 +164,60 @@ describe("PeoplePanel", () => {
       imageHeight: 480,
     };
     const { rerender } = render(
-      <LocaleProvider initialLocale="en">
-        <PeoplePanel {...props} status="empty" />
-      </LocaleProvider>,
+      <QueryClientProvider client={new QueryClient()}>
+        <LocaleProvider initialLocale="en">
+          <PeoplePanel {...props} status="empty" />
+        </LocaleProvider>
+      </QueryClientProvider>,
     );
 
     expect(screen.getByText("I couldn't find people in this photo")).toBeInTheDocument();
 
     rerender(
-      <LocaleProvider initialLocale="en">
-        <PeoplePanel {...props} status="unavailable" unavailableReason="People detection is unavailable." />
-      </LocaleProvider>,
+      <QueryClientProvider client={new QueryClient()}>
+        <LocaleProvider initialLocale="en">
+          <PeoplePanel {...props} status="unavailable" unavailableReason="People detection is unavailable." />
+        </LocaleProvider>
+      </QueryClientProvider>,
     );
     expect(screen.getByText("People detection is unavailable.")).toBeInTheDocument();
+  });
+
+  it("offers the person detector when it is missing and refreshes the editor once it lands", async () => {
+    vi.mocked(packService.provisionPack).mockResolvedValue({ jobId: "job-1" } as never);
+    vi.mocked(packService.getProvisionStatus).mockResolvedValue({ jobId: "job-1", status: "done" } as never);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+    render(
+      <QueryClientProvider client={queryClient}>
+        <LocaleProvider initialLocale="en">
+          <PeoplePanel
+            people={[]}
+            choices={{}}
+            hoveredId={null}
+            onHover={() => undefined}
+            onToggle={() => undefined}
+            onGroup={() => undefined}
+            protectKept
+            onProtectKeptChange={() => undefined}
+            onAccept={() => undefined}
+            onRetry={() => undefined}
+            status="unavailable"
+            imageUrl="blob:photo"
+            imageWidth={640}
+            imageHeight={480}
+            unavailableReason="The person detector is missing (≈36 MB)"
+          />
+        </LocaleProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(screen.getByText("The person detector is missing (≈36 MB)")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Download" }));
+
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["editorCapabilities"] }));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["editorPeople"] });
+    expect(packService.provisionPack).toHaveBeenCalledWith("person-detector", undefined, false);
   });
 
   it("shows skeletons while loading and retries after an error", () => {
@@ -187,16 +238,20 @@ describe("PeoplePanel", () => {
       imageHeight: 480,
     };
     const { rerender } = render(
-      <LocaleProvider initialLocale="en">
-        <PeoplePanel {...props} status="loading" />
-      </LocaleProvider>,
+      <QueryClientProvider client={new QueryClient()}>
+        <LocaleProvider initialLocale="en">
+          <PeoplePanel {...props} status="loading" />
+        </LocaleProvider>
+      </QueryClientProvider>,
     );
     expect(screen.getByLabelText("Detecting people").querySelectorAll(".animate-pulse")).toHaveLength(5);
 
     rerender(
-      <LocaleProvider initialLocale="en">
-        <PeoplePanel {...props} status="error" error="Detection failed." />
-      </LocaleProvider>,
+      <QueryClientProvider client={new QueryClient()}>
+        <LocaleProvider initialLocale="en">
+          <PeoplePanel {...props} status="error" error="Detection failed." />
+        </LocaleProvider>
+      </QueryClientProvider>,
     );
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(screen.getByText("Detection failed.")).toBeInTheDocument();

@@ -9,6 +9,7 @@ import type { GenerationCapabilities, InitImageResponse } from "../../lib/apiTyp
 import * as api from "../../lib/api";
 import * as editorService from "../../services/editor";
 import * as generationService from "../../services/generation";
+import * as packService from "../../services/capabilities";
 import { EditorPanel } from "./EditorPanel";
 import * as retouchApply from "./retouchApply";
 import * as zones from "./zones";
@@ -40,6 +41,11 @@ vi.mock("../../services/generation", async (importOriginal) => {
     cancelGenerationJob: vi.fn(),
   };
 });
+vi.mock("../../services/capabilities", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../services/capabilities")>()),
+  provisionPack: vi.fn(),
+  getProvisionStatus: vi.fn(),
+}));
 vi.mock("../../services/editor", () => ({
   fetchEditorCapabilities: vi.fn(),
   detectPeople: vi.fn(),
@@ -304,11 +310,57 @@ describe("EditorPanel", () => {
     expect(screen.getByRole("button", { name: "Add 2 silhouettes" })).toBeEnabled();
   });
 
-  it("disables People when detection is unavailable", async () => {
+  it("offers the person detector when People is unavailable and enables the tool once it lands", async () => {
+    // El detector "aparece" recién cuando termina la descarga: así el refetch de
+    // capacidades que dispara el montaje no lo habilita antes de tiempo.
+    let detectorInstalled = false;
+    vi.mocked(editorService.fetchEditorCapabilities).mockImplementation(async () => ({
+      tapSelect: true,
+      people: detectorInstalled,
+    }));
+    vi.mocked(editorService.detectPeople).mockResolvedValue([
+      { id: 1, box: [10, 10, 120, 400], score: 0.9, role: "subject", face: null, anchor: [60, 200] },
+    ]);
+    vi.mocked(packService.provisionPack).mockResolvedValue({ jobId: "job-1" } as never);
+    vi.mocked(packService.getProvisionStatus).mockImplementation(async () => {
+      detectorInstalled = true;
+      return { jobId: "job-1", status: "done" } as never;
+    });
     renderPanel();
     await loadBaseImage();
 
-    expect(screen.getByRole("radio", { name: "People" })).toBeDisabled();
+    fireEvent.click(await screen.findByRole("radio", { name: "People" }));
+    expect(screen.getByRole("radio", { name: "People" })).toBeEnabled();
+    expect(await screen.findByText(en["editor.people.missingDetector"])).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Download" }));
+
+    expect(await screen.findByRole("listitem", { name: "Person 1" })).toBeInTheDocument();
+    expect(vi.mocked(packService.provisionPack).mock.calls[0]).toEqual(["person-detector", undefined, false]);
+  });
+
+  it("shows the OSOR download under eraser-auto when OSOR is missing", async () => {
+    vi.mocked(generationService.fetchGenerationCapabilities).mockResolvedValue({
+      ...CAPABILITIES,
+      models: [{ id: "eraser-auto", name: "Auto", status: "installed", eraseOnly: true, supportsInpaint: true }],
+    });
+    vi.mocked(editorService.fetchEditorCapabilities).mockResolvedValue({ tapSelect: true, osor: false });
+    renderPanel();
+    await loadBaseImage();
+
+    expect(await screen.findByText(en["editor.erase.osorHint"])).toBeVisible();
+    expect(screen.getByRole("button", { name: "Download" })).toBeVisible();
+  });
+
+  it("hides the OSOR hint once OSOR is installed", async () => {
+    vi.mocked(generationService.fetchGenerationCapabilities).mockResolvedValue({
+      ...CAPABILITIES,
+      models: [{ id: "eraser-auto", name: "Auto", status: "installed", eraseOnly: true, supportsInpaint: true }],
+    });
+    vi.mocked(editorService.fetchEditorCapabilities).mockResolvedValue({ tapSelect: true, osor: true });
+    renderPanel();
+    await loadBaseImage();
+
+    expect(screen.queryByText(en["editor.erase.osorHint"])).not.toBeInTheDocument();
   });
 
   it("defaults to eraser-auto and visibly disables replacement without a fill model", async () => {

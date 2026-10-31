@@ -1060,8 +1060,6 @@ export const en = {
   "editor.tools.retouch": "Retouch",
   "editor.sidePanel.label": "Editor settings",
   "editor.tool.people": "People",
-  "editor.tool.peopleUnavailable":
-    "People detection is unavailable. Install the required package or use the brush.",
   "editor.tool.brush": "Brush",
   "editor.tool.eraser": "Eraser",
   "editor.tool.lasso": "Lasso",
@@ -1070,6 +1068,7 @@ export const en = {
   "editor.protect.clear": "Clear protection",
   "editor.protect.hint": "Tap an object to protect it. Green = preserve; red = edit.",
   "editor.erase.autoHint": "Automatic: LaMa for small areas, the selected SDXL for quality in large areas.",
+  "editor.erase.osorHint": "OSOR improves large holes (~9 GB download)",
   "editor.tool.tap": "Tap object",
   "editor.tool.tapUnavailable":
     "Tap-to-select is not installed yet. Install it from Settings, or use the brush.",
@@ -1091,6 +1090,7 @@ export const en = {
   "editor.people.overlay": "Detected people outlines",
   "editor.people.empty": "I couldn't find people in this photo",
   "editor.people.error": "People couldn't be detected.",
+  "editor.people.missingDetector": "The person detector is missing (≈36 MB)",
   "editor.people.retry": "Retry",
   "editor.people.protectKept": "Protect the people I keep",
   "editor.people.accept": "Add {{count}} silhouettes",

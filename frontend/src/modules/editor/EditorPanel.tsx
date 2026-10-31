@@ -1,8 +1,7 @@
-import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useGenerationCapabilities, useGenerationJob } from "../../hooks/useGenerationJob";
 import { useTranslation } from "../../i18n/LocaleProvider";
-import { fetchEditorCapabilities, segmentEditorObject } from "../../services/editor";
+import { segmentEditorObject } from "../../services/editor";
 import {
   canReplace,
   defaultEraseModel,
@@ -47,6 +46,7 @@ import { editsBase, useHealTool } from "./useHealTool";
 import { isRetouchTool, useRetouchTool } from "./useRetouchTool";
 import { applyRetouch, type RetouchKind, type RetouchOffset } from "./retouchApply";
 import { RetouchCrosshair } from "./RetouchCrosshair";
+import { useEditorCapabilities } from "./useEditorCapabilities";
 
 // Prompts fijos del modo "Eliminar": el modelo rellena con entorno coherente.
 // En inglés porque los checkpoints SD responden mejor a prompts en inglés.
@@ -63,7 +63,7 @@ const BRUSH_SIZE_STEP = 4;
 export function EditorPanel() {
   const { t } = useTranslation();
   const capabilitiesQuery = useGenerationCapabilities();
-  const editorCapabilities = useQuery({ queryKey: ["editorCapabilities"], queryFn: fetchEditorCapabilities });
+  const editorCapabilities = useEditorCapabilities();
   const { phase, job, errorMessage, submit, cancel, reset } = useGenerationJob();
 
   const baseVersions = useBaseVersions();
@@ -482,7 +482,6 @@ export function EditorPanel() {
             tool={tool}
             onToolChange={setTool}
             disabledTools={{
-              people: peopleEnabled ? undefined : t("editor.tool.peopleUnavailable"),
               tap: tapAvailable ? undefined : t("editor.tool.tapUnavailable"),
               protect: tapAvailable ? undefined : t("editor.tool.tapUnavailable"),
             }}

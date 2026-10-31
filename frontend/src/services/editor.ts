@@ -6,6 +6,7 @@ const API_BASE = "/api/v1";
 export interface EditorCapabilities {
   tapSelect: boolean;
   people?: boolean;
+  osor?: boolean;
 }
 
 export interface EditorPerson {

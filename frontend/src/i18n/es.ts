@@ -1055,8 +1055,6 @@ export const es = {
   "editor.tools.retouch": "Retocar",
   "editor.sidePanel.label": "Panel del editor",
   "editor.tool.people": "Personas",
-  "editor.tool.peopleUnavailable":
-    "La detección de personas no está disponible. Instalá el paquete correspondiente o usá el pincel.",
   "editor.tool.brush": "Pincel",
   "editor.tool.eraser": "Goma",
   "editor.tool.lasso": "Lazo",
@@ -1065,6 +1063,7 @@ export const es = {
   "editor.protect.clear": "Limpiar protección",
   "editor.protect.hint": "Tocá un objeto para protegerlo. Verde = conservar; rojo = editar.",
   "editor.erase.autoHint": "Automático: LaMa para lo chico, SDXL elegido por calidad para lo grande.",
+  "editor.erase.osorHint": "OSOR mejora los huecos grandes (descarga de ~9 GB)",
   "editor.tool.tap": "Tocar objeto",
   "editor.tool.tapUnavailable":
     "La selección por toque no está instalada todavía. Instalala desde Ajustes, o usá el pincel.",
@@ -1086,6 +1085,7 @@ export const es = {
   "editor.people.overlay": "Contornos de personas detectadas",
   "editor.people.empty": "No encontré personas en esta foto",
   "editor.people.error": "No se pudieron detectar las personas.",
+  "editor.people.missingDetector": "Falta el detector de personas (≈36 MB)",
   "editor.people.retry": "Reintentar",
   "editor.people.protectKept": "Proteger a las que conservo",
   "editor.people.accept": "Agregar {{count}} siluetas al borrado",

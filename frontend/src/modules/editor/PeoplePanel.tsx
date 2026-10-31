@@ -1,5 +1,7 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { Check, X } from "lucide-react";
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -8,10 +10,12 @@ import {
   type KeyboardEvent,
   type MutableRefObject,
 } from "react";
+import { PackDownload } from "../../components/PackDownload";
 import { useTranslation } from "../../i18n/LocaleProvider";
 import type { EditorPerson } from "../../services/editor";
 import { countRemove, groupPeople, personNumbers, type Choice } from "./peopleState";
 import type { SilhouetteProgress } from "./useSilhouetteBatch";
+import { EDITOR_CAPABILITIES_KEY } from "./useEditorCapabilities";
 
 type PeopleStatus = "loading" | "ready" | "empty" | "error" | "unavailable";
 
@@ -264,6 +268,11 @@ export function PeoplePanel(props: PeoplePanelProps) {
     onProtectKeptChange, onAccept, onRetry, status, imageUrl, unavailableReason, error, progress,
   } = props;
   const { t } = useTranslation();
+  const queryClient = useQueryClient();
+  const refreshDetector = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: EDITOR_CAPABILITIES_KEY });
+    void queryClient.invalidateQueries({ queryKey: ["editorPeople"] });
+  }, [queryClient]);
   const { front, back } = useMemo(() => groupPeople(people), [people]);
   const rows = useMemo(() => [...front, ...back], [back, front]);
   const numbers = useMemo(() => personNumbers(people), [people]);
@@ -308,7 +317,13 @@ export function PeoplePanel(props: PeoplePanelProps) {
       )}
       {status === "empty" && <p className="py-4 text-sm text-text-dim">{t("editor.people.empty")}</p>}
       {status === "unavailable" && (
-        <p className="py-4 text-sm text-text-dim">{unavailableReason ?? t("editor.tool.peopleUnavailable")}</p>
+        <div className="py-3">
+          <PackDownload
+            pack="person-detector"
+            reason={unavailableReason ?? t("editor.people.missingDetector")}
+            onDone={refreshDetector}
+          />
+        </div>
       )}
       {status === "error" && (
         <div className="py-3 text-sm text-danger">

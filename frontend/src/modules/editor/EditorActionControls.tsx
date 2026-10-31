@@ -1,5 +1,8 @@
+import { useQueryClient } from "@tanstack/react-query";
+import { useCallback } from "react";
 import { AccordionSection } from "../../components/AccordionSection";
 import { DevicePicker } from "../../components/DevicePicker";
+import { PackDownload } from "../../components/PackDownload";
 import { useTranslation } from "../../i18n/LocaleProvider";
 import type { DeviceInfoResponse, GenerationModelSummary, InitImageResponse } from "../../lib/apiTypes";
 import { EdgeAdjustControls } from "./EdgeAdjustControls";
@@ -7,6 +10,21 @@ import type { EdgeAdjust } from "./editorMaskCanvas";
 import { canReplace } from "./eraseJobParams";
 import { InsertObjectPanel } from "./InsertObjectPanel";
 import { InpaintModelSelect, type EditMode } from "./InpaintModelSelect";
+import { EDITOR_CAPABILITIES_KEY, useEditorCapabilities } from "./useEditorCapabilities";
+
+function OsorHint() {
+  const { t } = useTranslation();
+  const queryClient = useQueryClient();
+  const refresh = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: EDITOR_CAPABILITIES_KEY });
+  }, [queryClient]);
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="text-xs text-text-faint">{t("editor.erase.osorHint")}</p>
+      <PackDownload pack="osor" onDone={refresh} />
+    </div>
+  );
+}
 
 export function EditorActionControls({
   baseInfo,
@@ -79,6 +97,8 @@ export function EditorActionControls({
 }) {
   const { t } = useTranslation();
   const replaceUnavailable = capabilitiesLoaded && !canReplace(models);
+  const editorCapabilities = useEditorCapabilities().data;
+  const showOsorHint = mode === "erase" && modelId === "eraser-auto" && editorCapabilities?.osor === false;
   return (
     <>
       <div className="flex gap-1 rounded border border-border bg-bg p-1" role="radiogroup" aria-label={t("editor.mode.label")}>
@@ -127,6 +147,7 @@ export function EditorActionControls({
           mode={mode}
           hint={autoErase ? t("editor.erase.autoHint") : undefined}
         />
+        {showOsorHint && <OsorHint />}
         <DevicePicker
           value={device}
           onChange={(selected: DeviceInfoResponse) => setDevice(selected.id)}

@@ -353,6 +353,7 @@ $script:OptionalPacks = @(
         Feature = 'Editor: seleccionar objetos con un toque para quitarlos o reemplazarlos'
         Size    = '~45 MB'
     },
+    @{ Key = 'person-detector'; Feature = 'Editor: detectar personas para elegir a quien quitar'; Size = '~36 MB' },
     @{
         Key     = 'migan'
         Feature = 'Editor: borrado rapido de objetos, sin esperar a la IA generativa'
@@ -483,8 +484,16 @@ function Install-MissingBinaries {
         Invoke-DownloadScript -ScriptName 'download-mobilesam.ps1' -Label 'MobileSAM (seleccion por toque del Editor)'
     }
 
+    if ($selectedKeys -contains 'person-detector') {
+        Invoke-DownloadScript -ScriptName 'download-yolox.ps1' -Label 'Detector de personas (seleccion de personas del Editor)'
+    }
+
     if ($selectedKeys -contains 'migan') {
         Invoke-DownloadScript -ScriptName 'download-migan.ps1' -Label 'MI-GAN (borrado rapido del Editor)'
+    }
+
+    if ($selectedKeys -contains 'lama') {
+        Invoke-DownloadScript -ScriptName 'download-lama.ps1' -Label 'LaMa (borrado de calidad del Editor)'
     }
 
     if ($selectedKeys -contains 'sdcpp') {

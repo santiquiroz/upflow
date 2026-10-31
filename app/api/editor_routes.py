@@ -153,7 +153,13 @@ async def editor_capabilities(
     segmenter: EditorSegmenter = Depends(get_editor_segmenter),
     people: EditorPeople = Depends(get_editor_people),
 ) -> dict[str, bool]:
-    return {"tapSelect": segmenter.available(), "people": people.available()}
+    from app.config import get_settings
+
+    return {
+        "tapSelect": segmenter.available(),
+        "people": people.available(),
+        "osor": get_settings().osor_available(),
+    }
 
 
 @router.post(
