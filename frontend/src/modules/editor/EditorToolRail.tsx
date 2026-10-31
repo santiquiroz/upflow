@@ -17,7 +17,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import type { KeyboardEvent } from "react";
+import type { KeyboardEvent, ReactNode } from "react";
 import { useTranslation } from "../../i18n/LocaleProvider";
 
 export type Tool =
@@ -116,18 +116,22 @@ export function EditorToolRail({
     { value: "clone", icon: <Stamp aria-hidden="true" className="h-4 w-4 shrink-0" />, label: t("editor.tool.clone") },
     { value: "heal", icon: <Bandage aria-hidden="true" className="h-4 w-4 shrink-0" />, label: t("editor.tool.heal") },
   ] as const;
-  const radioTools = [...tools, ...retouchTools];
-  const tabStopTool = radioTools.some((item) => item.value === tool && !disabledTools[item.value])
-    ? tool
-    : radioTools.find((item) => !disabledTools[item.value])?.value;
   const panTool = {
     value: "pan" as const,
     icon: <Hand aria-hidden="true" className="h-4 w-4 shrink-0" />,
     label: t("editor.tool.pan"),
   };
-  const renderedTools = [...radioTools, panTool] as const;
 
-  function renderToolButton(item: (typeof renderedTools)[number], radio = false) {
+  // Cada grupo de radios tiene su propio punto de tabulación: Tab llega al grupo Retocar aunque una herramienta de Seleccionar esté activa.
+  function tabStopIn(items: readonly { value: Tool }[]): Tool | null {
+    const enabled = items.filter((item) => !disabledTools[item.value]);
+    return enabled.find((item) => item.value === tool)?.value ?? enabled[0]?.value ?? null;
+  }
+  const selectTabStop = tabStopIn(tools);
+  const retouchTabStop = tabStopIn(retouchTools);
+
+  function renderToolButton(item: { value: Tool; icon: ReactNode; label: string }, tabStop?: Tool | null) {
+    const radio = tabStop !== undefined;
     const disabledReason = disabledTools[item.value];
     return (
       <button
@@ -137,7 +141,7 @@ export function EditorToolRail({
         role={radio ? "radio" : undefined}
         aria-checked={radio ? tool === item.value : undefined}
         aria-pressed={!radio ? tool === item.value : undefined}
-        tabIndex={radio ? (tabStopTool === item.value ? 0 : -1) : undefined}
+        tabIndex={radio ? (tabStop === item.value ? 0 : -1) : undefined}
         aria-label={item.label}
         title={disabledReason ?? toolTitles[item.value] ?? item.label}
         disabled={Boolean(disabledReason)}
@@ -165,7 +169,7 @@ export function EditorToolRail({
           aria-label={t("editor.tools.label")}
           onKeyDown={(event) => moveRadioFocus(event, tools, disabledTools, onToolChange)}
         >
-          {tools.map((item) => renderToolButton(item, true))}
+          {tools.map((item) => renderToolButton(item, selectTabStop))}
         </div>
       </div>
 
@@ -177,7 +181,7 @@ export function EditorToolRail({
           aria-label={t("editor.tools.retouch")}
           onKeyDown={(event) => moveRadioFocus(event, retouchTools, disabledTools, onToolChange)}
         >
-          {retouchTools.map((item) => renderToolButton(item, true))}
+          {retouchTools.map((item) => renderToolButton(item, retouchTabStop))}
         </div>
       </div>
 

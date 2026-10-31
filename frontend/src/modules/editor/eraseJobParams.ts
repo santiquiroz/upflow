@@ -45,6 +45,10 @@ export function shouldUseAutoErase(
   const model = models.find((candidate) => candidate.id === modelId);
   if (model?.status !== "installed") return false;
   if (!model.inpaintOnly || model.eraseOnly) return false;
+  return hasInstalledLama(models);
+}
+
+export function hasInstalledLama(models: GenerationModelSummary[]): boolean {
   return models.some((candidate) => candidate.id === "eraser-lama" && candidate.status === "installed");
 }
 

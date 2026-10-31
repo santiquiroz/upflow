@@ -4,6 +4,7 @@ import type { InitImageResponse } from "../../lib/apiTypes";
 import { fetchInitImage, healEditorImage } from "../../services/editor";
 import { uploadGenerationInitImage } from "../../services/generation";
 import { createMaskCanvas, exportMaskBlob } from "./editorMaskCanvas";
+import { localizedErrorMessage } from "./editorErrors";
 import { drawStrokes, type BrushStroke } from "./maskCanvas";
 import { isRetouchTool } from "./useRetouchTool";
 
@@ -78,7 +79,7 @@ export function useHealTool({ baseInfo, sequenceRef, onAdopt, onError }: HealToo
       const blob = await fetchInitImage(healed.initImageToken);
       if (sequence === sequenceRef.current) onAdopt(healed, blob);
     } catch (error) {
-      if (sequence === sequenceRef.current) onError(error instanceof Error ? error.message : String(error));
+      if (sequence === sequenceRef.current) onError(localizedErrorMessage(error, t));
     } finally {
       healingRef.current = false;
       setHealing(false);

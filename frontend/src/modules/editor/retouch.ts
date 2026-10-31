@@ -35,18 +35,26 @@ function sourceIndex(width: number, height: number, x: number, y: number): numbe
   return (y * width + x) * 4;
 }
 
-export function cloneWithMask(current: ImageData, mask: ImageData, rawDx: number, rawDy: number): ImageData {
-  // El desplazamiento llega en píxeles de foto con decimales; un índice fraccionario lee undefined.
-  const dx = Math.round(rawDx);
-  const dy = Math.round(rawDy);
-  const out = copyImage(current);
+// El origen de la fuente puede ser otro recorte: shift dice dónde cae el píxel (x, y) del destino dentro de la fuente.
+export function cloneFromSource(
+  target: ImageData,
+  mask: ImageData,
+  source: ImageData,
+  shift: { x: number; y: number },
+): ImageData {
+  const out = copyImage(target);
   for (let y = 0; y < out.height; y += 1) {
     for (let x = 0; x < out.width; x += 1) {
       const index = (y * out.width + x) * 4;
       const weight = weightAt(mask, index);
-      const from = sourceIndex(out.width, out.height, x + dx, y + dy);
-      if (weight > 0 && from !== null) blendInto(out, index, current.data, from, weight);
+      const from = sourceIndex(source.width, source.height, x + shift.x, y + shift.y);
+      if (weight > 0 && from !== null) blendInto(out, index, source.data, from, weight);
     }
   }
   return out;
+}
+
+export function cloneWithMask(current: ImageData, mask: ImageData, rawDx: number, rawDy: number): ImageData {
+  // El desplazamiento llega en píxeles de foto con decimales; un índice fraccionario lee undefined.
+  return cloneFromSource(current, mask, current, { x: Math.round(rawDx), y: Math.round(rawDy) });
 }

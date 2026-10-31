@@ -11,6 +11,7 @@ import {
   type MutableRefObject,
 } from "react";
 import { PackDownload } from "../../components/PackDownload";
+import { countKey } from "../../i18n";
 import { useTranslation } from "../../i18n/LocaleProvider";
 import type { EditorPerson } from "../../services/editor";
 import { countRemove, groupPeople, personNumbers, type Choice } from "./peopleState";
@@ -304,7 +305,7 @@ export function PeoplePanel(props: PeoplePanelProps) {
         <h2 className="text-sm font-semibold text-text">{t("editor.people.title")}</h2>
         {status === "ready" && (
           <p className="mt-0.5 text-xs text-text-dim">
-            {t("editor.people.summary", { count: people.length })}
+            {t(countKey("editor.people.summary", people.length), { count: people.length })}
           </p>
         )}
       </div>
@@ -395,7 +396,7 @@ export function PeoplePanel(props: PeoplePanelProps) {
                 current: Math.min(progress.done + 1, progress.total),
                 total: progress.total,
               })
-              : t("editor.people.accept", { count: removeCount })}
+              : t(countKey("editor.people.accept", removeCount), { count: removeCount })}
           </button>
         </>
       )}

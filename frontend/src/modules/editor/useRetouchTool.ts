@@ -29,19 +29,21 @@ export function useRetouchTool(onCommit: RetouchCommit) {
   const activeRef = useRef<ActiveStroke | null>(null);
   const applyingRef = useRef(false);
 
-  function start(kind: RetouchKind, point: BrushPoint, altKey: boolean, radius: number) {
-    if (applyingRef.current) return;
+  // Devuelve true solo si empezó un trazo que se va a aplicar: Alt+clic fija la fuente y no pinta.
+  function start(kind: RetouchKind, point: BrushPoint, altKey: boolean, radius: number): boolean {
+    if (applyingRef.current) return false;
     if (kind === "clone" && altKey) {
       setSource(point);
-      return;
+      return false;
     }
-    if (kind === "clone" && !source) return;
+    if (kind === "clone" && !source) return false;
     const offset = kind === "clone" && source
       ? { dx: source.x - point.x, dy: source.y - point.y }
       : NO_OFFSET;
     activeRef.current = { kind, stroke: startStroke("paint", radius, point), offset };
     setSamplePoint(sampleAt(point, offset));
     setPainting(true);
+    return true;
   }
 
   function move(point: BrushPoint) {

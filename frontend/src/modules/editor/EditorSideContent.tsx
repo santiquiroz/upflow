@@ -17,6 +17,8 @@ export interface EditorSidePeople {
   selection: ReturnType<typeof usePeopleSelection>;
   batch: ReturnType<typeof useSilhouetteBatch>;
   personIds: number[];
+  failed: number;
+  originalUrl: string | null;
   onBack: () => void;
 }
 
@@ -37,6 +39,7 @@ export interface EditorSideJob {
   phase: GenerationJobPhase;
   job: GenerationJob | undefined;
   errorMessage: string | null;
+  busy: boolean;
   onCancel: () => void;
   onUseAsBase: () => void;
 }
@@ -52,7 +55,7 @@ interface EditorSideContentProps {
   actionControls: ComponentProps<typeof EditorActionControls>;
 }
 
-function PeopleView({ people, baseInfo, baseUrl }: Pick<EditorSideContentProps, "people" | "baseInfo" | "baseUrl">) {
+function PeopleView({ people, baseInfo }: Pick<EditorSideContentProps, "people" | "baseInfo">) {
   const { t } = useTranslation();
   const { selection, batch } = people;
   return (
@@ -69,7 +72,7 @@ function PeopleView({ people, baseInfo, baseUrl }: Pick<EditorSideContentProps, 
       progress={batch.progress}
       onRetry={() => void selection.refetch()}
       status={selection.status}
-      imageUrl={baseUrl ?? ""}
+      imageUrl={people.originalUrl ?? ""}
       imageWidth={baseInfo.width}
       imageHeight={baseInfo.height}
       unavailableReason={selection.error ?? t("editor.people.missingDetector")}
@@ -104,13 +107,14 @@ function ReviewJob({ job, fileName }: { job: EditorSideJob; fileName: string }) 
   const { t } = useTranslation();
   const shown = job.job;
   return (
-    <div className="mb-3">
+    <div className="mb-3 min-w-0">
       <JobCard phase={job.phase} job={shown} fileName={fileName} errorMessage={job.errorMessage} onCancel={job.onCancel} />
       {shown?.status === "completed" && shown.downloadUrl && (
         <button
           type="button"
           onClick={job.onUseAsBase}
-          className="mt-3 min-h-9 rounded border border-border px-4 py-2 text-sm text-text hover:bg-surface-2"
+          disabled={job.busy}
+          className="mt-3 min-h-9 rounded border border-border px-4 py-2 text-sm text-text hover:bg-surface-2 disabled:opacity-40"
         >
           {t("editor.useAsBase")}
         </button>
@@ -122,13 +126,13 @@ function ReviewJob({ job, fileName }: { job: EditorSideJob; fileName: string }) 
 export function EditorSideContent(props: EditorSideContentProps) {
   const { view, baseInfo, uploadError, people, job, actionControls } = props;
   return (
-    <>
-      {uploadError && <p className="mb-3 text-sm text-danger">{uploadError}</p>}
+    <div className="min-w-0">
+      {uploadError && <p className="mb-3 break-words text-sm text-danger">{uploadError}</p>}
       {view === "action" && (
         <PeopleSummary
           personIds={people.personIds}
           numbers={personNumbers(people.selection.people)}
-          failed={people.batch.failed}
+          failed={people.failed}
           onBack={people.onBack}
         />
       )}
@@ -136,7 +140,7 @@ export function EditorSideContent(props: EditorSideContentProps) {
       {view === "review" && <ReviewView {...props} />}
       {view === "review" && <ReviewJob job={job} fileName={baseInfo.originalFilename} />}
       {view !== "people" && <EditorActionControls {...actionControls} />}
-      {view !== "people" && (
+      {view === "action" && (
         <JobCard
           phase={job.phase}
           job={job.job}
@@ -145,6 +149,6 @@ export function EditorSideContent(props: EditorSideContentProps) {
           onCancel={job.onCancel}
         />
       )}
-    </>
+    </div>
   );
 }

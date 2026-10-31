@@ -1,9 +1,9 @@
 import { useRef, useState, type MutableRefObject } from "react";
 import type { InitImageResponse } from "../../lib/apiTypes";
 import type { EditorPerson } from "../../services/editor";
-import { pngBlobToAlphaCanvas, type HistoryEntry } from "./editorMaskCanvas";
+import { pngBlobToCropMask, type HistoryEntry } from "./editorMaskCanvas";
 import type { Choice } from "./peopleState";
-import { silhouetteCount, silhouettesFor } from "./silhouettes";
+import { cropRect, silhouetteCount, silhouettesFor } from "./silhouettes";
 
 export interface SilhouetteProgress {
   done: number;
@@ -25,9 +25,7 @@ interface SilhouetteBatchOptions {
 
 export function useSilhouetteBatch({ baseInfo, selection, sequenceRef, onDone }: SilhouetteBatchOptions) {
   const [progress, setProgress] = useState<SilhouetteProgress | null>(null);
-  const [failure, setFailure] = useState<{ token: string | null; count: number }>({ token: null, count: 0 });
   const runningRef = useRef(false);
-  const token = baseInfo?.initImageToken ?? null;
 
   async function accept() {
     if (!baseInfo || runningRef.current) return;
@@ -38,11 +36,10 @@ export function useSilhouetteBatch({ baseInfo, selection, sequenceRef, onDone }:
     setProgress({ done: 0, total: silhouetteCount(people, choices, protectKept) });
     try {
       const result = await silhouettesFor(initImageToken, people, choices, protectKept, {
-        toMask: (blob) => pngBlobToAlphaCanvas(blob, width, height),
+        toMask: (blob, box) => pngBlobToCropMask(blob, width, height, cropRect(box, width, height)),
         onProgress: (done, total) => setProgress({ done, total }),
       });
       if (sequence !== sequenceRef.current) return;
-      setFailure({ token: initImageToken, count: result.failed });
       onDone(result.entry);
     } finally {
       runningRef.current = false;
@@ -50,14 +47,5 @@ export function useSilhouetteBatch({ baseInfo, selection, sequenceRef, onDone }:
     }
   }
 
-  function clearFailed() {
-    setFailure({ token: null, count: 0 });
-  }
-
-  return {
-    progress,
-    failed: failure.token === token ? failure.count : 0,
-    accept,
-    clearFailed,
-  };
+  return { progress, accept };
 }

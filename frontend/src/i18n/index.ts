@@ -61,6 +61,11 @@ export function translate(
   return interpolate(template, params);
 }
 
+// Una cuenta de 1 usa la clave `<base>.one`; el resto usa la clave base con {{count}}.
+export function countKey(base: string, count: number): string {
+  return count === 1 ? `${base}.one` : base;
+}
+
 export function catalogFor(locale: Locale): Catalog {
   return CATALOGS[locale];
 }

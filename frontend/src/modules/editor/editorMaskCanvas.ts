@@ -1,14 +1,34 @@
-import { drawStrokes, strokeAddsEditableArea, type BrushStroke } from "./maskCanvas";
-import { maskHasPixels, maskToOpaquePixels, subtractProtectedPixels } from "./protectMask";
+import { drawStrokes, strokeAddsEditableArea, type BrushPoint, type BrushStroke } from "./maskCanvas";
+import { maskHasPixels, maskToOpaquePixels } from "./protectMask";
 
 export interface HistoryEntry {
   id?: number;
   kind: "stroke" | "segment" | "protect" | "clearProtection" | "batch";
   stroke?: BrushStroke;
   mask?: HTMLCanvasElement;
-  point?: { x: number; y: number };
+  origin?: BrushPoint;
+  point?: BrushPoint;
+  points?: BrushPoint[];
   entries?: HistoryEntry[];
   personIds?: number[];
+  failed?: number;
+}
+
+export interface PixelRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface CropMask {
+  mask: HTMLCanvasElement;
+  origin: BrushPoint;
+}
+
+export interface CommittedMasks {
+  edit: HTMLCanvasElement;
+  protect: HTMLCanvasElement;
 }
 
 export function flattenHistory(history: HistoryEntry[]): HistoryEntry[] {
@@ -26,10 +46,6 @@ export interface EdgeAdjust {
 
 export const NO_EDGE: EdgeAdjust = { growPx: 0, featherPx: 0 };
 
-const OVERLAY_RED = [239, 68, 68];
-const GROW_ALPHA = 56;
-const SHRINK_ALPHA = 200;
-
 export function createMaskCanvas(width: number, height: number): HTMLCanvasElement {
   const canvas = document.createElement("canvas");
   canvas.width = width;
@@ -37,28 +53,19 @@ export function createMaskCanvas(width: number, height: number): HTMLCanvasEleme
   return canvas;
 }
 
-export function pngBlobToAlphaCanvas(blob: Blob, width: number, height: number): Promise<HTMLCanvasElement> {
+function contextOf(canvas: HTMLCanvasElement): CanvasRenderingContext2D {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("canvas 2d context unavailable");
+  return ctx;
+}
+
+function loadMaskImage(blob: Blob): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(blob);
     const image = new Image();
     image.onload = () => {
       URL.revokeObjectURL(url);
-      const canvas = createMaskCanvas(width, height);
-      const ctx = canvas.getContext("2d");
-      if (!ctx) {
-        reject(new Error("canvas 2d context unavailable"));
-        return;
-      }
-      ctx.drawImage(image, 0, 0, width, height);
-      const pixels = ctx.getImageData(0, 0, width, height);
-      for (let i = 0; i < pixels.data.length; i += 4) {
-        pixels.data[i + 3] = pixels.data[i];
-        pixels.data[i] = 255;
-        pixels.data[i + 1] = 255;
-        pixels.data[i + 2] = 255;
-      }
-      ctx.putImageData(pixels, 0, 0);
-      resolve(canvas);
+      resolve(image);
     };
     image.onerror = () => {
       URL.revokeObjectURL(url);
@@ -68,12 +75,47 @@ export function pngBlobToAlphaCanvas(blob: Blob, width: number, height: number):
   });
 }
 
-export function replayMasks(
-  edit: HTMLCanvasElement,
-  protect: HTMLCanvasElement,
-  history: HistoryEntry[],
-  live: BrushStroke | null,
-): void {
+function toAlphaPixels(pixels: ImageData): ImageData {
+  for (let i = 0; i < pixels.data.length; i += 4) {
+    pixels.data[i + 3] = pixels.data[i];
+    pixels.data[i] = 255;
+    pixels.data[i + 1] = 255;
+    pixels.data[i + 2] = 255;
+  }
+  return pixels;
+}
+
+// Decodifica solo el recorte: la máscara de una persona no ocupa el lienzo completo de la foto.
+export async function pngBlobToCropMask(
+  blob: Blob,
+  width: number,
+  height: number,
+  rect: PixelRect,
+): Promise<CropMask> {
+  const image = await loadMaskImage(blob);
+  const mask = createMaskCanvas(rect.width, rect.height);
+  const ctx = contextOf(mask);
+  ctx.drawImage(image, -rect.x, -rect.y, width, height);
+  ctx.putImageData(toAlphaPixels(ctx.getImageData(0, 0, rect.width, rect.height)), 0, 0);
+  return { mask, origin: { x: rect.x, y: rect.y } };
+}
+
+export async function pngBlobToAlphaCanvas(blob: Blob, width: number, height: number): Promise<HTMLCanvasElement> {
+  const { mask } = await pngBlobToCropMask(blob, width, height, { x: 0, y: 0, width, height });
+  return mask;
+}
+
+function drawEntryMask(ctx: CanvasRenderingContext2D, entry: HistoryEntry): void {
+  ctx.drawImage(entry.mask!, entry.origin?.x ?? 0, entry.origin?.y ?? 0);
+}
+
+function eraseEntry(ctx: CanvasRenderingContext2D, entry: HistoryEntry): void {
+  ctx.globalCompositeOperation = "destination-out";
+  drawEntryMask(ctx, entry);
+  ctx.globalCompositeOperation = "source-over";
+}
+
+export function replayMasks(edit: HTMLCanvasElement, protect: HTMLCanvasElement, history: HistoryEntry[]): void {
   const editCtx = edit.getContext("2d");
   const protectCtx = protect.getContext("2d");
   if (!editCtx || !protectCtx) return;
@@ -88,17 +130,22 @@ export function replayMasks(
       continue;
     }
     if (entry.kind === "protect" && entry.mask) {
-      protectCtx.drawImage(entry.mask, 0, 0);
+      drawEntryMask(protectCtx, entry);
       continue;
     }
     if (entry.kind === "segment" && entry.mask) {
-      editCtx.drawImage(entry.mask, 0, 0);
+      drawEntryMask(editCtx, entry);
       continue;
     }
     if (entry.stroke) drawStrokes(editCtx, [entry.stroke], "#ffffff");
   }
   resolveOverlap(edit, editCtx, protectCtx, activeProtections(flat));
-  if (live) drawStrokes(editCtx, [live], "#ffffff");
+}
+
+export function composeCommittedMasks(history: HistoryEntry[], width: number, height: number): CommittedMasks {
+  const masks = { edit: createMaskCanvas(width, height), protect: createMaskCanvas(width, height) };
+  replayMasks(masks.edit, masks.protect, history);
+  return masks;
 }
 
 function activeProtections(history: HistoryEntry[]): HistoryEntry[] {
@@ -106,15 +153,9 @@ function activeProtections(history: HistoryEntry[]): HistoryEntry[] {
   return history.slice(lastClear + 1).filter((entry) => entry.kind === "protect" && entry.mask);
 }
 
-function coversPoint(ctx: CanvasRenderingContext2D, point: { x: number; y: number } | undefined): boolean {
-  if (!point) return false;
-  return ctx.getImageData(Math.floor(point.x), Math.floor(point.y), 1, 1).data[3] > 0;
-}
-
-function eraseWith(ctx: CanvasRenderingContext2D, mask: HTMLCanvasElement): void {
-  ctx.globalCompositeOperation = "destination-out";
-  ctx.drawImage(mask, 0, 0);
-  ctx.globalCompositeOperation = "source-over";
+function touchesEntry(ctx: CanvasRenderingContext2D, entry: HistoryEntry): boolean {
+  const points = entry.points ?? (entry.point ? [entry.point] : []);
+  return points.some((point) => ctx.getImageData(Math.floor(point.x), Math.floor(point.y), 1, 1).data[3] > 0);
 }
 
 // Medido en 59 fotos de grado: un segmento que contiene el toque de una protección se tragó a ese
@@ -128,9 +169,11 @@ function resolveOverlap(
 ): void {
   if (protections.length === 0) return;
   protections
-    .filter((entry) => coversPoint(editCtx, entry.point))
-    .forEach((entry) => eraseWith(editCtx, entry.mask!));
-  eraseWith(protectCtx, edit);
+    .filter((entry) => touchesEntry(editCtx, entry))
+    .forEach((entry) => eraseEntry(editCtx, entry));
+  protectCtx.globalCompositeOperation = "destination-out";
+  protectCtx.drawImage(edit, 0, 0);
+  protectCtx.globalCompositeOperation = "source-over";
 }
 
 export function maskHasContent(history: HistoryEntry[]): boolean {
@@ -146,93 +189,6 @@ export function hasProtection(history: HistoryEntry[]): boolean {
 export function canvasHasPixels(canvas: HTMLCanvasElement): boolean {
   const ctx = canvas.getContext("2d");
   return Boolean(ctx && maskHasPixels(ctx.getImageData(0, 0, canvas.width, canvas.height).data));
-}
-
-function tintMask(canvas: HTMLCanvasElement, color: string): void {
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-  ctx.globalCompositeOperation = "source-in";
-  ctx.fillStyle = color;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.globalCompositeOperation = "source-over";
-}
-
-function copyCanvas(source: HTMLCanvasElement, width: number, height: number): HTMLCanvasElement {
-  const copy = createMaskCanvas(width, height);
-  copy.getContext("2d")?.drawImage(source, 0, 0, width, height);
-  return copy;
-}
-
-function blurCanvas(source: HTMLCanvasElement, radiusPx: number): HTMLCanvasElement {
-  const blurred = createMaskCanvas(source.width, source.height);
-  const ctx = blurred.getContext("2d");
-  if (ctx) {
-    ctx.filter = `blur(${radiusPx}px)`;
-    ctx.drawImage(source, 0, 0);
-  }
-  return blurred;
-}
-
-function thresholdAlpha(source: HTMLCanvasElement, minAlpha: number): HTMLCanvasElement {
-  const out = createMaskCanvas(source.width, source.height);
-  const outCtx = out.getContext("2d");
-  const pixels = source.getContext("2d")?.getImageData(0, 0, source.width, source.height);
-  if (!outCtx || !pixels) return out;
-  for (let i = 0; i < pixels.data.length; i += 4) {
-    pixels.data.set(OVERLAY_RED, i);
-    pixels.data[i + 3] = pixels.data[i + 3] >= minAlpha ? 255 : 0;
-  }
-  outCtx.putImageData(pixels, 0, 0);
-  return out;
-}
-
-function usableScale(scale: number): number | null {
-  return Number.isFinite(scale) && scale > 0 ? Math.min(scale, 1) : null;
-}
-
-export function overlayScale(overlay: HTMLElement, photoWidth: number): number {
-  return (overlay.offsetWidth || overlay.clientWidth) / photoWidth;
-}
-
-export function previewAdjust(canvas: HTMLCanvasElement, growPx: number, featherPx: number, rawScale: number): void {
-  if (growPx === 0 && featherPx === 0) return;
-  const scale = usableScale(rawScale);
-  if (scale === null) return;
-  const width = Math.round(canvas.width * scale);
-  const height = Math.round(canvas.height * scale);
-  if (width <= 0 || height <= 0) return;
-  const ctx = canvas.getContext("2d");
-  if (!ctx || !("filter" in ctx)) return;
-  let shape = copyCanvas(canvas, width, height);
-  if (growPx !== 0) {
-    shape = thresholdAlpha(blurCanvas(shape, Math.abs(growPx) * scale), growPx > 0 ? GROW_ALPHA : SHRINK_ALPHA);
-  }
-  if (featherPx !== 0) shape = blurCanvas(shape, featherPx * scale);
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.drawImage(shape, 0, 0, canvas.width, canvas.height);
-}
-
-export function renderMaskOverlays(
-  overlay: HTMLCanvasElement,
-  protectionOverlay: HTMLCanvasElement,
-  edit: HTMLCanvasElement,
-  protect: HTMLCanvasElement,
-  edge: EdgeAdjust | null = null,
-): void {
-  const ctx = overlay.getContext("2d");
-  const protectCtx = protect.getContext("2d");
-  const editCtx = edit.getContext("2d");
-  const greenCtx = protectionOverlay.getContext("2d");
-  if (!ctx || !protectCtx || !editCtx || !greenCtx) return;
-  const pixels = editCtx.getImageData(0, 0, edit.width, edit.height);
-  const protectedPixels = protectCtx.getImageData(0, 0, protect.width, protect.height);
-  pixels.data.set(subtractProtectedPixels(pixels.data, protectedPixels.data));
-  ctx.putImageData(pixels, 0, 0);
-  tintMask(overlay, "#ef4444");
-  if (edge) previewAdjust(overlay, edge.growPx, edge.featherPx, overlayScale(overlay, edit.width));
-  greenCtx.clearRect(0, 0, protect.width, protect.height);
-  greenCtx.drawImage(protect, 0, 0);
-  tintMask(protectionOverlay, "#22c55e");
 }
 
 export function exportMaskBlob(maskCanvas: HTMLCanvasElement): Promise<Blob> {

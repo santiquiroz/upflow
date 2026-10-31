@@ -1,4 +1,5 @@
 import { ArrowLeft } from "lucide-react";
+import { countKey } from "../../i18n";
 import { useTranslation } from "../../i18n/LocaleProvider";
 
 interface PeopleSummaryProps {
@@ -13,7 +14,10 @@ function BatchDetails({ personIds, numbers, onBack }: Omit<PeopleSummaryProps, "
   const sorted = [...personIds].sort((a, b) => (numbers[a] ?? 0) - (numbers[b] ?? 0));
   return (
     <>
-      <h2 className="text-sm font-semibold text-text">{t("editor.people.batchTitle", { count: personIds.length })}</h2>
+      <h2 className="text-sm font-semibold text-text">
+        {t(countKey("editor.people.batchTitle", personIds.length), { count: personIds.length })}
+      </h2>
+      <p className="mt-1 text-xs text-text-dim">{t("editor.people.polishKeys")}</p>
       <ul aria-label={t("editor.people.batchPeople")} className="mt-2 flex flex-wrap gap-1">
         {sorted.map((id) => (
           <li key={id} className="rounded-full border border-border bg-bg px-2 py-0.5 text-[11px] text-text">
@@ -41,7 +45,7 @@ export function PeopleSummary({ personIds, numbers, failed, onBack }: PeopleSumm
     <section className="mb-3 rounded-lg border border-border bg-surface-2 p-3">
       {personIds.length > 0 && <BatchDetails personIds={personIds} numbers={numbers} onBack={onBack} />}
       <p aria-live="polite" className={failed > 0 ? "mt-2 text-xs text-text-dim" : "sr-only"}>
-        {failed > 0 ? t("editor.people.failed", { count: failed }) : ""}
+        {failed > 0 ? t(countKey("editor.people.failed", failed), { count: failed }) : ""}
       </p>
     </section>
   );

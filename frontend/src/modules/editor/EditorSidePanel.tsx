@@ -18,7 +18,7 @@ export function EditorSidePanel({
       aria-label={t("editor.sidePanel.label")}
       data-view={view}
       style={{ maxHeight: EDITOR_SIDE_PANEL_MAX_HEIGHT }}
-      className="min-h-0 w-full flex-none overflow-y-auto rounded-lg border border-border bg-surface p-3 lg:w-[340px]"
+      className="min-h-0 min-w-0 w-full flex-none overflow-x-hidden overflow-y-auto rounded-lg border border-border bg-surface p-3 lg:w-[340px]"
     >
       {children}
     </aside>

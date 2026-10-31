@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useGenerationCapabilities, useGenerationJob } from "../../hooks/useGenerationJob";
 import { useTranslation } from "../../i18n/LocaleProvider";
 import { segmentEditorObject } from "../../services/editor";
@@ -7,18 +7,21 @@ import {
   defaultEraseModel,
   effectiveMode,
   hasEraserAuto,
+  hasInstalledLama,
   modelForMode,
   shouldUseAutoErase,
 } from "./eraseJobParams";
 import { EditorDropzone } from "./EditorDropzone";
 import { EditorSideContent } from "./EditorSideContent";
 import { EditorSidePanel } from "./EditorSidePanel";
+import { EditorStageStatus } from "./EditorStageStatus";
 import { BRUSH_SIZE_MAX, BRUSH_SIZE_MIN, EditorToolRail, type Tool } from "./EditorToolRail";
 import { PeopleOverlay } from "./PeopleOverlay";
 import {
-  createMaskCanvas, hasProtection, maskHasContent, pngBlobToAlphaCanvas, renderMaskOverlays, replayMasks,
-  type HistoryEntry,
+  composeCommittedMasks, hasProtection, maskHasContent, pngBlobToAlphaCanvas, type HistoryEntry,
 } from "./editorMaskCanvas";
+import { localizedErrorMessage } from "./editorErrors";
+import { toolLocks } from "./editorToolLocks";
 import { ReviewOverlay } from "./ReviewOverlay";
 import { useEditorSubmit } from "./useEditorSubmit";
 import { useReviewSession } from "./useReviewSession";
@@ -44,6 +47,7 @@ import { useEditorUndo } from "./useEditorUndo";
 import { useEdgeAdjust } from "./useEdgeAdjust";
 import { editsBase, useHealTool } from "./useHealTool";
 import { isRetouchTool, useRetouchTool } from "./useRetouchTool";
+import { useMaskOverlay } from "./useMaskOverlay";
 import { applyRetouch, type RetouchKind, type RetouchOffset } from "./retouchApply";
 import { RetouchCrosshair } from "./RetouchCrosshair";
 import { useEditorCapabilities } from "./useEditorCapabilities";
@@ -69,6 +73,7 @@ export function EditorPanel() {
   const baseVersions = useBaseVersions();
   const baseInfo = baseVersions.current;
   const baseUrl = useObjectUrl(baseVersions.currentBlob);
+  const originalUrl = useObjectUrl(baseVersions.original?.blob ?? null);
   const retouch = useRetouchTool(handleRetouchCommit);
   const [baseUploading, setBaseUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -157,16 +162,6 @@ export function EditorPanel() {
   const autoErase = shouldUseAutoErase(mode, modelId, models);
   const { preview: edgePreview, ...edgeControls } = useEdgeAdjust({ mode, modelId, models, photo: baseVersions.original });
   const tapAvailable = editorCapabilities.data?.tapSelect ?? false;
-  const jobBusy = baseUploading || phase === "uploading" || phase === "queued" || phase === "running";
-  const editorSubmit = useEditorSubmit({
-    baseInfo, models, editMaskRef, protectMaskRef, uploadSequence, segmentPendingRef, review, submit, blocked: jobBusy,
-    form: {
-      mode, modelId, prompt, erasePromptText, eraseNegative, replaceNegative, steps, guidance, seedText, strength, device,
-      edge: edgeControls.edge,
-    },
-    onError: setUploadError,
-  });
-  const busy = jobBusy || editorSubmit.preparingJob;
   const heal = useHealTool({
     baseInfo, sequenceRef: uploadSequence, onError: setUploadError,
     onAdopt: (info, blob) => recordBase(baseVersions.adopt(info, blob)),
@@ -174,6 +169,17 @@ export function EditorPanel() {
   const { undoLog, appendHistory, dropHistoryEntry, recordBase, handleUndo, clearSelection } = useEditorUndo({
     history, setHistory, undoBase: baseVersions.undo, applying: retouch.applying || heal.healing,
   });
+  const jobBusy = baseUploading || phase === "uploading" || phase === "queued" || phase === "running"
+    || retouch.applying || heal.healing;
+  const editorSubmit = useEditorSubmit({
+    baseInfo, models, editMaskRef, protectMaskRef, uploadSequence, segmentPendingRef, review, submit, blocked: jobBusy,
+    form: {
+      mode, modelId, prompt, erasePromptText, eraseNegative, replaceNegative, steps, guidance, seedText, strength, device,
+      edge: edgeControls.edge,
+    },
+    onError: (message) => setUploadError(message === null ? null : localizedErrorMessage(message, t)),
+  });
+  const busy = jobBusy || editorSubmit.preparingJob;
   const { last: lastUndo, clear: clearUndo } = undoLog;
   const handleBrushSmaller = useCallback(() => {
     setBrushSize((current) => Math.max(BRUSH_SIZE_MIN, current - BRUSH_SIZE_STEP));
@@ -189,24 +195,28 @@ export function EditorPanel() {
     enabled: Boolean(baseInfo),
   });
 
-  function redrawMasks() {
-    const canvas = canvasRef.current;
-    const protectionOverlay = protectionOverlayRef.current;
-    if (!canvas || !protectionOverlay || !baseInfo) return;
-    const { width, height } = baseInfo;
-    if (editMaskRef.current?.width !== width || editMaskRef.current?.height !== height) {
-      editMaskRef.current = createMaskCanvas(width, height);
-      protectMaskRef.current = createMaskCanvas(width, height);
-    }
-    const edit = editMaskRef.current!;
-    const protect = protectMaskRef.current!;
-    replayMasks(edit, protect, history, liveStrokeRef.current);
-    renderMaskOverlays(canvas, protectionOverlay, edit, protect, edgePreview);
-  }
+  // El historial se compone en un lienzo completo solo cuando cambia; pintar un trazo no lo recompone.
+  const committed = useMemo(
+    () => (baseInfo ? composeCommittedMasks(history, baseInfo.width, baseInfo.height) : null),
+    [history, baseInfo?.width, baseInfo?.height],
+  );
+  useEffect(() => {
+    editMaskRef.current = committed?.edit ?? null;
+    protectMaskRef.current = committed?.protect ?? null;
+  }, [committed]);
+  const redrawOverlay = useMaskOverlay({
+    masks: committed,
+    photoWidth: baseInfo?.width ?? 0,
+    photoHeight: baseInfo?.height ?? 0,
+    edge: edgePreview,
+    redRef: canvasRef,
+    greenRef: protectionOverlayRef,
+    liveRef: liveStrokeRef,
+  });
 
   useEffect(() => {
-    redrawMasks();
-  }, [history, baseInfo, edgePreview]);
+    redrawOverlay();
+  }, [committed, baseInfo, edgePreview]);
 
   useEffect(() => {
     if (mode === "replace" && isEraseOnlyModel) {
@@ -238,18 +248,17 @@ export function EditorPanel() {
         await baseVersions.reset(file);
       } catch (error) {
         if (sequence === uploadSequence.current) {
-          setUploadError(error instanceof Error ? error.message : String(error));
+          setUploadError(localizedErrorMessage(error, t));
         }
       } finally {
         if (sequence === uploadSequence.current) setBaseUploading(false);
       }
     },
-    [baseVersions.reset, clearUndo, reset, retouch.reset, review.clear],
+    [baseVersions.reset, clearUndo, reset, retouch.reset, review.clear, t],
   );
 
   // Un retoque sube una versión nueva de la base: no toca el historial de máscaras.
-  async function pushBase(blob: Blob) {
-    const sequence = uploadSequence.current;
+  async function pushBase(blob: Blob, sequence = uploadSequence.current) {
     const evicted = await baseVersions.push(blob);
     if (sequence !== uploadSequence.current) return;
     recordBase(evicted);
@@ -261,10 +270,10 @@ export function EditorPanel() {
     const sequence = uploadSequence.current;
     try {
       const blob = await applyRetouch(kind, stroke, currentBlob, original.blob, offset);
-      if (sequence === uploadSequence.current) await pushBase(blob);
+      await pushBase(blob, sequence);
     } catch (error) {
       if (sequence === uploadSequence.current) {
-        setUploadError(error instanceof Error ? error.message : String(error));
+        setUploadError(localizedErrorMessage(error, t));
       }
     }
   }
@@ -301,7 +310,7 @@ export function EditorPanel() {
       panOriginRef.current = { x: event.clientX, y: event.clientY };
       return;
     }
-    if (tool === "tap" || tool === "protect" || tool === "people" || busy || ((heal.healing || retouch.applying) && editsBase(tool))) {
+    if (tool === "tap" || tool === "protect" || tool === "people" || busy || showingResult || ((heal.healing || retouch.applying) && editsBase(tool))) {
       return;
     }
     const point = imagePointFromEvent(event);
@@ -309,8 +318,13 @@ export function EditorPanel() {
       return;
     }
     event.currentTarget.setPointerCapture?.(event.pointerId);
+    const radius = scaledBrushRadius();
     if (isRetouchTool(tool)) {
-      retouch.start(tool, point, event.altKey, scaledBrushRadius());
+      // El trazo del retoque se dibuja igual que el del pincel; Alt+clic solo fija la fuente y no pinta.
+      if (retouch.start(tool, point, event.altKey, radius)) {
+        liveStrokeRef.current = startStroke("paint", radius, point);
+        redrawOverlay();
+      }
       return;
     }
     if (tool === "rect") {
@@ -321,9 +335,9 @@ export function EditorPanel() {
     } else if (tool === "lasso") {
       liveStrokeRef.current = startStroke("lasso", 0, point);
     } else {
-      liveStrokeRef.current = startStroke(tool === "eraser" ? "erase" : "paint", scaledBrushRadius(), point);
+      liveStrokeRef.current = startStroke(tool === "eraser" ? "erase" : "paint", radius, point);
     }
-    redrawMasks();
+    redrawOverlay();
   }
 
   function handlePointerMove(event: React.PointerEvent<HTMLCanvasElement>) {
@@ -336,11 +350,6 @@ export function EditorPanel() {
       setViewport((current) => panBy(current, dx, dy, container));
       return;
     }
-    if (isRetouchTool(tool)) {
-      const point = imagePointFromEvent(event);
-      if (point) retouch.move(point);
-      return;
-    }
     if (!liveStrokeRef.current) {
       return;
     }
@@ -348,19 +357,22 @@ export function EditorPanel() {
     if (!point) {
       return;
     }
+    if (isRetouchTool(tool)) retouch.move(point);
     const rectOrigin = rectOriginRef.current;
     if (rectOrigin) {
       liveStrokeRef.current = { ...liveStrokeRef.current, points: rectanglePoints(rectOrigin, point) };
     } else {
       liveStrokeRef.current = appendPoint(liveStrokeRef.current, point);
     }
-    redrawMasks();
+    redrawOverlay();
   }
 
   function handlePointerUp() {
     panOriginRef.current = null;
     rectOriginRef.current = null;
     if (isRetouchTool(tool)) {
+      liveStrokeRef.current = null;
+      redrawOverlay();
       void retouch.end();
       return;
     }
@@ -371,11 +383,11 @@ export function EditorPanel() {
     liveStrokeRef.current = null;
     if (!isCommittableStroke(stroke)) {
       // Un lazo de 1-2 puntos no forma polígono: se descarta y se borra su preview.
-      redrawMasks();
+      redrawOverlay();
       return;
     }
     // El corrector no entra al historial de máscaras: el trazo va al servicio.
-    if (tool === "heal") { redrawMasks(); void heal.commit(stroke); return; }
+    if (tool === "heal") { redrawOverlay(); void heal.commit(stroke); return; }
     appendHistory({ kind: "stroke", stroke });
   }
 
@@ -405,7 +417,7 @@ export function EditorPanel() {
   }
 
   async function handleCanvasClick(event: React.MouseEvent<HTMLCanvasElement>) {
-    if ((tool !== "tap" && tool !== "protect") || !tapAvailable || !baseInfo || segmentPendingRef.current || busy) {
+    if ((tool !== "tap" && tool !== "protect") || !tapAvailable || !baseInfo || segmentPendingRef.current || busy || showingResult) {
       return;
     }
     const point = imagePointFromEvent(event);
@@ -424,7 +436,7 @@ export function EditorPanel() {
       appendHistory({ kind, mask, point });
     } catch (error) {
       if (sequence === segmentSequence.current) {
-        setSegmentError(error instanceof Error ? error.message : String(error));
+        setSegmentError(localizedErrorMessage(error, t));
       }
     } finally {
       if (sequence === segmentSequence.current) {
@@ -435,28 +447,31 @@ export function EditorPanel() {
   }
 
   function handlePeopleBatch(entry: HistoryEntry) {
-    if (entry.entries?.length) appendHistory(entry);
-    setTool("brush");
+    if (entry.entries?.length || entry.failed) appendHistory(entry);
+    setTool((current) => (current === "people" ? "brush" : current));
   }
 
   function handleBackToChoosing() {
     if (peopleBatch?.id !== undefined) dropHistoryEntry(peopleBatch.id);
-    silhouetteBatch.clearFailed();
     setTool("people");
   }
 
-  // "Seguir editando este resultado" sube una base nueva sin tocar el original ni las máscaras.
+  // "Seguir editando este resultado": la base nueva reemplaza los trazos de Quitar en una sola acción de Deshacer; las protecciones siguen.
   async function handleUseResultAsBase() {
-    if (!shownJob?.downloadUrl) {
+    if (!shownJob?.downloadUrl || busy) {
       return;
     }
+    const sequence = uploadSequence.current;
     reset();
     review.clear();
     try {
       const response = await fetch(shownJob.downloadUrl);
-      await pushBase(await response.blob());
+      const blob = await response.blob();
+      if (sequence !== uploadSequence.current) return;
+      clearSelection();
+      await pushBase(blob, sequence);
     } catch (error) {
-      setUploadError(error instanceof Error ? error.message : String(error));
+      setUploadError(localizedErrorMessage(error, t));
     }
   }
 
@@ -469,6 +484,7 @@ export function EditorPanel() {
     !segmenting;
   const panelView = tool === "people" ? "people" : job?.status === "completed" ? "review" : "action";
   const showingResult = panelView === "review" && Boolean(review.zones && resultUrl);
+  const disabledTools = toolLocks({ tapAvailable, resultShown: showingResult, lamaInstalled: hasInstalledLama(models) }, t);
 
   return (
     <div className={baseInfo
@@ -481,10 +497,7 @@ export function EditorPanel() {
           <EditorToolRail
             tool={tool}
             onToolChange={setTool}
-            disabledTools={{
-              tap: tapAvailable ? undefined : t("editor.tool.tapUnavailable"),
-              protect: tapAvailable ? undefined : t("editor.tool.tapUnavailable"),
-            }}
+            disabledTools={disabledTools}
             toolTitles={{
               protect: t("editor.protect.hint"),
               restore: t("editor.tool.restoreHint"),
@@ -523,8 +536,6 @@ export function EditorPanel() {
                   : baseUrl && <img src={baseUrl} alt={baseInfo.originalFilename} className="block max-w-full" />}
                 <canvas
                   ref={canvasRef}
-                  width={baseInfo.width}
-                  height={baseInfo.height}
                   data-testid="editor-mask-canvas"
                   className={`absolute inset-0 h-full w-full ${showingResult ? "opacity-0" : "opacity-60"} ${
                     tool === "pan"
@@ -542,8 +553,6 @@ export function EditorPanel() {
                 />
                 <canvas
                   ref={protectionOverlayRef}
-                  width={baseInfo.width}
-                  height={baseInfo.height}
                   data-testid="editor-protect-canvas"
                   className={`pointer-events-none absolute inset-0 h-full w-full ${showingResult ? "opacity-0" : "opacity-50"}`}
                 />
@@ -575,21 +584,7 @@ export function EditorPanel() {
                   />
                 )}
               </div>
-              {segmenting && (
-                <p className="absolute bottom-2 left-2 rounded bg-surface px-2 py-1 text-xs text-text-dim">
-                  {t("editor.segmenting")}
-                </p>
-              )}
-              {retouch.applying && (
-                <p className="absolute bottom-2 left-2 rounded bg-surface px-2 py-1 text-xs text-text-dim">
-                  {t("editor.retouch.applying")}
-                </p>
-              )}
-              {heal.healing && (
-                <p className="absolute bottom-2 left-2 rounded bg-surface px-2 py-1 text-xs text-text-dim">
-                  {t("editor.heal.healing")}
-                </p>
-              )}
+              <EditorStageStatus segmenting={segmenting} applying={retouch.applying} healing={heal.healing} />
             </div>
             <p className="text-center text-xs text-text-faint">{t("editor.maskHint")}</p>
             {tool === "clone" && !retouch.source && (
@@ -610,6 +605,8 @@ export function EditorPanel() {
                 selection: peopleSelection,
                 batch: silhouetteBatch,
                 personIds: peopleBatch?.personIds ?? [],
+                failed: peopleBatch?.failed ?? 0,
+                originalUrl,
                 onBack: handleBackToChoosing,
               }}
               review={{
@@ -628,6 +625,7 @@ export function EditorPanel() {
                 phase,
                 job: shownJob,
                 errorMessage,
+                busy,
                 onCancel: cancel,
                 onUseAsBase: () => void handleUseResultAsBase(),
               }}

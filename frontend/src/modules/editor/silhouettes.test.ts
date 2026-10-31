@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as editorService from "../../services/editor";
 import type { EditorPerson } from "../../services/editor";
+import type { CropMask } from "./editorMaskCanvas";
 import { lastPeopleBatch, silhouettesFor } from "./silhouettes";
 
 vi.mock("../../services/editor", () => ({ segmentEditorBox: vi.fn() }));
@@ -9,11 +10,18 @@ function person(id: number, role: EditorPerson["role"] = "background"): EditorPe
   return { id, box: [id, 0, id + 10, 50], score: 0.9, role, face: null, anchor: [id + 5, 25] };
 }
 
-function fakeMask(blob: Blob): Promise<HTMLCanvasElement> {
-  const canvas = document.createElement("canvas");
-  canvas.dataset.source = String(blob.size);
-  return Promise.resolve(canvas);
+// Como el recorte real: un lienzo del tamaño de la caja, ubicado en su origen dentro de la foto.
+function fakeMask(_blob: Blob, box: [number, number, number, number]): Promise<CropMask> {
+  const mask = document.createElement("canvas");
+  mask.width = box[2] - box[0];
+  mask.height = box[3] - box[1];
+  return Promise.resolve({ mask, origin: { x: box[0], y: box[1] } });
 }
+
+beforeEach(() => {
+  // jsdom no trae canvas 2D: la unión de recortes solo necesita dibujar, así que basta con un contexto que lo acepte.
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(() => ({ drawImage: vi.fn() }) as never);
+});
 
 afterEach(() => vi.mocked(editorService.segmentEditorBox).mockReset());
 
@@ -38,9 +46,23 @@ describe("silhouettesFor", () => {
     expect(failed).toBe(0);
     expect(entry.kind).toBe("batch");
     expect(entry.personIds).toEqual([2, 3]);
-    expect(entry.entries?.map((item) => item.kind)).toEqual(["protect", "segment", "segment"]);
-    expect(entry.entries?.[1].point).toEqual({ x: 7, y: 25 });
-    expect(entry.entries?.[1].mask).toBeInstanceOf(HTMLCanvasElement);
+    expect(entry.entries?.map((item) => item.kind)).toEqual(["segment", "protect"]);
+    const [segment, protect] = entry.entries ?? [];
+    expect(segment.mask).toBeInstanceOf(HTMLCanvasElement);
+    expect(protect.points).toEqual([{ x: 6, y: 25 }]);
+  });
+
+  it("merges the removed people into one canvas sized to their boxes", async () => {
+    vi.mocked(editorService.segmentEditorBox).mockResolvedValue(new Blob(["png"]));
+
+    const { entry } = await silhouettesFor(
+      "tok", [person(1), person(2), person(3)], { 1: "remove", 2: "remove", 3: "remove" }, false, { toMask: fakeMask },
+    );
+
+    const segments = entry.entries?.filter((item) => item.kind === "segment") ?? [];
+    expect(segments).toHaveLength(1);
+    expect(segments[0].origin).toEqual({ x: 1, y: 0 });
+    expect([segments[0].mask?.width, segments[0].mask?.height]).toEqual([12, 50]);
   });
 
   it("skips kept people when they are not protected", async () => {
