@@ -600,6 +600,41 @@ async def test_init_image_download_returns_the_uploaded_bytes() -> None:
     assert response.media_type == "image/png"
 
 
+@pytest.mark.asyncio
+async def test_init_image_download_serves_decoded_format_not_filename_suffix() -> None:
+    buffer = io.BytesIO()
+    Image.new("RGB", (8, 8), (9, 8, 7)).save(buffer, format="PNG")
+    settings = get_settings()
+    StorageService(settings).ensure_directories()
+    uploaded = await upload_init_image(
+        file=UploadFile(filename="x.html", file=io.BytesIO(buffer.getvalue())),
+        storage=StorageService(settings),
+        settings=settings,
+    )
+
+    response = download_init_image(uploaded.init_image_token, settings=settings)
+
+    assert response.media_type == "image/png"
+    assert "text/html" not in response.headers["content-type"]
+
+
+@pytest.mark.asyncio
+async def test_init_image_download_sends_nosniff() -> None:
+    buffer = io.BytesIO()
+    Image.new("RGB", (8, 8), (9, 8, 7)).save(buffer, format="PNG")
+    settings = get_settings()
+    StorageService(settings).ensure_directories()
+    uploaded = await upload_init_image(
+        file=UploadFile(filename="photo.png", file=io.BytesIO(buffer.getvalue())),
+        storage=StorageService(settings),
+        settings=settings,
+    )
+
+    response = download_init_image(uploaded.init_image_token, settings=settings)
+
+    assert response.headers["x-content-type-options"] == "nosniff"
+
+
 def test_init_image_download_rejects_bad_and_unknown_tokens() -> None:
     settings = get_settings()
     with pytest.raises(HTTPException) as bad:

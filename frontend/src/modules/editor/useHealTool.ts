@@ -5,17 +5,32 @@ import { fetchInitImage, healEditorImage } from "../../services/editor";
 import { uploadGenerationInitImage } from "../../services/generation";
 import { createMaskCanvas, exportMaskBlob } from "./editorMaskCanvas";
 import { drawStrokes, type BrushStroke } from "./maskCanvas";
+import { isRetouchTool } from "./useRetouchTool";
 
 // Mismo límite que el backend (SMALL_ZONE_SIDE): más grande, la zona es de Quitar.
 export const HEAL_MAX_SIDE = 700;
 
+// Corrector, Restaurar y Clonar escriben la base: mientras uno está en vuelo, los demás no arrancan.
+export function editsBase(tool: string): boolean {
+  return tool === "heal" || isRetouchTool(tool);
+}
+
 // Caja del trazo en píxeles de la foto: los puntos más el radio del pincel en cada borde.
+// Un solo recorrido: Math.max(...xs) desborda la pila con un trazo largo.
 export function strokeSides(stroke: BrushStroke): { width: number; height: number } {
-  const xs = stroke.points.map((point) => point.x);
-  const ys = stroke.points.map((point) => point.y);
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const { x, y } of stroke.points) {
+    minX = Math.min(minX, x);
+    maxX = Math.max(maxX, x);
+    minY = Math.min(minY, y);
+    maxY = Math.max(maxY, y);
+  }
   return {
-    width: Math.max(...xs) - Math.min(...xs) + 2 * stroke.radius,
-    height: Math.max(...ys) - Math.min(...ys) + 2 * stroke.radius,
+    width: maxX - minX + 2 * stroke.radius,
+    height: maxY - minY + 2 * stroke.radius,
   };
 }
 

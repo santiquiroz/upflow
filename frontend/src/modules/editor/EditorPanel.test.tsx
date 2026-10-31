@@ -1203,6 +1203,54 @@ describe("EditorPanel: corrector puntual", () => {
     expect(generationService.uploadGenerationInitImage).toHaveBeenCalledTimes(2);
   });
 
+  function holdHeal(): () => Promise<void> {
+    let finish!: (value: InitImageResponse) => void;
+    vi.mocked(editorService.healEditorImage).mockImplementationOnce(
+      () => new Promise((resolve) => { finish = resolve; }),
+    );
+    return async () => { await act(async () => finish(HEALED)); };
+  }
+
+  it("ctrl+z while healing does nothing", async () => {
+    const finish = holdHeal();
+    renderPanel();
+    await loadBaseImage();
+    fireEvent.click(screen.getByRole("radio", { name: en["editor.tool.brush"] }));
+    paintOnCanvas();
+    fireEvent.click(screen.getByRole("radio", { name: en["editor.tool.heal"] }));
+
+    healStroke(2);
+    await screen.findByText(en["editor.heal.healing"]);
+    fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+    await finish();
+
+    await waitFor(() => expect(healing()).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: en["editor.clear"] })).toBeEnabled();
+  });
+
+  it("ignores restore and clone strokes while a heal runs", async () => {
+    vi.mocked(retouchApply.applyRetouch).mockClear();
+    const finish = holdHeal();
+    await openHeal();
+
+    healStroke(1);
+    await screen.findByText(en["editor.heal.healing"]);
+    fireEvent.click(screen.getByRole("radio", { name: en["editor.tool.restore"] }));
+    healStroke(2);
+    fireEvent.click(screen.getByRole("radio", { name: en["editor.tool.clone"] }));
+    const canvas = screen.getByTestId("editor-mask-canvas");
+    fireEvent.pointerDown(canvas, { clientX: 5, clientY: 5, pointerId: 3, altKey: true });
+    fireEvent.pointerUp(canvas, { pointerId: 3 });
+    expect(screen.getByText(en["editor.retouch.cloneNoSource"])).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("radio", { name: en["editor.tool.heal"] }));
+    healStroke(4);
+    await finish();
+
+    await waitFor(() => expect(healing()).not.toBeInTheDocument());
+    expect(retouchApply.applyRetouch).not.toHaveBeenCalled();
+    expect(editorService.healEditorImage).toHaveBeenCalledTimes(1);
+  });
+
   it("a large stroke shows the notice and does not call the service", async () => {
     vi.mocked(generationService.uploadGenerationInitImage).mockResolvedValueOnce({ ...BASE_IMAGE, width: 1200, height: 900 });
     const rect = { left: 0, top: 0, width: 1200, height: 900 } as DOMRect;

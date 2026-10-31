@@ -42,7 +42,7 @@ import { useEditorShortcuts } from "./useEditorShortcuts";
 import { usePeopleSelection } from "./usePeopleSelection";
 import { useBaseVersions, useObjectUrl } from "./useBaseVersions";
 import { useEditorUndo } from "./useEditorUndo";
-import { useHealTool } from "./useHealTool";
+import { editsBase, useHealTool } from "./useHealTool";
 import { isRetouchTool, useRetouchTool } from "./useRetouchTool";
 import { applyRetouch, type RetouchKind, type RetouchOffset } from "./retouchApply";
 import { RetouchCrosshair } from "./RetouchCrosshair";
@@ -165,14 +165,14 @@ export function EditorPanel() {
     onError: setUploadError,
   });
   const busy = jobBusy || editorSubmit.preparingJob;
-  const { undoLog, appendHistory, dropHistoryEntry, recordBase, handleUndo, clearSelection } = useEditorUndo({
-    history, setHistory, undoBase: baseVersions.undo, applying: retouch.applying,
-  });
-  const { last: lastUndo, clear: clearUndo } = undoLog;
   const heal = useHealTool({
     baseInfo, sequenceRef: uploadSequence, onError: setUploadError,
     onAdopt: (info, blob) => recordBase(baseVersions.adopt(info, blob)),
   });
+  const { undoLog, appendHistory, dropHistoryEntry, recordBase, handleUndo, clearSelection } = useEditorUndo({
+    history, setHistory, undoBase: baseVersions.undo, applying: retouch.applying || heal.healing,
+  });
+  const { last: lastUndo, clear: clearUndo } = undoLog;
   const handleBrushSmaller = useCallback(() => {
     setBrushSize((current) => Math.max(BRUSH_SIZE_MIN, current - BRUSH_SIZE_STEP));
   }, []);
@@ -299,7 +299,7 @@ export function EditorPanel() {
       panOriginRef.current = { x: event.clientX, y: event.clientY };
       return;
     }
-    if (tool === "tap" || tool === "protect" || tool === "people" || busy || (tool === "heal" && heal.healing)) {
+    if (tool === "tap" || tool === "protect" || tool === "people" || busy || ((heal.healing || retouch.applying) && editsBase(tool))) {
       return;
     }
     const point = imagePointFromEvent(event);

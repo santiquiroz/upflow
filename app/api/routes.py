@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import mimetypes
 import re
 import subprocess
 from dataclasses import asdict
@@ -2839,8 +2838,32 @@ async def upload_init_image(
 )
 def download_init_image(token: str, settings: Settings = Depends(get_settings)) -> FileResponse:
     path = _resolve_init_image(settings, token)
-    media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-    return FileResponse(path, media_type=media_type)
+    return FileResponse(
+        path,
+        media_type=_image_media_type(path),
+        headers={"X-Content-Type-Options": "nosniff", "Content-Disposition": "attachment"},
+    )
+
+
+_IMAGE_MEDIA_TYPES = {
+    "PNG": "image/png",
+    "JPEG": "image/jpeg",
+    "WEBP": "image/webp",
+    "BMP": "image/bmp",
+    "GIF": "image/gif",
+    "TIFF": "image/tiff",
+}
+
+
+def _image_media_type(path: Path) -> str:
+    try:
+        from PIL import Image
+
+        with Image.open(path) as image:
+            image_format = image.format
+    except Exception:  # noqa: BLE001 - lo ilegible se sirve como binario opaco
+        return "application/octet-stream"
+    return _IMAGE_MEDIA_TYPES.get(image_format or "", "application/octet-stream")
 
 
 def _video_aware_sampling(payload, settings: Settings) -> tuple[int, float]:
